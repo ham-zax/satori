@@ -199,14 +199,17 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
             : configFailures.map((proof) => proof.message).join(" "),
     });
 
-    const configChecks = evaluateStaticRuntimeConfig(options.env);
+    const configChecks = evaluateStaticRuntimeConfig({
+        ...options.env,
+        ...options.installResult.runtimeEnvironment,
+    });
     const configErrors = configChecks.filter((check) => check.status === "error");
     checks.push({
         name: "provider_configuration",
         status: configErrors.length === 0 ? "ok" : "warning",
         message: configErrors.length === 0
-            ? "Installer process environment has complete static embedding and vector configuration."
-            : `Installer process environment is incomplete: ${configErrors.map((check) => check.message).join(" ")}`,
+            ? "Installed runtime environment has complete static embedding and vector configuration."
+            : `Installed runtime environment is incomplete: ${configErrors.map((check) => check.message).join(" ")}`,
     });
 
     if (configFailures.length > 0) {

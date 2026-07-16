@@ -11,6 +11,11 @@ import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from 
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
+import type {
+    InstallPreflightDependencies,
+    InstallPreflightInput,
+    InstallPreflightResult,
+} from "./install-preflight.js";
 import {
     runInstallPostflight,
     type InstallPostflightOptions,
@@ -35,7 +40,12 @@ interface RunCliOptions {
     cwd?: string;
     installabilityVerifier?: () => string | Promise<string>;
     installRuntimeCommand?: ManagedRuntimeCommand;
-    doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult;
+    installPreflightDependencies?: InstallPreflightDependencies;
+    installPreflightRunner?: (
+        input: InstallPreflightInput,
+        dependencies?: InstallPreflightDependencies,
+    ) => Promise<InstallPreflightResult>;
+    doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult | Promise<DoctorResult>;
     nowMs?: () => number;
     /** Test/embed override; null disables best-effort local recording. */
     diagnosticsPath?: string | null;
@@ -112,7 +122,7 @@ function buildHelpPayload() {
     return {
         usage: "satori-cli <command>",
         commands: [
-            "install [--client all|codex|claude|opencode] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook]",
+            "install [--client all|codex|claude|opencode] [--runtime voyage|offline] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook]",
             "uninstall [--client all|codex|claude|opencode] [--dry-run]",
             "doctor",
             "tools list",
@@ -281,7 +291,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "doctor") {
-            const result = (options.doctorRunner || ((doctorOptions: { env: NodeJS.ProcessEnv }) => runDoctor({ env: doctorOptions.env })))({
+            const result = await (options.doctorRunner || ((doctorOptions: { env: NodeJS.ProcessEnv }) => runDoctor({ env: doctorOptions.env })))({
                 env: effectiveEnv,
             });
             emitJson(writers, result);
@@ -296,13 +306,16 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
             let packageSpecifier: string | undefined;
-            if (parsed.command.kind === "install") {
+            if (parsed.command.kind === "install" && !parsed.command.dryRun) {
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
-            const result = executeInstallCommand(parsed.command, {
+            const result = await executeInstallCommand(parsed.command, {
                 homeDir,
                 packageSpecifier,
                 runtimeCommand: options.installRuntimeCommand,
+                env: effectiveEnv,
+                preflightDependencies: options.installPreflightDependencies,
+                preflightRunner: options.installPreflightRunner,
             });
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
                 const postflight = await (options.installPostflightRunner || runInstallPostflight)({

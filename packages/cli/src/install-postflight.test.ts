@@ -22,11 +22,19 @@ function writeOwnerRegistry(homeDir: string, owners: unknown[]): void {
     fs.writeFileSync(filePath, JSON.stringify({ formatVersion: "v1", updatedAt: new Date(0).toISOString(), owners }), "utf8");
 }
 
-function installFixture(homeDir: string) {
-    return executeInstallCommand({ kind: "install", client: "all", dryRun: false }, {
+async function installFixture(homeDir: string) {
+    return executeInstallCommand({
+        kind: "install",
+        client: "all",
+        dryRun: false,
+        runtime: "voyage",
+    }, {
         homeDir,
         packageSpecifier: "@zokizuan/satori-mcp@4.11.17",
         runtimeCommand: { command: process.execPath, args: [path.join(homeDir, "runtime.js")] },
+        preflightRunner: async () => ({
+            runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
+        }),
     });
 }
 
@@ -48,7 +56,7 @@ function createSession(homeDir: string, names = TOOL_NAMES): InstallPostflightSe
 test("install postflight verifies launcher, clients, tools, owner, config, and termination", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-ok-"));
     try {
-        const installResult = installFixture(homeDir);
+        const installResult = await installFixture(homeDir);
         const result = await runInstallPostflight({
             installResult,
             homeDir,
@@ -82,11 +90,50 @@ test("install postflight verifies launcher, clients, tools, owner, config, and t
     }
 });
 
+test("install postflight validates the installed profile over stale ambient providers", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-managed-profile-"));
+    try {
+        const baseInstallResult = await installFixture(homeDir);
+        const installResult = {
+            ...baseInstallResult,
+            runtime: "offline" as const,
+            runtimeEnvironment: Object.freeze({
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
+                EMBEDDING_PROVIDER: "Ollama",
+                OLLAMA_MODEL: "nomic-embed-text:latest",
+                OLLAMA_MODEL_DIGEST: "a".repeat(64),
+                EMBEDDING_OUTPUT_DIMENSION: "768",
+                OLLAMA_HOST: "http://127.0.0.1:11434",
+            }),
+        };
+        const result = await runInstallPostflight({
+            installResult,
+            homeDir,
+            env: {
+                VOYAGEAI_API_KEY: "retained-but-disabled",
+                MILVUS_ADDRESS: "stale-cloud-endpoint",
+            },
+            startupTimeoutMs: 1_000,
+            callTimeoutMs: 1_000,
+            writeStderr: () => {},
+            connectSession: async () => createSession(homeDir),
+            isProcessLive: () => false,
+            wait: async () => {},
+        });
+
+        assert.equal(result.checks.find((check) => check.name === "provider_configuration")?.status, "ok");
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
 test("install postflight reports exact tool-list drift and still closes the session", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-tools-"));
     let closed = false;
     try {
-        const installResult = installFixture(homeDir);
+        const installResult = await installFixture(homeDir);
         const session = createSession(homeDir, TOOL_NAMES.slice(0, -1));
         const result = await runInstallPostflight({
             installResult,
@@ -118,7 +165,7 @@ test("install postflight preserves tool timeout code and proves owner cleanup", 
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-tool-timeout-"));
     try {
         const result = await runInstallPostflight({
-            installResult: installFixture(homeDir),
+            installResult: await installFixture(homeDir),
             homeDir,
             env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
@@ -150,7 +197,7 @@ test("install postflight preserves startup timeout code and verifies launcher ex
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-startup-timeout-"));
     try {
         const result = await runInstallPostflight({
-            installResult: installFixture(homeDir),
+            installResult: await installFixture(homeDir),
             homeDir,
             env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
@@ -177,7 +224,7 @@ test("install postflight reports incomplete static config as a warning without p
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-postflight-config-"));
     try {
         const result = await runInstallPostflight({
-            installResult: installFixture(homeDir),
+            installResult: await installFixture(homeDir),
             homeDir,
             env: {},
             startupTimeoutMs: 1_000,

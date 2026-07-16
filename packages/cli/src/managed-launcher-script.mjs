@@ -5,14 +5,49 @@
 
 export const DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS = 5_000;
 const EOF_SHUTDOWN_GRACE_MS = 1_500;
+const MANAGED_ENV_PREFIX = "const managedEnv = ";
 
 /**
- * @param {{ command: string, args: readonly string[], shutdownGraceMs?: number }} options
+ * Read the non-secret runtime selection persisted by buildLauncherScript().
+ * Launchers generated before runtime profiles existed intentionally resolve to
+ * an empty environment so existing connected installations remain valid.
+ *
+ * @param {string} content
+ * @returns {Readonly<Record<string, string>>}
+ */
+export function parseManagedLauncherEnvironment(content) {
+  const line = content.split(/\r?\n/).find((candidate) => candidate.startsWith(MANAGED_ENV_PREFIX));
+  if (line === undefined) {
+    return Object.freeze({});
+  }
+  if (!line.endsWith(";")) {
+    throw new Error("Managed launcher runtime environment is malformed.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(line.slice(MANAGED_ENV_PREFIX.length, -1));
+  } catch {
+    throw new Error("Managed launcher runtime environment is malformed.");
+  }
+  if (
+    typeof parsed !== "object"
+    || parsed === null
+    || Array.isArray(parsed)
+    || Object.values(parsed).some((value) => typeof value !== "string")
+  ) {
+    throw new Error("Managed launcher runtime environment must contain only string values.");
+  }
+  return Object.freeze({ ...parsed });
+}
+
+/**
+ * @param {{ command: string, args: readonly string[], managedEnv?: Readonly<Record<string, string>>, shutdownGraceMs?: number }} options
  * @returns {string}
  */
 export function buildLauncherScript(options) {
   const command = options.command;
   const args = options.args;
+  const managedEnv = options.managedEnv ?? {};
   const shutdownGraceMs = Number.isFinite(options.shutdownGraceMs) && options.shutdownGraceMs >= 0
     ? Math.floor(options.shutdownGraceMs)
     : DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS;
@@ -24,10 +59,11 @@ export function buildLauncherScript(options) {
     "",
     `const command = ${JSON.stringify(command)};`,
     `const baseArgs = ${JSON.stringify(args)};`,
+    `const managedEnv = ${JSON.stringify(managedEnv)};`,
     `const shutdownGraceMs = ${JSON.stringify(shutdownGraceMs)};`,
     "const child = spawn(command, [...baseArgs, ...process.argv.slice(2)], {",
     '  stdio: ["pipe", "inherit", "inherit"],',
-    "  env: process.env,",
+    "  env: { ...process.env, ...managedEnv },",
     "});",
     "",
     'let shutdownReason = null;',

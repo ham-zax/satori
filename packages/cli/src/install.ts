@@ -2,12 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
-import type { InstallClient, InstallProfile } from "./args.js";
+import type { InstallClient, InstallProfile, InstallRuntime, InstallVectorStore } from "./args.js";
+import {
+    planInstallRuntimeEnvironment,
+    probeLanceDbRuntime,
+    probeManagedRuntimeCandidate,
+    runInstallPreflight,
+    selectedConnectedVectorStore,
+    type InstallPreflightDependencies,
+    type InstallPreflightInput,
+    type InstallPreflightResult,
+    type LanceDbModule,
+} from "./install-preflight.js";
 import { resolveManagedPackageSpecifier } from "./managed-package.js";
-import { buildLauncherScript } from "./managed-launcher-script.mjs";
+import { buildLauncherScript, parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
@@ -22,6 +34,9 @@ const MANAGED_RUNTIME_DIR = "mcp-runtime";
 const MANAGED_BIN_DIR = "bin";
 const MANAGED_LAUNCHER_FILE = "satori-mcp.js";
 const SATORI_RUNTIME_ENV_VARS = [
+    "SATORI_RUNTIME_PROFILE",
+    "VECTOR_STORE_PROVIDER",
+    "LANCEDB_PATH",
     "EMBEDDING_PROVIDER",
     "EMBEDDING_MODEL",
     "EMBEDDING_OUTPUT_DIMENSION",
@@ -33,6 +48,7 @@ const SATORI_RUNTIME_ENV_VARS = [
     "GEMINI_BASE_URL",
     "OLLAMA_HOST",
     "OLLAMA_MODEL",
+    "OLLAMA_MODEL_DIGEST",
     "MILVUS_ADDRESS",
     "MILVUS_TOKEN",
     "READ_FILE_MAX_LINES",
@@ -45,6 +61,9 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# ~/.codex/config.toml to store Satori runtime settings directly.",
     "# This template is outside the launcher block so reinstall keeps edits.",
     "# [mcp_servers.satori.env]",
+    "# SATORI_RUNTIME_PROFILE = \"connected\"",
+    "# VECTOR_STORE_PROVIDER = \"LanceDB\"",
+    "# LANCEDB_PATH = \"/absolute/path/to/.satori/vector/lancedb\"",
     "# EMBEDDING_PROVIDER = \"VoyageAI\"",
     "# EMBEDDING_MODEL = \"voyage-code-3\"",
     "# EMBEDDING_OUTPUT_DIMENSION = \"1024\"",
@@ -127,13 +146,30 @@ export interface ManagedRuntimeCommand {
     args: string[];
 }
 
-export interface InstallCommandInput {
-    kind: "install" | "uninstall";
-    client: InstallClient;
-    dryRun: boolean;
-    installGuidanceHook?: boolean;
-    profile?: InstallProfile;
-}
+type InstallCommandBase = {
+        kind: "install";
+        client: InstallClient;
+        dryRun: boolean;
+        installGuidanceHook?: boolean;
+        profile?: InstallProfile;
+};
+
+export type InstallCommandInput =
+    | (InstallCommandBase & {
+        runtime: "voyage";
+        vectorStore?: InstallVectorStore;
+        ollamaModel?: never;
+    })
+    | (InstallCommandBase & {
+        runtime: "offline";
+        vectorStore?: "LanceDB";
+        ollamaModel: string;
+    })
+    | {
+        kind: "uninstall";
+        client: InstallClient;
+        dryRun: boolean;
+    };
 
 export interface InstallCommandOptions {
     homeDir?: string;
@@ -142,6 +178,12 @@ export interface InstallCommandOptions {
     skillAssetRoot?: string;
     runtimeCommand?: ManagedRuntimeCommand;
     execFileSyncImpl?: ExecFileSyncLike;
+    env?: NodeJS.ProcessEnv;
+    preflightDependencies?: InstallPreflightDependencies;
+    preflightRunner?: (
+        input: InstallPreflightInput,
+        dependencies?: InstallPreflightDependencies,
+    ) => Promise<InstallPreflightResult>;
 }
 
 export interface ClientInstallResult {
@@ -165,7 +207,21 @@ export interface InstallCommandResult {
     profile?: InstallProfile;
     profileConfigPath?: string;
     profileConfigChanged?: boolean;
+    runtime?: InstallRuntime;
+    /** Non-secret runtime values persisted in the managed launcher. */
+    runtimeEnvironment?: Readonly<Record<string, string>>;
     results: ClientInstallResult[];
+}
+
+export interface InstallPlan {
+    readonly command: InstallCommandInput;
+    readonly homeDir: string;
+    readonly packageSpecifier: string;
+    readonly plannedRuntimeCommand: ManagedRuntimeCommand;
+    readonly clientCommand: ManagedRuntimeCommand;
+    readonly profileMutation: FileMutation & { filePath?: string };
+    readonly prepared: PreparedMutation[];
+    readonly options: InstallCommandOptions;
 }
 
 interface ClientTarget {
@@ -181,18 +237,30 @@ type CompanionTarget =
 interface CompanionMutation {
     companion: CompanionTarget;
     changed: boolean;
+    assertUnchanged?: () => void;
     apply: () => void;
 }
 
 interface PreparedMutation {
     target: ClientTarget;
+    configMutation: FileMutation;
     configChanged: boolean;
     companionMutations: CompanionMutation[];
-    apply: () => void;
+}
+
+interface ManagedRuntimeCandidate {
+    readonly command: ManagedRuntimeCommand;
+    readonly identity: {
+        readonly name: string;
+        readonly version: string;
+    };
+    readonly runtimeRoot: string;
+    readonly newlyInstalled: boolean;
 }
 
 interface FileMutation {
     changed: boolean;
+    assertUnchanged?: () => void;
     apply: () => void;
 }
 
@@ -277,6 +345,25 @@ function readTextIfExists(filePath: string): string | null {
     return fs.readFileSync(filePath, "utf8");
 }
 
+function assertFileContentUnchanged(filePath: string, expected: string | null): void {
+    if (readTextIfExists(filePath) === expected) {
+        return;
+    }
+    throw new CliError(
+        "E_INSTALL_PLAN_STALE",
+        `Refusing to overwrite '${filePath}' because it changed after the installation plan was created. Rerun the same command against the current file.`,
+        1,
+    );
+}
+
+function guardFileMutation(filePath: string, expected: string | null, mutation: FileMutation): FileMutation {
+    assertFileContentUnchanged(filePath, expected);
+    return {
+        ...mutation,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, expected),
+    };
+}
+
 function normalizeTrailingNewline(value: string): string {
     return value.endsWith("\n") ? value : `${value}\n`;
 }
@@ -346,11 +433,13 @@ function prepareProjectProfileInstall(repoDir: string, profile: InstallProfile |
         return { changed: false, apply: () => {} };
     }
     const filePath = path.join(repoDir, "satori.toml");
-    const current = readTextIfExists(filePath) ?? "";
+    const currentFile = readTextIfExists(filePath);
+    const current = currentFile ?? "";
     const next = updateSatoriProjectConfig(current, profile);
     return {
         filePath,
         changed: next !== current,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
         apply: () => {
             if (next === current) {
                 return;
@@ -428,6 +517,10 @@ function resolveRuntimePackageRoot(homeDir: string, packageSpecifier: string): s
     return path.join(resolveRuntimeRoot(homeDir, packageSpecifier), "node_modules", ...packageNameFromSpecifier(packageSpecifier).split("/"));
 }
 
+function resolveRuntimePackageRootFromRoot(runtimeRoot: string, packageSpecifier: string): string {
+    return path.join(runtimeRoot, "node_modules", ...packageNameFromSpecifier(packageSpecifier).split("/"));
+}
+
 function resolveRuntimeEntryPath(packageRoot: string, packageJson?: { bin?: unknown; main?: unknown }): string {
     const bin = packageJson?.bin;
     let relativeEntry = "dist/index.js";
@@ -469,15 +562,21 @@ function writeTextFileAtomic(filePath: string, content: string, mode?: number): 
     fs.renameSync(tempPath, filePath);
 }
 
-function prepareLauncherInstall(homeDir: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+function prepareLauncherInstall(
+    homeDir: string,
+    runtimeCommand: ManagedRuntimeCommand,
+    managedEnv: Readonly<Record<string, string>> = {},
+): FileMutation {
     const launcherPath = resolveLauncherPath(homeDir);
     const current = readTextIfExists(launcherPath);
     const next = buildLauncherScript({
         command: runtimeCommand.command,
         args: runtimeCommand.args,
+        managedEnv,
     });
     return {
         changed: current !== next,
+        assertUnchanged: () => assertFileContentUnchanged(launcherPath, current),
         apply: () => {
             if (current === next) {
                 return;
@@ -500,12 +599,26 @@ function npmOutput(error: unknown): string {
     return `${stdout}\n${stderr}\n${error.message}`.trim();
 }
 
-function installManagedRuntimeCommand(
+function installManagedRuntimeCandidate(
     homeDir: string,
     packageSpecifier: string,
     execImpl: ExecFileSyncLike
-): ManagedRuntimeCommand {
-    const runtimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
+): ManagedRuntimeCandidate {
+    const stableRuntimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
+    const existing = resolveInstalledRuntimeCommand(stableRuntimeRoot, packageSpecifier, true);
+    if (existing) {
+        return {
+            ...existing,
+            runtimeRoot: stableRuntimeRoot,
+            newlyInstalled: false,
+        };
+    }
+    // Never reinstall into a directory that may still be the target of the
+    // active launcher. A failed or stale reinstall must leave the old runtime
+    // bytes untouched.
+    const runtimeRoot = fs.existsSync(stableRuntimeRoot)
+        ? fs.mkdtempSync(`${stableRuntimeRoot}.generation-`)
+        : stableRuntimeRoot;
     ensureDir(runtimeRoot);
     try {
         execImpl("npm", [
@@ -524,6 +637,7 @@ function installManagedRuntimeCommand(
             stdio: ["ignore", "pipe", "pipe"],
         });
     } catch (error) {
+        fs.rmSync(runtimeRoot, { recursive: true, force: true });
         throw new CliError(
             "E_USAGE",
             `Failed to install Satori MCP runtime package ${packageSpecifier} into ${runtimeRoot}. ${npmOutput(error)}`,
@@ -531,13 +645,58 @@ function installManagedRuntimeCommand(
         );
     }
 
-    const packageRoot = resolveRuntimePackageRoot(homeDir, packageSpecifier);
+    const installed = resolveInstalledRuntimeCommand(runtimeRoot, packageSpecifier, false);
+    if (!installed) {
+        const packageRoot = resolveRuntimePackageRootFromRoot(runtimeRoot, packageSpecifier);
+        fs.rmSync(runtimeRoot, { recursive: true, force: true });
+        throw new CliError(
+            "E_USAGE",
+            `Installed Satori MCP runtime is missing a usable entry under ${packageRoot}.`,
+            2,
+        );
+    }
+    return {
+        ...installed,
+        runtimeRoot,
+        newlyInstalled: true,
+    };
+}
+
+const EXACT_PACKAGE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function requestedExactPackageVersion(packageSpecifier: string): string | null {
+    const packageName = packageNameFromSpecifier(packageSpecifier);
+    const suffix = packageSpecifier.slice(packageName.length);
+    if (!suffix.startsWith("@")) {
+        return null;
+    }
+    const version = suffix.slice(1);
+    return EXACT_PACKAGE_VERSION_PATTERN.test(version) ? version : null;
+}
+
+function resolveInstalledRuntimeCommand(
+    runtimeRoot: string,
+    packageSpecifier: string,
+    forReuse: boolean,
+): Pick<ManagedRuntimeCandidate, "command" | "identity"> | null {
+    const packageRoot = resolveRuntimePackageRootFromRoot(runtimeRoot, packageSpecifier);
     const packageJsonPath = path.join(packageRoot, "package.json");
-    let packageJson: { bin?: unknown; main?: unknown };
+    let packageJson: { name?: unknown; version?: unknown; bin?: unknown; main?: unknown };
     try {
-        packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { bin?: unknown; main?: unknown };
-    } catch (error) {
-        throw new CliError("E_USAGE", `Installed Satori MCP runtime is missing package metadata at ${packageJsonPath}: ${(error as Error).message}`, 2);
+        packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as typeof packageJson;
+    } catch {
+        return null;
+    }
+    const expectedName = packageNameFromSpecifier(packageSpecifier);
+    const expectedVersion = requestedExactPackageVersion(packageSpecifier);
+    if (
+        packageJson.name !== expectedName
+        || typeof packageJson.version !== "string"
+        || !EXACT_PACKAGE_VERSION_PATTERN.test(packageJson.version)
+        || (expectedVersion !== null && packageJson.version !== expectedVersion)
+        || (forReuse && expectedVersion === null)
+    ) {
+        return null;
     }
 
     const command = {
@@ -545,9 +704,26 @@ function installManagedRuntimeCommand(
         args: [resolveRuntimeEntryPath(packageRoot, packageJson)],
     };
     if (!fs.existsSync(command.args[0])) {
-        throw new CliError("E_USAGE", `Installed Satori MCP runtime entry does not exist: ${command.args[0]}`, 2);
+        return null;
     }
-    return command;
+    return {
+        command,
+        identity: {
+            name: packageJson.name,
+            version: packageJson.version,
+        },
+    };
+}
+
+function exactRuntimeLanceDbProbe(runtimeCommand: ManagedRuntimeCommand): (databasePath: string) => Promise<void> {
+    const runtimeEntry = runtimeCommand.args[0];
+    return async (databasePath: string): Promise<void> => {
+        const requireFromRuntime = createRequire(runtimeEntry);
+        const resolved = requireFromRuntime.resolve("@zokizuan/satori-core/lancedb");
+        await probeLanceDbRuntime(databasePath, {
+            loadLanceDb: () => import(pathToFileURL(resolved).href) as Promise<LanceDbModule>,
+        });
+    };
 }
 
 function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
@@ -993,7 +1169,8 @@ function buildManagedInstructionsBlock(instructions: string): string {
 }
 
 function prepareInstructionsInstall(filePath: string, instructions: string): FileMutation {
-    const current = readTextIfExists(filePath) ?? "";
+    const currentFile = readTextIfExists(filePath);
+    const current = currentFile ?? "";
     const block = buildManagedInstructionsBlock(instructions);
     let next = current;
     if (current.includes(INSTRUCTIONS_BLOCK_START) && current.includes(INSTRUCTIONS_BLOCK_END)) {
@@ -1009,6 +1186,7 @@ function prepareInstructionsInstall(filePath: string, instructions: string): Fil
 
     return {
         changed: next !== current,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
         apply: () => {
             if (next === current) {
                 return;
@@ -1032,6 +1210,7 @@ function prepareInstructionsRemoval(filePath: string): FileMutation {
 
     return {
         changed: next !== current,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, current),
         apply: () => {
             if (next === current) {
                 return;
@@ -1056,6 +1235,7 @@ function prepareCompanionMutation(
     return {
         companion,
         changed: mutation.changed,
+        assertUnchanged: mutation.assertUnchanged,
         apply: mutation.apply,
     };
 }
@@ -1065,19 +1245,22 @@ function prepareConfigMutation(
     command: InstallCommandInput,
     runtimeCommand: ManagedRuntimeCommand
 ): FileMutation {
+    const expected = readTextIfExists(target.configPath);
+    let mutation: FileMutation;
     if (target.client === "codex") {
-        return command.kind === "install"
+        mutation = command.kind === "install"
             ? prepareCodexInstall(target.configPath, runtimeCommand, command.installGuidanceHook === true)
             : prepareCodexUninstall(target.configPath);
-    }
-    if (target.client === "claude") {
-        return command.kind === "install"
+    } else if (target.client === "claude") {
+        mutation = command.kind === "install"
             ? prepareClaudeInstall(target.configPath, runtimeCommand)
             : prepareClaudeUninstall(target.configPath);
+    } else {
+        mutation = command.kind === "install"
+            ? prepareOpenCodeInstall(target.configPath, runtimeCommand)
+            : prepareOpenCodeUninstall(target.configPath);
     }
-    return command.kind === "install"
-        ? prepareOpenCodeInstall(target.configPath, runtimeCommand)
-        : prepareOpenCodeUninstall(target.configPath);
+    return guardFileMutation(target.configPath, expected, mutation);
 }
 
 function prepareMutation(
@@ -1093,14 +1276,9 @@ function prepareMutation(
 
     return {
         target,
+        configMutation,
         configChanged: configMutation.changed,
         companionMutations,
-        apply: () => {
-            configMutation.apply();
-            for (const companionMutation of companionMutations) {
-                companionMutation.apply();
-            }
-        },
     };
 }
 
@@ -1160,6 +1338,190 @@ function hasSatoriClientEntry(target: ClientTarget): boolean {
     }
 }
 
+function parseVectorStoreLiteral(value: unknown, source: string): InstallVectorStore | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (typeof value !== "string") {
+        throw new CliError("E_USAGE", `${source} VECTOR_STORE_PROVIDER must be Milvus or LanceDB.`, 2);
+    }
+    if (/^\$\{|^\{env:/.test(value.trim())) {
+        return undefined;
+    }
+    if (value === "Milvus" || value === "LanceDB") {
+        return value;
+    }
+    throw new CliError("E_USAGE", `${source} VECTOR_STORE_PROVIDER must be Milvus or LanceDB.`, 2);
+}
+
+function readCodexVectorStore(filePath: string): InstallVectorStore | undefined {
+    const content = readTextIfExists(filePath);
+    if (content === null) {
+        return undefined;
+    }
+    let inSatoriEnvironment = false;
+    let selected: InstallVectorStore | undefined;
+    for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+        const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+        if (table) {
+            inSatoriEnvironment = table[1] === "mcp_servers.satori.env";
+            continue;
+        }
+        if (!inSatoriEnvironment || !/^\s*VECTOR_STORE_PROVIDER\s*=/.test(line)) {
+            continue;
+        }
+        const literal = line.match(/^\s*VECTOR_STORE_PROVIDER\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/);
+        const candidate = parseVectorStoreLiteral(literal?.[1] ?? literal?.[2], `Codex config '${filePath}'`);
+        if (!candidate) {
+            throw new CliError("E_USAGE", `Codex config '${filePath}' has an unreadable VECTOR_STORE_PROVIDER value.`, 2);
+        }
+        if (selected && selected !== candidate) {
+            throw new CliError("E_USAGE", `Codex config '${filePath}' contains conflicting VECTOR_STORE_PROVIDER values.`, 2);
+        }
+        selected = candidate;
+    }
+    return selected;
+}
+
+function readClientVectorStore(target: ClientTarget): InstallVectorStore | undefined {
+    if (target.client === "codex") {
+        return readCodexVectorStore(target.configPath);
+    }
+    if (target.client === "claude") {
+        const entry = objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori);
+        return parseVectorStoreLiteral(objectValue(entry?.env)?.VECTOR_STORE_PROVIDER, `Claude config '${target.configPath}'`);
+    }
+    const content = readTextIfExists(target.configPath);
+    if (content === null) {
+        return undefined;
+    }
+    const entry = objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori);
+    return parseVectorStoreLiteral(
+        objectValue(entry?.environment)?.VECTOR_STORE_PROVIDER,
+        `OpenCode config '${target.configPath}'`,
+    );
+}
+
+function readManagedLauncherVectorStore(
+    homeDir: string,
+    managedEnvironment?: Readonly<Record<string, string>>,
+): InstallVectorStore | undefined {
+    try {
+        return parseVectorStoreLiteral(
+            (managedEnvironment ?? readManagedRuntimeEnvironment(homeDir)).VECTOR_STORE_PROVIDER,
+            `Managed launcher '${resolveLauncherPath(homeDir)}'`,
+        );
+    } catch (error) {
+        if (error instanceof CliError) {
+            throw error;
+        }
+        return undefined;
+    }
+}
+
+function readManagedRuntimeEnvironment(homeDir: string): Readonly<Record<string, string>> {
+    const launcherPath = resolveLauncherPath(homeDir);
+    const launcher = readTextIfExists(launcherPath);
+    if (launcher === null) {
+        return Object.freeze({});
+    }
+    try {
+        return parseManagedLauncherEnvironment(launcher);
+    } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new CliError(
+            "E_MANAGED_RUNTIME_ENV_INVALID",
+            `Managed launcher '${launcherPath}' contains invalid runtime identity: ${cause}`,
+            1,
+        );
+    }
+}
+
+function runtimeEnvironmentWithManagedFallbacks(
+    managed: Readonly<Record<string, string>>,
+    env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+    const fallbacks: NodeJS.ProcessEnv = {};
+    // These non-secret location values are installer-owned runtime identity.
+    // Provider credentials and tokens must never be recovered from a launcher.
+    for (const key of ["LANCEDB_PATH", "OLLAMA_HOST"] as const) {
+        if (typeof managed[key] === "string" && managed[key].length > 0) {
+            fallbacks[key] = managed[key];
+        }
+    }
+    for (const [key, value] of Object.entries(env)) {
+        if (value !== undefined) {
+            if ((key === "LANCEDB_PATH" || key === "OLLAMA_HOST") && value.trim().length === 0) {
+                continue;
+            }
+            fallbacks[key] = value;
+        }
+    }
+    return fallbacks;
+}
+
+function readConfiguredClientVectorStore(homeDir: string): InstallVectorStore | undefined {
+    const selections = resolveClientTargets(homeDir)
+        .filter(hasSatoriClientEntry)
+        .map(readClientVectorStore)
+        .filter((value): value is InstallVectorStore => value !== undefined);
+    const distinct = [...new Set(selections)];
+    if (distinct.length > 1) {
+        throw new CliError(
+            "E_USAGE",
+            "Configured Satori clients disagree about VECTOR_STORE_PROVIDER. Re-run install with an explicit --vector-store after reconciling literal client settings.",
+            2,
+        );
+    }
+    return distinct[0];
+}
+
+function resolveConnectedVectorStoreForInstall(
+    command: Extract<InstallCommandInput, { kind: "install" }>,
+    homeDir: string,
+    env: NodeJS.ProcessEnv,
+    managedEnvironment?: Readonly<Record<string, string>>,
+): InstallVectorStore {
+    if (command.vectorStore) {
+        return command.vectorStore;
+    }
+    const environmentSelection = env.VECTOR_STORE_PROVIDER === undefined
+        ? undefined
+        : selectedConnectedVectorStore({ runtime: "voyage", homeDir, env });
+    const managedSelection = readManagedLauncherVectorStore(homeDir, managedEnvironment);
+    const clientSelection = readConfiguredClientVectorStore(homeDir);
+    const discovered = [environmentSelection, managedSelection, clientSelection]
+        .filter((value): value is InstallVectorStore => value !== undefined);
+    if (new Set(discovered).size > 1) {
+        throw new CliError(
+            "E_USAGE",
+            "The installer environment, managed launcher, and configured Satori clients disagree about VECTOR_STORE_PROVIDER. Re-run install with an explicit --vector-store after reconciling literal client settings.",
+            2,
+        );
+    }
+    return environmentSelection
+        ?? managedSelection
+        ?? clientSelection
+        ?? selectedConnectedVectorStore({ runtime: "voyage", homeDir, env });
+}
+
+function resolveConnectedVectorStoreForInstallOrThrow(
+    command: Extract<InstallCommandInput, { kind: "install" }>,
+    homeDir: string,
+    env: NodeJS.ProcessEnv,
+    managedEnvironment?: Readonly<Record<string, string>>,
+): InstallVectorStore {
+    try {
+        return resolveConnectedVectorStoreForInstall(command, homeDir, env, managedEnvironment);
+    } catch (error) {
+        if (error instanceof CliError) {
+            throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CliError("E_USAGE", message, 2);
+    }
+}
+
 export function inspectManagedClientConfigurations(homeDir: string): ManagedClientConfigProof[] {
     const expected = resolveManagedClientCommand(homeDir);
     return resolveClientTargets(homeDir)
@@ -1175,19 +1537,16 @@ export function verifyManagedClientConfigurations(
     return installResult.results.map((result) => verifyManagedClientTarget(result, expected));
 }
 
-export function executeInstallCommand(
+export function createInstallPlan(
     command: InstallCommandInput,
     options: InstallCommandOptions = {}
-): InstallCommandResult {
+): InstallPlan {
     const homeDir = options.homeDir ?? os.homedir();
     const repoDir = options.repoDir ?? process.cwd();
     const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
     const skillAssetRoot = options.skillAssetRoot ?? resolveDefaultSkillAssetRoot();
     const plannedRuntimeCommand = options.runtimeCommand ?? plannedManagedRuntimeCommand(homeDir, packageSpecifier);
     const clientCommand = resolveManagedClientCommand(homeDir);
-    let launcherMutation = command.kind === "install"
-        ? prepareLauncherInstall(homeDir, plannedRuntimeCommand)
-        : { changed: false, apply: () => {} };
     const profileMutation: FileMutation & { filePath?: string } = command.kind === "install"
         ? prepareProjectProfileInstall(repoDir, command.profile)
         : { changed: false, apply: () => {} };
@@ -1196,17 +1555,123 @@ export function executeInstallCommand(
         prepareMutation(target, command, clientCommand, skillAssetRoot)
     ));
 
+    return Object.freeze({
+        command: Object.freeze({ ...command }),
+        homeDir,
+        packageSpecifier,
+        plannedRuntimeCommand: Object.freeze({
+            command: plannedRuntimeCommand.command,
+            args: Object.freeze([...plannedRuntimeCommand.args]) as unknown as string[],
+        }),
+        clientCommand: Object.freeze({
+            command: clientCommand.command,
+            args: Object.freeze([...clientCommand.args]) as unknown as string[],
+        }),
+        profileMutation,
+        prepared,
+        options,
+    });
+}
+
+export function applyInstallPlan(
+    plan: InstallPlan,
+    preflight?: InstallPreflightResult,
+): InstallCommandResult {
+    const { command, homeDir, packageSpecifier, profileMutation, prepared, options } = plan;
+    if (command.kind === "install" && !command.dryRun && !preflight) {
+        throw new CliError(
+            "E_INSTALL_PREFLIGHT_REQUIRED",
+            "Refusing to apply an installation plan without a completed runtime preflight.",
+            1,
+        );
+    }
+    const runtimeEnvironment = preflight?.runtimeEnvironment ?? Object.freeze({});
+    let launcherMutation = command.kind === "install"
+        ? prepareLauncherInstall(homeDir, plan.plannedRuntimeCommand, runtimeEnvironment)
+        : { changed: false, apply: () => {} };
+
     if (!command.dryRun) {
+        const plannedSteps: Array<{ description: string; changed: boolean; apply: () => void }> = [];
         if (command.kind === "install" && !options.runtimeCommand) {
-            const installedRuntimeCommand = installManagedRuntimeCommand(homeDir, packageSpecifier, options.execFileSyncImpl ?? execFileSync);
-            launcherMutation = prepareLauncherInstall(homeDir, installedRuntimeCommand);
+            plannedSteps.push({
+                description: `managed runtime package at ${resolveRuntimeRoot(homeDir, packageSpecifier)}`,
+                changed: true,
+                apply: () => {
+                    const installedRuntime = installManagedRuntimeCandidate(
+                        homeDir,
+                        packageSpecifier,
+                        options.execFileSyncImpl ?? execFileSync,
+                    );
+                    profileMutation.assertUnchanged?.();
+                    for (const mutation of prepared) {
+                        mutation.configMutation.assertUnchanged?.();
+                        for (const companion of mutation.companionMutations) {
+                            companion.assertUnchanged?.();
+                        }
+                    }
+                    launcherMutation.assertUnchanged?.();
+                    launcherMutation = prepareLauncherInstall(homeDir, installedRuntime.command, runtimeEnvironment);
+                },
+            });
         }
         if (command.kind === "install") {
-            launcherMutation.apply();
-            profileMutation.apply();
+            plannedSteps.push({
+                description: `managed launcher at ${resolveLauncherPath(homeDir)}`,
+                changed: launcherMutation.changed || !options.runtimeCommand,
+                apply: () => {
+                    launcherMutation.assertUnchanged?.();
+                    launcherMutation.apply();
+                },
+            });
+            plannedSteps.push({
+                description: `repository profile at ${profileMutation.filePath ?? "satori.toml"}`,
+                changed: profileMutation.changed,
+                apply: () => {
+                    profileMutation.assertUnchanged?.();
+                    profileMutation.apply();
+                },
+            });
         }
         for (const mutation of prepared) {
-            mutation.apply();
+            plannedSteps.push({
+                description: `${mutation.target.client} client configuration at ${mutation.target.configPath}`,
+                changed: mutation.configMutation.changed,
+                apply: () => {
+                    mutation.configMutation.assertUnchanged?.();
+                    mutation.configMutation.apply();
+                },
+            });
+            for (const companion of mutation.companionMutations) {
+                plannedSteps.push({
+                    description: `${mutation.target.client} ${companion.companion.kind} at ${companion.companion.path}`,
+                    changed: companion.changed,
+                    apply: () => {
+                        companion.assertUnchanged?.();
+                        companion.apply();
+                    },
+                });
+            }
+        }
+
+        const mutationSteps = plannedSteps.filter((step) => step.changed);
+        const applied: string[] = [];
+        for (let index = 0; index < mutationSteps.length; index += 1) {
+            const step = mutationSteps[index];
+            try {
+                step.apply();
+                applied.push(step.description);
+            } catch (error) {
+                const cause = error instanceof Error ? error.message : String(error);
+                const notYetApplied = mutationSteps.slice(index + 1).map((entry) => entry.description);
+                throw new CliError(
+                    command.kind === "install" ? "E_INSTALL_PARTIAL" : "E_UNINSTALL_PARTIAL",
+                    `${command.kind === "install" ? "Installation" : "Uninstallation"} failed while applying ${step.description}: ${cause} `
+                    + `Successfully changed: ${applied.length > 0 ? applied.join(", ") : "none"}. `
+                    + `Not yet applied: ${notYetApplied.length > 0 ? notYetApplied.join(", ") : "none"}. `
+                    + "The failing step may be partially applied; correct the error and rerun the same command.",
+                    1,
+                );
+            }
         }
     }
 
@@ -1218,6 +1683,10 @@ export function executeInstallCommand(
         profile: command.kind === "install" ? command.profile : undefined,
         profileConfigPath: command.kind === "install" ? profileMutation.filePath : undefined,
         profileConfigChanged: command.kind === "install" ? profileMutation.changed : undefined,
+        runtime: command.kind === "install" ? command.runtime : undefined,
+        runtimeEnvironment: command.kind === "install" && command.runtime
+            ? runtimeEnvironment
+            : undefined,
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,
@@ -1230,4 +1699,112 @@ export function executeInstallCommand(
             dryRun: command.dryRun,
         })),
     };
+}
+
+export async function executeInstallCommand(
+    command: InstallCommandInput,
+    options: InstallCommandOptions = {}
+): Promise<InstallCommandResult> {
+    const homeDir = options.homeDir ?? os.homedir();
+    const env = options.env ?? process.env;
+    let preflight: InstallPreflightResult | undefined;
+    let installedRuntimeCommand = options.runtimeCommand;
+    let managedRuntimeCandidate: ManagedRuntimeCandidate | undefined;
+    let plan: InstallPlan;
+    try {
+        if (command.kind === "install") {
+            if (command.runtime === "offline" && command.vectorStore !== undefined && command.vectorStore !== "LanceDB") {
+                throw new CliError("E_USAGE", "Offline install requires --vector-store lancedb.", 2);
+            }
+            const managedRuntimeEnvironment = readManagedRuntimeEnvironment(homeDir);
+            const vectorStore = command.runtime === "voyage"
+                ? resolveConnectedVectorStoreForInstallOrThrow(command, homeDir, env, managedRuntimeEnvironment)
+                : "LanceDB";
+            const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedRuntimeEnvironment, env);
+            const preflightInput = {
+                runtime: command.runtime,
+                homeDir,
+                env: effectiveEnv,
+                vectorStore,
+                ollamaModel: command.ollamaModel,
+            };
+            if (command.dryRun) {
+                preflight = { runtimeEnvironment: planInstallRuntimeEnvironment(preflightInput) };
+            } else {
+                if (!installedRuntimeCommand) {
+                    managedRuntimeCandidate = installManagedRuntimeCandidate(
+                        homeDir,
+                        options.packageSpecifier ?? resolveDefaultPackageSpecifier(),
+                        options.execFileSyncImpl ?? execFileSync,
+                    );
+                    installedRuntimeCommand = managedRuntimeCandidate.command;
+                }
+                const preflightDependencies: InstallPreflightDependencies = {
+                    ...options.preflightDependencies,
+                    probeLanceDb: options.preflightDependencies?.probeLanceDb
+                        ?? exactRuntimeLanceDbProbe(installedRuntimeCommand),
+                };
+                try {
+                    preflight = await (options.preflightRunner ?? runInstallPreflight)(
+                        preflightInput,
+                        preflightDependencies,
+                    );
+                    if (managedRuntimeCandidate) {
+                        try {
+                            await (preflightDependencies.probeCandidateRuntime ?? probeManagedRuntimeCandidate)({
+                                runtimeCommand: managedRuntimeCandidate.command,
+                                runtimeEnvironment: preflight.runtimeEnvironment,
+                                inheritedEnvironment: effectiveEnv,
+                                homeDir,
+                                expectedVersion: managedRuntimeCandidate.identity.version,
+                            });
+                        } catch (error) {
+                            const message = error instanceof Error ? error.message : String(error);
+                            throw new CliError(
+                                "E_INSTALL_PREFLIGHT",
+                                `Candidate runtime preflight failed: ${message}`,
+                                1,
+                            );
+                        }
+                    }
+                } catch (error) {
+                    if (error instanceof CliError) throw error;
+                    const message = error instanceof Error ? error.message : String(error);
+                    throw new CliError("E_INSTALL_PREFLIGHT", `Runtime preflight failed: ${message}`, 1);
+                }
+            }
+            if (
+                command.runtime === "voyage"
+                && resolveConnectedVectorStoreForInstallOrThrow(command, homeDir, env) !== vectorStore
+            ) {
+                throw new CliError(
+                    "E_INSTALL_PLAN_STALE",
+                    "Connected vector-store selection changed while runtime preflight was running. Rerun install against the current configuration.",
+                    1,
+                );
+            }
+            const currentManagedRuntimeEnvironment = readManagedRuntimeEnvironment(homeDir);
+            for (const key of ["LANCEDB_PATH", "OLLAMA_HOST"] as const) {
+                if (currentManagedRuntimeEnvironment[key] !== managedRuntimeEnvironment[key]) {
+                    throw new CliError(
+                        "E_INSTALL_PLAN_STALE",
+                        `Managed ${key} changed while runtime preflight was running. Rerun install against the current launcher.`,
+                        1,
+                    );
+                }
+            }
+        }
+        // Read mutable client/profile files only after awaited preflight completes.
+        plan = createInstallPlan(command, {
+            ...options,
+            homeDir,
+            ...(installedRuntimeCommand ? { runtimeCommand: installedRuntimeCommand } : {}),
+        });
+    } catch (error) {
+        if (managedRuntimeCandidate?.newlyInstalled) {
+            fs.rmSync(managedRuntimeCandidate.runtimeRoot, { recursive: true, force: true });
+        }
+        throw error;
+    }
+    return applyInstallPlan(plan, preflight);
 }

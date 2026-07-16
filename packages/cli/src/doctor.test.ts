@@ -10,6 +10,7 @@ import {
     resolveCorePackageVersionViaMcp,
     runDoctor,
 } from "./doctor.js";
+import { buildLauncherScript } from "./managed-launcher-script.mjs";
 
 const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
 
@@ -31,6 +32,13 @@ function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
         diagnosticsPath: noDiagnosticsPath,
         mutationLeasesPath: null,
         managedLauncherPath: null,
+        resolveOllamaIdentity: async ({ model }) => Object.freeze({
+            configuredModel: model,
+            resolvedModel: `${model}:latest`,
+            artifactDigest: "a".repeat(64),
+            artifactSize: 1,
+            dimension: 768,
+        }),
         inspectManagedClients: () => [{
             client: "codex",
             configPath: "/tmp/config.toml",
@@ -63,8 +71,8 @@ function runtimeOwner(overrides: Record<string, unknown>): Record<string, unknow
     };
 }
 
-test("runDoctor reports missing default VoyageAI and Milvus env", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor reports missing default VoyageAI credentials with LanceDB selected", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {},
     }));
@@ -74,15 +82,15 @@ test("runDoctor reports missing default VoyageAI and Milvus env", () => {
     assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Embedding model: voyage-code-3.");
     assert.equal(result.checks.find((check) => check.name === "embedding_dimension")?.message, "Embedding output dimension: 1024.");
     assert.equal(result.checks.some((check) => check.name === "embedding_provider_env" && check.status === "error"), true);
-    assert.equal(result.checks.some((check) => check.name === "milvus_address" && check.status === "error"), true);
+    assert.equal(result.checks.find((check) => check.name === "vector_store_provider")?.message, "Vector store provider: LanceDB.");
+    assert.equal(result.checks.find((check) => check.name === "lancedb_path")?.status, "ok");
     assert.deepEqual(result.nextSteps, [
         "Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.",
-        "Set MILVUS_ADDRESS to a Zilliz Cloud public endpoint or local Milvus address such as localhost:19530.",
         "Restart your MCP client after changing Satori environment variables.",
     ]);
 });
 
-test("runDoctor includes a privacy-safe summary of local CLI diagnostics", () => {
+test("runDoctor includes a privacy-safe summary of local CLI diagnostics", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-diagnostics-"));
     const diagnosticsPath = path.join(tempDir, "events.jsonl");
     try {
@@ -96,7 +104,7 @@ test("runDoctor includes a privacy-safe summary of local CLI diagnostics", () =>
             warningCodes: ["RERANKER_FAILED"],
             fallbackUsed: true,
         })}\n`);
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             diagnosticsPath,
         }));
@@ -110,11 +118,12 @@ test("runDoctor includes a privacy-safe summary of local CLI diagnostics", () =>
     }
 });
 
-test("runDoctor treats whitespace-only provider env as incomplete", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor treats whitespace-only provider env as incomplete", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "   ",
+            VECTOR_STORE_PROVIDER: "Milvus",
             MILVUS_ADDRESS: "",
         },
     }));
@@ -130,8 +139,8 @@ test("runDoctor treats whitespace-only provider env as incomplete", () => {
     );
 });
 
-test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v22.0.0",
         env: {
             EMBEDDING_PROVIDER: "Ollama",
@@ -148,8 +157,93 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", () 
     assert.equal(result.checks.find((check) => check.name === "milvus_token")?.status, "ok");
 });
 
-test("runDoctor rejects unsupported embedding providers", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor proves the selected offline backend, model identity, and network invariant", async () => {
+    const result = await runDoctor(baseDoctorOptions({
+        nodeVersion: "v22.0.0",
+        env: {
+            HOME: "/tmp/satori-offline-doctor",
+            SATORI_RUNTIME_PROFILE: "offline",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            EMBEDDING_PROVIDER: "Ollama",
+            OLLAMA_MODEL: "nomic-embed-text:latest",
+            OLLAMA_MODEL_DIGEST: "a".repeat(64),
+            OLLAMA_HOST: "http://127.0.0.1:11434",
+            VOYAGEAI_API_KEY: "retained-but-disabled",
+        },
+    }));
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.checks.find((check) => check.name === "ollama_model_identity")?.status, "ok");
+    assert.equal(result.checks.find((check) => check.name === "offline_execution_invariant")?.status, "ok");
+});
+
+test("ordinary doctor leaves an empty home directory unchanged", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-read-only-"));
+    try {
+        const before = fs.readdirSync(homeDir);
+        await runDoctor(baseDoctorOptions({
+            env: {
+                HOME: homeDir,
+                SATORI_RUNTIME_PROFILE: "connected",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                EMBEDDING_PROVIDER: "VoyageAI",
+                VOYAGEAI_API_KEY: "test-only",
+            },
+        }));
+        assert.deepEqual(fs.readdirSync(homeDir), before);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor uses installer-owned launcher settings over stale ambient providers", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-managed-profile-"));
+    const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
+    const target = path.join(packageRoot, "dist", "index.js");
+    const launcherPath = path.join(tempDir, "satori-mcp.js");
+    try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, "// runtime");
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: "4.11.17",
+        }));
+        fs.writeFileSync(launcherPath, buildLauncherScript({
+            command: process.execPath,
+            args: [target],
+            managedEnv: {
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: path.join(tempDir, "lancedb"),
+                EMBEDDING_PROVIDER: "Ollama",
+                OLLAMA_MODEL: "nomic-embed-text:latest",
+                OLLAMA_MODEL_DIGEST: "a".repeat(64),
+                OLLAMA_HOST: "http://127.0.0.1:11434",
+            },
+        }));
+
+        const result = await runDoctor(baseDoctorOptions({
+            env: {
+                HOME: tempDir,
+                VOYAGEAI_API_KEY: "retained-but-disabled",
+                MILVUS_ADDRESS: "stale-cloud-endpoint",
+            },
+            managedLauncherPath: launcherPath,
+            loadManagedLanceDb: async () => undefined,
+        }));
+
+        assert.equal(result.status, "ok");
+        assert.equal(result.checks.find((check) => check.name === "runtime_profile")?.message, "Runtime profile: offline.");
+        assert.equal(result.checks.find((check) => check.name === "vector_store_provider")?.message, "Vector store provider: LanceDB.");
+        assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Embedding provider: Ollama.");
+        assert.equal(result.checks.find((check) => check.name === "offline_execution_invariant")?.status, "ok");
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor rejects unsupported embedding providers", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v22.0.0",
         env: {
             EMBEDDING_PROVIDER: "Typo",
@@ -173,8 +267,8 @@ test("runDoctor rejects unsupported embedding providers", () => {
     );
 });
 
-test("runDoctor flags unsupported Node versions", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor flags unsupported Node versions", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v18.19.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
@@ -186,8 +280,8 @@ test("runDoctor flags unsupported Node versions", () => {
     assert.equal(result.checks.find((check) => check.name === "node_version")?.status, "error");
 });
 
-test("runDoctor reports Satori package version set and independent-version policy", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor reports Satori package version set and independent-version policy", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
@@ -211,8 +305,8 @@ test("runDoctor reports Satori package version set and independent-version polic
     assert.equal(result.checks.find((check) => check.name === "package_version_policy")?.status, "ok");
 });
 
-test("runDoctor warns when a package version cannot be resolved", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor warns when a package version cannot be resolved", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v20.11.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
@@ -229,7 +323,7 @@ test("runDoctor warns when a package version cannot be resolved", () => {
     assert.equal(result.checks.find((check) => check.name === "package_version_mcp")?.status, "warning");
 });
 
-test("runDoctor errors when multiple live Satori MCP package versions are registered", () => {
+test("runDoctor errors when multiple live Satori MCP package versions are registered", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-owners-"));
     const ownersPath = path.join(tempDir, "owners.json");
     try {
@@ -260,7 +354,7 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
             ],
         }), "utf8");
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             nodeVersion: "v20.11.0",
             env: {
                 VOYAGEAI_API_KEY: "pa-test",
@@ -285,7 +379,7 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
     }
 });
 
-test("runDoctor errors when a live runtime version differs from the installed MCP version", () => {
+test("runDoctor errors when a live runtime version differs from the installed MCP version", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-stale-owner-"));
     const ownersPath = path.join(tempDir, "owners.json");
     try {
@@ -294,7 +388,7 @@ test("runDoctor errors when a live runtime version differs from the installed MC
             owners: [runtimeOwner({ satoriVersion: "4.11.15" })],
         }));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             runtimeOwnersPath: ownersPath,
             inspectProcess: (pid) => ({ pid, processStartTime: "start-111" }),
@@ -309,7 +403,7 @@ test("runDoctor errors when a live runtime version differs from the installed MC
     }
 });
 
-test("runDoctor errors on same-version runtime identity conflicts", () => {
+test("runDoctor errors on same-version runtime identity conflicts", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-identity-owner-"));
     const ownersPath = path.join(tempDir, "owners.json");
     try {
@@ -327,7 +421,7 @@ test("runDoctor errors on same-version runtime identity conflicts", () => {
             ],
         }));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             runtimeOwnersPath: ownersPath,
             inspectProcess: (pid) => ({ pid, processStartTime: `start-${pid}` }),
@@ -343,7 +437,7 @@ test("runDoctor errors on same-version runtime identity conflicts", () => {
     }
 });
 
-test("runDoctor rejects reused owner pids when process-start evidence differs", () => {
+test("runDoctor rejects reused owner pids when process-start evidence differs", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-owner-start-"));
     const ownersPath = path.join(tempDir, "owners.json");
     try {
@@ -352,7 +446,7 @@ test("runDoctor rejects reused owner pids when process-start evidence differs", 
             owners: [runtimeOwner({ processStartTime: "old-start" })],
         }));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             runtimeOwnersPath: ownersPath,
             inspectProcess: (pid) => ({ pid, processStartTime: "new-start" }),
@@ -366,7 +460,7 @@ test("runDoctor rejects reused owner pids when process-start evidence differs", 
     }
 });
 
-test("runDoctor reports active and abandoned mutation leases without age expiry", () => {
+test("runDoctor reports active and abandoned mutation leases without age expiry", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-leases-"));
     try {
         const lease = (root: string, pid: number, processStartTime: string) => ({
@@ -387,7 +481,7 @@ test("runDoctor reports active and abandoned mutation leases without age expiry"
         fs.writeFileSync(path.join(tempDir, "a.json"), JSON.stringify(lease("/repo/active", 111, "start-111")));
         fs.writeFileSync(path.join(tempDir, "b.json"), JSON.stringify(lease("/repo/abandoned", 222, "start-222")));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             mutationLeasesPath: tempDir,
             inspectProcess: (pid) => pid === 111 ? { pid, processStartTime: "start-111" } : null,
@@ -405,11 +499,11 @@ test("runDoctor reports active and abandoned mutation leases without age expiry"
     }
 });
 
-test("runDoctor fails closed on malformed mutation lease state", () => {
+test("runDoctor fails closed on malformed mutation lease state", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-corrupt-lease-"));
     try {
         fs.writeFileSync(path.join(tempDir, "broken.json"), "{not-json");
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             mutationLeasesPath: tempDir,
         }));
@@ -422,7 +516,7 @@ test("runDoctor fails closed on malformed mutation lease state", () => {
     }
 });
 
-test("runDoctor diagnoses a managed launcher whose runtime target is missing", () => {
+test("runDoctor diagnoses a managed launcher whose runtime target is missing", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-missing-"));
     const launcherPath = path.join(tempDir, "satori-mcp.js");
     try {
@@ -431,7 +525,7 @@ test("runDoctor diagnoses a managed launcher whose runtime target is missing", (
             `const command = ${JSON.stringify(process.execPath)};`,
             `const baseArgs = ${JSON.stringify([path.join(tempDir, "missing", "dist", "index.js")])};`,
         ].join("\n"));
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             managedLauncherPath: launcherPath,
         }));
@@ -444,7 +538,7 @@ test("runDoctor diagnoses a managed launcher whose runtime target is missing", (
     }
 });
 
-test("runDoctor diagnoses a managed launcher targeting a stale MCP package version", () => {
+test("runDoctor diagnoses a managed launcher targeting a stale MCP package version", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-version-"));
     const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
     const target = path.join(packageRoot, "dist", "index.js");
@@ -462,7 +556,7 @@ test("runDoctor diagnoses a managed launcher targeting a stale MCP package versi
             `const baseArgs = ${JSON.stringify([target])};`,
         ].join("\n"));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             managedLauncherPath: launcherPath,
         }));
@@ -476,7 +570,7 @@ test("runDoctor diagnoses a managed launcher targeting a stale MCP package versi
     }
 });
 
-test("runDoctor accepts a managed launcher targeting the installed MCP package", () => {
+test("runDoctor accepts a managed launcher targeting the installed MCP package", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-current-"));
     const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
     const target = path.join(packageRoot, "dist", "index.js");
@@ -494,7 +588,7 @@ test("runDoctor accepts a managed launcher targeting the installed MCP package",
             `const baseArgs = ${JSON.stringify([target])};`,
         ].join("\n"));
 
-        const result = runDoctor(baseDoctorOptions({
+        const result = await runDoctor(baseDoctorOptions({
             env: healthyEnv(),
             managedLauncherPath: launcherPath,
         }));
@@ -507,8 +601,60 @@ test("runDoctor accepts a managed launcher targeting the installed MCP package",
     }
 });
 
-test("runDoctor errors when a configured MCP client does not point to the managed launcher", () => {
-    const result = runDoctor(baseDoctorOptions({
+test("runDoctor reports an exact-runtime LanceDB native load failure independently of provider credentials", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-lancedb-native-"));
+    const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
+    const coreRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-core");
+    const target = path.join(packageRoot, "dist", "index.js");
+    const launcherPath = path.join(tempDir, "satori-mcp.js");
+    try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.mkdirSync(coreRoot, { recursive: true });
+        fs.writeFileSync(target, "// runtime", "utf8");
+        fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: "4.11.17",
+        }), "utf8");
+        fs.writeFileSync(path.join(coreRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-core",
+            version: "1.6.12",
+            exports: { "./lancedb": "./lancedb.cjs" },
+        }), "utf8");
+        fs.writeFileSync(
+            path.join(coreRoot, "lancedb.cjs"),
+            'throw new Error("blocked exact-runtime LanceDB native binding");\n',
+            "utf8",
+        );
+        fs.writeFileSync(launcherPath, buildLauncherScript({
+            command: process.execPath,
+            args: [target],
+            managedEnv: {
+                SATORI_RUNTIME_PROFILE: "connected",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: path.join(tempDir, "vector"),
+                EMBEDDING_PROVIDER: "VoyageAI",
+                EMBEDDING_MODEL: "voyage-code-3",
+                EMBEDDING_OUTPUT_DIMENSION: "1024",
+            },
+        }), "utf8");
+
+        const result = await runDoctor(baseDoctorOptions({
+            env: {},
+            managedLauncherPath: launcherPath,
+        }));
+
+        const check = result.checks.find((entry) => entry.name === "lancedb_native_load");
+        assert.equal(check?.status, "error");
+        assert.match(check?.message || "", /blocked exact-runtime LanceDB native binding/);
+        assert.equal(result.checks.find((entry) => entry.name === "embedding_provider_env")?.status, "error");
+        assert.equal(fs.existsSync(path.join(tempDir, "vector")), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor errors when a configured MCP client does not point to the managed launcher", async () => {
+    const result = await runDoctor(baseDoctorOptions({
         env: healthyEnv(),
         inspectManagedClients: () => [{
             client: "claude",
@@ -524,7 +670,7 @@ test("runDoctor errors when a configured MCP client does not point to the manage
 });
 
 // Doctor finding: core nested under mcp must still resolve (createRequire from MCP package.json).
-test("resolveCorePackageVersionViaMcp resolves core nested under mcp package root", () => {
+test("resolveCorePackageVersionViaMcp resolves core nested under mcp package root", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-nested-"));
     try {
         const mcpDir = path.join(tempRoot, "node_modules", "@zokizuan", "satori-mcp");
@@ -562,7 +708,7 @@ test("resolveCorePackageVersionViaMcp resolves core nested under mcp package roo
     }
 });
 
-test("resolveCorePackageVersionViaMcp resolves core in the live workspace", () => {
+test("resolveCorePackageVersionViaMcp resolves core in the live workspace", async () => {
     const viaMcp = resolveCorePackageVersionViaMcp();
     assert.ok(viaMcp, "MCP-rooted core resolution should succeed in this workspace");
     assert.equal(viaMcp?.name, "@zokizuan/satori-core");

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CliError } from "./errors.js";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
@@ -10,6 +11,11 @@ import { isExecutedDirectlyForPaths, runCli } from "./index.js";
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_SERVER_ENTRY = path.resolve(PACKAGE_ROOT, "..", "mcp", "src", "index.ts");
 const RUN_LIVE_SERVER_SMOKE = process.env.SATORI_RUN_LIVE_SERVER_SMOKE === "1";
+const BLOCK_LANCEDB_NATIVE_FIXTURE = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "test-fixtures",
+    "block-lancedb-native.cjs",
+);
 
 function captureIo() {
     let stdout = "";
@@ -183,6 +189,9 @@ test("runCli install updates config and emits the bounded postflight receipt", a
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir },
             installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
+            }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             installPostflightRunner: async ({ homeDir: verifiedHome }) => {
                 assert.equal(verifiedHome, homeDir);
@@ -204,6 +213,113 @@ test("runCli install updates config and emits the bounded postflight receipt", a
         assert.equal(parsed.client, "codex");
         assert.equal(parsed.postflight.status, "ok");
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem work", async () => {
+    for (const argv of [
+        ["install", "--client", "all", "--runtime", "voyage", "--dry-run"],
+        ["install", "--runtime", "offline", "--ollama-model", "nomic-embed-text", "--dry-run"],
+    ]) {
+        const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-dry-run-home-"));
+        const io = captureIo();
+        let installabilityCalls = 0;
+        let preflightCalls = 0;
+        try {
+            const before = fs.readdirSync(homeDir);
+            const exitCode = await runCli(argv, {
+                writeStdout: io.writeStdout,
+                writeStderr: io.writeStderr,
+                env: { ...process.env, HOME: homeDir },
+                diagnosticsPath: null,
+                installabilityVerifier: () => {
+                    installabilityCalls += 1;
+                    return "@zokizuan/satori-mcp@4.4.1";
+                },
+                installPreflightRunner: async () => {
+                    preflightCalls += 1;
+                    throw new Error("dry-run must not preflight");
+                },
+            });
+
+            assert.equal(exitCode, 0);
+            assert.equal(installabilityCalls, 0);
+            assert.equal(preflightCalls, 0);
+            assert.deepEqual(fs.readdirSync(homeDir), before);
+            assert.equal(fs.existsSync(path.join(homeDir, ".satori", "vector")), false);
+            assert.equal(fs.existsSync(path.join(homeDir, ".satori", "bin")), false);
+            assert.equal(fs.existsSync(path.join(homeDir, ".codex")), false);
+        } finally {
+            fs.rmSync(homeDir, { recursive: true, force: true });
+        }
+    }
+});
+
+test("runCli connected dry-run rejects an invalid static vector-store selection", async () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-dry-run-invalid-home-"));
+    const io = captureIo();
+    let preflightCalls = 0;
+    try {
+        const exitCode = await runCli(["install", "--runtime", "voyage", "--dry-run"], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { HOME: homeDir, VECTOR_STORE_PROVIDER: "Typo" },
+            diagnosticsPath: null,
+            installPreflightRunner: async () => {
+                preflightCalls += 1;
+                throw new Error("dry-run must not preflight");
+            },
+        });
+
+        assert.equal(exitCode, 2);
+        assert.equal(preflightCalls, 0);
+        const output = io.read();
+        assert.match(`${output.stdout}\n${output.stderr}`, /VECTOR_STORE_PROVIDER must be Milvus or LanceDB/);
+        assert.deepEqual(fs.readdirSync(homeDir), []);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("non-LanceDB CLI commands start when the native module is unavailable", () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-no-lancedb-native-home-"));
+    const indexUrl = pathToFileURL(path.join(PACKAGE_ROOT, "src", "index.ts")).href;
+    const script = `
+        const { runCli } = await import(${JSON.stringify(indexUrl)});
+        const output = { writeStdout() {}, writeStderr() {}, diagnosticsPath: null, env: { HOME: ${JSON.stringify(homeDir)} } };
+        if (await runCli(["help"], output) !== 0) process.exit(11);
+        if (await runCli(["version"], output) !== 0) process.exit(12);
+        if (await runCli(["uninstall", "--client", "codex", "--dry-run"], output) !== 0) process.exit(13);
+        if (await runCli(["doctor"], {
+            ...output,
+            doctorRunner: async () => ({
+                status: "warning",
+                packageVersions: [],
+                packageVersionNote: "test",
+                checks: [],
+                nextSteps: [],
+                localDiagnostics: { eventsRead: 0 },
+            }),
+        }) !== 0) process.exit(14);
+    `;
+    try {
+        const result = spawnSync(process.execPath, [
+            "--require",
+            BLOCK_LANCEDB_NATIVE_FIXTURE,
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            script,
+        ], {
+            cwd: path.resolve(PACKAGE_ROOT, "..", ".."),
+            encoding: "utf8",
+            env: { ...process.env, HOME: homeDir },
+        });
+        assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+        assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /SATORI_TEST_LANCEDB_NATIVE_UNAVAILABLE/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }

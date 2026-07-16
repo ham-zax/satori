@@ -12,14 +12,28 @@ test("static runtime config rejects unsupported providers without unrelated key 
 
 test("static runtime config rejects dimensions the runtime would ignore", () => {
     const checks = evaluateStaticRuntimeConfig({
-        EMBEDDING_PROVIDER: "Ollama",
-        EMBEDDING_OUTPUT_DIMENSION: "999",
+        EMBEDDING_PROVIDER: "OpenAI",
+        EMBEDDING_OUTPUT_DIMENSION: "1024",
+        OPENAI_API_KEY: "sk-test",
         MILVUS_ADDRESS: "localhost:19530",
     });
 
     const dimension = checks.find((check) => check.name === "embedding_dimension");
     assert.equal(dimension?.status, "error");
-    assert.match(dimension?.message || "", /256, 512, 1024, or 2048/);
+    assert.match(dimension?.message || "", /OpenAI ignores this setting/);
+});
+
+test("static runtime config accepts an installer-resolved Ollama dimension", () => {
+    const checks = evaluateStaticRuntimeConfig({
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        EMBEDDING_PROVIDER: "Ollama",
+        OLLAMA_MODEL: "nomic-embed-text:latest",
+        OLLAMA_MODEL_DIGEST: "a".repeat(64),
+        EMBEDDING_OUTPUT_DIMENSION: "768",
+    });
+
+    assert.equal(checks.find((check) => check.name === "embedding_dimension")?.status, "ok");
 });
 
 test("static runtime config reports a complete Ollama and local Milvus setup", () => {
@@ -31,4 +45,28 @@ test("static runtime config reports a complete Ollama and local Milvus setup", (
 
     assert.equal(checks.some((check) => check.status === "error"), false);
     assert.equal(checks.find((check) => check.name === "embedding_provider_env")?.message, "Ollama does not require an API key.");
+});
+
+test("static runtime config enforces the explicit offline policy and recorded model identity", () => {
+    const complete = evaluateStaticRuntimeConfig({
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        EMBEDDING_PROVIDER: "Ollama",
+        OLLAMA_MODEL: "nomic-embed-text:latest",
+        OLLAMA_MODEL_DIGEST: "a".repeat(64),
+        VOYAGEAI_API_KEY: "retained-but-unreachable",
+    });
+    assert.equal(complete.some((check) => check.status === "error"), false);
+    assert.equal(complete.find((check) => check.name === "offline_model_digest")?.status, "ok");
+
+    const invalid = evaluateStaticRuntimeConfig({
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "Milvus",
+        EMBEDDING_PROVIDER: "VoyageAI",
+        VOYAGEAI_API_KEY: "pa-test",
+        MILVUS_ADDRESS: "localhost:19530",
+    });
+    assert.equal(invalid.find((check) => check.name === "offline_embedding_policy")?.status, "error");
+    assert.equal(invalid.find((check) => check.name === "offline_vector_policy")?.status, "error");
+    assert.equal(invalid.find((check) => check.name === "offline_model_digest")?.status, "error");
 });

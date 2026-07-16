@@ -30,6 +30,9 @@
   ],
   "references": [
     {
+      "path": "../core"
+    },
+    {
       "path": "../mcp"
     }
   ]

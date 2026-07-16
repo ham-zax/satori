@@ -15,7 +15,23 @@ Supported clients are `codex`, `claude`, `opencode`, and `all`.
 
 The installer performs package resolution once, stores the MCP server under `~/.satori/mcp-runtime/`, writes a stable launcher at `~/.satori/bin/satori-mcp.js`, and writes client-specific config that starts the launcher directly with Node. Resident MCP startup should not run `npx` or require a custom long startup timeout.
 
-After a non-dry-run install, the CLI runs a bounded postflight against that exact launcher. It verifies managed client wiring, MCP initialization and installed server version, the fixed six-tool list in canonical order, runtime-owner registration, and complete child shutdown. Provider and vector settings are validated statically only: incomplete settings produce a warning and a successful install exit, while launcher, protocol, tool-list, owner, or shutdown failures produce a non-zero exit without removing the installed artifacts. The postflight uses a dedicated non-mutating runtime mode and never calls `manage_index`, search, or another provider-backed tool.
+Before managed configuration mutation, install resolves or installs an immutable
+MCP runtime candidate, verifies its resolved package name and exact version, and
+starts that candidate to prove MCP initialization and the canonical six-tool
+surface. Tags and ranges are resolved again instead of reusing an older package
+merely because its entry file still exists. A rejected newly installed candidate
+is removed without touching the active launcher target.
+A selected LanceDB backend proves native write/FTS/reopen behavior on the configured target
+filesystem; a selected Milvus backend does not load or validate LanceDB. The
+offline profile additionally resolves and probes the selected local Ollama
+artifact. A rejected preflight leaves the prior launcher target and managed client
+files unchanged. After a
+non-dry-run install, the CLI runs a bounded postflight against that exact
+launcher. It verifies managed client
+wiring, MCP initialization and installed server version, the fixed six-tool
+list in canonical order, runtime-owner registration, and complete child
+shutdown. The postflight uses a dedicated non-mutating runtime mode and never
+calls `manage_index`, search, or another provider-backed tool.
 
 Treat `~/.satori/` as installer-owned state. The public setup path is the installer command above, not manual copying of runtime cache paths into each harness.
 
@@ -23,7 +39,7 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 - `satori`
 
-After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer verifies wiring but does not run indexing or provider-backed work during setup.
+After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer never indexes or searches a repository during setup; its provider work is limited to the selected preflight probes. `--dry-run` performs static runtime/backend selection and path-syntax validation but does not inspect target filesystem shape, install a package, load LanceDB, contact Ollama, or write filesystem state.
 
 Grouped search responses use `formatVersion: 2`: each result has one canonical `target`, bounded source evidence, quality, and compact graph readiness. Use the envelope `codebaseRoot` with that target for `read_file` or graph-ready `call_graph` calls; graph-ready results explicitly require inbound verification, and the removed per-result action/fallback trees are not part of the 6.0 contract.
 
@@ -31,6 +47,9 @@ Grouped search responses use `formatVersion: 2`: each result has one canonical `
 
 ```bash
 npx -y @zokizuan/satori-cli@latest install --client codex
+npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage
+npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage --vector-store milvus
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 npx -y @zokizuan/satori-cli@latest install --client all --profile minimal
 npx -y @zokizuan/satori-cli@latest install --client codex --install-guidance-hook
 npx -y @zokizuan/satori-cli@latest install --client claude
@@ -39,7 +58,18 @@ npx -y @zokizuan/satori-cli@latest install --client all --dry-run
 npx -y @zokizuan/satori-cli@latest uninstall --client codex
 ```
 
-`doctor` is read-only. It checks Node, package visibility, supported provider/model/dimension settings, required provider keys, Milvus configuration, the installed Satori package set, the stable managed launcher target, and every configured Codex/Claude/OpenCode Satori entry. It reads runtime owners with process-start evidence when the platform provides it, errors on stale installed versions or conflicting fingerprints/config identities, and reports active, abandoned, or corrupt mutation leases without expiring or rewriting them by age.
+`doctor` does not write configuration or database state. It checks Node, package
+visibility, the runtime profile persisted by the managed launcher,
+provider/model/dimension settings, required provider keys, optional Milvus
+configuration, and every configured Codex/Claude/OpenCode Satori entry. For a
+managed LanceDB runtime it read-only loads that runtime's Core LanceDB subpath
+and native dependency; the install preflight, not doctor, owns the temporary
+write/FTS/reopen capability proof. Offline diagnostics also resolve the local
+Ollama artifact and compare its digest with the installer-recorded identity.
+Doctor reads runtime owners with process-start
+evidence when the platform provides it, errors on stale installed versions or
+conflicting fingerprints/config identities, and reports active, abandoned, or
+corrupt mutation leases without expiring or rewriting them by age.
 
 Direct MCP tool calls made through `satori-cli` also write a capped, local-only diagnostics log. `doctor` reports its aggregate under `localDiagnostics`: tool category, duration, outcome, returned `search_codebase` result count, known warning codes, fallback use, lifecycle outcome, and repair success. Outline symbols, graph nodes or edges, listed roots, and read bytes are not combined into the search-result metric. The log stores no source, query text, path, symbol name, or repository identifier, is limited to 1,000 validated events, and is never uploaded. Writes use a bounded interprocess lock and same-directory atomic replacement, refuse symlinked log paths, and remove malformed or extra fields during compaction. Recording is best-effort and cannot change a tool call's result.
 
@@ -65,7 +95,18 @@ npx -y @zokizuan/satori-cli@latest doctor
 # restart your MCP client
 ```
 
-The installer writes launcher config only. Runtime provider settings are read when the MCP client starts.
+The installer writes the managed launcher and client wiring. The launcher
+persists the selected non-secret runtime profile/backend/model identity and
+combines it with secret credentials forwarded by the MCP client at startup.
+For connected installs, LanceDB is the default. Pass `--vector-store milvus` to
+retain a Milvus deployment; a consistent literal Milvus selection already
+stored in any configured Satori client is also preserved on reinstall. The
+launcher is shared by every installed client, so an explicit `--vector-store`
+changes the effective backend for all of them regardless of `--client`.
+Conflicting environment, managed-launcher, or literal client selections fail
+until literal settings are reconciled and the backend is chosen explicitly.
+Reinstall preserves the managed LanceDB path and offline Ollama endpoint unless
+the current installer environment explicitly supplies replacements.
 
 Repo profile config is separate from client/provider config:
 
@@ -86,13 +127,13 @@ If you want a client to store literal values, replace the generated pass-through
 
 ```toml
 [mcp_servers.satori.env]
+SATORI_RUNTIME_PROFILE = "connected"
+VECTOR_STORE_PROVIDER = "LanceDB"
 EMBEDDING_PROVIDER = "VoyageAI"
 EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_OUTPUT_DIMENSION = "1024"
 VOYAGEAI_API_KEY = "pa-..."
 VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
-MILVUS_ADDRESS = "https://your-zilliz-endpoint"
-MILVUS_TOKEN = "your-zilliz-token"
 ```
 
 ## Direct Tool Calls
@@ -115,16 +156,27 @@ After changing embedding/vector runtime config or the installed Satori package v
 
 Node.js 22.13 or newer is required.
 
-Indexing and search require an embedding provider plus a Milvus-compatible backend. MCP startup and `tools list` do not require those credentials; provider-backed tool calls return `MISSING_PROVIDER_CONFIG` when setup is incomplete.
+The installer defaults to `--runtime voyage`, which freezes a connected
+VoyageAI identity and an installer-owned LanceDB path only after the LanceDB
+native write, FTS, close, and reopen preflight succeeds. Milvus remains an
+explicit supported backend for existing cloud/local deployments through
+`--vector-store milvus`; Milvus credentials and addresses remain client-owned
+environment values. MCP startup and `tools list` do not require provider
+credentials; provider-backed tool calls return `MISSING_PROVIDER_CONFIG` when
+setup is incomplete.
 
-Common local setup:
+The offline installer candidate requires a local Ollama model and rejects
+non-loopback endpoints before changing managed client configuration:
 
 ```bash
-EMBEDDING_PROVIDER=Ollama
-EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_HOST=http://127.0.0.1:11434
-MILVUS_ADDRESS=localhost:19530
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 ```
+
+It persists the resolved model name/digest and selected LanceDB path in the
+non-secret managed launcher environment. The runtime prohibits cloud embedding,
+reranking, and Milvus construction even if old cloud credentials remain in the
+ambient environment. Offline release qualification remains pending until the
+live Ollama lifecycle and paired quality matrix pass.
 
 ## Development
 

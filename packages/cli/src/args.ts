@@ -18,7 +18,26 @@ export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
     | { kind: "doctor" }
-    | { kind: "install"; client: InstallClient; dryRun: boolean; installGuidanceHook: boolean; profile?: InstallProfile }
+    | {
+        kind: "install";
+        client: InstallClient;
+        dryRun: boolean;
+        installGuidanceHook: boolean;
+        profile?: InstallProfile;
+        runtime: "voyage";
+        vectorStore?: InstallVectorStore;
+        ollamaModel?: never;
+    }
+    | {
+        kind: "install";
+        client: InstallClient;
+        dryRun: boolean;
+        installGuidanceHook: boolean;
+        profile?: InstallProfile;
+        runtime: "offline";
+        vectorStore?: "LanceDB";
+        ollamaModel: string;
+    }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
     | { kind: "tool-call"; toolName: string; rawArgsMode: RawArgsMode }
@@ -36,6 +55,8 @@ export interface ResolveRawArgsOptions {
 
 export type InstallClient = "all" | "claude" | "codex" | "opencode";
 export type InstallProfile = "default" | "minimal" | "all-text";
+export type InstallRuntime = "voyage" | "offline";
+export type InstallVectorStore = "LanceDB" | "Milvus";
 
 const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "doctor", "install", "uninstall"]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
@@ -179,6 +200,9 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let dryRun = false;
     let installGuidanceHook = false;
     let profile: InstallProfile | undefined;
+    let runtime: InstallRuntime = "voyage";
+    let vectorStore: InstallVectorStore | undefined;
+    let ollamaModel: string | undefined;
 
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
@@ -208,12 +232,64 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             i += 1;
             continue;
         }
+        if (kind === "install" && token === "--runtime") {
+            const next = args[i + 1];
+            if (next !== "voyage" && next !== "offline") {
+                throw new CliError("E_USAGE", "--runtime must be one of: voyage, offline.", 2);
+            }
+            runtime = next;
+            i += 1;
+            continue;
+        }
+        if (kind === "install" && token === "--vector-store") {
+            const next = args[i + 1]?.trim().toLowerCase();
+            if (next !== "lancedb" && next !== "milvus") {
+                throw new CliError("E_USAGE", "--vector-store must be one of: lancedb, milvus.", 2);
+            }
+            vectorStore = next === "lancedb" ? "LanceDB" : "Milvus";
+            i += 1;
+            continue;
+        }
+        if (kind === "install" && token === "--ollama-model") {
+            const next = args[i + 1]?.trim();
+            if (!next) {
+                throw new CliError("E_USAGE", "--ollama-model requires a non-empty model name.", 2);
+            }
+            ollamaModel = next;
+            i += 1;
+            continue;
+        }
         throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
     }
 
-    return kind === "install"
-        ? { kind, client, dryRun, installGuidanceHook, profile }
-        : { kind, client, dryRun };
+    if (kind === "install") {
+        if (runtime === "offline" && !ollamaModel) {
+            throw new CliError("E_USAGE", "--runtime offline requires --ollama-model <model>.", 2);
+        }
+        if (runtime !== "offline" && ollamaModel) {
+            throw new CliError("E_USAGE", "--ollama-model is only valid with --runtime offline.", 2);
+        }
+        if (runtime === "offline" && vectorStore === "Milvus") {
+            throw new CliError("E_USAGE", "--runtime offline requires --vector-store lancedb.", 2);
+        }
+    }
+
+    if (kind !== "install") {
+        return { kind, client, dryRun };
+    }
+    if (runtime === "offline") {
+        return {
+            kind,
+            client,
+            dryRun,
+            installGuidanceHook,
+            profile,
+            runtime,
+            vectorStore: vectorStore === "LanceDB" ? "LanceDB" : undefined,
+            ollamaModel: ollamaModel!,
+        };
+    }
+    return { kind, client, dryRun, installGuidanceHook, profile, runtime, vectorStore };
 }
 
 export function parseCliArgs(argv: string[]): ParsedCliInput {

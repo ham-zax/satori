@@ -3,14 +3,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+    assertNetworkPolicyAllowsEndpoint,
+    resolveOllamaModelIdentity,
+    type ResolvedOllamaModelIdentity,
+} from "@zokizuan/satori-core";
 import {
     readManagedPackageJson,
     resolveManagedPackageJsonPath,
     resolveManagedPackageSpecifier,
 } from "./managed-package.js";
 import { inspectManagedClientConfigurations } from "./install.js";
-import { evaluateStaticRuntimeConfig } from "./runtime-config.js";
+import { parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
+import { evaluateStaticRuntimeConfig, selectedVectorStore } from "./runtime-config.js";
 import { readLocalDiagnosticsSummary, type LocalDiagnosticsSummary } from "./local-diagnostics.js";
 
 type CheckStatus = "ok" | "warning" | "error";
@@ -65,6 +71,9 @@ export interface DoctorOptions {
     inspectManagedClients?: (homeDir: string) => ReturnType<typeof inspectManagedClientConfigurations>;
     /** Override local diagnostics event log path. */
     diagnosticsPath?: string;
+    resolveOllamaIdentity?: typeof resolveOllamaModelIdentity;
+    /** Read-only exact-runtime LanceDB module load override. */
+    loadManagedLanceDb?: (runtimeTarget: string) => Promise<void>;
 }
 
 const PACKAGE_VERSION_NOTE =
@@ -265,7 +274,7 @@ export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
     });
 }
 
-export function runDoctor(options: DoctorOptions = {}): DoctorResult {
+export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResult> {
     const env = options.env || process.env;
     const homeDir = env.HOME || os.homedir();
     const nodeVersion = options.nodeVersion || process.version;
@@ -275,6 +284,27 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
     const packageVersions = options.resolvePackageVersions
         ? options.resolvePackageVersions()
         : resolveInstalledPackageVersions();
+    const managedLauncherPath = options.managedLauncherPath === null
+        ? null
+        : options.managedLauncherPath || path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    let managedRuntimeEnvironment: Readonly<Record<string, string>> = Object.freeze({});
+    let managedRuntimeTarget: string | null = null;
+    if (managedLauncherPath && fs.existsSync(managedLauncherPath)) {
+        try {
+            const launcher = fs.readFileSync(managedLauncherPath, "utf8");
+            managedRuntimeEnvironment = parseManagedLauncherEnvironment(launcher);
+            managedRuntimeTarget = parseManagedLauncherTarget(launcher);
+        } catch (error) {
+            addCheck(
+                checks,
+                "managed_runtime_environment",
+                "error",
+                error instanceof Error ? error.message : String(error),
+            );
+            nextSteps.push("Rerun satori-cli install to replace the malformed managed launcher.");
+        }
+    }
+    const runtimeEnv: NodeJS.ProcessEnv = { ...env, ...managedRuntimeEnvironment };
 
     for (const pkg of packageVersions) {
         const shortName = pkg.name.includes("/")
@@ -317,10 +347,78 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
     }
 
-    for (const check of evaluateStaticRuntimeConfig(env)) {
+    const staticRuntimeChecks = evaluateStaticRuntimeConfig(runtimeEnv);
+    for (const check of staticRuntimeChecks) {
         addCheck(checks, check.name, check.status, check.message);
         if (check.nextStep) {
             nextSteps.push(check.nextStep);
+        }
+    }
+
+    const vectorStore = selectedVectorStore(runtimeEnv);
+    if (
+        vectorStore === "LanceDB"
+        && managedRuntimeTarget
+        && path.isAbsolute(managedRuntimeTarget)
+        && isRegularFile(managedRuntimeTarget)
+    ) {
+        try {
+            await (options.loadManagedLanceDb ?? loadManagedLanceDbFromRuntime)(managedRuntimeTarget);
+            addCheck(
+                checks,
+                "lancedb_native_load",
+                "ok",
+                "The managed MCP runtime loaded its LanceDB adapter and native dependency without writing database state.",
+            );
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addCheck(
+                checks,
+                "lancedb_native_load",
+                "error",
+                `The managed MCP runtime could not load LanceDB: ${message}`,
+            );
+            nextSteps.push("Reinstall Satori on a supported Node/platform pair or repair the managed MCP runtime package.");
+        }
+    }
+
+    if (!staticRuntimeChecks.some((check) => check.status === "error")) {
+        if ((runtimeEnv.EMBEDDING_PROVIDER?.trim() || "VoyageAI") === "Ollama") {
+            const host = runtimeEnv.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
+            const model = runtimeEnv.OLLAMA_MODEL?.trim() || runtimeEnv.EMBEDDING_MODEL?.trim() || "nomic-embed-text";
+            try {
+                if ((runtimeEnv.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
+                    assertNetworkPolicyAllowsEndpoint({ kind: "local-only" }, host, "OLLAMA_HOST");
+                }
+                const identity: Readonly<ResolvedOllamaModelIdentity> = await (
+                    options.resolveOllamaIdentity ?? resolveOllamaModelIdentity
+                )({ model, host });
+                const recordedDigest = runtimeEnv.OLLAMA_MODEL_DIGEST?.trim().replace(/^sha256:/i, "").toLowerCase();
+                if (recordedDigest && recordedDigest !== identity.artifactDigest) {
+                    throw new Error("installed model digest does not match OLLAMA_MODEL_DIGEST");
+                }
+                addCheck(
+                    checks,
+                    "ollama_model_identity",
+                    "ok",
+                    `Ollama model ${identity.resolvedModel} resolved with dimension ${identity.dimension} and the recorded artifact digest.`,
+                );
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                addCheck(checks, "ollama_model_identity", "error", `Ollama model identity probe failed: ${message}`);
+                nextSteps.push("Start Ollama and reinstall the offline profile with the intended local model.");
+            }
+        }
+
+        if ((runtimeEnv.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
+            addCheck(
+                checks,
+                "offline_execution_invariant",
+                checks.some((check) => check.name === "ollama_model_identity" && check.status === "error")
+                    ? "error"
+                    : "ok",
+                "Offline profile selects LanceDB and Ollama; remote inference and reranking construction is prohibited.",
+            );
         }
     }
 
@@ -339,11 +437,11 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
         );
     }
 
-    if (options.managedLauncherPath !== null) {
+    if (managedLauncherPath) {
         appendManagedLauncherCheck(
             checks,
             nextSteps,
-            options.managedLauncherPath || path.join(homeDir, ".satori", "bin", "satori-mcp.js"),
+            managedLauncherPath,
             installedMcpVersion,
         );
     }
@@ -613,6 +711,12 @@ function parseManagedLauncherTarget(content: string): string | null {
     } catch {
         return null;
     }
+}
+
+async function loadManagedLanceDbFromRuntime(runtimeTarget: string): Promise<void> {
+    const requireFromRuntime = createRequire(runtimeTarget);
+    const resolvedModule = requireFromRuntime.resolve("@zokizuan/satori-core/lancedb");
+    await import(pathToFileURL(resolvedModule).href);
 }
 
 function isRegularFile(filePath: string): boolean {

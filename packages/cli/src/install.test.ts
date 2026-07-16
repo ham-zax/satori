@@ -7,7 +7,12 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
-import { executeInstallCommand, inspectManagedClientConfigurations } from "./install.js";
+import {
+    executeInstallCommand as executeInstallCommandProduction,
+    inspectManagedClientConfigurations,
+    type InstallCommandInput,
+    type InstallCommandOptions,
+} from "./install.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const POSTFLIGHT_MCP_RUNTIME_FIXTURE = path.resolve(
@@ -19,6 +24,21 @@ const PACKAGE_JSON = JSON.parse(
     fs.readFileSync(path.resolve(PACKAGE_ROOT, "..", "mcp", "package.json"), "utf8")
 ) as { name: string; version: string; bin?: Record<string, string> };
 const EXPECTED_PACKAGE_SPECIFIER = `${PACKAGE_JSON.name}@${PACKAGE_JSON.version}`;
+
+function executeInstallCommand(
+    command: InstallCommandInput,
+    options: InstallCommandOptions = {},
+) {
+    return executeInstallCommandProduction(command, {
+        preflightRunner: async () => ({
+            runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
+        }),
+        preflightDependencies: {
+            probeCandidateRuntime: async () => {},
+        },
+        ...options,
+    });
+}
 
 function fakeRuntimeCommand(homeDir: string) {
     return {
@@ -57,19 +77,19 @@ function installOptions(homeDir: string) {
     };
 }
 
-function withTempRepo(run: (repoDir: string) => void): void {
+async function withTempRepo(run: (repoDir: string) => void | Promise<void>): Promise<void> {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-profile-repo-"));
     try {
-        run(repoDir);
+        await run(repoDir);
     } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
     }
 }
 
-function withTempHome(run: (homeDir: string) => void): void {
+async function withTempHome(run: (homeDir: string) => void | Promise<void>): Promise<void> {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-install-"));
     try {
-        run(homeDir);
+        await run(homeDir);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -140,9 +160,10 @@ async function assertLauncherReapsChild(
         }), "utf8");
         fs.chmodSync(launcherPath(homeDir), 0o755);
     } else {
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, {
             homeDir,
@@ -189,20 +210,26 @@ function runGuidanceCommand(command: string, cwd: string, runtimeDir: string): s
     });
 }
 
-function installRuntimePackageStub(relativeEntry: string) {
+function installRuntimePackageStub(
+    relativeEntry: string,
+    expectedSpecifier = EXPECTED_PACKAGE_SPECIFIER,
+    installedVersion = expectedSpecifier.slice(expectedSpecifier.lastIndexOf("@") + 1),
+) {
     return (command: string, args: string[]) => {
         assert.equal(command, "npm");
         const prefixIndex = args.indexOf("--prefix");
         assert.notEqual(prefixIndex, -1);
         const runtimeRoot = args[prefixIndex + 1];
         assert.equal(typeof runtimeRoot, "string");
-        const packageIndex = args.indexOf(EXPECTED_PACKAGE_SPECIFIER);
+        const packageIndex = args.indexOf(expectedSpecifier);
         assert.notEqual(packageIndex, -1);
         assert.equal(args[packageIndex - 1], "--");
         const packageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
         const entryPath = path.join(packageRoot, relativeEntry);
         fs.mkdirSync(path.dirname(entryPath), { recursive: true });
         fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: installedVersion,
             bin: {
                 satori: relativeEntry,
             },
@@ -212,15 +239,40 @@ function installRuntimePackageStub(relativeEntry: string) {
     };
 }
 
-test("install writes managed Codex config block and copies packaged skill", () => {
-    withTempHome((homeDir) => {
+function brokenRuntimePackageStub(
+    expectedSpecifier: string,
+    startedMarkerPath: string,
+    installedPrefixes: string[],
+) {
+    const install = installRuntimePackageStub("dist/broken-runtime.mjs", expectedSpecifier);
+    return (command: string, args: string[]) => {
+        const result = install(command, args);
+        const prefix = args[args.indexOf("--prefix") + 1];
+        installedPrefixes.push(prefix);
+        fs.writeFileSync(
+            path.join(prefix, "node_modules", "@zokizuan", "satori-mcp", "dist", "broken-runtime.mjs"),
+            [
+                'import fs from "node:fs";',
+                `fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started\\n", "utf8");`,
+                'throw new Error("candidate startup failed");',
+                "",
+            ].join("\n"),
+            "utf8",
+        );
+        return result;
+    };
+}
+
+test("install writes managed Codex config block and copies packaged skill", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(codexConfigPath, 'model = "gpt-5"\n', "utf8");
 
-        const result = executeInstallCommand({
+        const result = await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -276,14 +328,15 @@ test("install writes managed Codex config block and copies packaged skill", () =
     });
 });
 
-test("install writes the actual installed runtime bin path into the stable launcher", () => {
-    withTempHome((homeDir) => {
+test("install writes the actual installed runtime bin path into the stable launcher", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, {
             homeDir,
@@ -299,6 +352,258 @@ test("install writes the actual installed runtime bin path into the stable launc
         assert.equal(content.includes("startup_timeout_ms"), false);
         const launcher = readFile(launcherPath(homeDir));
         assert.equal(launcher.includes("custom/server.mjs"), true);
+    });
+});
+
+test("managed package installation completes before reading mutable client config", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".codex", "config.toml");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, 'model = "before-package-install"\n', "utf8");
+        const installRuntime = installRuntimePackageStub("custom/server.mjs");
+        const execFileSyncImpl = ((command: string, args: string[]) => {
+            const result = installRuntime(command, args);
+            fs.writeFileSync(configPath, 'model = "changed-during-package-install"\n', "utf8");
+            return result;
+        }) as never;
+
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: EXPECTED_PACKAGE_SPECIFIER,
+            execFileSyncImpl,
+        });
+
+        const content = readFile(configPath);
+        assert.match(content, /model = "changed-during-package-install"/);
+        assert.equal(fs.existsSync(launcherPath(homeDir)), true);
+    });
+});
+
+test("failed runtime upgrade leaves the previous launcher target unchanged", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: "@zokizuan/satori-mcp@1.0.0-test",
+            execFileSyncImpl: installRuntimePackageStub("dist/old-runtime.mjs", "@zokizuan/satori-mcp@1.0.0-test") as never,
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        assert.match(originalLauncher, /old-runtime\.mjs/);
+
+        await assert.rejects(
+            executeInstallCommandProduction({
+                kind: "install",
+                client: "codex",
+                runtime: "voyage",
+                dryRun: false,
+            }, {
+                homeDir,
+                packageSpecifier: "@zokizuan/satori-mcp@2.0.0-test",
+                execFileSyncImpl: installRuntimePackageStub("dist/new-runtime.mjs", "@zokizuan/satori-mcp@2.0.0-test") as never,
+                preflightRunner: async () => {
+                    throw new Error("staged runtime rejected");
+                },
+            }),
+            /Runtime preflight failed: staged runtime rejected/,
+        );
+
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+    });
+});
+
+test("Milvus upgrade starts the candidate and preserves the old install when startup fails", async () => {
+    await withTempHome(async (homeDir) => {
+        const oldSpecifier = "@zokizuan/satori-mcp@1.0.0-test";
+        const newSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            vectorStore: "Milvus",
+            dryRun: false,
+        }, {
+            homeDir,
+            env: { VECTOR_STORE_PROVIDER: "Milvus", MILVUS_ADDRESS: "https://milvus.example.test" },
+            packageSpecifier: oldSpecifier,
+            execFileSyncImpl: installRuntimePackageStub("dist/old-runtime.mjs", oldSpecifier) as never,
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        const configPath = path.join(homeDir, ".codex", "config.toml");
+        const originalConfig = readFile(configPath);
+        const startedMarkerPath = path.join(homeDir, "candidate-started");
+        const installedPrefixes: string[] = [];
+
+        await assert.rejects(
+            executeInstallCommandProduction({
+                kind: "install",
+                client: "codex",
+                runtime: "voyage",
+                vectorStore: "Milvus",
+                dryRun: false,
+            }, {
+                homeDir,
+                env: { VECTOR_STORE_PROVIDER: "Milvus", MILVUS_ADDRESS: "https://milvus.example.test" },
+                packageSpecifier: newSpecifier,
+                execFileSyncImpl: brokenRuntimePackageStub(
+                    newSpecifier,
+                    startedMarkerPath,
+                    installedPrefixes,
+                ) as never,
+            }),
+            /Candidate runtime preflight failed/,
+        );
+
+        assert.equal(fs.existsSync(startedMarkerPath), true);
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+        assert.equal(readFile(configPath), originalConfig);
+        assert.equal(installedPrefixes.length, 1);
+        assert.equal(fs.existsSync(installedPrefixes[0]), false);
+    });
+});
+
+test("runtime reuse requires the exact requested package identity", async () => {
+    await withTempHome(async (homeDir) => {
+        const requestedSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        const stableRoot = path.join(
+            homeDir,
+            ".satori",
+            "mcp-runtime",
+            "@zokizuan-satori-mcp@2.0.0-test",
+        );
+        const stalePackageRoot = path.join(stableRoot, "node_modules", "@zokizuan", "satori-mcp");
+        fs.mkdirSync(path.join(stalePackageRoot, "dist"), { recursive: true });
+        fs.writeFileSync(path.join(stalePackageRoot, "package.json"), JSON.stringify({
+            name: "@zokizuan/satori-mcp",
+            version: "1.0.0-test",
+            bin: { satori: "dist/stale-runtime.mjs" },
+        }), "utf8");
+        fs.writeFileSync(path.join(stalePackageRoot, "dist", "stale-runtime.mjs"), "", "utf8");
+        const installedPrefixes: string[] = [];
+        const install = installRuntimePackageStub("dist/new-runtime.mjs", requestedSpecifier);
+
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: requestedSpecifier,
+            execFileSyncImpl: ((command: string, args: string[]) => {
+                installedPrefixes.push(args[args.indexOf("--prefix") + 1]);
+                return install(command, args);
+            }) as never,
+        });
+
+        assert.equal(installedPrefixes.length, 1);
+        assert.notEqual(installedPrefixes[0], stableRoot);
+        assert.match(readFile(launcherPath(homeDir)), /new-runtime\.mjs/);
+        assert.equal(fs.existsSync(path.join(stalePackageRoot, "dist", "stale-runtime.mjs")), true);
+    });
+});
+
+test("runtime reuse never treats a package tag as a resolved immutable version", async () => {
+    await withTempHome(async (homeDir) => {
+        const requestedSpecifier = "@zokizuan/satori-mcp@latest";
+        const installedPrefixes: string[] = [];
+        const installVersion = (installedVersion: string) => {
+            const install = installRuntimePackageStub(
+                "dist/runtime.mjs",
+                requestedSpecifier,
+                installedVersion,
+            );
+            return ((command: string, args: string[]) => {
+                installedPrefixes.push(args[args.indexOf("--prefix") + 1]);
+                return install(command, args);
+            }) as never;
+        };
+
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: requestedSpecifier,
+            execFileSyncImpl: installVersion("1.0.0"),
+        });
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: requestedSpecifier,
+            execFileSyncImpl: installVersion("2.0.0"),
+        });
+
+        assert.equal(installedPrefixes.length, 2);
+        assert.notEqual(installedPrefixes[0], installedPrefixes[1]);
+        const launcher = readFile(launcherPath(homeDir));
+        assert.match(launcher, new RegExp(installedPrefixes[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    });
+});
+
+test("successful runtime upgrade switches the launcher only after candidate preflight", async () => {
+    await withTempHome(async (homeDir) => {
+        const oldSpecifier = "@zokizuan/satori-mcp@1.0.0-test";
+        const newSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        const installedPrefixes: string[] = [];
+        const preflightEntries: string[] = [];
+        const installVersion = (entry: string, specifier: string) => {
+            const install = installRuntimePackageStub(entry, specifier);
+            return ((command: string, args: string[]) => {
+                installedPrefixes.push(args[args.indexOf("--prefix") + 1]);
+                return install(command, args);
+            }) as never;
+        };
+
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: oldSpecifier,
+            execFileSyncImpl: installVersion("dist/old-runtime.mjs", oldSpecifier),
+        });
+        const oldRuntimeRoot = installedPrefixes[0];
+
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: newSpecifier,
+            execFileSyncImpl: installVersion("dist/new-runtime.mjs", newSpecifier),
+            preflightDependencies: {
+                probeCandidateRuntime: async ({ runtimeCommand, expectedVersion }) => {
+                    preflightEntries.push(runtimeCommand.args[0]);
+                    assert.equal(expectedVersion, "2.0.0-test");
+                    assert.match(runtimeCommand.args[0], /new-runtime\.mjs$/);
+                },
+            },
+        });
+
+        assert.equal(installedPrefixes.length, 2);
+        assert.notEqual(installedPrefixes[0], installedPrefixes[1]);
+        assert.equal(preflightEntries.length, 1);
+        assert.match(readFile(launcherPath(homeDir)), /new-runtime\.mjs/);
+        assert.equal(fs.existsSync(oldRuntimeRoot), true);
     });
 });
 
@@ -490,11 +795,12 @@ test("managed launcher closes the real postflight runtime on stdin EOF and unreg
     }
 });
 
-test("install launcher embeds shared SIGKILL grace path", () => {
-    withTempHome((homeDir) => {
-        executeInstallCommand({
+test("install launcher embeds shared SIGKILL grace path", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
         const launcher = readFile(launcherPath(homeDir));
@@ -505,11 +811,12 @@ test("install launcher embeds shared SIGKILL grace path", () => {
 });
 
 // F-OP-02: install result must surface the managed package specifier used.
-test("install result includes packageSpecifier used for managed runtime", () => {
-    withTempHome((homeDir) => {
-        const result = executeInstallCommand({
+test("install result includes packageSpecifier used for managed runtime", async () => {
+    await withTempHome(async (homeDir) => {
+        const result = await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: true,
         }, {
             homeDir,
@@ -522,30 +829,32 @@ test("install result includes packageSpecifier used for managed runtime", () => 
     });
 });
 
-test("managed MCP package exposes a single satori bin for npx package execution", () => {
+test("managed MCP package exposes a single satori bin for npx package execution", async () => {
     assert.deepEqual(PACKAGE_JSON.bin, {
         satori: "dist/index.js",
     });
 });
 
-test("packaged Satori skill assets stay identical across CLI and MCP packages", () => {
+test("packaged Satori skill assets stay identical across CLI and MCP packages", async () => {
     const cliSkill = readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md"));
     const mcpSkill = readFile(path.join(PACKAGE_ROOT, "..", "mcp", "assets", "skills", "satori", "SKILL.md"));
 
     assert.equal(cliSkill, mcpSkill);
 });
 
-test("install is idempotent for managed Codex config", () => {
-    withTempHome((homeDir) => {
-        executeInstallCommand({
+test("install is idempotent for managed Codex config", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
-        const second = executeInstallCommand({
+        const second = await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -556,8 +865,8 @@ test("install is idempotent for managed Codex config", () => {
     });
 });
 
-test("install replaces only the managed Codex AGENTS block and preserves user content", () => {
-    withTempHome((homeDir) => {
+test("install replaces only the managed Codex AGENTS block and preserves user content", async () => {
+    await withTempHome(async (homeDir) => {
         const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
         fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
         fs.writeFileSync(agentsPath, [
@@ -574,9 +883,10 @@ test("install replaces only the managed Codex AGENTS block and preserves user co
             "",
         ].join("\n"), "utf8");
 
-        const result = executeInstallCommand({
+        const result = await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -591,8 +901,8 @@ test("install replaces only the managed Codex AGENTS block and preserves user co
     });
 });
 
-test("install replaces an existing managed Codex block", () => {
-    withTempHome((homeDir) => {
+test("install replaces an existing managed Codex block", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -611,9 +921,10 @@ test("install replaces an existing managed Codex block", () => {
             "utf8"
         );
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -631,8 +942,8 @@ test("install replaces an existing managed Codex block", () => {
     });
 });
 
-test("install preserves user-owned Codex env values outside the managed block", () => {
-    withTempHome((homeDir) => {
+test("install preserves user-owned Codex env values outside the managed block", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -652,9 +963,10 @@ test("install preserves user-owned Codex env values outside the managed block", 
             "utf8"
         );
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -665,8 +977,8 @@ test("install preserves user-owned Codex env values outside the managed block", 
     });
 });
 
-test("install adds opt-in managed Codex guidance hook and preserves user hooks", () => {
-    withTempHome((homeDir) => {
+test("install adds opt-in managed Codex guidance hook and preserves user hooks", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -685,9 +997,10 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
             "utf8"
         );
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
             installGuidanceHook: true,
         }, installOptions(homeDir));
@@ -703,8 +1016,8 @@ test("install adds opt-in managed Codex guidance hook and preserves user hooks",
     });
 });
 
-test("managed Codex guidance hook command suppresses duplicate prints per working directory", () => {
-    withTempHome((homeDir) => {
+test("managed Codex guidance hook command suppresses duplicate prints per working directory", async () => {
+    await withTempHome(async (homeDir) => {
         const runtimeDir = path.join(homeDir, "runtime");
         const repoA = path.join(homeDir, "repo-a");
         const repoB = path.join(homeDir, "repo-b");
@@ -712,9 +1025,10 @@ test("managed Codex guidance hook command suppresses duplicate prints per workin
         fs.mkdirSync(repoA, { recursive: true });
         fs.mkdirSync(repoB, { recursive: true });
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
             installGuidanceHook: true,
         }, installOptions(homeDir));
@@ -731,8 +1045,8 @@ test("managed Codex guidance hook command suppresses duplicate prints per workin
     });
 });
 
-test("install replaces existing managed Codex guidance hook", () => {
-    withTempHome((homeDir) => {
+test("install replaces existing managed Codex guidance hook", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -751,9 +1065,10 @@ test("install replaces existing managed Codex guidance hook", () => {
             "utf8"
         );
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "codex",
+            runtime: "voyage",
             dryRun: false,
             installGuidanceHook: true,
         }, installOptions(homeDir));
@@ -766,8 +1081,8 @@ test("install replaces existing managed Codex guidance hook", () => {
     });
 });
 
-test("uninstall removes an existing managed Codex block", () => {
-    withTempHome((homeDir) => {
+test("uninstall removes an existing managed Codex block", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
         const skillPath = path.join(homeDir, ".codex", "skills", "satori", "SKILL.md");
@@ -799,7 +1114,7 @@ test("uninstall removes an existing managed Codex block", () => {
             "",
         ].join("\n"), "utf8");
 
-        const result = executeInstallCommand({
+        const result = await executeInstallCommand({
             kind: "uninstall",
             client: "codex",
             dryRun: false,
@@ -817,8 +1132,8 @@ test("uninstall removes an existing managed Codex block", () => {
     });
 });
 
-test("uninstall removes managed Codex guidance hook and preserves user hooks", () => {
-    withTempHome((homeDir) => {
+test("uninstall removes managed Codex guidance hook and preserves user hooks", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -846,7 +1161,7 @@ test("uninstall removes managed Codex guidance hook and preserves user hooks", (
             "utf8"
         );
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "uninstall",
             client: "codex",
             dryRun: false,
@@ -859,8 +1174,8 @@ test("uninstall removes managed Codex guidance hook and preserves user hooks", (
     });
 });
 
-test("install refuses to overwrite unmanaged Codex Satori sections", () => {
-    withTempHome((homeDir) => {
+test("install refuses to overwrite unmanaged Codex Satori sections", async () => {
+    await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
         fs.writeFileSync(
@@ -876,10 +1191,11 @@ test("install refuses to overwrite unmanaged Codex Satori sections", () => {
             "utf8"
         );
 
-        assert.throws(
+        await assert.rejects(
             () => executeInstallCommand({
                 kind: "install",
                 client: "codex",
+            runtime: "voyage",
                 dryRun: false,
             }, installOptions(homeDir)),
             /Refusing to overwrite unmanaged Satori config/
@@ -887,8 +1203,8 @@ test("install refuses to overwrite unmanaged Codex Satori sections", () => {
     });
 });
 
-test("install merges Claude JSON config and uninstall removes only Satori-owned entry and skills", () => {
-    withTempHome((homeDir) => {
+test("install merges Claude JSON config and uninstall removes only Satori-owned entry and skills", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         const skillsDir = path.join(homeDir, ".claude", "skills");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -908,9 +1224,10 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
             }
         }, null, 2), "utf8");
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "claude",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -925,7 +1242,7 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
         assert.equal(fs.existsSync(path.join(skillsDir, "satori", "SKILL.md")), true);
 
-        const uninstall = executeInstallCommand({
+        const uninstall = await executeInstallCommand({
             kind: "uninstall",
             client: "claude",
             dryRun: false,
@@ -940,8 +1257,8 @@ test("install merges Claude JSON config and uninstall removes only Satori-owned 
     });
 });
 
-test("install preserves direct Claude Satori env values on reinstall", () => {
-    withTempHome((homeDir) => {
+test("install preserves direct Claude Satori env values on reinstall", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
@@ -958,9 +1275,10 @@ test("install preserves direct Claude Satori env values on reinstall", () => {
             },
         }, null, 2), "utf8");
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "claude",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -973,8 +1291,8 @@ test("install preserves direct Claude Satori env values on reinstall", () => {
     });
 });
 
-test("install strips empty-defaulting Claude env expansions on reinstall", () => {
-    withTempHome((homeDir) => {
+test("install strips empty-defaulting Claude env expansions on reinstall", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
@@ -991,9 +1309,10 @@ test("install strips empty-defaulting Claude env expansions on reinstall", () =>
             },
         }, null, 2), "utf8");
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "claude",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -1004,8 +1323,8 @@ test("install strips empty-defaulting Claude env expansions on reinstall", () =>
     });
 });
 
-test("install refuses to overwrite unmanaged Claude Satori entries", () => {
-    withTempHome((homeDir) => {
+test("install refuses to overwrite unmanaged Claude Satori entries", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
@@ -1018,10 +1337,11 @@ test("install refuses to overwrite unmanaged Claude Satori entries", () => {
             }
         }, null, 2), "utf8");
 
-        assert.throws(
+        await assert.rejects(
             () => executeInstallCommand({
                 kind: "install",
                 client: "claude",
+            runtime: "voyage",
                 dryRun: false,
             }, installOptions(homeDir)),
             /Refusing to overwrite unmanaged Satori config/
@@ -1029,8 +1349,8 @@ test("install refuses to overwrite unmanaged Claude Satori entries", () => {
     });
 });
 
-test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
-    withTempHome((homeDir) => {
+test("uninstall refuses to remove unmanaged Claude Satori entries", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         const original = JSON.stringify({
@@ -1044,7 +1364,7 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
         }, null, 2);
         fs.writeFileSync(configPath, original, "utf8");
 
-        assert.throws(
+        await assert.rejects(
             () => executeInstallCommand({
                 kind: "uninstall",
                 client: "claude",
@@ -1057,8 +1377,8 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", () => {
     });
 });
 
-test("install writes OpenCode JSONC config and AGENTS instructions", () => {
-    withTempHome((homeDir) => {
+test("install writes OpenCode JSONC config and AGENTS instructions", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, [
@@ -1075,9 +1395,10 @@ test("install writes OpenCode JSONC config and AGENTS instructions", () => {
             "",
         ].join("\n"), "utf8");
 
-        const result = executeInstallCommand({
+        const result = await executeInstallCommand({
             kind: "install",
             client: "opencode",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -1103,11 +1424,12 @@ test("install writes OpenCode JSONC config and AGENTS instructions", () => {
     });
 });
 
-test("install all smoke writes launcher-backed config for every supported client", () => {
-    withTempHome((homeDir) => {
-        const result = executeInstallCommand({
+test("install all smoke writes launcher-backed config for every supported client", async () => {
+    await withTempHome(async (homeDir) => {
+        const result = await executeInstallCommand({
             kind: "install",
             client: "all",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -1167,11 +1489,12 @@ test("install all smoke writes launcher-backed config for every supported client
     });
 });
 
-test("managed client inspection reuses installer parsers and reports stale wiring", () => {
-    withTempHome((homeDir) => {
-        executeInstallCommand({
+test("managed client inspection reuses installer parsers and reports stale wiring", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({
             kind: "install",
             client: "all",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -1192,12 +1515,13 @@ test("managed client inspection reuses installer parsers and reports stale wirin
     });
 });
 
-test("install --profile writes repo-local Satori config once for all clients", () => {
-    withTempHome((homeDir) => {
-        withTempRepo((repoDir) => {
-            const result = executeInstallCommand({
+test("install --profile writes repo-local Satori config once for all clients", async () => {
+    await withTempHome(async (homeDir) => {
+        await withTempRepo(async (repoDir) => {
+            const result = await executeInstallCommand({
                 kind: "install",
                 client: "all",
+            runtime: "voyage",
                 dryRun: false,
                 profile: "minimal",
             }, {
@@ -1220,9 +1544,9 @@ test("install --profile writes repo-local Satori config once for all clients", (
     });
 });
 
-test("install --profile updates existing repo config and preserves unrelated TOML", () => {
-    withTempHome((homeDir) => {
-        withTempRepo((repoDir) => {
+test("install --profile updates existing repo config and preserves unrelated TOML", async () => {
+    await withTempHome(async (homeDir) => {
+        await withTempRepo(async (repoDir) => {
             const configPath = path.join(repoDir, "satori.toml");
             fs.writeFileSync(configPath, [
                 "[project]",
@@ -1233,9 +1557,10 @@ test("install --profile updates existing repo config and preserves unrelated TOM
                 "",
             ].join("\n"), "utf8");
 
-            const result = executeInstallCommand({
+            const result = await executeInstallCommand({
                 kind: "install",
                 client: "codex",
+            runtime: "voyage",
                 dryRun: false,
                 profile: "minimal",
             }, {
@@ -1256,20 +1581,21 @@ test("install --profile updates existing repo config and preserves unrelated TOM
     });
 });
 
-test("uninstall removes managed OpenCode config and instruction block only", () => {
-    withTempHome((homeDir) => {
+test("uninstall removes managed OpenCode config and instruction block only", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         const instructionsPath = path.join(homeDir, ".config", "opencode", "AGENTS.md");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "opencode",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
         fs.writeFileSync(instructionsPath, `${readFile(instructionsPath)}\n# User Notes\n`, "utf8");
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "uninstall",
             client: "opencode",
             dryRun: false,
@@ -1283,8 +1609,8 @@ test("uninstall removes managed OpenCode config and instruction block only", () 
     });
 });
 
-test("install preserves direct OpenCode Satori environment values on reinstall", () => {
-    withTempHome((homeDir) => {
+test("install preserves direct OpenCode Satori environment values on reinstall", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
@@ -1301,9 +1627,10 @@ test("install preserves direct OpenCode Satori environment values on reinstall",
             },
         }, null, 2), "utf8");
 
-        executeInstallCommand({
+        await executeInstallCommand({
             kind: "install",
             client: "opencode",
+            runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
 
@@ -1314,8 +1641,8 @@ test("install preserves direct OpenCode Satori environment values on reinstall",
     });
 });
 
-test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
-    withTempHome((homeDir) => {
+test("install refuses to overwrite unmanaged OpenCode Satori entries", async () => {
+    await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.writeFileSync(configPath, JSON.stringify({
@@ -1328,10 +1655,11 @@ test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
             }
         }, null, 2), "utf8");
 
-        assert.throws(
+        await assert.rejects(
             () => executeInstallCommand({
                 kind: "install",
                 client: "opencode",
+            runtime: "voyage",
                 dryRun: false,
             }, installOptions(homeDir)),
             /Refusing to overwrite unmanaged Satori config/
@@ -1339,18 +1667,19 @@ test("install refuses to overwrite unmanaged OpenCode Satori entries", () => {
     });
 });
 
-test("install all preflights every target before mutating any config", () => {
-    withTempHome((homeDir) => {
+test("install all preflights every target before mutating any config", async () => {
+    await withTempHome(async (homeDir) => {
         const claudeConfigPath = path.join(homeDir, ".claude.json");
         fs.mkdirSync(path.dirname(claudeConfigPath), { recursive: true });
         fs.writeFileSync(claudeConfigPath, "{ not valid json", "utf8");
 
-        assert.throws(
+        await assert.rejects(
             () => executeInstallCommand({
                 kind: "install",
                 client: "all",
+            runtime: "voyage",
                 dryRun: false,
-            }, { homeDir }),
+            }, installOptions(homeDir)),
             /Failed to parse JSON config/
         );
 
@@ -1359,11 +1688,55 @@ test("install all preflights every target before mutating any config", () => {
     });
 });
 
-test("dry-run reports install actions without writing files", () => {
-    withTempHome((homeDir) => {
-        const result = executeInstallCommand({
+test("Codex-only install ignores malformed unrelated Claude config", async () => {
+    await withTempHome(async (homeDir) => {
+        fs.writeFileSync(path.join(homeDir, ".claude.json"), "{ not valid json", "utf8");
+
+        const result = await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, installOptions(homeDir));
+
+        assert.equal(result.results.length, 1);
+        assert.equal(result.results[0]?.client, "codex");
+        assert.equal(readFile(path.join(homeDir, ".claude.json")), "{ not valid json");
+    });
+});
+
+test("reinstall rejects malformed installer-owned launcher identity", async () => {
+    await withTempHome(async (homeDir) => {
+        const managedLauncher = launcherPath(homeDir);
+        fs.mkdirSync(path.dirname(managedLauncher), { recursive: true });
+        fs.writeFileSync(managedLauncher, [
+            "#!/usr/bin/env node",
+            "const managedEnv = {not-json};",
+            "",
+        ].join("\n"), "utf8");
+
+        await assert.rejects(
+            executeInstallCommand({
+                kind: "install",
+                client: "codex",
+                runtime: "voyage",
+                dryRun: true,
+            }, installOptions(homeDir)),
+            (error: unknown) => {
+                assert.equal((error as { token?: string }).token, "E_MANAGED_RUNTIME_ENV_INVALID");
+                assert.match(error instanceof Error ? error.message : String(error), /contains invalid runtime identity/);
+                return true;
+            },
+        );
+    });
+});
+
+test("dry-run reports install actions without writing files", async () => {
+    await withTempHome(async (homeDir) => {
+        const result = await executeInstallCommand({
             kind: "install",
             client: "all",
+            runtime: "voyage",
             dryRun: true,
         }, installOptions(homeDir));
 
@@ -1378,4 +1751,39 @@ test("dry-run reports install actions without writing files", () => {
         assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "AGENTS.md")), false);
         assert.equal(fs.existsSync(launcherPath(homeDir)), false);
     });
+});
+
+test("application failure reports completed and unattempted mutation paths", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-install-partial-home-"));
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-install-partial-repo-"));
+    fs.writeFileSync(path.join(homeDir, ".codex"), "blocks directory creation", "utf8");
+    try {
+        await assert.rejects(
+            executeInstallCommand({
+                kind: "install",
+                client: "codex",
+                runtime: "voyage",
+                dryRun: false,
+                profile: "minimal",
+            }, {
+                homeDir,
+                repoDir,
+                packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+                runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
+            }),
+            (error: unknown) => {
+                assert.equal((error as { token?: string }).token, "E_INSTALL_PARTIAL");
+                const message = error instanceof Error ? error.message : String(error);
+                assert.equal(message.includes(`managed launcher at ${launcherPath(homeDir)}`), true);
+                assert.equal(message.includes(`repository profile at ${path.join(repoDir, "satori.toml")}`), true);
+                assert.equal(message.includes(`while applying codex client configuration at ${path.join(homeDir, ".codex", "config.toml")}`), true);
+                assert.match(message, /Not yet applied: codex skills at/);
+                assert.match(message, /correct the error and rerun the same command/);
+                return true;
+            },
+        );
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+        fs.rmSync(repoDir, { recursive: true, force: true });
+    }
 });

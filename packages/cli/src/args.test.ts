@@ -38,6 +38,51 @@ test("parseCliArgs supports install with explicit client and dry-run", () => {
     }
     assert.equal(parsed.command.client, "codex");
     assert.equal(parsed.command.dryRun, true);
+    assert.equal(parsed.command.runtime, "voyage");
+});
+
+test("parseCliArgs accepts the strict offline runtime variant", () => {
+    const parsed = parseCliArgs([
+        "install",
+        "--runtime",
+        "offline",
+        "--ollama-model",
+        "nomic-embed-text",
+    ]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(parsed.command.runtime, "offline");
+    assert.equal(parsed.command.ollamaModel, "nomic-embed-text");
+});
+
+test("parseCliArgs accepts an explicit connected Milvus backend", () => {
+    const parsed = parseCliArgs(["install", "--runtime", "voyage", "--vector-store", "milvus"]);
+    assert.equal(parsed.command.kind, "install");
+    if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(parsed.command.vectorStore, "Milvus");
+});
+
+test("parseCliArgs rejects incomplete or contradictory runtime variants", () => {
+    assert.throws(
+        () => parseCliArgs(["install", "--runtime", "offline"]),
+        /requires --ollama-model/,
+    );
+    assert.throws(
+        () => parseCliArgs(["install", "--ollama-model", "nomic-embed-text"]),
+        /only valid with --runtime offline/,
+    );
+    assert.throws(
+        () => parseCliArgs([
+            "install",
+            "--runtime",
+            "offline",
+            "--ollama-model",
+            "nomic-embed-text",
+            "--vector-store",
+            "milvus",
+        ]),
+        /offline requires --vector-store lancedb/,
+    );
 });
 
 test("parseCliArgs supports install profile selection", () => {

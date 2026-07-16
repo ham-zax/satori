@@ -1757,6 +1757,41 @@ test('Context.pruneUnprovenStagedCollectionFamily removes failed staged generati
     );
 });
 
+test('Context.pruneUnprovenStagedCollectionFamily discards interrupted payload only under a current mutation lease', async () => {
+    const vectorDatabase = new InMemoryVectorDatabase();
+    const context = new Context({
+        embedding: new TestEmbedding(),
+        vectorDatabase,
+    });
+    const codebasePath = '/repo/interrupted';
+    const interruptedCollectionName = `${context.resolveCollectionName(codebasePath)}__gen_interrupted`;
+
+    await vectorDatabase.createHybridCollection(interruptedCollectionName);
+    await vectorDatabase.writeDocuments(interruptedCollectionName, [
+        buildChunkDoc('partial_chunk'),
+    ]);
+
+    await assert.rejects(
+        () => context.pruneUnprovenStagedCollectionFamily(codebasePath, {
+            discardUnprovenPayload: true,
+        }),
+        /requires a current mutation lease/i,
+    );
+    assert.equal(await vectorDatabase.hasCollection(interruptedCollectionName), true);
+
+    let leaseChecks = 0;
+    const dropped = await context.pruneUnprovenStagedCollectionFamily(codebasePath, {
+        discardUnprovenPayload: true,
+        assertMutationCurrent: () => {
+            leaseChecks += 1;
+        },
+    });
+
+    assert.deepEqual(dropped, [interruptedCollectionName]);
+    assert.equal(leaseChecks, 1);
+    assert.equal(await vectorDatabase.hasCollection(interruptedCollectionName), false);
+});
+
 test('Context.indexCodebase clears stale completion marker before rebuilding navigation', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-stale-marker-'));
     try {

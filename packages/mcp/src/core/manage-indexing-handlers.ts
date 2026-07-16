@@ -190,7 +190,11 @@ type ManageIndexingHandlersHost = {
     getContextIndexedExtensions(codebasePath: string): string[];
     canonicalizeCodebasePath(codebasePath: string): string;
     pruneIndexedCollectionFamily(codebasePath: string, keepCollectionName: string, assertMutationCurrent?: () => void): Promise<string[]>;
-    pruneUnprovenStagedCollectionFamily(codebasePath: string, assertMutationCurrent?: () => void): Promise<string[]>;
+    pruneUnprovenStagedCollectionFamily(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        discardUnprovenPayload?: boolean,
+    ): Promise<string[]>;
     getContextTrackedRelativePaths(codebasePath: string): string[];
     setIndexingStats(stats: { indexedFiles: number; totalChunks: number } | null): void;
     rebuildCallGraphForIndex(
@@ -715,6 +719,7 @@ export class ManageIndexingHandlers {
                     mutationLease
                         ? () => this.host.mutationLeaseCoordinator?.assertCurrent(mutationLease!)
                         : undefined,
+                    mutationLease !== undefined,
                 );
                 if (prunedStagedCollections.length > 0) {
                     console.log(`[INDEX-VALIDATION] 🧹 Removed ${prunedStagedCollections.length} unproven staged collection(s): ${prunedStagedCollections.join(", ")}`);

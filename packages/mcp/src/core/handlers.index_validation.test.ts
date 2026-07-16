@@ -44,7 +44,10 @@ type ToolHandlersTestOverrides = {
 
 interface ValidationHarnessOptions {
     checkCollectionLimitImpl: () => Promise<boolean>;
-    pruneUnprovenStagedCollectionFamilyImpl?: (codebasePath: string) => Promise<string[]>;
+    pruneUnprovenStagedCollectionFamilyImpl?: (
+        codebasePath: string,
+        options?: { assertMutationCurrent?: () => void; discardUnprovenPayload?: boolean },
+    ) => Promise<string[]>;
     backendProvider?: BackendProvider;
     collectionDetails?: Array<{ name: string; createdAt?: string }>;
     metadataByCollection?: Record<string, { codebasePath?: string }>;
@@ -595,9 +598,16 @@ test('handleIndexCodebase prunes unproven staged generations before collection l
     await withTempRepo(async (repoPath) => {
         const events: string[] = [];
         const failedStagedCollection = `${resolveCollectionName(repoPath)}__gen_failed`;
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), 'lease-state'),
+            ownerId: 'owner-a',
+        });
         const { handlers } = createHandlersForValidation({
             backendProvider: 'zilliz',
-            pruneUnprovenStagedCollectionFamilyImpl: async (codebasePath) => {
+            mutationLeaseCoordinator: coordinator,
+            pruneUnprovenStagedCollectionFamilyImpl: async (codebasePath, options) => {
+                assert.equal(options?.discardUnprovenPayload, true);
+                options?.assertMutationCurrent?.();
                 events.push(`prune:${codebasePath}`);
                 return [failedStagedCollection];
             },

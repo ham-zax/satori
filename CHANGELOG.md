@@ -17,6 +17,9 @@ All notable changes to this repository are documented in this file.
 - Raw search result objects remain unchanged. This is a presentation-only wire change and requires no reindex or index migration.
 - Grouped serialization is a closed field projection, cross-file ownership evidence is demoted before publication, malformed exact-registry hits continue through normal retrieval, and oversized exact hits recommend a bounded declaration window first.
 
+### Fixed
+- A new lease-owning indexing attempt now removes incomplete staged generations left by an interrupted write, while lease-free maintenance continues to preserve payload it cannot prove is abandoned.
+
 ## [2026-07-11] Operational Trust Evidence And Useful-Context Evaluation
 
 ### Release Versions

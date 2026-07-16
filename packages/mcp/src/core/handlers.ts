@@ -257,7 +257,10 @@ type IndexCompletionMarkerContext = {
     getCompletionProofCollectionName?: (codebasePath: string) => Promise<string | null>;
     clearIndexCompletionMarker?: (codebasePath: string, assertMutationCurrent?: () => void) => Promise<void>;
     pruneIndexedCollectionFamily?: (codebasePath: string, keepCollectionName: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
-    pruneUnprovenStagedCollectionFamily?: (codebasePath: string, options?: { assertMutationCurrent?: () => void }) => Promise<string[]>;
+    pruneUnprovenStagedCollectionFamily?: (codebasePath: string, options?: {
+        assertMutationCurrent?: () => void;
+        discardUnprovenPayload?: boolean;
+    }) => Promise<string[]>;
 };
 
 type ToolTextResponse = {
@@ -1698,12 +1701,19 @@ export class ToolHandlers {
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 
-    private async pruneUnprovenStagedCollectionFamily(codebasePath: string, assertMutationCurrent?: () => void): Promise<string[]> {
+    private async pruneUnprovenStagedCollectionFamily(
+        codebasePath: string,
+        assertMutationCurrent?: () => void,
+        discardUnprovenPayload: boolean = false,
+    ): Promise<string[]> {
         const prune = this.contextLifecycle().pruneUnprovenStagedCollectionFamily;
         if (typeof prune !== 'function') {
             throw new Error('Context lifecycle capability pruneUnprovenStagedCollectionFamily is required.');
         }
-        const dropped = await prune.call(this.context, codebasePath, { assertMutationCurrent });
+        const dropped = await prune.call(this.context, codebasePath, {
+            assertMutationCurrent,
+            discardUnprovenPayload,
+        });
         return Array.isArray(dropped) ? dropped.filter((entry): entry is string => typeof entry === 'string') : [];
     }
 

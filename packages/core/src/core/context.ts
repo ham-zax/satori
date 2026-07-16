@@ -612,6 +612,11 @@ type MutationGuardOptions = {
     preparedCollectionBinding?: PreparedIndexCollectionBinding;
 };
 
+type StagedCollectionPruneOptions = {
+    assertMutationCurrent?: () => void;
+    discardUnprovenPayload?: boolean;
+};
+
 export type PreparedIndexCollectionBinding = Readonly<{
     generation: number;
     operationId: string;
@@ -2066,8 +2071,11 @@ export class Context {
 
     public async pruneUnprovenStagedCollectionFamily(
         codebasePath: string,
-        options: MutationGuardOptions = {},
+        options: StagedCollectionPruneOptions = {},
     ): Promise<string[]> {
+        if (options.discardUnprovenPayload && !options.assertMutationCurrent) {
+            throw new Error('Discarding unproven staged payload requires a current mutation lease.');
+        }
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
         const droppedCollections: string[] = [];
 
@@ -2079,7 +2087,11 @@ export class Context {
             if (marker && await this.collectionHasIndexedPayload(collectionName, marker)) {
                 continue;
             }
-            if (!marker && await this.collectionHasAnyIndexedPayload(collectionName)) {
+            if (
+                !marker
+                && !options.discardUnprovenPayload
+                && await this.collectionHasAnyIndexedPayload(collectionName)
+            ) {
                 continue;
             }
             await deleteCollectionWithVerification(this.vectorDatabase, collectionName, {

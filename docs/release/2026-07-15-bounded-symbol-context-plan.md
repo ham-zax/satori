@@ -1590,8 +1590,8 @@ remain unversioned under the frozen camel-case shape; the prior snake-case
 shape is rejected rather than retained as a compatibility path. Deterministic
 contract suites, MCP type checking and lint, and generated documentation and
 manifest checks are green. This closes Phase 5 implementation only: Phase 6
-evaluation remains pending, the Phase 0 performance baseline remains deferred,
-and no release-grade performance claim is made.
+bounded exploratory evidence is recorded below, the Phase 0 performance
+baseline remains deferred, and no release-grade performance claim is made.
 
 ### Phase 6 — Evaluation and retention decision
 
@@ -1625,6 +1625,50 @@ Retain the public feature only if it meets the numerical gates frozen in Phase
 If two materially different excerpt-selection strategies fail to improve the
 measured workflow, revert the public exposure and retain only independently
 useful metadata/status improvements.
+
+#### 2026-07-16 bounded exploratory UX check
+
+The implementation decision used one exploratory native/Satori pair per fixed
+task, not the release-grade sample policy above. The initial suite ran both
+tasks (four model sessions) at revision
+`15b0f9d7aa54720ea19d15ca834ac9cfe700db32`; after that run exposed a real
+search-to-exact-open authority defect, only the conceptual pair was repeated
+(two model sessions) at the fix revision
+`45e1f44d9d04cdd93f091c5bf093a7fa20b12a14`. Both suites used OpenCode 1.17.20,
+`opencode/deepseek-v4-flash-free`, temperature 0, natural mode, and one
+repetition per arm.
+
+| Workload and candidate revision | Native | Satori | Directional observation |
+|---|---:|---:|---|
+| `known-exact-target` at `15b0f9d` | pass; 64,519 ms; 19 calls; 86,401 visible bytes | pass; 49,448 ms; 10 calls; 36,591 visible bytes | The composed path completed correctly with fewer calls, fewer model-visible bytes, and lower wall time in this single pair. |
+| `unknown-freshness-reuse` at `45e1f44` | fail; 132,923 ms; 35 calls; 129,836 visible bytes | fail; 171,617 ms; 23 calls; 144,489 visible bytes | Neither arm produced the required owner/relationship answer. The Satori arm used fewer calls but was slower and larger; no comparative efficiency claim is valid for failed runs. |
+
+The first conceptual Satori attempt found `PreparedReadCache` and received
+`NAVIGATION_UNAVAILABLE` from the exact request recommended by the same search
+response. The reproduced cause was split runtime ownership: search prepared
+authority in the embedding-capable `ToolHandlers`, while exact `read_file`
+composed through a different context. Commit `45e1f44` routes exact reads
+through vector-backed authority and reuses an existing embedding-capable
+context for `vector_only` consumers. The focused runtime/read tests, MCP runtime
+build, and a fresh-process search-to-recommended-open replay passed. In the
+post-fix model trace, every exact open completed; the conceptual task still
+failed because the model pursued `PreparedReadCache` instead of
+`runSearchFrontDoor`, not because the exact-symbol transport failed.
+
+Artifacts:
+
+- `.satori/benchmarks/agent-discovery/opencode-2026-07-16T10-15-13-093Z-f1e01c90/`
+  (tree `5c0b0f046864210544b50d98ffed1398e9c43ebb`, runtime SHA-256
+  `c5cf867082c71f6196fbed14bbac4cfed9d9253d2b841cf7db97cbc76af6e195`);
+- `.satori/benchmarks/agent-discovery/opencode-2026-07-16T10-40-52-539Z-5264404b/`
+  (tree `ff401227a9ae08aa20f521ede21de6cdb74e8d5b`, runtime SHA-256
+  `4442e6c3de216f6ab15db50a6466d22f9c77fcf7b665070168efdbe053fe02e7`).
+
+Disposition: retain the canonical v2 exact-symbol transport. The known-symbol
+pair supplies directional UX evidence and the demonstrated authority defect is
+fixed on master. The sample does not prove conceptual-discovery improvement,
+the Phase 0 instrumented baseline remains ineligible, and the original
+release-grade latency/source-cost gates remain unclaimed.
 
 ## Validation matrix
 
@@ -1718,20 +1762,22 @@ Return `BOUNDED SYMBOL CONTEXT COMPLETE` only when:
   within 20% of the instrumented adaptive baseline;
 - the tested tree and diff have immutable identities.
 
-Until those conditions are met, this remains a measured follow-on plan. The
-current search-quality program should not claim this future composed context
-surface as already implemented.
+Until those conditions are met, the public composed context implementation is
+retained but the release-grade completion claim remains open. The
+search-quality program may describe the canonical v2 surface as implemented;
+it must not promote the exploratory pair to statistical proof.
 
-## Continuation checkpoint
+## Post-evaluation checkpoint
 
-The current implementation session proceeds to Phase 6 under the recorded
-2026-07-15 directional-sample decision:
+The bounded 2026-07-16 Phase 6 decision is to retain the implementation under
+these limits:
 
 1. Keep `instrumentedMeasurementBaseline` deferred and ineligible until it
    becomes blocking for a release-grade statistical claim.
-2. Evaluate only the canonical Phase 5 exact-symbol transport; do not revive
-   the historical full-span branch or add a parallel compatibility contract.
+2. Keep only the canonical Phase 5 exact-symbol transport; do not revive the
+   historical full-span branch or add a parallel compatibility contract.
 3. Keep grouped-search and public call-graph envelopes compact unless measured
    utility justifies their enrichment.
-4. Do not claim bounded symbol context complete until the Phase 6 retention
-   gates and required baseline comparisons are satisfied.
+4. Treat the symbol upgrade as implemented on master, while withholding the
+   original release-grade completion/performance claim until the baseline-gated
+   comparisons are satisfied.

@@ -112,7 +112,7 @@ described as completed:
    hybrid paths in focused tests, but they are not provider-SDK interceptors.
    Validate them against live traces before using them for billing claims.
 
-### Immediate continuation order
+### Historical continuation order (superseded on 2026-07-16)
 
 1. After the remote Milvus publication path recovers, explicitly create the
    index and require terminal `ok` authority for the clean pinned revision. Do
@@ -169,6 +169,28 @@ a new measured failure.
 The hard stop still applies: do not continue into ranking-weight tuning,
 generation-bound caches, or indexing-contract changes unless the deterministic
 or live measurements show a concrete unresolved failure.
+
+### 2026-07-16 bounded agent-discovery follow-up
+
+Remote authority later recovered, so the paired harness reached live model
+execution. The follow-up was deliberately exploratory: one native/Satori pair
+per fixed task rather than the three-pair default or ten-pair acceptance
+profile. It therefore informs the product UX decision but does not replace the
+deferred instrumented baseline or support statistical latency/source-cost
+claims.
+
+| Suite / revision | Task | Native | Satori | Result |
+|---|---|---:|---:|---|
+| `opencode-2026-07-16T10-15-13-093Z-f1e01c90` / `15b0f9d` | `known-exact-target` | pass; 64,519 ms; 19 calls; 86,401 visible bytes | pass; 49,448 ms; 10 calls; 36,591 visible bytes | Directionally favorable to the composed exact-symbol path. |
+| `opencode-2026-07-16T10-40-52-539Z-5264404b` / `45e1f44` | `unknown-freshness-reuse` | fail; 132,923 ms; 35 calls; 129,836 visible bytes | fail; 171,617 ms; 23 calls; 144,489 visible bytes | Inconclusive for comparative quality or cost because both answers failed. |
+
+The first conceptual attempt exposed a product defect rather than a benchmark
+result: graph-ready search recommended a canonical exact open that immediately
+returned `NAVIGATION_UNAVAILABLE`. Commit `45e1f44` preserves search-prepared
+authority for follow-up exact reads. The post-fix trace completed all exact
+opens, while the model selected the wrong conceptual owner. That residual miss
+does not justify changing ranking, indexing, or the exact-symbol contract
+without a deterministic reproduction showing a product-owned correction.
 
 ## Frozen safety and compatibility boundaries
 
@@ -851,5 +873,5 @@ change was made in response.
 | Full integration gate | `pnpm test:integration` | Green; 30/30. |
 | Repository static/build gate | `pnpm check` and `pnpm build` | Green; all-package lint/typecheck, version freshness, generated docs/manifest and full workspace build. |
 | OpenCode paired-agent harness | `evals/agent-discovery/run-opencode.mjs`, restricted agents/guard, fixed v2 task key, and focused script tests | Implemented; 17/17 focused and 77/77 repository script tests pass. Task/arm/profile questions are removed, exact and conceptual tasks are automatic, sessions are isolated, duplicate sessions invalidate both arms, arm order alternates, forbidden tools are rejected, OpenCode events own timing/tokens/steps, and current AST spans and relationships are validated before model calls. |
-| External paired-agent evaluation | `pnpm eval:agent-discovery` with pinned `opencode/deepseek-v4-flash-free` and OpenCode 1.17.20 | Blocked before model calls. Two independent create operations using old and freshly built MCP processes failed Milvus hybrid-chunk persistence with gRPC `14 UNAVAILABLE: Connection dropped` after their internal retries. DNS and TLS 1.2 are healthy; generation 2789 is durably failed and no authoritative completion marker exists. |
+| External paired-agent evaluation | Two bounded exploratory suites with pinned `opencode/deepseek-v4-flash-free` and OpenCode 1.17.20 | Executed after authority recovery. The known-exact pair passed in both arms and was directionally favorable to Satori. Both conceptual arms failed; the Satori exact-open defect observed in the first attempt was fixed by `45e1f44` and all post-fix exact opens completed. No statistical or conceptual-quality claim is made. |
 | Diff hygiene | `git diff --check` | Green. |

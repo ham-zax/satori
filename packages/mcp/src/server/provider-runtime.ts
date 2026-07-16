@@ -17,13 +17,38 @@ import { ContextMcpConfig, IndexFingerprint } from "../config.js";
 import { createEmbeddingInstance, logEmbeddingProviderInfo } from "../embedding.js";
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 
-type VectorSearchResults = Awaited<ReturnType<VectorDatabase["search"]>>;
-type HybridVectorSearchResults = Awaited<ReturnType<VectorDatabase["hybridSearch"]>>;
-type VectorQueryRows = Awaited<ReturnType<VectorDatabase["query"]>>;
+type VectorSearchResults = Awaited<ReturnType<VectorDatabase["retrieveDense"]>>;
+type VectorQueryRows = Awaited<ReturnType<VectorDatabase["queryDocuments"]>>;
 type ProviderSyncLifecycle = Pick<
     SyncManager,
     "startBackgroundSync" | "stopBackgroundSync" | "startWatcherMode" | "stopWatcherMode"
 >;
+type SyncCompletionHook = NonNullable<
+    NonNullable<ConstructorParameters<typeof SyncManager>[2]>['onSyncCompleted']
+>;
+
+type ResolvedProviderRuntimeBootstrap = Readonly<{
+    embedding: Readonly<
+        | { kind: 'configured' }
+        | {
+            kind: 'metadata-only';
+            provider: string;
+            model: string;
+            dimension: number;
+        }
+    >;
+    vectorBackend: Readonly<{
+        kind: 'milvus';
+        address: string;
+        token?: string;
+    }>;
+    reranker: Readonly<{
+        kind: 'voyage';
+        apiKey: string;
+        model: NonNullable<ConstructorParameters<typeof VoyageAIReranker>[0]['model']>;
+    }> | null;
+    embeddingCapable: boolean;
+}>;
 
 export async function startProviderSyncLifecycle(
     syncManager: ProviderSyncLifecycle,
@@ -93,15 +118,14 @@ class UnconfiguredVectorDatabase implements VectorDatabase {
     async dropCollection(): Promise<void> { this.throwMissing(); }
     async hasCollection(): Promise<boolean> { this.throwMissing(); }
     async listCollections(): Promise<string[]> { this.throwMissing(); }
-    async insert(): Promise<void> { this.throwMissing(); }
-    async insertHybrid(): Promise<void> { this.throwMissing(); }
+    async writeDocuments(): Promise<void> { this.throwMissing(); }
     async insertControl(): Promise<void> { this.throwMissing(); }
     async getControl(): Promise<null> { this.throwMissing(); }
     async deleteControl(): Promise<void> { this.throwMissing(); }
-    async search(): Promise<VectorSearchResults> { this.throwMissing(); }
-    async hybridSearch(): Promise<HybridVectorSearchResults> { this.throwMissing(); }
-    async delete(): Promise<void> { this.throwMissing(); }
-    async query(): Promise<VectorQueryRows> { this.throwMissing(); }
+    async retrieveDense(): Promise<VectorSearchResults> { this.throwMissing(); }
+    async retrieveLexical(): Promise<VectorSearchResults> { this.throwMissing(); }
+    async deleteDocuments(): Promise<void> { this.throwMissing(); }
+    async queryDocuments(): Promise<VectorQueryRows> { this.throwMissing(); }
     async checkCollectionLimit(): Promise<boolean> { this.throwMissing(); }
 }
 
@@ -274,25 +298,15 @@ export class ProviderRuntime {
     }
 
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
-        const embedding = requireEmbedding
-            ? createEmbeddingInstance(this.config)
-            : new MetadataOnlyEmbedding(
-                this.config.encoderProvider,
-                this.config.encoderModel,
-                resolveConfiguredEmbeddingDimension(this.config),
-            );
-        if (requireEmbedding) {
-            logEmbeddingProviderInfo(this.config, embedding as ReturnType<typeof createEmbeddingInstance>);
-        }
-
-        const vectorDatabase = new MilvusVectorDatabase({
-            address: this.config.milvusEndpoint,
-            ...(this.config.milvusApiToken && { token: this.config.milvusApiToken }),
-            vectorDimension: embedding.getDimension(),
-        });
+        const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
+        const embedding = this.createEmbeddingProvider(bootstrap);
+        const vectorDatabase = this.createVectorBackend(bootstrap, embedding.getDimension());
         const context = new Context({
             embedding,
             vectorDatabase,
+            mutationGenerationObserver: (canonicalRoot) => (
+                this.mutationLeaseCoordinator.observe(canonicalRoot)
+            ),
             durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(
                 this.mutationLeaseCoordinator,
             ),
@@ -300,44 +314,10 @@ export class ProviderRuntime {
         const syncManager = new SyncManager(context, this.snapshotManager, {
             watchEnabled: this.watchSyncEnabled,
             watchDebounceMs: this.watchDebounceMs,
-            onSyncCompleted: async (codebasePath, stats, assertMutationCurrent) => {
-                try {
-                    assertMutationCurrent();
-                    const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
-                        codebasePath,
-                        stats.changedFiles,
-                        context.getActiveIgnorePatterns(codebasePath),
-                        assertMutationCurrent,
-                    );
-                    if (sidecar) {
-                        assertMutationCurrent();
-                        const committed = this.snapshotManager.commitCodebaseCallGraphSidecar(
-                            codebasePath,
-                            sidecar,
-                            assertMutationCurrent,
-                        );
-                        if (!committed) {
-                            console.warn(
-                                `[CALL-GRAPH] Sync lifecycle rebuild discarded for '${codebasePath}': `
-                                + "fenced snapshot commit failed; in-memory sidecar rolled back.",
-                            );
-                            return;
-                        }
-                        console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
-                    }
-                } catch (error: unknown) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${message}`);
-                }
-            },
+            onSyncCompleted: this.createSyncCompletionHook(context),
             mutationLeaseCoordinator: this.mutationLeaseCoordinator,
         });
-        const reranker = requireEmbedding && this.capabilities.hasReranker()
-            ? new VoyageAIReranker({
-                apiKey: this.config.voyageKey as string,
-                model: this.config.rankerModel || "rerank-2.5",
-            })
-            : null;
+        const reranker = this.createReranker(bootstrap);
         if (reranker) {
             console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${this.config.rankerModel || "rerank-2.5"}`);
         }
@@ -358,7 +338,7 @@ export class ProviderRuntime {
 
         await startProviderSyncLifecycle(syncManager, {
             enabled: this.startSyncLifecycle,
-            embeddingCapable: requireEmbedding,
+            embeddingCapable: bootstrap.embeddingCapable,
             watcherEnabled: this.watchSyncEnabled,
         });
 
@@ -376,6 +356,107 @@ export class ProviderRuntime {
         };
         this.activeContexts.push(toolContext);
         return toolContext;
+    }
+
+    private async resolveRuntimeBootstrap(
+        requireEmbedding: boolean,
+    ): Promise<ResolvedProviderRuntimeBootstrap> {
+        const address = this.config.milvusEndpoint;
+        if (!address) {
+            throw new Error('MISSING_PROVIDER_CONFIG MILVUS_ADDRESS is not configured');
+        }
+        const reranker = requireEmbedding && this.capabilities.hasReranker()
+            ? {
+                kind: 'voyage' as const,
+                apiKey: this.config.voyageKey as string,
+                model: this.config.rankerModel || 'rerank-2.5',
+            }
+            : null;
+        const embedding = requireEmbedding
+            ? Object.freeze({ kind: 'configured' as const })
+            : Object.freeze({
+                kind: 'metadata-only' as const,
+                provider: this.config.encoderProvider,
+                model: this.config.encoderModel,
+                dimension: resolveConfiguredEmbeddingDimension(this.config),
+            });
+        return Object.freeze({
+            embedding,
+            vectorBackend: Object.freeze({
+                kind: 'milvus' as const,
+                address,
+                ...(this.config.milvusApiToken ? { token: this.config.milvusApiToken } : {}),
+            }),
+            reranker: reranker ? Object.freeze(reranker) : null,
+            embeddingCapable: requireEmbedding,
+        });
+    }
+
+    private createEmbeddingProvider(bootstrap: ResolvedProviderRuntimeBootstrap): Embedding {
+        if (bootstrap.embedding.kind === 'metadata-only') {
+            return new MetadataOnlyEmbedding(
+                bootstrap.embedding.provider,
+                bootstrap.embedding.model,
+                bootstrap.embedding.dimension,
+            );
+        }
+        const embedding = createEmbeddingInstance(this.config);
+        logEmbeddingProviderInfo(this.config, embedding);
+        return embedding;
+    }
+
+    private createVectorBackend(
+        bootstrap: ResolvedProviderRuntimeBootstrap,
+        vectorDimension: number,
+    ): VectorDatabase {
+        return new MilvusVectorDatabase({
+            address: bootstrap.vectorBackend.address,
+            ...(bootstrap.vectorBackend.token ? { token: bootstrap.vectorBackend.token } : {}),
+            vectorDimension,
+        });
+    }
+
+    private createReranker(
+        bootstrap: ResolvedProviderRuntimeBootstrap,
+    ): VoyageAIReranker | null {
+        if (!bootstrap.reranker) return null;
+        return new VoyageAIReranker({
+            apiKey: bootstrap.reranker.apiKey,
+            model: bootstrap.reranker.model,
+        });
+    }
+
+    private createSyncCompletionHook(context: Context): SyncCompletionHook {
+        return async (codebasePath, stats, assertMutationCurrent) => {
+            try {
+                assertMutationCurrent();
+                const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
+                    codebasePath,
+                    stats.changedFiles,
+                    context.getActiveIgnorePatterns(codebasePath),
+                    assertMutationCurrent,
+                );
+                if (sidecar) {
+                    assertMutationCurrent();
+                    const committed = this.snapshotManager.commitCodebaseCallGraphSidecar(
+                        codebasePath,
+                        sidecar,
+                        assertMutationCurrent,
+                    );
+                    if (!committed) {
+                        console.warn(
+                            `[CALL-GRAPH] Sync lifecycle rebuild discarded for '${codebasePath}': `
+                            + 'fenced snapshot commit failed; in-memory sidecar rolled back.',
+                        );
+                        return;
+                    }
+                    console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
+                }
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${message}`);
+            }
+        };
     }
 
     public async shutdown(): Promise<void> {

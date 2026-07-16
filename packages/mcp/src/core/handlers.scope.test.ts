@@ -143,7 +143,12 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 const DENSE_RUNTIME_FINGERPRINT: IndexFingerprint = {

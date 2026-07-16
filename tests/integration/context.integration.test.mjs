@@ -71,23 +71,20 @@ class InMemoryVectorDatabase {
     return Array.from(this.collections.keys());
   }
 
-  filterDocuments(documents, filterExpr) {
-    let filtered = documents;
-    if ((filterExpr || '').includes('fileExtension != ".satori_meta"')) {
-      filtered = filtered.filter((doc) => doc.fileExtension !== '.satori_meta');
-    }
-    const idMatch = /^id == \"(.+)\"$/.exec(filterExpr || '');
-    if (idMatch) {
-      filtered = filtered.filter((doc) => doc.id === idMatch[1]);
-    }
-    const relativePathMatch = /^relativePath == \"(.+)\"$/.exec(filterExpr || '');
-    if (relativePathMatch) {
-      filtered = filtered.filter((doc) => doc.relativePath === relativePathMatch[1]);
-    }
-    return filtered;
+  filterDocuments(documents, filter) {
+    const matches = (doc, candidate) => {
+      if (!candidate) return true;
+      if (candidate.kind === 'and') return candidate.operands.every((operand) => matches(doc, operand));
+      const value = doc[candidate.field];
+      if (candidate.kind === 'in') return candidate.values.includes(value);
+      return candidate.operator === 'eq' ? value === candidate.value : value !== candidate.value;
+    };
+    return documents
+      .filter((doc) => doc.fileExtension !== '.satori_meta')
+      .filter((doc) => matches(doc, filter));
   }
 
-  async insert(collectionName, documents) {
+  async storeDocuments(collectionName, documents) {
     const collection = this.collections.get(collectionName);
     if (!collection) throw new Error(`Collection not found: ${collectionName}`);
     for (const input of documents) {
@@ -96,12 +93,12 @@ class InMemoryVectorDatabase {
     }
   }
 
-  async insertHybrid(collectionName, documents) {
-    return this.insert(collectionName, documents);
+  async writeDocuments(collectionName, documents) {
+    return this.storeDocuments(collectionName, documents);
   }
 
   async insertControl(collectionName, record) {
-    return this.insert(collectionName, [{
+    return this.storeDocuments(collectionName, [{
       id: record.id,
       vector: [],
       content: '',
@@ -124,30 +121,31 @@ class InMemoryVectorDatabase {
   }
 
   async deleteControl(collectionName, id) {
-    return this.delete(collectionName, [id]);
+    return this.deleteDocuments(collectionName, [id]);
   }
 
-  async search(collectionName, queryVector, options = {}) {
+  async retrieveDense(collectionName, request) {
     const collection = this.collections.get(collectionName);
     if (!collection) return [];
-    const threshold = options.threshold ?? 0;
-    const topK = options.topK ?? 5;
+    const threshold = request.minimumScore ?? 0;
 
-    const ranked = this.filterDocuments(Array.from(collection.docs.values()), options.filterExpr)
-      .map((document) => ({ document, score: cosineSimilarity(queryVector, document.vector) }))
+    const ranked = this.filterDocuments(Array.from(collection.docs.values()), request.filter)
+      .map((document) => ({ document, score: cosineSimilarity(request.vector, document.vector) }))
       .filter((item) => item.score >= threshold)
       .sort((a, b) => b.score - a.score);
 
-    return ranked.slice(0, topK);
+    return ranked.slice(0, request.limit);
   }
 
-  async hybridSearch(collectionName, searchRequests, options = {}) {
-    const dense = searchRequests.find((r) => Array.isArray(r.data));
-    const queryVector = dense ? dense.data : [0, 0, 0, 0];
-    return this.search(collectionName, queryVector, options);
+  async retrieveLexical(collectionName, request) {
+    const collection = this.collections.get(collectionName);
+    if (!collection) return [];
+    return this.filterDocuments(Array.from(collection.docs.values()), request.filter)
+      .slice(0, request.limit)
+      .map((document, index) => ({ document, score: 1 - (index / 1000) }));
   }
 
-  async delete(collectionName, ids) {
+  async deleteDocuments(collectionName, ids) {
     const collection = this.collections.get(collectionName);
     if (!collection) return;
     for (const id of ids) {
@@ -155,14 +153,14 @@ class InMemoryVectorDatabase {
     }
   }
 
-  async query(collectionName, filter, outputFields, limit = 1000) {
+  async queryDocuments(collectionName, request) {
     const collection = this.collections.get(collectionName);
     if (!collection) return [];
-    const docs = this.filterDocuments(Array.from(collection.docs.values()), filter);
+    const docs = this.filterDocuments(Array.from(collection.docs.values()), request.filter);
 
-    const rows = docs.slice(0, limit).map((doc) => {
+    const rows = docs.slice(0, request.limit ?? 1000).map((doc) => {
       const row = {};
-      for (const field of outputFields) {
+      for (const field of request.fields) {
         row[field] = doc[field];
       }
       return row;
@@ -235,11 +233,7 @@ async function publishCurrentAuthorityCheckpoint(context, codebasePath) {
 }
 
 class FailingInsertVectorDatabase extends InMemoryVectorDatabase {
-  async insert() {
-    throw new Error('Synthetic insert failure');
-  }
-
-  async insertHybrid() {
+  async writeDocuments() {
     throw new Error('Synthetic insert failure');
   }
 }

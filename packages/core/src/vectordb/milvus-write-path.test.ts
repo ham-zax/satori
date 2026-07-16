@@ -54,8 +54,15 @@ test('Milvus control-row translation remains compatible with legacy metadata-kin
     });
 });
 
-for (const method of ['insert', 'insertHybrid'] as const) {
-    test(`Milvus gRPC ${method} does not perform a non-gating collection load-state check`, async () => {
+test('Milvus control-row translation rejects its reserved transport metadata key', () => {
+    assert.throws(() => toLegacyMilvusControlDocument({
+        id: '__control__',
+        kind: 'test_control',
+        metadata: { __satoriControlKind: 'logical-value' },
+    }, 2), /reserved key/);
+});
+
+test('Milvus gRPC searchable write does not perform a non-gating collection load-state check', async () => {
         const calls: Array<Record<string, unknown>> = [];
         const target = {
             ensureLoaded: async () => {
@@ -67,7 +74,7 @@ for (const method of ['insert', 'insertHybrid'] as const) {
             },
         };
 
-        await MilvusVectorDatabase.prototype[method].call(
+        await MilvusVectorDatabase.prototype.writeDocuments.call(
             target as unknown as MilvusVectorDatabase,
             'collection-v1',
             documents,
@@ -85,8 +92,7 @@ for (const method of ['insert', 'insertHybrid'] as const) {
             fileExtension: '.ts',
             metadata: '{"language":"typescript"}',
         }]);
-    });
-}
+});
 
 test('Milvus gRPC writes control records through the separate control boundary', async () => {
     const calls: Array<Record<string, unknown>> = [];
@@ -114,11 +120,11 @@ test('Milvus gRPC writes control records through the separate control boundary',
 test('Milvus gRPC reads and deletes control records through the separate control boundary', async () => {
     const deleted: string[][] = [];
     const target = {
-        query: async () => [{
+        queryRows: async () => [{
             id: '__control__',
             metadata: '{"__satoriControlKind":"test_control","value":"control metadata"}',
         }],
-        delete: async (_collectionName: string, ids: string[]) => {
+        deleteRows: async (_collectionName: string, ids: string[]) => {
             deleted.push(ids);
         },
     };
@@ -154,34 +160,31 @@ test('Milvus gRPC excludes control rows from every retrieval operation', async (
             },
         },
     };
-    const hybridRequests = [
-        { data: [0.1, 0.2], anns_field: 'vector', param: {}, limit: 5 },
-        { data: 'owner', anns_field: 'sparse_vector', param: {}, limit: 5 },
-    ];
-
-    await MilvusVectorDatabase.prototype.search.call(
+    await MilvusVectorDatabase.prototype.retrieveDense.call(
         target as unknown as MilvusVectorDatabase,
         'collection-v1',
-        [0.1, 0.2],
+        {
+            vector: [0.1, 0.2],
+            limit: 5,
+            filter: {
+                kind: 'comparison',
+                field: 'relativePath',
+                operator: 'eq',
+                value: 'src/owner.ts',
+            },
+        },
     );
-    await MilvusVectorDatabase.prototype.hybridSearch.call(
+    await MilvusVectorDatabase.prototype.retrieveLexical.call(
         target as unknown as MilvusVectorDatabase,
         'collection-v1',
-        hybridRequests,
-        { filterExpr: 'language == "typescript"' },
-    );
-    await MilvusVectorDatabase.prototype.sparseSearch!.call(
-        target as unknown as MilvusVectorDatabase,
-        'collection-v1',
-        'owner',
+        { query: 'owner', limit: 5 },
     );
 
-    assert.equal(requests[0]?.expr, 'fileExtension != ".satori_meta"');
     assert.equal(
-        requests[1]?.expr,
-        '(language == "typescript") and (fileExtension != ".satori_meta")',
+        requests[0]?.expr,
+        '(relativePath == "src/owner.ts") and (fileExtension != ".satori_meta")',
     );
-    assert.equal(requests[2]?.expr, 'fileExtension != ".satori_meta"');
+    assert.equal(requests[1]?.expr, 'fileExtension != ".satori_meta"');
 });
 
 test('Milvus gRPC idempotent write retries a dropped connection with a fresh client', async () => {
@@ -439,8 +442,7 @@ test('Milvus hybrid creation defers index construction and loading until finaliz
     ]);
 });
 
-for (const method of ['insert', 'insertHybrid'] as const) {
-    test(`Milvus REST ${method} does not perform a non-gating collection load-state check`, async () => {
+test('Milvus REST searchable write does not perform a non-gating collection load-state check', async () => {
         const calls: Array<{ endpoint: string; method: string; body: Record<string, unknown> }> = [];
         let initializationChecks = 0;
         const target = {
@@ -457,7 +459,7 @@ for (const method of ['insert', 'insertHybrid'] as const) {
             },
         };
 
-        await MilvusRestfulVectorDatabase.prototype[method].call(
+        await MilvusRestfulVectorDatabase.prototype.writeDocuments.call(
             target as unknown as MilvusRestfulVectorDatabase,
             'collection-v1',
             documents,
@@ -482,8 +484,7 @@ for (const method of ['insert', 'insertHybrid'] as const) {
                 }],
             },
         }]);
-    });
-}
+});
 
 test('Milvus REST writes control records through the separate control boundary', async () => {
     const calls: Array<{ endpoint: string; body: Record<string, unknown> }> = [];
@@ -512,11 +513,11 @@ test('Milvus REST writes control records through the separate control boundary',
 test('Milvus REST reads and deletes control records through the separate control boundary', async () => {
     const deleted: string[][] = [];
     const target = {
-        query: async () => [{
+        queryRows: async () => [{
             id: '__control__',
             metadata: { __satoriControlKind: 'test_control', value: 'control metadata' },
         }],
-        delete: async (_collectionName: string, ids: string[]) => {
+        deleteRows: async (_collectionName: string, ids: string[]) => {
             deleted.push(ids);
         },
     };
@@ -547,33 +548,29 @@ test('Milvus REST excludes control rows from every retrieval operation', async (
             return { code: 0, data: [] };
         },
     };
-    const hybridRequests = [
-        { data: [0.1, 0.2], anns_field: 'vector', param: {}, limit: 5 },
-        { data: 'owner', anns_field: 'sparse_vector', param: {}, limit: 5 },
-    ];
-
-    await MilvusRestfulVectorDatabase.prototype.search.call(
+    await MilvusRestfulVectorDatabase.prototype.retrieveDense.call(
         target as unknown as MilvusRestfulVectorDatabase,
         'collection-v1',
-        [0.1, 0.2],
+        {
+            vector: [0.1, 0.2],
+            limit: 5,
+            filter: {
+                kind: 'comparison',
+                field: 'relativePath',
+                operator: 'eq',
+                value: 'src/owner.ts',
+            },
+        },
     );
-    await MilvusRestfulVectorDatabase.prototype.hybridSearch.call(
+    await MilvusRestfulVectorDatabase.prototype.retrieveLexical.call(
         target as unknown as MilvusRestfulVectorDatabase,
         'collection-v1',
-        hybridRequests,
-        { filterExpr: 'language == "typescript"' },
-    );
-    await MilvusRestfulVectorDatabase.prototype.sparseSearch!.call(
-        target as unknown as MilvusRestfulVectorDatabase,
-        'collection-v1',
-        'owner',
+        { query: 'owner', limit: 5 },
     );
 
-    assert.equal(requests[0]?.body.filter, 'fileExtension != ".satori_meta"');
-    const hybridSearches = requests[1]?.body.search as Array<Record<string, unknown>>;
-    assert.deepEqual(hybridSearches.map((request) => request.filter), [
-        '(language == "typescript") and (fileExtension != ".satori_meta")',
-        '(language == "typescript") and (fileExtension != ".satori_meta")',
-    ]);
-    assert.equal(requests[2]?.body.filter, 'fileExtension != ".satori_meta"');
+    assert.equal(
+        requests[0]?.body.filter,
+        '(relativePath == "src/owner.ts") and (fileExtension != ".satori_meta")',
+    );
+    assert.equal(requests[1]?.body.filter, 'fileExtension != ".satori_meta"');
 });

@@ -1,4 +1,4 @@
-import type { BackendScoreKind, RetrievalMode, ScorePolicy } from './vectordb/types';
+import type { BackendScoreKind, RetrievalMode, ScorePolicy, VectorFilter } from './vectordb/types';
 
 export interface SearchQuery {
     term: string;
@@ -11,7 +11,7 @@ export interface SemanticSearchRequest {
     query: string;
     topK?: number;
     retrievalMode?: RetrievalMode;
-    filterExpr?: string;
+    filter?: VectorFilter;
     scorePolicy?: ScorePolicy;
 }
 

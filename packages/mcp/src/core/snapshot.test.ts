@@ -23,7 +23,12 @@ const FINGERPRINT_A: IndexFingerprint = {
     embeddingModel: 'voyage-4-large',
     embeddingDimension: 1024,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 const FINGERPRINT_B: IndexFingerprint = {
@@ -31,7 +36,12 @@ const FINGERPRINT_B: IndexFingerprint = {
     embeddingModel: 'text-embedding-3-small',
     embeddingDimension: 1536,
     vectorStoreProvider: 'Milvus',
-    schemaVersion: 'hybrid_v3'
+    schemaVersion: 'hybrid_v3',
+    parserVersion: 'parser-v1',
+    extractorVersion: 'extractor-v1',
+    relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 test('SnapshotManager rejects invalid lifecycle counts and progress during shape validation', () => {

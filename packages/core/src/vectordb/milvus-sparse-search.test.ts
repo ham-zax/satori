@@ -27,11 +27,10 @@ test('Milvus gRPC sparse search sends one BM25 request without dense data', asyn
         },
     };
 
-    const results = await MilvusVectorDatabase.prototype.sparseSearch.call(
+    const results = await MilvusVectorDatabase.prototype.retrieveLexical.call(
         target as unknown as MilvusVectorDatabase,
         'collection-v1',
-        'SOURCE_CHECKPOINT_MISSING',
-        { topK: 7, dropRatioSearch: 0.15, filterExpr: 'fileExtension != ".satori_meta"' },
+        { query: 'SOURCE_CHECKPOINT_MISSING', limit: 7 },
     );
 
     assert.equal(calls.length, 1);
@@ -41,7 +40,7 @@ test('Milvus gRPC sparse search sends one BM25 request without dense data', asyn
         anns_field: 'sparse_vector',
         limit: 7,
         metric_type: 'BM25',
-        params: { drop_ratio_search: 0.15 },
+        params: { drop_ratio_search: 0.2 },
         output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
         expr: 'fileExtension != ".satori_meta"',
     });
@@ -74,11 +73,10 @@ test('Milvus REST sparse search sends one BM25 request through the search endpoi
         },
     };
 
-    const results = await MilvusRestfulVectorDatabase.prototype.sparseSearch.call(
+    const results = await MilvusRestfulVectorDatabase.prototype.retrieveLexical.call(
         target as unknown as MilvusRestfulVectorDatabase,
         'collection-v1',
-        'SOURCE_CHECKPOINT_MISSING',
-        { topK: 7, dropRatioSearch: 0.15, filterExpr: 'fileExtension != ".satori_meta"' },
+        { query: 'SOURCE_CHECKPOINT_MISSING', limit: 7 },
     );
 
     assert.equal(calls.length, 1);
@@ -93,7 +91,7 @@ test('Milvus REST sparse search sends one BM25 request through the search endpoi
         outputFields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
         searchParams: {
             metricType: 'BM25',
-            params: { drop_ratio_search: 0.15 },
+            params: { drop_ratio_search: 0.2 },
         },
         filter: 'fileExtension != ".satori_meta"',
     });

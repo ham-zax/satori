@@ -5,7 +5,7 @@ import { MilvusRestfulVectorDatabase } from './milvus-restful-vectordb';
 import { MilvusVectorDatabase } from './milvus-vectordb';
 
 type CountTarget = {
-    query: (
+    queryRows: (
         collectionName: string,
         filter: string,
         outputFields: string[],
@@ -16,16 +16,15 @@ type CountTarget = {
 test('Milvus count requests the aggregate field without imposing a row limit', async () => {
     const calls: unknown[][] = [];
     const target: CountTarget = {
-        query: async (...args) => {
+        queryRows: async (...args) => {
             calls.push(args);
             return [{ 'count(*)': '42' }];
         },
     };
 
-    const count = await MilvusVectorDatabase.prototype.count.call(
+    const count = await MilvusVectorDatabase.prototype.countDocuments.call(
         target as unknown as MilvusVectorDatabase,
         'chunks',
-        'fileExtension != ".satori_meta"',
     );
 
     assert.equal(count, 42);
@@ -39,16 +38,15 @@ test('Milvus count requests the aggregate field without imposing a row limit', a
 test('Milvus REST count requests one aggregate result row', async () => {
     const calls: unknown[][] = [];
     const target: CountTarget = {
-        query: async (...args) => {
+        queryRows: async (...args) => {
             calls.push(args);
             return [{ count: 7 }];
         },
     };
 
-    const count = await MilvusRestfulVectorDatabase.prototype.count.call(
+    const count = await MilvusRestfulVectorDatabase.prototype.countDocuments.call(
         target as unknown as MilvusRestfulVectorDatabase,
         'chunks',
-        'fileExtension != ".satori_meta"',
     );
 
     assert.equal(count, 7);
@@ -62,22 +60,20 @@ test('Milvus REST count requests one aggregate result row', async () => {
 
 test('Milvus count adapters reject malformed aggregate results', async () => {
     const target: CountTarget = {
-        query: async () => [{ 'count(*)': '1.5' }],
+        queryRows: async () => [{ 'count(*)': '1.5' }],
     };
 
     await assert.rejects(
-        () => MilvusVectorDatabase.prototype.count.call(
+        () => MilvusVectorDatabase.prototype.countDocuments.call(
             target as unknown as MilvusVectorDatabase,
             'chunks',
-            '',
         ),
         /invalid row count/,
     );
     await assert.rejects(
-        () => MilvusRestfulVectorDatabase.prototype.count.call(
+        () => MilvusRestfulVectorDatabase.prototype.countDocuments.call(
             target as unknown as MilvusRestfulVectorDatabase,
             'chunks',
-            '',
         ),
         /invalid row count/,
     );

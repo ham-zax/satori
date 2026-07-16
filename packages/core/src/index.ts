@@ -5,6 +5,7 @@ export * from './types';
 export * from './context';
 export * from './core/persisted-index-authority';
 export * from './core/search-projections';
+export { VECTOR_CANDIDATE_RRF_K_V1 } from './core/vector-candidate-fusion';
 export * from './sync/synchronizer';
 export * from './sync/root-bound-fs';
 export * from './measurement/source-ledger';

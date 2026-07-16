@@ -4,7 +4,14 @@ export {
     VectorControlRecord,
     IndexedVectorDocument,
     SearchProjections,
-    SearchOptions,
+    DenseCandidateRequest,
+    LexicalCandidateRequest,
+    VectorCandidate,
+    VectorFilter,
+    VectorFilterField,
+    VectorFilterValue,
+    VectorDocumentField,
+    VectorDocumentQuery,
     VectorSearchResult,
     VectorDatabase,
     CollectionDetails,
@@ -12,11 +19,7 @@ export {
     VectorWriteAttemptSample,
     VectorWriteFlushReason,
     VectorWriteMetricsSnapshot,
-    HybridSearchRequest,
-    HybridSearchOptions,
     HybridSearchResult,
-    SparseSearchOptions,
-    RerankStrategy,
     RetrievalMode,
     ScorePolicy,
     BackendScoreKind,
@@ -24,13 +27,13 @@ export {
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
-    INDEX_COMPLETION_MARKER_RELATIVE_PATH,
     COLLECTION_LIMIT_MESSAGE
 } from './types';
 
 // Implementation class exports
 export { MilvusRestfulVectorDatabase, MilvusRestfulConfig } from './milvus-restful-vectordb';
 export { MilvusVectorDatabase, MilvusConfig } from './milvus-vectordb';
+export { VectorDatabaseTestAdapter } from './test-adapter';
 export {
     RemoteCollectionDeletePendingError,
     deleteCollectionWithVerification,

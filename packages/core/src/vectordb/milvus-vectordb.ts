@@ -5,26 +5,22 @@ import {
     FunctionType,
     LoadState,
     hybridtsToUnixtime,
-    type HybridSearchReq,
     type QueryReq,
     type RowData,
     type SearchSimpleReq,
 } from '@zilliz/milvus2-sdk-node';
 import {
-    VectorDocument,
     VectorControlRecord,
     IndexedVectorDocument,
-    SearchOptions,
-    VectorSearchResult,
+    DenseCandidateRequest,
+    VectorCandidate,
     VectorDatabase,
-    HybridSearchRequest,
-    HybridSearchOptions,
-    HybridSearchResult,
-    SparseSearchOptions,
+    LexicalCandidateRequest,
     CollectionDetails,
     VectorStoreBackendInfo,
-    VectorDocumentMetadata,
     VectorRecord,
+    VectorDocumentQuery,
+    VectorFilter,
     CollectionCreateOptions,
     VectorWriteFlushReason,
     VectorWriteMetricsSnapshot,
@@ -34,41 +30,23 @@ import {
     toLegacyMilvusControlDocument,
     withMilvusControlExclusion,
 } from './milvus-control-record';
+import {
+    assertMilvusSearchableDocumentIds,
+    decodeMilvusCandidate,
+    encodeMilvusDocument,
+    encodeMilvusSearchableDocument,
+    type MilvusPhysicalRow,
+} from './milvus-row-codec';
 import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
 import { buildMilvusIdInFilter } from './filters';
 import { envManager } from '../utils/env-manager';
-
-type MilvusResultRow = {
-    id?: unknown;
-    content?: unknown;
-    relativePath?: unknown;
-    startLine?: unknown;
-    endLine?: unknown;
-    fileExtension?: unknown;
-    metadata?: unknown;
-    score?: unknown;
-    distance?: unknown;
-};
 
 type MilvusCollectionListPayload = {
     data?: Array<{ name?: unknown; timestamp?: unknown }>;
     collection_names?: unknown;
     collections?: unknown;
 };
-
-function toMilvusWriteRow(document: VectorDocument): RowData {
-    return {
-        id: document.id,
-        vector: document.vector,
-        content: document.content,
-        relativePath: document.relativePath,
-        startLine: document.startLine,
-        endLine: document.endLine,
-        fileExtension: document.fileExtension,
-        metadata: JSON.stringify(document.metadata),
-    };
-}
 
 // Zilliz serverless collection removal can legitimately take substantially
 // longer than the SDK's 15-second default. Keep the wider deadline scoped to
@@ -187,30 +165,6 @@ function splitMilvusWriteBatches(
     return batches;
 }
 
-type MilvusHybridSearchSingleRequest = {
-    data: number[] | string;
-    anns_field: string;
-    params: VectorRecord;
-    limit: number;
-    expr?: string;
-};
-
-type MilvusHybridSearchParams = {
-    collection_name: string;
-    data: MilvusHybridSearchSingleRequest[];
-    limit: number;
-    rerank: {
-        strategy: string;
-        params: VectorRecord;
-    };
-    output_fields: string[];
-    expr?: string;
-};
-
-type HybridVectorDocument = VectorDocument & {
-    sparse_vector: never[];
-};
-
 const COLLECTION_LIMIT_PATTERNS = [
     /exceeded the limit number of collections/i,
     /collection limit/i,
@@ -249,73 +203,6 @@ function stringValue(value: unknown, fallback: string = ''): string {
     }
 
     return fallback;
-}
-
-function numberValue(value: unknown, fallback: number = 0): number {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-        return value;
-    }
-
-    if (typeof value === 'string' && value.trim().length > 0) {
-        const parsed = Number(value);
-        if (Number.isFinite(parsed)) {
-            return parsed;
-        }
-    }
-
-    return fallback;
-}
-
-function parseMetadata(value: unknown): VectorDocumentMetadata {
-    if (isRecord(value)) {
-        return value;
-    }
-
-    if (typeof value !== 'string' || value.length === 0) {
-        return {};
-    }
-
-    try {
-        const parsed: unknown = JSON.parse(value);
-        return isRecord(parsed) ? parsed : {};
-    } catch {
-        return {};
-    }
-}
-
-function toVectorSearchResult(row: MilvusResultRow, vector: number[]): VectorSearchResult {
-    return {
-        document: {
-            id: stringValue(row.id),
-            vector,
-            content: stringValue(row.content),
-            relativePath: stringValue(row.relativePath),
-            startLine: numberValue(row.startLine),
-            endLine: numberValue(row.endLine),
-            fileExtension: stringValue(row.fileExtension),
-            metadata: parseMetadata(row.metadata),
-        },
-        score: numberValue(row.score),
-    };
-}
-
-function toHybridSearchResult(row: MilvusResultRow): HybridSearchResult {
-    const document: HybridVectorDocument = {
-        id: stringValue(row.id),
-        content: stringValue(row.content),
-        vector: [],
-        sparse_vector: [],
-        relativePath: stringValue(row.relativePath),
-        startLine: numberValue(row.startLine),
-        endLine: numberValue(row.endLine),
-        fileExtension: stringValue(row.fileExtension),
-        metadata: parseMetadata(row.metadata),
-    };
-
-    return {
-        document,
-        score: numberValue(row.score),
-    };
 }
 
 function collectErrorText(
@@ -936,23 +823,23 @@ export class MilvusVectorDatabase implements VectorDatabase {
         };
     }
 
-    async insert(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
+    async writeDocuments(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
         console.log('Inserting documents into collection:', collectionName);
         // The legacy Milvus schema retains source content for result round-trips
         // and server BM25. Dense vectors already encode the supplied projection.
-        const data = documents.map(({ document }) => toMilvusWriteRow(document));
+        const data = documents.map(({ document }) => encodeMilvusSearchableDocument(document) as RowData);
 
         await this.upsertDocuments(collectionName, data);
     }
 
     async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
         await this.upsertDocuments(collectionName, [
-            toMilvusWriteRow(toLegacyMilvusControlDocument(record, this.config.vectorDimension)),
+            encodeMilvusDocument(toLegacyMilvusControlDocument(record, this.config.vectorDimension)) as RowData,
         ]);
     }
 
     async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
-        const rows = await this.query(collectionName, buildMilvusIdInFilter([id]), ['id', 'metadata'], 2);
+        const rows = await this.queryRows(collectionName, buildMilvusIdInFilter([id]), ['id', 'metadata'], 2);
         for (const row of rows) {
             const record = fromLegacyMilvusControlRow(row, id);
             if (record) return record;
@@ -961,10 +848,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
     }
 
     async deleteControl(collectionName: string, id: string): Promise<void> {
-        await this.delete(collectionName, [id]);
+        await this.deleteRows(collectionName, [id]);
     }
 
-    async search(collectionName: string, queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
+    async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 
@@ -974,10 +861,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         const searchParams: SearchSimpleReq = {
             collection_name: collectionName,
-            data: [queryVector],
-            limit: options?.topK || 10,
+            data: [[...request.vector]],
+            limit: request.limit,
             output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
-            expr: withMilvusControlExclusion(options?.filterExpr),
+            expr: withMilvusControlExclusion(request.filter),
         };
 
         const searchResult = await this.client.search(searchParams);
@@ -986,13 +873,21 @@ export class MilvusVectorDatabase implements VectorDatabase {
             return [];
         }
 
-        const resultRows = searchResult.results as unknown as MilvusResultRow[];
+        const resultRows = searchResult.results as unknown as MilvusPhysicalRow[];
         return resultRows
-            .map((result) => toVectorSearchResult(result, queryVector))
-            .filter((result: VectorSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
+            .map((result) => decodeMilvusCandidate(result, {
+                vector: request.vector,
+                scoreSource: 'score',
+            }))
+            .filter((result: VectorCandidate) => request.minimumScore === undefined || result.score >= request.minimumScore);
     }
 
-    async delete(collectionName: string, ids: string[]): Promise<void> {
+    async deleteDocuments(collectionName: string, ids: string[]): Promise<void> {
+        assertMilvusSearchableDocumentIds(ids);
+        await this.deleteRows(collectionName, ids);
+    }
+
+    private async deleteRows(collectionName: string, ids: string[]): Promise<void> {
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 
@@ -1006,7 +901,21 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    async query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<VectorRecord[]> {
+    async queryDocuments(collectionName: string, request: VectorDocumentQuery): Promise<VectorRecord[]> {
+        return this.queryRows(
+            collectionName,
+            withMilvusControlExclusion(request.filter),
+            [...request.fields],
+            request.limit,
+        );
+    }
+
+    private async queryRows(
+        collectionName: string,
+        filter: string,
+        outputFields: string[],
+        limit?: number,
+    ): Promise<VectorRecord[]> {
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 
@@ -1044,8 +953,12 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
     }
 
-    async count(collectionName: string, filter: string): Promise<number> {
-        const rows = await this.query(collectionName, filter, ['count(*)']);
+    async countDocuments(collectionName: string, filter?: VectorFilter): Promise<number> {
+        const rows = await this.queryRows(
+            collectionName,
+            withMilvusControlExclusion(filter),
+            ['count(*)'],
+        );
         const rawCount = rows[0]?.['count(*)'] ?? rows[0]?.count;
         const count = Number(rawCount);
         if (!Number.isSafeInteger(count) || count < 0) {
@@ -1200,108 +1113,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    async insertHybrid(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
-        const data = documents.map(({ document }) => toMilvusWriteRow(document));
-
-        await this.upsertDocuments(collectionName, data);
-    }
-
-    async hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
-        await this.ensureInitialized();
-        await this.ensureLoaded(collectionName);
-
-        if (!this.client) {
-            throw new Error('MilvusClient is not initialized after ensureInitialized().');
-        }
-
-        try {
-            // Generate OpenAI embedding for the first search request (dense)
-            console.log(`[MilvusDB] 🔍 Preparing hybrid search for collection: ${collectionName}`);
-
-            // Prepare search requests in the correct Milvus format
-            const search_param_1: MilvusHybridSearchSingleRequest = {
-                data: searchRequests[0].data,
-                anns_field: searchRequests[0].anns_field, // "vector"
-                params: searchRequests[0].param, // {"nprobe": 10}
-                limit: searchRequests[0].limit
-            };
-
-            const search_param_2: MilvusHybridSearchSingleRequest = {
-                data: searchRequests[1].data, // query text for sparse search
-                anns_field: searchRequests[1].anns_field, // "sparse_vector"
-                params: searchRequests[1].param, // {"drop_ratio_search": 0.2}
-                limit: searchRequests[1].limit
-            };
-
-            // Set rerank strategy to RRF (100) by default
-            const rerank_strategy = {
-                strategy: "rrf",
-                params: {
-                    k: 100
-                }
-            };
-
-            console.log(`[MilvusDB] 🔍 Dense search params:`, JSON.stringify({
-                anns_field: search_param_1.anns_field,
-                params: search_param_1.params,
-                limit: search_param_1.limit,
-                data_length: Array.isArray(search_param_1.data) ? search_param_1.data.length : 'N/A'
-            }, null, 2));
-            console.log(`[MilvusDB] 🔍 Sparse search params:`, JSON.stringify({
-                anns_field: search_param_2.anns_field,
-                params: search_param_2.params,
-                limit: search_param_2.limit,
-                query_text: typeof search_param_2.data === 'string' ? search_param_2.data.substring(0, 50) + '...' : 'N/A'
-            }, null, 2));
-            console.log(`[MilvusDB] 🔍 Rerank strategy:`, JSON.stringify(rerank_strategy, null, 2));
-
-            // Execute hybrid search using the correct client.search format
-            const searchParams: MilvusHybridSearchParams = {
-                collection_name: collectionName,
-                data: [search_param_1, search_param_2],
-                limit: options?.limit || searchRequests[0]?.limit || 10,
-                rerank: rerank_strategy,
-                output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
-                expr: withMilvusControlExclusion(options?.filterExpr),
-            };
-
-            console.log(`[MilvusDB] 🔍 Complete search request:`, JSON.stringify({
-                collection_name: searchParams.collection_name,
-                data_count: searchParams.data.length,
-                limit: searchParams.limit,
-                rerank: searchParams.rerank,
-                output_fields: searchParams.output_fields,
-                expr: searchParams.expr
-            }, null, 2));
-
-            const searchResult = await this.client.search(searchParams as unknown as HybridSearchReq);
-
-            console.log(`[MilvusDB] 🔍 Search executed, processing results...`);
-
-            if (!searchResult.results || searchResult.results.length === 0) {
-                console.log(`[MilvusDB] ⚠️  No results returned from Milvus search`);
-                return [];
-            }
-
-            console.log(`[MilvusDB] ✅ Found ${searchResult.results.length} results from hybrid search`);
-
-            // Transform results to HybridSearchResult format
-            const resultRows = searchResult.results as unknown as MilvusResultRow[];
-            return resultRows
-                .map(toHybridSearchResult)
-                .filter((result: HybridSearchResult) => options?.threshold === undefined || result.score >= options.threshold);
-
-        } catch (error) {
-            console.error(`[MilvusDB] ❌ Failed to perform hybrid search on collection '${collectionName}':`, error);
-            throw error;
-        }
-    }
-
-    async sparseSearch(
+    async retrieveLexical(
         collectionName: string,
-        queryText: string,
-        options?: SparseSearchOptions,
-    ): Promise<HybridSearchResult[]> {
+        request: LexicalCandidateRequest,
+    ): Promise<VectorCandidate[]> {
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 
@@ -1311,22 +1126,23 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
         const searchParams: SearchSimpleReq = {
             collection_name: collectionName,
-            data: [queryText],
+            data: [request.query],
             anns_field: 'sparse_vector',
-            limit: options?.topK ?? 10,
+            limit: request.limit,
             metric_type: 'BM25',
             params: {
-                drop_ratio_search: options?.dropRatioSearch ?? 0.2,
+                drop_ratio_search: 0.2,
             },
             output_fields: ['id', 'content', 'relativePath', 'startLine', 'endLine', 'fileExtension', 'metadata'],
-            expr: withMilvusControlExclusion(options?.filterExpr),
+            expr: withMilvusControlExclusion(request.filter),
         };
 
         const searchResult = await this.client.search(searchParams);
         if (!searchResult.results || searchResult.results.length === 0) {
             return [];
         }
-        return (searchResult.results as unknown as MilvusResultRow[]).map(toHybridSearchResult);
+        return (searchResult.results as unknown as MilvusPhysicalRow[])
+            .map((row) => decodeMilvusCandidate(row, { scoreSource: 'score' }));
     }
 
     /**

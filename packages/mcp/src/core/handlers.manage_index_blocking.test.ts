@@ -54,6 +54,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     parserVersion: 'parser-v1',
     extractorVersion: 'extractor-v1',
     relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 const CAPABILITIES = new CapabilityResolver({
@@ -974,7 +976,7 @@ test('handleGetIndexingStatus recovers stale indexing mismatch to requires_reind
         assert.match(envelope.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
         assert.match(
             (envelope.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
-            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=legacy\/lexical_projection=legacy$/,
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=[a-f0-9]{12}\/lexical_projection=[a-f0-9]{12}$/,
         );
     });
 });

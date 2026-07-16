@@ -19,16 +19,16 @@ import {
 } from "@zokizuan/satori-core";
 import type {
     CollectionDetails,
+    DenseCandidateRequest,
     EmbeddingVector,
-    HybridSearchOptions,
-    HybridSearchRequest,
-    HybridSearchResult,
     IndexedVectorDocument,
-    SearchOptions,
+    LexicalCandidateRequest,
+    VectorCandidate,
     VectorControlRecord,
     VectorDatabase,
     VectorDocument,
-    VectorSearchResult,
+    VectorDocumentQuery,
+    VectorFilter,
 } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "../core/capabilities.js";
 import type { IndexFingerprint } from "../config.js";
@@ -99,40 +99,21 @@ class InMemoryVectorDatabase implements VectorDatabase {
      * Minimal filter evaluation for Context marker/query paths.
      * Must honor `id == "..."` so completion-marker clear/write does not delete real chunks.
      */
-    private listDocuments(collectionName: string, filterExpr?: string): VectorDocument[] {
+    private listDocuments(collectionName: string, filter?: VectorFilter): VectorDocument[] {
         const collection = this.collections.get(collectionName);
         if (!collection) {
             return [];
         }
-        let documents = Array.from(collection.values());
-        const expr = filterExpr || "";
-
-        const idMatch = /^id == "((?:\\.|[^"\\])*)"$/.exec(expr);
-        if (idMatch?.[1]) {
-            const id = idMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-            return documents.filter((document) => document.id === id);
-        }
-
-        if (expr.includes('fileExtension != ".satori_meta"') || expr.includes("fileExtension != '.satori_meta'")) {
-            documents = documents.filter((document) => document.fileExtension !== ".satori_meta");
-        }
-
-        const relativePathMatch = /relativePath == ["'](.+?)["']/.exec(expr);
-        if (relativePathMatch?.[1]) {
-            documents = documents.filter((document) => document.relativePath === relativePathMatch[1]);
-        }
-
-        return documents;
-    }
-
-    async hybridSearch(
-        collectionName: string,
-        _searchRequests: HybridSearchRequest[],
-        options?: HybridSearchOptions,
-    ): Promise<HybridSearchResult[]> {
-        return this.listDocuments(collectionName, options?.filterExpr)
-            .slice(0, options?.limit ?? 1000)
-            .map((document, index) => ({ document, score: 0.99 - (index * 0.01) }));
+        const matches = (document: VectorDocument, candidate?: VectorFilter): boolean => {
+            if (!candidate) return true;
+            if (candidate.kind === 'and') return candidate.operands.every((operand) => matches(document, operand));
+            const value = document[candidate.field];
+            if (candidate.kind === 'in') return candidate.values.includes(value as string);
+            return candidate.operator === 'eq' ? value === candidate.value : value !== candidate.value;
+        };
+        return Array.from(collection.values())
+            .filter((document) => document.fileExtension !== '.satori_meta')
+            .filter((document) => matches(document, filter));
     }
 
     async createCollection(collectionName: string): Promise<void> {
@@ -159,7 +140,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
         return Array.from(this.collections.keys()).map((name) => ({ name }));
     }
 
-    async insert(
+    private async storeDocuments(
         collectionName: string,
         documents: Array<IndexedVectorDocument | VectorDocument>,
     ): Promise<void> {
@@ -173,15 +154,12 @@ class InMemoryVectorDatabase implements VectorDatabase {
         }
     }
 
-    async insertHybrid(
-        collectionName: string,
-        documents: Array<IndexedVectorDocument | VectorDocument>,
-    ): Promise<void> {
-        await this.insert(collectionName, documents);
+    async writeDocuments(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {
+        await this.storeDocuments(collectionName, documents);
     }
 
     async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
-        await this.insert(collectionName, [{
+        await this.storeDocuments(collectionName, [{
             id: record.id,
             vector: [],
             content: '',
@@ -203,31 +181,32 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async deleteControl(collectionName: string, id: string): Promise<void> {
-        await this.delete(collectionName, [id]);
+        await this.deleteDocuments(collectionName, [id]);
     }
 
-    async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
-        return this.listDocuments(collectionName, options?.filterExpr)
-            .slice(0, options?.topK ?? 1000)
+    async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
+        return this.listDocuments(collectionName, request.filter)
+            .slice(0, request.limit)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
-    async delete(collectionName: string, ids: string[]): Promise<void> {
+    async retrieveLexical(collectionName: string, request: LexicalCandidateRequest): Promise<VectorCandidate[]> {
+        return this.listDocuments(collectionName, request.filter)
+            .slice(0, request.limit)
+            .map((document, index) => ({ document, score: 1 - (index / 1000) }));
+    }
+
+    async deleteDocuments(collectionName: string, ids: string[]): Promise<void> {
         const collection = this.collections.get(collectionName);
         for (const id of ids) {
             collection?.delete(id);
         }
     }
 
-    async query(
-        collectionName: string,
-        filterExpr: string,
-        outputFields: string[],
-        limit: number = 1000,
-    ): Promise<Record<string, unknown>[]> {
-        return this.listDocuments(collectionName, filterExpr).slice(0, limit).map((document) => {
+    async queryDocuments(collectionName: string, request: VectorDocumentQuery): Promise<Record<string, unknown>[]> {
+        return this.listDocuments(collectionName, request.filter).slice(0, request.limit ?? 1000).map((document) => {
             const row: Record<string, unknown> = {};
-            for (const field of outputFields) {
+            for (const field of request.fields) {
                 row[field] = (document as unknown as Record<string, unknown>)[field];
             }
             return row;

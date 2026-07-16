@@ -59,47 +59,65 @@ export type ScorePolicy =
 
 export type BackendScoreKind = 'dense_similarity' | 'lexical_rank' | 'rrf_fusion';
 
-export interface SearchOptions {
-    topK?: number;
-    filter?: VectorRecord;
-    threshold?: number;
-    filterExpr?: string;
+export type VectorFilterField = 'id' | 'relativePath' | 'fileExtension';
+export type VectorFilterValue = string;
+
+export type VectorFilter =
+    | {
+        readonly kind: 'comparison';
+        readonly field: VectorFilterField;
+        readonly operator: 'eq' | 'ne';
+        readonly value: VectorFilterValue;
+    }
+    | {
+        readonly kind: 'in';
+        readonly field: VectorFilterField;
+        readonly values: readonly VectorFilterValue[];
+    }
+    | {
+        readonly kind: 'and';
+        readonly operands: readonly VectorFilter[];
+    };
+
+export interface DenseCandidateRequest {
+    readonly vector: readonly number[];
+    readonly limit: number;
+    readonly minimumScore?: number;
+    readonly filter?: VectorFilter;
 }
 
-// New interfaces for hybrid search
-export interface HybridSearchRequest {
-    data: number[] | string; // Query vector or text
-    anns_field: string; // Vector field name (vector or sparse_vector)
-    param: VectorRecord; // Search parameters
-    limit: number;
+export interface LexicalCandidateRequest {
+    readonly query: string;
+    readonly limit: number;
+    readonly filter?: VectorFilter;
 }
 
-export interface HybridSearchOptions {
-    rerank?: RerankStrategy;
-    limit?: number;
-    threshold?: number;
-    filterExpr?: string;
-}
-
-export interface SparseSearchOptions {
-    topK?: number;
-    filterExpr?: string;
-    dropRatioSearch?: number;
-}
-
-export interface RerankStrategy {
-    strategy: 'rrf' | 'weighted';
-    params?: VectorRecord;
-}
-
-export interface VectorSearchResult {
+export interface VectorCandidate {
     document: VectorDocument;
+    /**
+     * Adapter-normalized backend rank score. The value must be finite and a
+     * larger value must always represent a better match. Numeric ranges may
+     * differ by retrieval arm; Core uses only the induced ordering for RRF.
+     */
     score: number;
 }
 
-export interface HybridSearchResult {
-    document: VectorDocument;
-    score: number;
+export type VectorSearchResult = VectorCandidate;
+export type HybridSearchResult = VectorCandidate;
+
+export type VectorDocumentField =
+    | 'id'
+    | 'content'
+    | 'relativePath'
+    | 'startLine'
+    | 'endLine'
+    | 'fileExtension'
+    | 'metadata';
+
+export interface VectorDocumentQuery {
+    readonly filter?: VectorFilter;
+    readonly fields: readonly VectorDocumentField[];
+    readonly limit?: number;
 }
 
 export interface CollectionDetails {
@@ -119,7 +137,6 @@ export type IndexCompletionMarkerDocument = CanonicalCompletionMarker & VectorDo
 
 export const INDEX_COMPLETION_MARKER_DOC_ID = '__satori_index_completion_marker_v1__';
 export const INDEX_COMPLETION_MARKER_FILE_EXTENSION = '.satori_meta';
-export const INDEX_COMPLETION_MARKER_RELATIVE_PATH = '.__satori__/index_completion_marker.json';
 
 export type CollectionCreateOptions = {
     deferIndexBuild?: boolean;
@@ -206,19 +223,8 @@ export interface VectorDatabase {
      */
     getWriteMetricsSnapshot?(): VectorWriteMetricsSnapshot;
 
-    /**
-     * Insert vector documents
-     * @param collectionName Collection name
-     * @param documents Document array
-     */
-    insert(collectionName: string, documents: IndexedVectorDocument[]): Promise<void>;
-
-    /**
-     * Insert hybrid vector documents
-     * @param collectionName Collection name
-     * @param documents Document array
-     */
-    insertHybrid(collectionName: string, documents: IndexedVectorDocument[]): Promise<void>;
+    /** Persist searchable documents. Collection schema determines lexical support. */
+    writeDocuments(collectionName: string, documents: IndexedVectorDocument[]): Promise<void>;
 
     /** Persist one non-searchable backend control record. */
     insertControl(collectionName: string, record: VectorControlRecord): Promise<void>;
@@ -229,38 +235,16 @@ export interface VectorDatabase {
     /** Delete one non-searchable backend control record by exact ID. */
     deleteControl(collectionName: string, id: string): Promise<void>;
 
-    /**
-     * Search similar vectors
-     * @param collectionName Collection name
-     * @param queryVector Query vector
-     * @param options Search options
-     */
-    search(collectionName: string, queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]>;
+    retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]>;
 
-    /**
-     * Hybrid search with multiple vector fields
-     * @param collectionName Collection name
-     * @param searchRequests Array of search requests for different fields
-     * @param options Hybrid search options including reranking
-     */
-    hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]>;
-
-    /**
-     * Search the server-generated BM25 sparse field without a dense query vector.
-     * Implementations for hybrid collections should expose this capability.
-     */
-    sparseSearch?(
-        collectionName: string,
-        queryText: string,
-        options?: SparseSearchOptions,
-    ): Promise<HybridSearchResult[]>;
+    retrieveLexical(collectionName: string, request: LexicalCandidateRequest): Promise<VectorCandidate[]>;
 
     /**
      * Delete documents
      * @param collectionName Collection name
      * @param ids Document ID array
      */
-    delete(collectionName: string, ids: string[]): Promise<void>;
+    deleteDocuments(collectionName: string, ids: string[]): Promise<void>;
 
     /**
      * Query documents with filter conditions
@@ -269,10 +253,10 @@ export interface VectorDatabase {
      * @param outputFields Fields to return
      * @param limit Maximum number of results
      */
-    query(collectionName: string, filter: string, outputFields: string[], limit?: number): Promise<VectorRecord[]>;
+    queryDocuments(collectionName: string, request: VectorDocumentQuery): Promise<VectorRecord[]>;
 
-    /** Return the exact number of rows matching a backend filter. */
-    count?(collectionName: string, filter: string): Promise<number>;
+    /** Return the exact number of searchable rows matching a backend-neutral filter. */
+    countDocuments?(collectionName: string, filter?: VectorFilter): Promise<number>;
 
     /**
      * Check collection limit

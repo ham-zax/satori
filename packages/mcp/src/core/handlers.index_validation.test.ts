@@ -93,7 +93,7 @@ function createHandlersForValidation(options: ValidationHarnessOptions): {
         getBackendInfo: () => ({ provider: backendProvider, transport: 'grpc' as const, address: 'in03.example.cloud.zilliz.com' }),
         listCollectionDetails: async () => collectionDetails,
         listCollections: async () => collectionDetails.map((detail) => detail.name),
-        query: async (collectionName: string) => {
+        queryDocuments: async (collectionName: string) => {
             queriedCollections.push(collectionName);
             const metadata = metadataByCollection[collectionName];
             if (!metadata?.codebasePath) {

@@ -16,14 +16,14 @@ import {
 } from '@zokizuan/satori-core';
 import type {
     EmbeddingVector,
+    DenseCandidateRequest,
+    LexicalCandidateRequest,
     VectorDatabase,
+    VectorCandidate,
     VectorControlRecord,
     VectorDocument,
-    SearchOptions,
-    VectorSearchResult,
-    HybridSearchRequest,
-    HybridSearchOptions,
-    HybridSearchResult,
+    VectorDocumentQuery,
+    VectorFilter,
     IndexedVectorDocument,
     IndexCompletionMarkerDocument,
     SemanticSearchRequest
@@ -57,13 +57,12 @@ class FakeEmbedding extends Embedding {
     }
 }
 
-function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]; vectorResults?: VectorSearchResult[] }) {
+function createInMemoryVectorDb(options?: { hybridResults?: VectorCandidate[]; vectorResults?: VectorCandidate[] }) {
     const byCollection = new Map<string, Map<string, VectorDocument>>();
-    let lastHybridFilterExpr: string | undefined;
-    let lastHybridOptions: HybridSearchOptions | undefined;
-    let lastHybridCollectionName: string | undefined;
-    let lastSearchOptions: SearchOptions | undefined;
-    let lastSearchCollectionName: string | undefined;
+    let lastDenseRequest: DenseCandidateRequest | undefined;
+    let lastDenseCollectionName: string | undefined;
+    let lastLexicalRequest: LexicalCandidateRequest | undefined;
+    let lastLexicalCollectionName: string | undefined;
 
     const ensureCollection = (collectionName: string): Map<string, VectorDocument> => {
         if (!byCollection.has(collectionName)) {
@@ -72,9 +71,12 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         return byCollection.get(collectionName)!;
     };
 
-    const parseIdEqualsFilter = (filter: string): string | null => {
-        const match = filter.match(/^\s*id\s*==\s*"([^"]+)"\s*$/);
-        return match?.[1] || null;
+    const matchesFilter = (document: VectorDocument, filter?: VectorFilter): boolean => {
+        if (!filter) return true;
+        if (filter.kind === 'and') return filter.operands.every((operand) => matchesFilter(document, operand));
+        const value = document[filter.field];
+        if (filter.kind === 'in') return filter.values.includes(value as string);
+        return filter.operator === 'eq' ? value === filter.value : value !== filter.value;
     };
 
     const db = {
@@ -89,7 +91,7 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         async listCollections() {
             return Array.from(byCollection.keys());
         },
-        async insert(
+        async writeDocuments(
             collectionName: string,
             documents: Array<IndexedVectorDocument | VectorDocument>,
         ) {
@@ -99,7 +101,7 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
                 collection.set(doc.id, doc);
             }
         },
-        async insertHybrid(
+        async seedDocuments(
             collectionName: string,
             documents: Array<IndexedVectorDocument | VectorDocument>,
         ) {
@@ -132,34 +134,37 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
         async deleteControl(collectionName: string, id: string) {
             byCollection.get(collectionName)?.delete(id);
         },
-        async search(collectionName, _queryVector, searchOptions?: SearchOptions): Promise<VectorSearchResult[]> {
-            lastSearchCollectionName = collectionName;
-            lastSearchOptions = searchOptions;
-            const results = options?.vectorResults || [];
-            if (searchOptions?.threshold === undefined) {
+        async retrieveDense(collectionName, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
+            lastDenseCollectionName = collectionName;
+            lastDenseRequest = request;
+            const results = request.minimumScore === undefined
+                ? options?.hybridResults || options?.vectorResults || []
+                : options?.vectorResults || [];
+            if (request.minimumScore === undefined) {
                 return results;
             }
-            return results.filter((result) => result.score >= searchOptions.threshold!);
+            return results.filter((result) => result.score >= request.minimumScore!);
         },
-        async hybridSearch() {
-            return [];
+        async retrieveLexical(collectionName, request: LexicalCandidateRequest): Promise<VectorCandidate[]> {
+            lastLexicalCollectionName = collectionName;
+            lastLexicalRequest = request;
+            return options?.hybridResults || [];
         },
-        async delete(collectionName, ids) {
+        async deleteDocuments(collectionName, ids) {
             const collection = ensureCollection(collectionName);
             for (const id of ids) {
                 collection.delete(id);
             }
         },
-        async query(collectionName, filter, outputFields, limit) {
+        async queryDocuments(collectionName, request: VectorDocumentQuery) {
             const collection = ensureCollection(collectionName);
-            const idEquals = parseIdEqualsFilter(filter);
-            const values = idEquals
-                ? Array.from(collection.values()).filter((doc) => doc.id === idEquals)
-                : Array.from(collection.values());
+            const values = Array.from(collection.values())
+                .filter((document) => document.fileExtension !== INDEX_COMPLETION_MARKER_FILE_EXTENSION)
+                .filter((document) => matchesFilter(document, request.filter));
 
-            const rows = values.slice(0, limit ?? values.length).map((doc) => {
+            const rows = values.slice(0, request.limit ?? values.length).map((doc) => {
                 const row: Record<string, unknown> = {};
-                for (const field of outputFields) {
+                for (const field of request.fields) {
                     if (field === 'id') row.id = doc.id;
                     if (field === 'metadata') row.metadata = JSON.stringify(doc.metadata || {});
                 }
@@ -167,14 +172,11 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
             });
             return rows;
         },
-        async count(collectionName, filter) {
-            const documents = Array.from(ensureCollection(collectionName).values());
-            if (filter.includes(`fileExtension != "${INDEX_COMPLETION_MARKER_FILE_EXTENSION}"`)) {
-                return documents.filter((document) => (
-                    document.fileExtension !== INDEX_COMPLETION_MARKER_FILE_EXTENSION
-                )).length;
-            }
-            return documents.length;
+        async countDocuments(collectionName, filter?: VectorFilter) {
+            return Array.from(ensureCollection(collectionName).values())
+                .filter((document) => document.fileExtension !== INDEX_COMPLETION_MARKER_FILE_EXTENSION)
+                .filter((document) => matchesFilter(document, filter))
+                .length;
         },
         async checkCollectionLimit() {
             return true;
@@ -182,24 +184,11 @@ function createInMemoryVectorDb(options?: { hybridResults?: HybridSearchResult[]
     } satisfies VectorDatabase;
 
     return {
-        db: {
-            ...db,
-            async hybridSearch(collectionName: string, _searchRequests: HybridSearchRequest[], hybridOptions?: HybridSearchOptions): Promise<HybridSearchResult[]> {
-                lastHybridCollectionName = collectionName;
-                lastHybridFilterExpr = hybridOptions?.filterExpr;
-                lastHybridOptions = hybridOptions;
-                const results = options?.hybridResults || [];
-                if (hybridOptions?.threshold === undefined) {
-                    return results;
-                }
-                return results.filter((result) => result.score >= hybridOptions.threshold!);
-            }
-        } satisfies VectorDatabase,
-        getLastHybridFilterExpr: () => lastHybridFilterExpr,
-        getLastHybridOptions: () => lastHybridOptions,
-        getLastHybridCollectionName: () => lastHybridCollectionName,
-        getLastSearchOptions: () => lastSearchOptions,
-        getLastSearchCollectionName: () => lastSearchCollectionName
+        db,
+        getLastDenseRequest: () => lastDenseRequest,
+        getLastDenseCollectionName: () => lastDenseCollectionName,
+        getLastLexicalRequest: () => lastLexicalRequest,
+        getLastLexicalCollectionName: () => lastLexicalCollectionName,
     };
 }
 
@@ -271,7 +260,7 @@ test('Context marker lifecycle writes, reads, and clears completion marker doc',
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
-    await db.insertHybrid(collectionName, [buildChunkDoc('lifecycle_chunk', 'src/runtime.ts')]);
+    await db.seedDocuments(collectionName, [buildChunkDoc('lifecycle_chunk', 'src/runtime.ts')]);
 
     await context.writeIndexCompletionMarker(codebasePath, {
         ...buildMarker(policy.policyHash),
@@ -298,7 +287,7 @@ test('Context-backed completion proof requires reindex for a stored v1 marker', 
     const codebasePath = '/repo/completion-legacy-v1';
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
-    await db.insertHybrid(collectionName, [
+    await db.seedDocuments(collectionName, [
         buildChunkDoc('legacy_chunk', 'src/legacy.ts'),
         {
             id: INDEX_COMPLETION_MARKER_DOC_ID,
@@ -337,7 +326,7 @@ test('Context-backed completion proof reports invalid v3 generation evidence bef
     const legacyCollectionName = `${familyCollectionName}__gen_legacy`;
     await db.createHybridCollection(familyCollectionName, 4);
     await db.createHybridCollection(legacyCollectionName, 4);
-    await db.insertHybrid(familyCollectionName, [
+    await db.seedDocuments(familyCollectionName, [
         buildChunkDoc('invalid_current_chunk', 'src/current.ts'),
         {
             id: INDEX_COMPLETION_MARKER_DOC_ID,
@@ -354,7 +343,7 @@ test('Context-backed completion proof reports invalid v3 generation evidence bef
             },
         },
     ]);
-    await db.insertHybrid(legacyCollectionName, [{
+    await db.seedDocuments(legacyCollectionName, [{
         id: INDEX_COMPLETION_MARKER_DOC_ID,
         vector: [0, 0, 0, 0],
         content: 'legacy marker',
@@ -390,7 +379,7 @@ test('Context-backed completion proof does not let an orphan staged v3 mask the 
     const orphanCollectionName = `${familyCollectionName}__gen_orphan`;
     await db.createHybridCollection(familyCollectionName, 4);
     await db.createHybridCollection(orphanCollectionName, 4);
-    await db.insertHybrid(familyCollectionName, [{
+    await db.seedDocuments(familyCollectionName, [{
         id: INDEX_COMPLETION_MARKER_DOC_ID,
         vector: [0, 0, 0, 0],
         content: 'legacy marker',
@@ -403,7 +392,7 @@ test('Context-backed completion proof does not let an orphan staged v3 mask the 
             codebasePath,
         },
     }]);
-    await db.insertHybrid(orphanCollectionName, [{
+    await db.seedDocuments(orphanCollectionName, [{
         id: INDEX_COMPLETION_MARKER_DOC_ID,
         vector: [0, 0, 0, 0],
         content: 'orphan invalid marker',
@@ -439,7 +428,7 @@ test('Context-backed completion proof does not let a valid unbound staged v3 mas
     const orphanCollectionName = `${familyCollectionName}__gen_orphan_valid`;
     await db.createHybridCollection(familyCollectionName, 4);
     await db.createHybridCollection(orphanCollectionName, 4);
-    await db.insertHybrid(familyCollectionName, [{
+    await db.seedDocuments(familyCollectionName, [{
         id: INDEX_COMPLETION_MARKER_DOC_ID,
         vector: [0, 0, 0, 0],
         content: 'legacy marker',
@@ -452,7 +441,7 @@ test('Context-backed completion proof does not let a valid unbound staged v3 mas
             codebasePath,
         },
     }]);
-    await db.insertHybrid(orphanCollectionName, [
+    await db.seedDocuments(orphanCollectionName, [
         buildChunkDoc('orphan_chunk', 'src/orphan.ts'),
         buildMarkerDoc({
             ...buildMarker(ORPHAN_POLICY_HASH),
@@ -484,7 +473,7 @@ test('Context getIndexCompletionMarker selects the newest proven staged generati
     const newerCollectionName = `${familyCollectionName}__gen_newer`;
 
     await db.createHybridCollection(olderCollectionName, 4);
-    await db.insertHybrid(olderCollectionName, [
+    await db.seedDocuments(olderCollectionName, [
         buildChunkDoc('older_chunk', 'src/older.ts'),
         buildMarkerDoc({
             ...buildMarker(),
@@ -494,7 +483,7 @@ test('Context getIndexCompletionMarker selects the newest proven staged generati
     ]);
 
     await db.createHybridCollection(newerCollectionName, 4);
-    await db.insertHybrid(newerCollectionName, [
+    await db.seedDocuments(newerCollectionName, [
         buildChunkDoc('newer_chunk', 'src/newer.ts'),
         buildMarkerDoc({
             ...buildMarker(),
@@ -523,7 +512,7 @@ test('Context-backed validation prefers a base v3 generation over a newer unboun
     await db.createHybridCollection(familyCollectionName, 4);
     await db.createHybridCollection(stagedCollectionName, 4);
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
-    await db.insertHybrid(familyCollectionName, [
+    await db.seedDocuments(familyCollectionName, [
         buildChunkDoc('base_chunk', 'src/base.ts'),
         buildMarkerDoc({
             ...buildMarker(policy.policyHash),
@@ -531,7 +520,7 @@ test('Context-backed validation prefers a base v3 generation over a newer unboun
             runId: 'run_base_authoritative',
         }),
     ]);
-    await db.insertHybrid(stagedCollectionName, [
+    await db.seedDocuments(stagedCollectionName, [
         buildChunkDoc('staged_chunk', 'src/staged.ts'),
         buildMarkerDoc({
             ...buildMarker(STAGED_POLICY_HASH),
@@ -600,7 +589,7 @@ test('Context getIndexCompletionMarker ignores a newer marker-only staged genera
     const markerOnlyCollectionName = `${familyCollectionName}__gen_marker_only`;
 
     await db.createHybridCollection(provenCollectionName, 4);
-    await db.insertHybrid(provenCollectionName, [
+    await db.seedDocuments(provenCollectionName, [
         buildChunkDoc('proven_chunk', 'src/proven.ts'),
         buildMarkerDoc({
             ...buildMarker(),
@@ -610,7 +599,7 @@ test('Context getIndexCompletionMarker ignores a newer marker-only staged genera
     ]);
 
     await db.createHybridCollection(markerOnlyCollectionName, 4);
-    await db.insertHybrid(markerOnlyCollectionName, [
+    await db.seedDocuments(markerOnlyCollectionName, [
         buildMarkerDoc({
             ...buildMarker(),
             completedAt: '2026-02-28T23:57:10.000Z',
@@ -624,10 +613,10 @@ test('Context getIndexCompletionMarker ignores a newer marker-only staged genera
     assert.equal(marker?.runId, 'run_proven');
 });
 
-test('Context semanticSearch always excludes completion marker docs from query filter', async (t) => {
+test('Context semanticSearch forwards backend-neutral filters without storage syntax', async (t) => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-filter-policy-'));
     t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
-    const { db, getLastHybridFilterExpr } = createInMemoryVectorDb();
+    const { db, getLastDenseRequest, getLastLexicalRequest } = createInMemoryVectorDb();
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
@@ -638,7 +627,7 @@ test('Context semanticSearch always excludes completion marker docs from query f
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
 
-    await db.insertHybrid(collectionName, [
+    await db.seedDocuments(collectionName, [
         buildChunkDoc('filter_chunk', 'src/runtime.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
@@ -652,24 +641,31 @@ test('Context semanticSearch always excludes completion marker docs from query f
         query: 'runtime symbol',
         topK: 8,
         retrievalMode: 'hybrid',
-        filterExpr: 'fileExtension in [".ts"]',
+        filter: {
+            kind: 'in',
+            field: 'fileExtension',
+            values: ['.ts'],
+        },
         scorePolicy: { kind: 'topk_only' }
     });
 
-    const filterExpr = getLastHybridFilterExpr();
-    assert.ok(filterExpr);
-    assert.match(filterExpr!, /fileExtension in \["\.ts"\]/);
-    assert.match(filterExpr!, /fileExtension != "\.satori_meta"/);
+    const expectedFilter = {
+        kind: 'in',
+        field: 'fileExtension',
+        values: ['.ts'],
+    } as const;
+    assert.deepEqual(getLastDenseRequest()?.filter, expectedFilter);
+    assert.deepEqual(getLastLexicalRequest()?.filter, expectedFilter);
 });
 
 test('Context semanticSearch uses the active staged generation when the base family collection is absent', async (t) => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-completion-active-policy-'));
     t.after(() => fs.rmSync(stateRoot, { recursive: true, force: true }));
-    const hybridResults: HybridSearchResult[] = [{
+    const hybridResults: VectorCandidate[] = [{
         document: buildChunkDoc('chunk_runtime', 'src/runtime.ts'),
         score: 0.91
     }];
-    const { db, getLastHybridCollectionName } = createInMemoryVectorDb({ hybridResults });
+    const { db, getLastDenseCollectionName, getLastLexicalCollectionName } = createInMemoryVectorDb({ hybridResults });
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
@@ -681,7 +677,7 @@ test('Context semanticSearch uses the active staged generation when the base fam
     const stagedCollectionName = `${familyCollectionName}__gen_ready`;
 
     await db.createHybridCollection(stagedCollectionName, 4);
-    await db.insertHybrid(stagedCollectionName, [
+    await db.seedDocuments(stagedCollectionName, [
         buildChunkDoc('ready_chunk', 'src/runtime.ts'),
         buildMarkerDoc({
             ...buildMarker(policy.policyHash),
@@ -704,7 +700,8 @@ test('Context semanticSearch uses the active staged generation when the base fam
 
     assert.equal(results.length, 1);
     assert.equal(results[0]?.relativePath, 'src/runtime.ts');
-    assert.equal(getLastHybridCollectionName(), stagedCollectionName);
+    assert.equal(getLastDenseCollectionName(), stagedCollectionName);
+    assert.equal(getLastLexicalCollectionName(), stagedCollectionName);
 });
 
 test('Context clearIndex removes every collection in the family, including staged generations', async () => {
@@ -726,7 +723,7 @@ test('Context clearIndex removes every collection in the family, including stage
 });
 
 test('Context semanticSearch does not apply dense thresholds to hybrid RRF results', async () => {
-    const hybridResults: HybridSearchResult[] = [{
+    const hybridResults: VectorCandidate[] = [{
         document: {
             id: 'chunk_hurst',
             vector: [],
@@ -742,7 +739,7 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
         },
         score: 0.019
     }];
-    const { db, getLastHybridOptions } = createInMemoryVectorDb({ hybridResults });
+    const { db, getLastDenseRequest, getLastLexicalRequest } = createInMemoryVectorDb({ hybridResults });
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
@@ -751,7 +748,7 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createHybridCollection(collectionName, 4);
-    await db.insertHybrid(collectionName, [
+    await db.seedDocuments(collectionName, [
         buildChunkDoc('hybrid_chunk', 'src/runtime.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
@@ -770,11 +767,13 @@ test('Context semanticSearch does not apply dense thresholds to hybrid RRF resul
 
     assert.equal(results.length, 1);
     assert.equal(results[0]?.relativePath, 'src/python/core/regime/hurst_gate.py');
-    assert.equal(getLastHybridOptions()?.threshold, undefined);
+    assert.equal(getLastDenseRequest()?.minimumScore, undefined);
+    assert.equal(getLastDenseRequest()?.limit, 8);
+    assert.equal(getLastLexicalRequest()?.limit, 8);
 });
 
 test('Context semanticSearch request preserves dense thresholds and returns dense score metadata', async () => {
-    const vectorResults: VectorSearchResult[] = [
+    const vectorResults: VectorCandidate[] = [
         {
             document: {
                 id: 'chunk_high',
@@ -802,7 +801,7 @@ test('Context semanticSearch request preserves dense thresholds and returns dens
             score: 0.35
         }
     ];
-    const { db, getLastSearchOptions } = createInMemoryVectorDb({ vectorResults });
+    const { db, getLastDenseRequest } = createInMemoryVectorDb({ vectorResults });
     const context = new Context({
         embedding: new FakeEmbedding(),
         vectorDatabase: db,
@@ -811,7 +810,7 @@ test('Context semanticSearch request preserves dense thresholds and returns dens
     const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
     const collectionName = context.resolveCollectionName(codebasePath);
     await db.createCollection(collectionName, 4);
-    await db.insert(collectionName, [
+    await db.seedDocuments(collectionName, [
         buildChunkDoc('dense_chunk', 'src/core/high.ts'),
         buildMarkerDoc(buildMarker(policy.policyHash))
     ]);
@@ -830,7 +829,7 @@ test('Context semanticSearch request preserves dense thresholds and returns dens
 
     const results = await context.semanticSearch(request);
 
-    assert.equal(getLastSearchOptions()?.threshold, 0.6);
+    assert.equal(getLastDenseRequest()?.minimumScore, 0.6);
     assert.equal(results.length, 1);
     assert.equal(results[0]?.relativePath, 'src/core/high.ts');
     assert.equal(results[0]?.backendScoreKind, 'dense_similarity');

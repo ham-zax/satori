@@ -30,18 +30,18 @@ import {
 } from '../language-analysis';
 import type {
     CollectionDetails,
-    HybridSearchOptions,
-    HybridSearchRequest,
-    HybridSearchResult,
+    DenseCandidateRequest,
     IndexedVectorDocument,
     IndexCompletionFingerprint,
     type SearchProjections,
-    SearchOptions,
-    SparseSearchOptions,
+    LexicalCandidateRequest,
+    VectorCandidate,
     VectorControlRecord,
     VectorDatabase,
     VectorDocument,
-    VectorSearchResult,
+    VectorFilterField,
+    VectorDocumentQuery,
+    VectorFilter,
 } from '../vectordb';
 import {
     INDEX_COMPLETION_MARKER_DOC_ID,
@@ -219,45 +219,35 @@ async function publishCurrentAuthorityCheckpoint(
 class InMemoryVectorDatabase implements VectorDatabase {
     readonly collections = new Map<string, Map<string, VectorDocument>>();
     readonly indexedDocuments: IndexedVectorDocument[] = [];
-    readonly queryCalls: Array<{ collectionName: string; filter: string; outputFields: string[] }> = [];
+    readonly queryCalls: Array<{ collectionName: string; request: VectorDocumentQuery }> = [];
     listCollectionsCalls = 0;
     getControlCalls = 0;
     searchCalls = 0;
-    hybridSearchCalls = 0;
-    readonly hybridSearchRequests: HybridSearchRequest[][] = [];
     sparseSearchCalls = 0;
-    queryHook?: (call: { collectionName: string; filter: string; outputFields: string[] }) => void | Promise<void>;
+    queryHook?: (call: { collectionName: string; request: VectorDocumentQuery }) => void | Promise<void>;
     controlReadHook?: (call: { collectionName: string; id: string }) => void | Promise<void>;
     readonly mutationCalls: Array<
         'payload_insert' | 'payload_delete' | 'marker_insert' | 'marker_delete'
     > = [];
 
-    private listDocuments(collectionName: string, filterExpr?: string): VectorDocument[] {
+    private listDocuments(collectionName: string, filter?: VectorFilter): VectorDocument[] {
         const collection = this.collections.get(collectionName);
         if (!collection) {
-            return [];
+            throw new Error(`Collection not found: ${collectionName}`);
         }
-        let documents = Array.from(collection.values());
-        if ((filterExpr || '').includes('fileExtension != ".satori_meta"')) {
-            documents = documents.filter((document) => document.fileExtension !== '.satori_meta');
-        }
-        const idMatch = /^id == "(.+)"$/.exec(filterExpr || '');
-        if (idMatch?.[1]) {
-            documents = documents.filter((document) => document.id === idMatch[1]);
-        }
-        const idInMatch = /^id in \[(.*)\]$/.exec(filterExpr || '');
-        if (idInMatch?.[1]) {
-            const ids = new Set(
-                [...idInMatch[1].matchAll(/"((?:\\.|[^"\\])*)"/g)]
-                    .map((match) => match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
-            );
-            documents = documents.filter((document) => ids.has(document.id));
-        }
-        const relativePathMatch = /^relativePath == "(.+)"$/.exec(filterExpr || '');
-        if (relativePathMatch?.[1]) {
-            documents = documents.filter((document) => document.relativePath === relativePathMatch[1]);
-        }
-        return documents;
+        const searchableDocuments = Array.from(collection.values())
+            .filter((document) => document.fileExtension !== '.satori_meta');
+        const fieldValue = (document: VectorDocument, field: VectorFilterField) => document[field];
+        const matches = (document: VectorDocument, candidate?: VectorFilter): boolean => {
+            if (!candidate) return true;
+            if (candidate.kind === 'and') {
+                return candidate.operands.every((operand) => matches(document, operand));
+            }
+            const value = fieldValue(document, candidate.field);
+            if (candidate.kind === 'in') return candidate.values.includes(value as string);
+            return candidate.operator === 'eq' ? value === candidate.value : value !== candidate.value;
+        };
+        return searchableDocuments.filter((document) => matches(document, filter));
     }
 
     async createCollection(collectionName: string): Promise<void> {
@@ -285,16 +275,16 @@ class InMemoryVectorDatabase implements VectorDatabase {
         return Array.from(this.collections.keys()).map((name) => ({ name }));
     }
 
-    async insert(
+    async writeDocuments(
         collectionName: string,
         documents: Array<IndexedVectorDocument | VectorDocument>,
     ): Promise<void> {
         this.indexedDocuments.push(...documents.filter(
             (document): document is IndexedVectorDocument => 'projections' in document,
         ));
-        const sourceDocuments = documents.map((document) =>
+        const sourceDocuments = documents.map((document) => (
             'projections' in document ? document.document : document
-        );
+        ));
         this.mutationCalls.push(
             sourceDocuments.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
                 ? 'marker_insert'
@@ -309,15 +299,11 @@ class InMemoryVectorDatabase implements VectorDatabase {
         }
     }
 
-    async insertHybrid(
-        collectionName: string,
-        documents: Array<IndexedVectorDocument | VectorDocument>,
-    ): Promise<void> {
-        await this.insert(collectionName, documents);
-    }
-
     async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
-        await this.insert(collectionName, [{
+        this.mutationCalls.push('marker_insert');
+        const collection = this.collections.get(collectionName);
+        if (!collection) throw new Error(`Collection not found: ${collectionName}`);
+        collection.set(record.id, {
             id: record.id,
             vector: [],
             content: '',
@@ -326,7 +312,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
             endLine: 0,
             fileExtension: '.satori_meta',
             metadata: { ...record.metadata, kind: record.kind },
-        }]);
+        });
     }
 
     async getControl(collectionName: string, id: string): Promise<VectorControlRecord | null> {
@@ -342,32 +328,25 @@ class InMemoryVectorDatabase implements VectorDatabase {
     }
 
     async deleteControl(collectionName: string, id: string): Promise<void> {
-        await this.delete(collectionName, [id]);
+        this.mutationCalls.push('marker_delete');
+        this.collections.get(collectionName)?.delete(id);
     }
 
-    async search(collectionName: string, _queryVector: number[], options?: SearchOptions): Promise<VectorSearchResult[]> {
+    async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
         this.searchCalls += 1;
-        return this.listDocuments(collectionName, options?.filterExpr)
-            .slice(0, options?.topK ?? 1000)
+        return this.listDocuments(collectionName, request.filter)
+            .slice(0, request.limit)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
-    async hybridSearch(collectionName: string, searchRequests: HybridSearchRequest[], options?: HybridSearchOptions): Promise<HybridSearchResult[]> {
-        this.hybridSearchCalls += 1;
-        this.hybridSearchRequests.push(searchRequests);
-        return this.listDocuments(collectionName, options?.filterExpr)
-            .slice(0, options?.limit ?? 1000)
-            .map((document, index) => ({ document, score: 1 - (index / 1000) }));
-    }
-
-    async sparseSearch(collectionName: string, _queryText: string, options?: SparseSearchOptions): Promise<HybridSearchResult[]> {
+    async retrieveLexical(collectionName: string, request: LexicalCandidateRequest): Promise<VectorCandidate[]> {
         this.sparseSearchCalls += 1;
-        return this.listDocuments(collectionName, options?.filterExpr)
-            .slice(0, options?.topK ?? 1000)
+        return this.listDocuments(collectionName, request.filter)
+            .slice(0, request.limit)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
     }
 
-    async delete(collectionName: string, ids: string[]): Promise<void> {
+    async deleteDocuments(collectionName: string, ids: string[]): Promise<void> {
         this.mutationCalls.push(
             ids.every((id) => id === INDEX_COMPLETION_MARKER_DOC_ID)
                 ? 'marker_delete'
@@ -379,12 +358,12 @@ class InMemoryVectorDatabase implements VectorDatabase {
         }
     }
 
-    async query(collectionName: string, _filter: string, outputFields: string[], limit: number = 1000): Promise<Record<string, unknown>[]> {
-        const call = { collectionName, filter: _filter, outputFields };
+    async queryDocuments(collectionName: string, request: VectorDocumentQuery): Promise<Record<string, unknown>[]> {
+        const call = { collectionName, request };
         this.queryCalls.push(call);
-        const rows = this.listDocuments(collectionName, _filter).slice(0, limit).map((document) => {
+        const rows = this.listDocuments(collectionName, request.filter).slice(0, request.limit ?? 1000).map((document) => {
             const row: Record<string, unknown> = {};
-            for (const field of outputFields) {
+            for (const field of request.fields) {
                 row[field] = (document as unknown as Record<string, unknown>)[field];
             }
             return row;
@@ -418,44 +397,44 @@ class DeferredIndexVectorDatabase extends InMemoryVectorDatabase {
         this.lifecycleEvents.push('finalize');
     }
 
-    async query(
-        collectionName: string,
-        filter: string,
-        outputFields: string[],
-        limit?: number,
-    ): Promise<Record<string, unknown>[]> {
+    async queryDocuments(collectionName: string, request: VectorDocumentQuery): Promise<Record<string, unknown>[]> {
         if (!this.finalized) {
             throw new Error('deferred collection must not be queried before finalization');
         }
-        return super.query(collectionName, filter, outputFields, limit);
+        return super.queryDocuments(collectionName, request);
     }
 
-    async insert(
+    async writeDocuments(
         collectionName: string,
         documents: Array<IndexedVectorDocument | VectorDocument>,
     ): Promise<void> {
-        const sourceDocuments = documents.map((document) =>
+        const sourceDocuments = documents.map((document) => (
             'projections' in document ? document.document : document
-        );
+        ));
         this.lifecycleEvents.push(
             sourceDocuments.every((document) => document.id === INDEX_COMPLETION_MARKER_DOC_ID)
                 ? 'marker_insert'
                 : 'payload_insert',
         );
-        await super.insert(collectionName, documents);
+        await super.writeDocuments(collectionName, documents);
+    }
+
+    async insertControl(collectionName: string, record: VectorControlRecord): Promise<void> {
+        this.lifecycleEvents.push('marker_insert');
+        await super.insertControl(collectionName, record);
     }
 }
 
 class MarkerObservingVectorDatabase extends InMemoryVectorDatabase {
     readonly payloadMutationMarkerPresence: boolean[] = [];
 
-    async delete(collectionName: string, ids: string[]): Promise<void> {
+    async deleteDocuments(collectionName: string, ids: string[]): Promise<void> {
         if (ids.some((id) => id !== INDEX_COMPLETION_MARKER_DOC_ID)) {
             this.payloadMutationMarkerPresence.push(
                 this.collections.get(collectionName)?.has(INDEX_COMPLETION_MARKER_DOC_ID) === true,
             );
         }
-        await super.delete(collectionName, ids);
+        await super.deleteDocuments(collectionName, ids);
     }
 }
 
@@ -621,19 +600,27 @@ test('Context blocks completion marker insertion when the mutation guard fails',
     assert.deepEqual(vectorDatabase.mutationCalls, []);
 });
 
-test('Context.deleteFileChunks escapes relative paths as Milvus string literals', async () => {
+test('Context.deleteFileChunks sends an exact backend-neutral path predicate', async () => {
     const vectorDatabase = new InMemoryVectorDatabase();
     const context = new Context({
         embedding: new TestEmbedding(),
         vectorDatabase,
     }) as unknown as ContextWithDeleteFileChunks;
+    await vectorDatabase.createHybridCollection('chunks');
 
     await context.deleteFileChunks('chunks', 'src/quote"and\\slash.ts');
 
     assert.deepEqual(vectorDatabase.queryCalls, [{
         collectionName: 'chunks',
-        filter: 'relativePath == "src/quote\\"and\\\\slash.ts"',
-        outputFields: ['id'],
+        request: {
+            filter: {
+                kind: 'comparison',
+                field: 'relativePath',
+                operator: 'eq',
+                value: 'src/quote"and\\slash.ts',
+            },
+            fields: ['id'],
+        },
     }]);
 });
 
@@ -699,7 +686,7 @@ test('Context.semanticSearch does not embed or search an unproven collection', a
     const codebasePath = '/repo/unproven';
     const collectionName = context.resolveCollectionName(codebasePath);
     await vectorDatabase.createHybridCollection(collectionName);
-    await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('unproven')]);
+    await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('unproven')]);
 
     const results = await context.semanticSearch({
         codebasePath,
@@ -752,7 +739,7 @@ test('Context active collection resolution requires exact completion-marker payl
             const codebasePath = `/repo/payload-count/${input.label.replace(/ /g, '-')}`;
             const collectionName = context.resolveCollectionName(codebasePath);
             await vectorDatabase.createHybridCollection(collectionName);
-            await vectorDatabase.insertHybrid(collectionName, [
+            await vectorDatabase.writeDocuments(collectionName, [
                 ...Array.from({ length: input.payloadChunks }, (_, index) => buildChunkDoc(`payload-${index}`)),
                 buildCompletionMarkerDoc({
                     codebasePath,
@@ -784,7 +771,7 @@ test('Context active collection resolution rejects runtime fingerprint mismatche
             const codebasePath = `/repo/fingerprint/${label.replace(/ /g, '-')}`;
             const collectionName = context.resolveCollectionName(codebasePath);
             await vectorDatabase.createHybridCollection(collectionName);
-            await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('payload')]);
+            await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('payload')]);
             await context.writeIndexCompletionMarker(codebasePath, {
                 kind: 'satori_index_completion_v2',
                 codebasePath,
@@ -807,7 +794,7 @@ test('Context classifies a legacy projection fingerprint as requires_reindex and
     const codebasePath = '/repo/fingerprint/legacy-projections';
     const collectionName = context.resolveCollectionName(codebasePath);
     await vectorDatabase.createHybridCollection(collectionName);
-    await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('payload')]);
+    await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('payload')]);
     await context.writeIndexCompletionMarker(codebasePath, {
         kind: 'satori_index_completion_v2',
         codebasePath,
@@ -1190,7 +1177,7 @@ test('Context.reindexByChange refuses publication when exact post-sync payload p
         contextWithProcessFileList.processFileList = async (...args: unknown[]) => {
             const result = await originalProcessFileList(...args);
             const collectionName = context.resolveCollectionName(codebasePath);
-            await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('unexpected-post-sync-payload')]);
+            await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('unexpected-post-sync-payload')]);
             return result;
         };
 
@@ -1226,7 +1213,7 @@ test('Context.reindexByChange removes stale payload for a newly added source pat
         const collectionName = context.resolveCollectionName(codebasePath);
         const previousMarker = await context.getIndexCompletionMarker(codebasePath);
         assert.ok(previousMarker);
-        await vectorDatabase.insertHybrid(collectionName, [
+        await vectorDatabase.writeDocuments(collectionName, [
             buildChunkDoc('stale-future-row', 'future.ts'),
         ]);
         await context.writeIndexCompletionMarker(codebasePath, {
@@ -1579,15 +1566,15 @@ test('Context.pruneUnprovenStagedCollectionFamily removes failed staged generati
     await vectorDatabase.createHybridCollection(familyCollectionName);
     await vectorDatabase.createHybridCollection(failedStagedCollectionName);
     await vectorDatabase.createHybridCollection(markerOnlyCollectionName);
-    await vectorDatabase.insertHybrid(markerOnlyCollectionName, [
+    await vectorDatabase.writeDocuments(markerOnlyCollectionName, [
         buildCompletionMarkerDoc({ codebasePath, runId: 'run_marker_only', totalChunks: 5 }),
     ]);
     await vectorDatabase.createHybridCollection(inProgressStagedCollectionName);
-    await vectorDatabase.insertHybrid(inProgressStagedCollectionName, [
+    await vectorDatabase.writeDocuments(inProgressStagedCollectionName, [
         buildChunkDoc('in_progress_chunk'),
     ]);
     await vectorDatabase.createHybridCollection(provenStagedCollectionName);
-    await vectorDatabase.insertHybrid(provenStagedCollectionName, [
+    await vectorDatabase.writeDocuments(provenStagedCollectionName, [
         buildChunkDoc('ready_chunk'),
         buildCompletionMarkerDoc({ codebasePath, runId: 'run_ready' }),
     ]);
@@ -1617,7 +1604,7 @@ test('Context.indexCodebase clears stale completion marker before rebuilding nav
         const collectionName = context.resolveCollectionName(repoPath);
 
         await vectorDatabase.createHybridCollection(collectionName);
-        await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('old_ready_chunk')]);
+        await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('old_ready_chunk')]);
         await context.writeIndexCompletionMarker(repoPath, {
             kind: 'satori_index_completion_v3',
             codebasePath: path.resolve(repoPath),
@@ -1932,8 +1919,10 @@ test('Context persists its canonical relative path instead of analyzer chunk met
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-trusted-chunk-path-'));
     const codebasePath = path.join(tempRoot, 'repo');
     const sourcePath = path.join(codebasePath, 'src', 'owned.ts');
+    const analyzeInputs: LanguageAnalysisInput[] = [];
     const maliciousAnalyzer: LanguageAnalysisPort = {
-        async analyze() {
+        async analyze(input) {
+            analyzeInputs.push(input);
             return {
                 backend: 'oxc' as const,
                 structuralStatus: 'complete' as const,
@@ -1989,13 +1978,23 @@ test('Context persists its canonical relative path instead of analyzer chunk met
             ['src/owned.ts'],
         );
 
-        await (context as unknown as ContextWithProcessFileList)
+        const indexed = await (context as unknown as ContextWithProcessFileList)
             .processFileList([sourcePath], codebasePath);
 
         const documents = [...(vectorDatabase.collections.get(collectionName)?.values() ?? [])];
         assert.ok(documents.length > 0);
         assert.ok(documents.every((document) => document.relativePath === 'src/owned.ts'));
         assert.ok(documents.every((document) => document.fileExtension === '.ts'));
+        assert.deepEqual(indexed.symbolManifestFiles, expected.symbolManifestFiles);
+        assert.deepEqual(navigation.symbolManifestFiles, expected.symbolManifestFiles);
+        assert.deepEqual(
+            analyzeInputs.map(({ content, language, relativePath }) => ({ content, language, relativePath })),
+            Array.from({ length: 3 }, () => ({
+                content: 'export const owned = true;\n',
+                language: 'typescript',
+                relativePath: 'src/owned.ts',
+            })),
+        );
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -3356,10 +3355,8 @@ test('Context completion validation propagates transient and unavailable payload
             symbolRegistryStateRoot: path.join(tempRoot, 'navigation'),
         });
         await context.indexCodebase(codebasePath);
-        vectorDatabase.queryHook = (call) => {
-            if (call.filter.includes('fileExtension != ".satori_meta"')) {
-                throw new Error('temporary count failure');
-            }
+        vectorDatabase.queryHook = () => {
+            throw new Error('temporary count failure');
         };
         await assert.rejects(
             () => context.getIndexCompletionMarkerForValidation(codebasePath),
@@ -3982,10 +3979,7 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.equal(first.exactPayloadCount, first.marker.totalChunks);
         assert.equal(vectorDatabase.listCollectionsCalls, 0);
         assert.equal(vectorDatabase.getControlCalls, 2);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
-            1,
-        );
+        assert.equal(vectorDatabase.queryCalls.length, 1);
 
         vectorDatabase.listCollectionsCalls = 0;
         vectorDatabase.getControlCalls = 0;
@@ -3998,19 +3992,13 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.equal(context.getIndexAuthorityObservation(codebasePath), authorityObservation);
         assert.equal(vectorDatabase.listCollectionsCalls, 0);
         assert.equal(vectorDatabase.getControlCalls, 2);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
-            1,
-        );
+        assert.equal(vectorDatabase.queryCalls.length, 1);
         vectorDatabase.queryCalls.length = 0;
         vectorDatabase.getControlCalls = 0;
         const warm = await context.revalidateProvenGeneration(codebasePath, second);
         assert.ok(warm);
         assert.equal(vectorDatabase.getControlCalls, 1);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes('fileExtension != \".satori_meta\"')).length,
-            0,
-        );
+        assert.equal(vectorDatabase.queryCalls.length, 0);
         assert.equal(await context.revalidateProvenGeneration(codebasePath, {
             ...second,
             exactPayloadCount: second.exactPayloadCount + 1,
@@ -4354,10 +4342,7 @@ test('Context keeps vector retrieval usable but rejects strict proof when no nav
             scorePolicy: { kind: 'topk_only' },
         });
         assert.ok(results.length > 0);
-        assert.equal(
-            vectorDatabase.queryCalls.filter((call) => call.filter.includes(`id == \"${INDEX_COMPLETION_MARKER_DOC_ID}\"`)).length,
-            0,
-        );
+        assert.equal(vectorDatabase.queryCalls.length, 0);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -4403,6 +4388,191 @@ test('Context hybrid search uses the proven collection without a non-gating quer
     }
 });
 
+test('Context rejects malformed filters before embedding or retrieval', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-filter-boundary-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const filteredValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const embedding = new CountingTestEmbedding();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+        const embedCallsBefore = embedding.embedCalls;
+        const denseCallsBefore = vectorDatabase.searchCalls;
+        const lexicalCallsBefore = vectorDatabase.sparseSearchCalls;
+
+        await assert.rejects(
+            context.semanticSearchInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'filteredValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                filter: {
+                    kind: 'comparison',
+                    field: 'language',
+                    operator: 'eq',
+                    value: 'typescript',
+                } as unknown as VectorFilter,
+                scorePolicy: { kind: 'topk_only' },
+            }),
+            /comparison filter is malformed/,
+        );
+
+        assert.equal(embedding.embedCalls, embedCallsBefore);
+        assert.equal(vectorDatabase.searchCalls, denseCallsBefore);
+        assert.equal(vectorDatabase.sparseSearchCalls, lexicalCallsBefore);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context rejects hybrid candidates when the proven generation changes between arms', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-hybrid-generation-race-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const changingValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+
+        let markDenseComplete!: () => void;
+        const denseComplete = new Promise<void>((resolve) => {
+            markDenseComplete = resolve;
+        });
+        const retrieveDense = vectorDatabase.retrieveDense.bind(vectorDatabase);
+        const retrieveLexical = vectorDatabase.retrieveLexical.bind(vectorDatabase);
+        vectorDatabase.retrieveDense = async (collectionName, request) => {
+            const results = await retrieveDense(collectionName, request);
+            markDenseComplete();
+            return results;
+        };
+        vectorDatabase.retrieveLexical = async (collectionName, request) => {
+            await denseComplete;
+            await vectorDatabase.deleteControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+            return retrieveLexical(collectionName, request);
+        };
+
+        await assert.rejects(
+            context.semanticSearchInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'changingValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' },
+            }),
+            /Index generation changed during hybrid retrieval/,
+        );
+        assert.equal(vectorDatabase.searchCalls > 0, true);
+        assert.equal(vectorDatabase.sparseSearchCalls > 0, true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context rejects hybrid candidates after an ABA mutation restores the original marker', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-hybrid-aba-race-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const restoredValue = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        let mutationGeneration = 0;
+        let mutationActive = false;
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            mutationGenerationObserver: () => ({
+                generation: mutationGeneration,
+                mutationActive,
+            }),
+        });
+        await context.indexCodebase(codebasePath);
+        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(vectorReceipt);
+        const collection = vectorDatabase.collections.get(vectorReceipt.collectionName);
+        assert.ok(collection);
+        const originalMarker = await vectorDatabase.getControl(
+            vectorReceipt.collectionName,
+            INDEX_COMPLETION_MARKER_DOC_ID,
+        );
+        assert.ok(originalMarker);
+        const payload = Array.from(collection.values()).find(
+            (document) => document.id !== INDEX_COMPLETION_MARKER_DOC_ID,
+        );
+        assert.ok(payload);
+        const originalPayload = structuredClone(payload);
+
+        let markDenseComplete!: () => void;
+        const denseComplete = new Promise<void>((resolve) => {
+            markDenseComplete = resolve;
+        });
+        const retrieveDense = vectorDatabase.retrieveDense.bind(vectorDatabase);
+        const retrieveLexical = vectorDatabase.retrieveLexical.bind(vectorDatabase);
+        vectorDatabase.retrieveDense = async (collectionName, request) => {
+            const results = await retrieveDense(collectionName, request);
+            markDenseComplete();
+            return results;
+        };
+        vectorDatabase.retrieveLexical = async (collectionName, request) => {
+            await denseComplete;
+            mutationGeneration++;
+            mutationActive = true;
+            await vectorDatabase.deleteControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+            collection.set(originalPayload.id, {
+                ...originalPayload,
+                content: `${originalPayload.content}\n// temporary mutation`,
+            });
+            const transitionalResults = await retrieveLexical(collectionName, request);
+            collection.set(originalPayload.id, originalPayload);
+            await vectorDatabase.insertControl(collectionName, originalMarker);
+            mutationActive = false;
+            return transitionalResults;
+        };
+
+        await assert.rejects(
+            context.semanticSearchInProvenGeneration(vectorReceipt, {
+                codebasePath,
+                query: 'restoredValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' },
+            }),
+            /Index generation changed during hybrid retrieval/,
+        );
+        assert.equal(mutationActive, false);
+        assert.deepEqual(
+            await vectorDatabase.getControl(
+                vectorReceipt.collectionName,
+                INDEX_COMPLETION_MARKER_DOC_ID,
+            ),
+            originalMarker,
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context lexical retrieval uses sparse search without embedding or dense retrieval', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sparse-only-'));
     const stateRoot = path.join(tempRoot, 'state');
@@ -4424,7 +4594,6 @@ test('Context lexical retrieval uses sparse search without embedding or dense re
 
         const embedCallsBefore = embedding.embedCalls;
         const denseCallsBefore = vectorDatabase.searchCalls;
-        const hybridCallsBefore = vectorDatabase.hybridSearchCalls;
         const sparseCallsBefore = vectorDatabase.sparseSearchCalls;
         const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
             codebasePath,
@@ -4438,55 +4607,7 @@ test('Context lexical retrieval uses sparse search without embedding or dense re
         assert.equal(results[0]?.backendScoreKind, 'lexical_rank');
         assert.equal(embedding.embedCalls, embedCallsBefore);
         assert.equal(vectorDatabase.searchCalls, denseCallsBefore);
-        assert.equal(vectorDatabase.hybridSearchCalls, hybridCallsBefore);
         assert.equal(vectorDatabase.sparseSearchCalls, sparseCallsBefore + 1);
-    } finally {
-        fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-});
-
-test('Context lexical retrieval falls back to one sparse hybrid request when the shortcut is unavailable', async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-sparse-fallback-'));
-    const stateRoot = path.join(tempRoot, 'state');
-    const codebasePath = path.join(tempRoot, 'repo');
-    try {
-        fs.mkdirSync(codebasePath, { recursive: true });
-        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const sparseFallbackValue = 1;\n', 'utf8');
-        const vectorDatabase = new InMemoryVectorDatabase();
-        Object.defineProperty(vectorDatabase, 'sparseSearch', { value: undefined });
-        const embedding = new CountingTestEmbedding();
-        const context = new Context({
-            embedding,
-            vectorDatabase,
-            symbolRegistryStateRoot: stateRoot,
-            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
-        });
-        await context.indexCodebase(codebasePath);
-        const vectorReceipt = await context.proveVectorGeneration(codebasePath);
-        assert.ok(vectorReceipt);
-
-        const embedCallsBefore = embedding.embedCalls;
-        const denseCallsBefore = vectorDatabase.searchCalls;
-        const hybridCallsBefore = vectorDatabase.hybridSearchCalls;
-        const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
-            codebasePath,
-            query: 'sparseFallbackValue',
-            topK: 5,
-            retrievalMode: 'lexical',
-            scorePolicy: { kind: 'topk_only' },
-        });
-
-        assert.ok(results.length > 0);
-        assert.equal(results[0]?.backendScoreKind, 'lexical_rank');
-        assert.equal(embedding.embedCalls, embedCallsBefore);
-        assert.equal(vectorDatabase.searchCalls, denseCallsBefore);
-        assert.equal(vectorDatabase.hybridSearchCalls, hybridCallsBefore + 1);
-        assert.deepEqual(vectorDatabase.hybridSearchRequests.at(-1), [{
-            data: 'sparseFallbackValue',
-            anns_field: 'sparse_vector',
-            param: { drop_ratio_search: 0.2 },
-            limit: 5,
-        }]);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -4511,9 +4632,6 @@ test('Context hybrid search still surfaces collection failure without a query pr
         assert.ok(vectorReceipt);
         const collectionName = vectorReceipt!.collectionName;
         await vectorDatabase.dropCollection(collectionName);
-        vectorDatabase.hybridSearch = async () => {
-            throw new Error(`Collection not found: ${collectionName}`);
-        };
 
         vectorDatabase.queryCalls.length = 0;
         await assert.rejects(
@@ -4552,7 +4670,7 @@ test('Context sparse retrieval surfaces collection failure without embedding fal
         assert.ok(vectorReceipt);
         const collectionName = vectorReceipt!.collectionName;
         const embedCallsBefore = embedding.embedCalls;
-        vectorDatabase.sparseSearch = async () => {
+        vectorDatabase.retrieveLexical = async () => {
             throw new Error(`Collection not found: ${collectionName}`);
         };
 
@@ -5334,8 +5452,8 @@ test('Context proven generation rejects a navigation pointer changed after activ
         assert.ok(await context.resolveProvenGeneration(codebasePath));
 
         let rebound = false;
-        vectorDatabase.queryHook = (call) => {
-            if (!rebound && call.filter.includes('fileExtension != ".satori_meta"')) {
+        vectorDatabase.queryHook = () => {
+            if (!rebound) {
                 rebound = true;
                 const currentPath = path.join(
                     resolveNavigationSidecarRoot(stateRoot, codebasePath),
@@ -5775,7 +5893,7 @@ test('Context.reindexByChange refuses marker restore when extra remote rows exis
         await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
         const collectionName = context.resolveCollectionName(codebasePath);
-        await vectorDatabase.insertHybrid(collectionName, [buildChunkDoc('stale_extra_chunk')]);
+        await vectorDatabase.writeDocuments(collectionName, [buildChunkDoc('stale_extra_chunk')]);
         await context.clearIndexCompletionMarker(codebasePath);
 
         await assert.rejects(
@@ -7038,7 +7156,7 @@ test('Context.repairIndex reports a malformed completion marker as failed eviden
         const fingerprint = await readTrustedFingerprint(context, codebasePath);
         const collectionName = context.resolveCollectionName(codebasePath);
         await context.clearIndexCompletionMarker(codebasePath);
-        await vectorDatabase.insert(collectionName, [{
+        await vectorDatabase.writeDocuments(collectionName, [{
             id: INDEX_COMPLETION_MARKER_DOC_ID,
             vector: [],
             content: 'malformed marker',
@@ -7088,12 +7206,12 @@ test('Context.repairIndex publishes partial proof before a backend payload probe
         const fingerprint = await readTrustedFingerprint(context, codebasePath);
         await context.clearIndexCompletionMarker(codebasePath);
 
-        const originalQuery = vectorDatabase.query.bind(vectorDatabase);
-        vectorDatabase.query = async (collectionName, filter, outputFields, limit) => {
-            if (filter.startsWith('id in [')) {
+        const originalQuery = vectorDatabase.queryDocuments.bind(vectorDatabase);
+        vectorDatabase.queryDocuments = async (collectionName, request) => {
+            if (request.filter?.kind === 'in' && request.filter.field === 'id') {
                 throw new Error('milvus connection closed during payload proof');
             }
-            return originalQuery(collectionName, filter, outputFields, limit);
+            return originalQuery(collectionName, request);
         };
         const proofUpdates: RepairProof[] = [];
 
@@ -7326,15 +7444,14 @@ test('Context.repairIndex requires reindex when exact payload equality exceeds t
             symbolRecords: [],
             symbolManifestFiles: [],
         });
-        const originalQuery = vectorDatabase.query.bind(vectorDatabase);
-        vectorDatabase.query = async (collectionName, filter, outputFields, limit) => {
-            const idInMatch = /^id in \[(.*)\]$/.exec(filter);
-            if (idInMatch?.[1]) {
-                return [...idInMatch[1].matchAll(/"((?:\\.|[^"\\])*)"/g)]
-                    .slice(0, limit)
-                    .map((match) => ({ id: match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\') }));
+        const originalQuery = vectorDatabase.queryDocuments.bind(vectorDatabase);
+        vectorDatabase.queryDocuments = async (collectionName, request) => {
+            if (request.filter?.kind === 'in' && request.filter.field === 'id') {
+                return request.filter.values
+                    .slice(0, request.limit)
+                    .map((id) => ({ id }));
             }
-            return originalQuery(collectionName, filter, outputFields, limit);
+            return originalQuery(collectionName, request);
         };
 
         const result = await context.repairIndex(codebasePath, {
@@ -7533,7 +7650,7 @@ test('Context.repairIndex fingerprint mismatch returns requires_reindex, not rep
                 navigation: { status: 'not_bound' },
             }
         };
-        await vectorDatabase.insert(collectionName, [mismatchedMarkerDoc]);
+        await vectorDatabase.writeDocuments(collectionName, [mismatchedMarkerDoc]);
 
         // 3. Run repairIndex - should return requires_reindex
         const repairResult = await context.repairIndex(codebasePath);

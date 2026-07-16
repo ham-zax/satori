@@ -3,11 +3,59 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { VectorDatabase } from "@zokizuan/satori-core";
+import {
+    INDEX_COMPLETION_MARKER_DOC_ID,
+    type VectorDatabase,
+} from "@zokizuan/satori-core";
 import { MutationLeaseCoordinator, type RootMutationLease } from "./mutation-lease.js";
 import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
 
 const COLLECTION = "hybrid_code_chunks_deadbeef";
+
+function currentCompletionMarker(codebasePath: string) {
+    return {
+        kind: "satori_index_completion_v3" as const,
+        codebasePath,
+        fingerprint: {
+            embeddingProvider: "test",
+            embeddingModel: "test",
+            embeddingDimension: 4,
+            vectorStoreProvider: "Milvus",
+            schemaVersion: "hybrid_v3",
+            parserVersion: "parser-v1",
+            extractorVersion: "extractor-v1",
+            relationshipVersion: "relationships-v1",
+            embeddingProjectionVersion: "embedding_projection_v1",
+            lexicalProjectionVersion: "lexical_projection_v1",
+        },
+        indexedFiles: 0,
+        totalChunks: 0,
+        completedAt: "2026-07-16T00:00:00.000Z",
+        runId: "maintenance-test",
+        indexPolicyHash: "0".repeat(64),
+        indexStatus: "completed" as const,
+        navigation: { status: "not_bound" as const },
+    };
+}
+
+function retiredCompletionMarker(
+    kind: "satori_index_completion_v1" | "satori_index_completion_v2",
+    codebasePath: string,
+) {
+    const current = currentCompletionMarker(codebasePath);
+    return {
+        kind,
+        codebasePath,
+        fingerprint: current.fingerprint,
+        indexedFiles: current.indexedFiles,
+        totalChunks: current.totalChunks,
+        completedAt: current.completedAt,
+        runId: current.runId,
+        ...(kind === "satori_index_completion_v2"
+            ? { indexPolicyHash: current.indexPolicyHash }
+            : {}),
+    };
+}
 
 function withTempRoots<T>(fn: (roots: {
     targetRoot: string;
@@ -39,7 +87,7 @@ function createReceiptHarness(options: {
     const vectorDb = {
         getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
         hasCollection: async () => collectionExists,
-        query: async () => [{
+        queryDocuments: async () => [{
             metadata: JSON.stringify({ codebasePath: options.mappedRoot }),
         }],
         dropCollection: async () => {
@@ -234,5 +282,197 @@ test("same-root Zilliz eviction reuses the caller create lease without a nested 
         } finally {
             coordinator.release(createLease);
         }
+    });
+});
+
+test("Zilliz guidance resolves an untracked marker-only collection from its control record", async () => {
+    await withTempRoots(async ({ targetRoot, mappedRoot }) => {
+        let payloadQueries = 0;
+        const vectorDb = {
+            getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
+            listCollectionDetails: async () => [{ name: COLLECTION }],
+            getControl: async (_collectionName: string, id: string) => {
+                assert.equal(id, INDEX_COMPLETION_MARKER_DOC_ID);
+                return {
+                    id,
+                    kind: "satori_index_completion_v3",
+                    metadata: currentCompletionMarker(mappedRoot),
+                };
+            },
+            queryDocuments: async () => {
+                payloadQueries++;
+                return [];
+            },
+        } as unknown as VectorDatabase;
+        const maintenance = new VectorBackendMaintenance({
+            context: { getVectorStore: () => vectorDb },
+            snapshotManager: {},
+            getSnapshotAllCodebases: () => [],
+            canonicalizeCodebasePath: (codebasePath: string) => fs.realpathSync.native(path.resolve(codebasePath)),
+            resolveCollectionName: () => COLLECTION,
+            markCodebaseCleared: () => undefined,
+            saveSnapshotIfSupported: () => undefined,
+            unwatchCodebase: async () => undefined,
+            mutationLeaseCoordinator: null,
+        } as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+
+        const guidance = await maintenance.buildCollectionLimitMessage(targetRoot);
+
+        assert.equal(guidance.includes(mappedRoot), true);
+        assert.equal(payloadQueries, 0);
+    });
+});
+
+test("Zilliz guidance resolves marker-only collections from recognized retired controls", async () => {
+    await withTempRoots(async ({ targetRoot, mappedRoot }) => {
+        for (const kind of [
+            "satori_index_completion_v1",
+            "satori_index_completion_v2",
+        ] as const) {
+            let payloadQueries = 0;
+            const vectorDb = {
+                getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
+                listCollectionDetails: async () => [{ name: COLLECTION }],
+                getControl: async () => ({
+                    id: INDEX_COMPLETION_MARKER_DOC_ID,
+                    kind,
+                    metadata: retiredCompletionMarker(kind, mappedRoot),
+                }),
+                queryDocuments: async () => {
+                    payloadQueries++;
+                    return [];
+                },
+            } as unknown as VectorDatabase;
+            const maintenance = new VectorBackendMaintenance({
+                context: { getVectorStore: () => vectorDb },
+                snapshotManager: {},
+                getSnapshotAllCodebases: () => [],
+                canonicalizeCodebasePath: (codebasePath: string) => fs.realpathSync.native(path.resolve(codebasePath)),
+                resolveCollectionName: () => COLLECTION,
+                markCodebaseCleared: () => undefined,
+                saveSnapshotIfSupported: () => undefined,
+                unwatchCodebase: async () => undefined,
+                mutationLeaseCoordinator: null,
+            } as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+
+            const guidance = await maintenance.buildCollectionLimitMessage(targetRoot);
+            assert.equal(guidance.includes(mappedRoot), true);
+            assert.equal(payloadQueries, 0);
+        }
+    });
+});
+
+test("Zilliz guidance rejects malformed or routing-mismatched completion controls", async () => {
+    await withTempRoots(async ({ targetRoot, mappedRoot }) => {
+        const validMarker = currentCompletionMarker(mappedRoot);
+        const invalidRecords = [
+            {
+                id: INDEX_COMPLETION_MARKER_DOC_ID,
+                kind: "unexpected_control",
+                metadata: validMarker,
+            },
+            {
+                id: INDEX_COMPLETION_MARKER_DOC_ID,
+                kind: "satori_index_completion_v3",
+                metadata: { ...validMarker, kind: "satori_index_completion_v2" },
+            },
+            {
+                id: INDEX_COMPLETION_MARKER_DOC_ID,
+                kind: "satori_index_completion_v3",
+                metadata: { kind: "satori_index_completion_v3", codebasePath: mappedRoot },
+            },
+        ];
+
+        for (const record of invalidRecords) {
+            let payloadQueries = 0;
+            const vectorDb = {
+                getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
+                listCollectionDetails: async () => [{ name: COLLECTION }],
+                getControl: async () => record,
+                queryDocuments: async () => {
+                    payloadQueries++;
+                    return [];
+                },
+            } as unknown as VectorDatabase;
+            const maintenance = new VectorBackendMaintenance({
+                context: { getVectorStore: () => vectorDb },
+                snapshotManager: {},
+                getSnapshotAllCodebases: () => [],
+                canonicalizeCodebasePath: (codebasePath: string) => fs.realpathSync.native(path.resolve(codebasePath)),
+                resolveCollectionName: () => COLLECTION,
+                markCodebaseCleared: () => undefined,
+                saveSnapshotIfSupported: () => undefined,
+                unwatchCodebase: async () => undefined,
+                mutationLeaseCoordinator: null,
+            } as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+
+            const guidance = await maintenance.buildCollectionLimitMessage(targetRoot);
+            assert.equal(guidance.includes(mappedRoot), false);
+            assert.equal(payloadQueries, 0);
+        }
+    });
+});
+
+test("Zilliz guidance retains trusted snapshot ownership when a control is malformed", async () => {
+    await withTempRoots(async ({ targetRoot, mappedRoot }) => {
+        let payloadQueries = 0;
+        const vectorDb = {
+            getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
+            listCollectionDetails: async () => [{ name: COLLECTION }],
+            getControl: async () => ({
+                id: INDEX_COMPLETION_MARKER_DOC_ID,
+                kind: "satori_index_completion_v3",
+                metadata: { kind: "satori_index_completion_v3", codebasePath: targetRoot },
+            }),
+            queryDocuments: async () => {
+                payloadQueries++;
+                return [];
+            },
+        } as unknown as VectorDatabase;
+        const maintenance = new VectorBackendMaintenance({
+            context: { getVectorStore: () => vectorDb },
+            snapshotManager: {},
+            getSnapshotAllCodebases: () => [{ path: mappedRoot, info: {} }],
+            canonicalizeCodebasePath: (codebasePath: string) => fs.realpathSync.native(path.resolve(codebasePath)),
+            resolveCollectionName: () => COLLECTION,
+            markCodebaseCleared: () => undefined,
+            saveSnapshotIfSupported: () => undefined,
+            unwatchCodebase: async () => undefined,
+            mutationLeaseCoordinator: null,
+        } as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+
+        const guidance = await maintenance.buildCollectionLimitMessage(targetRoot);
+        assert.equal(guidance.includes(mappedRoot), true);
+        assert.equal(payloadQueries, 0);
+    });
+});
+
+test("Zilliz guidance preserves whitespace-bearing repository identity from a valid marker", async () => {
+    await withTempRoots(async ({ targetRoot, mappedRoot }) => {
+        const whitespaceRoot = `${mappedRoot} `;
+        fs.mkdirSync(whitespaceRoot);
+        const vectorDb = {
+            getBackendInfo: () => ({ provider: "zilliz", transport: "grpc" }),
+            listCollectionDetails: async () => [{ name: COLLECTION }],
+            getControl: async () => ({
+                id: INDEX_COMPLETION_MARKER_DOC_ID,
+                kind: "satori_index_completion_v3",
+                metadata: currentCompletionMarker(whitespaceRoot),
+            }),
+        } as unknown as VectorDatabase;
+        const maintenance = new VectorBackendMaintenance({
+            context: { getVectorStore: () => vectorDb },
+            snapshotManager: {},
+            getSnapshotAllCodebases: () => [],
+            canonicalizeCodebasePath: (codebasePath: string) => fs.realpathSync.native(path.resolve(codebasePath)),
+            resolveCollectionName: () => COLLECTION,
+            markCodebaseCleared: () => undefined,
+            saveSnapshotIfSupported: () => undefined,
+            unwatchCodebase: async () => undefined,
+            mutationLeaseCoordinator: null,
+        } as unknown as ConstructorParameters<typeof VectorBackendMaintenance>[0]);
+
+        const guidance = await maintenance.buildCollectionLimitMessage(targetRoot);
+        assert.equal(guidance.includes(whitespaceRoot), true);
     });
 });

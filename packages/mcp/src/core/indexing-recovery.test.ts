@@ -13,6 +13,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     parserVersion: 'parser-v1',
     extractorVersion: 'extractor-v1',
     relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 function buildMarker(overrides: Partial<IndexCompletionMarkerDocument> = {}): IndexCompletionMarkerDocument {

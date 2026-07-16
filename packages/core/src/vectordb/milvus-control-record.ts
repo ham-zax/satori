@@ -2,26 +2,13 @@ import {
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     type VectorControlRecord,
     type VectorDocument,
-    type VectorDocumentMetadata,
+    type VectorFilter,
     type VectorRecord,
 } from './types';
+import { serializeMilvusFilter } from './filters';
+import { decodeMilvusMetadata } from './milvus-row-codec';
 
 const MILVUS_CONTROL_KIND_METADATA_KEY = '__satoriControlKind';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseMetadata(value: unknown): VectorDocumentMetadata {
-    if (isRecord(value)) return { ...value };
-    if (typeof value !== 'string') return {};
-    try {
-        const parsed: unknown = JSON.parse(value);
-        return isRecord(parsed) ? { ...parsed } : {};
-    } catch {
-        return {};
-    }
-}
 
 function requireLegacyVectorDimension(recordId: string, vectorDimension: number): number {
     if (!Number.isSafeInteger(vectorDimension) || vectorDimension <= 0) {
@@ -35,6 +22,11 @@ export function toLegacyMilvusControlDocument(
     record: VectorControlRecord,
     vectorDimension: number,
 ): VectorDocument {
+    if (Object.prototype.hasOwnProperty.call(record.metadata, MILVUS_CONTROL_KIND_METADATA_KEY)) {
+        throw new Error(
+            `Milvus control metadata cannot contain reserved key '${MILVUS_CONTROL_KIND_METADATA_KEY}'.`,
+        );
+    }
     return {
         id: record.id,
         vector: new Array<number>(requireLegacyVectorDimension(record.id, vectorDimension)).fill(0),
@@ -55,7 +47,7 @@ export function fromLegacyMilvusControlRow(
     expectedId: string,
 ): VectorControlRecord | null {
     if (row.id !== expectedId) return null;
-    const metadata = parseMetadata(row.metadata);
+    const metadata = decodeMilvusMetadata(row.metadata);
     const encodedKind = metadata[MILVUS_CONTROL_KIND_METADATA_KEY];
     const kind = typeof encodedKind === 'string'
         ? encodedKind
@@ -73,8 +65,15 @@ export function fromLegacyMilvusControlRow(
 }
 
 /** Keep legacy Milvus placeholder rows out of every retrieval operation. */
-export function withMilvusControlExclusion(filterExpr?: string): string {
-    const controlExclusion = `fileExtension != "${INDEX_COMPLETION_MARKER_FILE_EXTENSION}"`;
-    if (!filterExpr || filterExpr.trim().length === 0) return controlExclusion;
-    return `(${filterExpr}) and (${controlExclusion})`;
+export function withMilvusControlExclusion(filter?: VectorFilter): string {
+    const controlExclusion = serializeMilvusFilter({
+        kind: 'comparison',
+        field: 'fileExtension',
+        operator: 'ne',
+        value: INDEX_COMPLETION_MARKER_FILE_EXTENSION,
+    });
+    const callerFilter = serializeMilvusFilter(filter);
+    return callerFilter.length > 0
+        ? `(${callerFilter}) and (${controlExclusion})`
+        : controlExclusion;
 }

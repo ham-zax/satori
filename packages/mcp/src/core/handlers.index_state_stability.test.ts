@@ -52,6 +52,8 @@ const RUNTIME_FINGERPRINT: IndexFingerprint = {
     parserVersion: 'parser-v1',
     extractorVersion: 'extractor-v1',
     relationshipVersion: 'relationships-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 };
 
 const CAPABILITIES = new CapabilityResolver({
@@ -1336,7 +1338,7 @@ test('handleIndexCodebase recovers marker-backed mismatch without restarting ind
         assert.match(payload.humanText || '', /restart Satori with VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3/i);
         assert.match(
             (payload.hints?.runtimeMismatch as RuntimeMismatchHint | undefined)?.indexedFingerprint || '',
-            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=legacy\/lexical_projection=legacy$/,
+            /^VoyageAI\/voyage-code-3\/1024\/Milvus\/hybrid_v3\/parser=[a-f0-9]{12}\/extractor=[a-f0-9]{12}\/relationship=[a-f0-9]{12}\/embedding_projection=[a-f0-9]{12}\/lexical_projection=[a-f0-9]{12}$/,
         );
         assert.equal(startedBackgroundIndexing, false);
         assert.equal(collectionLimitCalls, 0);

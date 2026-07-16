@@ -26,7 +26,9 @@ const RUNTIME_FINGERPRINT = {
     schemaVersion: 'hybrid_v3',
     parserVersion: 'parser-v1',
     extractorVersion: 'extractor-v1',
-    relationshipVersion: 'relationship-v1'
+    relationshipVersion: 'relationship-v1',
+    embeddingProjectionVersion: 'embedding-projection-v1',
+    lexicalProjectionVersion: 'lexical-projection-v1',
 } as const;
 
 const POLICY_HASH = 'a'.repeat(64);

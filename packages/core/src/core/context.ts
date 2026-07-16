@@ -9,19 +9,17 @@ import {
     VectorControlRecord,
     IndexedVectorDocument,
     SearchProjections,
-    VectorSearchResult,
-    HybridSearchRequest,
-    HybridSearchResult,
+    VectorCandidate,
+    VectorFilter,
     RetrievalMode,
     ScorePolicy,
     IndexCompletionFingerprint,
     IndexCompletionMarkerDocument,
     INDEX_COMPLETION_MARKER_DOC_ID,
-    INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     deleteCollectionWithVerification,
     type VectorWriteMetricsSnapshot,
 } from '../vectordb';
-import { buildMilvusIdInFilter, escapeMilvusStringLiteral } from '../vectordb/filters';
+import { validateVectorFilter } from '../vectordb/filters';
 import { SemanticSearchRequest, SemanticSearchResult } from '../types';
 import { envManager } from '../utils/env-manager';
 import {
@@ -78,8 +76,13 @@ import {
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     type CodeChunk,
+    type LanguageAnalysisResult,
     type LanguageAnalysisPort,
 } from '../language-analysis';
+import {
+    canonicalizeRepositoryRelativePath,
+    type RepositoryRelativePath,
+} from '../paths/repository-path';
 import {
     buildRelationshipsForRegistry,
     type RelationshipAnalysisEvidence,
@@ -107,6 +110,7 @@ import type {
 } from './repair-proof';
 import {
     buildCanonicalIndexPolicyDocument,
+    indexFingerprintsEqual,
     inspectCompletionMarker,
     inspectIndexPolicyDocument,
     type CanonicalPolicyNavigationBinding,
@@ -117,16 +121,40 @@ import {
     LEXICAL_PROJECTION_VERSION,
 } from './search-projections';
 import { compareContractStrings } from '../utils/compare-contract-strings';
+import {
+    fuseVectorCandidatesWithRrf,
+    VECTOR_CANDIDATE_RRF_K_V1,
+} from './vector-candidate-fusion';
 
 interface ProjectedChunkEntry {
     readonly chunk: CodeChunk;
-    readonly relativePath: string;
+    readonly relativePath: RepositoryRelativePath;
     readonly fileChunkIndex: number;
     readonly projections: SearchProjections;
 }
 
 interface PendingIndexedChunk extends ProjectedChunkEntry {
     readonly codebasePath: string;
+}
+
+interface AnalyzedIndexedFile {
+    readonly relativePath: RepositoryRelativePath;
+    readonly source: string;
+    /** Exact source-byte identity used to prove full-index coverage. */
+    readonly sourceHash: string;
+    /** Decoded UTF-8 identity retained by navigation manifest compatibility. */
+    readonly contentHash: string;
+    readonly language: string;
+    readonly chunks: CodeChunk[];
+    readonly extractedSymbols: LanguageAnalysisResult['symbols'];
+    readonly moduleBindings: LanguageAnalysisResult['moduleBindings'];
+    readonly callSites: LanguageAnalysisResult['callSites'];
+}
+
+interface AnalyzedFileSymbolFacts {
+    readonly symbolRecords: SymbolRecord[];
+    readonly manifestFile: SymbolRegistryManifestFile;
+    readonly relationshipEvidence: RelationshipAnalysisEvidence;
 }
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
@@ -337,6 +365,15 @@ export type DurableAuthorityRecoveryPublisher = (
     publish: () => void,
 ) => boolean;
 
+export type MutationGenerationObservation = Readonly<{
+    generation: number;
+    mutationActive: boolean;
+}>;
+
+export type MutationGenerationObserver = (
+    canonicalRoot: string,
+) => MutationGenerationObservation;
+
 export interface ContextConfig {
     embedding?: Embedding;
     vectorDatabase?: VectorDatabase;
@@ -348,6 +385,8 @@ export interface ContextConfig {
     symbolRegistryStateRoot?: string;
     indexPolicyStateRoot?: string;
     durableAuthorityRecoveryPublisher?: DurableAuthorityRecoveryPublisher;
+    /** Required when hybrid reads can overlap externally coordinated mutations. */
+    mutationGenerationObserver?: MutationGenerationObserver;
 }
 
 export interface CustomIndexPolicyUpdate {
@@ -590,12 +629,30 @@ export type IndexCodebaseResult = {
 
 function chunksWithTrustedRelativePath(
     chunks: readonly CodeChunk[],
-    relativePath: string,
+    relativePath: RepositoryRelativePath,
 ): CodeChunk[] {
     return chunks.map((chunk) => ({
         ...chunk,
         metadata: { ...chunk.metadata, filePath: relativePath },
     }));
+}
+
+function chunksWithResolvedOwners(
+    chunks: readonly CodeChunk[],
+    symbols: SymbolRecord[],
+): CodeChunk[] {
+    return chunks.map((chunk) => {
+        const owner = resolveOwnerSymbolForChunk({ chunk, symbols });
+        return {
+            ...chunk,
+            metadata: {
+                ...chunk.metadata,
+                ownerSymbolKey: owner.symbolKey,
+                ownerSymbolInstanceId: owner.symbolInstanceId,
+                symbolKind: owner.kind,
+            },
+        };
+    });
 }
 
 type ReindexByChangeResult = {
@@ -648,6 +705,7 @@ export class Context {
     private writeCollectionOverrides = new Map<string, string>();
     private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
+    private readonly mutationGenerationObserver?: MutationGenerationObserver;
 
     constructor(config: ContextConfig = {}) {
         // Initialize services
@@ -669,6 +727,7 @@ export class Context {
             throw new Error('VectorDatabase is required. Please provide a vectorDatabase instance in the config.');
         }
         this.vectorDatabase = config.vectorDatabase;
+        this.mutationGenerationObserver = config.mutationGenerationObserver;
 
         this.languageAnalyzer = config.languageAnalyzer || createLanguageAnalysisService({
             chunkSize: 2500,
@@ -1104,18 +1163,17 @@ export class Context {
         collectionName: string,
         marker: IndexCompletionMarkerDocument
     ): Promise<boolean> {
-        const payloadFilter = 'fileExtension != ".satori_meta"';
-        const count = await this.countIndexedPayloadExactly(collectionName, payloadFilter, marker.totalChunks);
+        const count = await this.countIndexedPayloadExactly(collectionName, undefined, marker.totalChunks);
         return count === marker.totalChunks;
     }
 
     private async countIndexedPayloadExactly(
         collectionName: string,
-        filter: string,
+        filter: VectorFilter | undefined,
         expectedMaximum?: number,
     ): Promise<number | null> {
-        if (typeof this.vectorDatabase.count === 'function') {
-            return this.vectorDatabase.count(collectionName, filter);
+        if (typeof this.vectorDatabase.countDocuments === 'function') {
+            return this.vectorDatabase.countDocuments(collectionName, filter);
         }
 
         // Query-only adapters can prove bounded result sets by requesting one row
@@ -1128,7 +1186,11 @@ export class Context {
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximumExactQueryRows) {
             return null;
         }
-        const rows = await this.vectorDatabase.query(collectionName, filter, ['id'], limit);
+        const rows = await this.vectorDatabase.queryDocuments(collectionName, {
+            filter,
+            fields: ['id'],
+            limit,
+        });
         if (expectedMaximum === undefined && rows.length === maximumExactQueryRows) {
             return null;
         }
@@ -1136,7 +1198,7 @@ export class Context {
     }
 
     private async collectionHasAnyIndexedPayload(collectionName: string): Promise<boolean> {
-        const rows = await this.vectorDatabase.query(collectionName, 'fileExtension != ".satori_meta"', ['id'], 1);
+        const rows = await this.vectorDatabase.queryDocuments(collectionName, { fields: ['id'], limit: 1 });
         return rows.some((row) => typeof row?.id === 'string' && row.id !== INDEX_COMPLETION_MARKER_DOC_ID);
     }
 
@@ -1167,23 +1229,6 @@ export class Context {
         };
     }
 
-    private indexCompletionFingerprintsMatch(left: unknown, right: IndexCompletionFingerprint): boolean {
-        if (!left || typeof left !== 'object') {
-            return false;
-        }
-        const record = left as Record<string, unknown>;
-        return record.embeddingProvider === right.embeddingProvider
-            && record.embeddingModel === right.embeddingModel
-            && Number(record.embeddingDimension) === Number(right.embeddingDimension)
-            && record.vectorStoreProvider === right.vectorStoreProvider
-            && record.schemaVersion === right.schemaVersion
-            && record.parserVersion === right.parserVersion
-            && record.extractorVersion === right.extractorVersion
-            && record.relationshipVersion === right.relationshipVersion
-            && record.embeddingProjectionVersion === right.embeddingProjectionVersion
-            && record.lexicalProjectionVersion === right.lexicalProjectionVersion;
-    }
-
     public indexCompletionMarkersEqual(
         left: IndexCompletionMarkerDocument,
         right: IndexCompletionMarkerDocument,
@@ -1203,8 +1248,8 @@ export class Context {
             && left.indexPolicyHash === right.indexPolicyHash
             && left.indexStatus === right.indexStatus
             && navigationEqual
-            && this.indexCompletionFingerprintsMatch(left.fingerprint, right.fingerprint)
-            && this.indexCompletionFingerprintsMatch(right.fingerprint, left.fingerprint);
+            && indexFingerprintsEqual(left.fingerprint, right.fingerprint)
+            && indexFingerprintsEqual(right.fingerprint, left.fingerprint);
     }
 
     private markerMatchesSealedAuthority(
@@ -1212,7 +1257,7 @@ export class Context {
         policy: ResolvedIndexPolicy,
         binding: IndexPolicyBinding & { policyHash: string },
     ): boolean {
-        return this.indexCompletionFingerprintsMatch(marker.fingerprint, this.buildIndexCompletionFingerprint())
+        return indexFingerprintsEqual(marker.fingerprint, this.buildIndexCompletionFingerprint())
             && marker.indexPolicyHash === policy.policyHash
             && binding.policyHash === marker.indexPolicyHash
             && policyNavigationBindingsEqual(
@@ -1307,7 +1352,7 @@ export class Context {
             if (!marker) {
                 continue;
             }
-            if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, runtimeFingerprint)) {
+            if (!indexFingerprintsEqual(marker.fingerprint, runtimeFingerprint)) {
                 continue;
             }
             if (marker.indexPolicyHash !== activePolicyHash) {
@@ -1445,11 +1490,6 @@ export class Context {
         return proven?.collectionName ?? null;
     }
 
-    private async getActiveVectorCollectionName(codebasePath: string): Promise<string | null> {
-        const proven = await this.proveVectorGeneration(codebasePath);
-        return proven?.collectionName ?? null;
-    }
-
     public getIndexAuthorityObservation(codebasePath: string): string | null {
         const observations = this.getIndexAuthorityObservations(codebasePath);
         return observations ? JSON.stringify(observations) : null;
@@ -1561,7 +1601,7 @@ export class Context {
 
         const exactPayloadCount = await this.countIndexedPayloadExactly(
             policyBinding.collectionName,
-            'fileExtension != ".satori_meta"',
+            undefined,
             initialMarker.totalChunks,
         );
         if (exactPayloadCount === null) {
@@ -2386,7 +2426,7 @@ export class Context {
                 const proofCollection = await this.resolveCompletionProofCollection(codebasePath);
                 if (
                     proofCollection
-                    && this.indexCompletionFingerprintsMatch(
+                    && indexFingerprintsEqual(
                         proofCollection.marker.fingerprint,
                         this.buildIndexCompletionFingerprint(),
                     )
@@ -2580,10 +2620,9 @@ export class Context {
         if (previousMarker?.indexStatus !== 'limit_reached') {
             replacedPayloadCount = 0;
             for (const relativePath of new Set([...added, ...removed, ...modified])) {
-                const escapedPath = escapeMilvusStringLiteral(relativePath);
                 const pathCount = await this.countIndexedPayloadExactly(
                     targetCollectionName,
-                    `relativePath == "${escapedPath}"`,
+                    { kind: 'comparison', field: 'relativePath', operator: 'eq', value: relativePath },
                     previousMarker?.totalChunks,
                 );
                 if (pathCount === null) {
@@ -2839,18 +2878,16 @@ export class Context {
         relativePath: string,
         assertMutationCurrent?: () => void,
     ): Promise<void> {
-        const escapedPath = escapeMilvusStringLiteral(relativePath);
-        const results = await this.vectorDatabase.query(
-            collectionName,
-            `relativePath == "${escapedPath}"`,
-            ['id']
-        );
+        const results = await this.vectorDatabase.queryDocuments(collectionName, {
+            filter: { kind: 'comparison', field: 'relativePath', operator: 'eq', value: relativePath },
+            fields: ['id'],
+        });
 
         if (results.length > 0) {
             const ids = results.map(r => r.id as string).filter(id => id);
             if (ids.length > 0) {
                 assertMutationCurrent?.();
-                await this.vectorDatabase.delete(collectionName, ids);
+                await this.vectorDatabase.deleteDocuments(collectionName, ids);
                 console.log(`[Context] Deleted ${ids.length} chunks for file ${relativePath}`);
             }
         }
@@ -2864,13 +2901,13 @@ export class Context {
      * @param threshold Similarity threshold
      */
     async semanticSearch(request: SemanticSearchRequest): Promise<SemanticSearchResult[]>;
-    async semanticSearch(codebasePath: string, query: string, topK?: number, threshold?: number, filterExpr?: string): Promise<SemanticSearchResult[]>;
+    async semanticSearch(codebasePath: string, query: string, topK?: number, threshold?: number, filter?: VectorFilter): Promise<SemanticSearchResult[]>;
     async semanticSearch(
         requestOrCodebasePath: SemanticSearchRequest | string,
         query?: string,
         topK: number = 5,
         threshold: number = 0.5,
-        filterExpr?: string
+        filter?: VectorFilter
     ): Promise<SemanticSearchResult[]> {
         return this.semanticSearchWithReceipt(
             undefined,
@@ -2878,7 +2915,7 @@ export class Context {
             query,
             topK,
             threshold,
-            filterExpr,
+            filter,
         );
     }
 
@@ -2895,19 +2932,24 @@ export class Context {
         query?: string,
         topK: number = 5,
         threshold: number = 0.5,
-        filterExpr?: string,
+        filter?: VectorFilter,
         requestBoundReceipt = false,
     ): Promise<SemanticSearchResult[]> {
-        const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filterExpr);
+        const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filter);
         const resolvedRequest = this.resolveSemanticSearchRequest(request);
         const codebasePath = resolvedRequest.codebasePath;
         const hybridCollection = this.getIsHybrid() === true;
         const isSparseOnly = resolvedRequest.retrievalMode === 'lexical' && hybridCollection;
         const isHybrid = resolvedRequest.retrievalMode === 'hybrid' && hybridCollection;
+        const initialMutationObservation = isHybrid
+            ? this.observeMutationGeneration(codebasePath)
+            : null;
+        if (initialMutationObservation?.mutationActive) {
+            throw new Error('Index generation changed during hybrid retrieval.');
+        }
         const searchType = isSparseOnly ? 'sparse search' : isHybrid ? 'hybrid search' : 'semantic search';
         const requestId = crypto.randomUUID();
         console.log(`[Context] 🔍 Executing ${searchType}: query_length=${resolvedRequest.query.length}, request_id=${requestId}, root=${codebasePath}`);
-        const effectiveFilterExpr = this.buildSemanticSearchFilterExpr(resolvedRequest.filterExpr);
 
         const normalizeBreadcrumbs = (value: unknown): string[] | undefined => {
             if (!Array.isArray(value)) {
@@ -2921,7 +2963,7 @@ export class Context {
             return normalized.length > 0 ? normalized : undefined;
         };
         const toSemanticSearchResult = (
-            result: HybridSearchResult | VectorSearchResult,
+            result: VectorCandidate,
             backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion',
         ): SemanticSearchResult => ({
             content: result.document.content,
@@ -2949,42 +2991,22 @@ export class Context {
 
         const revalidatedReceipt = receipt && !requestBoundReceipt
             ? await this.revalidateProvenVectorGeneration(codebasePath, receipt)
-            : receipt ?? null;
-        const collectionName = receipt
-            ? revalidatedReceipt?.collectionName ?? null
-            : await this.getActiveVectorCollectionName(codebasePath);
-        console.log(`[Context] 🔍 Using collection: ${collectionName}`);
+            : receipt ?? await this.proveVectorGeneration(codebasePath);
+        console.log(`[Context] 🔍 Using collection: ${revalidatedReceipt?.collectionName ?? null}`);
 
         // Check if collection exists and has data
-        if (!collectionName) {
+        if (!revalidatedReceipt) {
             console.log(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Please index the codebase first.`);
             return [];
         }
+        const collectionName = revalidatedReceipt.collectionName;
 
         if (isSparseOnly) {
-            const searchResults = this.vectorDatabase.sparseSearch
-                ? await this.vectorDatabase.sparseSearch(
-                    collectionName,
-                    resolvedRequest.query,
-                    {
-                        topK: resolvedRequest.topK,
-                        dropRatioSearch: 0.2,
-                        filterExpr: effectiveFilterExpr,
-                    },
-                )
-                : await this.vectorDatabase.hybridSearch(
-                    collectionName,
-                    [{
-                        data: resolvedRequest.query,
-                        anns_field: 'sparse_vector',
-                        param: { drop_ratio_search: 0.2 },
-                        limit: resolvedRequest.topK,
-                    }],
-                    {
-                        limit: resolvedRequest.topK,
-                        filterExpr: effectiveFilterExpr,
-                    },
-                );
+            const searchResults = await this.vectorDatabase.retrieveLexical(collectionName, {
+                query: resolvedRequest.query,
+                limit: resolvedRequest.topK,
+                filter: resolvedRequest.filter,
+            });
             return searchResults.map((result) => toSemanticSearchResult(result, 'lexical_rank'));
         }
 
@@ -2995,40 +3017,46 @@ export class Context {
             console.log(`[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`);
 
             // 2. Prepare hybrid search requests
-            const searchRequests: HybridSearchRequest[] = [
-                {
-                    data: queryEmbedding.vector,
-                    anns_field: "vector",
-                    param: { "nprobe": 10 },
-                    limit: resolvedRequest.topK
-                },
-                {
-                    data: resolvedRequest.query,
-                    anns_field: "sparse_vector",
-                    param: { "drop_ratio_search": 0.2 },
-                    limit: resolvedRequest.topK
-                }
-            ];
+            console.log(`[Context] 🔍 Dense candidate request: vector_dim=${queryEmbedding.vector.length}, limit=${resolvedRequest.topK}`);
+            console.log(`[Context] 🔍 Lexical candidate request: query_length=${resolvedRequest.query.length}, request_id=${requestId}, limit=${resolvedRequest.topK}`);
 
-            console.log(`[Context] 🔍 Search request 1 (dense): anns_field="${searchRequests[0].anns_field}", vector_dim=${queryEmbedding.vector.length}, limit=${searchRequests[0].limit}`);
-            console.log(`[Context] 🔍 Search request 2 (sparse): anns_field="${searchRequests[1].anns_field}", query_length=${resolvedRequest.query.length}, request_id=${requestId}, limit=${searchRequests[1].limit}`);
-
-            // 3. Execute hybrid search
+            // 3. Retrieve each backend-neutral arm and fuse under one Core-owned policy.
             console.log(`[Context] 🔍 Executing hybrid search with RRF reranking...`);
-            const searchResults: HybridSearchResult[] = await this.vectorDatabase.hybridSearch(
-                collectionName,
-                searchRequests,
-                {
-                    rerank: {
-                        strategy: 'rrf',
-                        params: { k: 100 }
-                    },
+            const [denseCandidates, lexicalCandidates] = await Promise.all([
+                this.vectorDatabase.retrieveDense(collectionName, {
+                    vector: queryEmbedding.vector,
                     limit: resolvedRequest.topK,
-                    // Hybrid RRF scores are backend/rerank relative, so dense similarity
-                    // thresholds can erase valid sparse lexical matches before MCP ranking.
-                    filterExpr: effectiveFilterExpr
-                }
+                    filter: resolvedRequest.filter,
+                }),
+                this.vectorDatabase.retrieveLexical(collectionName, {
+                    query: resolvedRequest.query,
+                    limit: resolvedRequest.topK,
+                    filter: resolvedRequest.filter,
+                }),
+            ]);
+            const sameGenerationReceipt = await this.revalidateProvenVectorGeneration(
+                codebasePath,
+                revalidatedReceipt,
             );
+            const finalMutationObservation = initialMutationObservation
+                ? this.observeMutationGeneration(codebasePath)
+                : null;
+            if (
+                !sameGenerationReceipt
+                || (initialMutationObservation && (
+                    !finalMutationObservation
+                    || finalMutationObservation.mutationActive
+                    || finalMutationObservation.generation !== initialMutationObservation.generation
+                ))
+            ) {
+                throw new Error('Index generation changed during hybrid retrieval.');
+            }
+            const searchResults = fuseVectorCandidatesWithRrf({
+                dense: denseCandidates,
+                lexical: lexicalCandidates,
+                k: VECTOR_CANDIDATE_RRF_K_V1,
+                limit: resolvedRequest.topK,
+            });
 
             console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
 
@@ -3050,11 +3078,12 @@ export class Context {
                 : undefined;
 
             // 2. Search in vector database
-            const searchResults: VectorSearchResult[] = await this.vectorDatabase.search(
-                collectionName,
-                queryEmbedding.vector,
-                { topK: resolvedRequest.topK, threshold: denseThreshold, filterExpr: effectiveFilterExpr }
-            );
+            const searchResults = await this.vectorDatabase.retrieveDense(collectionName, {
+                vector: queryEmbedding.vector,
+                limit: resolvedRequest.topK,
+                minimumScore: denseThreshold,
+                filter: resolvedRequest.filter,
+            });
 
             // 3. Convert to semantic search result format
             const results = searchResults.map((result) => toSemanticSearchResult(result, 'dense_similarity'));
@@ -3064,19 +3093,35 @@ export class Context {
         }
     }
 
+    private observeMutationGeneration(codebasePath: string): MutationGenerationObservation | null {
+        if (!this.mutationGenerationObserver) return null;
+        const observation = this.mutationGenerationObserver(this.canonicalizeCodebasePath(codebasePath));
+        if (
+            !Number.isSafeInteger(observation.generation)
+            || observation.generation < 0
+            || typeof observation.mutationActive !== 'boolean'
+        ) {
+            throw new Error('Mutation generation observer returned an invalid observation.');
+        }
+        return {
+            generation: observation.generation,
+            mutationActive: observation.mutationActive,
+        };
+    }
+
     private normalizeSemanticSearchRequest(
         requestOrCodebasePath: SemanticSearchRequest | string,
         query?: string,
         topK: number = 5,
         threshold: number = 0.5,
-        filterExpr?: string
+        filter?: VectorFilter
     ): SemanticSearchRequest {
         if (typeof requestOrCodebasePath === 'string') {
             return {
                 codebasePath: requestOrCodebasePath,
                 query: query ?? '',
                 topK,
-                filterExpr,
+                filter,
                 ...(threshold > 0
                     ? {
                         retrievalMode: 'dense',
@@ -3091,7 +3136,10 @@ export class Context {
         return requestOrCodebasePath;
     }
 
-    private resolveSemanticSearchRequest(request: SemanticSearchRequest): Required<SemanticSearchRequest> & { retrievalMode: RetrievalMode; scorePolicy: ScorePolicy } {
+    private resolveSemanticSearchRequest(request: SemanticSearchRequest): Omit<
+        Required<SemanticSearchRequest>,
+        'filter'
+    > & { filter?: VectorFilter; retrievalMode: RetrievalMode; scorePolicy: ScorePolicy } {
         const hybridEnabled = this.getIsHybrid() === true;
         const retrievalMode = request.retrievalMode ?? (hybridEnabled ? 'hybrid' : 'dense');
         const scorePolicy = request.scorePolicy ?? (retrievalMode === 'dense'
@@ -3111,17 +3159,11 @@ export class Context {
             query: request.query,
             topK: request.topK ?? 5,
             retrievalMode,
-            filterExpr: request.filterExpr ?? '',
+            filter: request.filter === undefined
+                ? undefined
+                : validateVectorFilter(request.filter),
             scorePolicy
         };
-    }
-
-    private buildSemanticSearchFilterExpr(filterExpr?: string): string {
-        const markerExclusion = `fileExtension != "${INDEX_COMPLETION_MARKER_FILE_EXTENSION}"`;
-        if (!filterExpr || filterExpr.trim().length === 0) {
-            return markerExclusion;
-        }
-        return `(${filterExpr}) and (${markerExclusion})`;
     }
 
     private async clearIndexCompletionMarkerFromCollection(
@@ -4132,37 +4174,20 @@ export class Context {
         return inputPath.replace(/[\\/]+$/, '');
     }
 
-    private normalizeRelativePathForCodebase(codebasePath: string, candidatePath: string): string | null {
-        if (typeof candidatePath !== 'string') {
-            return null;
-        }
-
-        const trimmed = candidatePath.trim();
-        if (trimmed.length === 0) {
-            return null;
-        }
-
+    private normalizeRelativePathForCodebase(
+        codebasePath: string,
+        candidatePath: string,
+    ): RepositoryRelativePath | null {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const normalizedCandidate = trimmed.replace(/\\/g, '/');
-        let relativePath = normalizedCandidate;
+        const canonicalRelativePath = canonicalizeRepositoryRelativePath(canonicalRoot, candidatePath);
+        if (canonicalRelativePath) return canonicalRelativePath;
 
-        if (path.isAbsolute(trimmed)) {
-            const resolvedCandidate = path.resolve(trimmed);
-            relativePath = path.relative(canonicalRoot, resolvedCandidate).replace(/\\/g, '/');
-            // Symlink-safe fallback: if canonical-root relative path is invalid,
-            // retry against resolved (non-realpathed) root before dropping.
-            if (!relativePath || relativePath.startsWith('..')) {
-                const resolvedRoot = this.trimTrailingSeparators(path.normalize(path.resolve(codebasePath)));
-                relativePath = path.relative(resolvedRoot, resolvedCandidate).replace(/\\/g, '/');
-            }
-        }
-
-        relativePath = relativePath.replace(/^\/+/, '');
-        if (!relativePath || relativePath === '.' || relativePath.startsWith('..')) {
-            return null;
-        }
-
-        return relativePath;
+        // A scanned path may use the caller's symlinked root while canonicalRoot
+        // names its real target. Retry against that resolved spelling only.
+        const resolvedRoot = this.trimTrailingSeparators(path.normalize(path.resolve(codebasePath)));
+        return resolvedRoot === canonicalRoot
+            ? null
+            : canonicalizeRepositoryRelativePath(resolvedRoot, candidatePath);
     }
 
     private normalizeRelativePathsForCodebase(codebasePath: string, relativePaths: string[]): string[] {
@@ -4395,6 +4420,64 @@ export class Context {
         return observation?.content ?? null;
     }
 
+    private async analyzeIndexedFile(
+        filePath: string,
+        codebasePath: string,
+        indexPolicy?: ResolvedIndexPolicy,
+    ): Promise<AnalyzedIndexedFile | null> {
+        const sourceObservation = await this.readIndexableFileObservationInsideRoot(
+            filePath,
+            codebasePath,
+            indexPolicy,
+        );
+        if (sourceObservation === null) return null;
+
+        const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
+        if (!relativePath) {
+            throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
+        }
+        const source = sourceObservation.content;
+        const language = this.getLanguageFromFilePath(filePath);
+        const analysis = await this.languageAnalyzer.analyze({ content: source, language, relativePath });
+
+        return {
+            relativePath,
+            source,
+            sourceHash: sourceObservation.sourceHash,
+            contentHash: crypto.createHash('sha256').update(source, 'utf8').digest('hex'),
+            language,
+            chunks: chunksWithTrustedRelativePath(analysis.chunks, relativePath),
+            extractedSymbols: analysis.symbols,
+            moduleBindings: analysis.moduleBindings,
+            callSites: analysis.callSites,
+        };
+    }
+
+    private buildAnalyzedFileSymbolFacts(analyzed: AnalyzedIndexedFile): AnalyzedFileSymbolFacts {
+        const symbolRecords = buildSymbolRecordsForFile({
+            relativePath: analyzed.relativePath,
+            language: analyzed.language,
+            content: analyzed.source,
+            fileHash: analyzed.contentHash,
+            extractorVersion: this.getSymbolExtractorVersion(),
+            extractedSymbols: analyzed.extractedSymbols,
+            chunks: analyzed.chunks,
+        });
+        return {
+            symbolRecords,
+            manifestFile: {
+                path: analyzed.relativePath,
+                hash: analyzed.contentHash,
+                language: analyzed.language,
+                symbolCount: symbolRecords.length,
+            },
+            relationshipEvidence: {
+                moduleBindings: analyzed.moduleBindings,
+                callSites: analyzed.callSites,
+            },
+        };
+    }
+
     private buildSupportedExtensions(profile: IndexProfile, canonicalRoot?: string): string[] {
         return normalizeSupportedExtensions([
             ...getSupportedExtensionsForIndexProfile(profile),
@@ -4487,51 +4570,22 @@ export class Context {
 
             try {
                 const analysisStartedAt = Date.now();
-                const sourceObservation = await this.readIndexableFileObservationInsideRoot(filePath, codebasePath, indexPolicy);
-                if (sourceObservation === null) continue;
-                const { content } = sourceObservation;
-                const language = this.getLanguageFromFilePath(filePath);
-                const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
-                if (!relativePath) {
-                    throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
-                }
-                const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-                const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
-                analysisByFile.set(relativePath, {
-                    moduleBindings: analysis.moduleBindings,
-                    callSites: analysis.callSites,
-                });
-                const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-                indexedFileHashes.set(relativePath, sourceObservation.sourceHash);
-                const fileSymbols = buildSymbolRecordsForFile({
-                    relativePath,
-                    language,
-                    content,
-                    fileHash,
-                    extractorVersion: this.getSymbolExtractorVersion(),
-                    extractedSymbols: analysis.symbols,
-                    chunks,
-                });
-                for (const chunk of chunks) {
-                    const owner = resolveOwnerSymbolForChunk({ chunk, symbols: fileSymbols });
-                    chunk.metadata.ownerSymbolKey = owner.symbolKey;
-                    chunk.metadata.ownerSymbolInstanceId = owner.symbolInstanceId;
-                    chunk.metadata.symbolKind = owner.kind;
-                }
-                symbolRecords.push(...fileSymbols);
-                symbolManifestFiles.push({
-                    path: relativePath,
-                    hash: fileHash,
-                    language,
-                    symbolCount: fileSymbols.length,
-                });
+                const analyzed = await this.analyzeIndexedFile(filePath, codebasePath, indexPolicy);
+                if (analyzed === null) continue;
+                const symbolFacts = this.buildAnalyzedFileSymbolFacts(analyzed);
+                const chunks = chunksWithResolvedOwners(analyzed.chunks, symbolFacts.symbolRecords);
+                const { relativePath } = analyzed;
+                analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
+                indexedFileHashes.set(relativePath, analyzed.sourceHash);
+                symbolRecords.push(...symbolFacts.symbolRecords);
+                symbolManifestFiles.push(symbolFacts.manifestFile);
                 performance.analysisMs += Date.now() - analysisStartedAt;
 
                 // Log files with many chunks or large content
                 if (chunks.length > 50) {
-                    console.warn(`[Context] ⚠️  File ${filePath} generated ${chunks.length} chunks (${Math.round(content.length / 1024)}KB)`);
-                } else if (content.length > 100000) {
-                    console.log(`📄 Large file ${filePath}: ${Math.round(content.length / 1024)}KB -> ${chunks.length} chunks`);
+                    console.warn(`[Context] ⚠️  File ${filePath} generated ${chunks.length} chunks (${Math.round(analyzed.source.length / 1024)}KB)`);
+                } else if (analyzed.source.length > 100000) {
+                    console.log(`📄 Large file ${filePath}: ${Math.round(analyzed.source.length / 1024)}KB -> ${chunks.length} chunks`);
                 }
 
                 let fileFullyIncluded = true;
@@ -4632,38 +4686,16 @@ export class Context {
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of filePaths) {
-            const content = await this.readIndexableFileInsideRoot(filePath, codebasePath, indexPolicy);
-            if (content === null) {
+            const analyzed = await this.analyzeIndexedFile(filePath, codebasePath, indexPolicy);
+            if (analyzed === null) {
                 throw new Error(`Indexed source no longer satisfies the active policy: ${filePath}`);
             }
-            const language = this.getLanguageFromFilePath(filePath);
-            const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
-            if (!relativePath) {
-                throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
-            }
-            const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-            const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
-            analysisByFile.set(relativePath, {
-                moduleBindings: analysis.moduleBindings,
-                callSites: analysis.callSites,
-            });
-            const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-            const fileSymbols = buildSymbolRecordsForFile({
-                relativePath,
-                language,
-                content,
-                fileHash,
-                extractorVersion: this.getSymbolExtractorVersion(),
-                extractedSymbols: analysis.symbols,
-                chunks,
-            });
+            const symbolFacts = this.buildAnalyzedFileSymbolFacts(analyzed);
+            const chunks = chunksWithResolvedOwners(analyzed.chunks, symbolFacts.symbolRecords);
+            const { relativePath } = analyzed;
+            analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
             for (let index = 0; index < chunks.length; index++) {
                 const chunk = chunks[index];
-                const owner = resolveOwnerSymbolForChunk({ chunk, symbols: fileSymbols });
-                chunk.metadata.ownerSymbolKey = owner.symbolKey;
-                chunk.metadata.ownerSymbolInstanceId = owner.symbolInstanceId;
-                chunk.metadata.symbolKind = owner.kind;
-
                 const startLine = chunk.metadata.startLine || 0;
                 const endLine = chunk.metadata.endLine || 0;
                 const id = this.generateId(relativePath, chunk, index);
@@ -4678,13 +4710,8 @@ export class Context {
                     chunkIndex: index,
                 });
             }
-            symbolRecords.push(...fileSymbols);
-            symbolManifestFiles.push({
-                path: relativePath,
-                hash: fileHash,
-                language,
-                symbolCount: fileSymbols.length,
-            });
+            symbolRecords.push(...symbolFacts.symbolRecords);
+            symbolManifestFiles.push(symbolFacts.manifestFile);
         }
 
         return {
@@ -4775,7 +4802,7 @@ export class Context {
 
         const observedTotalChunks = await this.countIndexedPayloadExactly(
             collectionName,
-            'fileExtension != ".satori_meta"',
+            undefined,
             expectedTotalChunks,
         );
         if (observedTotalChunks === null) {
@@ -4846,12 +4873,11 @@ export class Context {
         const chunkIdBatchSize = 512;
         for (let index = 0; index < expectedIds.length; index += chunkIdBatchSize) {
             const batch = expectedIds.slice(index, index + chunkIdBatchSize);
-            const rows = await this.vectorDatabase.query(
-                collectionName,
-                buildMilvusIdInFilter(batch),
-                ['id'],
-                batch.length
-            );
+            const rows = await this.vectorDatabase.queryDocuments(collectionName, {
+                filter: { kind: 'in', field: 'id', values: batch },
+                fields: ['id'],
+                limit: batch.length,
+            });
             for (const row of rows) {
                 const id = typeof row?.id === 'string' ? row.id : '';
                 if (id && id !== INDEX_COMPLETION_MARKER_DOC_ID) {
@@ -4885,12 +4911,10 @@ export class Context {
         const expectedIdsSet = new Set(expectedIds);
         // Repair/sync marker restoration relies on vector backends returning up to limit rows
         // for this un-ordered payload query; limit=N+1 lets us detect stale extra chunks.
-        const remotePayloadRows = await this.vectorDatabase.query(
-            collectionName,
-            'fileExtension != ".satori_meta"',
-            ['id'],
-            remotePayloadLimit
-        );
+        const remotePayloadRows = await this.vectorDatabase.queryDocuments(collectionName, {
+            fields: ['id'],
+            limit: remotePayloadLimit,
+        });
         const extraRemoteIds = new Set<string>();
         for (const row of remotePayloadRows) {
             const id = typeof row?.id === 'string' ? row.id : '';
@@ -4925,7 +4949,7 @@ export class Context {
             basis: 'snapshot_fingerprint_missing',
         };
         const snapshotFingerprintMatches = snapshotEvidence.status === 'verified'
-            && this.indexCompletionFingerprintsMatch(snapshotEvidence.fingerprint, currentFingerprint);
+            && indexFingerprintsEqual(snapshotEvidence.fingerprint, currentFingerprint);
         const proof: RepairProof = {
             collection: { status: 'not_checked' },
             snapshot: snapshotEvidence.status === 'missing'
@@ -5064,7 +5088,7 @@ export class Context {
         }
         if (markerResolution.status === 'matched') {
             const marker = markerResolution.marker;
-            if (!this.indexCompletionFingerprintsMatch(marker.fingerprint, currentFingerprint)) {
+            if (!indexFingerprintsEqual(marker.fingerprint, currentFingerprint)) {
                 proof.marker = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
                 proof.fingerprint = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
                 return withProof({
@@ -5206,12 +5230,11 @@ export class Context {
         const chunkIdBatchSize = 512;
         for (let index = 0; index < expectedIds.length; index += chunkIdBatchSize) {
             const batch = expectedIds.slice(index, index + chunkIdBatchSize);
-            const rows = await this.vectorDatabase.query(
-                selectedCollection,
-                buildMilvusIdInFilter(batch),
-                ['id'],
-                batch.length
-            );
+            const rows = await this.vectorDatabase.queryDocuments(selectedCollection, {
+                filter: { kind: 'in', field: 'id', values: batch },
+                fields: ['id'],
+                limit: batch.length,
+            });
             for (const row of rows) {
                 const id = typeof row?.id === 'string' ? row.id : '';
                 if (id && id !== INDEX_COMPLETION_MARKER_DOC_ID) {
@@ -5300,12 +5323,10 @@ export class Context {
             });
         }
         // Repair relies on query(filter, limit=N+1) returning N+1 rows when more than N payload rows exist.
-        const remotePayloadRows = await this.vectorDatabase.query(
-            selectedCollection,
-            'fileExtension != ".satori_meta"',
-            ['id'],
-            remotePayloadLimit
-        );
+        const remotePayloadRows = await this.vectorDatabase.queryDocuments(selectedCollection, {
+            fields: ['id'],
+            limit: remotePayloadLimit,
+        });
         const extraRemoteIds = new Set<string>();
         for (const row of remotePayloadRows) {
             const id = typeof row?.id === 'string' ? row.id : '';
@@ -5447,40 +5468,14 @@ export class Context {
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
 
         for (const filePath of [...filePaths].sort((a, b) => a.localeCompare(b))) {
-            const content = await this.readIndexableFileInsideRoot(filePath, codebasePath);
-            if (content === null) {
+            const analyzed = await this.analyzeIndexedFile(filePath, codebasePath);
+            if (analyzed === null) {
                 throw new Error(`Indexed source no longer satisfies the active policy: ${filePath}`);
             }
-            const language = this.getLanguageFromFilePath(filePath);
-            const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
-            if (!relativePath) {
-                throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
-            }
-
-            const fileHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
-            const analysis = await this.languageAnalyzer.analyze({ content, language, relativePath });
-            const chunks = chunksWithTrustedRelativePath(analysis.chunks, relativePath);
-            analysisByFile.set(relativePath, {
-                moduleBindings: analysis.moduleBindings,
-                callSites: analysis.callSites,
-            });
-            const fileSymbols = buildSymbolRecordsForFile({
-                relativePath,
-                language,
-                content,
-                fileHash,
-                extractorVersion: this.getSymbolExtractorVersion(),
-                extractedSymbols: analysis.symbols,
-                chunks,
-            });
-
-            symbolRecords.push(...fileSymbols);
-            symbolManifestFiles.push({
-                path: relativePath,
-                hash: fileHash,
-                language,
-                symbolCount: fileSymbols.length,
-            });
+            const symbolFacts = this.buildAnalyzedFileSymbolFacts(analyzed);
+            analysisByFile.set(analyzed.relativePath, symbolFacts.relationshipEvidence);
+            symbolRecords.push(...symbolFacts.symbolRecords);
+            symbolManifestFiles.push(symbolFacts.manifestFile);
         }
 
         return {
@@ -5822,7 +5817,6 @@ export class Context {
         assertMutationCurrent?: () => void,
         performance?: IndexingPipelineMetrics,
     ): Promise<void> {
-        const isHybrid = this.getIsHybrid();
         const indexedAt = new Date().toISOString();
         const chunks = chunkEntries.map(({ chunk }) => chunk);
         const projections = chunkEntries.map(({ projections: entryProjections }) => entryProjections);
@@ -5901,11 +5895,7 @@ export class Context {
             if (performance) performance.logicalVectorWriteRequests += 1;
             const writeStartedAt = Date.now();
             try {
-                if (isHybrid === true) {
-                    await this.vectorDatabase.insertHybrid(collectionName, documents);
-                } else {
-                    await this.vectorDatabase.insert(collectionName, documents);
-                }
+                await this.vectorDatabase.writeDocuments(collectionName, documents);
             } finally {
                 if (performance) {
                     performance.logicalVectorWriteDurationMs += Date.now() - writeStartedAt;

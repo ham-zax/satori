@@ -2,6 +2,8 @@ import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
     deleteCollectionWithVerification,
+    INDEX_COMPLETION_MARKER_DOC_ID,
+    inspectCompletionMarker,
     type VectorDatabase,
 } from "@zokizuan/satori-core";
 import path from "node:path";
@@ -126,23 +128,22 @@ export class VectorBackendMaintenance {
     }
 
     private parseCodebaseFromMetadata(metadataValue: unknown): string | null | undefined {
-        if (typeof metadataValue !== "string" || metadataValue.trim().length === 0) {
-            return undefined;
-        }
-
+        let metadata: unknown = metadataValue;
         try {
-            const metadata: unknown = JSON.parse(metadataValue);
-            const codebasePath = isRecord(metadata) ? metadata.codebasePath : undefined;
-            if (typeof codebasePath !== "string" || codebasePath.trim().length === 0) {
-                return undefined;
+            if (typeof metadataValue === "string") {
+                if (metadataValue.trim().length === 0) return undefined;
+                metadata = JSON.parse(metadataValue);
             }
-            const trimmedPath = codebasePath.trim();
-            return path.isAbsolute(trimmedPath)
-                ? this.host.canonicalizeCodebasePath(trimmedPath)
-                : null;
         } catch {
             return null;
         }
+        const codebasePath = isRecord(metadata) ? metadata.codebasePath : undefined;
+        if (typeof codebasePath !== "string" || codebasePath.length === 0) {
+            return undefined;
+        }
+        return path.isAbsolute(codebasePath)
+            ? this.host.canonicalizeCodebasePath(codebasePath)
+            : null;
     }
 
     private buildSnapshotCollectionOwnership(): {
@@ -179,7 +180,41 @@ export class VectorBackendMaintenance {
         const knownPath = byCollectionName.get(collectionName);
 
         try {
-            const results = await vectorDb.query(collectionName, "", ["metadata"], 1);
+            const marker = await vectorDb.getControl(
+                collectionName,
+                INDEX_COMPLETION_MARKER_DOC_ID,
+            );
+            if (marker) {
+                const inspected = inspectCompletionMarker(marker.metadata);
+                const ownership = inspected.status === "current"
+                    ? { kind: inspected.value.kind, codebasePath: inspected.value.codebasePath }
+                    : inspected.status === "requires_reindex"
+                        ? inspected.ownership
+                        : undefined;
+                if (
+                    marker.id !== INDEX_COMPLETION_MARKER_DOC_ID
+                    || !ownership
+                    || marker.kind !== ownership.kind
+                ) {
+                    // A malformed control cannot override the independently
+                    // derived snapshot mapping, but it is not safe payload evidence.
+                    return knownPath;
+                }
+                const markerPath = this.parseCodebaseFromMetadata(ownership);
+                if (markerPath === null || markerPath === undefined) return knownPath;
+                return knownPath && knownPath !== markerPath
+                    ? undefined
+                    : markerPath;
+            }
+        } catch {
+            // Payload rows remain a bounded fallback for legacy or partially available backends.
+        }
+
+        try {
+            const results = await vectorDb.queryDocuments(collectionName, {
+                fields: ["metadata"],
+                limit: 1,
+            });
             if (!Array.isArray(results) || results.length === 0) {
                 return knownPath;
             }

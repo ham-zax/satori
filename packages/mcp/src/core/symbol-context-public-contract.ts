@@ -329,19 +329,24 @@ export function resolveSymbolContextOperation(input: {
     }
 
     const requested = input.request.continuation;
-    if (!requested || !["source_range", "caller_page", "callee_page"].includes(requested.kind)) {
+    if (!requested) {
         return { kind: "unsupported_continuation" };
     }
-    const pageSize = requested.kind === "source_range"
-        ? undefined
-        : clamp(
-            requested.pageSize,
-            SYMBOL_CONTEXT_LIMITS.defaultEdgesPerDirection,
-            SYMBOL_CONTEXT_LIMITS.maxEdgesPerDirection,
-        );
-    const continuation: SymbolContextContinuationRequest = requested.kind === "source_range"
-        ? requested
-        : { ...requested, pageSize: pageSize as number };
+    let continuation: SymbolContextContinuationRequest;
+    if ("startLine" in requested) {
+        continuation = requested;
+    } else if ("cursor" in requested) {
+        continuation = {
+            ...requested,
+            pageSize: clamp(
+                requested.pageSize,
+                SYMBOL_CONTEXT_LIMITS.defaultEdgesPerDirection,
+                SYMBOL_CONTEXT_LIMITS.maxEdgesPerDirection,
+            ),
+        };
+    } else {
+        return { kind: "unsupported_continuation" };
+    }
     const include = continuationInclude(continuation);
     const effectiveBase: EffectiveSymbolContextRequest = {
         requestedMode: input.mode,

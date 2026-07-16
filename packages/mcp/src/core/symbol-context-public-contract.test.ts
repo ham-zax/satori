@@ -173,6 +173,35 @@ test("continuation resolution scopes evidence and does not echo its fingerprint 
     assert.equal(JSON.stringify(resolved.effectiveRequest).includes("canonical-cursor"), false);
 });
 
+test("source continuation resolution preserves its validated range", () => {
+    const request = exactSymbolOpenRequestSchema.parse({
+        contractVersion: 2,
+        symbolId: "sym_target",
+        continuation: {
+            kind: "source_range",
+            fingerprint: "sha256_source_fixture",
+            startLine: 12,
+            endLine: 24,
+        },
+    });
+    const resolved = resolveSymbolContextOperation({ mode: "plain", request });
+    assert.equal(resolved.kind, "continuation");
+    if (resolved.kind !== "continuation") return;
+    assert.deepEqual(resolved.include, {
+        source: true,
+        siblings: false,
+        callers: false,
+        callees: false,
+    });
+    assert.deepEqual(resolved.continuation, {
+        kind: "source_range",
+        fingerprint: "sha256_source_fixture",
+        startLine: 12,
+        endLine: 24,
+    });
+    assert.deepEqual(resolved.effectiveRequest.continuation, { kind: "source_range" });
+});
+
 test("public envelope reserves its prefix inside the caller-clamped total response budget", () => {
     const request = exactSymbolOpenRequestSchema.parse({
         contractVersion: 2,

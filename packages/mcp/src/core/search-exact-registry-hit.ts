@@ -25,6 +25,8 @@ import type {
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import { WARNING_CODES } from "./warnings.js";
+import { appendGroupedCandidateStage } from "./search-candidate-survival.js";
+import type { SearchCandidateSurvivalDebug } from "./search-types.js";
 
 export type BuildExactRegistryHitEnvelopeInput = {
     codebaseRoot: string;
@@ -46,6 +48,7 @@ export type BuildExactRegistryHitEnvelopeInput = {
     debugMode: SearchDebugMode;
     debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
     debugSearch?: NonNullable<SearchResponseHints["debugSearch"]>;
+    candidateSurvival?: SearchCandidateSurvivalDebug;
     now: () => number;
     previewMaxBytes: number;
     navigationHelpers: SearchNavigationHelpers;
@@ -120,6 +123,10 @@ export function buildExactRegistryHitEnvelope(
     });
     if (visibleGroupedResults.length === 0) {
         return undefined;
+    }
+    if (input.candidateSurvival) {
+        appendGroupedCandidateStage(input.candidateSurvival, "grouped", visibleGroupedResults);
+        appendGroupedCandidateStage(input.candidateSurvival, "disclosed", visibleGroupedResults);
     }
     const noiseMitigationHint = input.buildNoiseMitigationHint(
         visibleGroupedResults.map((result) => result.target.file),

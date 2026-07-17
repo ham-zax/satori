@@ -34,7 +34,11 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
     grouped: T[],
     limit: number,
     groupBy: SearchGroupBy,
-): { selected: T[]; summary: SearchDiversitySummary } {
+): {
+    selected: T[];
+    omitted: Array<{ group: T; reason: "file_diversity_cap" | "symbol_diversity_cap" | "visible_limit" }>;
+    summary: SearchDiversitySummary;
+} {
     const summary: SearchDiversitySummary = {
         maxPerFile: SEARCH_DIVERSITY_MAX_PER_FILE,
         maxPerSymbol: SEARCH_DIVERSITY_MAX_PER_SYMBOL,
@@ -86,5 +90,33 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
         applyPass(SEARCH_DIVERSITY_RELAXED_FILE_CAP);
     }
 
-    return { selected: selected.slice(0, limit), summary };
+    const finalSelected = selected.slice(0, limit);
+    const finalSelectedIds = new Set(finalSelected.map((group) => group.__groupId));
+    const finalFileCounts = new Map<string, number>();
+    const finalSymbolCounts = new Map<string, number>();
+    for (const group of finalSelected) {
+        finalFileCounts.set(group.target.file, (finalFileCounts.get(group.target.file) || 0) + 1);
+        const symbolKey = group.__symbolInstanceId || group.__symbolKey || group.target.symbolId;
+        if (typeof symbolKey === "string") {
+            finalSymbolCounts.set(symbolKey, (finalSymbolCounts.get(symbolKey) || 0) + 1);
+        }
+    }
+    const finalFileCap = summary.usedRelaxedCap
+        ? SEARCH_DIVERSITY_RELAXED_FILE_CAP
+        : SEARCH_DIVERSITY_MAX_PER_FILE;
+    const omitted = grouped
+        .filter((group) => !finalSelectedIds.has(group.__groupId))
+        .map((group) => {
+            const symbolKey = group.__symbolInstanceId || group.__symbolKey || group.target.symbolId;
+            const reason = (finalFileCounts.get(group.target.file) || 0) >= finalFileCap
+                ? "file_diversity_cap" as const
+                : groupBy === "symbol"
+                    && typeof symbolKey === "string"
+                    && (finalSymbolCounts.get(symbolKey) || 0) >= SEARCH_DIVERSITY_MAX_PER_SYMBOL
+                    ? "symbol_diversity_cap" as const
+                    : "visible_limit" as const;
+            return { group, reason };
+        });
+
+    return { selected: finalSelected, omitted, summary };
 }

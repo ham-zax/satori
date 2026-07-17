@@ -22,3 +22,38 @@ test('resolveSearchPolicy enables the existing bounded must retry rounds', () =>
         [64, 80, 80],
     );
 });
+
+test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from the product baseline', () => {
+    assert.deepEqual(
+        resolveSearchPolicy({
+            resultLimit: 3,
+            hasMustOperators: true,
+            diagnosticCandidateLimit: 160,
+        }),
+        {
+            candidateLimit: 32,
+            maxCandidateLimit: 80,
+            maxAttempts: 3,
+            diagnosticCandidateLimit: 160,
+        },
+    );
+    assert.deepEqual(resolveSearchPolicy({
+        resultLimit: 3,
+        hasMustOperators: false,
+        diagnosticCandidateLimit: 999,
+    }), {
+        candidateLimit: 32,
+        maxCandidateLimit: 80,
+        maxAttempts: 1,
+        diagnosticCandidateLimit: 160,
+    });
+    assert.equal(resolveSearchPolicy({
+        resultLimit: 10,
+        hasMustOperators: false,
+        diagnosticCandidateLimit: 5,
+    }).diagnosticCandidateLimit, 80);
+    assert.equal(resolveSearchPolicy({
+        resultLimit: 3,
+        hasMustOperators: false,
+    }).candidateLimit, 32);
+});

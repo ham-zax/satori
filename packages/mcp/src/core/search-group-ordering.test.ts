@@ -35,6 +35,7 @@ function group(partial: GroupInput): Sortable {
         preview: partial.preview || partial.displayLabel,
         navigation: { graph: "missing_symbol" },
         __groupId: partial.__groupId || `grp_${partial.file}_${partial.displayLabel}`,
+        __candidateIds: partial.__candidateIds || [`candidate_${partial.file}_${span.startLine}_${span.endLine}`],
         ...(partial.__symbolKey ? { __symbolKey: partial.__symbolKey } : {}),
         ...(partial.__symbolInstanceId ? { __symbolInstanceId: partial.__symbolInstanceId } : {}),
         __exactLexicalMatch: partial.__exactLexicalMatch || false,

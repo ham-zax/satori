@@ -49,9 +49,11 @@ import {
     type SearchNavigationState,
 } from "./search-navigation.js";
 import { WARNING_CODES } from "./warnings.js";
+import { searchCandidateIdentity } from "./search-candidate-survival.js";
 
 type SearchCandidateLike = {
     result: {
+        candidateId?: string;
         relativePath: string;
         language?: string | null;
         symbolLabel?: string | null;
@@ -59,6 +61,7 @@ type SearchCandidateLike = {
         content?: string | null;
         startLine?: number;
         endLine?: number;
+        ownerSymbolInstanceId?: string;
     };
     finalScore: number;
     pathCategory: PathCategory;
@@ -306,6 +309,7 @@ export function buildExactRegistryGroupResult(input: {
             input.graphUnavailableReasonOverride,
         ),
         __groupId: registrySymbol.symbolInstanceId,
+        __candidateIds: [`registry:${registrySymbol.symbolInstanceId}`],
         __symbolKey: registrySymbol.symbolKey,
         __symbolInstanceId: registrySymbol.symbolInstanceId,
         __exactLexicalMatch: true,
@@ -364,6 +368,7 @@ export function buildGroupedSymbolSearchResult(input: {
     semanticMatch: SearchCapabilityConfidence;
     spanValidation: SearchSpanValidation;
     ownershipValidated?: boolean;
+    candidateIds: string[];
 }): SearchGroupResult | undefined {
     const supportBoost = Math.min(Math.log1p(input.chunkCount) * 0.01, 0.03);
     const symbolScore = input.representative.finalScore + supportBoost;
@@ -460,6 +465,7 @@ export function buildGroupedSymbolSearchResult(input: {
             input.graphUnavailableReasonOverride,
         ),
         __groupId: groupId,
+        __candidateIds: [...input.candidateIds],
         ...(registrySymbol?.symbolKey ? { __symbolKey: registrySymbol.symbolKey } : {}),
         ...(registrySymbol?.symbolInstanceId ? { __symbolInstanceId: registrySymbol.symbolInstanceId } : {}),
         __exactLexicalMatch: input.representative.exactLexicalMatch,
@@ -512,6 +518,12 @@ export function buildVisibleGroupedSearchResults(input: {
     resolveOwner: (result: SearchResultLike) => SearchOwnerResolution;
 }): {
     visibleResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }>;
+    rankedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }>;
+    diversityOmissions: Array<{
+        group: SearchGroupResult & { __exactLexicalMatch: boolean };
+        reason: "file_diversity_cap" | "symbol_diversity_cap" | "visible_limit";
+    }>;
+    invalidCandidateIds: string[];
     warnings: string[];
     diversitySummary: SearchDiversitySummary;
     exactMatchPinningApplied: boolean;
@@ -519,6 +531,7 @@ export function buildVisibleGroupedSearchResults(input: {
 } {
     const groups = new Map<string, GroupAccumulator>();
     let invalidGroupCandidateOmitted = false;
+    const invalidCandidateIds: string[] = [];
     for (const candidate of input.scored) {
         const result = candidate.result as SearchResultLike;
         const normalizedFile = input.navigationHelpers.sanitizeIndexedRelativeFilePath(result.relativePath);
@@ -528,6 +541,7 @@ export function buildVisibleGroupedSearchResults(input: {
         };
         if (!normalizedFile || !isValidSearchSpan(candidateSpan) || !Number.isFinite(candidate.finalScore)) {
             invalidGroupCandidateOmitted = true;
+            invalidCandidateIds.push(searchCandidateIdentity(result).candidateId);
             continue;
         }
         const safeCandidate: SearchCandidateLike = normalizedFile === result.relativePath
@@ -660,6 +674,9 @@ export function buildVisibleGroupedSearchResults(input: {
                 ? (registrySymbolRepair.validated ? "verified" : registrySymbolRepair.attempted ? "unverified" : "not_applicable")
                 : "not_applicable",
             ownershipValidated: group.validatedOwnerChunkCount === group.chunks.length,
+            candidateIds: group.chunks.map((chunk) => searchCandidateIdentity(
+                chunk.result as SearchResultLike,
+            ).candidateId),
         });
         if (groupedResult) {
             groupedResults.push(groupedResult);
@@ -679,6 +696,9 @@ export function buildVisibleGroupedSearchResults(input: {
     const diversityApplied = applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
     return {
         visibleResults: diversityApplied.selected,
+        rankedResults: rankedGroupedResults,
+        diversityOmissions: diversityApplied.omitted,
+        invalidCandidateIds: Array.from(new Set(invalidCandidateIds)).sort(),
         warnings: Array.from(spanWarningCodes).sort(),
         diversitySummary: diversityApplied.summary,
         exactMatchPinningApplied,

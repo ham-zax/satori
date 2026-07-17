@@ -129,6 +129,71 @@ test('search_codebase rejects explicit debug false with debugMode', async () => 
     assert.match(response.content[0]?.text || '', /debug.*false.*debugMode|debugMode.*debug.*false/i);
 });
 
+test('search_codebase accepts bounded diagnostic candidate depth only with full diagnostics', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const calls: Array<Record<string, unknown>> = [];
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async (args: Record<string, unknown>) => {
+                calls.push(args);
+                return {
+                    content: [{ type: 'text' as const, text: JSON.stringify({
+                        formatVersion: 2,
+                        status: 'ok',
+                        path: '/repo',
+                        codebaseRoot: '/repo',
+                        query: 'auth',
+                        scope: 'runtime',
+                        groupBy: 'symbol',
+                        resultMode: 'grouped',
+                        limit: 3,
+                        freshnessDecision: { mode: 'skipped_recent' },
+                        freshnessSummary: {
+                            syncMode: 'skipped_recent',
+                            lastSyncAt: null,
+                            changedFileCount: 0,
+                            gitDirtyFilesConsidered: false,
+                            changedFilesBoostApplied: false,
+                            changedFilesBoostSkippedForLargeChangeSet: false,
+                        },
+                        results: [],
+                    }) }],
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    const accepted = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        limit: 3,
+        debugMode: 'full',
+        debugCandidateLimit: 160,
+    }, ctx);
+    const rejectedWithoutFull = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        debugMode: 'ranking',
+        debugCandidateLimit: 160,
+    }, ctx);
+    const rejectedAboveBound = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        debugMode: 'full',
+        debugCandidateLimit: 161,
+    }, ctx);
+
+    assert.equal(accepted.isError, undefined);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.debugCandidateLimit, 160);
+    assert.equal(calls[0]?.limit, 3);
+    assert.equal(rejectedWithoutFull.isError, true);
+    assert.match(rejectedWithoutFull.content[0]?.text || '', /debugCandidateLimit.*full/i);
+    assert.equal(rejectedAboveBound.isError, true);
+    assert.match(rejectedAboveBound.content[0]?.text || '', /160|less than or equal/i);
+});
+
 test('search_codebase acquires embedding context only for routes that require dense retrieval', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const requestedOperations: string[] = [];

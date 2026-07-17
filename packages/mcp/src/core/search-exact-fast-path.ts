@@ -2,11 +2,16 @@ import type { SymbolRegistry } from "@zokizuan/satori-core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
+    SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+    SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
+    SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+    SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_RRF_K,
     SEARCH_RERANK_TOP_K,
     SEARCH_RERANK_WEIGHT,
+    SEARCH_RRF_K,
     type SearchGroupBy,
     type SearchResultMode,
     type SearchScope,
@@ -31,6 +36,7 @@ import type { FreshnessDecision } from "./sync.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import { buildSearchDebugSummary, buildSearchGroupPreview } from "./search-response-helpers.js";
 import { WARNING_CODES } from "./warnings.js";
+import { createSearchCandidateSurvivalTrace } from "./search-candidate-survival.js";
 import type {
     RelationshipBackedCallGraphInput,
     RelationshipBackedCallGraphResult,
@@ -408,6 +414,13 @@ export async function runExactRegistryFastPath(
             weight: SEARCH_RERANK_WEIGHT,
             docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
             docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+            requestedResultLimit: input.limit,
+            selectionPolicy: {
+                minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
+                ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+                boundedCandidatesPerResult: SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
+                maxSupplementalChunksPerFamily: SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+            },
         }
         : undefined;
     const changedCode = input.debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
@@ -431,6 +444,9 @@ export async function runExactRegistryFastPath(
                 mode: input.queryPlan.retrievalMode,
                 scorePolicyKind: input.queryPlan.scorePolicyKind,
                 backendScoreKinds: [],
+            },
+            mcpFusion: {
+                rrfK: SEARCH_RRF_K,
             },
             providerWork: {
                 semanticSearchAttempts: 0,
@@ -483,8 +499,17 @@ export async function runExactRegistryFastPath(
             ...(changedCode ? { changedCode } : {}),
         }, input.freshnessSummary)
         : undefined;
+    const candidateSurvival = input.debugMode === "full"
+        ? createSearchCandidateSurvivalTrace()
+        : undefined;
     const debugSearch: NonNullable<SearchResponseHints["debugSearch"]> | undefined = input.debugMode === "full"
-        ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
+        ? {
+            ...rankingDebug!,
+            phaseTimingsMs: input.phaseTimings,
+            readiness: input.readiness,
+            ...(changedCode ? { changedCode } : {}),
+            ...(candidateSurvival ? { candidateSurvival } : {}),
+        }
         : input.debugMode === "ranking"
             ? rankingDebug
             : input.debugMode === "freshness"
@@ -508,6 +533,7 @@ export async function runExactRegistryFastPath(
         debugMode: input.debugMode,
         ...(debugSummary ? { debugSummary } : {}),
         ...(debugSearch ? { debugSearch } : {}),
+        ...(candidateSurvival ? { candidateSurvival } : {}),
         now: host.now,
         previewMaxBytes: input.previewMaxBytes,
         navigationHelpers: host.getSearchNavigationHelpers(),

@@ -335,6 +335,7 @@ test("a broad same-file chunk cannot publish a nested registry symbol target", (
         registryLoaded: true,
         navigationState: { relationshipReady: false },
         chunkCount: 1,
+        candidateIds: ["broad-service-chunk"],
         semanticMatch: "medium",
         spanValidation: "not_applicable",
         debugMode: 'full',

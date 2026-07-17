@@ -1,4 +1,5 @@
 import {
+    SEARCH_MAX_DIAGNOSTIC_CANDIDATES,
     SEARCH_MAX_CANDIDATES,
     SEARCH_MUST_RETRY_MULTIPLIER,
     SEARCH_MUST_RETRY_ROUNDS,
@@ -11,22 +12,33 @@ export type ResolvedSearchPolicy = Readonly<{
     candidateLimit: number;
     maxCandidateLimit: number;
     maxAttempts: number;
+    diagnosticCandidateLimit?: number;
 }>;
 
 export function resolveSearchPolicy(input: {
     resultLimit: number;
     hasMustOperators: boolean;
+    diagnosticCandidateLimit?: number;
 }): ResolvedSearchPolicy {
-    return {
-        candidateLimit: Math.max(
-            1,
-            Math.min(
-                SEARCH_MAX_CANDIDATES,
-                Math.max(input.resultLimit * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES),
-            ),
+    const maxCandidateLimit = SEARCH_MAX_CANDIDATES;
+    const candidateLimit = Math.max(
+        1,
+        Math.min(
+            maxCandidateLimit,
+            Math.max(input.resultLimit * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES),
         ),
-        maxCandidateLimit: SEARCH_MAX_CANDIDATES,
+    );
+    const diagnosticCandidateLimit = input.diagnosticCandidateLimit === undefined
+        ? undefined
+        : Math.max(
+            candidateLimit,
+            Math.min(SEARCH_MAX_DIAGNOSTIC_CANDIDATES, input.diagnosticCandidateLimit),
+        );
+    return {
+        candidateLimit,
+        maxCandidateLimit,
         maxAttempts: input.hasMustOperators ? 1 + SEARCH_MUST_RETRY_ROUNDS : 1,
+        ...(diagnosticCandidateLimit !== undefined ? { diagnosticCandidateLimit } : {}),
     };
 }
 

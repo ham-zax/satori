@@ -19,6 +19,7 @@ import {
     buildSearchQueryPlan,
     parseSearchOperators,
 } from "../core/search-query-planning.js";
+import { SEARCH_MAX_DIAGNOSTIC_CANDIDATES } from "../core/search-constants.js";
 
 interface SearchDiagnostics {
     resultsBeforeFilter: number;
@@ -228,12 +229,22 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     limit: z.number().int().positive().max(ctx.capabilities.getMaxSearchLimit()).default(ctx.capabilities.getDefaultSearchLimit()).optional().describe("Maximum groups (grouped mode) or chunks (raw mode)."),
     debug: z.boolean().optional().describe("Backward-compatible debug toggle. true selects full diagnostics when debugMode is omitted."),
     debugMode: z.enum(["summary", "ranking", "freshness", "full"]).optional().describe("Bounded diagnostic projection. May be used without debug; debug=true remains an alias for full."),
+    debugCandidateLimit: z.number().int().positive().max(SEARCH_MAX_DIAGNOSTIC_CANDIDATES).optional().describe("Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings."),
 }).superRefine((value, refinementContext) => {
     if (value.debug === false && value.debugMode !== undefined) {
         refinementContext.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["debugMode"],
             message: "debugMode cannot be combined with explicit debug=false.",
+        });
+    }
+    const fullDebugSelected = value.debugMode === "full"
+        || (value.debugMode === undefined && value.debug === true);
+    if (value.debugCandidateLimit !== undefined && !fullDebugSelected) {
+        refinementContext.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["debugCandidateLimit"],
+            message: "debugCandidateLimit requires debugMode=full or debug=true.",
         });
     }
 });

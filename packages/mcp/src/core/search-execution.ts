@@ -1,4 +1,8 @@
-import type { SemanticSearchResult, VoyageAIReranker } from "@zokizuan/satori-core";
+import type {
+    SemanticSearchExecutionResult,
+    SemanticSearchResult,
+    VoyageAIReranker,
+} from "@zokizuan/satori-core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
@@ -11,11 +15,21 @@ import {
     type SearchScope,
 } from "./search-constants.js";
 import type {
+    SearchCandidateSurvivalDebug,
     SearchDebugMode,
     SearchFreshnessSummary,
     SearchOperatorSummary,
     SearchProviderWorkDebugHint,
 } from "./search-types.js";
+import {
+    appendCoreCandidateTrace,
+    appendSearchCandidatePass,
+    appendSearchCandidateRemoval,
+    appendSearchCandidateStage,
+    createSearchCandidateSurvivalTrace,
+    SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE,
+    searchCandidateIdentity,
+} from "./search-candidate-survival.js";
 import { WARNING_CODES } from "./warnings.js";
 import {
     buildSearchPassWarning as buildSearchPassWarningHelper,
@@ -36,13 +50,14 @@ import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { VectorBackendDiagnostic } from "./backend-diagnostics.js";
 import type { FreshnessDecision } from "./sync.js";
 import {
+    resolveRerankFamilyKey,
     selectRerankCandidates,
     type RerankBudgetReason,
 } from "./search-rerank-policy.js";
 import {
     resolveNextSearchCandidateLimit,
-    resolveSearchPolicy,
 } from './search-policy.js';
+import type { ResolvedSearchPolicy } from './search-policy.js';
 
 type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
@@ -108,6 +123,8 @@ export type SearchCandidate = {
     exactMatchPinned: boolean;
     rerankAdjusted: boolean;
     retrievalPasses: string[];
+    rerankFamilyId?: string;
+    rerankDocumentUtf8Bytes?: number;
 };
 
 export type SearchFilterSummary = {
@@ -255,6 +272,7 @@ export type SearchExecutionOutcome =
         dirtyFilesNotFreshened: boolean;
         trackedLexicalDebug?: TrackedLexicalSearchDebug;
         candidateLimit: number;
+        diagnosticCandidateLimit?: number;
         attemptsUsed: number;
         searchWarnings: string[];
         searchWarningsSet: Set<string>;
@@ -280,6 +298,7 @@ export type SearchExecutionOutcome =
         rerankerBudgetReason?: RerankBudgetReason;
         semanticExpansion: SearchExpansionDecision & { attempted: boolean };
         providerWork: SearchProviderWorkDiagnostics;
+        candidateSurvival?: SearchCandidateSurvivalDebug;
     }
     | {
         kind: "vector_backend_unavailable";
@@ -297,7 +316,8 @@ export type SearchExecutionHost = {
         topK: number;
         retrievalMode: "dense" | "lexical" | "hybrid";
         scorePolicy: { kind: "topk_only" } | { kind: "dense_similarity_min"; min: number };
-    }) => Promise<SemanticSearchResult[]>;
+        diagnosticLexicalFallbackTerms?: string[];
+    }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: VoyageAIReranker | null;
     shouldForceSearchPassFailure: (passId: SearchPassId) => boolean;
     classifyVectorBackendError: (error: unknown) => VectorBackendDiagnostic | null;
@@ -320,6 +340,7 @@ export type SearchExecutionInput = {
     exactRegistryFallbackForTrackedLexical: boolean;
     freshnessMode: FreshnessDecision["mode"];
     observedChangedFilesState: ChangedFilesState;
+    retrievalPolicy: ResolvedSearchPolicy;
 };
 
 type RerankPhaseResult = {
@@ -344,6 +365,7 @@ async function rerankSearchCandidates(
     searchDiagnostics: SearchDiagnostics,
     scored: SearchCandidate[],
     initialExactMatchPinningApplied: boolean,
+    candidateSurvival?: SearchCandidateSurvivalDebug,
 ): Promise<RerankPhaseResult> {
     const rerankDecision = host.searchQuerySupport.resolveRerankDecision(input.scope, input.queryPlan);
     let exactMatchPinningApplied = initialExactMatchPinningApplied;
@@ -383,6 +405,9 @@ async function rerankSearchCandidates(
             rerankerCandidateBudget = selection.budget;
             rerankerBudgetReason = selection.budgetReason;
             const rerankSlice = selection.selected;
+            if (candidateSurvival) {
+                appendSearchCandidateStage(candidateSurvival, "reranker_input", rerankSlice);
+            }
             const rerankDocuments = rerankSlice.map((candidate) => (
                 host.searchQuerySupport.buildRerankDocument(candidate.result)
             ));
@@ -438,6 +463,13 @@ async function rerankSearchCandidates(
                 rerankSlice[idx].rerankAdjusted = true;
                 rerankerUpdatedCandidates++;
             }
+            if (candidateSurvival) {
+                const rerankerOutput = [...rerankRanks.entries()]
+                    .sort((left, right) => left[1] - right[1])
+                    .map(([originalIndex]) => rerankSlice[originalIndex])
+                    .filter((candidate): candidate is SearchCandidate => Boolean(candidate));
+                appendSearchCandidateStage(candidateSurvival, "reranker_output", rerankerOutput);
+            }
 
             exactMatchPinningApplied = sortSearchCandidatesHelper(
                 scored,
@@ -484,10 +516,10 @@ export async function runSearchExecution(
     searchDiagnostics: SearchDiagnostics,
 ): Promise<SearchExecutionOutcome> {
     const expandedQuery = `${input.semanticQuery}\nimplementation runtime source entrypoint`;
-    const retrievalPolicy = resolveSearchPolicy({
-        resultLimit: input.limit,
-        hasMustOperators: input.parsedOperators.must.length > 0,
-    });
+    const candidateSurvival = input.debugMode === "full"
+        ? createSearchCandidateSurvivalTrace()
+        : undefined;
+    const retrievalPolicy = input.retrievalPolicy;
     const maxAttempts = retrievalPolicy.maxAttempts;
     let candidateLimit = retrievalPolicy.candidateLimit;
     let trackedLexicalDebug: TrackedLexicalSearchDebug | undefined;
@@ -578,12 +610,21 @@ export async function runSearchExecution(
                 const scorePolicy = input.queryPlan.scorePolicyKind === "topk_only"
                     ? { kind: "topk_only" as const }
                     : { kind: "dense_similarity_min" as const, min: 0.3 };
+                const diagnosticLexicalFallbackTerms = retrievalPolicy.diagnosticCandidateLimit !== undefined
+                    ? host.searchQuerySupport
+                        .buildSearchQueryPlan(pass.query, input.parsedOperators)
+                        .lexicalTerms
+                        .map((term) => term.value)
+                    : [];
                 return host.semanticSearch({
                     codebasePath: input.effectiveRoot,
                     query: pass.query,
                     topK: candidateLimit,
                     retrievalMode: input.queryPlan.retrievalMode,
                     scorePolicy,
+                    ...(diagnosticLexicalFallbackTerms.length > 0
+                        ? { diagnosticLexicalFallbackTerms }
+                        : {}),
                 });
                 })),
             );
@@ -591,8 +632,10 @@ export async function runSearchExecution(
         const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
         const primarySettled = await runPasses([primaryDescriptor]);
         const primaryResult = primarySettled[0];
-        const primaryResults = primaryResult.status === "fulfilled" && Array.isArray(primaryResult.value)
-            ? primaryResult.value
+        const primaryResults = primaryResult.status === "fulfilled"
+            ? Array.isArray(primaryResult.value)
+                ? primaryResult.value
+                : primaryResult.value.results
             : [];
         const primaryScopedCandidateCount = new Set(primaryResults
             .filter((result) => {
@@ -628,16 +671,34 @@ export async function runSearchExecution(
             passSettled.push(...await runPasses([expandedDescriptor]));
         }
 
-        const successfulPasses: Array<{ id: string; results: SearchResultLike[] }> = [];
+        const successfulPasses: Array<{
+            id: string;
+            results: SearchResultLike[];
+            diagnosticCandidateArms?: SemanticSearchExecutionResult["diagnosticCandidateArms"];
+        }> = [];
         let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
         for (let idx = 0; idx < passSettled.length; idx++) {
             const passResult = passSettled[idx];
             const passDescriptor = passDescriptors[idx];
-            if (passResult.status === "fulfilled" && Array.isArray(passResult.value)) {
+            if (passResult.status === "fulfilled") {
+                const results = Array.isArray(passResult.value)
+                    ? passResult.value
+                    : passResult.value.results;
                 successfulPasses.push({
                     id: passDescriptor.id,
-                    results: passResult.value,
+                    results,
+                    ...(!Array.isArray(passResult.value) && passResult.value.diagnosticCandidateArms
+                        ? { diagnosticCandidateArms: passResult.value.diagnosticCandidateArms }
+                        : {}),
                 });
+                if (candidateSurvival && !Array.isArray(passResult.value)) {
+                    const tracePassId = `attempt:${attempt + 1}/${passDescriptor.id}`;
+                    appendCoreCandidateTrace(
+                        candidateSurvival,
+                        tracePassId,
+                        passResult.value.candidateTrace,
+                    );
+                }
                 passesUsed.add(passDescriptor.id);
                 continue;
             }
@@ -663,6 +724,38 @@ export async function runSearchExecution(
 
         const byChunkKey = new Map<string, SearchCandidate>();
         const attemptFilterSummary = buildEmptyFilterSummary();
+        const createCandidate = (
+            result: SearchResultLike,
+            fusionScore: number,
+            retrievalPasses: string[],
+        ): SearchCandidate => {
+            const backendScoreKind = typeof result.backendScoreKind === "string"
+                ? result.backendScoreKind as BackendScoreKind
+                : "unknown";
+            const backendScore = typeof result.backendScore === "number"
+                ? result.backendScore
+                : (typeof result.score === "number" ? result.score : 0);
+            return {
+                result,
+                baseScore: backendScore,
+                backendScore,
+                backendScoreKind,
+                backendScoreKindsSeen: [backendScoreKind],
+                fusionScore,
+                lexicalScore: 0,
+                finalScore: 0,
+                pathCategory: "neutral",
+                pathMultiplier: 1.0,
+                changedFilesMultiplier: 1.0,
+                agentFitMultiplier: 1,
+                agentFitReason: "neutral",
+                passesMatchedMust: false,
+                exactLexicalMatch: false,
+                exactMatchPinned: false,
+                rerankAdjusted: false,
+                retrievalPasses,
+            };
+        };
         const addPass = (results: SearchResultLike[], passId: string, passWeight = 1) => {
             for (let i = 0; i < results.length; i++) {
                 const result = results[i];
@@ -674,6 +767,14 @@ export async function runSearchExecution(
                     && normalizedObservedChangedFiles.has(normalizedResultPath)
                 ) {
                     suppressedDirtyPaths.add(normalizedResultPath);
+                    if (candidateSurvival) {
+                        appendSearchCandidateRemoval(candidateSurvival, {
+                            candidateId: searchCandidateIdentity(result).candidateId,
+                            afterStage: "mcp_filtered",
+                            reason: "dirty_source_suppressed",
+                            passId: `attempt:${attempt + 1}/${passId}`,
+                        });
+                    }
                     continue;
                 }
                 if (passId === "dirty_overlay") {
@@ -688,30 +789,7 @@ export async function runSearchExecution(
                         ? result.backendScoreKind as BackendScoreKind
                         : "unknown";
                     backendScoreKinds.add(backendScoreKind);
-                    byChunkKey.set(key, {
-                        result,
-                        baseScore: typeof result.backendScore === "number"
-                            ? result.backendScore
-                            : (typeof result.score === "number" ? result.score : 0),
-                        backendScore: typeof result.backendScore === "number"
-                            ? result.backendScore
-                            : (typeof result.score === "number" ? result.score : 0),
-                        backendScoreKind,
-                        backendScoreKindsSeen: [backendScoreKind],
-                        fusionScore: rrf,
-                        lexicalScore: 0,
-                        finalScore: 0,
-                        pathCategory: "neutral",
-                        pathMultiplier: 1.0,
-                        changedFilesMultiplier: 1.0,
-                        agentFitMultiplier: 1,
-                        agentFitReason: "neutral",
-                        passesMatchedMust: false,
-                        exactLexicalMatch: false,
-                        exactMatchPinned: false,
-                        rerankAdjusted: false,
-                        retrievalPasses: [passId],
-                    });
+                    byChunkKey.set(key, createCandidate(result, rrf, [passId]));
                 } else {
                     existing.fusionScore += rrf;
                     const nextScore = typeof result.backendScore === "number"
@@ -735,6 +813,14 @@ export async function runSearchExecution(
         };
 
         for (const pass of successfulPasses) {
+            if (candidateSurvival) {
+                appendSearchCandidatePass(
+                    candidateSurvival,
+                    pass.results,
+                    `attempt:${attempt + 1}/${pass.id}`,
+                    1,
+                );
+            }
             addPass(pass.results, pass.id, 1);
         }
 
@@ -750,6 +836,14 @@ export async function runSearchExecution(
             if (dirtyOverlayResults.length > 0) {
                 // This pass replaces every stale semantic pass for the dirty path,
                 // so retain equivalent fusion weight instead of penalizing freshness.
+                if (candidateSurvival) {
+                    appendSearchCandidatePass(
+                        candidateSurvival,
+                        dirtyOverlayResults,
+                        `attempt:${attempt + 1}/dirty_overlay`,
+                        successfulPasses.length,
+                    );
+                }
                 addPass(dirtyOverlayResults, "dirty_overlay", successfulPasses.length);
                 passesUsed.add("dirty_overlay");
             }
@@ -768,6 +862,14 @@ export async function runSearchExecution(
         );
         trackedLexicalDebug = trackedLexical.debug;
         if (trackedLexical.results.length > 0) {
+            if (candidateSurvival) {
+                appendSearchCandidatePass(
+                    candidateSurvival,
+                    trackedLexical.results,
+                    `attempt:${attempt + 1}/lexical_files`,
+                    1,
+                );
+            }
             addPass(trackedLexical.results, "lexical_files", 1);
             passesUsed.add("lexical_files");
         }
@@ -780,37 +882,73 @@ export async function runSearchExecution(
                 changedFiles: observedChangedFilesState.files,
             });
             if (livePathResults.length > 0) {
+                if (candidateSurvival) {
+                    appendSearchCandidatePass(
+                        candidateSurvival,
+                        livePathResults,
+                        `attempt:${attempt + 1}/live_path`,
+                        1,
+                    );
+                }
                 addPass(livePathResults, "live_path", 1);
                 passesUsed.add("live_path");
             }
         }
 
+        if (candidateSurvival) {
+            const fusedForTrace = [...byChunkKey.values()].sort((left, right) => {
+                const scoreOrder = right.fusionScore - left.fusionScore;
+                if (scoreOrder !== 0) return scoreOrder;
+                const leftId = searchCandidateIdentity(left.result).candidateId;
+                const rightId = searchCandidateIdentity(right.result).candidateId;
+                return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+            });
+            appendSearchCandidateStage(
+                candidateSurvival,
+                "mcp_fusion",
+                fusedForTrace,
+                `attempt:${attempt + 1}`,
+            );
+        }
+
         const beforeFilter = byChunkKey.size;
         const scoredAttempt: SearchCandidate[] = [];
-        for (const candidate of byChunkKey.values()) {
+        const evaluateCandidate = (
+            candidate: SearchCandidate,
+            summary: SearchFilterSummary,
+            recordRemoval: (
+                candidate: SearchCandidate,
+                reason: Parameters<typeof appendSearchCandidateRemoval>[1]["reason"],
+            ) => void,
+            trackBoostedCandidate: boolean,
+        ): boolean => {
             const category = classifyPathCategory(candidate.result.relativePath);
             if (!shouldIncludeCategoryInScope(input.scope, category)) {
-                attemptFilterSummary.removedByScope += 1;
-                continue;
+                summary.removedByScope += 1;
+                recordRemoval(candidate, "scope_filter");
+                return false;
             }
 
             const languageValue = typeof candidate.result.language === "string"
                 ? candidate.result.language.toLowerCase()
                 : "unknown";
             if (input.parsedOperators.lang.length > 0 && !input.parsedOperators.lang.includes(languageValue)) {
-                attemptFilterSummary.removedByLanguage += 1;
-                continue;
+                summary.removedByLanguage += 1;
+                recordRemoval(candidate, "language_filter");
+                return false;
             }
 
             const relativePath = String(candidate.result.relativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
             if (input.parsedOperators.path.length > 0 && !host.searchQuerySupport.pathMatchesAnyPattern(relativePath, input.parsedOperators.path)) {
-                attemptFilterSummary.removedByPathInclude += 1;
-                continue;
+                summary.removedByPathInclude += 1;
+                recordRemoval(candidate, "path_include_filter");
+                return false;
             }
 
             if (input.parsedOperators.excludePath.length > 0 && host.searchQuerySupport.pathMatchesAnyPattern(relativePath, input.parsedOperators.excludePath)) {
-                attemptFilterSummary.removedByPathExclude += 1;
-                continue;
+                summary.removedByPathExclude += 1;
+                recordRemoval(candidate, "path_exclude_filter");
+                return false;
             }
 
             const symbolLabel = typeof candidate.result.symbolLabel === "string" ? candidate.result.symbolLabel : "";
@@ -818,14 +956,16 @@ export async function runSearchExecution(
             const fields = [symbolLabel, relativePath, content];
             const matchesMust = input.parsedOperators.must.every((token) => host.searchQuerySupport.tokenMatchesAnyField(token, fields));
             if (!matchesMust) {
-                attemptFilterSummary.removedByMust += 1;
-                continue;
+                summary.removedByMust += 1;
+                recordRemoval(candidate, "must_filter");
+                return false;
             }
 
             const matchesExclude = input.parsedOperators.exclude.some((token) => host.searchQuerySupport.tokenMatchesAnyField(token, fields));
             if (matchesExclude) {
-                attemptFilterSummary.removedByExclude += 1;
-                continue;
+                summary.removedByExclude += 1;
+                recordRemoval(candidate, "exclude_filter");
+                return false;
             }
 
             const pathMultiplier = SCOPE_PATH_MULTIPLIERS[input.scope][category];
@@ -841,7 +981,7 @@ export async function runSearchExecution(
                 && changedFilesState.files.has(relativePath)
                 && shouldApplyChangedFilesBoost(category, input.queryPlan)) {
                 changedFilesMultiplier = SEARCH_CHANGED_FIRST_MULTIPLIER;
-                boostedCandidates += 1;
+                if (trackBoostedCandidate) boostedCandidates += 1;
             }
 
             candidate.pathCategory = category;
@@ -857,7 +997,24 @@ export async function runSearchExecution(
                 * pathMultiplier
                 * changedFilesMultiplier
                 * agentFit.multiplier;
-            scoredAttempt.push(candidate);
+            return true;
+        };
+        const recordFilterRemoval = (
+            candidate: SearchCandidate,
+            reason: Parameters<typeof appendSearchCandidateRemoval>[1]["reason"],
+        ): void => {
+            if (!candidateSurvival) return;
+            appendSearchCandidateRemoval(candidateSurvival, {
+                candidateId: searchCandidateIdentity(candidate.result).candidateId,
+                afterStage: "mcp_filtered",
+                reason,
+                passId: `attempt:${attempt + 1}`,
+            });
+        };
+        for (const candidate of byChunkKey.values()) {
+            if (evaluateCandidate(candidate, attemptFilterSummary, recordFilterRemoval, true)) {
+                scoredAttempt.push(candidate);
+            }
         }
 
         searchDiagnostics.resultsBeforeFilter = beforeFilter;
@@ -871,6 +1028,115 @@ export async function runSearchExecution(
             input.parsedOperators.must.length > 0,
         ) || exactMatchPinningApplied;
         rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
+        if (candidateSurvival) {
+            appendSearchCandidateStage(
+                candidateSurvival,
+                "mcp_filtered",
+                scored,
+                `attempt:${attempt + 1}`,
+            );
+
+            const diagnosticCandidates = new Map<string, SearchCandidate>();
+            for (const candidate of scoredAttempt) {
+                const candidateId = searchCandidateIdentity(candidate.result).candidateId;
+                candidate.rerankFamilyId = resolveRerankFamilyKey(candidate);
+                candidate.rerankDocumentUtf8Bytes = Buffer.byteLength(
+                    host.searchQuerySupport.buildRerankDocument(candidate.result),
+                    "utf8",
+                );
+                diagnosticCandidates.set(candidateId, candidate);
+            }
+            const diagnosticFilterSummary = buildEmptyFilterSummary();
+            const diagnosticPassId = `attempt:${attempt + 1}/diagnostic_replay`;
+            const recordDiagnosticRemoval = (
+                candidate: SearchCandidate,
+                reason: Parameters<typeof appendSearchCandidateRemoval>[1]["reason"],
+            ): void => {
+                appendSearchCandidateRemoval(candidateSurvival, {
+                    candidateId: searchCandidateIdentity(candidate.result).candidateId,
+                    afterStage: "mcp_filtered",
+                    reason,
+                    passId: diagnosticPassId,
+                });
+            };
+            for (const pass of successfulPasses) {
+                const arms = pass.diagnosticCandidateArms;
+                if (!arms) continue;
+                const rawCandidates = [
+                    ...(arms.dense ?? []),
+                    ...(arms.preciseLexical ?? []),
+                    ...(arms.fallbackLexical ?? []),
+                ];
+                for (const result of rawCandidates) {
+                    const candidate = createCandidate(result, 0, []);
+                    const candidateId = searchCandidateIdentity(result).candidateId;
+                    const existing = diagnosticCandidates.get(candidateId);
+                    if (existing) {
+                        if (
+                            existing.result.relativePath !== result.relativePath
+                            || existing.result.startLine !== result.startLine
+                            || existing.result.endLine !== result.endLine
+                            || existing.result.content !== result.content
+                        ) {
+                            throw new Error(
+                                `Diagnostic candidate '${candidateId}' has conflicting source payloads.`,
+                            );
+                        }
+                        continue;
+                    }
+                    const normalizedPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+                    if (dirtyFilesNotFreshened && normalizedObservedChangedFiles.has(normalizedPath)) {
+                        recordDiagnosticRemoval(candidate, "dirty_source_suppressed");
+                        continue;
+                    }
+                    if (!evaluateCandidate(
+                        candidate,
+                        diagnosticFilterSummary,
+                        recordDiagnosticRemoval,
+                        false,
+                    )) {
+                        continue;
+                    }
+                    candidate.rerankFamilyId = resolveRerankFamilyKey(candidate);
+                    candidate.rerankDocumentUtf8Bytes = Buffer.byteLength(
+                        host.searchQuerySupport.buildRerankDocument(candidate.result),
+                        "utf8",
+                    );
+                    diagnosticCandidates.set(candidateId, candidate);
+                }
+            }
+            const replaySignals = [...diagnosticCandidates.values()];
+            sortSearchCandidatesHelper(
+                replaySignals,
+                input.queryPlan.exactMatchPinningEnabled,
+                input.parsedOperators.must.length > 0,
+            );
+            const replayAttemptId = `attempt:${attempt + 1}`;
+            if (replaySignals.length === 0) {
+                appendSearchCandidateStage(
+                    candidateSurvival,
+                    "mcp_replay_signals",
+                    replaySignals,
+                    `${replayAttemptId}/replay:1`,
+                );
+            } else {
+                for (
+                    let offset = 0, chunk = 1;
+                    offset < replaySignals.length;
+                    offset += SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE, chunk += 1
+                ) {
+                    appendSearchCandidateStage(
+                        candidateSurvival,
+                        "mcp_replay_signals",
+                        replaySignals.slice(
+                            offset,
+                            offset + SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE,
+                        ),
+                        `${replayAttemptId}/replay:${chunk}`,
+                    );
+                }
+            }
+        }
 
         if (
             input.parsedOperators.must.length === 0
@@ -902,6 +1168,7 @@ export async function runSearchExecution(
         searchDiagnostics,
         scored,
         exactMatchPinningApplied,
+        candidateSurvival,
     );
     exactMatchPinningApplied = rerankPhase.exactMatchPinningApplied;
     if (rerankPhase.warning) searchWarnings.push(rerankPhase.warning);
@@ -946,6 +1213,9 @@ export async function runSearchExecution(
     if (mustApplied && !mustSatisfied) {
         searchWarnings.push("FILTER_MUST_UNSATISFIED");
     }
+    if (candidateSurvival) {
+        appendSearchCandidateStage(candidateSurvival, "mcp_ranked", scored);
+    }
 
     return {
         kind: "ok",
@@ -956,6 +1226,9 @@ export async function runSearchExecution(
         dirtyFilesNotFreshened,
         trackedLexicalDebug,
         candidateLimit,
+        ...(retrievalPolicy.diagnosticCandidateLimit !== undefined
+            ? { diagnosticCandidateLimit: retrievalPolicy.diagnosticCandidateLimit }
+            : {}),
         attemptsUsed,
         searchWarnings: Array.from(new Set(searchWarnings)).sort(),
         searchWarningsSet,
@@ -996,5 +1269,6 @@ export async function runSearchExecution(
             semanticExpansionAttempted: searchDiagnostics.semanticExpansionAttempted,
             semanticExpansionReason: searchDiagnostics.semanticExpansionReason,
         },
+        ...(candidateSurvival ? { candidateSurvival } : {}),
     };
 }

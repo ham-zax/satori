@@ -57,6 +57,7 @@ type SemanticSearchRequestView = {
     topK?: number;
     retrievalMode?: string;
     scorePolicy?: unknown;
+    diagnosticLexicalFallbackTerms?: string[];
 };
 type ParsedSemanticSearchInvocation = {
     root: string;
@@ -547,12 +548,75 @@ function createHandlers(
         sidecarReady?: boolean;
         sidecarNodes?: SidecarNodeFixture[];
         sidecarBuiltAt?: string;
+        respectSemanticTopK?: boolean;
+        diagnosticCandidateArms?: {
+            dense?: SearchFixtureResult[];
+            preciseLexical?: SearchFixtureResult[];
+            fallbackLexical?: SearchFixtureResult[];
+        };
+        enableVectorReceipt?: boolean;
     }
 ) {
+    const tracedSearchResults = searchResults.map((result, index) => ({
+        ...result,
+        candidateId: result.candidateId ?? `fixture-candidate-${index + 1}`,
+    }));
     const context = {
         getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
         semanticSearch: async () => searchResults,
-        semanticSearchInProvenGeneration: async () => searchResults,
+        semanticSearchInProvenGeneration: async (_receipt: unknown, request: { topK: number }) => (
+            options?.respectSemanticTopK ? searchResults.slice(0, request.topK) : searchResults
+        ),
+        semanticSearchWithCandidateTraceInProvenGeneration: async (
+            _receipt: unknown,
+            request: { topK: number },
+        ) => {
+            const selectedResults = options?.respectSemanticTopK
+                ? tracedSearchResults.slice(0, request.topK)
+                : tracedSearchResults;
+            const diagnosticCandidateArms = options?.diagnosticCandidateArms
+                ? Object.fromEntries(Object.entries(options.diagnosticCandidateArms).map(
+                    ([arm, results]) => [arm, results?.map((result, index) => ({
+                        ...result,
+                        candidateId: result.candidateId ?? `${arm}-fixture-${index + 1}`,
+                    }))],
+                ))
+                : undefined;
+            return {
+            results: selectedResults,
+            ...(diagnosticCandidateArms ? { diagnosticCandidateArms } : {}),
+            candidateTrace: {
+                schemaVersion: 'semantic_search_candidate_trace_v1',
+                maxEntriesPerStage: 160,
+                productCandidateLimit: request.topK,
+                queryEmbeddingSha256: 'a'.repeat(64),
+                lexicalRequests: [{
+                    role: 'primary',
+                    querySha256: 'b'.repeat(64),
+                    matchMode: 'all_terms',
+                }],
+                stages: [{
+                    stage: 'core_result',
+                    totalOccurrences: selectedResults.length,
+                    uniqueCandidates: selectedResults.length,
+                    omittedOccurrences: 0,
+                    candidates: selectedResults.map((result, index) => ({
+                        candidateId: result.candidateId,
+                        ownerId: JSON.stringify(['file', result.relativePath]),
+                        evidenceOccurrenceId: JSON.stringify([result.candidateId, 'core_result', index + 1]),
+                        relativePath: result.relativePath,
+                        startLine: result.startLine,
+                        endLine: result.endLine,
+                        language: result.language,
+                        rank: index + 1,
+                        score: result.score,
+                    })),
+                }],
+                removals: [],
+                omittedRemovals: 0,
+            },
+        };
+        },
     } as unknown as HandlerContext;
 
     const snapshotManager = {
@@ -625,6 +689,9 @@ function createHandlers(
         generationReceipt: {
             navigation: { navigationSealHash: 'a'.repeat(64) },
         },
+        ...(options?.enableVectorReceipt
+            ? { vectorReceipt: { collectionName: 'committed-v3' } as never }
+            : {}),
     });
     return handlers;
 }
@@ -747,6 +814,7 @@ function parseSemanticSearchInvocation(args: unknown[]): ParsedSemanticSearchInv
 function assertClosedDebugProjection(
     payload: DebugProjectionPayload,
     mode: 'none' | 'summary' | 'ranking' | 'freshness' | 'full',
+    expectCandidateSurvival: boolean | 'exact' = true,
 ): void {
     const hints = payload.hints;
     const resultDebug = payload.results?.[0]?.debug;
@@ -767,6 +835,7 @@ function assertClosedDebugProjection(
         assert.equal(hints.debugSearch.phaseTimingsMs, undefined);
         assert.equal(hints.debugSearch.readiness, undefined);
         assert.equal(hints.debugSearch.changedCode, undefined);
+        assert.equal(hints.debugSearch.candidateSurvival, undefined);
         assert.ok(resultDebug);
         assert.equal(resultDebug.freshness, undefined);
         assert.equal(resultDebug.graphEvidence, undefined);
@@ -777,12 +846,38 @@ function assertClosedDebugProjection(
         assert.ok(hints.debugSearch.readiness);
         assert.equal(hints.debugSearch.queryIntent, undefined);
         assert.equal(hints.debugSearch.rankingProvenance, undefined);
+        assert.equal(hints.debugSearch.candidateSurvival, undefined);
         assert.equal(resultDebug, undefined);
         return;
     }
     assert.ok(hints.debugSearch.phaseTimingsMs);
     assert.ok(hints.debugSearch.readiness);
     assert.ok(hints.debugSearch.queryIntent);
+    if (expectCandidateSurvival) {
+        assert.equal(hints.debugSearch.candidateSurvival?.schemaVersion, 'search_candidate_survival_v1');
+        const queryEmbeddings = hints.debugSearch.candidateSurvival?.queryEmbeddings ?? [];
+        assert.ok(Array.isArray(queryEmbeddings));
+        if (hints.debugSearch.candidateSurvival?.stages.some(
+            (stage) => stage.stage === 'raw_dense' || stage.stage === 'core_result',
+        )) {
+            assert.deepEqual(queryEmbeddings, [{
+                passId: 'attempt:1/primary',
+                sha256: 'a'.repeat(64),
+            }]);
+        }
+        if (expectCandidateSurvival === 'exact') {
+            assert.deepEqual(
+                hints.debugSearch.candidateSurvival?.stages.map((stage) => stage.stage),
+                ['grouped', 'disclosed'],
+            );
+        } else {
+            assert.ok(hints.debugSearch.candidateSurvival?.stages.some((stage) => stage.stage === 'mcp_fusion'));
+        }
+        assert.ok(hints.debugSearch.candidateSurvival?.stages.some((stage) => stage.stage === 'disclosed'));
+        assert.equal(JSON.stringify(hints.debugSearch.candidateSurvival).includes('return session.isValid'), false);
+    } else {
+        assert.equal(hints.debugSearch.candidateSurvival, undefined);
+    }
     assert.ok(resultDebug);
 }
 
@@ -812,7 +907,7 @@ test('handleSearchCode semantic path publishes closed debug projections for ever
             });
             const payload = JSON.parse(response.content[0]?.text || '{}');
             assert.equal(payload.status, 'ok');
-            assertClosedDebugProjection(payload, mode);
+                assertClosedDebugProjection(payload, mode);
         }
     });
 });
@@ -2183,6 +2278,15 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
             assert.equal(payload.hints?.debugSearch?.passesUsed?.includes('lexical_files'), false);
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'hit');
             assert.equal(payload.hints?.debugSearch?.exactRegistry?.matchedSymbolInstanceId, owner.symbolInstanceId);
+            const exactCandidateStages = payload.hints?.debugSearch?.candidateSurvival?.stages ?? [];
+            assert.deepEqual(exactCandidateStages.map((stage: { stage: string }) => stage.stage), [
+                'grouped',
+                'disclosed',
+            ]);
+            for (const stage of exactCandidateStages) {
+                assert.equal(stage.candidates[0]?.candidateId, `registry:${owner.symbolInstanceId}`);
+                assert.equal(stage.candidates[0]?.candidateIdKind, 'registry');
+            }
             assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
                 semanticSearchAttempts: 0,
                 embeddingCallsByCurrentContract: 0,
@@ -2216,7 +2320,7 @@ test('handleSearchCode exact registry fast path returns a grouped symbol despite
                 const modePayload = JSON.parse(modeResponse.content[0]?.text || '{}');
                 assert.equal(modePayload.status, 'ok');
                 assert.equal(modePayload.results[0].target.symbolId, owner.symbolInstanceId);
-                assertClosedDebugProjection(modePayload, mode);
+                assertClosedDebugProjection(modePayload, mode, mode === 'full' ? 'exact' : false);
             }
         });
     });
@@ -4483,7 +4587,7 @@ test('handleSearchCode parses operators from query prefix and applies determinis
                 symbolLabel: 'auth docs'
             },
             {
-                content: 'legacy fallback',
+                content: 'ERR_CODE_42 legacy fallback',
                 relativePath: 'src/legacy.ts',
                 startLine: 1,
                 endLine: 2,
@@ -4492,6 +4596,28 @@ test('handleSearchCode parses operators from query prefix and applies determinis
                 indexedAt: '2026-01-01T00:30:00.000Z',
                 symbolId: 'sym_legacy',
                 symbolLabel: 'function legacy()'
+            },
+            {
+                content: 'missing required token',
+                relativePath: 'src/missing.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.97,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_missing',
+                symbolLabel: 'function missing()'
+            },
+            {
+                content: 'ERR_CODE_42 in a test',
+                relativePath: 'test/auth.test.ts',
+                startLine: 1,
+                endLine: 2,
+                language: 'typescript',
+                score: 0.96,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: 'sym_test',
+                symbolLabel: 'test auth'
             }
         ]);
 
@@ -4516,6 +4642,12 @@ test('handleSearchCode parses operators from query prefix and applies determinis
         assert.equal(payload.hints?.debugSearch?.operatorSummary?.exclude?.[0], 'legacy');
         assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
         assert.equal(payload.hints?.debugSearch?.mustRetry?.finalCount, 1);
+        assert.deepEqual(
+            [...new Set(payload.hints?.debugSearch?.candidateSurvival?.removals.map(
+                (removal: { reason: string }) => removal.reason,
+            ))].sort(),
+            ['exclude_filter', 'language_filter', 'must_filter', 'path_include_filter'],
+        );
     });
 });
 
@@ -4629,6 +4761,49 @@ test('handleSearchCode does not emit FILTER_MUST_UNSATISFIED when must succeeds 
     });
 });
 
+test('full diagnostics preserve the product depth of every three-attempt must retry pass', async () => {
+    await withTempRepo(async (repoPath) => {
+        const results = Array.from({ length: 80 }, (_, index) => ({
+            content: index === 70 ? 'contains OMEGAQUASAR77' : `candidate ${index}`,
+            relativePath: `src/third-attempt-${index}.ts`,
+            startLine: 1,
+            endLine: 2,
+            language: 'typescript',
+            score: 0.99 - (index * 0.0001),
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: `sym_third_attempt_${index}`,
+            symbolLabel: `function thirdAttempt${index}()`,
+        }));
+        const handlers = createHandlers(repoPath, results, undefined, {
+            respectSemanticTopK: true,
+            enableVectorReceipt: true,
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'must:OMEGAQUASAR77 runtime',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 1,
+            debugMode: 'full',
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.attempts, 3);
+        assert.equal(payload.results[0]?.target?.file, 'src/third-attempt-70.ts');
+        assert.deepEqual(payload.hints?.debugSearch?.candidateSurvival?.corePasses, [
+            { passId: 'attempt:1/primary', productCandidateLimit: 32 },
+            { passId: 'attempt:1/expanded', productCandidateLimit: 32 },
+            { passId: 'attempt:2/primary', productCandidateLimit: 64 },
+            { passId: 'attempt:2/expanded', productCandidateLimit: 64 },
+            { passId: 'attempt:3/primary', productCandidateLimit: 80 },
+            { passId: 'attempt:3/expanded', productCandidateLimit: 80 },
+        ]);
+    });
+});
+
 test('handleSearchCode grouped representative prefers must-matching chunk within the same symbol group', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
@@ -4693,8 +4868,8 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
             {
                 content: 'export const b = 2;',
                 relativePath: 'src/one.ts',
-                startLine: 10,
-                endLine: 12,
+                startLine: 100,
+                endLine: 102,
                 language: 'typescript',
                 score: 0.98,
                 indexedAt: '2026-01-01T00:30:00.000Z',
@@ -4704,8 +4879,8 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
             {
                 content: 'export const c = 3;',
                 relativePath: 'src/one.ts',
-                startLine: 20,
-                endLine: 22,
+                startLine: 200,
+                endLine: 202,
                 language: 'typescript',
                 score: 0.97,
                 indexedAt: '2026-01-01T00:30:00.000Z',
@@ -4740,6 +4915,15 @@ test('handleSearchCode grouped diversity keeps multi-file coverage by default', 
         assert.equal(files.includes('src/two.ts'), true);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerFile, 2);
         assert.equal(payload.hints?.debugSearch?.diversitySummary?.maxPerSymbol, 1);
+        assert.ok(payload.hints?.debugSearch?.candidateSurvival?.stages.some(
+            (stage: { stage: string }) => stage.stage === 'grouped',
+        ));
+        assert.equal(payload.hints?.debugSearch?.candidateSurvival?.stages.find(
+            (stage: { stage: string }) => stage.stage === 'disclosed',
+        )?.uniqueCandidates, 3);
+        assert.ok(payload.hints?.debugSearch?.candidateSurvival?.removals.some(
+            (removal: { reason: string }) => removal.reason === 'file_diversity_cap',
+        ));
     });
 });
 
@@ -5995,6 +6179,12 @@ test('handleSearchCode reranks family-diverse candidates and exposes the adaptiv
         assert.equal(payload.hints?.debugSearch?.rerank?.candidatePoolCount, 5);
         assert.equal(payload.hints?.debugSearch?.rerank?.candidatesReranked, 5);
         assert.equal(payload.hints?.debugSearch?.rerank?.budgetReason, 'complete_family_pool');
+        assert.equal(payload.hints?.debugSearch?.candidateSurvival?.stages.find(
+            (stage: { stage: string }) => stage.stage === 'reranker_input',
+        )?.uniqueCandidates, 5);
+        assert.equal(payload.hints?.debugSearch?.candidateSurvival?.stages.find(
+            (stage: { stage: string }) => stage.stage === 'reranker_output',
+        )?.uniqueCandidates, 5);
         assert.deepEqual(payload.hints?.debugSearch?.providerWork, {
             semanticSearchAttempts: 1,
             embeddingCallsByCurrentContract: 1,
@@ -8501,6 +8691,209 @@ test('handleSearchCode builds explicit hybrid semantic search requests with topk
             assert.equal(call.request.retrievalMode, 'hybrid');
             assert.deepEqual(call.request.scorePolicy, { kind: 'topk_only' });
         }
+    });
+});
+
+test('handleSearchCode keeps diagnostic candidate depth separate from visible and reranker limits', async () => {
+    await withTempRepo(async (repoPath) => {
+        const calls: ParsedSemanticSearchInvocation[] = [];
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async (...args: unknown[]) => {
+                calls.push(parseSemanticSearchInvocation(args));
+                return [];
+            },
+        } as unknown as HandlerContext;
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        } as unknown as HandlerSnapshotManager;
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000,
+            }),
+        } as unknown as HandlerSyncManager;
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES_NO_RERANK,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+        );
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debugMode: 'full',
+            debugCandidateLimit: 160,
+        });
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.limit, 3);
+        assert.ok(calls.length > 0);
+        assert.deepEqual(calls.map((call) => call.topK), calls.map(() => 32));
+        assert.deepEqual(
+            calls.map((call) => call.request?.diagnosticLexicalFallbackTerms),
+            [
+                ['validate', 'session'],
+                ['validate', 'session', 'implementation', 'runtime', 'source', 'entrypoint'],
+            ],
+        );
+        assert.equal(payload.hints?.debugSearch?.candidateLimit, 32);
+        assert.equal(payload.hints?.debugSearch?.diagnosticCandidateLimit, 160);
+
+        const rejected = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 3,
+            debugMode: 'ranking',
+            debugCandidateLimit: 160,
+        });
+        assert.equal(rejected.isError, true);
+        assert.match(rejected.content[0]?.text || '', /debugCandidateLimit.*debugMode=full/i);
+    });
+});
+
+test('full candidate diagnostics preserve reranker input, grouping, and disclosed product results', async () => {
+    await withTempRepo(async (repoPath) => {
+        const rerankInputs: string[][] = [];
+        const reranker = {
+            rerank: async (_query: string, documents: string[]) => {
+                rerankInputs.push([...documents]);
+                return documents.map((_document, index) => ({
+                    index,
+                    relevanceScore: 1 - (index * 0.01),
+                }));
+            },
+        };
+        const handlers = createHandlers(repoPath, [
+            {
+                relativePath: 'src/session-owner.ts',
+                startLine: 1,
+                endLine: 8,
+                language: 'typescript',
+                content: 'export function validateSessionLifecycle() { return true; }',
+                score: 0.92,
+            },
+            {
+                relativePath: 'src/session-cache.ts',
+                startLine: 3,
+                endLine: 11,
+                language: 'typescript',
+                content: 'export function readSessionCache() { return true; }',
+                score: 0.81,
+            },
+            {
+                relativePath: 'src/session-status.ts',
+                startLine: 5,
+                endLine: 13,
+                language: 'typescript',
+                content: 'export function sessionStatus() { return true; }',
+                score: 0.74,
+            },
+        ], reranker as unknown as HandlerReranker);
+        const baseArgs = {
+            path: repoPath,
+            query: 'session lifecycle behavior',
+            scope: 'runtime' as const,
+            resultMode: 'grouped' as const,
+            groupBy: 'file' as const,
+            limit: 3,
+        };
+
+        const normal = JSON.parse((await handlers.handleSearchCode(baseArgs)).content[0]?.text || '{}');
+        const diagnostic = JSON.parse((await handlers.handleSearchCode({
+            ...baseArgs,
+            debugMode: 'full',
+            debugCandidateLimit: 160,
+        })).content[0]?.text || '{}');
+        const productProjection = (payload: { results?: Array<Record<string, unknown>> }) => (
+            (payload.results ?? []).map(({ debug: _debug, ...result }) => result)
+        );
+
+        assert.equal(rerankInputs.length, 2);
+        assert.deepEqual(rerankInputs[1], rerankInputs[0]);
+        assert.deepEqual(productProjection(diagnostic), productProjection(normal));
+        assert.equal(diagnostic.limit, normal.limit);
+        assert.deepEqual(diagnostic.recommendedNextAction, normal.recommendedNextAction);
+    });
+});
+
+test('full diagnostics chunk the complete multi-arm replay-signal union without truncation', async () => {
+    await withTempRepo(async (repoPath) => {
+        const buildArm = (arm: string) => Array.from({ length: 160 }, (_, index) => ({
+            candidateId: `${arm}-${index}`,
+            relativePath: `src/${arm}-${index}.ts`,
+            startLine: 1,
+            endLine: 2,
+            language: 'typescript',
+            content: `export const ${arm}${index} = true;`,
+            score: 1 - (index / 1000),
+        }));
+        const dense = buildArm('dense');
+        const handlers = createHandlers(repoPath, [dense[0]], undefined, {
+            enableVectorReceipt: true,
+            diagnosticCandidateArms: {
+                dense,
+                preciseLexical: buildArm('precise'),
+                fallbackLexical: buildArm('fallback'),
+            },
+        });
+
+        const payload = JSON.parse((await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'multi arm diagnostic union',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            limit: 1,
+            debugMode: 'full',
+            debugCandidateLimit: 160,
+        })).content[0]?.text || '{}');
+        const replayStages = payload.hints?.debugSearch?.candidateSurvival?.stages.filter(
+            (stage: { stage: string }) => stage.stage === 'mcp_replay_signals',
+        ) ?? [];
+
+        assert.equal(
+            replayStages.length,
+            3,
+            JSON.stringify(replayStages.map((stage: {
+                passId?: string;
+                totalOccurrences?: number;
+                omittedOccurrences?: number;
+                candidates?: unknown[];
+            }) => ({
+                passId: stage.passId,
+                totalOccurrences: stage.totalOccurrences,
+                omittedOccurrences: stage.omittedOccurrences,
+                candidates: stage.candidates?.length,
+            }))),
+        );
+        assert.deepEqual(replayStages.map((stage: { passId: string }) => stage.passId), [
+            'attempt:1/replay:1',
+            'attempt:1/replay:2',
+            'attempt:1/replay:3',
+        ]);
+        assert.deepEqual(
+            replayStages.map((stage: { candidates: unknown[] }) => stage.candidates.length),
+            [160, 160, 160],
+        );
+        assert.ok(replayStages.every((stage: { omittedOccurrences: number }) => (
+            stage.omittedOccurrences === 0
+        )));
     });
 });
 

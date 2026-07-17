@@ -190,9 +190,12 @@ export function collapseDuplicateDeclarationGroups<T extends SearchGroupResult>(
             continue;
         }
 
-        if (compareGroupedSearchResults(group, existing) < 0) {
-            deduped.set(key, group);
-        }
+        const candidateIds = Array.from(new Set([
+            ...existing.__candidateIds,
+            ...group.__candidateIds,
+        ])).sort();
+        const winner = compareGroupedSearchResults(group, existing) < 0 ? group : existing;
+        deduped.set(key, { ...winner, __candidateIds: candidateIds });
     }
 
     return Array.from(deduped.values());

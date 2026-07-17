@@ -2,11 +2,16 @@ import type { SymbolRegistry } from "@zokizuan/satori-core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
+    SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+    SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
+    SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+    SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_RRF_K,
     SEARCH_RERANK_TOP_K,
     SEARCH_RERANK_WEIGHT,
+    SEARCH_RRF_K,
     type SearchGroupBy,
     type SearchResultMode,
     type SearchScope,
@@ -35,6 +40,11 @@ import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { ExactRegistryLookupDebug } from "./search/exact-registry.js";
 import type { SearchExecutionOutcome } from "./search-execution.js";
+import {
+    appendGroupedCandidateStage,
+    appendSearchCandidateRemoval,
+    appendSearchCandidateStage,
+} from "./search-candidate-survival.js";
 
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>["reason"];
 type ChangedFilesState = { available: boolean; files: Set<string> };
@@ -143,6 +153,7 @@ export async function finalizeSearchResults(
         filterSummary,
         trackedLexicalDebug,
         candidateLimit,
+        diagnosticCandidateLimit,
         attemptsUsed,
         searchWarnings,
         passesUsed,
@@ -167,6 +178,7 @@ export async function finalizeSearchResults(
         rerankerBudgetReason,
         semanticExpansion,
         providerWork,
+        candidateSurvival,
     } = input.execution;
     let freshnessSummary = input.freshnessSummary;
 
@@ -197,6 +209,9 @@ export async function finalizeSearchResults(
                 scorePolicyKind: input.queryPlan.scorePolicyKind,
                 backendScoreKinds: Array.from(backendScoreKinds).sort(),
             },
+            mcpFusion: {
+                rrfK: SEARCH_RRF_K,
+            },
             providerWork: {
                 semanticSearchAttempts: providerWork.semanticSearchAttempts,
                 embeddingCallsByCurrentContract: providerWork.embeddingCallsByCurrentContract,
@@ -215,6 +230,7 @@ export async function finalizeSearchResults(
             ...(input.exactRegistryDebug ? { exactRegistry: input.exactRegistryDebug } : {}),
             passesUsed: Array.from(passesUsed).sort(),
             candidateLimit,
+            ...(diagnosticCandidateLimit !== undefined ? { diagnosticCandidateLimit } : {}),
             mustRetry: {
                 attempts: attemptsUsed,
                 maxAttempts: input.maxAttempts,
@@ -259,6 +275,13 @@ export async function finalizeSearchResults(
                 weight: SEARCH_RERANK_WEIGHT,
                 docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                 docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+                requestedResultLimit: input.limit,
+                selectionPolicy: {
+                    minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
+                    ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+                    boundedCandidatesPerResult: SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
+                    maxSupplementalChunksPerFamily: SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+                },
                 ...(rerankerFailurePhase ? { errorCode: "RERANKER_FAILED" as const, failurePhase: rerankerFailurePhase } : {}),
             },
         });
@@ -305,11 +328,24 @@ export async function finalizeSearchResults(
                 weight: SEARCH_RERANK_WEIGHT,
                 docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                 docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+                requestedResultLimit: input.limit,
+                selectionPolicy: {
+                    minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
+                    ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+                    boundedCandidatesPerResult: SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
+                    maxSupplementalChunksPerFamily: SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+                },
             },
             ...(changedCode ? { changedCode } : {}),
         }, freshnessSummary);
         const debugSearch = input.debugMode === "full"
-            ? { ...rankingDebug!, phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
+            ? {
+                ...rankingDebug!,
+                phaseTimingsMs: input.phaseTimings,
+                readiness: input.readiness,
+                ...(changedCode ? { changedCode } : {}),
+                ...(candidateSurvival ? { candidateSurvival } : {}),
+            }
             : input.debugMode === "ranking"
                 ? rankingDebug
                 : input.debugMode === "freshness"
@@ -322,6 +358,13 @@ export async function finalizeSearchResults(
     };
 
     if (input.resultMode === "raw") {
+        if (candidateSurvival) {
+            appendSearchCandidateStage(
+                candidateSurvival,
+                "disclosed",
+                scored.slice(0, input.limit),
+            );
+        }
         const rawResults = buildRawSearchResultsHelper({
             scored,
             limit: input.limit,
@@ -444,6 +487,27 @@ export async function finalizeSearchResults(
             ? host.resolveSearchOwnerFromRegistry(result as SearchResultLike, searchSymbolRegistry, input.queryPlan)
             : {},
     });
+
+    if (candidateSurvival) {
+        appendGroupedCandidateStage(candidateSurvival, "grouped", groupedSearchResults.rankedResults);
+        appendGroupedCandidateStage(candidateSurvival, "disclosed", groupedSearchResults.visibleResults);
+        for (const candidateId of groupedSearchResults.invalidCandidateIds) {
+            appendSearchCandidateRemoval(candidateSurvival, {
+                candidateId,
+                afterStage: "grouped",
+                reason: "invalid_group_target",
+            });
+        }
+        for (const omission of groupedSearchResults.diversityOmissions) {
+            for (const candidateId of omission.group.__candidateIds) {
+                appendSearchCandidateRemoval(candidateSurvival, {
+                    candidateId,
+                    afterStage: "disclosed",
+                    reason: omission.reason,
+                });
+            }
+        }
+    }
 
     if (groupedSearchResults.warnings.length > 0) {
         finalizedSearchWarnings = Array.from(new Set([

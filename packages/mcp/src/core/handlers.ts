@@ -173,6 +173,7 @@ import {
     type SearchFilterSummary,
 } from "./search-execution.js";
 import { resolveSearchPolicy } from './search-policy.js';
+import { SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE } from './search-candidate-survival.js';
 import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
 import { finalizeSearchResults } from "./search-result-finalization.js";
 import type {
@@ -318,6 +319,12 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
         receipt: ProvenVectorGenerationReceipt,
         request: import('@zokizuan/satori-core').SemanticSearchRequest,
     ) => Promise<import('@zokizuan/satori-core').SemanticSearchResult[]>;
+    semanticSearchWithCandidateTraceInProvenGeneration?: (
+        receipt: ProvenVectorGenerationReceipt,
+        request: import('@zokizuan/satori-core').SemanticSearchRequest,
+        maxEntriesPerStage: number,
+        options?: import('@zokizuan/satori-core').SemanticSearchCandidateTraceOptions,
+    ) => Promise<import('@zokizuan/satori-core').SemanticSearchExecutionResult>;
 };
 
 type PreparedReadObservationSnapshot = {
@@ -3098,6 +3105,9 @@ export class ToolHandlers {
             ? args.debugMode
             : 'none';
         const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit);
+        const rawDebugCandidateLimit = typeof args.debugCandidateLimit === 'number'
+            ? args.debugCandidateLimit
+            : Number(args.debugCandidateLimit);
         const input: SearchRequestInput = {
             path: typeof args.path === 'string' ? args.path : '',
             query: typeof args.query === 'string' ? args.query : '',
@@ -3107,6 +3117,9 @@ export class ToolHandlers {
             rankingMode,
             limit: Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 10,
             debugMode,
+            ...(Number.isFinite(rawDebugCandidateLimit)
+                ? { debugCandidateLimit: Math.max(1, rawDebugCandidateLimit) }
+                : {}),
         };
 
         const isScopeValid = input.scope === 'runtime' || input.scope === 'mixed' || input.scope === 'docs';
@@ -3114,7 +3127,12 @@ export class ToolHandlers {
         const isGroupByValid = input.groupBy === 'symbol' || input.groupBy === 'file';
         const isRankingModeValid = input.rankingMode === 'default' || input.rankingMode === 'auto_changed_first';
 
-        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+        const isDebugCandidateLimitValid = input.debugCandidateLimit === undefined
+            || (debugMode === 'full'
+                && Number.isInteger(input.debugCandidateLimit)
+                && input.debugCandidateLimit <= SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE);
+
+        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || !isDebugCandidateLimitValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
             const payload = this.buildInvalidSearchRequestPayload({
                 path: typeof input.path === 'string' ? input.path : '',
                 query: typeof input.query === 'string' ? input.query : '',
@@ -3122,7 +3140,7 @@ export class ToolHandlers {
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
                 limit: input.limit
-            }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first.');
+            }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first. debugCandidateLimit is an integer from 1 to 160 and requires debugMode=full.');
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true,
@@ -3375,6 +3393,9 @@ export class ToolHandlers {
             const retrievalPolicy = resolveSearchPolicy({
                 resultLimit: input.limit,
                 hasMustOperators: parsedOperators.must.length > 0,
+                ...(input.debugCandidateLimit !== undefined
+                    ? { diagnosticCandidateLimit: input.debugCandidateLimit }
+                    : {}),
             });
             const maxAttempts = retrievalPolicy.maxAttempts;
             const candidateLimit = retrievalPolicy.candidateLimit;
@@ -3557,11 +3578,35 @@ export class ToolHandlers {
                 exactRegistryFallbackForTrackedLexical,
                 freshnessMode: freshnessDecision.mode,
                 observedChangedFilesState: initialObservedChangedFilesState,
+                retrievalPolicy,
             }, {
                 searchQuerySupport: this.searchQuerySupport,
-                semanticSearch: (request) => vectorReceipt
-                    ? this.contextLifecycle().semanticSearchInProvenGeneration!(vectorReceipt, request)
-                    : this.context.semanticSearch(request),
+                semanticSearch: (request) => {
+                    const lifecycle = this.contextLifecycle();
+                    if (
+                        vectorReceipt
+                        && debugMode === 'full'
+                        && lifecycle.semanticSearchWithCandidateTraceInProvenGeneration
+                    ) {
+                        return lifecycle.semanticSearchWithCandidateTraceInProvenGeneration(
+                            vectorReceipt,
+                            request,
+                            SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE,
+                            retrievalPolicy.diagnosticCandidateLimit !== undefined
+                                ? {
+                                    captureLexicalFallback: true,
+                                    diagnosticCandidateLimit: retrievalPolicy.diagnosticCandidateLimit,
+                                    ...(request.diagnosticLexicalFallbackTerms
+                                        ? { lexicalFallbackTerms: request.diagnosticLexicalFallbackTerms }
+                                        : {}),
+                                }
+                                : {},
+                        );
+                    }
+                    return vectorReceipt
+                        ? lifecycle.semanticSearchInProvenGeneration!(vectorReceipt, request)
+                        : this.context.semanticSearch(request);
+                },
                 reranker: this.reranker,
                 shouldForceSearchPassFailure: (passId) => this.shouldForceSearchPassFailure(passId),
                 classifyVectorBackendError,

@@ -204,7 +204,103 @@ export interface SearchGroupResult extends SearchGroupedResultV2 {
     __groupId: string;
     __symbolKey?: string;
     __symbolInstanceId?: string;
+    __candidateIds: string[];
     __exactLexicalMatch: boolean;
+}
+
+export type SearchCandidateSurvivalStageName =
+    | "raw_dense"
+    | "raw_lexical"
+    | "raw_lexical_fallback"
+    | "core_fusion"
+    | "core_result"
+    | "mcp_pass"
+    | "mcp_fusion"
+    | "mcp_replay_signals"
+    | "mcp_filtered"
+    | "reranker_input"
+    | "reranker_output"
+    | "mcp_ranked"
+    | "grouped"
+    | "disclosed";
+
+export interface SearchCandidateSurvivalOccurrence {
+    candidateId: string;
+    candidateIdKind: "persisted" | "derived" | "registry";
+    ownerId: string;
+    evidenceOccurrenceId: string;
+    relativePath: string;
+    startLine: number | null;
+    endLine: number | null;
+    language: string;
+    rank: number;
+    score?: number;
+    passId?: string;
+    replay?: {
+        lexicalScore: number;
+        pathMultiplier: number;
+        changedFilesMultiplier: number;
+        agentFitMultiplier: number;
+        exactLexicalMatch: boolean;
+        passesMatchedMust: boolean;
+        rerankFamilyId: string;
+        rerankDocumentUtf8Bytes: number;
+        symbolLabel: string | null;
+        symbolId: string | null;
+    };
+}
+
+export interface SearchCandidateSurvivalStage {
+    stage: SearchCandidateSurvivalStageName;
+    passId?: string;
+    weight?: number;
+    totalOccurrences: number;
+    uniqueCandidates: number;
+    omittedOccurrences: number;
+    candidates: SearchCandidateSurvivalOccurrence[];
+}
+
+export interface SearchCandidateSurvivalRemoval {
+    candidateId: string;
+    afterStage: SearchCandidateSurvivalStageName;
+    passId?: string;
+    reason:
+        | "core_fusion_limit"
+        | "dirty_source_suppressed"
+        | "scope_filter"
+        | "language_filter"
+        | "path_include_filter"
+        | "path_exclude_filter"
+        | "must_filter"
+        | "exclude_filter"
+        | "invalid_group_target"
+        | "duplicate_group"
+        | "file_diversity_cap"
+        | "symbol_diversity_cap"
+        | "visible_limit";
+}
+
+export interface SearchCandidateSurvivalDebug {
+    schemaVersion: "search_candidate_survival_v1";
+    maxEntriesPerStage: number;
+    corePasses: Array<{
+        passId: string;
+        productCandidateLimit: number;
+    }>;
+    queryEmbeddings: Array<{
+        passId: string;
+        sha256: string | null;
+    }>;
+    lexicalRequests: Array<{
+        passId: string;
+        role: "primary" | "fallback_or";
+        querySha256: string;
+        matchMode: "all_terms" | "any_terms" | "provider_sparse" | "unspecified";
+        terms?: string[];
+    }>;
+    stages: SearchCandidateSurvivalStage[];
+    removals: SearchCandidateSurvivalRemoval[];
+    omittedRemovals: number;
 }
 
 export interface FingerprintCompatibilityDiagnostics {
@@ -298,7 +394,11 @@ export interface SearchDebugHint {
         scorePolicyKind: "dense_similarity_min" | "topk_only";
         backendScoreKinds: Array<"dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown">;
     };
+    mcpFusion: {
+        rrfK: number;
+    };
     providerWork: SearchProviderWorkDebugHint;
+    candidateSurvival?: SearchCandidateSurvivalDebug;
     semanticExpansion?: {
         attempted: boolean;
         expand: boolean;
@@ -363,6 +463,7 @@ export interface SearchDebugHint {
     readiness: SearchReadinessDebugHint;
     passesUsed: string[];
     candidateLimit: number;
+    diagnosticCandidateLimit?: number;
     mustRetry: {
         attempts: number;
         maxAttempts: number;
@@ -451,6 +552,13 @@ export interface SearchDebugHint {
         weight: number;
         docMaxLines: number;
         docMaxChars: number;
+        requestedResultLimit: number;
+        selectionPolicy: {
+            minAmbiguousCandidates: number;
+            ambiguousCandidatesPerResult: number;
+            boundedCandidatesPerResult: number;
+            maxSupplementalChunksPerFamily: number;
+        };
     };
 }
 
@@ -458,6 +566,7 @@ export type SearchRankingDebugHint = Pick<SearchDebugHint,
     | "route"
     | "queryIntent"
     | "retrieval"
+    | "mcpFusion"
     | "providerWork"
     | "semanticExpansion"
     | "rankingProvenance"
@@ -571,6 +680,7 @@ export interface SearchRequestInput {
     rankingMode: SearchRankingMode;
     limit: number;
     debugMode?: SearchDebugMode;
+    debugCandidateLimit?: number;
 }
 
 export interface FileOutlineInput {

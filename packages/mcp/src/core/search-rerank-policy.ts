@@ -1,5 +1,11 @@
 import type { SemanticSearchResult } from "@zokizuan/satori-core";
-import { SEARCH_RERANK_TOP_K } from "./search-constants.js";
+import {
+    SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
+    SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
+    SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
+    SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
+    SEARCH_RERANK_TOP_K,
+} from "./search-constants.js";
 
 export type RerankBudgetReason =
     | "complete_family_pool"
@@ -17,11 +23,6 @@ export type RerankCandidateSelection<T> = {
     budget: number;
     budgetReason: RerankBudgetReason;
 };
-
-const SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES = 12;
-const SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT = 4;
-const SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT = 2;
-const SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY = 2;
 
 function normalizedString(value: unknown): string | null {
     if (typeof value !== "string") return null;

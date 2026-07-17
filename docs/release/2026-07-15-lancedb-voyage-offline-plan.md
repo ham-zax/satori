@@ -2,7 +2,7 @@
 
 Date: 2026-07-15
 
-Status: implementation and qualification in progress
+Status: connected implementation and storage qualification complete; offline qualification pending
 
 As of 2026-07-17, Phases 0 through 3 are implemented in the worktree: Core owns
 versioned projections, embedding purpose is immutable per call, LanceDB provides
@@ -14,22 +14,21 @@ identity, local-only policy, model-digest validation, target-filesystem LanceDB
 proof against the installed MCP runtime, non-overwriting runtime upgrades,
 guarded installer writes, and profile-aware read-only doctor checks.
 
-Release qualification is not complete. The paired comparison contract and
-three-arm harness are implemented in `evals/vector-stacks/` and
-`scripts/satori-vector-stack-compare.mjs`. Provisional Milvus/Voyage and
-LanceDB/Voyage observations have been recorded, but their 24-task runs did not
-bind or hold one immutable Satori runtime and recorder artifact across both
-arms. They are useful diagnostic evidence, not yet an authoritative
-storage-only release comparison. LanceDB/Ollama live qualification also remains
-open. The offline profile therefore remains a qualification candidate rather
-than an advertised offline release.
+The paired comparison contract and three-arm harness are implemented in
+`evals/vector-stacks/` and `scripts/satori-vector-stack-compare.mjs`. The
+connected Milvus/Voyage and LanceDB/Voyage arms have now been rebuilt and
+recorded from one clean immutable runtime, and the fail-closed comparator accepts
+the pair as `storage_only`. The evidence establishes the storage-attributable
+latency and ranking deltas below; it does not establish that the backends rank
+interchangeably.
 
-For the connected-storage Milvus/LanceDB gate, only the authoritative
-qualification remains. That statement does not close the broader release:
-version-aware managed-runtime reuse still needs end-to-end upgrade verification,
-cleanup and retention of inactive runtime generations remain undefined,
-LanceDB/Ollama offline qualification remains pending, and bounded LanceDB
-optimization remains future maintenance outside publication authority.
+The broader release is not complete. LanceDB/Ollama live qualification remains
+open, so the offline profile remains a qualification candidate rather than an
+advertised offline release. Cleanup and bounded retention of inactive managed
+runtime generations remain undefined, and LanceDB optimization remains future
+maintenance outside publication authority. Exact-version runtime reuse,
+candidate preflight, failed-candidate cleanup, and launcher switching have
+focused end-to-end upgrade coverage.
 
 ## Decision
 
@@ -859,18 +858,43 @@ provider work. Dense-only correctness remains an adapter-level
 exhaustive-cosine gate because the public query planner exposes lexical and
 hybrid product routes rather than an invented dense-only request mode.
 
-The first live Milvus/Voyage and LanceDB/Voyage artifacts each contain 24 of 24
-successful observations with four cold and twenty warm readiness proofs. A
-comparison reports `changeKind: storage_only`, lexical agreement of 6/6, overall
-top-result agreement of 12/24, and a substantial LanceDB latency advantage.
-These values are internally consistent but are not accepted release evidence:
-the Milvus arm was recorded before the recorder and MCP runtime changed, while
-the LanceDB arm was recorded after those changes, and neither artifact binds the
-executed Satori runtime or recorder bytes. The current classification therefore
-describes the stored runtime fingerprints, not a causally isolated storage
-experiment.
+The first live Milvus/Voyage and LanceDB/Voyage artifacts each contained 24 of
+24 successful observations, but they were recorded from different executable
+and recorder bytes. They remain exploratory evidence only.
 
-#### Phase 4 qualification correction plan
+The corrected connected-storage run completed on 2026-07-17 at clean revision
+`6e4aaf792b2083756cb98a7290910c6fdda63249`. Both arms use immutable runtime
+manifest SHA-256
+`02afb9b7f587caf6f6b55f0dbd675426aba1ca9fc0d5d7b5534b43e7be39831c`
+and task-suite SHA-256
+`553855f560da9e267f68ce40ff94a22739ab4fe00e75b2954c120ea706af61d9`.
+Each arm was rebuilt once, followed by a zero-change synchronization that
+preserved its publication receipt, then recorded 24 of 24 successful
+observations with four cold and twenty warm readiness proofs. The evidence is
+archived under
+`~/satori-evidence/vector-stacks/6e4aaf792b2083756cb98a7290910c6fdda63249/`
+with separate input and output checksum manifests.
+
+The fail-closed comparator accepts `changeKind: storage_only`. The measured
+result agreement and latency are:
+
+| Metric | Milvus/Voyage | LanceDB/Voyage | LanceDB delta |
+| --- | ---: | ---: | ---: |
+| Cold latency p50 | 4,231 ms | 1,856 ms | -2,375 ms |
+| Cold latency p95 | 7,038 ms | 2,622 ms | -4,416 ms |
+| Warm latency p50 | 2,250 ms | 701 ms | -1,549 ms |
+| Warm latency p95 | 3,833 ms | 984 ms | -2,849 ms |
+| Expected owner in top three, cold | 2/4 | 1/4 | -1 task |
+
+Overall mean Jaccard is `0.507845`, exact-order agreement is 6/24, and top-result
+agreement is 12/24. Lexical retrieval is identical across all six observations;
+hybrid and configuration top results do not match, while structural top results
+match in all six observations despite lower set overlap. This qualifies the
+connected pair as a causal storage comparison and demonstrates a substantial
+local latency benefit. It also records a real ranking-quality difference that
+must remain visible in the default-backend product decision.
+
+#### Phase 4 qualification correction plan (completed for connected storage)
 
 1. Fix result-tuple identity in the recorder so path/symbol pairs cannot collide
    when either value contains `#`; use one canonical tuple encoding from capture
@@ -895,7 +919,8 @@ experiment.
    measurements outside temporary storage.
 7. Accept `storage_only` quality and latency conclusions only after the rerun
    passes the existing fail-closed comparator and the artifact identities match.
-   Keep the current artifacts labeled exploratory.
+   The corrected pair passes this boundary; only the superseded pair remains
+   exploratory.
 
 For this connected-storage qualification exercise only, the operator cost
 ceiling is five full reindex attempts:

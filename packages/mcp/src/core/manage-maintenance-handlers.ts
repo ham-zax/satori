@@ -18,6 +18,7 @@ import { SyncOperationError, type SyncManager } from "./sync.js";
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
+    TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
 import { WARNING_CODES, type WarningCode } from "./warnings.js";
 import {
@@ -62,6 +63,10 @@ type ManageMaintenanceHandlersHost = {
         TrackedRootReadiness,
         "prepareTrackedRootForRead" | "buildMissingLocalCollectionMessage"
     >;
+    seedPreparedRead?(
+        state: Extract<TrackedRootReadinessState, { state: "ready" }>,
+        preserveProofAge: boolean,
+    ): void;
     getSnapshotAllCodebases(): string[];
     getSnapshotIndexedCodebases(): string[];
     getSnapshotIndexingCodebases(): string[];
@@ -511,6 +516,12 @@ export class ManageMaintenanceHandlers {
             }
 
             const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
+            if (trackedRootState.state === "ready") {
+                // Status already paid for the same marker and generation proof that a
+                // following read needs. Publish it to the bounded prepared-read cache;
+                // the normal observation and receipt revalidation still guards reuse.
+                this.host.seedPreparedRead?.(trackedRootState, false);
+            }
             if (trackedRootState.state === "requires_reindex") {
                 const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
                     ? this.host.snapshotManager.getLatestOperation(trackedRootState.codebasePath)

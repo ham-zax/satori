@@ -776,6 +776,7 @@ export class ToolHandlers {
             snapshotManager: this.snapshotManager,
             syncManager: this.syncManager,
             trackedRootReadiness: this.trackedRootReadiness,
+            seedPreparedRead: this.seedPreparedRead.bind(this),
             getSnapshotAllCodebases: getSnapshotAllCodebasePaths,
             getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
             getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),

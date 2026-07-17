@@ -24,7 +24,7 @@ pnpm eval:useful-context:record -- \
   --dry-run
 ```
 
-`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. Current recordings emit observation version 3 with one cold sample and numbered warm samples. Version 3 preserves tagged file-versus-symbol result identities; archived versions 1 and 2 remain readable. Metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation sync statistics, and the completed operation generation and runtime fingerprint for every task. It also hashes the task file and each repeated `--authority-file` artifact. If an authority artifact inside the indexed repository appears in recorded candidates, the run fails instead of post-filtering it. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof.
+`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. Current recordings emit observation version 3 with one cold sample and numbered warm samples. Version 3 preserves tagged file-versus-symbol result identities; archived versions 1 and 2 remain readable. Metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation mode and applicable sync statistics, and the completed operation generation and runtime fingerprint for every task. It also hashes the task file and each repeated `--authority-file` artifact. If an authority artifact inside the indexed repository appears in recorded candidates, the run fails instead of post-filtering it. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof.
 
 ### Candidate capture and offline replay
 
@@ -47,6 +47,18 @@ pnpm eval:search-candidates:capture -- \
 pnpm eval:search-candidates:replay -- \
   --capture /absolute/evaluation/candidates.json \
   --out /absolute/evaluation/baseline-replay.json
+
+pnpm eval:search-candidates:replay -- \
+  --capture /absolute/evaluation/candidates.json \
+  --policy-file /absolute/evaluation/contender.json \
+  --task-prefix tuning \
+  --out /absolute/evaluation/contender-tuning-replay.json
+
+pnpm eval:search-candidates:score -- \
+  --capture /absolute/evaluation/candidates.json \
+  --replay /absolute/evaluation/contender-replay.json \
+  --split-prefix tuning \
+  --out /absolute/evaluation/contender-tuning-score.json
 ```
 
 The baseline replay recomputes both Core and MCP RRF stages and fails on any
@@ -58,19 +70,40 @@ indexing. Newly admitted candidates still require one separately budgeted live
 provider validation; the replay marks this requirement instead of inventing
 reranker outcomes.
 
+Use `--task-prefix tuning` for contender selection so replay does not process
+validation tasks before one policy digest is frozen. After selection, replay
+only that policy with `--task-prefix validation`. Exact-registry hits are
+recorded as policy-invariant routes: their ordered target identities and zero
+fusion/provider work must reproduce, while Core/MCP fusion is explicitly
+`not_applicable` rather than synthetically replayed.
+
+Scoring compares the frozen expected owner by both canonical relative path and
+captured symbol label. It reports local-survival rank, reranker admission,
+hard misses, exact-identifier regressions, and reranker candidate/byte deltas.
+Use `--split-prefix tuning` while choosing a finalist, then score only that
+frozen finalist with `--split-prefix validation`. A file-only match is not
+accepted as symbol-owner evidence.
+
 Candidate capture also requires mechanical measurement isolation: every timed
-search must report `skipped_recent`, its preparation sync must be zero-change,
-and its exact operation/publication proof must be unchanged after the samples.
+search must report `skipped_recent`, and its exact operation/publication proof
+must be unchanged after the samples. The default recorder preparation performs
+a proven zero-change sync. A frozen-publication experiment may instead use
+`--preparation-mode status-only` with `satori-published-index-runtime.mjs`; that
+wrapper disables freshness work for the exact measured runtime, and the capture
+rejects status-only records that contain synchronization evidence.
 Replay output records the replay script, canonical-JSON helper, Node identity,
 measured-runtime digest, and exact policy-source bytes so later results can be
 attributed to one executable replay artifact.
 
-Capture readiness is classified separately. `fusionReady` covers the raw arms
-and Core/MCP RRF stages used by fusion replay; `survivalReady` additionally
-requires the local-scoring signals and removal evidence used by contender
-admission; `agentReady` is reserved for the later reranker-output, grouping,
-and disclosure replay contract. `--require-replay-ready` currently requires
-complete fusion and survival authority, not the unfinished agent replay.
+Capture readiness is classified separately. `fusionReady` covers applicable
+raw arms and Core/MCP RRF stages; exact-registry hits carry a separate
+policy-invariant route contract. `survivalReady` additionally requires complete
+local-scoring signals used by contender admission. Truncated human-readable
+removal reasons are reported independently because absence from the complete
+replay-signal set already proves filtering. `agentReady` is reserved for later
+reranker-output, grouping, and disclosure replay. `--require-replay-ready`
+requires every task's route-specific replay authority, not unfinished agent
+replay.
 
 ## Grade
 

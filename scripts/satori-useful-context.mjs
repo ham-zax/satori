@@ -340,11 +340,12 @@ export function validateTaskSuite(value) {
 
 export function validateObservationSet(value, taskIds) {
     const set = requireRecord(value, "Observation set");
-    if (set.version !== 1 && set.version !== 2) {
-        throw new Error("Observation set version must be 1 or 2.");
+    if (set.version !== 1 && set.version !== 2 && set.version !== 3) {
+        throw new Error("Observation set version must be 1, 2, or 3.");
     }
     const version = set.version;
-    const warmSampleCount = version === 2
+    const hasSampleOrdinals = version >= 2;
+    const warmSampleCount = hasSampleOrdinals
         ? positiveIntegerForObservation(set.warmSampleCount, "Observation set warmSampleCount")
         : 1;
     if (!Array.isArray(set.observations)) {
@@ -362,7 +363,7 @@ export function validateObservationSet(value, taskIds) {
             throw new Error(`observations[${index}].phase must be cold or warm.`);
         }
         let sample;
-        if (version === 2) {
+        if (hasSampleOrdinals) {
             if (!Number.isSafeInteger(observation.sample) || observation.sample < 0) {
                 throw new Error(`observations[${index}].sample must be a non-negative safe integer.`);
             }
@@ -374,7 +375,7 @@ export function validateObservationSet(value, taskIds) {
                 throw new Error(`observations[${index}] warm sample must be from 1 through ${warmSampleCount}.`);
             }
         }
-        const observationKey = version === 2
+        const observationKey = hasSampleOrdinals
             ? `${taskId}:${observation.phase}:${sample}`
             : `${taskId}:${observation.phase}`;
         if (observedKeys.has(observationKey)) {
@@ -405,8 +406,31 @@ export function validateObservationSet(value, taskIds) {
         }
         const results = observation.results.map((rawResult, resultIndex) => {
             const result = requireRecord(rawResult, `observations[${index}].results[${resultIndex}]`);
+            const file = requireNonEmptyString(
+                result.file,
+                `observations[${index}].results[${resultIndex}].file`,
+            );
+            if (version === 3) {
+                if (result.kind === "file") {
+                    if (result.symbol !== undefined) {
+                        throw new Error(`observations[${index}].results[${resultIndex}] file identity must not contain symbol.`);
+                    }
+                    return { kind: "file", file };
+                }
+                if (result.kind === "symbol") {
+                    return {
+                        kind: "symbol",
+                        file,
+                        symbol: requireNonEmptyString(
+                            result.symbol,
+                            `observations[${index}].results[${resultIndex}].symbol`,
+                        ),
+                    };
+                }
+                throw new Error(`observations[${index}].results[${resultIndex}].kind must be file or symbol.`);
+            }
             return {
-                file: requireNonEmptyString(result.file, `observations[${index}].results[${resultIndex}].file`),
+                file,
                 symbol: requireNonEmptyString(result.symbol, `observations[${index}].results[${resultIndex}].symbol`),
             };
         });
@@ -421,8 +445,19 @@ export function validateObservationSet(value, taskIds) {
             response: jsonClone(observation.response),
             results,
             ...(readiness !== undefined ? { readiness } : {}),
-            ...(version === 2 ? { sample } : {}),
+            ...(hasSampleOrdinals ? { sample } : {}),
         };
+        if (observation.freshnessModes !== undefined) {
+            if (!Array.isArray(observation.freshnessModes)) {
+                throw new Error(`observations[${index}].freshnessModes must be an array.`);
+            }
+            normalized.freshnessModes = observation.freshnessModes.map((mode, modeIndex) => (
+                requireNonEmptyString(
+                    mode,
+                    `observations[${index}].freshnessModes[${modeIndex}]`,
+                )
+            ));
+        }
         for (const key of ["toolCalls", "callsToSource"]) {
             if (observation[key] !== undefined) {
                 if (observation[key] !== null
@@ -443,7 +478,7 @@ export function validateObservationSet(value, taskIds) {
         }
         const hasExplicitSourceEvidence = observation.sourceReached !== undefined
             || observation.sourceMode !== undefined;
-        if (version === 2 || hasExplicitSourceEvidence) {
+        if (hasSampleOrdinals || hasExplicitSourceEvidence) {
             if (typeof observation.sourceReached !== "boolean") {
                 throw new Error(`observations[${index}].sourceReached must be a boolean.`);
             }
@@ -478,7 +513,7 @@ export function validateObservationSet(value, taskIds) {
         return normalized;
     });
 
-    const expectedKeys = version === 2
+    const expectedKeys = hasSampleOrdinals
         ? [...expectedIds].flatMap((id) => [
             `${id}:cold:0`,
             ...Array.from({ length: warmSampleCount }, (_, index) => `${id}:warm:${index + 1}`),
@@ -490,7 +525,7 @@ export function validateObservationSet(value, taskIds) {
     }
     return {
         version,
-        ...(version === 2 ? { warmSampleCount } : {}),
+        ...(hasSampleOrdinals ? { warmSampleCount } : {}),
         observations,
     };
 }
@@ -525,7 +560,9 @@ export function nearestRankPercentile(values, percentile) {
 }
 
 function sameOwner(expected, actual) {
-    return actual?.file === expected.ownerFile && actual?.symbol === expected.ownerSymbol;
+    return actual?.kind !== "file"
+        && actual?.file === expected.ownerFile
+        && actual?.symbol === expected.ownerSymbol;
 }
 
 function extractRecoveredCallers(task, response) {
@@ -642,7 +679,7 @@ export function summarizeUsefulContext(taskSuite, observationSet) {
         observationSet,
         suite.tasks.map((task) => task.id)
     );
-    const grades = observations.version === 2
+    const grades = observations.version >= 2
         ? observations.observations.map((observation) => {
             const task = suite.tasks.find((candidate) => candidate.id === observation.taskId);
             return gradeObservation(task, observation);
@@ -687,7 +724,7 @@ export function summarizeUsefulContext(taskSuite, observationSet) {
         version: observations.version,
         taskCount: suite.tasks.length,
         observationCount: grades.length,
-        metrics: observations.version === 2
+        metrics: observations.version >= 2
             ? { cold: summarizeGrades(coldGrades), warm: summarizeGrades(warmGrades) }
             : {
                 ...legacyMetrics,

@@ -26,11 +26,17 @@ function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function resultIdentityKey(file, symbol) {
-    if (typeof file !== "string" || typeof symbol !== "string") {
-        throw new Error("Result identity requires string file and symbol values.");
+export function resultIdentityKey(identity) {
+    if (!isRecord(identity) || typeof identity.file !== "string" || !identity.file) {
+        throw new Error("Result identity requires a tagged file or symbol value.");
     }
-    return JSON.stringify([file, symbol]);
+    if (identity.kind === "file" && identity.symbol === undefined) {
+        return JSON.stringify(["file", identity.file]);
+    }
+    if (identity.kind === "symbol" && typeof identity.symbol === "string" && identity.symbol) {
+        return JSON.stringify(["symbol", identity.file, identity.symbol]);
+    }
+    throw new Error("Result identity requires a tagged file or symbol value.");
 }
 
 function positiveInteger(value, label) {
@@ -65,7 +71,8 @@ function usage() {
         "  --startup-timeout-ms <ms>",
         "  --call-timeout-ms <ms>",
         "  --close-timeout-ms <ms>",
-        "  --warm-samples <count>         Repeated warm samples in one MCP process (v2 output)",
+        "  --warm-samples <count>         Repeated warm samples in one MCP process (v3 output)",
+        "  --authority-file <path>        Repeat for every evaluation-authority artifact",
         "  --dry-run                       Validate and print the expanded task plan",
     ].join("\n");
 }
@@ -81,6 +88,7 @@ export function parseArgs(argv) {
         callTimeoutMs: DEFAULT_CALL_TIMEOUT_MS,
         closeTimeoutMs: DEFAULT_CLOSE_TIMEOUT_MS,
         warmSampleCount: 1,
+        authorityFiles: [],
         dryRun: false,
         help: false,
     };
@@ -113,6 +121,8 @@ export function parseArgs(argv) {
             options.closeTimeoutMs = positiveInteger(next(), arg);
         } else if (arg === "--warm-samples") {
             options.warmSampleCount = positiveInteger(next(), arg);
+        } else if (arg === "--authority-file") {
+            options.authorityFiles.push(path.resolve(next()));
         } else if (arg === "--dry-run") {
             options.dryRun = true;
         } else if (arg === "--help" || arg === "-h") {
@@ -486,6 +496,10 @@ function publicationIdentity(proof) {
     };
 }
 
+function compareContractStrings(left, right) {
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function assertSamePublishedGeneration(expected, actual, taskId) {
     if (canonicalJson(publicationIdentity(actual)) !== canonicalJson(publicationIdentity(expected))) {
         throw new Error(`Task '${taskId}' index publication changed between task runs.`);
@@ -497,6 +511,59 @@ function normalizeRelativeFile(value, repoRoot) {
     const relative = path.isAbsolute(value) ? path.relative(repoRoot, value) : value;
     if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
     return relative.split(path.sep).join("/");
+}
+
+export function resolveEvaluationAuthority(files, repoRoot) {
+    const byRealPath = new Map();
+    for (const file of files) {
+        const resolved = path.resolve(file);
+        const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+        if (!stat?.isFile()) {
+            throw new Error(`Evaluation-authority artifact '${resolved}' is not a file.`);
+        }
+        const realPath = fs.realpathSync(resolved);
+        if (byRealPath.has(realPath)) continue;
+        byRealPath.set(realPath, {
+            realPath,
+            repositoryRelativePath: normalizeRelativeFile(realPath, repoRoot),
+            ...sha256File(realPath),
+        });
+    }
+    const artifacts = [...byRealPath.values()]
+        .sort((left, right) => compareContractStrings(left.realPath, right.realPath));
+    return {
+        artifacts,
+        indexedPaths: new Set(artifacts
+            .map((artifact) => artifact.repositoryRelativePath)
+            .filter((value) => typeof value === "string" && value.length > 0)),
+    };
+}
+
+export function assertNoEvaluationAuthorityResults(identities, indexedPaths, taskId) {
+    const contaminated = [...new Set(identities
+        .map((identity) => identity.file)
+        .filter((file) => indexedPaths.has(file)))]
+        .sort();
+    if (contaminated.length > 0) {
+        throw new Error(
+            `Task '${taskId}' retrieved evaluation-authority artifact(s): ${contaminated.join(", ")}. `
+            + "Invalidate the run and create a clean publication; post-retrieval filtering is forbidden.",
+        );
+    }
+}
+
+function candidateSurvivalAuthorityIdentities(payload, repoRoot) {
+    const stages = payload?.hints?.debugSearch?.candidateSurvival?.stages;
+    if (!Array.isArray(stages)) return [];
+    const identities = [];
+    for (const stage of stages) {
+        if (!Array.isArray(stage?.candidates)) continue;
+        for (const candidate of stage.candidates) {
+            const file = normalizeRelativeFile(candidate?.relativePath, repoRoot);
+            if (file) identities.push({ kind: "file", file });
+        }
+    }
+    return identities;
 }
 
 function escapeRegExp(value) {
@@ -518,7 +585,7 @@ function normalizeSymbol(value, expectedSymbol) {
     return identifiers.at(-1) || null;
 }
 
-function normalizeResultIdentities(payload, task, repoRoot) {
+export function normalizeResultIdentities(payload, task, repoRoot) {
     const candidates = [];
     if (Array.isArray(payload?.results)) candidates.push(...payload.results);
     if (Array.isArray(payload?.nodes)) candidates.push(...payload.nodes);
@@ -535,20 +602,27 @@ function normalizeResultIdentities(payload, task, repoRoot) {
             || target?.file,
             repoRoot,
         );
+        const explicitSymbol = candidate?.symbol
+            || target?.symbol
+            || candidate?.navigation?.callerSearchTerm
+            || candidate?.symbolName
+            || candidate?.name;
+        const displayLabel = candidate?.symbolLabel || candidate?.displayLabel;
         const symbol = normalizeSymbol({
             ...candidate,
-            symbol: candidate?.symbol
-                || target?.symbol
-                || candidate?.navigation?.callerSearchTerm,
-            symbolName: candidate?.symbolName,
-            name: candidate?.name || candidate?.navigation?.callerSearchTerm,
-            symbolLabel: candidate?.symbolLabel || candidate?.displayLabel,
+            symbol: explicitSymbol,
+            symbolLabel: typeof displayLabel === "string" && !/^file\s+/i.test(displayLabel.trim())
+                ? displayLabel
+                : undefined,
         }, task.expected.ownerSymbol);
-        if (!file || !symbol) continue;
-        const key = resultIdentityKey(file, symbol);
+        if (!file) continue;
+        const identity = symbol
+            ? { kind: "symbol", file, symbol }
+            : { kind: "file", file };
+        const key = resultIdentityKey(identity);
         if (seen.has(key)) continue;
         seen.add(key);
-        results.push({ file, symbol });
+        results.push(identity);
     }
     return results;
 }
@@ -572,7 +646,9 @@ function contextBytes(payload) {
 
 function isExpectedOwner(candidate, task, repoRoot) {
     const [identity] = normalizeResultIdentities({ results: [candidate] }, task, repoRoot);
-    return identity?.file === task.expected.ownerFile && identity.symbol === task.expected.ownerSymbol;
+    return identity?.kind === "symbol"
+        && identity.file === task.expected.ownerFile
+        && identity.symbol === task.expected.ownerSymbol;
 }
 
 function contextBytesThroughOwner(payload, task, repoRoot) {
@@ -828,7 +904,7 @@ async function prepareMeasurementState(session, task, repoRoot) {
     };
 }
 
-export async function recordPhase(session, task, phase, repoRoot, sample) {
+export async function recordPhase(session, task, phase, repoRoot, sample, evaluationAuthorityPaths = new Set()) {
     const startedAt = performance.now();
     let finalResult;
     let finalPayload;
@@ -841,6 +917,7 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
     let toolCalls = 0;
     let callsToSource = null;
     let sourceMode = null;
+    const freshnessModes = [];
     for (const invocation of task.workload.invocations) {
         toolCalls += 1;
         if (invocation.tool === "manage_index") {
@@ -862,6 +939,7 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
         });
         if (readinessDiagnostics) readiness.push(readinessDiagnostics);
         const freshnessMode = called.payload?.freshnessDecision?.mode;
+        if (typeof freshnessMode === "string") freshnessModes.push(freshnessMode);
         if (["synced", "reconciled_ignore_change", "coalesced"].includes(freshnessMode)) {
             throw new Error(`Task '${task.id}' measured call caused or joined sync freshness mode '${freshnessMode}'.`);
         }
@@ -885,8 +963,15 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
                 sourceMode = "search_preview";
             }
         }
-        for (const identity of normalizeResultIdentities(called.payload, task, repoRoot)) {
-            const key = resultIdentityKey(identity.file, identity.symbol);
+        const invocationIdentities = normalizeResultIdentities(called.payload, task, repoRoot);
+        const candidateStageIdentities = candidateSurvivalAuthorityIdentities(called.payload, repoRoot);
+        assertNoEvaluationAuthorityResults(
+            [...invocationIdentities, ...candidateStageIdentities],
+            evaluationAuthorityPaths,
+            task.id,
+        );
+        for (const identity of invocationIdentities) {
+            const key = resultIdentityKey(identity);
             if (!seen.has(key)) {
                 seen.add(key);
                 identities.push(identity);
@@ -907,6 +992,7 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
         sourceReached: callsToSource !== null,
         callsToSource,
         sourceMode,
+        freshnessModes,
         ...(readiness.length > 0 ? { readiness } : {}),
         ...(sample !== undefined ? { sample } : {}),
     };
@@ -938,12 +1024,23 @@ function cleanGitRevision(repoRoot) {
 export async function recordSuite(taskSuite, options) {
     const validated = validateTaskSuite(taskSuite);
     const repoRoot = fs.realpathSync(options.repoRoot);
+    const evaluationAuthority = resolveEvaluationAuthority([
+        ...(options.tasksFile ? [options.tasksFile] : []),
+        ...(options.authorityFiles || []),
+    ], repoRoot);
     const expanded = replaceRepoRoot(validated, repoRoot);
     for (const task of expanded.tasks) validateSetupProtocol(task);
     const warmSampleCount = options.warmSampleCount ?? 1;
-    const outputVersion = warmSampleCount > 1 ? 2 : 1;
+    const outputVersion = 3;
     if (options.dryRun) {
-        return { version: outputVersion, dryRun: true, repoRoot, warmSampleCount, tasks: expanded.tasks };
+        return {
+            version: outputVersion,
+            dryRun: true,
+            repoRoot,
+            warmSampleCount,
+            evaluationAuthority: evaluationAuthority.artifacts,
+            tasks: expanded.tasks,
+        };
     }
     const revision = cleanGitRevision(repoRoot);
     const runtimeIdentity = qualificationRuntimeIdentity(options);
@@ -971,7 +1068,8 @@ export async function recordSuite(taskSuite, options) {
                 task,
                 "cold",
                 repoRoot,
-                outputVersion === 2 ? 0 : undefined,
+                0,
+                evaluationAuthority.indexedPaths,
             )), generationReceipt });
             for (let sample = 1; sample <= warmSampleCount; sample += 1) {
                 observations.push({ ...(await recordPhase(
@@ -979,7 +1077,8 @@ export async function recordSuite(taskSuite, options) {
                     task,
                     "warm",
                     repoRoot,
-                    outputVersion === 2 ? sample : undefined,
+                    sample,
+                    evaluationAuthority.indexedPaths,
                 )), generationReceipt });
             }
             const finalStatus = (await callAndDecode(session, {
@@ -994,7 +1093,11 @@ export async function recordSuite(taskSuite, options) {
                 publication: extractPublicationProof(finalStatus, repoRoot),
             };
             assertSameIndexProof(prepared.indexProof, finalProof, task.id);
-            taskRuns.push({ taskId: task.id, ...prepared });
+            taskRuns.push({
+                taskId: task.id,
+                ...prepared,
+                finalIndexProof: finalProof,
+            });
         } finally {
             await session.close();
         }
@@ -1007,12 +1110,19 @@ export async function recordSuite(taskSuite, options) {
     if (canonicalJson(finalRuntimeIdentity) !== canonicalJson(runtimeIdentity)) {
         throw new Error("Satori runtime or recorder artifacts changed during recording; discard this run.");
     }
+    const finalEvaluationAuthority = resolveEvaluationAuthority([
+        ...(options.tasksFile ? [options.tasksFile] : []),
+        ...(options.authorityFiles || []),
+    ], repoRoot);
+    if (canonicalJson(finalEvaluationAuthority.artifacts) !== canonicalJson(evaluationAuthority.artifacts)) {
+        throw new Error("Evaluation-authority artifacts changed during recording; discard this run.");
+    }
     if (!armIndexProof) {
         throw new Error("No arm-level index generation proof was recorded.");
     }
     const recorded = {
         version: outputVersion,
-        ...(outputVersion === 2 ? { warmSampleCount } : {}),
+        warmSampleCount,
         metadata: {
             repoRoot,
             gitRevision: revision,
@@ -1020,6 +1130,7 @@ export async function recordSuite(taskSuite, options) {
             serverInfo,
             node: recorderNodeMetadata(),
             qualificationRuntime: runtimeIdentity,
+            evaluationAuthority: evaluationAuthority.artifacts,
             armIndexProof,
             taskRuns,
             warmSampleCount,

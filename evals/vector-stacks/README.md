@@ -30,8 +30,11 @@ different operation IDs and timestamps. A republished or changing generation
 invalidates the arm rather than being averaged into its measurements.
 
 The recorder inherits its environment. Supply credentials through the process
-environment, never through committed files or command arguments. Example after
-the selected arm has a completed index:
+environment, never through committed files or command arguments. The task file
+is automatically recorded as evaluation authority. Repeat `--authority-file`
+for every separate owner ledger, rubric, prompt, or judge fixture. An authority
+path returned by search invalidates the run; it is never post-filtered. Example
+after the selected arm has a completed index:
 
 ```sh
 node scripts/satori-useful-context-record.mjs \
@@ -56,11 +59,11 @@ pnpm eval:vector-stacks -- \
 ```
 
 The comparison fails closed when Git revision, task hash, Node identity, Satori
-server identity, sample shape, arm generation receipt, zero-change sync proof,
-or an arm's runtime fingerprint differs. It reports result overlap/order, cold
-and warm latency deltas, owner-quality metrics, actual retrieval-mode counts,
-and Satori logical provider operations. Logical operation counts are not
-transport-request or retry counts.
+server identity, evaluation-authority hashes, sample shape, arm generation
+receipt, zero-change sync proof, or an arm's runtime fingerprint differs. It
+reports result overlap/order, cold and warm latency deltas, owner-quality
+metrics, actual retrieval-mode counts, and Satori logical provider operations.
+Logical operation counts are not transport-request or retry counts.
 
 Dense-only correctness remains an adapter-level exhaustive-cosine gate because
 the public product planner intentionally routes supported user queries through

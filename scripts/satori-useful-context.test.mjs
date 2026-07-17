@@ -317,6 +317,40 @@ test("validateObservationSet accepts repeated v2 warm samples with stable ordina
     assert.deepEqual(normalized.observations.map((entry) => entry.sample), [0, 1, 2, 3]);
 });
 
+test("validateObservationSet v3 preserves tagged file and symbol identities", () => {
+    const observations = {
+        version: 3,
+        warmSampleCount: 1,
+        observations: [
+            baseObservation({
+                taskId: "a",
+                phase: "cold",
+                sample: 0,
+                results: [
+                    { kind: "file", file: "src/config.ts" },
+                    { kind: "symbol", file: "src/owner.ts", symbol: "handleOwner" },
+                ],
+            }),
+            baseObservation({
+                taskId: "a",
+                phase: "warm",
+                sample: 1,
+                results: [{ kind: "symbol", file: "src/owner.ts", symbol: "handleOwner" }],
+            }),
+        ],
+    };
+
+    const normalized = validateObservationSet(observations, ["a"]);
+    assert.equal(normalized.version, 3);
+    assert.deepEqual(normalized.observations[0].results, observations.observations[0].results);
+    assert.throws(() => validateObservationSet({
+        ...observations,
+        observations: observations.observations.map((entry, index) => index === 0
+            ? { ...entry, results: [{ kind: "file", file: "src/config.ts", symbol: "ts" }] }
+            : entry),
+    }, ["a"]), /file identity must not contain symbol/);
+});
+
 test("validateObservationSet rejects bad spans, non-finite numbers, and non-JSON response", () => {
     const taskIds = ["t-owner"];
     assert.throws(

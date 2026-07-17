@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { validateTaskSuite } from "./satori-useful-context.mjs";
+import { validateObservationSet, validateTaskSuite } from "./satori-useful-context.mjs";
 import {
     JsonRpcStdioSession,
     callAndDecode,
@@ -204,7 +204,8 @@ function addStaleRecoveryEvidence(task, cold, warm, syncProof) {
         && Number.isInteger(syncProof?.syncStats?.modified)
         && syncProof.syncStats.modified >= 1;
     const ownerRecovered = (observation) => observation.status === "ok"
-        && observation.results.some((result) => result.file === task.expected.ownerFile
+        && observation.results.some((result) => result.kind === "symbol"
+            && result.file === task.expected.ownerFile
             && result.symbol === task.expected.ownerSymbol);
     const recovered = staleDetected && ownerRecovered(cold) && ownerRecovered(warm);
     for (const observation of [cold, warm]) {
@@ -275,15 +276,16 @@ export async function recordFixtureSuite(rawSuite, options) {
                 indexProof = extractCompletedOperationProof(staleSyncProof, fixtureRoot, "sync");
                 preparationSyncStats = structuredClone(staleSyncProof.syncStats);
             }
-            const cold = await recordPhase(session, task, "cold", fixtureRoot);
+            const cold = await recordPhase(session, task, "cold", fixtureRoot, 0);
             if (task.queryClass === "dirty_owner") {
-                const ownerFound = cold.results.some((result) => result.file === task.expected.ownerFile
+                const ownerFound = cold.results.some((result) => result.kind === "symbol"
+                    && result.file === task.expected.ownerFile
                     && result.symbol === task.expected.ownerSymbol);
                 if (cold.status !== "ok" || !ownerFound || cold.response?.freshnessDecision?.mode !== "skipped_recent") {
                     throw new Error(`Task '${task.id}' did not prove bounded dirty-file overlay with freshnessDecision.mode='skipped_recent'.`);
                 }
             }
-            const warm = await recordPhase(session, task, "warm", fixtureRoot);
+            const warm = await recordPhase(session, task, "warm", fixtureRoot, 1);
             const finalStatus = (await callAndDecode(session, {
                 tool: "manage_index",
                 args: { action: "status", path: fixtureRoot },
@@ -335,8 +337,9 @@ export async function recordFixtureSuite(rawSuite, options) {
             throw new Error(messages.join("; "));
         }
     }
-    return {
-        version: 1,
+    const output = {
+        version: 3,
+        warmSampleCount: 1,
         metadata: {
             fixtureIsolated: true,
             taskSuiteSha256: hashTaskSuite(rawSuite),
@@ -346,6 +349,8 @@ export async function recordFixtureSuite(rawSuite, options) {
         },
         observations,
     };
+    validateObservationSet(output, validated.tasks.map((task) => task.id));
+    return output;
 }
 
 function containingCheckoutRoot(template) {

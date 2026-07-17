@@ -168,7 +168,8 @@ test("fixture recorder isolates mutations, records caller/dirty/stale evidence, 
         assert.equal(fs.readFileSync(path.join(template, "src", "owner.ts"), "utf8"), "export function fixtureOwner() { return 1; }\n");
 
         const output = JSON.parse(fs.readFileSync(outputFile, "utf8"));
-        assert.equal(output.version, 1);
+        assert.equal(output.version, 3);
+        assert.equal(output.warmSampleCount, 1);
         assert.equal(output.metadata.fixtureIsolated, true);
         assert.match(output.metadata.taskSuiteSha256, /^[0-9a-f]{64}$/);
         assert.deepEqual(output.metadata.serverInfo, { name: "fake", version: "1" });
@@ -177,10 +178,12 @@ test("fixture recorder isolates mutations, records caller/dirty/stale evidence, 
         assert.equal(output.observations.length, 6);
         for (const taskId of ["caller", "dirty", "stale"]) {
             assert.deepEqual(output.observations.filter((entry) => entry.taskId === taskId).map((entry) => entry.phase), ["cold", "warm"]);
+            assert.deepEqual(output.observations.filter((entry) => entry.taskId === taskId).map((entry) => entry.sample), [0, 1]);
         }
         const stale = output.observations.find((entry) => entry.taskId === "stale" && entry.phase === "cold");
         assert.equal(stale.staleIndexDetected, true);
         assert.equal(stale.recoverySucceeded, true);
+        assert.ok(stale.results.every((result) => result.kind === "symbol"));
 
         const calls = fs.readFileSync(logFile, "utf8").trim().split("\n").map(JSON.parse);
         const creates = calls.filter((entry) => entry.name === "manage_index" && entry.args.action === "create");

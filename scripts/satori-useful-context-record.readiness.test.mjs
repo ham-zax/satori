@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+    assertNoEvaluationAuthorityResults,
     assertMeasuredReadiness,
     extractReadinessDiagnostics,
+    normalizeResultIdentities,
     resultIdentityKey,
 } from "./satori-useful-context-record.mjs";
 
@@ -65,12 +67,41 @@ function warmReadiness(overrides = {}) {
 }
 
 test("result identity keys preserve path and symbol tuple boundaries", () => {
-    const pathContainsSeparator = resultIdentityKey("src/a#b.ts", "c");
-    const symbolContainsSeparator = resultIdentityKey("src/a.ts", "b#c");
+    const pathContainsSeparator = resultIdentityKey({ kind: "symbol", file: "src/a#b.ts", symbol: "c" });
+    const symbolContainsSeparator = resultIdentityKey({ kind: "symbol", file: "src/a.ts", symbol: "b#c" });
+    const fileIdentity = resultIdentityKey({ kind: "file", file: "src/a.ts" });
+    const symbolIdentity = resultIdentityKey({ kind: "symbol", file: "src/a.ts", symbol: "ts" });
 
     assert.notEqual(pathContainsSeparator, symbolContainsSeparator);
-    assert.equal(pathContainsSeparator, JSON.stringify(["src/a#b.ts", "c"]));
-    assert.throws(() => resultIdentityKey(null, "owner"), /requires string file and symbol/);
+    assert.notEqual(fileIdentity, symbolIdentity);
+    assert.equal(pathContainsSeparator, JSON.stringify(["symbol", "src/a#b.ts", "c"]));
+    assert.throws(() => resultIdentityKey({ kind: "symbol", file: "src/a.ts" }), /tagged file or symbol/);
+    assert.throws(
+        () => resultIdentityKey({ kind: "file", file: "src/a.ts", symbol: "ts" }),
+        /tagged file or symbol/,
+    );
+});
+
+test("file-level display labels remain file identities", () => {
+    const task = { expected: { ownerSymbol: "handleOwner" } };
+    assert.deepEqual(normalizeResultIdentities({
+        results: [{
+            target: { file: "src/config.ts", span: { startLine: 1, endLine: 4 } },
+            displayLabel: "file src/config.ts:1",
+        }],
+    }, task, "/repo"), [{ kind: "file", file: "src/config.ts" }]);
+
+    assert.deepEqual(normalizeResultIdentities({
+        results: [{ file: "src/owner.ts", symbolLabel: "function handleOwner()" }],
+    }, task, "/repo"), [{ kind: "symbol", file: "src/owner.ts", symbol: "handleOwner" }]);
+});
+
+test("evaluation-authority results fail closed without post-filtering", () => {
+    assert.throws(() => assertNoEvaluationAuthorityResults(
+        [{ kind: "file", file: "evals/tasks.json" }],
+        new Set(["evals/tasks.json"]),
+        "owner-task",
+    ), /retrieved evaluation-authority artifact.*create a clean publication/i);
 });
 
 test("extractReadinessDiagnostics accepts cold and warm proofs", () => {

@@ -51,6 +51,10 @@ function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function compareContractStrings(left, right) {
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function requireRecord(value, label) {
     if (!isRecord(value)) throw new Error(`${label} must be an object.`);
     return value;
@@ -75,6 +79,40 @@ function requireExactKeys(record, expectedKeys, label) {
     if (canonicalJson(Object.keys(record).sort()) !== canonicalJson([...expectedKeys].sort())) {
         throw new Error(`${label} must contain exactly ${expectedKeys.join(", ")}.`);
     }
+}
+
+function parseEvaluationAuthority(value, label) {
+    if (!Array.isArray(value) || value.length === 0) {
+        throw new Error(`${label} must be a non-empty array.`);
+    }
+    const artifacts = value.map((rawArtifact, index) => {
+        const artifactLabel = `${label}[${index}]`;
+        const artifact = requireRecord(rawArtifact, artifactLabel);
+        requireExactKeys(
+            artifact,
+            ["bytes", "realPath", "repositoryRelativePath", "sha256"],
+            artifactLabel,
+        );
+        if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 0) {
+            throw new Error(`${artifactLabel}.bytes must be a non-negative safe integer.`);
+        }
+        if (artifact.repositoryRelativePath !== null) {
+            requireString(artifact.repositoryRelativePath, `${artifactLabel}.repositoryRelativePath`);
+        }
+        return {
+            realPath: requireString(artifact.realPath, `${artifactLabel}.realPath`),
+            repositoryRelativePath: artifact.repositoryRelativePath,
+            bytes: artifact.bytes,
+            sha256: requireSha256(artifact.sha256, `${artifactLabel}.sha256`),
+        };
+    });
+    const canonicalOrder = [...artifacts].sort((left, right) => (
+        compareContractStrings(left.realPath, right.realPath)
+    ));
+    if (canonicalJson(artifacts) !== canonicalJson(canonicalOrder)) {
+        throw new Error(`${label} must use canonical real-path order.`);
+    }
+    return artifacts;
 }
 
 function parseQualificationRuntime(value, label) {
@@ -206,7 +244,9 @@ function observationKey(observation) {
 }
 
 function resultIdentities(observation) {
-    return observation.results.map((result) => JSON.stringify([result.file, result.symbol]));
+    return observation.results.map((result) => result.kind === "file"
+        ? JSON.stringify(["file", result.file])
+        : JSON.stringify(["symbol", result.file, result.symbol]));
 }
 
 function roundMetric(value) {
@@ -464,6 +504,16 @@ function normalizeArm(input, suite) {
         metadata.qualificationRuntime,
         `Arm '${input.id}' qualification runtime`,
     );
+    const evaluationAuthority = observations.version === 3
+        ? parseEvaluationAuthority(
+            metadata.evaluationAuthority,
+            `Arm '${input.id}' evaluation authority`,
+        ).map(({ repositoryRelativePath, bytes, sha256 }) => ({
+            repositoryRelativePath,
+            bytes,
+            sha256,
+        })).sort((left, right) => compareContractStrings(canonicalJson(left), canonicalJson(right)))
+        : null;
     const repoRoot = requireString(metadata.repoRoot, `Arm '${input.id}' repository root`);
     const authority = extractFingerprint(
         metadata,
@@ -491,6 +541,7 @@ function normalizeArm(input, suite) {
             node: structuredClone(node),
             serverInfo: structuredClone(serverInfo),
             qualificationRuntime,
+            evaluationAuthority,
             observationVersion: observations.version,
             warmSampleCount: observations.warmSampleCount ?? 1,
             generationReceipt: structuredClone(authority.generationReceipt),
@@ -509,7 +560,7 @@ function changeKind(left, right) {
 }
 
 function phaseLatency(report, phase) {
-    return report.version === 2
+    return report.version >= 2
         ? report.metrics[phase]?.latencyMs ?? null
         : report.metrics.latencyMs?.[phase] ?? null;
 }
@@ -579,7 +630,7 @@ export function compareVectorStacks(taskSuite, armInputs) {
                 throw new Error(`Arm '${arm.id}' has a different ${key}; paired comparison is invalid.`);
             }
         }
-        for (const key of ["node", "serverInfo", "qualificationRuntime"]) {
+        for (const key of ["node", "serverInfo", "qualificationRuntime", "evaluationAuthority"]) {
             if (canonicalJson(arm.corpus[key]) !== canonicalJson(baseline[key])) {
                 throw new Error(`Arm '${arm.id}' has a different ${key} identity; paired comparison is invalid.`);
             }
@@ -603,6 +654,7 @@ export function compareVectorStacks(taskSuite, armInputs) {
             node: baseline.node,
             serverInfo: baseline.serverInfo,
             qualificationRuntime: baseline.qualificationRuntime,
+            evaluationAuthority: baseline.evaluationAuthority,
         },
         arms: arms.map((arm) => ({
             id: arm.id,

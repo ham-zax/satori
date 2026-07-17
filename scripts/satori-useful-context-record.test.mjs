@@ -95,6 +95,8 @@ function writeFakeMcp(file, options = {}) {
     const dirtyFile = options.dirtyFile || null;
     const searchFreshnessMode = options.searchFreshnessMode || "skipped_recent";
     const driftAfterSearch = options.driftAfterSearch === true;
+    const authorityResultFile = options.authorityResultFile || null;
+    const authorityCandidateFile = options.authorityCandidateFile || null;
     fs.writeFileSync(file, `
 import fs from "node:fs";
 import readline from "node:readline";
@@ -103,6 +105,8 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const dirtyFile = ${JSON.stringify(dirtyFile)};
 const searchFreshnessMode = ${JSON.stringify(searchFreshnessMode)};
 const driftAfterSearch = ${JSON.stringify(driftAfterSearch)};
+const authorityResultFile = ${JSON.stringify(authorityResultFile)};
+const authorityCandidateFile = ${JSON.stringify(authorityCandidateFile)};
 let measuredSearchRan = false;
 const operation = () => ({
   id: measuredSearchRan && driftAfterSearch ? "op-drifted" : "op-prepared",
@@ -152,10 +156,19 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
               warmReceiptRevalidations: proofMode === "warm" ? 1 : 0,
               exactPayloadRecounts: proofMode === "cold" ? 1 : 0
             }
-          }
+          },
+          ...(authorityCandidateFile ? {
+            candidateSurvival: {
+              stages: [{
+                stage: "raw_dense",
+                candidates: [{ relativePath: authorityCandidateFile }]
+              }]
+            }
+          } : {})
         }
       },
       results: [
+        ...(authorityResultFile ? [{ file: authorityResultFile, displayLabel: \`file \${authorityResultFile}:1\` }] : []),
         { file: "src/first.ts", symbolLabel: "function firstCandidate()", preview: "first preview" },
         { file: "src/owner.ts", symbolLabel: "function handleOwner()", content: "return owner;" },
         { file: "src/after.ts", symbolLabel: "function afterCandidate()", content: "must not count" }
@@ -215,7 +228,8 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         assert.equal(run.status, 0, run.stderr);
 
         const output = JSON.parse(fs.readFileSync(outputFile, "utf8"));
-        assert.equal(output.version, 1);
+        assert.equal(output.version, 3);
+        assert.equal(output.warmSampleCount, 1);
         assert.equal(output.metadata.repoRoot, fs.realpathSync(repoRoot));
         assert.match(output.metadata.gitRevision, /^[0-9a-f]{40}$/);
         assert.match(output.metadata.taskSuiteSha256, /^[0-9a-f]{64}$/);
@@ -225,10 +239,24 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         assert.equal(output.metadata.node.arch, process.arch);
         assert.equal(output.metadata.qualificationRuntime.status, "bound");
         assert.match(output.metadata.qualificationRuntime.sha256, /^[0-9a-f]{64}$/);
+        assert.deepEqual(output.metadata.evaluationAuthority.map((entry) => ({
+            realPath: entry.realPath,
+            repositoryRelativePath: entry.repositoryRelativePath,
+        })), [{
+            realPath: fs.realpathSync(tasksFile),
+            repositoryRelativePath: null,
+        }]);
         assert.equal(output.metadata.taskRuns.length, 2);
         assert.deepEqual(output.metadata.taskRuns.map((entry) => entry.indexProof.generation), [7, 7]);
         assert.equal(output.metadata.taskRuns[0].indexProof.runtimeFingerprint.schemaVersion, "hybrid_v3");
+        assert.ok(output.metadata.taskRuns.every((entry) => (
+            JSON.stringify(entry.finalIndexProof) === JSON.stringify(entry.indexProof)
+        )));
         assert.equal(output.observations.length, 4);
+        assert.ok(output.observations.every((observation) => (
+            JSON.stringify(observation.freshnessModes) === JSON.stringify(["skipped_recent"])
+            || JSON.stringify(observation.freshnessModes) === JSON.stringify([])
+        )));
 
         const ownerCold = output.observations.find((entry) => entry.taskId === "find-owner" && entry.phase === "cold");
         const ownerWarm = output.observations.find((entry) => entry.taskId === "find-owner" && entry.phase === "warm");
@@ -238,9 +266,9 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         assert.notEqual(ownerCold.response.runtimeId, openCold.response.runtimeId);
         assert.equal(openCold.response.runtimeId, openWarm.response.runtimeId);
         assert.deepEqual(ownerCold.results, [
-            { file: "src/first.ts", symbol: "firstCandidate" },
-            { file: "src/owner.ts", symbol: "handleOwner" },
-            { file: "src/after.ts", symbol: "afterCandidate" },
+            { kind: "symbol", file: "src/first.ts", symbol: "firstCandidate" },
+            { kind: "symbol", file: "src/owner.ts", symbol: "handleOwner" },
+            { kind: "symbol", file: "src/after.ts", symbol: "afterCandidate" },
         ]);
         assert.equal(
             ownerCold.contextBytes,
@@ -270,7 +298,126 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
             "--json",
         ], { encoding: "utf8" });
         assert.equal(grade.status, 0, grade.stderr);
-        assert.equal(JSON.parse(grade.stdout).metrics.exactSymbolOpenSuccess.rate, 1);
+        const report = JSON.parse(grade.stdout);
+        assert.equal(report.metrics.cold.exactSymbolOpenSuccess.rate, 1);
+        assert.equal(report.metrics.warm.exactSymbolOpenSuccess.rate, 1);
+    } finally {
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+});
+
+test("recorder rejects an indexed evaluation-authority artifact without post-filtering", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-contamination-"));
+    try {
+        const repoRoot = path.join(temp, "repo");
+        const tasksFile = path.join(repoRoot, "evals/tasks.json");
+        const outputFile = path.join(temp, "observations.json");
+        const runtimeRoot = path.join(temp, "runtime");
+        const fakeMcp = path.join(runtimeRoot, "packages/mcp/dist/index.js");
+        initializeRepo(repoRoot);
+        fs.mkdirSync(path.dirname(tasksFile), { recursive: true });
+        writeJson(tasksFile, taskSuite(repoRoot));
+        spawnSync("git", ["add", "evals/tasks.json"], { cwd: repoRoot });
+        spawnSync("git", [
+            "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "-qm", "add evaluation authority",
+        ], { cwd: repoRoot });
+        fs.mkdirSync(path.dirname(fakeMcp), { recursive: true });
+        writeFakeMcp(fakeMcp, { authorityResultFile: "evals/tasks.json" });
+        commitRuntimeFixture(runtimeRoot);
+
+        const run = spawnSync(process.execPath, [
+            SCRIPT_PATH,
+            "--tasks", tasksFile,
+            "--repo", repoRoot,
+            "--out", outputFile,
+            "--command", process.execPath,
+            "--command-arg", fakeMcp,
+            "--startup-timeout-ms", "2000",
+            "--call-timeout-ms", "2000",
+            "--close-timeout-ms", "500",
+        ], { encoding: "utf8" });
+
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /retrieved evaluation-authority artifact.*evals\/tasks\.json/i);
+        assert.equal(fs.existsSync(outputFile), false);
+    } finally {
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+});
+
+test("recorder rejects evaluation authority present only in a diagnostic candidate stage", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-stage-contamination-"));
+    try {
+        const repoRoot = path.join(temp, "repo");
+        const tasksFile = path.join(repoRoot, "evals/tasks.json");
+        const outputFile = path.join(temp, "observations.json");
+        const runtimeRoot = path.join(temp, "runtime");
+        const fakeMcp = path.join(runtimeRoot, "packages/mcp/dist/index.js");
+        initializeRepo(repoRoot);
+        fs.mkdirSync(path.dirname(tasksFile), { recursive: true });
+        writeJson(tasksFile, taskSuite(repoRoot));
+        spawnSync("git", ["add", "evals/tasks.json"], { cwd: repoRoot });
+        spawnSync("git", [
+            "-c", "user.name=Test", "-c", "user.email=test@example.com",
+            "commit", "-qm", "add evaluation authority",
+        ], { cwd: repoRoot });
+        fs.mkdirSync(path.dirname(fakeMcp), { recursive: true });
+        writeFakeMcp(fakeMcp, { authorityCandidateFile: "evals/tasks.json" });
+        commitRuntimeFixture(runtimeRoot);
+
+        const run = spawnSync(process.execPath, [
+            SCRIPT_PATH,
+            "--tasks", tasksFile,
+            "--repo", repoRoot,
+            "--out", outputFile,
+            "--command", process.execPath,
+            "--command-arg", fakeMcp,
+            "--startup-timeout-ms", "2000",
+            "--call-timeout-ms", "2000",
+            "--close-timeout-ms", "500",
+        ], { encoding: "utf8" });
+
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /retrieved evaluation-authority artifact.*evals\/tasks\.json/i);
+        assert.equal(fs.existsSync(outputFile), false);
+    } finally {
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+});
+
+test("recorder rejects evaluation-authority drift during measurement", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-authority-drift-"));
+    try {
+        const repoRoot = path.join(temp, "repo");
+        const tasksFile = path.join(temp, "tasks.json");
+        const rubricFile = path.join(temp, "rubric.json");
+        const outputFile = path.join(temp, "observations.json");
+        const runtimeRoot = path.join(temp, "runtime");
+        const fakeMcp = path.join(runtimeRoot, "packages/mcp/dist/index.js");
+        initializeRepo(repoRoot);
+        writeJson(tasksFile, taskSuite(repoRoot));
+        writeJson(rubricFile, { version: 1, rubric: "owner must be reachable" });
+        fs.mkdirSync(path.dirname(fakeMcp), { recursive: true });
+        writeFakeMcp(fakeMcp, { dirtyFile: rubricFile });
+        commitRuntimeFixture(runtimeRoot);
+
+        const run = spawnSync(process.execPath, [
+            SCRIPT_PATH,
+            "--tasks", tasksFile,
+            "--repo", repoRoot,
+            "--out", outputFile,
+            "--command", process.execPath,
+            "--command-arg", fakeMcp,
+            "--authority-file", rubricFile,
+            "--startup-timeout-ms", "2000",
+            "--call-timeout-ms", "2000",
+            "--close-timeout-ms", "500",
+        ], { encoding: "utf8" });
+
+        assert.equal(run.status, 1);
+        assert.match(run.stderr, /evaluation-authority artifacts changed during recording/i);
+        assert.equal(fs.existsSync(outputFile), false);
     } finally {
         fs.rmSync(temp, { recursive: true, force: true });
     }
@@ -335,20 +482,28 @@ test("dry-run validates and expands tasks without starting the command", () => {
     try {
         const repoRoot = path.join(temp, "repo");
         const tasksFile = path.join(temp, "tasks.json");
+        const rubricFile = path.join(temp, "rubric.json");
         const markerFile = path.join(temp, "started");
         const command = path.join(temp, "must-not-start.mjs");
         fs.mkdirSync(repoRoot);
         writeJson(tasksFile, taskSuite(repoRoot));
+        writeJson(rubricFile, { version: 1, rubric: "owner must be reachable" });
         fs.writeFileSync(command, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(markerFile)}, "started");`);
 
         const run = spawnSync(process.execPath, [
             SCRIPT_PATH, "--", "--tasks", tasksFile, "--repo", repoRoot,
-            "--command", process.execPath, "--command-arg", command, "--dry-run",
+            "--command", process.execPath, "--command-arg", command,
+            "--authority-file", rubricFile, "--dry-run",
         ], { encoding: "utf8" });
         assert.equal(run.status, 0, run.stderr);
         assert.equal(fs.existsSync(markerFile), false);
         const plan = JSON.parse(run.stdout);
         assert.equal(plan.dryRun, true);
+        assert.deepEqual(plan.evaluationAuthority.map((entry) => entry.realPath), [
+            fs.realpathSync(rubricFile),
+            fs.realpathSync(tasksFile),
+        ].sort());
+        assert.ok(plan.evaluationAuthority.every((entry) => /^[0-9a-f]{64}$/.test(entry.sha256)));
         assert.equal(plan.tasks[0].workload.setup[0].args.path, fs.realpathSync(repoRoot));
         assert.equal(plan.tasks[1].workload.invocations[0].args.path, path.join(fs.realpathSync(repoRoot), "src/owner.ts"));
     } finally {

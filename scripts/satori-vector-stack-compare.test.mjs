@@ -396,6 +396,41 @@ test("classifies normalization drift as full-stack and keeps result tuples colli
     assert.equal(comparison.comparisons[0].resultAgreement.meanJaccard < 1, true);
 });
 
+test("v3 comparison keeps file and symbol result identities distinct", () => {
+    const toV3 = (set) => {
+        const next = structuredClone(set);
+        next.version = 3;
+        next.metadata.evaluationAuthority = [{
+            realPath: "/evidence/tasks.json",
+            repositoryRelativePath: null,
+            bytes: 128,
+            sha256: "c".repeat(64),
+        }];
+        for (const observation of next.observations) {
+            observation.results = observation.results.map((result) => ({ kind: "symbol", ...result }));
+        }
+        return next;
+    };
+    const left = toV3(observationSet("LanceDB", "VoyageAI"));
+    const right = toV3(observationSet("LanceDB", "VoyageAI"));
+    right.metadata.evaluationAuthority[0].realPath = "/other-copy/tasks.json";
+    left.observations[0].results = [{ kind: "file", file: "src/config.ts" }];
+    right.observations[0].results = [{ kind: "symbol", file: "src/config.ts", symbol: "ts" }];
+
+    const comparison = compareVectorStacks(TASK_SUITE, [
+        { id: "left", observations: left },
+        { id: "right", observations: right },
+    ]);
+    assert.equal(comparison.comparisons[0].resultAgreement.meanJaccard < 1, true);
+
+    const mismatchedAuthority = structuredClone(right);
+    mismatchedAuthority.metadata.evaluationAuthority[0].sha256 = "d".repeat(64);
+    assert.throws(() => compareVectorStacks(TASK_SUITE, [
+        { id: "left", observations: left },
+        { id: "right", observations: mismatchedAuthority },
+    ]), /different evaluationAuthority identity/);
+});
+
 test("parses repeated named arms", () => {
     const parsed = parseArgs([
         "--tasks", "tasks.json",

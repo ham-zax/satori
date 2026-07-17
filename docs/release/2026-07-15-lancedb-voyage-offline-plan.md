@@ -16,10 +16,20 @@ guarded installer writes, and profile-aware read-only doctor checks.
 
 Release qualification is not complete. The paired comparison contract and
 three-arm harness are implemented in `evals/vector-stacks/` and
-`scripts/satori-vector-stack-compare.mjs`, but authoritative live Milvus/Voyage,
-LanceDB/Voyage, and LanceDB/Ollama observations have not yet all been recorded.
-The offline profile therefore remains a qualification candidate rather than an
-advertised offline release.
+`scripts/satori-vector-stack-compare.mjs`. Provisional Milvus/Voyage and
+LanceDB/Voyage observations have been recorded, but their 24-task runs did not
+bind or hold one immutable Satori runtime and recorder artifact across both
+arms. They are useful diagnostic evidence, not yet an authoritative
+storage-only release comparison. LanceDB/Ollama live qualification also remains
+open. The offline profile therefore remains a qualification candidate rather
+than an advertised offline release.
+
+For the connected-storage Milvus/LanceDB gate, only the authoritative
+qualification remains. That statement does not close the broader release:
+version-aware managed-runtime reuse still needs end-to-end upgrade verification,
+cleanup and retention of inactive runtime generations remain undefined,
+LanceDB/Ollama offline qualification remains pending, and bounded LanceDB
+optimization remains future maintenance outside publication authority.
 
 ## Decision
 
@@ -836,20 +846,142 @@ uses `fastSearch()`.
    from measurements.
 5. Keep exhaustive FP32 search unless it fails the frozen latency gate.
 
-The reproducible comparison boundary is implemented. It consumes immutable
-useful-context observation artifacts, rejects mismatched Git revisions, task
-hashes, Node/server identities, sample shapes, within-arm runtime fingerprints,
-published-generation receipts, or non-zero preparation syncs. Separate
-no-change preparation operations may have different operation IDs and durable
-timestamps when their canonical root, generation, runtime fingerprint,
-collection name, marker run ID, index-policy hash, and policy-document digest
-identify the same publication. The comparison reports result
-overlap/order, owner-quality metrics, cold/warm latency, actual retrieval modes,
-and logical provider work. Dense-only
-correctness remains an adapter-level exhaustive-cosine gate because the public
-query planner exposes lexical and hybrid product routes rather than an invented
-dense-only request mode. Live arm observations and indexing-economics evidence
-remain pending.
+The comparison boundary consumes useful-context observation artifacts and
+rejects mismatched corpus Git revisions, task hashes, Node/server identities,
+sample shapes, within-arm runtime fingerprints, publication receipts, or
+non-zero preparation syncs. Separate no-change preparation operations may have
+different operation IDs, mutation-lease generations, and durable timestamps.
+The searchable publication identity is instead bound by canonical root, runtime
+fingerprint, collection name, marker run ID, index-policy hash, and
+policy-document digest. The comparison reports result overlap/order,
+owner-quality metrics, cold/warm latency, actual retrieval modes, and logical
+provider work. Dense-only correctness remains an adapter-level
+exhaustive-cosine gate because the public query planner exposes lexical and
+hybrid product routes rather than an invented dense-only request mode.
+
+The first live Milvus/Voyage and LanceDB/Voyage artifacts each contain 24 of 24
+successful observations with four cold and twenty warm readiness proofs. A
+comparison reports `changeKind: storage_only`, lexical agreement of 6/6, overall
+top-result agreement of 12/24, and a substantial LanceDB latency advantage.
+These values are internally consistent but are not accepted release evidence:
+the Milvus arm was recorded before the recorder and MCP runtime changed, while
+the LanceDB arm was recorded after those changes, and neither artifact binds the
+executed Satori runtime or recorder bytes. The current classification therefore
+describes the stored runtime fingerprints, not a causally isolated storage
+experiment.
+
+#### Phase 4 qualification correction plan
+
+1. Fix result-tuple identity in the recorder so path/symbol pairs cannot collide
+   when either value contains `#`; use one canonical tuple encoding from capture
+   through comparison.
+2. Build one immutable MCP/Core runtime plus recorder candidate. Record its
+   source revision and clean-state identity or SHA-256 artifact digests in every
+   arm, and make the comparator reject cross-arm runtime or harness drift.
+3. Freeze the corpus revision, task-suite hash, provider/model/dimension,
+   reranker policy, projection and parser fingerprints, candidate policy,
+   publication receipt, sample counts, and arm order before recording.
+4. Rerun both Milvus/Voyage and LanceDB/Voyage from that same candidate. Do not
+   reuse the existing Milvus arm merely because its runtime fingerprint is
+   structurally compatible.
+5. Correct the native 4,904-row LanceDB fixture so it actually submits the
+   claimed final 208-row batch, and put the freshness-timing regression under a
+   canonical MCP test glob. Prove recent background ticks do not acquire a
+   mutation lease and expired roots still compare. Run Core and MCP suites with
+   isolated temporary state roots so tests cannot read or write the user's
+   `~/.satori` state.
+6. Archive the task suite, both raw observation sets, comparison output, runtime
+   identity, command/environment manifest without secrets, and indexing-economics
+   measurements outside temporary storage.
+7. Accept `storage_only` quality and latency conclusions only after the rerun
+   passes the existing fail-closed comparator and the artifact identities match.
+   Keep the current artifacts labeled exploratory.
+
+For this connected-storage qualification exercise only, the operator cost
+ceiling is five full reindex attempts:
+
+```text
+planned:     1 x Milvus/Voyage + 1 x LanceDB/Voyage
+contingency: at most one complete paired rerun after a proven harness/runtime fix
+reserve:     1 same-artifact operational retry when no compared identity changed
+```
+
+Search repetitions, comparator reruns, receipt checks, and deterministic tests
+reuse the frozen publications and do not consume this budget. If a runtime,
+projection, task, or harness change invalidates the pair after the contingency
+rerun, stop qualification and diagnose rather than purchasing more reindexes.
+No Ollama reindex is part of this connected-storage correction pass.
+
+This is not a product capacity limit. Satori does not cap LanceDB at four or
+five repositories or collections, and the installer/runtime must not enforce
+this qualification-run ceiling. Local LanceDB capacity is bounded by the
+operator's storage and runtime resources. A hosted Zilliz/Milvus deployment may
+instead reject new collections under its provider-specific account quota; that
+adapter-reported quota must remain backend-specific and must not constrain
+LanceDB or another local backend.
+
+#### Provisional 15-query semantic bakeoff
+
+On 2026-07-17, a separate human-judged bakeoff ran fifteen natural-language
+ownership queries against the qualification corpus. The recorded setup used
+Voyage `voyage-code-3` at 1024 dimensions and the same reranker policy for both
+stores. The operator judged each top-five result set against known code owners;
+this is intentionally separate from the automated Jaccard evaluation.
+
+Raw local dumps:
+
+```text
+/tmp/satori-vector-qual-f93f0604e21a6c086110167ee1371643237f5612/
+  semantic-bakeoff/milvus.json
+  semantic-bakeoff/lancedb.json
+  semantic-bakeoff/paired.json
+```
+
+| Measure | Milvus | LanceDB |
+|---|---:|---:|
+| Query wins | 3 | 2 |
+| Ties | 10 shared | 10 shared |
+| Relevance sum (0-5 x 15) | 67 | 64 |
+| Primary owner in top five | 14/15 | 13/15 |
+| Mean latency | about 4,970 ms | about 1,560 ms |
+
+The LanceDB arm was about 3.2 times faster on these one-shot observations.
+Relevance was close, with a narrow Milvus advantage on this sample.
+
+| Query | Ownership topic | Milvus top result | LanceDB top result | Judgment |
+|---|---|---|---|---|
+| Q1 | installer preflight owner | `evals/.../tasks.json` fixture | `runtime-owner.ts` | LanceDB |
+| Q2 | mutation lease fence | manage-indexing lease path | same ownership shape | tie |
+| Q3 | warm prepared read | `prepared-read-cache.ts` | same | tie |
+| Q4 | LanceDB finalize/FTS | `lancedb-vectordb.ts` | same | tie |
+| Q5 | `IndexNotExist` prune | `context.ts` | same | tie |
+| Q6 | what is Satori/MCP | latency benchmark | `handlers.ts` | LanceDB |
+| Q7 | embedding fingerprint | `context.ts` plus embedding owner | same | tie |
+| Q8 | ignore reconciliation | `sync.ts` | harness/eslint/release scripts | Milvus |
+| Q9 | Voyage reranker | search execution plus reranker | same | tie |
+| Q10 | file outline/navigation | `navigation-handlers.ts` | sidecar first, navigation second | Milvus |
+| Q11 | warm-to-cold recount | `handlers.ts` | same | tie |
+| Q12 | publication identity | `manage-types.ts` | same | tie |
+| Q13 | background sync versus warm cache | prepared read then `sync.ts` | same | tie |
+| Q14 | embedding runtime owns background sync | `provider-runtime.ts` | `sync.ts` first, provider runtime second | Milvus |
+| Q15 | `SOURCE_FRESHNESS_UNVERIFIED` | search response helpers | same | tie |
+
+Both stores usually found the correct owner for clear technical ownership
+queries. LanceDB corrected two Milvus results that over-weighted evaluation or
+benchmark artifacts. Milvus ranked ignore reconciliation, outline ownership,
+and provider-runtime lifecycle ownership more precisely. The LanceDB miss on Q8
+is a concrete semantic-quality case to preserve in the next frozen suite.
+
+Because both arms used the same embedding model and reranker policy, these
+differences principally reflect backend candidate generation and ordering, not
+embedding-model quality. This bakeoff supports continued use of LanceDB as the
+local/default candidate and continued Milvus support for cloud deployments, but
+it is not an acceptance gate yet. The raw files do not carry the known-owner
+answer key, per-query scores, immutable runtime/recorder identity, repetition
+rule, or publication/readiness receipts. Before expanding by another ten to
+fifteen agent-style questions, freeze those inputs and the answer key before
+viewing results, then record repeated latency samples rather than treating one
+observation per query as a distribution.
 
 ### Phase 5: add the offline installer profile
 

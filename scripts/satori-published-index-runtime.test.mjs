@@ -46,3 +46,62 @@ process.stdout.write(JSON.stringify(result));
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("published-index runtime selects a versioned route policy in the same executable", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-published-index-route-policy-"));
+    try {
+        const distDir = path.join(tempDir, "packages", "mcp", "dist");
+        fs.mkdirSync(path.join(distDir, "core"), { recursive: true });
+        fs.writeFileSync(path.join(tempDir, "package.json"), JSON.stringify({ type: "module" }));
+        fs.writeFileSync(path.join(distDir, "core", "sync.js"), `
+export class SyncManager {
+  async ensureFreshness() { throw new Error("original freshness must not run"); }
+}
+`);
+        fs.writeFileSync(path.join(distDir, "core", "search-query-planning.js"), `
+export function buildSearchQueryPlan(_query, hybrid, _operators, routePolicy) {
+  return { hybrid, routePolicy };
+}
+`);
+        fs.writeFileSync(path.join(distDir, "core", "search-query-support.js"), `
+export class SearchQuerySupport {
+  constructor() { this.runtimeFingerprint = { schemaVersion: "hybrid_v1" }; }
+  buildSearchQueryPlan() { throw new Error("unpatched planner must not run"); }
+}
+`);
+        const entryPath = path.join(distDir, "index.js");
+        fs.writeFileSync(entryPath, `
+import { SearchQuerySupport } from "./core/search-query-support.js";
+process.stdout.write(JSON.stringify(new SearchQuerySupport().buildSearchQueryPlan("query", {})));
+`);
+
+        for (const routePolicy of [
+            "baseline_path_anywhere_v1",
+            "semantic_cues_before_heuristic_path_v1",
+        ]) {
+            const run = spawnSync(process.execPath, [WRAPPER_PATH, entryPath], {
+                encoding: "utf8",
+                env: {
+                    ...process.env,
+                    SATORI_EVAL_PUBLISHED_INDEX: "1",
+                    SATORI_EVAL_SEARCH_ROUTE_POLICY: routePolicy,
+                },
+            });
+            assert.equal(run.status, 0, run.stderr);
+            assert.deepEqual(JSON.parse(run.stdout), { hybrid: true, routePolicy });
+        }
+
+        const rejected = spawnSync(process.execPath, [WRAPPER_PATH, entryPath], {
+            encoding: "utf8",
+            env: {
+                ...process.env,
+                SATORI_EVAL_PUBLISHED_INDEX: "1",
+                SATORI_EVAL_SEARCH_ROUTE_POLICY: "unknown",
+            },
+        });
+        assert.notEqual(rejected.status, 0);
+        assert.match(rejected.stderr, /Unsupported SATORI_EVAL_SEARCH_ROUTE_POLICY/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

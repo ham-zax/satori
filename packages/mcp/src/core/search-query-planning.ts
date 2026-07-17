@@ -389,12 +389,21 @@ function buildRouteContract(kind: SearchRouteKind, reason: SearchRouteReason): S
     };
 }
 
+export type SearchRoutePolicy =
+    | "baseline_path_anywhere_v1"
+    | "semantic_cues_before_heuristic_path_v1";
+
+export const DEFAULT_SEARCH_ROUTE_POLICY: SearchRoutePolicy =
+    "semantic_cues_before_heuristic_path_v1";
+
 function classifySearchRoute(input: {
     semanticQuery: string;
     intent: SearchQueryIntent;
     identifierTargetPresent: boolean;
     quotedLiteralSeeking: boolean;
     referenceSeeking: boolean;
+    implementationSeeking: boolean;
+    routePolicy: SearchRoutePolicy;
     parsedOperators?: ParsedSearchOperators;
 }): SearchRouteContract {
     const normalizedQuery = input.semanticQuery.toLowerCase();
@@ -404,7 +413,7 @@ function classifySearchRoute(input: {
     if (pathOperatorPresent) {
         return buildRouteContract("exact_path", "exact_path_operator");
     }
-    if (pathShapedQuery) {
+    if (pathShapedQuery && input.routePolicy === "baseline_path_anywhere_v1") {
         return buildRouteContract("exact_path", "path_shaped_query");
     }
     if (input.quotedLiteralSeeking) {
@@ -425,6 +434,9 @@ function classifySearchRoute(input: {
     if (/\b(architecture|architectural|trace|pipeline|flow|entrypoint|call\s+graph|structure|structural)\b/.test(normalizedQuery)) {
         return buildRouteContract("structural", "structural_cue");
     }
+    if (pathShapedQuery && !input.implementationSeeking) {
+        return buildRouteContract("exact_path", "path_shaped_query");
+    }
     if (input.intent === "identifier") {
         return buildRouteContract("exact_identifier", "identifier_intent");
     }
@@ -441,6 +453,7 @@ export function buildSearchQueryPlan(
     semanticQuery: string,
     hybridEnabled: boolean,
     parsedOperators?: ParsedSearchOperators,
+    routePolicy: SearchRoutePolicy = DEFAULT_SEARCH_ROUTE_POLICY,
 ): SearchQueryPlan {
     const tokens = semanticQuery
         .split(/\s+/)
@@ -525,6 +538,8 @@ export function buildSearchQueryPlan(
         identifierTargetPresent: exactIdentifierTarget !== undefined,
         quotedLiteralSeeking,
         referenceSeeking,
+        implementationSeeking,
+        routePolicy,
         parsedOperators,
     });
     const sparseOnlyRoute = route.kind === "exact_identifier"

@@ -32,5 +32,37 @@ SyncManager.prototype.ensureFreshness = async function noSyncPublishedIndexFresh
     };
 };
 
+const routePolicy = process.env.SATORI_EVAL_SEARCH_ROUTE_POLICY;
+if (routePolicy !== undefined) {
+    const supportedPolicies = new Set([
+        "baseline_path_anywhere_v1",
+        "semantic_cues_before_heuristic_path_v1",
+    ]);
+    if (!supportedPolicies.has(routePolicy)) {
+        throw new Error(`Unsupported SATORI_EVAL_SEARCH_ROUTE_POLICY '${routePolicy}'.`);
+    }
+    const planningModulePath = path.join(path.dirname(entryPath), "core", "search-query-planning.js");
+    const supportModulePath = path.join(path.dirname(entryPath), "core", "search-query-support.js");
+    const planningModule = await import(pathToFileURL(planningModulePath).href);
+    const supportModule = await import(pathToFileURL(supportModulePath).href);
+    if (
+        typeof planningModule.buildSearchQueryPlan !== "function"
+        || typeof supportModule.SearchQuerySupport !== "function"
+    ) {
+        throw new Error(`The exact MCP runtime at '${entryPath}' exposes no patchable search planner.`);
+    }
+    supportModule.SearchQuerySupport.prototype.buildSearchQueryPlan = function buildEvaluationSearchQueryPlan(
+        semanticQuery,
+        parsedOperators,
+    ) {
+        return planningModule.buildSearchQueryPlan(
+            semanticQuery,
+            this.runtimeFingerprint.schemaVersion.startsWith("hybrid"),
+            parsedOperators,
+            routePolicy,
+        );
+    };
+}
+
 process.argv = [process.argv[0], entryPath, ...process.argv.slice(3)];
 await import(pathToFileURL(entryPath).href);

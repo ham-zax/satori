@@ -44,6 +44,52 @@ test('buildSearchQueryPlan classifies explicit routes without changing legacy re
     }
 });
 
+test('buildSearchQueryPlan gives semantic cues precedence over heuristic path tokens', () => {
+    const cases = [
+        { query: 'src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
+        { query: 'open src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
+        { query: 'path:src/search/ranking.ts rankCandidates', route: 'exact_path', retrievalMode: 'lexical' },
+        {
+            query: 'reconcile ignore rules when .gitignore or satori.toml changes during sync',
+            route: 'mixed',
+            retrievalMode: 'hybrid',
+        },
+        { query: 'who calls initialization in src/runtime.ts', route: 'references', retrievalMode: 'hybrid' },
+        { query: 'where is src/runtime.ts configured', route: 'configuration', retrievalMode: 'lexical' },
+        { query: 'trace the startup pipeline in src/runtime.ts', route: 'structural', retrievalMode: 'hybrid' },
+    ] as const;
+
+    for (const row of cases) {
+        const parsed = parseSearchOperators(row.query);
+        const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
+        assert.equal(plan.route.kind, row.route, row.query);
+        assert.equal(plan.retrievalMode, row.retrievalMode, row.query);
+    }
+
+    const parsed = parseSearchOperators(
+        'reconcile ignore rules when .gitignore or satori.toml changes during sync',
+    );
+    const baseline = buildSearchQueryPlan(
+        parsed.semanticQuery,
+        true,
+        parsed,
+        'baseline_path_anywhere_v1',
+    );
+    assert.equal(baseline.route.kind, 'exact_path');
+    assert.equal(baseline.retrievalMode, 'lexical');
+    assert.equal(baseline.rerankAllowed, false);
+
+    const contender = buildSearchQueryPlan(
+        parsed.semanticQuery,
+        true,
+        parsed,
+        'semantic_cues_before_heuristic_path_v1',
+    );
+    assert.equal(contender.route.kind, 'mixed');
+    assert.equal(contender.retrievalMode, 'hybrid');
+    assert.equal(contender.rerankAllowed, true);
+});
+
 test('buildSearchQueryPlan extracts one strong structural target and reference direction', () => {
     const ownership = parseSearchOperators('who owns rankCandidates');
     const ownershipPlan = buildSearchQueryPlan(ownership.semanticQuery, true, ownership);

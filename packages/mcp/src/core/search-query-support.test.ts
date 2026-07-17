@@ -44,7 +44,7 @@ test('buildSearchQueryPlan classifies explicit routes without changing legacy re
     }
 });
 
-test('buildSearchQueryPlan gives semantic cues precedence over heuristic path tokens', () => {
+test('buildSearchQueryPlan keeps the accepted baseline while exposing semantic-cue replay', () => {
     const cases = [
         { query: 'src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
         { query: 'open src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },
@@ -61,7 +61,12 @@ test('buildSearchQueryPlan gives semantic cues precedence over heuristic path to
 
     for (const row of cases) {
         const parsed = parseSearchOperators(row.query);
-        const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
+        const plan = buildSearchQueryPlan(
+            parsed.semanticQuery,
+            true,
+            parsed,
+            'semantic_cues_before_heuristic_path_v1',
+        );
         assert.equal(plan.route.kind, row.route, row.query);
         assert.equal(plan.retrievalMode, row.retrievalMode, row.query);
     }
@@ -78,6 +83,9 @@ test('buildSearchQueryPlan gives semantic cues precedence over heuristic path to
     assert.equal(baseline.route.kind, 'exact_path');
     assert.equal(baseline.retrievalMode, 'lexical');
     assert.equal(baseline.rerankAllowed, false);
+
+    const defaultPlan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
+    assert.deepEqual(defaultPlan, baseline);
 
     const contender = buildSearchQueryPlan(
         parsed.semanticQuery,

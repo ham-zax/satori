@@ -394,7 +394,7 @@ export type SearchRoutePolicy =
     | "semantic_cues_before_heuristic_path_v1";
 
 export const DEFAULT_SEARCH_ROUTE_POLICY: SearchRoutePolicy =
-    "semantic_cues_before_heuristic_path_v1";
+    "baseline_path_anywhere_v1";
 
 function classifySearchRoute(input: {
     semanticQuery: string;

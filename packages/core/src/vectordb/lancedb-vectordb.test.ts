@@ -347,7 +347,7 @@ test('LanceDB publication finalization creates FTS and does not call optimize', 
     const sourcePath = path.resolve(import.meta.dirname, 'lancedb-vectordb.ts');
     const source = fs.readFileSync(sourcePath, 'utf8');
     const finalizeMatch = source.match(
-        /async finalizeCollectionForSearch\([\s\S]*?\n    \}\n\n    async dropCollection/,
+        /async finalizeCollectionForSearch\([\s\S]*?\n {4}\}\n\n {4}async dropCollection/,
     );
     assert.ok(finalizeMatch, 'expected to locate finalizeCollectionForSearch in source');
     const finalizeBody = finalizeMatch[0];
@@ -515,17 +515,22 @@ async function writeInBatches(
     collectionName: string,
     documents: IndexedVectorDocument[],
     batchSizes: number[],
-): Promise<void> {
+): Promise<number[]> {
     let offset = 0;
+    const writtenBatchSizes: number[] = [];
     for (const batchSize of batchSizes) {
         if (offset >= documents.length) break;
         const batch = documents.slice(offset, offset + batchSize);
         await database.writeDocuments(collectionName, batch);
+        writtenBatchSizes.push(batch.length);
         offset += batch.length;
     }
     if (offset < documents.length) {
-        await database.writeDocuments(collectionName, documents.slice(offset));
+        const batch = documents.slice(offset);
+        await database.writeDocuments(collectionName, batch);
+        writtenBatchSizes.push(batch.length);
     }
+    return writtenBatchSizes;
 }
 
 test('LanceDB finalizes real multi-file UTF-8 corpora without optimize and remains searchable', async (t) => {
@@ -551,7 +556,7 @@ test('LanceDB finalizes real multi-file UTF-8 corpora without optimize and remai
             rowCount: 4904,
             batchSizes: [
                 400, 400, 400, 400, 400, 400, 400, 400, 400, 400,
-                400, 400, 296, 208,
+                400, 296, 208,
             ],
             probeTokenPrefix: 'corpustoken',
         },
@@ -574,7 +579,13 @@ test('LanceDB finalizes real multi-file UTF-8 corpora without optimize and remai
                 await writer.createHybridCollection(collectionName, dimension, undefined, {
                     deferIndexBuild: true,
                 });
-                await writeInBatches(writer, collectionName, documents, testCase.batchSizes);
+                const writtenBatchSizes = await writeInBatches(
+                    writer,
+                    collectionName,
+                    documents,
+                    testCase.batchSizes,
+                );
+                assert.deepEqual(writtenBatchSizes, testCase.batchSizes);
                 await writer.finalizeCollectionForSearch(collectionName);
             } finally {
                 await writer.close();

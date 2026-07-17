@@ -4,11 +4,11 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 
 ## Outline of Discovered Behaviors (Complete)
 - Server boot lifecycle is split into a bootstrap entrypoint (`index.ts`) and server factory (`start-server.ts`), with run-mode gates for startup loops.
-- Canonical architecture path: Core sync state + vector store + sidecar + MCP handlers + 6 MCP tools.
+- Canonical architecture path: Core sync state + vector store + sidecar + MCP handlers + 7 MCP tools.
 - North-star agent path: plain-English `search_codebase` discovery first, then use the returned `codebaseRoot` and canonical grouped `target` with `file_outline -> call_graph -> read_file(open_symbol)` for deterministic proof.
-- Exactly six MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `file_outline`, `call_graph`, `read_file`.
-- `satori-cli` is a shell client of the same six MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
-- `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the six-tool surface.
+- Exactly seven MCP tools are exposed via registry: `list_codebases`, `manage_index`, `search_codebase`, `continue_search`, `file_outline`, `call_graph`, `read_file`.
+- `satori-cli` is a shell client of the same seven MCP tools (tool reflection via `tools/list` and execution via `tools/call`) and does not add MCP tool surface.
+- `satori-cli` also ships CLI-only `install` and `uninstall` commands for supported clients; these commands run before MCP session startup and do not widen the seven-tool surface.
 - Managed installs perform package resolution during setup, not resident MCP startup; generated client config must avoid `npx`/package-manager launch paths.
 - Installer `--profile default|minimal|all-text` writes repo-local `satori.toml`; runtime reads `[index].profile` as index policy and treats `satori.toml` as a control file with `.gitignore` and `.satoriignore`.
 - Index profile defaults are safe-broad but hard-deny secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, database dumps, and snapshots before indexing.
@@ -30,6 +30,7 @@ Maintenance rule: this spec is hand-maintained and treated as a contract. Behavi
 - Candidate and group sorting both use explicit deterministic tie-break chains.
 - Grouping supports `symbol` and `file`; symbol grouping prefers owner metadata when present, repairs missing owner identity from a compatible registry, and uses deterministic hashed fallback groups when symbol identity is unavailable.
 - Grouped `formatVersion: 2` results expose one canonical `target`, display and quality facts, bounded preview evidence, and reasoned `navigation.graph` state. The envelope carries the only `recommendedNextAction`; consumers derive reads and graph calls from `codebaseRoot` plus `target` without repeated per-result tool arguments.
+- Grouped search separately bounds retrieval, reranker admission, initial disclosure, and final UTF-8 response bytes. The reranker byte ceiling counts selected document strings, not query or provider framing. When groups remain inside the caller's limit, the envelope may include an opaque process-local continuation handle and exact next offset. `continue_search` returns the next deterministic groups from that frozen ranked set without query embedding, vector retrieval, or reranking; exact request retries replay the same serialized page, while publication/source-observation drift, expiry, restart, cursor conflict, or complete consumption fails with a classified outcome.
 - `file_outline` supports `resolveMode=outline|exact` with exact outcomes `ok|ambiguous|not_found`.
 - `read_file` supports `plain|annotated`. Ordinary line-range and unversioned direct-span `open_symbol` requests return source text (annotated mode adds `outlineStatus`, `outline`, `hasMore`, warnings/hints). Exact symbol opens require `mode` plus the one canonical request shape: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both modes, and accepted exact failures use bounded structured errors. Content is served only when the requested absolute path's canonical real path is inside a tracked searchable root (`indexed` or `sync_completed`). Relative paths are rejected before exact-request acceptance. Ordinary absolute paths outside a searchable root use `outside_indexed_root`; an otherwise schema-accepted exact request whose root authority cannot be established uses the bounded `NAVIGATION_UNAVAILABLE` envelope without returning the path or source.
 - Reindex-compatibility gates propagate `requires_reindex` envelopes with deterministic `hints.reindex` across search/navigation tools.
@@ -53,7 +54,7 @@ Architecture in words:
 - Core sync (`packages/core`) tracks file state (stats, hashes, merkle root, partial-scan metadata).
 - MCP runtime (`packages/mcp`) owns snapshot status, freshness gating, search orchestration, call graph sidecar lifecycle, and tool routing.
 - Public installer/doctor ownership is `packages/cli` (`satori-cli`). Install/uninstall mutate client config and managed runtime under `~/.satori/`; they are not MCP tools.
-- Every non-dry-run install runs a bounded postflight through the exact installed launcher. The additive `postflight` receipt proves managed client configuration, MCP initialization and installed version, the canonical six-tool list, runtime-owner registration, and child/owner cleanup. Static provider/backend gaps are warnings; runtime or wiring proof failures return a non-zero install exit while preserving installed artifacts.
+- Every non-dry-run install runs a bounded postflight through the exact installed launcher. The additive `postflight` receipt proves managed client configuration, MCP initialization and installed version, the canonical seven-tool list, runtime-owner registration, and child/owner cleanup. Static provider/backend gaps are warnings; runtime or wiring proof failures return a non-zero install exit while preserving installed artifacts.
 - Postflight starts MCP with internal `SATORI_RUN_MODE=postflight`: it registers the runtime owner and serves MCP, but skips interrupted-index recovery, background sync, watchers, lifecycle calls, search, and all provider-backed work.
 - Managed launchers preserve the five-second signal-shutdown grace for cooperative provider/watcher cleanup. On client stdin EOF they proxy EOF to the runtime, which performs the same graceful shutdown and owner unregister; a separate 1.5-second EOF fallback reaps a non-cooperative child before the MCP SDK kills the launcher.
 - Doctor is read-only: it validates static provider/backend configuration, installed packages, managed launcher target/version, configured Codex/Claude/OpenCode launcher wiring, live owner version/fingerprint/config identity, process-start identity when available, and active/abandoned/corrupt mutation leases. It never evicts a lease based on elapsed time. Its additive `localDiagnostics` field summarizes bounded CLI-mediated activity from a local-only v1 event log.
@@ -61,7 +62,7 @@ Architecture in words:
 - `packages/mcp/src/cli` is residual non-bin tool-shell glue (list/call wrappers). `install`/`uninstall` there are hard-deprecated and exit with guidance to `satori-cli`; they must not write configs or install managed runtime.
 - Installer runtime cache paths are private implementation details; public setup remains the one-command CLI installer flow.
 - Sidecar/index artifacts are consumed by `search_codebase`, `file_outline`, `call_graph`, `read_file`.
-- Agent-visible entrypoints are only the six tools from `toolRegistry`.
+- Agent-visible entrypoints are only the seven tools from `toolRegistry`.
 
 North-star workflow:
 - `search_codebase` finds candidate symbol/file groups.
@@ -99,7 +100,7 @@ Behavior contract:
 - Trigger: MCP server starts and tools are invoked.
 - Effect: Requests route through `ToolHandlers`, enforcing indexing/fingerprint/sync/sidecar gates before returning envelopes.
 - Persisted index authority has a hard v3 boundary: the canonical tuple is completion marker `satori_index_completion_v3`, policy document `satori_index_policy_v3`, and navigation pointer `navigation_current_v3`. Forward publication writes only this tuple. Known retired completion markers and navigation pointers are v1/v2; the first persisted policy schema was v2. Retired, pre-seal, or mixed-version authority is never upgraded by a read and always returns `requires_reindex` with `manage_index(action="reindex")` guidance. A recognizable numeric future schema in one of those schema families is retained as `unsupported_authority` internally and maps to the same fail-closed public bucket without repair, replacement, or cleanup; arbitrary malformed schema labels remain corrupt/invalid rather than implying a runtime upgrade. Operators must upgrade the runtime before deciding whether reindex is safe for genuine future authority.
-- This authority hard cut changes persisted-state admission and remediation only. The public six-tool MCP surface, tool input schemas, `manage_index` action enum, and response envelope versions remain unchanged.
+- The authority hard cut changed persisted-state admission and remediation only. The later additive search-continuation contract expanded the public surface to seven tools without changing the `manage_index` action enum.
 - Read readiness is receipt-bound. A cached ready state carries the proven collection, exact v3 marker identity/run ID, v3 policy document digest/hash, payload count, navigation generation, manifest hashes, and canonical navigation-seal digest, plus the exact prepared-read observation under which revalidation succeeded. Every warm reuse rechecks collection existence, reads and compares one exact completion marker, verifies policy/profile and the immutable navigation generation seal, and requires that prepared observation to remain unchanged through freshness. Exact payload count is reused only while that sealed receipt remains identical and for at most 30 minutes from the cold proof; frequent access and warm reseeding do not extend that deadline. Expiry forces a cold authority proof and exact recount. Cold proof and repair fully validate canonical v3 navigation artifacts and recompute the seal from them; warm observation reads `current.json`, `seal.json`, and stable tokens for the referenced symbol/relationship manifests and directories so direct artifact loss or in-place manifest change invalidates cached readiness.
 - Reindex rollback never republishes an older generation through the v3-only forward API. Before mutation it captures the exact durable policy document and navigation pointer bytes. Restoration is fenced by the live mutation lease when present and always compare-and-swaps against the captured candidate authority, then uses an fsynced two-file transaction journal so startup can complete an interrupted policy/pointer swap. Rollback may restore captured bytes for failure atomicity; restoring a retired tuple is acknowledged as `restored_requires_reindex` rather than reported as a failed durable restore, and that tuple is not promoted into runtime authority.
 - Vector completion proof and navigation proof are separate only within canonical v3 authority. A v3 vector-only tuple with navigation status `not_bound` remains searchable, while symbol navigation is explicitly unavailable. Missing, incompatible, or corrupt local navigation bound by an otherwise valid v3 tuple does not relabel vector payload as invalid; status/search may emit `NAVIGATION_REPAIR_REQUIRED` and recommend `manage_index repair`. Strict graph-rich generation resolution still requires valid navigation.
@@ -116,13 +117,13 @@ Behavior contract:
 - [packages/cli/src/install-postflight.ts](/home/hamza/repo/satori/packages/cli/src/install-postflight.ts) (bounded non-mutating launcher/config/protocol/tool/owner/termination proof).
 - [packages/mcp/src/cli/index.ts](/home/hamza/repo/satori/packages/mcp/src/cli/index.ts) (legacy non-bin tool shell; install hard-deprecated).
 - [packages/mcp/src/cli/install.ssot.test.ts](/home/hamza/repo/satori/packages/mcp/src/cli/install.ssot.test.ts) (MCP install mutation surface must stay gone).
-- [registry.ts](/home/hamza/repo/satori/packages/mcp/src/tools/registry.ts) (6-tool surface).
+- [registry.ts](/home/hamza/repo/satori/packages/mcp/src/tools/registry.ts) (7-tool surface).
 - [handlers.ts](/home/hamza/repo/satori/packages/mcp/src/core/handlers.ts) (`handleSearchCode`, `handleFileOutline`, `handleCallGraph`).
 - [search-types.ts](/home/hamza/repo/satori/packages/mcp/src/core/search-types.ts) (envelopes/contracts).
 
 ---
 
-## B) Tool Surface (6 tools)
+## B) Tool Surface (7 tools)
 
 ### 1) `list_codebases`
 Purpose: Show tracked codebases grouped by state.
@@ -224,10 +225,18 @@ Purpose: unified semantic retrieval with deterministic filtering/grouping/rankin
 
 Inputs/defaults:
 - Required: `path`, `query`.
-- Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `debug=false`.
+- Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `disclosureLimit=limit`, `debug=false`.
+- `disclosureLimit` is grouped-only and cannot exceed `limit`. It changes only
+  the initial visible page; retrieval depth and reranker admission remain bound
+  to `limit`.
 
 Outputs:
 - Every search JSON envelope carries `formatVersion: 2`; successful envelopes include `status`, requested `path`, resolved `codebaseRoot`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional structured `warnings`, one optional top-level `recommendedNextAction`, and `hints`.
+- Grouped responses are capped by exact serialized UTF-8 bytes. When presentation
+  omits groups, `disclosure` reports the available, returned, and omitted counts
+  plus classified reasons. A same-length opaque `continuation.handle` is emitted
+  only when more caller-eligible groups remain, so installing the real handle
+  cannot invalidate the byte proof computed with its placeholder.
 - Grouped results contain `target`, `displayLabel`, `language`, optional `symbolKind`, six-decimal `score`, `quality`, optional `evidenceChunks` (only when at least 2), bounded source-only `preview`, optional distinct `evidenceSpan`, `navigation`, and optional bounded evidence-only `debug`. Display labels are capped at 160 UTF-8 bytes, previews at five lines and 768 bytes, and caller terms at 96 bytes without truncating identifiers. The display label is not prepended to `preview`.
 - `target.file` is normalized repo-relative, `target.span` is 1-based inclusive, and `target.symbolId` is present only for a registry-proven concrete `symbolInstanceId`. Internal group IDs, logical symbol keys, and chunk IDs never become navigation identity.
 - `navigation.graph` is `ready` only when the target is accepted directly by `call_graph.symbolRef`; every graph-ready result also carries `navigation.inbound="verify"`. `callerSearchTerm` is an optional graph-ready ASCII identifier for a separate `must:<term> <term>` inbound-reference search. Unavailable graph states omit both inbound fields and carry the precise reason in `navigation.graph`.
@@ -272,9 +281,48 @@ Behavior:
   9. only then continue into retrieval/ranking/grouping
 - Observability: envelope + debug hints.
 - Determinism: explicit comparator chains and bounded loops.
-- Performance: bounded candidates, TTL cache, rerank top-K, coalesced freshness.
+- Performance: bounded candidates, exact aggregate reranker bytes, exact grouped
+  response bytes, TTL result-set cache, rerank top-K, coalesced freshness.
 
-### 4) `file_outline`
+### 4) `continue_search`
+Purpose: reveal more grouped results from the exact frozen ordering produced by
+an earlier `search_codebase` response.
+
+Inputs/defaults:
+- Required: opaque 48-character lowercase hexadecimal `handle` returned by
+  `search_codebase`.
+- Required: nonnegative integer `expectedOffset`, copied exactly from the
+  response's `continuation.nextOffset`.
+- Optional: positive integer `limit`, bounded by the capability search maximum;
+  it defaults to the initial disclosure page size.
+
+Outputs:
+- The same grouped format-version-2 envelope shape, containing only the next
+  complete groups and a page-specific disclosure summary.
+- Another continuation object appears only while caller-eligible frozen groups
+  remain.
+
+Authority and failure behavior:
+- The cache entry is process-local, count-bounded, serialized-byte-bounded, and
+  TTL-bounded. Restart makes a handle unavailable.
+- Before and after page projection, the handler revalidates the proven vector
+  generation, prepared authority, and exact captured source-observation state;
+  unavailable source evidence is frozen as `null`, not treated as a wildcard.
+- Retrying the same handle, `expectedOffset`, and effective limit returns the
+  exact prior serialized page, including the final page. A different offset or
+  page size conflicts rather than silently skipping or reshaping results.
+- Invalid, missing, expired, stale, conflicting, oversized-page, and fully
+  consumed handles return stable classified errors and require either the
+  latest page or a new search as directed.
+
+Determinism and performance:
+- Pages advance through one frozen diversity-preserving DTO order; they never
+  rerun grouping, diversity selection, retrieval, query embedding, or reranking.
+- Complete groups are added while they fit. Serialized JSON is never byte-sliced;
+  if one group alone is too large, only its preview is truncated at a UTF-8-safe
+  boundary and full source remains available through `read_file`.
+
+### 5) `file_outline`
 Purpose: deterministic symbol outline and exact symbol resolver from the compatible symbol registry.
 
 Inputs/defaults:
@@ -321,7 +369,7 @@ Behavior:
 - Determinism: explicit sort and exact-mode status semantics.
 - Performance: sidecar lookup only; no sync-on-read.
 
-### 5) `call_graph`
+### 6) `call_graph`
 Purpose: relationship-backed caller/callee traversal from symbolRef.
 
 Inputs/defaults:
@@ -359,7 +407,7 @@ Behavior:
 - Determinism: fixed traversal/sort rules.
 - Performance: query-side traversal only; no sync-on-read.
 
-### 6) `read_file`
+### 7) `read_file`
 Purpose: file content retrieval with optional deterministic exact-symbol context package, unversioned direct spans, and annotated outline envelope for ordinary reads.
 
 Inputs/defaults:

@@ -9,14 +9,15 @@ Use this skill when a task needs Satori MCP for behavior-level code discovery, d
 
 ## Tools
 
-Satori exposes exactly six MCP tools:
+Satori exposes exactly seven MCP tools:
 
 1. `list_codebases`
 2. `manage_index`
 3. `search_codebase`
-4. `file_outline`
-5. `call_graph`
-6. `read_file`
+4. `continue_search`
+5. `file_outline`
+6. `call_graph`
+7. `read_file`
 
 ## Default Workflow
 
@@ -24,9 +25,10 @@ Satori exposes exactly six MCP tools:
 2. If the codebase is not indexed, use `manage_index(action="create", path=...)`.
 3. Search the requested path with `search_codebase(path=..., query=..., scope="runtime", resultMode="grouped", groupBy="symbol", rankingMode="auto_changed_first")`; start with plain-English behavior/concept queries unless you already know the exact identifier, constant, warning code, or path.
 4. Prefer the envelope `recommendedNextAction` when present; it is Satori's ranked next proof step.
-5. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
-6. If a grouped result has `navigation.graph="ready"`, call `call_graph(path=codebaseRoot, symbolRef=target, direction="both", depth=1)`.
-7. Use the canonical `read_file` symbol-context request or deterministic line spans for final evidence before editing.
+5. When the grouped envelope contains `continuation`, use `continue_search(handle=..., expectedOffset=...)` with its exact `nextOffset` to expose more groups from that same frozen ranking without a new search.
+6. Use `file_outline(resolveMode="exact", symbolIdExact|symbolLabelExact)` to lock exact symbol spans when identity is available.
+7. If a grouped result has `navigation.graph="ready"`, call `call_graph(path=codebaseRoot, symbolRef=target, direction="both", depth=1)`.
+8. Use the canonical `read_file` symbol-context request or deterministic line spans for final evidence before editing.
 
 ## Search Rules
 
@@ -40,6 +42,7 @@ Satori exposes exactly six MCP tools:
 - Persisted authority is v3-only: `satori_index_completion_v3`, `satori_index_policy_v3`, and `navigation_current_v3`. Completion markers and navigation pointers v1/v2, policy v2, pre-seal authority, and mixed authority require `manage_index(action="reindex")`; read tools never mutate or auto-upgrade them.
 - A canonical v3 vector generation with navigation status `not_bound` remains searchable, but symbol navigation is unavailable until a new canonical generation supplies navigation authority.
 - Grouped `formatVersion: 2` results contain canonical facts, not per-result tool calls: inspect `target`, `quality`, `navigation.graph`, required graph-ready `navigation.inbound="verify"`, and optional `callerSearchTerm`.
+- `continue_search` consumes an opaque handle and exact `nextOffset` returned by `search_codebase` or the prior continuation page; it does not embed the query, retrieve candidates, or rerank. Retry the same handle, offset, and limit to replay a lost response. Expired, stale, conflicting, or process-local-missing handles require the classified recovery action.
 - Use `debugMode=summary|ranking|freshness|full` only when the corresponding diagnostics are required. Existing `debug=true` selects `full`. Inspect `hints.debugSummary` before deeper `debugSearch` evidence.
 
 ## Navigation Rules

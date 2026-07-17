@@ -30,7 +30,7 @@ Satori indexes a repo and gives MCP-compatible agents a fixed investigation path
 | Package | Purpose |
 |---|---|
 | `@zokizuan/satori-core` | Oxc/Tree-sitter-WASM language analysis, indexing, embeddings, LanceDB and Milvus/Zilliz storage, retrieval, incremental sync |
-| `@zokizuan/satori-mcp` | MCP server with the six agent-facing tools and lifecycle gates |
+| `@zokizuan/satori-mcp` | MCP server with the seven agent-facing tools and lifecycle gates |
 | `@zokizuan/satori-cli` | Installer, doctor command, and shell access to MCP tools |
 
 ## Quick Start
@@ -79,7 +79,7 @@ The installer writes Satori-managed config and copies the first-party workflow s
 
 It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a stable launcher at `~/.satori/bin/satori-mcp.js`, and points client config at that launcher with Node. Resident MCP startup should not perform package-manager resolution.
 
-A non-dry-run install then performs a bounded postflight through that exact launcher. It proves managed client wiring, MCP initialization and installed version, the canonical six-tool surface, runtime-owner registration, and complete child termination. Missing provider or vector configuration is a warning because the proof is static and non-provider-backed. Launcher, protocol, tool, owner, or shutdown failures return a non-zero exit while preserving the installed artifacts and the emitted postflight receipt. The dedicated postflight runtime mode does not recover indexes, start watchers or background sync, call lifecycle tools, search, or create remote state.
+A non-dry-run install then performs a bounded postflight through that exact launcher. It proves managed client wiring, MCP initialization and installed version, the canonical seven-tool surface, runtime-owner registration, and complete child termination. Missing provider or vector configuration is a warning because the proof is static and non-provider-backed. Launcher, protocol, tool, owner, or shutdown failures return a non-zero exit while preserving the installed artifacts and the emitted postflight receipt. The dedicated postflight runtime mode does not recover indexes, start watchers or background sync, call lifecycle tools, search, or create remote state.
 
 Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
 
@@ -246,13 +246,14 @@ Grouped search responses use `formatVersion: 2`. Each result carries one canonic
 
 `call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and avoid re-embedding or rewriting unchanged vector chunks. Current source may still be reparsed to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
 
-## Six MCP Tools
+## Seven MCP Tools
 
 | Tool | Use it for |
 |---|---|
 | `list_codebases` | See indexed roots and lifecycle buckets; ready roots include compact `symbolQuality=…` and optional Runtime owners summary |
 | `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when vector payload + trusted fingerprint proof allow). `status` may include structured `symbolQuality` and Runtime owners |
 | `search_codebase` | Runtime-first plain-English discovery with exact operators, compact v2 symbol groups, freshness, warnings, one `recommendedNextAction`, explicit inbound verification, and optional `callerSearchTerm` evidence |
+| `continue_search` | Reveal the next groups from a frozen `search_codebase` ranking without new embedding, retrieval, or reranking work |
 | `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing (`ok` / `ambiguous` / `not_found`) |
 | `call_graph` | Bounded advisory caller/callee context from a search `symbolRef` when relationship-backed navigation is ready (TS/JS/Python; not sole blast-radius authority) |
 | `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader): line ranges and annotated plain source, unversioned direct-span opens, or exact `open_symbol` contractVersion 2 context packages |
@@ -381,7 +382,7 @@ npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
 
 ## Open Source
 
-Satori is open source under the MIT License. The public MCP surface is fixed to six tools and does not expose source-code write tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent edit surface.
+Satori is open source under the MIT License. The public MCP surface is fixed to seven tools and does not expose source-code write tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent edit surface.
 
 ## License
 

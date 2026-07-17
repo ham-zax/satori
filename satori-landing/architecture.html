@@ -13,7 +13,7 @@
     <meta name="robots" content="index,follow" />
     <link rel="canonical" href="https://satori.hamza.my.id/architecture" />
     <meta property="og:title" content="Satori Architecture | Deterministic MCP Code Retrieval" />
-    <meta property="og:description" content="Understand Satori's six-tool MCP runtime, installer-owned startup, freshness gates, vector search, symbol registry and relationship sidecars, snapshots, and sync safety." />
+    <meta property="og:description" content="Understand Satori's seven-tool MCP runtime, installer-owned startup, freshness gates, vector search, symbol registry and relationship sidecars, snapshots, and sync safety." />
     <meta property="og:type" content="article" />
     <meta property="og:url" content="https://satori.hamza.my.id/architecture" />
     <meta property="og:site_name" content="Satori" />
@@ -27,7 +27,7 @@
         "@context": "https://schema.org",
         "@type": "TechArticle",
         "headline": "Satori Architecture",
-        "description": "Architecture notes for Satori's installer-owned MCP startup, fixed six-tool surface, freshness gates, vector retrieval, symbol registry and relationship sidecars, snapshot state, and sync safety.",
+        "description": "Architecture notes for Satori's installer-owned MCP startup, fixed seven-tool surface, freshness gates, vector retrieval, symbol registry and relationship sidecars, snapshot state, and sync safety.",
         "url": "https://satori.hamza.my.id/architecture",
         "author": {
           "@type": "Person",
@@ -1073,7 +1073,7 @@
       <section class="section">
         <h2>System Overview</h2>
         <p class="intro">
-          Agent requests route through a fixed six-tool registry. The MCP
+          Agent requests route through a fixed seven-tool registry. The MCP
           runtime enforces freshness/fingerprint gates and orchestrates search.
           Core sync provides deterministic file-state truth for indexing.
         </p>
@@ -1189,7 +1189,7 @@
           </article>
           <article class="card">
             <h3><code>@zokizuan/satori-mcp</code></h3>
-            <p>Owns the MCP server, six-tool contract, lifecycle state, and agent envelopes.</p>
+            <p>Owns the MCP server, seven-tool contract, lifecycle state, and agent envelopes.</p>
           </article>
           <article class="card">
             <h3><code>@zokizuan/satori-cli</code></h3>
@@ -1261,7 +1261,7 @@
       <section class="section">
         <h2>Agent-Safe Tool Surface</h2>
         <p class="intro">
-          Satori exposes six MCP tools. The point is not a large API; it is a
+          Satori exposes seven MCP tools. The point is not a large API; it is a
           small set of operations that return state, warnings, and next steps
           when context is unsafe. The MCP server does not expose source-code
           write tools.
@@ -1279,6 +1279,11 @@
                 <h3><code>search_codebase</code></h3>
                 <p>Finds relevant code from plain-English behavior queries, exact identifier lookup, symbol-owned grouping, freshness checks, recommended actions, structured warnings, and navigation hints.</p>
                 <p class="refusal">Refuses stale or unsafe context when index gates require attention.</p>
+              </div>
+              <div class="tool-card">
+                <h3><code>continue_search</code></h3>
+                <p>Reveals more groups from one frozen search ordering without new embedding, retrieval, or reranking work; exact offset retries replay the same page.</p>
+                <p class="refusal">Refuses expired, stale, unavailable, or conflicting handles.</p>
               </div>
             </div>
           </article>

@@ -6,18 +6,19 @@ This guide covers common tasks. The authoritative tool contracts and edge-case b
 
 ## Public Surface
 
-Satori exposes exactly six MCP tools:
+Satori exposes exactly seven MCP tools:
 
 | Tool | Use |
 | --- | --- |
 | `list_codebases` | List known roots and readiness. |
 | `manage_index` | Create, reindex, sync, inspect, clear, or repair an index. |
 | `search_codebase` | Find behavioral owners with freshness-aware search. |
+| `continue_search` | Reveal more groups from a frozen search result set without rerunning retrieval or reranking. |
 | `file_outline` | Resolve deterministic file symbols and spans. |
 | `call_graph` | Inspect bounded heuristic caller/callee context. |
 | `read_file` | Read tracked files or one exactly resolved symbol. |
 
-Filesystem `path` inputs are always absolute, but their targets differ by tool. `manage_index` and `file_outline` use a codebase root; `search_codebase` and `call_graph` accept an indexed root or subdirectory; `read_file` uses the absolute file path. Nested `file` and `symbolRef.file` values are repository-relative to the resolved root. `list_codebases` has no path input. Satori never writes source files.
+Filesystem `path` inputs are always absolute, but their targets differ by tool. `manage_index` and `file_outline` use a codebase root; `search_codebase` and `call_graph` accept an indexed root or subdirectory; `read_file` uses the absolute file path. Nested `file` and `symbolRef.file` values are repository-relative to the resolved root. `list_codebases` has no path input, and `continue_search` accepts an opaque process-local result-set handle, the response's exact `nextOffset`, and an optional page limit. Retrying the same handle, offset, and limit replays the same page. Satori never writes source files.
 
 ## 1. Install
 

@@ -198,7 +198,7 @@ Responsibilities:
 - protect stdout for stdio JSON-RPC
 - load runtime config from env
 - build embedding and vector DB dependencies
-- expose exactly six tools
+- expose exactly seven tools
 - validate tool input schemas
 - enforce index/fingerprint/completion-proof gates
 - manage snapshot state
@@ -378,18 +378,19 @@ READ_FILE_MAX_LINES=1000
 
 Never commit real API keys, Milvus tokens, or provider credentials.
 
-## Six MCP Tools
+## Seven MCP Tools
 
-The public MCP surface is fixed at six tools:
+The public MCP surface is fixed at seven tools:
 
 1. `list_codebases`
 2. `manage_index`
 3. `search_codebase`
-4. `file_outline`
-5. `call_graph`
-6. `read_file`
+4. `continue_search`
+5. `file_outline`
+6. `call_graph`
+7. `read_file`
 
-This is a core invariant. Do not add a seventh MCP tool casually.
+This is a core invariant. Do not expand the MCP surface casually.
 
 The normal agent workflow is:
 
@@ -1046,7 +1047,7 @@ This reduces drift between implementation and README documentation.
 
 These are the rules you should protect when editing.
 
-### Public Tool Surface Is Exactly Six Tools
+### Public Tool Surface Is Exactly Seven Tools
 
 Do not add tools casually.
 
@@ -1447,7 +1448,7 @@ Focus:
 
 - package layout
 - build scripts
-- six tools
+- seven tools
 - architecture docs
 - TypeScript workspace basics
 
@@ -1722,7 +1723,7 @@ Use this sequence if you are starting from scratch:
 
 After following this roadmap, you should be able to explain:
 
-- why Satori uses a fixed six-tool MCP surface
+- why Satori uses a fixed seven-tool MCP surface
 - how `manage_index create` becomes vector documents
 - why AST-aware chunking improves code retrieval
 - why hybrid search is useful for code

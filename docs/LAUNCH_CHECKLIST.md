@@ -41,7 +41,7 @@ Satori is a read-only MCP server and installer that helps AI coding agents inves
 
 I built Satori because coding agents often start editing before they have enough repo evidence. Satori gives them a read-only MCP surface for searching code by intent, opening exact symbols, following caller/callee context, and detecting stale or unsafe index state.
 
-The public setup path is installer-first: `satori-cli install --client all` writes managed config for supported clients and avoids resident `npx` startup latency. The MCP surface stays intentionally small: six tools, deterministic status, and no source-code write operations.
+The public setup path is installer-first: `satori-cli install --client all` writes managed config for supported clients and avoids resident `npx` startup latency. The MCP surface stays intentionally small: seven tools, deterministic status, and no source-code write operations.
 
 I would especially like feedback on install UX across MCP clients and whether the search -> outline -> graph -> read workflow matches how you actually want agents to investigate large repos.
 
@@ -69,7 +69,7 @@ I would especially like feedback on install UX across MCP clients and whether th
 
 - Landing page title and description mention MCP coding agents and repo retrieval.
 - `/docs/` explains install, provider setup, first index, lifecycle states, warnings, and troubleshooting.
-- `/architecture.html` explains installer-owned startup and the six-tool MCP boundary.
+- `/architecture.html` explains installer-owned startup and the seven-tool MCP boundary.
 - `robots.txt`, `sitemap.xml`, Open Graph, Twitter card, and structured data are present.
 - Product Hunt URL, GitHub URL, and install commands match current package versions.
 

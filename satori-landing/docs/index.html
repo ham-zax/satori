@@ -1083,7 +1083,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
       </section>
 
       <section class="section" id="tools">
-        <h2>Six Tools</h2>
+        <h2>Seven Tools</h2>
         <p class="lede">
           Satori keeps the public MCP surface small. The tools move an agent
           from repo discovery to exact evidence without adding edit commands.
@@ -1116,6 +1116,15 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
               mixed includes all. Search is the freshness-aware read path and
               returns structured warnings, recommended actions, and navigation
               fallbacks.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>continue_search</h3>
+            <p>
+              Returns the next groups from a frozen grouped-search result set
+              without query embedding, retrieval, or reranking. Handles are
+              process-local; callers pass the exact next offset, making an
+              identical retry safe. Expiry or authority drift fails closed.
             </p>
           </div>
           <div class="panel">
@@ -1450,7 +1459,7 @@ MILVUS_ADDRESS=localhost:19530</code></pre>
         </div>
         <div class="footer-bottom">
           <span>&copy; 2026 Satori. MIT License.</span>
-          <span>Fixed six-tool surface. Diagnostics through existing tools.</span>
+          <span>Fixed seven-tool surface. Diagnostics through existing tools.</span>
         </div>
       </footer>
     </div>

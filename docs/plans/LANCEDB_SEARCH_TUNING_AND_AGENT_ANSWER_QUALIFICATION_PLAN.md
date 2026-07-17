@@ -1,10 +1,12 @@
 # LanceDB Search Tuning and Agent-Answer Qualification Plan
 
-**Status:** Phase 0/1 authority and diagnostics plus the Phase 2 capture/replay
-implementation are complete. No search-policy contender has been admitted and
-normal product ranking remains unchanged. The Phase 2 experimental exit still
-requires one frozen maximum-candidate capture and tuning/validation run; Phase 3
-and Phase 4 remain pending.
+**Status:** Phase 0/1 authority and diagnostics, the Phase 2 capture/replay
+implementation, and Phase 3 infrastructure steps 1–5 are complete. No
+search-policy contender has been admitted; normal product ranking and the
+default visible-result count remain unchanged. The Phase 2 experimental exit
+still requires one frozen maximum-candidate capture and tuning/validation run.
+Phase 3's smaller-disclosure and agent-answer gates remain pending, and Phase 4
+remains conditional on localized lexical misses.
 **Date:** 2026-07-17
 **Related implementation authority:**
 `docs/release/2026-07-15-lancedb-voyage-offline-plan.md`, current code under
@@ -800,6 +802,22 @@ Implementation order inside this phase:
 5. Add the bounded, opaque result-set handle and continuation path.
 6. Only then test smaller initial disclosure classes. Keep the existing visible
    default until the continuation contract and held-out reachability gate pass.
+
+Implementation state on 2026-07-18:
+
+- Steps 1–5 are implemented. Retrieval, reranker admission, and disclosure
+  limits are separate; selected reranker document strings and grouped responses
+  have exact UTF-8 byte guards; grouping freezes one diversity-preserving order;
+  and `continue_search` pages a bounded process-local frozen result set.
+- Continuation is bound to the proven vector generation, prepared authority,
+  and the exact source-observation state, including unavailable `null` evidence.
+  Authority or source drift is checked before and after projection. Exact cursor
+  retries replay the prior serialized page; offset/limit conflict, expiry,
+  process restart, and completed consumption fail with classified outcomes.
+- Continuation performs no query embedding, storage retrieval, or reranking.
+- Step 6 is deliberately not admitted. `disclosureLimit` is opt-in and omitting
+  it preserves the existing visible-result count. A smaller default still
+  requires the frozen held-out agent-answer gate on both backends.
 
 This phase does not invent a second source-expansion mechanism. Agents continue
 to use the existing file-reading tools for full source; the new continuation

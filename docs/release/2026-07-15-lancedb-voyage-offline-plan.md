@@ -640,7 +640,7 @@ resolve and validate the proposed runtime identity without I/O
    the active launcher's runtime bytes
 -> verify the candidate's resolved package name and exact installed version
 -> start that exact candidate and prove MCP initialization plus the canonical
-   six-tool surface for every backend
+   seven-tool surface for every backend
 -> await the selected backend/provider probes against that exact candidate
 -> read mutable client/project files into a pure synchronous install plan
 -> revalidate every planned input immediately before managed writes

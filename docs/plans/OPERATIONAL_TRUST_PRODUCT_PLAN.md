@@ -43,11 +43,11 @@ The mutation-ownership, durable-receipt, repair-evidence, and verified-installat
 - Create, reindex, sync, repair, clear, stale recovery, and cross-root eviction publish receipts through the same transactional snapshot commit.
 - Receipt commits roll back in-memory receipt and lifecycle mutations when persistence fails, reject stale local or disk authority, and return only the post-save authoritative receipt.
 - The final snapshot publication rechecks the mutation lease while the snapshot lock is held.
-- `manage_index` mutation responses and status expose the same optional receipt without changing the version 1 envelope or six-tool surface.
+- `manage_index` mutation responses and status expose the same optional receipt without changing the version 1 envelope. The later progressive-disclosure work expanded the surface to seven tools with `continue_search`.
 - Generated MCP documentation is sourced from the runtime tool description and checked for drift.
 - Repair preserves partial proof after evidence collection begins, distinguishes malformed from missing markers, reserves create for no related collection, and routes every existing untrusted or incomplete generation to reindex.
 - Successful repair rebuilds navigation and may write a fresh completion marker without re-embedding or rewriting source chunks.
-- Non-dry-run install now emits an additive postflight receipt after proving the exact managed launcher and client wiring, MCP initialization/version, canonical six-tool order, runtime-owner registration, and bounded child/owner cleanup.
+- Non-dry-run install now emits an additive postflight receipt after proving the exact managed launcher and client wiring, MCP initialization/version, canonical seven-tool order, runtime-owner registration, and bounded child/owner cleanup.
 - Postflight uses a dedicated non-mutating MCP run mode. It skips recovery, watchers, background sync, lifecycle tools, search, and provider-backed work; incomplete static provider/backend configuration is warning-only, while wiring or runtime proof failure returns a non-zero install exit without rolling back installed artifacts.
 - Managed launchers retain the five-second signal grace for cooperative cleanup. They proxy stdin, trigger graceful MCP shutdown and owner unregister on EOF, and use a separate 1.5-second EOF fallback to reap non-cooperative children inside the MCP SDK shutdown window.
 - Doctor now compares live owner versions and stable identities with the installed runtime, uses process-start evidence when available, reports lease state without age expiry or mutation, validates the managed launcher target/version, and reuses installer-owned parsers to verify configured Codex, Claude, and OpenCode entries.
@@ -250,7 +250,7 @@ Default install postflight must be bounded and non-destructive:
 
 1. Start the exact installed launcher.
 2. Complete MCP initialization.
-3. Verify the fixed six-tool list.
+3. Verify the fixed seven-tool list.
 4. Verify managed client configuration points to that launcher.
 5. Verify runtime-owner registration and installed package version.
 6. Run static provider and vector configuration validation.
@@ -286,9 +286,9 @@ Runtime diagnostics cannot infer whether a result was useful or an edit was corr
 
 Current implementation state:
 
-- The offline grader validates exact six-tool setup/invocation payloads, language labels, paired cold/warm observations, owner-in-top-three, parser-bounded exact opens, graph-derived callers, UTF-8 payload bytes, context bytes, and optional regression limits.
+- The offline grader validates exact seven-tool setup/invocation payloads, language labels, paired cold/warm observations, owner-in-top-three, parser-bounded exact opens, graph-derived callers, UTF-8 payload bytes, context bytes, and optional regression limits.
 - Exact-open success requires `status=ok`, exact owner identity, and exact parser-derived boundaries. Configured limit failures remain in the report and make the CLI exit non-zero.
-- A deterministic recorder starts one fresh MCP runtime per task, verifies the canonical six-tool order, performs an unmeasured explicit incremental sync, proves its completed receipt through status, then records prepared-cold and warm calls in the same runtime. Prepared-cold means the workload has not run yet; protocol and freshness setup have run. Search samples retain model-visible UTF-8 text-content bytes aggregated across measured responses and structured readiness diagnostics. Cold samples must prove a cold readiness check with an exact payload recount; warm samples must prove a cache hit plus receipt revalidation with no recount. Measured calls that cause or join sync, change the operation generation, or contradict those proof modes are rejected.
+- A deterministic recorder starts one fresh MCP runtime per task, verifies the canonical seven-tool order, performs an unmeasured explicit incremental sync, proves its completed receipt through status, then records prepared-cold and warm calls in the same runtime. Prepared-cold means the workload has not run yet; protocol and freshness setup have run. Search samples retain model-visible UTF-8 text-content bytes aggregated across measured responses and structured readiness diagnostics. Cold samples must prove a cold readiness check with an exact payload recount; warm samples must prove a cache hit plus receipt revalidation with no recount. Measured calls that cause or join sync, change the operation generation, or contradict those proof modes are rejected.
 - Recording is bound to one canonical root, clean Git revision, normalized task-suite hash, MCP server version, Node platform, preparation sync statistics, and per-task completed operation generation/runtime fingerprint. Output paths inside the measured repository are rejected. The current status envelope does not separately expose the indexed fingerprint, so the completed compatibility-gated sync receipt is the available proof.
 - The current corpus contains source-read-only repeatable owner-discovery, exact-identifier, and exact-open workloads. Preparation sync may update stale index chunks and advances durable receipts before timing. The recorder and grader provide deterministic operation evidence and separate cold/warm nearest-rank percentiles, but the corpus still has no measured baseline or justified absolute wall-clock budgets.
 - Caller, dirty-file, and stale-recovery grading use a dedicated fixture runner with a fresh temporary Git root per task. The runner rejects template symlinks, traversal, and output inside the template checkout. Dirty-file setup uses an explicit same-runtime no-change sync because the freshness throttle is process-local; it does not pre-run the exact workload. Dirty searches must return the expected owner with `freshnessDecision.mode=skipped_recent`. Stale recovery requires `syncStats.modified >= 1`, a completed durable sync receipt, and recovered expected-owner evidence.

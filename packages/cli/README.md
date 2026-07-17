@@ -17,7 +17,7 @@ The installer performs package resolution once, stores the MCP server under `~/.
 
 Before managed configuration mutation, install resolves or installs an immutable
 MCP runtime candidate, verifies its resolved package name and exact version, and
-starts that candidate to prove MCP initialization and the canonical six-tool
+starts that candidate to prove MCP initialization and the canonical seven-tool
 surface. Tags and ranges are resolved again instead of reusing an older package
 merely because its entry file still exists. A rejected newly installed candidate
 is removed without touching the active launcher target.
@@ -28,7 +28,7 @@ artifact. A rejected preflight leaves the prior launcher target and managed clie
 files unchanged. After a
 non-dry-run install, the CLI runs a bounded postflight against that exact
 launcher. It verifies managed client
-wiring, MCP initialization and installed server version, the fixed six-tool
+wiring, MCP initialization and installed server version, the fixed seven-tool
 list in canonical order, runtime-owner registration, and complete child
 shutdown. The postflight uses a dedicated non-mutating runtime mode and never
 calls `manage_index`, search, or another provider-backed tool.
@@ -39,7 +39,7 @@ The installer only manages Satori-owned config and the first-party workflow skil
 
 - `satori`
 
-After a repo is indexed, Satori keeps the public MCP surface fixed (six tools) while building derived navigation data behind it: grouped search is symbol-owned, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer never indexes or searches a repository during setup; its provider work is limited to the selected preflight probes. `--dry-run` performs static runtime/backend selection and path-syntax validation but does not inspect target filesystem shape, install a package, load LanceDB, contact Ollama, or write filesystem state.
+After a repo is indexed, Satori keeps the public MCP surface fixed (seven tools) while building derived navigation data behind it: grouped search is symbol-owned, `continue_search` pages a frozen ranked result set without provider work, exact navigation uses `symbolInstanceId`, `call_graph` reads relationship sidecars, and completed full indexes write canonical JSON navigation state while optionally importing an additive SQLite cache. The installer never indexes or searches a repository during setup; its provider work is limited to the selected preflight probes. `--dry-run` performs static runtime/backend selection and path-syntax validation but does not inspect target filesystem shape, install a package, load LanceDB, contact Ollama, or write filesystem state.
 
 Grouped search responses use `formatVersion: 2`: each result has one canonical `target`, bounded source evidence, quality, and compact graph readiness. Use the envelope `codebaseRoot` with that target for `read_file` or graph-ready `call_graph` calls; graph-ready results explicitly require inbound verification, and the removed per-result action/fallback trees are not part of the 6.0 contract.
 

@@ -59,7 +59,7 @@ Satori does not edit your code. It gives agents better repo evidence while edits
 
 ## Slide 4: Product
 
-**A fixed six-tool MCP surface for repo investigation**
+**A fixed seven-tool MCP surface for repo investigation**
 
 Satori exposes a small, stable tool surface that coding agents can reliably use during development workflows.
 

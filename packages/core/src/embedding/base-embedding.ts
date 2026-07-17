@@ -30,6 +30,43 @@ export interface EmbeddingIdentity {
     normalizationPolicy: string;
 }
 
+export type EmbeddingProviderErrorCode =
+    | 'EMBEDDING_PROVIDER_AUTH_FAILED'
+    | 'EMBEDDING_PROVIDER_FORBIDDEN'
+    | 'EMBEDDING_PROVIDER_RATE_LIMITED'
+    | 'EMBEDDING_PROVIDER_INVALID_REQUEST'
+    | 'EMBEDDING_PROVIDER_TIMEOUT'
+    | 'EMBEDDING_PROVIDER_UNAVAILABLE'
+    | 'EMBEDDING_PROVIDER_NETWORK_ERROR'
+    | 'EMBEDDING_PROVIDER_ERROR';
+
+/**
+ * Backend-neutral, redacted provider failure exposed at the embedding boundary.
+ * Raw SDK errors stay inside the provider adapter so credentials and response
+ * bodies cannot leak into public tool responses.
+ */
+export class EmbeddingProviderError extends Error {
+    readonly provider: string;
+    readonly code: EmbeddingProviderErrorCode;
+    readonly retryable: boolean;
+    readonly statusCode: number | null;
+
+    constructor(input: {
+        provider: string;
+        code: EmbeddingProviderErrorCode;
+        retryable: boolean;
+        statusCode?: number | null;
+        message: string;
+    }) {
+        super(input.message);
+        this.name = 'EmbeddingProviderError';
+        this.provider = input.provider;
+        this.code = input.code;
+        this.retryable = input.retryable;
+        this.statusCode = input.statusCode ?? null;
+    }
+}
+
 /**
  * Abstract base class for embedding implementations
  */

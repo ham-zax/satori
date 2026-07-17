@@ -451,6 +451,28 @@ export class ToolResponseBuilders {
         } as SearchResponseEnvelope;
     }
 
+    public buildEmbeddingProviderSearchPayload(
+        diagnostic: { code: string; message: string; hints?: Record<string, unknown> },
+        searchContext: SearchContext,
+    ): SearchResponseEnvelope {
+        return {
+            formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
+            status: "not_ready",
+            reason: "embedding_provider_unavailable",
+            code: diagnostic.code,
+            path: searchContext.path,
+            query: searchContext.query,
+            scope: searchContext.scope,
+            groupBy: searchContext.groupBy,
+            resultMode: searchContext.resultMode,
+            limit: searchContext.limit,
+            freshnessDecision: null,
+            message: diagnostic.message,
+            hints: diagnostic.hints,
+            results: [],
+        } as SearchResponseEnvelope;
+    }
+
     public buildInvalidSearchRequestPayload(
         searchContext: SearchContext,
         message: string,

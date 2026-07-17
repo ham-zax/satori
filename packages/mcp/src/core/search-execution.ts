@@ -49,6 +49,7 @@ import type {
 } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
 import type { VectorBackendDiagnostic } from "./backend-diagnostics.js";
+import type { EmbeddingProviderDiagnostic } from "./embedding-provider-diagnostics.js";
 import type { FreshnessDecision } from "./sync.js";
 import {
     resolveRerankFamilyKey,
@@ -75,7 +76,8 @@ export type SearchExpansionReason =
     | "explicit_role_cue"
     | "primary_candidate_pool_sufficient"
     | "primary_candidate_pool_small"
-    | "primary_failed_fallback";
+    | "primary_failed_fallback"
+    | "primary_terminal_provider_failure";
 
 export type SearchExpansionDecision = {
     expand: boolean;
@@ -167,6 +169,7 @@ export function resolveSearchExpansionDecision(input: {
     explicitRoleCuePresent: boolean;
     primaryScopedCandidateCount: number;
     primaryFailed: boolean;
+    primaryFailureRetryable?: boolean;
 }): SearchExpansionDecision {
     if (input.retrievalMode === "lexical") {
         return {
@@ -176,6 +179,13 @@ export function resolveSearchExpansionDecision(input: {
         };
     }
     if (input.primaryFailed) {
+        if (input.primaryFailureRetryable === false) {
+            return {
+                expand: false,
+                reason: "primary_terminal_provider_failure",
+                primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+            };
+        }
         return {
             expand: true,
             reason: "primary_failed_fallback",
@@ -308,6 +318,10 @@ export type SearchExecutionOutcome =
         diagnostic: VectorBackendDiagnostic;
     }
     | {
+        kind: "embedding_provider_unavailable";
+        diagnostic: EmbeddingProviderDiagnostic;
+    }
+    | {
         kind: "all_semantic_passes_failed";
     };
 
@@ -323,6 +337,7 @@ export type SearchExecutionHost = {
     }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: VoyageAIReranker | null;
     shouldForceSearchPassFailure: (passId: SearchPassId) => boolean;
+    classifyEmbeddingProviderError: (error: unknown) => EmbeddingProviderDiagnostic | null;
     classifyVectorBackendError: (error: unknown) => VectorBackendDiagnostic | null;
     measureSearchPhase: <T>(
         phase: "semanticSearch" | "trackedLexical" | "rerank",
@@ -665,6 +680,9 @@ export async function runSearchExecution(
         const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
         const primarySettled = await runPasses([primaryDescriptor]);
         const primaryResult = primarySettled[0];
+        const primaryEmbeddingDiagnostic = primaryResult.status === "rejected"
+            ? host.classifyEmbeddingProviderError(primaryResult.reason)
+            : null;
         const primaryResults = primaryResult.status === "fulfilled"
             ? Array.isArray(primaryResult.value)
                 ? primaryResult.value
@@ -689,6 +707,7 @@ export async function runSearchExecution(
                 || input.queryPlan.writerSeeking,
             primaryScopedCandidateCount,
             primaryFailed: primaryResult.status === "rejected",
+            primaryFailureRetryable: primaryEmbeddingDiagnostic?.retryable,
         });
         semanticExpansion = {
             ...expansionDecision,
@@ -709,6 +728,7 @@ export async function runSearchExecution(
             results: SearchResultLike[];
             diagnosticCandidateArms?: SemanticSearchExecutionResult["diagnosticCandidateArms"];
         }> = [];
+        let embeddingProviderDiagnostic = primaryEmbeddingDiagnostic;
         let vectorBackendDiagnostic: VectorBackendDiagnostic | null = null;
         for (let idx = 0; idx < passSettled.length; idx++) {
             const passResult = passSettled[idx];
@@ -736,8 +756,11 @@ export async function runSearchExecution(
                 continue;
             }
 
-            if (passResult.status === "rejected" && vectorBackendDiagnostic === null) {
-                vectorBackendDiagnostic = host.classifyVectorBackendError(passResult.reason);
+            if (passResult.status === "rejected") {
+                embeddingProviderDiagnostic ??= host.classifyEmbeddingProviderError(passResult.reason);
+                if (embeddingProviderDiagnostic === null && vectorBackendDiagnostic === null) {
+                    vectorBackendDiagnostic = host.classifyVectorBackendError(passResult.reason);
+                }
             }
             searchWarningsSet.add(buildSearchPassWarningHelper(passDescriptor.id));
         }
@@ -746,6 +769,12 @@ export async function runSearchExecution(
         searchDiagnostics.searchPassFailureCount += passDescriptors.length - successfulPasses.length;
 
         if (successfulPasses.length === 0) {
+            if (embeddingProviderDiagnostic) {
+                return {
+                    kind: "embedding_provider_unavailable",
+                    diagnostic: embeddingProviderDiagnostic,
+                };
+            }
             if (vectorBackendDiagnostic) {
                 return {
                     kind: "vector_backend_unavailable",

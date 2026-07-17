@@ -49,3 +49,26 @@ test('semantic expansion remains available for ambiguous, constrained, mixed and
         { expand: true, reason: 'primary_failed_fallback', primaryScopedCandidateCount: 3 },
     );
 });
+
+test('semantic expansion does not repeat a terminal provider failure', () => {
+    assert.deepEqual(
+        resolveSearchExpansionDecision({
+            ...defaults,
+            primaryFailed: true,
+            primaryFailureRetryable: false,
+        }),
+        {
+            expand: false,
+            reason: 'primary_terminal_provider_failure',
+            primaryScopedCandidateCount: 3,
+        },
+    );
+    assert.deepEqual(
+        resolveSearchExpansionDecision({
+            ...defaults,
+            primaryFailed: true,
+            primaryFailureRetryable: true,
+        }),
+        { expand: true, reason: 'primary_failed_fallback', primaryScopedCandidateCount: 3 },
+    );
+});

@@ -412,7 +412,8 @@ export interface SearchDebugHint {
             | "explicit_role_cue"
             | "primary_candidate_pool_sufficient"
             | "primary_candidate_pool_small"
-            | "primary_failed_fallback";
+            | "primary_failed_fallback"
+            | "primary_terminal_provider_failure";
         primaryScopedCandidateCount: number;
     };
     rankingProvenance: {
@@ -625,6 +626,16 @@ export type VectorBackendResponseCode =
     | "VECTOR_BACKEND_TIMEOUT"
     | "VECTOR_BACKEND_CONNECTION_CLOSED";
 
+export type EmbeddingProviderResponseCode =
+    | "EMBEDDING_PROVIDER_AUTH_FAILED"
+    | "EMBEDDING_PROVIDER_FORBIDDEN"
+    | "EMBEDDING_PROVIDER_RATE_LIMITED"
+    | "EMBEDDING_PROVIDER_INVALID_REQUEST"
+    | "EMBEDDING_PROVIDER_TIMEOUT"
+    | "EMBEDDING_PROVIDER_UNAVAILABLE"
+    | "EMBEDDING_PROVIDER_NETWORK_ERROR"
+    | "EMBEDDING_PROVIDER_ERROR";
+
 export type NonOkReason =
     | "indexing"
     | "requires_reindex"
@@ -634,6 +645,7 @@ export type NonOkReason =
     | NavigationUnavailableReason
     | "missing_provider_config"
     | "search_backend_failed"
+    | "embedding_provider_unavailable"
     | "vector_backend_unavailable";
 
 export interface IndexingFailureMetadata {
@@ -646,7 +658,7 @@ interface SearchBaseResponseEnvelope {
     formatVersion: typeof SEARCH_RESPONSE_FORMAT_VERSION;
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
     reason?: NonOkReason;
-    code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode;
+    code?: "MISSING_PROVIDER_CONFIG" | VectorBackendResponseCode | EmbeddingProviderResponseCode;
     path: string;
     codebaseRoot?: string;
     query: string;

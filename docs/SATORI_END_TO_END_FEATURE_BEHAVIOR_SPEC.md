@@ -182,6 +182,7 @@ Warnings/hints:
 - Reindex guidance text when blocked by fingerprint mismatch.
 - Zilliz collection-limit guidance with explicit next action.
 - Vector backend failures return structured `status=error`, `reason=vector_backend_unavailable`, stable diagnostic code, and remediation in `hints.backend`.
+- Embedding provider failures return a redacted stable diagnostic code and remediation in `hints.embedding`; terminal failures do not start a second semantic pass.
 - Repair recovery is mechanically fixed: no related collection returns `blocked/needs_create` with create as `hints.nextAction`; any existing incompatible, incomplete, stale, malformed, or unprovable generation returns `requires_reindex` with reindex as `hints.nextAction`. Backend failure uses `hints.backend`; diagnose it and retry repair rather than inventing a lifecycle action.
 - `create` path resolves and can return "already indexed" guidance.
 - `reindex` preflight can emit deterministic warnings (`REINDEX_UNNECESSARY_IGNORE_ONLY`, `REINDEX_PREFLIGHT_UNKNOWN`, `IGNORE_POLICY_PROBE_FAILED`).

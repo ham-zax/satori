@@ -20,6 +20,7 @@ import {
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
     COLLECTION_LIMIT_MESSAGE,
+    EmbeddingProviderError,
 } from '@zokizuan/satori-core';
 import type { SymbolRecord, SymbolRegistryManifest } from '@zokizuan/satori-core';
 
@@ -9474,6 +9475,79 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
         assert.equal(payload.resultMode, 'grouped');
         assert.deepEqual(payload.results, []);
         assert.match(payload.message, /all semantic search passes failed/i);
+    });
+});
+
+test('handleSearchCode preserves a redacted terminal embedding cause without starting a fallback pass', async () => {
+    await withTempRepo(async (repoPath) => {
+        let semanticSearchCalls = 0;
+        const context = {
+            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
+            semanticSearch: async () => {
+                semanticSearchCalls += 1;
+                throw new EmbeddingProviderError({
+                    provider: 'VoyageAI',
+                    code: 'EMBEDDING_PROVIDER_AUTH_FAILED',
+                    retryable: false,
+                    statusCode: 401,
+                    message: 'invalid api_key=secret-provider-value',
+                });
+            },
+        } as unknown as HandlerContext;
+
+        const snapshotManager = {
+            getAllCodebases: () => [],
+            getIndexedCodebases: () => [repoPath],
+            getIndexingCodebases: () => [],
+            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
+        } as unknown as HandlerSnapshotManager;
+
+        const syncManager = {
+            ensureFreshness: async () => ({
+                mode: 'skipped_recent',
+                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
+                thresholdMs: 180000,
+            }),
+        } as unknown as HandlerSyncManager;
+
+        const handlers = new ToolHandlers(
+            context,
+            snapshotManager,
+            syncManager,
+            RUNTIME_FINGERPRINT,
+            CAPABILITIES_NO_RERANK,
+            () => Date.parse('2026-01-01T01:00:00.000Z'),
+        );
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'validate session',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        assert.equal(semanticSearchCalls, 1);
+        assert.equal(response.isError, true);
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'not_ready');
+        assert.equal(payload.reason, 'embedding_provider_unavailable');
+        assert.equal(payload.code, 'EMBEDDING_PROVIDER_AUTH_FAILED');
+        assert.equal(payload.message, 'VoyageAI embedding authentication failed (HTTP 401).');
+        assert.doesNotMatch(response.content[0]?.text || '', /secret-provider-value/);
+        assert.deepEqual(payload.hints?.embedding, {
+            code: 'EMBEDDING_PROVIDER_AUTH_FAILED',
+            provider: 'VoyageAI',
+            retryable: false,
+            statusCode: 401,
+            nextSteps: [
+                'Verify VOYAGEAI_API_KEY is present and current in the MCP client environment.',
+                'Restart the MCP server after correcting the credential.',
+            ],
+        });
+        assert.equal(response.meta?.searchDiagnostics?.searchPassCount, 1);
+        assert.equal(response.meta?.searchDiagnostics?.semanticExpansionReason, 'primary_terminal_provider_failure');
     });
 });
 

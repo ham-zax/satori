@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { VoyageAIError } from 'voyageai';
+import { EmbeddingProviderError } from './base-embedding.js';
 import { VoyageAIEmbedding } from './voyageai-embedding.js';
 
 type EmbedRequest = {
@@ -110,6 +111,104 @@ test('Voyage embedding exposes retries instead of hiding them inside the SDK', a
     assert.equal(attempts, 2);
     assert.equal(embedding.getOperationMetricsSnapshot().providerRequestCount, 2);
     assert.equal(embedding.getOperationMetricsSnapshot().retryCount, 1);
+});
+
+test('Voyage embedding classifies and redacts terminal authentication failures without retrying', async () => {
+    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    let attempts = 0;
+    stubEmbedClient(embedding, async () => {
+        attempts += 1;
+        throw new VoyageAIError({
+            statusCode: 401,
+            message: 'authentication connection failed api_key=secret-provider-value',
+        });
+    });
+
+    await assert.rejects(
+        embedding.embedQuery('owner'),
+        (error: unknown) => {
+            assert.ok(error instanceof EmbeddingProviderError);
+            assert.equal(error.provider, 'VoyageAI');
+            assert.equal(error.code, 'EMBEDDING_PROVIDER_AUTH_FAILED');
+            assert.equal(error.statusCode, 401);
+            assert.equal(error.retryable, false);
+            assert.equal(error.message, 'VoyageAI embedding authentication failed (HTTP 401).');
+            assert.doesNotMatch(error.message, /secret-provider-value/);
+            return true;
+        },
+    );
+    assert.equal(attempts, 1);
+    assert.equal(embedding.getOperationMetricsSnapshot().retryCount, 0);
+});
+
+test('Voyage embedding preserves retryability when classifying exhausted provider failures', async () => {
+    class ImmediateRetryEmbedding extends VoyageAIEmbedding {
+        protected async waitBeforeRetry(): Promise<void> {
+            return undefined;
+        }
+    }
+
+    const cases = [
+        {
+            name: 'invalid request',
+            error: new VoyageAIError({ statusCode: 400, message: 'invalid model' }),
+            code: 'EMBEDDING_PROVIDER_INVALID_REQUEST',
+            retryable: false,
+            attempts: 1,
+        },
+        {
+            name: 'forbidden',
+            error: new VoyageAIError({ statusCode: 403, message: 'source IP forbidden' }),
+            code: 'EMBEDDING_PROVIDER_FORBIDDEN',
+            retryable: false,
+            attempts: 1,
+        },
+        {
+            name: 'rate limited',
+            error: new VoyageAIError({ statusCode: 429, message: 'rate limited' }),
+            code: 'EMBEDDING_PROVIDER_RATE_LIMITED',
+            retryable: true,
+            attempts: 3,
+        },
+        {
+            name: 'service unavailable',
+            error: new VoyageAIError({ statusCode: 503, message: 'service unavailable' }),
+            code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
+            retryable: true,
+            attempts: 3,
+        },
+        {
+            name: 'network failure',
+            error: new Error('fetch failed'),
+            code: 'EMBEDDING_PROVIDER_NETWORK_ERROR',
+            retryable: true,
+            attempts: 3,
+        },
+    ] as const;
+
+    for (const fixture of cases) {
+        const embedding = new ImmediateRetryEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+        let attempts = 0;
+        stubEmbedClient(embedding, async () => {
+            attempts += 1;
+            throw fixture.error;
+        });
+
+        await assert.rejects(
+            embedding.embedQuery(fixture.name),
+            (error: unknown) => {
+                assert.ok(error instanceof EmbeddingProviderError);
+                assert.equal(error.code, fixture.code);
+                assert.equal(error.retryable, fixture.retryable);
+                return true;
+            },
+        );
+        assert.equal(attempts, fixture.attempts);
+        assert.equal(
+            embedding.getOperationMetricsSnapshot().retryCount,
+            fixture.retryable ? fixture.attempts - 1 : 0,
+        );
+    }
 });
 
 test('Voyage embedding keeps document and query roles isolated across overlapping retries', async () => {

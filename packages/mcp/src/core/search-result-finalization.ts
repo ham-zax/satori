@@ -40,6 +40,7 @@ import type {
     SearchGroupedResultV2,
     SearchRecommendedNextAction,
     SearchReadinessDebugHint,
+    SearchRankingDebugHint,
     SearchGroupedResponseEnvelope,
     SearchResponseHints,
     SearchResponseEnvelope,
@@ -219,7 +220,9 @@ export async function finalizeSearchResults(
     const mustApplied = input.parsedOperators.must.length > 0;
     const mustSatisfied = !mustApplied || scored.length > 0;
 
-    const buildRankingDebug = (diversitySummary?: SearchDebugHint["diversitySummary"]) => ({
+    const buildRankingDebug = (
+        diversitySummary?: SearchDebugHint["diversitySummary"],
+    ): SearchRankingDebugHint => ({
             route: {
                 ...input.queryPlan.route,
                 allowedSources: [...input.queryPlan.route.allowedSources],
@@ -384,7 +387,7 @@ export async function finalizeSearchResults(
             },
             ...(changedCode ? { changedCode } : {}),
         }, freshnessSummary);
-        const debugSearch = input.debugMode === "full"
+        const debugSearch: SearchResponseHints["debugSearch"] = input.debugMode === "full"
             ? {
                 ...rankingDebug!,
                 phaseTimingsMs: input.phaseTimings,

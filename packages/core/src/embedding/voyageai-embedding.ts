@@ -8,6 +8,8 @@ import {
     type EmbeddingBatchPolicy,
     type EmbeddingIdentity,
     type EmbeddingOperationMetricsSnapshot,
+    EmbeddingProviderError,
+    type EmbeddingProviderErrorCode,
     type EmbeddingVector,
 } from './base-embedding';
 
@@ -22,8 +24,8 @@ function isRetryableVoyageError(error: unknown): boolean {
     if (error instanceof VoyageAITimeoutError) return true;
     if (error instanceof VoyageAIError) {
         const statusCode = error.statusCode;
-        if (statusCode === 408 || statusCode === 429 || (statusCode !== undefined && statusCode >= 500)) {
-            return true;
+        if (statusCode !== undefined) {
+            return statusCode === 408 || statusCode === 429 || statusCode >= 500;
         }
     }
     const message = error instanceof Error ? error.message : String(error);
@@ -36,6 +38,53 @@ function isExplicitVoyageBatchLimitError(error: unknown): boolean {
     }
     const message = error instanceof Error ? error.message : String(error);
     return /too many|maximum.*(?:input|text|token)|token.*limit|input.*limit|request.*large/i.test(message);
+}
+
+function classifyVoyageProviderError(error: unknown): EmbeddingProviderError {
+    if (error instanceof EmbeddingProviderError) return error;
+
+    const statusCode = error instanceof VoyageAIError ? error.statusCode ?? null : null;
+    let code: EmbeddingProviderErrorCode = 'EMBEDDING_PROVIDER_ERROR';
+    let retryable = false;
+    let cause = 'request failed';
+
+    if (error instanceof VoyageAITimeoutError || statusCode === 408) {
+        code = 'EMBEDDING_PROVIDER_TIMEOUT';
+        retryable = true;
+        cause = 'request timed out';
+    } else if (statusCode === 401) {
+        code = 'EMBEDDING_PROVIDER_AUTH_FAILED';
+        cause = 'authentication failed';
+    } else if (statusCode === 403) {
+        code = 'EMBEDDING_PROVIDER_FORBIDDEN';
+        cause = 'request was forbidden';
+    } else if (statusCode === 429) {
+        code = 'EMBEDDING_PROVIDER_RATE_LIMITED';
+        retryable = true;
+        cause = 'rate limit was exceeded';
+    } else if (statusCode !== null && statusCode >= 500) {
+        code = 'EMBEDDING_PROVIDER_UNAVAILABLE';
+        retryable = true;
+        cause = 'service was unavailable';
+    } else if (statusCode !== null && statusCode >= 400) {
+        code = 'EMBEDDING_PROVIDER_INVALID_REQUEST';
+        cause = 'request was rejected';
+    } else {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/ECONNRESET|ETIMEDOUT|fetch failed|network|socket|connection/i.test(message)) {
+            code = 'EMBEDDING_PROVIDER_NETWORK_ERROR';
+            retryable = true;
+            cause = 'network request failed';
+        }
+    }
+
+    return new EmbeddingProviderError({
+        provider: 'VoyageAI',
+        code,
+        retryable,
+        statusCode,
+        message: `VoyageAI embedding ${cause}${statusCode === null ? '' : ` (HTTP ${statusCode})`}.`,
+    });
 }
 
 export type VoyageOutputDimension = 256 | 512 | 1024 | 2048;
@@ -123,15 +172,23 @@ export class VoyageAIEmbedding extends Embedding {
     }
 
     async embedQuery(text: string): Promise<EmbeddingVector> {
-        const [embedding] = await this.embedTexts([text], 'query');
-        if (!embedding) {
-            throw new Error('VoyageAI API returned invalid response');
+        try {
+            const [embedding] = await this.embedTexts([text], 'query');
+            if (!embedding) {
+                throw new Error('VoyageAI API returned invalid response');
+            }
+            return embedding;
+        } catch (error) {
+            throw classifyVoyageProviderError(error);
         }
-        return embedding;
     }
 
     async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
-        return this.embedTexts(texts, 'document');
+        try {
+            return await this.embedTexts(texts, 'document');
+        } catch (error) {
+            throw classifyVoyageProviderError(error);
+        }
     }
 
     private async embedTexts(texts: string[], inputType: VoyageInputType): Promise<EmbeddingVector[]> {

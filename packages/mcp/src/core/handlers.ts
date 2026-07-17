@@ -76,6 +76,10 @@ import {
     SearchSpan,
 } from "./search-types.js";
 import {
+    classifyEmbeddingProviderError,
+    type EmbeddingProviderDiagnostic,
+} from './embedding-provider-diagnostics.js';
+import {
     ManageIndexAction,
 } from "./manage-types.js";
 import {
@@ -2535,6 +2539,20 @@ export class ToolHandlers {
         return this.toolResponseBuilders.buildVectorBackendSearchPayload(diagnostic, searchContext);
     }
 
+    private buildEmbeddingProviderSearchPayload(
+        diagnostic: EmbeddingProviderDiagnostic,
+        searchContext: {
+            path: string;
+            query: string;
+            scope: SearchScope;
+            groupBy: SearchGroupBy;
+            resultMode: SearchResultMode;
+            limit: number;
+        },
+    ): SearchResponseEnvelope {
+        return this.toolResponseBuilders.buildEmbeddingProviderSearchPayload(diagnostic, searchContext);
+    }
+
     private buildInvalidSearchRequestPayload(
         searchContext: {
             path: string;
@@ -3684,6 +3702,7 @@ export class ToolHandlers {
                 },
                 reranker: this.reranker,
                 shouldForceSearchPassFailure: (passId) => this.shouldForceSearchPassFailure(passId),
+                classifyEmbeddingProviderError,
                 classifyVectorBackendError,
                 measureSearchPhase: (phase, run) => this.measureSearchPhase(phaseTimings, phase, run),
             }, searchDiagnostics);
@@ -3705,6 +3724,27 @@ export class ToolHandlers {
                             error: execution.diagnostic.code
                         }
                     }
+                };
+            }
+
+            if (execution.kind === 'embedding_provider_unavailable') {
+                const payload = this.buildEmbeddingProviderSearchPayload(execution.diagnostic, {
+                    path: absolutePath,
+                    query: input.query,
+                    scope: input.scope,
+                    groupBy: input.groupBy,
+                    resultMode: input.resultMode,
+                    limit: input.limit,
+                });
+                return {
+                    content: [{ type: "text", text: this.stringifyToolJson(payload) }],
+                    isError: !execution.diagnostic.retryable,
+                    meta: {
+                        searchDiagnostics: {
+                            ...searchDiagnostics,
+                            error: execution.diagnostic.code,
+                        },
+                    },
                 };
             }
 

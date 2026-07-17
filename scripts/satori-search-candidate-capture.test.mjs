@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildSearchCandidateCapture } from "./satori-search-candidate-capture.mjs";
 import {
+    orderCapturedCoreArm,
     replayBaselineCandidateCapture,
     replayCandidateCapture,
 } from "./satori-search-candidate-replay.mjs";
@@ -22,6 +23,26 @@ const REPLAY_SCRIPT_PATH = fileURLToPath(new URL("./satori-search-candidate-repl
 function sha256Canonical(value) {
     return crypto.createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }
+
+test("captured Core arms slice adapter order before normalized score ranking", () => {
+    const candidates = [
+        occurrence("raw_dense", 1, 0.4),
+        occurrence("raw_dense", 2, 0.9),
+        occurrence("raw_dense", 3, 1.0),
+    ];
+    const stage = {
+        stage: "raw_dense",
+        totalOccurrences: candidates.length,
+        uniqueCandidates: candidates.length,
+        omittedOccurrences: 0,
+        candidates,
+    };
+
+    assert.deepEqual(
+        orderCapturedCoreArm(stage, 2).map((candidate) => candidate.candidateId),
+        ["candidate-2", "candidate-1"],
+    );
+});
 
 function taskSuite() {
     return {
@@ -480,6 +501,24 @@ test("candidate capture binds stable query, runtime, publication, and trace auth
     assert.match(capture.sha256, /^[0-9a-f]{64}$/);
 });
 
+test("candidate capture accepts status-only preparation and rejects mixed sync evidence", () => {
+    const suite = taskSuite();
+    const observations = observationSet(suite);
+    for (const taskRun of observations.metadata.taskRuns) {
+        taskRun.preparationMode = "status-only";
+        delete taskRun.syncStats;
+    }
+
+    const capture = buildSearchCandidateCapture(suite, observations);
+    assert.equal(capture.captures.length, 1);
+
+    observations.metadata.taskRuns[0].syncStats = { added: 0, removed: 0, modified: 0 };
+    assert.throws(
+        () => buildSearchCandidateCapture(suite, observations),
+        /status-only preparation must not contain syncStats/,
+    );
+});
+
 test("candidate capture admits a complete depth-160 AND and OR superset", () => {
     const suite = taskSuite();
     suite.tasks[0].workload.invocations[0].args.debugCandidateLimit = 160;
@@ -516,6 +555,8 @@ test("baseline replay recomputes both Core and MCP fusion from one capture", () 
     assert.equal(replay.policyId, "baseline");
     assert.deepEqual(replay.tasks, [{
         taskId: "ignore-owner",
+        route: { kind: "fusion", fusionReplay: "exact" },
+        policyAffected: true,
         corePasses: [{
             passId: "attempt:1/primary",
             mode: "hybrid",
@@ -538,6 +579,67 @@ test("baseline replay recomputes both Core and MCP fusion from one capture", () 
     assert.equal(replay.replayRuntime.policySource.kind, "canonical_inline");
     assert.match(replay.replayRuntime.sha256, /^[0-9a-f]{64}$/);
     assert.match(replay.sha256, /^[0-9a-f]{64}$/);
+});
+
+test("exact-registry hits reproduce as policy-invariant routes without fusion work", () => {
+    const suite = taskSuite();
+    suite.tasks[0].queryClass = "exact_identifier";
+    suite.tasks[0].expected = {
+        ownerFile: "src/sync.ts",
+        ownerSymbol: "reconcileIgnoreRules",
+    };
+    const observations = observationSet(suite);
+    for (const observation of observations.observations) {
+        observation.results = [{
+            kind: "symbol",
+            file: "src/sync.ts",
+            symbol: "reconcileIgnoreRules",
+        }];
+        const debug = observation.response.hints.debugSearch;
+        debug.route = {
+            kind: "exact_identifier",
+            reason: "identifier_intent",
+            deterministicFirst: true,
+        };
+        debug.retrieval = { mode: "lexical", scorePolicyKind: "topk_only" };
+        delete debug.diagnosticCandidateLimit;
+        debug.passesUsed = ["exact_registry"];
+        debug.exactRegistry = {
+            attempted: true,
+            status: "hit",
+            reason: "symbol_name",
+            matchedSymbolInstanceId: "syminst-exact-owner",
+        };
+        debug.providerWork = Object.fromEntries(
+            Object.keys(debug.providerWork).map((field) => [field, 0]),
+        );
+        debug.rerank = {
+            ...debug.rerank,
+            attempted: false,
+            applied: false,
+            candidatesReranked: 0,
+        };
+        debug.candidateSurvival.corePasses = [];
+        debug.candidateSurvival.queryEmbeddings = [];
+        debug.candidateSurvival.lexicalRequests = [];
+        debug.candidateSurvival.stages = [];
+        debug.candidateSurvival.removals = [];
+        debug.candidateSurvival.omittedRemovals = 0;
+        observation.responseBytes = Buffer.byteLength(JSON.stringify(observation.response), "utf8");
+    }
+    const capture = buildSearchCandidateCapture(suite, observations, { requireReplayReady: true });
+
+    assert.deepEqual(capture.replayReadiness.policyInvariantTaskIds, ["ignore-owner"]);
+    assert.deepEqual(capture.replayReadiness.fusionTaskIds, []);
+    assert.equal(capture.captures[0].readiness.fusionReplayStatus, "not_applicable");
+
+    const baseline = replayBaselineCandidateCapture(capture);
+    const contender = replayCandidateCapture(capture, contenderPolicy());
+    assert.equal(baseline.tasks[0].route.kind, "exact_registry");
+    assert.equal(baseline.tasks[0].policyAffected, false);
+    assert.deepEqual(baseline.tasks[0].corePasses, []);
+    assert.deepEqual(contender.tasks[0].rankedResults, baseline.tasks[0].rankedResults);
+    assert.equal(contender.tasks[0].policyAffected, false);
 });
 
 test("baseline replay uses the captured product depth for each Core pass", () => {
@@ -590,6 +692,8 @@ test("contender replay proves baseline first and carries a conditional OR candid
         rerankerAdmission: true,
         rerankerProviderOutput: false,
         groupingAndDisclosure: false,
+        fusionTaskCount: 1,
+        exactRegistryPolicyInvariantTaskCount: 0,
     });
     assert.equal(replay.tasks[0].corePasses[0].fallbackActivated, true);
     assert.deepEqual(
@@ -599,6 +703,14 @@ test("contender replay proves baseline first and carries a conditional OR candid
     assert.deepEqual(
         replay.tasks[0].mcpAttempts[0].candidates.map((candidate) => candidate.candidateId),
         ["fallback-candidate", "candidate-1"],
+    );
+    assert.deepEqual(
+        replay.tasks[0].mcpAttempts[0].candidates.map((candidate) => candidate.symbolLabel),
+        ["fallbackOwner", "reconcileIgnoreRules"],
+    );
+    assert.deepEqual(
+        replay.tasks[0].mcpAttempts[0].candidates.map((candidate) => candidate.symbolId),
+        ["fallback-symbol", "primary-symbol"],
     );
     assert.deepEqual(
         replay.tasks[0].rerankerAdmission.selectedCandidateIds,
@@ -614,6 +726,27 @@ test("contender replay proves baseline first and carries a conditional OR candid
         () => replayCandidateCapture(capture, malformed),
         /must contain exactly/,
     );
+});
+
+test("contender tuning replay does not process validation captures", () => {
+    const suite = taskSuite();
+    suite.tasks[0].workload.invocations[0].args.debugCandidateLimit = 160;
+    const capture = buildSearchCandidateCapture(
+        suite,
+        replayReadyObservationSet(suite),
+        { requireReplayReady: true },
+    );
+    const template = capture.captures[0];
+    capture.captures = [
+        { ...structuredClone(template), taskId: "tuning-ignore-owner" },
+        { ...structuredClone(template), taskId: "validation-ignore-owner" },
+    ];
+    const { sha256: _captureSha256, ...unsignedCapture } = capture;
+    capture.sha256 = sha256Canonical(unsignedCapture);
+
+    const replay = replayCandidateCapture(capture, contenderPolicy(), { taskPrefix: "tuning" });
+    assert.equal(replay.taskPrefix, "tuning");
+    assert.deepEqual(replay.tasks.map((task) => task.taskId), ["tuning-ignore-owner"]);
 });
 
 test("contender replay excludes a fallback candidate with a recorded diagnostic removal", () => {
@@ -645,6 +778,36 @@ test("contender replay excludes a fallback candidate with a recorded diagnostic 
         reason: "scope_filter",
     }]);
     assert.deepEqual(replay.tasks[0].rerankerAdmission.selectedCandidateIds, ["candidate-1"]);
+});
+
+test("contender replay remains complete when only diagnostic removal reasons are truncated", () => {
+    const suite = taskSuite();
+    suite.tasks[0].workload.invocations[0].args.debugCandidateLimit = 160;
+    const observations = replayReadyObservationSet(suite);
+    for (const observation of observations.observations) {
+        const trace = observation.response.hints.debugSearch.candidateSurvival;
+        const signals = trace.stages.find((stage) => stage.stage === "mcp_replay_signals");
+        signals.candidates = signals.candidates.filter(
+            (candidate) => candidate.candidateId !== "fallback-candidate",
+        );
+        signals.totalOccurrences = signals.candidates.length;
+        signals.uniqueCandidates = signals.candidates.length;
+        trace.omittedRemovals = 1;
+        observation.responseBytes = Buffer.byteLength(JSON.stringify(observation.response), "utf8");
+    }
+    const capture = buildSearchCandidateCapture(
+        suite,
+        observations,
+        { requireReplayReady: true },
+    );
+
+    const replay = replayCandidateCapture(capture, contenderPolicy());
+    assert.equal(capture.replayReadiness.survivalReady, true);
+    assert.equal(capture.replayReadiness.removalReasonsComplete, false);
+    assert.deepEqual(replay.tasks[0].mcpAttempts[0].removed, [{
+        candidateId: "fallback-candidate",
+        reason: "filtered_before_local_scoring_reason_unrecorded",
+    }]);
 });
 
 test("replay CLI binds the exact policy-file bytes and executable manifest", () => {

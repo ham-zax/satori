@@ -37,6 +37,11 @@ function requireRecord(value, label) {
     return value;
 }
 
+function requireArray(value, label) {
+    if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+    return value;
+}
+
 function requireString(value, label) {
     if (typeof value !== "string" || value.length === 0) {
         throw new Error(`${label} must be a non-empty string.`);
@@ -176,11 +181,39 @@ function compactRankedArm(stage, label) {
     return ranked;
 }
 
+export function orderCapturedCoreArm(stage, depth, label = "Captured Core arm") {
+    const candidates = requireCompleteStage(stage, label).candidates
+        .slice(0, requirePositiveInteger(depth, `${label} depth`))
+        .map((rawCandidate) => {
+            const candidate = requireRecord(rawCandidate, `${label} candidate`);
+            requireString(candidate.candidateId, `${label} candidateId`);
+            if (typeof candidate.score !== "number" || !Number.isFinite(candidate.score)) {
+                throw new Error(`${label} candidate '${candidate.candidateId}' has no finite score.`);
+            }
+            return candidate;
+        })
+        .sort((left, right) => (
+            right.score - left.score || compareCandidateIdentity(left, right)
+        ));
+    const seen = new Map();
+    const ranked = [];
+    for (const candidate of candidates) {
+        const prior = seen.get(candidate.candidateId);
+        if (prior) {
+            assertSameCandidatePayload(prior, candidate, label);
+            continue;
+        }
+        seen.set(candidate.candidateId, candidate);
+        ranked.push(candidate);
+    }
+    return ranked;
+}
+
 function replayCoreFusion(denseStage, lexicalStage, limit, label) {
     const byId = new Map();
     const addArm = (stage, armLabel) => {
         if (!stage) return;
-        const candidates = compactRankedArm(stage, `${label} ${armLabel}`);
+        const candidates = orderCapturedCoreArm(stage, limit, `${label} ${armLabel}`);
         candidates.forEach((candidate, index) => {
             const score = 1 / (CORE_RRF_K + index + 1);
             const existing = byId.get(candidate.candidateId);
@@ -283,13 +316,25 @@ function replayPolicyCorePass(capture, outputStage, policy) {
     const fallbackStage = stageByNameAndPass(stages, "raw_lexical_fallback", passId);
     const arms = {
         dense: denseStage
-            ? compactRankedArm(denseStage, `Task '${capture.taskId}' dense '${passId}'`).slice(0, policy.core.candidateDepth)
+            ? orderCapturedCoreArm(
+                denseStage,
+                policy.core.candidateDepth,
+                `Task '${capture.taskId}' dense '${passId}'`,
+            )
             : [],
         preciseLexical: preciseStage
-            ? compactRankedArm(preciseStage, `Task '${capture.taskId}' precise lexical '${passId}'`).slice(0, policy.core.candidateDepth)
+            ? orderCapturedCoreArm(
+                preciseStage,
+                policy.core.candidateDepth,
+                `Task '${capture.taskId}' precise lexical '${passId}'`,
+            )
             : [],
         fallbackLexical: fallbackStage
-            ? compactRankedArm(fallbackStage, `Task '${capture.taskId}' fallback lexical '${passId}'`).slice(0, policy.core.candidateDepth)
+            ? orderCapturedCoreArm(
+                fallbackStage,
+                policy.core.candidateDepth,
+                `Task '${capture.taskId}' fallback lexical '${passId}'`,
+            )
             : [],
     };
     const fallbackActivated = policy.core.fallback.enabled
@@ -367,7 +412,11 @@ function assertRankedStageMatches(actual, expectedStage, label) {
         const recorded = requireRecord(expected[index], `${label} candidate ${index + 1}`);
         if (replayed.candidate.candidateId !== recorded.candidateId) {
             throw new Error(
-                `${label} replay order mismatch at rank ${index + 1} (${replayed.candidate.candidateId} != ${recorded.candidateId}).`,
+                `${label} replay order mismatch at rank ${index + 1} `
+                + `(${replayed.candidate.candidateId} score=${replayed.finalScore} `
+                + `path=${replayed.relativePath}:${replayed.startLine} != `
+                + `${recorded.candidateId} score=${recorded.score} `
+                + `path=${recorded.relativePath}:${recorded.startLine}).`,
             );
         }
         if (typeof replayed.score !== "number"
@@ -390,7 +439,11 @@ function assertLocalScoringMatches(actual, expectedStage, label) {
         const recorded = requireRecord(expected[index], `${label} candidate ${index + 1}`);
         if (replayed.candidate.candidateId !== recorded.candidateId) {
             throw new Error(
-                `${label} replay order mismatch at rank ${index + 1} (${replayed.candidate.candidateId} != ${recorded.candidateId}).`,
+                `${label} replay order mismatch at rank ${index + 1} `
+                + `(${replayed.candidate.candidateId} score=${replayed.finalScore} `
+                + `path=${replayed.relativePath}:${replayed.startLine} != `
+                + `${recorded.candidateId} score=${recorded.score} `
+                + `path=${recorded.relativePath}:${recorded.startLine}).`,
             );
         }
         if (typeof recorded.score !== "number"
@@ -517,9 +570,11 @@ function compareLocallyScoredCandidates(left, right, options) {
         return left.exactLexicalMatch ? -1 : 1;
     }
     if (right.finalScore !== left.finalScore) return right.finalScore - left.finalScore;
-    const fileOrder = compareNullableStrings(left.relativePath, right.relativePath);
+    const leftCandidate = left.candidate ?? left;
+    const rightCandidate = right.candidate ?? right;
+    const fileOrder = compareNullableStrings(leftCandidate.relativePath, rightCandidate.relativePath);
     if (fileOrder !== 0) return fileOrder;
-    const lineOrder = compareNullableNumbers(left.startLine, right.startLine);
+    const lineOrder = compareNullableNumbers(leftCandidate.startLine, rightCandidate.startLine);
     if (lineOrder !== 0) return lineOrder;
     const labelOrder = compareNullableStrings(left.symbolLabel, right.symbolLabel);
     if (labelOrder !== 0) return labelOrder;
@@ -577,13 +632,10 @@ function replayPostFusionLocalScoring(capture, attempt) {
         const candidateId = entry.candidate.candidateId;
         const signal = signals.get(candidateId);
         if (!signal) {
-            const reason = removals.get(candidateId);
-            if (!reason) {
-                throw new Error(
-                    `Task '${capture.taskId}' candidate '${candidateId}' has neither replay signals nor a diagnostic removal.`,
-                );
-            }
-            removed.push({ candidateId, reason });
+            removed.push({
+                candidateId,
+                reason: removals.get(candidateId) ?? "filtered_before_local_scoring_reason_unrecorded",
+            });
             continue;
         }
         assertSameCandidatePayload(
@@ -882,12 +934,49 @@ function replayTaskCapture(capture) {
         ["queryPlanDigest", record.queryPlan],
         ["passConfigurationDigest", record.passConfiguration],
         ["candidateTraceDigest", trace],
+        ["rankedResultIdentityDigest", record.rankedResults],
     ]) {
         if (sha256Canonical(value) !== record[field]) {
             throw new Error(`Task '${record.taskId}' ${field} does not match its contents.`);
         }
     }
     if (!Array.isArray(trace.stages)) throw new Error(`Task '${record.taskId}' trace stages must be an array.`);
+    if (record.readiness?.route === "exact_registry") {
+        if (record.readiness.policyInvariant !== true
+            || record.readiness.fusionReplayStatus !== "not_applicable"
+            || record.readiness.fusionNotApplicableReason !== "exact_registry_hit") {
+            throw new Error(`Task '${record.taskId}' has incomplete exact-registry route authority.`);
+        }
+        const expected = requireRecord(record.expected, `Task '${record.taskId}' expected owner`);
+        const rankedResults = requireArray(
+            record.rankedResults,
+            `Task '${record.taskId}' exact-registry ranked results`,
+        );
+        const first = requireRecord(rankedResults[0], `Task '${record.taskId}' exact-registry first result`);
+        if (first.file !== expected.ownerFile || first.symbol !== expected.ownerSymbol) {
+            throw new Error(`Task '${record.taskId}' exact-registry target does not match frozen owner authority.`);
+        }
+        return {
+            taskId: record.taskId,
+            route: {
+                kind: "exact_registry",
+                fusionReplay: "not_applicable",
+                reason: "exact_registry_hit",
+                matchedSymbolInstanceId: record.passConfiguration.exactRegistry.matchedSymbolInstanceId,
+            },
+            policyAffected: false,
+            rankedResults,
+            corePasses: [],
+            mcpAttempts: [],
+            providerWork: {
+                semanticSearchAttempts: 0,
+                embeddingCallsByCurrentContract: 0,
+                rerankerCalls: 0,
+                rerankerCandidates: 0,
+                rerankerInputBytes: 0,
+            },
+        };
+    }
     const corePasses = replayCorePasses(record);
     const internalMcpAttempts = trace.stages
         .filter((stage) => stage.stage === "mcp_fusion")
@@ -962,6 +1051,8 @@ function replayTaskCapture(capture) {
     }));
     return {
         taskId: record.taskId,
+        route: { kind: "fusion", fusionReplay: "exact" },
+        policyAffected: true,
         corePasses,
         mcpAttempts,
         ...(localScoring ? { localScoring } : {}),
@@ -1004,6 +1095,10 @@ export function replayBaselineCandidateCapture(value, options = {}) {
         sourceCaptureSha256: suppliedDigest,
         policyId: "baseline",
         replayRuntime,
+        routeCoverage: {
+            fusionTaskCount: tasks.filter((task) => task.route.kind === "fusion").length,
+            exactRegistryTaskCount: tasks.filter((task) => task.route.kind === "exact_registry").length,
+        },
         tasks,
     };
     return { ...replay, sha256: sha256Canonical(replay) };
@@ -1019,8 +1114,47 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
         );
     }
     const policy = normalizeReplayPolicy(policyValue);
+    const taskPrefix = options.taskPrefix ?? "all";
+    if (!["tuning", "validation", "all"].includes(taskPrefix)) {
+        throw new Error("Replay taskPrefix must be tuning, validation, or all.");
+    }
     const replayRuntime = buildReplayRuntimeManifest(capture, policy, options);
-    const tasks = capture.captures.map((taskCapture) => {
+    const baselineByTaskId = new Map(baseline.tasks.map((task) => [task.taskId, task]));
+    const selectedCaptures = capture.captures.filter((taskCapture) => (
+        taskPrefix === "all" || taskCapture.taskId.startsWith(`${taskPrefix}-`)
+    ));
+    if (selectedCaptures.length === 0) {
+        throw new Error(`Candidate capture has no tasks for prefix '${taskPrefix}'.`);
+    }
+    const tasks = selectedCaptures.map((taskCapture) => {
+        if (taskCapture.readiness?.route === "exact_registry") {
+            const baselineTask = baselineByTaskId.get(taskCapture.taskId);
+            if (!baselineTask || baselineTask.route?.kind !== "exact_registry") {
+                throw new Error(`Task '${taskCapture.taskId}' has no reproduced exact-registry baseline.`);
+            }
+            return {
+                taskId: taskCapture.taskId,
+                queryClass: taskCapture.queryClass,
+                language: taskCapture.language,
+                expected: taskCapture.expected,
+                route: baselineTask.route,
+                policyAffected: false,
+                rankedResults: baselineTask.rankedResults,
+                corePasses: [],
+                mcpAttempts: [],
+                rerankerAdmission: {
+                    enabled: false,
+                    skippedByExactPin: false,
+                    selectedCandidateIds: [],
+                    familyCount: 0,
+                    supplementalCandidateCount: 0,
+                    candidatePoolCount: 0,
+                    budget: 0,
+                    budgetReason: "exact_registry_not_applicable",
+                    inputUtf8Bytes: 0,
+                },
+            };
+        }
         const diagnosticLimit = taskCapture.queryPlan?.diagnosticCandidateLimit;
         if (!Number.isSafeInteger(diagnosticLimit) || diagnosticLimit < policy.core.candidateDepth) {
             throw new Error(
@@ -1048,6 +1182,8 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
             queryClass: taskCapture.queryClass,
             language: taskCapture.language,
             expected: taskCapture.expected,
+            route: { kind: "fusion", fusionReplay: "contender" },
+            policyAffected: true,
             corePasses: corePasses.map((pass) => ({
                 passId: pass.passId,
                 mode: pass.mode,
@@ -1069,6 +1205,8 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
                     candidateId: candidate.candidate.candidateId,
                     ownerId: candidate.candidate.ownerId,
                     relativePath: candidate.candidate.relativePath,
+                    symbolLabel: candidate.symbolLabel,
+                    symbolId: candidate.symbolId,
                     rank: rankIndex + 1,
                     fusionScore: candidate.fusionScore,
                     lexicalScore: candidate.lexicalScore,
@@ -1100,6 +1238,7 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
         baselineReproduced: true,
         policy,
         policySha256: sha256Canonical(policy),
+        taskPrefix,
         replayRuntime,
         providerValidationRequired: true,
         replayCoverage: {
@@ -1109,6 +1248,8 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
             rerankerAdmission: true,
             rerankerProviderOutput: false,
             groupingAndDisclosure: false,
+            fusionTaskCount: tasks.filter((task) => task.policyAffected).length,
+            exactRegistryPolicyInvariantTaskCount: tasks.filter((task) => !task.policyAffected).length,
         },
         liveValidationReasons: [
             "new_candidates_have_no_frozen_reranker_scores",
@@ -1119,16 +1260,18 @@ export function replayCandidateCapture(value, policyValue = "baseline", options 
 }
 
 function usage() {
-    return "Usage: node scripts/satori-search-candidate-replay.mjs --capture <capture.json> [--policy-file <policy.json>] [--out <replay.json>]";
+    return "Usage: node scripts/satori-search-candidate-replay.mjs --capture <capture.json> [--policy-file <policy.json>] [--task-prefix <tuning|validation|all>] [--out <replay.json>]";
 }
 
 export function main(argv = process.argv.slice(2)) {
     let captureFile;
     let policyFile;
+    let taskPrefix = "all";
     let outFile;
     for (let index = 0; index < argv.length; index += 1) {
         if (argv[index] === "--capture") captureFile = path.resolve(argv[++index]);
         else if (argv[index] === "--policy-file") policyFile = path.resolve(argv[++index]);
+        else if (argv[index] === "--task-prefix") taskPrefix = argv[++index];
         else if (argv[index] === "--out") outFile = path.resolve(argv[++index]);
         else if (argv[index] === "--help") {
             process.stdout.write(`${usage()}\n`);
@@ -1142,6 +1285,7 @@ export function main(argv = process.argv.slice(2)) {
         ? JSON.parse(policySourceBytes.toString("utf8"))
         : "baseline";
     const replay = replayCandidateCapture(capture, policy, {
+        taskPrefix,
         ...(policySourceBytes ? { policySourceBytes } : {}),
         ...(policyFile ? { policySourceFileName: policyFile } : {}),
     });

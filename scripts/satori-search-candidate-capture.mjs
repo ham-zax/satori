@@ -323,9 +323,18 @@ function assertMeasurementIsolation(metadata, observationSetValue, taskIds) {
             throw new Error(`Task '${taskId}' must have exactly one measurement-isolation receipt.`);
         }
         const taskRun = requireRecord(taskRuns[0], `Task '${taskId}' measurement receipt`);
-        const syncStats = requireRecord(taskRun.syncStats, `Task '${taskId}' syncStats`);
-        if ([syncStats.added, syncStats.removed, syncStats.modified].some((value) => value !== 0)) {
-            throw new Error(`Task '${taskId}' measurement preparation was not a zero-change sync.`);
+        const preparationMode = taskRun.preparationMode ?? "sync";
+        if (preparationMode === "sync") {
+            const syncStats = requireRecord(taskRun.syncStats, `Task '${taskId}' syncStats`);
+            if ([syncStats.added, syncStats.removed, syncStats.modified].some((value) => value !== 0)) {
+                throw new Error(`Task '${taskId}' measurement preparation was not a zero-change sync.`);
+            }
+        } else if (preparationMode === "status-only") {
+            if (taskRun.syncStats !== undefined) {
+                throw new Error(`Task '${taskId}' status-only preparation must not contain syncStats.`);
+            }
+        } else {
+            throw new Error(`Task '${taskId}' has an unsupported measurement preparation mode.`);
         }
         const preparedProof = requireRecord(taskRun.indexProof, `Task '${taskId}' prepared index proof`);
         const finalProof = requireRecord(taskRun.finalIndexProof, `Task '${taskId}' final index proof`);
@@ -445,11 +454,90 @@ function buildObservationCapture(task, observation) {
         passConfigurationDigest,
         candidateTrace: trace,
         candidateTraceDigest,
+        rankedResults: jsonClone(observation.results),
         rankedResultIdentityDigest: sha256Canonical(observation.results),
     };
 }
 
+function exactRegistryReplayReadiness(capture) {
+    if (capture.queryPlan.route?.kind !== "exact_identifier") return null;
+    const reasons = [];
+    const exactRegistry = capture.passConfiguration.exactRegistry;
+    if (capture.queryPlan.route.deterministicFirst !== true) {
+        reasons.push("exact_registry_route_not_deterministic_first");
+    }
+    if (!isRecord(exactRegistry)
+        || exactRegistry.attempted !== true
+        || exactRegistry.status !== "hit"
+        || typeof exactRegistry.matchedSymbolInstanceId !== "string"
+        || exactRegistry.matchedSymbolInstanceId.length === 0) {
+        reasons.push("exact_registry_hit_not_recorded");
+    }
+    if (canonicalJson(capture.passConfiguration.passesUsed) !== canonicalJson(["exact_registry"])) {
+        reasons.push("exact_registry_route_not_exclusive");
+    }
+    const providerWork = capture.passConfiguration.providerWork;
+    const zeroWorkFields = [
+        "semanticSearchAttempts",
+        "embeddingCallsByCurrentContract",
+        "denseQueriesByCurrentContract",
+        "sparseQueriesByCurrentContract",
+        "rerankerCalls",
+        "rerankerCandidates",
+        "rerankerInputBytes",
+    ];
+    if (!isRecord(providerWork) || zeroWorkFields.some((field) => providerWork[field] !== 0)) {
+        reasons.push("exact_registry_provider_work_not_zero");
+    }
+    const rerank = capture.passConfiguration.rerank;
+    if (!isRecord(rerank)
+        || rerank.attempted !== false
+        || rerank.applied !== false
+        || rerank.candidatesReranked !== 0) {
+        reasons.push("exact_registry_reranker_work_not_zero");
+    }
+    const fusionStages = new Set([
+        "raw_dense",
+        "raw_lexical",
+        "raw_lexical_fallback",
+        "core_fusion",
+        "core_result",
+        "mcp_pass",
+        "mcp_fusion",
+        "mcp_replay_signals",
+        "mcp_filtered",
+        "reranker_input",
+    ]);
+    if (capture.candidateTrace.corePasses.length !== 0
+        || capture.candidateTrace.queryEmbeddings.length !== 0
+        || capture.candidateTrace.lexicalRequests.length !== 0
+        || capture.candidateTrace.stages.some((stage) => fusionStages.has(stage.stage))) {
+        reasons.push("exact_registry_fusion_work_recorded");
+    }
+    if (!Array.isArray(capture.rankedResults) || capture.rankedResults.length === 0) {
+        reasons.push("exact_registry_ordered_results_missing");
+    }
+    return {
+        route: "exact_registry",
+        policyInvariant: reasons.length === 0,
+        routeReplayStatus: reasons.length === 0 ? "ready" : "incomplete",
+        fusionReplayStatus: "not_applicable",
+        survivalReplayStatus: "not_applicable",
+        fusionNotApplicableReason: "exact_registry_hit",
+        routeReasons: reasons,
+        removalReasonsComplete: capture.candidateTrace.omittedRemovals === 0,
+        removalReasonReasons: capture.candidateTrace.omittedRemovals > 0
+            ? ["candidate_removals_truncated"]
+            : [],
+        agentReplayReady: false,
+        requiredDepth: null,
+        agentReasons: ["agent_replay_not_implemented"],
+    };
+}
+
 function replayReadiness(capture) {
+    const registryReadiness = exactRegistryReplayReadiness(capture);
+    if (registryReadiness) return registryReadiness;
     const fusionReasons = [];
     if (capture.queryPlan.diagnosticCandidateLimit === null
         || capture.queryPlan.diagnosticCandidateLimit < REQUIRED_REPLAY_DEPTH) {
@@ -528,9 +616,9 @@ function replayReadiness(capture) {
         "mcp_filtered",
         "reranker_input",
     ]);
-    if (capture.candidateTrace.omittedRemovals > 0) {
-        survivalReasons.push("candidate_removals_truncated");
-    }
+    const removalReasonReasons = capture.candidateTrace.omittedRemovals > 0
+        ? ["candidate_removals_truncated"]
+        : [];
     if (capture.candidateTrace.stages.some((stage) => (
         survivalStageNames.has(stage.stage) && stage.omittedOccurrences > 0
     ))) {
@@ -551,8 +639,15 @@ function replayReadiness(capture) {
         "agent_replay_not_implemented",
     ]);
     return {
+        route: "fusion",
+        policyInvariant: false,
+        routeReplayStatus: normalizedSurvivalReasons.length === 0 ? "ready" : "incomplete",
+        fusionReplayStatus: normalizedFusionReasons.length === 0 ? "ready" : "incomplete",
+        survivalReplayStatus: normalizedSurvivalReasons.length === 0 ? "ready" : "incomplete",
         fusionReplayReady: normalizedFusionReasons.length === 0,
         survivalTraceComplete: normalizedSurvivalReasons.length === 0,
+        removalReasonsComplete: removalReasonReasons.length === 0,
+        removalReasonReasons,
         agentReplayReady: false,
         requiredDepth: REQUIRED_REPLAY_DEPTH,
         fusionReasons: normalizedFusionReasons,
@@ -605,7 +700,7 @@ export function buildSearchCandidateCapture(taskSuiteValue, observationSetValue,
                 }
             }
         }
-        return {
+        const taskCapture = {
             taskId: task.id,
             queryClass: task.queryClass,
             language: task.language,
@@ -613,21 +708,33 @@ export function buildSearchCandidateCapture(taskSuiteValue, observationSetValue,
             policyId,
             stableSampleCount: observedCaptures.length,
             ...baseline,
-            readiness: replayReadiness(baseline),
         };
+        return { ...taskCapture, readiness: replayReadiness(taskCapture) };
     });
     const fusionIncompleteTasks = captures
-        .filter((capture) => !capture.readiness.fusionReplayReady)
+        .filter((capture) => capture.readiness.fusionReplayStatus === "incomplete")
         .map((capture) => capture.taskId);
     const survivalIncompleteTasks = captures
-        .filter((capture) => !capture.readiness.survivalTraceComplete)
+        .filter((capture) => capture.readiness.survivalReplayStatus === "incomplete")
+        .map((capture) => capture.taskId);
+    const routeIncompleteTasks = captures
+        .filter((capture) => capture.readiness.routeReplayStatus !== "ready")
+        .map((capture) => capture.taskId);
+    const fusionTaskIds = captures
+        .filter((capture) => capture.readiness.route === "fusion")
+        .map((capture) => capture.taskId);
+    const policyInvariantTaskIds = captures
+        .filter((capture) => capture.readiness.policyInvariant)
         .map((capture) => capture.taskId);
     const agentIncompleteTasks = captures
         .filter((capture) => !capture.readiness.agentReplayReady)
         .map((capture) => capture.taskId);
-    if (options.requireReplayReady === true && survivalIncompleteTasks.length > 0) {
+    const removalReasonIncompleteTasks = captures
+        .filter((capture) => !capture.readiness.removalReasonsComplete)
+        .map((capture) => capture.taskId);
+    if (options.requireReplayReady === true && routeIncompleteTasks.length > 0) {
         throw new Error(
-            `Candidate captures are not replay-ready for complete fusion and survival authority: ${survivalIncompleteTasks.join(", ")}.`,
+            `Candidate captures are not replay-ready under their route-specific contracts: ${routeIncompleteTasks.join(", ")}.`,
         );
     }
     const capture = {
@@ -644,10 +751,16 @@ export function buildSearchCandidateCapture(taskSuiteValue, observationSetValue,
         replayReadiness: {
             fusionReady: fusionIncompleteTasks.length === 0,
             survivalReady: survivalIncompleteTasks.length === 0,
+            routeReplayReady: routeIncompleteTasks.length === 0,
             agentReady: agentIncompleteTasks.length === 0,
+            removalReasonsComplete: removalReasonIncompleteTasks.length === 0,
             fusionIncompleteTasks,
             survivalIncompleteTasks,
+            routeIncompleteTasks,
+            fusionTaskIds,
+            policyInvariantTaskIds,
             agentIncompleteTasks,
+            removalReasonIncompleteTasks,
         },
         captures,
     };

@@ -73,6 +73,7 @@ function usage() {
         "  --call-timeout-ms <ms>",
         "  --close-timeout-ms <ms>",
         "  --warm-samples <count>         Repeated warm samples in one MCP process (v3 output)",
+        "  --preparation-mode <mode>      sync (default) or status-only",
         "  --authority-file <path>        Repeat for every evaluation-authority artifact",
         "  --dry-run                       Validate and print the expanded task plan",
     ].join("\n");
@@ -89,6 +90,7 @@ export function parseArgs(argv) {
         callTimeoutMs: DEFAULT_CALL_TIMEOUT_MS,
         closeTimeoutMs: DEFAULT_CLOSE_TIMEOUT_MS,
         warmSampleCount: 1,
+        preparationMode: "sync",
         authorityFiles: [],
         dryRun: false,
         help: false,
@@ -122,6 +124,11 @@ export function parseArgs(argv) {
             options.closeTimeoutMs = positiveInteger(next(), arg);
         } else if (arg === "--warm-samples") {
             options.warmSampleCount = positiveInteger(next(), arg);
+        } else if (arg === "--preparation-mode") {
+            options.preparationMode = next();
+            if (!["sync", "status-only"].includes(options.preparationMode)) {
+                throw new Error("--preparation-mode must be sync or status-only.");
+            }
         } else if (arg === "--authority-file") {
             options.authorityFiles.push(path.resolve(next()));
         } else if (arg === "--dry-run") {
@@ -874,7 +881,17 @@ async function proveReady(session, task) {
     return readinessPayload;
 }
 
-async function prepareMeasurementState(session, task, repoRoot) {
+async function prepareMeasurementState(session, task, repoRoot, preparationMode) {
+    if (preparationMode === "status-only") {
+        const readiness = await proveReady(session, task);
+        return {
+            preparationMode,
+            indexProof: {
+                ...extractCompletedOperationProof(readiness, repoRoot, "sync"),
+                publication: extractPublicationProof(readiness, repoRoot),
+            },
+        };
+    }
     const prepared = (await callAndDecode(session, {
         tool: "manage_index",
         args: { action: "sync", path: repoRoot },
@@ -897,6 +914,7 @@ async function prepareMeasurementState(session, task, repoRoot) {
     const readinessProof = extractCompletedOperationProof(readiness, repoRoot, "sync");
     assertSameIndexProof(preparedProof, readinessProof, task.id);
     return {
+        preparationMode,
         syncStats: structuredClone(syncStats),
         indexProof: {
             ...preparedProof,
@@ -1039,6 +1057,7 @@ export async function recordSuite(taskSuite, options) {
             dryRun: true,
             repoRoot,
             warmSampleCount,
+            preparationMode: options.preparationMode,
             evaluationAuthority: evaluationAuthority.artifacts,
             tasks: expanded.tasks,
         };
@@ -1057,7 +1076,12 @@ export async function recordSuite(taskSuite, options) {
                 throw new Error(`MCP serverInfo changed during recording for task '${task.id}'.`);
             }
             serverInfo = structuredClone(session.serverInfo);
-            const prepared = await prepareMeasurementState(session, task, repoRoot);
+            const prepared = await prepareMeasurementState(
+                session,
+                task,
+                repoRoot,
+                options.preparationMode,
+            );
             if (armIndexProof) {
                 assertSamePublishedGeneration(armIndexProof, prepared.indexProof, task.id);
             } else {
@@ -1135,6 +1159,7 @@ export async function recordSuite(taskSuite, options) {
             armIndexProof,
             taskRuns,
             warmSampleCount,
+            preparationMode: options.preparationMode,
         },
         observations,
     };

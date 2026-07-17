@@ -97,6 +97,7 @@ function writeFakeMcp(file, options = {}) {
     const driftAfterSearch = options.driftAfterSearch === true;
     const authorityResultFile = options.authorityResultFile || null;
     const authorityCandidateFile = options.authorityCandidateFile || null;
+    const rejectSync = options.rejectSync === true;
     fs.writeFileSync(file, `
 import fs from "node:fs";
 import readline from "node:readline";
@@ -107,6 +108,7 @@ const searchFreshnessMode = ${JSON.stringify(searchFreshnessMode)};
 const driftAfterSearch = ${JSON.stringify(driftAfterSearch)};
 const authorityResultFile = ${JSON.stringify(authorityResultFile)};
 const authorityCandidateFile = ${JSON.stringify(authorityCandidateFile)};
+const rejectSync = ${JSON.stringify(rejectSync)};
 let measuredSearchRan = false;
 const operation = () => ({
   id: measuredSearchRan && driftAfterSearch ? "op-drifted" : "op-prepared",
@@ -134,6 +136,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   let payload;
   if (name === "manage_index") {
     const action = message.params.arguments.action;
+    if (action === "sync" && rejectSync) {
+      send({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "sync must not run" } });
+      return;
+    }
     payload = action === "sync"
       ? { status: ${JSON.stringify(status)}, action, path: message.params.arguments.path, operation: operation(), syncStats: { added: 0, removed: 0, modified: 0 } }
       : { status: ${JSON.stringify(status)}, action: "status", path: message.params.arguments.path, operation: operation(), publication: { collectionName: "generation-7", markerRunId: "marker-run-7", indexPolicyHash: "${"a".repeat(64)}", policyDocumentDigest: "${"b".repeat(64)}" } };
@@ -301,6 +307,46 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         const report = JSON.parse(grade.stdout);
         assert.equal(report.metrics.cold.exactSymbolOpenSuccess.rate, 1);
         assert.equal(report.metrics.warm.exactSymbolOpenSuccess.rate, 1);
+    } finally {
+        fs.rmSync(temp, { recursive: true, force: true });
+    }
+});
+
+test("status-only preparation proves one publication without requesting synchronization", () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "satori-useful-context-status-only-"));
+    try {
+        const repoRoot = path.join(temp, "repo");
+        const tasksFile = path.join(temp, "tasks.json");
+        const outputFile = path.join(temp, "observations.json");
+        const runtimeRoot = path.join(temp, "runtime");
+        const fakeMcp = path.join(runtimeRoot, "packages/mcp/dist/index.js");
+        initializeRepo(repoRoot);
+        writeJson(tasksFile, taskSuite(repoRoot));
+        fs.mkdirSync(path.dirname(fakeMcp), { recursive: true });
+        writeFakeMcp(fakeMcp, { rejectSync: true });
+        commitRuntimeFixture(runtimeRoot);
+
+        const run = spawnSync(process.execPath, [
+            SCRIPT_PATH,
+            "--tasks", tasksFile,
+            "--repo", repoRoot,
+            "--out", outputFile,
+            "--command", process.execPath,
+            "--command-arg", fakeMcp,
+            "--preparation-mode", "status-only",
+            "--startup-timeout-ms", "2000",
+            "--call-timeout-ms", "2000",
+            "--close-timeout-ms", "500",
+        ], { encoding: "utf8" });
+        assert.equal(run.status, 0, run.stderr);
+
+        const output = JSON.parse(fs.readFileSync(outputFile, "utf8"));
+        assert.equal(output.metadata.preparationMode, "status-only");
+        assert.ok(output.metadata.taskRuns.every((entry) => (
+            entry.preparationMode === "status-only"
+            && entry.syncStats === undefined
+            && JSON.stringify(entry.finalIndexProof) === JSON.stringify(entry.indexProof)
+        )));
     } finally {
         fs.rmSync(temp, { recursive: true, force: true });
     }

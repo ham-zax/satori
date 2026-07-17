@@ -50,6 +50,18 @@ import {
 } from '../vectordb';
 import { FileSynchronizer } from '../sync/synchronizer';
 
+const previousSatoriStateRoot = process.env.SATORI_STATE_ROOT;
+const testSatoriStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-test-state-'));
+process.env.SATORI_STATE_ROOT = testSatoriStateRoot;
+test.after(() => {
+    if (previousSatoriStateRoot === undefined) {
+        delete process.env.SATORI_STATE_ROOT;
+    } else {
+        process.env.SATORI_STATE_ROOT = previousSatoriStateRoot;
+    }
+    fs.rmSync(testSatoriStateRoot, { recursive: true, force: true });
+});
+
 class TestEmbedding extends Embedding {
     protected maxTokens = 8192;
 
@@ -280,6 +292,8 @@ class InMemoryVectorDatabase implements VectorDatabase {
     getControlCalls = 0;
     searchCalls = 0;
     sparseSearchCalls = 0;
+    readonly denseRequests: DenseCandidateRequest[] = [];
+    readonly lexicalRequests: LexicalCandidateRequest[] = [];
     queryHook?: (call: { collectionName: string; request: VectorDocumentQuery }) => void | Promise<void>;
     controlReadHook?: (call: { collectionName: string; id: string }) => void | Promise<void>;
     readonly mutationCalls: Array<
@@ -390,6 +404,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
 
     async retrieveDense(collectionName: string, request: DenseCandidateRequest): Promise<VectorCandidate[]> {
         this.searchCalls += 1;
+        this.denseRequests.push(request);
         return this.listDocuments(collectionName, request.filter)
             .slice(0, request.limit)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
@@ -397,6 +412,7 @@ class InMemoryVectorDatabase implements VectorDatabase {
 
     async retrieveLexical(collectionName: string, request: LexicalCandidateRequest): Promise<VectorCandidate[]> {
         this.sparseSearchCalls += 1;
+        this.lexicalRequests.push(request);
         return this.listDocuments(collectionName, request.filter)
             .slice(0, request.limit)
             .map((document, index) => ({ document, score: 1 - (index / 1000) }));
@@ -430,6 +446,16 @@ class InMemoryVectorDatabase implements VectorDatabase {
 
     async checkCollectionLimit(): Promise<boolean> {
         return true;
+    }
+}
+
+class InMemoryLanceVectorDatabase extends InMemoryVectorDatabase {
+    getBackendInfo() {
+        return {
+            provider: 'lancedb' as const,
+            transport: 'embedded' as const,
+            address: '/tmp/in-memory-lance',
+        };
     }
 }
 
@@ -4618,8 +4644,14 @@ test('Context hybrid search uses the proven collection without a non-gating quer
     const codebasePath = path.join(tempRoot, 'repo');
     try {
         fs.mkdirSync(codebasePath, { recursive: true });
-        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const hybridValue = 1;\n', 'utf8');
-        const vectorDatabase = new InMemoryVectorDatabase();
+        for (let index = 0; index < 8; index += 1) {
+            fs.writeFileSync(
+                path.join(codebasePath, `runtime-${index}.ts`),
+                `export const hybridValue${index} = ${index};\n`,
+                'utf8',
+            );
+        }
+        const vectorDatabase = new InMemoryLanceVectorDatabase();
         const embedding = new CountingTestEmbedding();
         const context = new Context({
             embedding,
@@ -4632,21 +4664,98 @@ test('Context hybrid search uses the proven collection without a non-gating quer
         assert.ok(vectorReceipt);
 
         vectorDatabase.queryCalls.length = 0;
+        vectorDatabase.denseRequests.length = 0;
+        vectorDatabase.lexicalRequests.length = 0;
         const embedCallsBefore = embedding.embedCalls;
         vectorDatabase.queryHook = () => {
             throw new Error('hybrid search must not issue a query probe');
         };
-        const results = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
+        const productResults = await context.semanticSearchInProvenGeneration(vectorReceipt!, {
             codebasePath,
             query: 'hybridValue',
             topK: 5,
             retrievalMode: 'hybrid',
             scorePolicy: { kind: 'topk_only' },
         });
+        vectorDatabase.denseRequests.length = 0;
+        vectorDatabase.lexicalRequests.length = 0;
+        const execution = await context.semanticSearchWithCandidateTraceInProvenGeneration(vectorReceipt!, {
+            codebasePath,
+            query: 'hybridValue',
+            topK: 5,
+            retrievalMode: 'hybrid',
+            scorePolicy: { kind: 'topk_only' },
+        }, 8, {
+            captureLexicalFallback: true,
+            diagnosticCandidateLimit: 8,
+            lexicalFallbackTerms: ['hybridValue'],
+        });
 
-        assert.ok(results.length > 0);
-        assert.equal(embedding.embedCalls, embedCallsBefore + 1);
+        assert.equal(execution.results.length, 5);
+        assert.deepEqual(
+            execution.results.map((result) => result.id),
+            productResults.map((result) => result.id),
+            'trace-only depth must not change product candidates or ordering',
+        );
+        assert.equal(execution.diagnosticCandidateArms?.dense?.length, 8);
+        assert.equal(execution.diagnosticCandidateArms?.preciseLexical?.length, 8);
+        assert.equal(execution.diagnosticCandidateArms?.fallbackLexical?.length, 8);
+        assert.ok((execution.diagnosticCandidateArms?.dense?.[0]?.content.length ?? 0) > 0);
+        assert.equal(embedding.embedCalls, embedCallsBefore + 2);
         assert.equal(vectorDatabase.queryCalls.length, 0);
+        assert.deepEqual(vectorDatabase.denseRequests.map((request) => request.limit), [8]);
+        assert.deepEqual(vectorDatabase.lexicalRequests.map((request) => request.limit), [8, 8]);
+        assert.deepEqual(vectorDatabase.lexicalRequests.map((request) => request.matchMode), [
+            undefined,
+            'any_terms',
+        ]);
+        assert.deepEqual(
+            execution.candidateTrace.stages.map((stage) => stage.stage),
+            ['raw_dense', 'raw_lexical', 'raw_lexical_fallback', 'core_fusion'],
+        );
+        assert.ok(execution.candidateTrace.stages.every((stage) => stage.omittedOccurrences === 0));
+        assert.equal(
+            execution.candidateTrace.stages.find((stage) => stage.stage === 'core_fusion')?.totalOccurrences,
+            5,
+        );
+        assert.ok(execution.candidateTrace.stages.every((stage) => (
+            stage.candidates.every((candidate) => candidate.candidateId.length > 0)
+        )));
+        assert.match(execution.candidateTrace.queryEmbeddingSha256 ?? '', /^[a-f0-9]{64}$/);
+        assert.deepEqual(execution.candidateTrace.lexicalRequests, [
+            {
+                role: 'primary',
+                querySha256: crypto.createHash('sha256').update('hybridValue', 'utf8').digest('hex'),
+                matchMode: 'all_terms',
+            },
+            {
+                role: 'fallback_or',
+                querySha256: crypto.createHash('sha256').update('hybridValue', 'utf8').digest('hex'),
+                matchMode: 'any_terms',
+                terms: ['hybridValue'],
+            },
+        ]);
+        assert.equal(JSON.stringify(execution.candidateTrace).includes('export const hybridValue'), false);
+        await assert.rejects(
+            context.semanticSearchWithCandidateTraceInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'hybridValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' },
+            }, 161),
+            /maxEntriesPerStage must be an integer from 1 through 160/,
+        );
+        await assert.rejects(
+            context.semanticSearchWithCandidateTraceInProvenGeneration(vectorReceipt!, {
+                codebasePath,
+                query: 'hybridValue',
+                topK: 5,
+                retrievalMode: 'hybrid',
+                scorePolicy: { kind: 'topk_only' },
+            }, 5, { diagnosticCandidateLimit: 6 }),
+            /Diagnostic candidate limit must be an integer from 1 through maxEntriesPerStage \(5\)/,
+        );
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

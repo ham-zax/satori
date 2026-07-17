@@ -1117,6 +1117,9 @@ export class MilvusVectorDatabase implements VectorDatabase {
         collectionName: string,
         request: LexicalCandidateRequest,
     ): Promise<VectorCandidate[]> {
+        if (request.matchMode !== undefined) {
+            throw new Error('Milvus sparse retrieval does not support explicit lexical term operators.');
+        }
         await this.ensureInitialized();
         await this.ensureLoaded(collectionName);
 

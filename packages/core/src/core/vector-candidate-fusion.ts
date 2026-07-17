@@ -42,7 +42,7 @@ function assertMatchingDocument(
     }
 }
 
-function orderCandidateArm(arm: readonly VectorCandidate[]): VectorCandidate[] {
+export function orderVectorCandidateArm(arm: readonly VectorCandidate[]): VectorCandidate[] {
     for (const candidate of arm) assertValidCandidate(candidate);
     return [...arm].sort((left, right) => (
         right.score - left.score
@@ -67,7 +67,7 @@ export function fuseVectorCandidatesWithRrf(input: {
     const addRankedArm = (arm: readonly VectorCandidate[]): void => {
         const seenDocumentsById = new Map<string, VectorCandidate['document']>();
         let rank = 0;
-        for (const candidate of orderCandidateArm(arm)) {
+        for (const candidate of orderVectorCandidateArm(arm)) {
             const priorArmDocument = seenDocumentsById.get(candidate.document.id);
             if (priorArmDocument) {
                 assertMatchingDocument(priorArmDocument, candidate.document);

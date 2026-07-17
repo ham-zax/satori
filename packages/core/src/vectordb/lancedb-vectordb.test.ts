@@ -129,6 +129,20 @@ test('LanceDB adapter preserves exact retrieval, projections, controls, and idem
     });
     assert.deepEqual(lexical.map((candidate) => candidate.document.id), ['a', 'b']);
 
+    const preciseLexical = await database.retrieveLexical(collectionName, {
+        query: 'shareduniqueterm UnicodeProbe',
+        limit: 2,
+        matchMode: 'all_terms',
+    });
+    const fallbackLexical = await database.retrieveLexical(collectionName, {
+        query: 'shareduniqueterm UnicodeProbe',
+        limit: 2,
+        matchMode: 'any_terms',
+    });
+    assert.deepEqual(preciseLexical, []);
+    assert.equal(fallbackLexical.length, 2);
+    assert.ok(fallbackLexical.some((candidate) => candidate.document.id === 'unicode'));
+
     const injectedPathRows = await database.queryDocuments(collectionName, {
         filter: {
             kind: 'comparison',

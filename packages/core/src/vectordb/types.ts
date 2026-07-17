@@ -91,6 +91,8 @@ export interface LexicalCandidateRequest {
     readonly query: string;
     readonly limit: number;
     readonly filter?: VectorFilter;
+    /** Backend-neutral term matching requested by diagnostic or retrieval policy. */
+    readonly matchMode?: 'all_terms' | 'any_terms';
 }
 
 export interface VectorCandidate {

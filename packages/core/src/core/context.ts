@@ -23,7 +23,16 @@ import {
     type VectorStoreProviderIdentity,
 } from '../vectordb';
 import { validateVectorFilter } from '../vectordb/filters';
-import { SemanticSearchRequest, SemanticSearchResult } from '../types';
+import {
+    SemanticSearchRequest,
+    SemanticSearchResult,
+    type SemanticSearchCandidateTrace,
+    type SemanticSearchCandidateTraceOccurrence,
+    type SemanticSearchCandidateTraceStage,
+    type SemanticSearchCandidateTraceStageName,
+    type SemanticSearchCandidateTraceOptions,
+    type SemanticSearchExecutionResult,
+} from '../types';
 import { envManager } from '../utils/env-manager';
 import {
     DEFAULT_IGNORE_PATTERNS,
@@ -126,6 +135,7 @@ import {
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import {
     fuseVectorCandidatesWithRrf,
+    orderVectorCandidateArm,
     VECTOR_CANDIDATE_RRF_K_V1,
 } from './vector-candidate-fusion';
 
@@ -163,6 +173,122 @@ interface AnalyzedFileSymbolFacts {
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
 const INDEX_POLICY_MALFORMED_LOCK_STALE_MS = 30_000;
+const MAX_SEMANTIC_SEARCH_TRACE_ENTRIES_PER_STAGE = 160;
+
+function semanticSearchTraceOwnerId(candidate: VectorCandidate): string {
+    const ownerSymbolInstanceId = candidate.document.metadata.ownerSymbolInstanceId;
+    return typeof ownerSymbolInstanceId === 'string' && ownerSymbolInstanceId.length > 0
+        ? JSON.stringify(['symbol', candidate.document.relativePath, ownerSymbolInstanceId])
+        : JSON.stringify(['file', candidate.document.relativePath]);
+}
+
+function buildSemanticSearchTraceStage(
+    stage: SemanticSearchCandidateTraceStageName,
+    candidates: readonly VectorCandidate[],
+    maxEntries: number,
+): SemanticSearchCandidateTraceStage {
+    const ordered = stage === 'raw_dense'
+        || stage === 'raw_lexical'
+        || stage === 'raw_lexical_fallback'
+        ? orderVectorCandidateArm(candidates)
+        : [...candidates];
+    const occurrences: SemanticSearchCandidateTraceOccurrence[] = ordered
+        .slice(0, maxEntries)
+        .map((candidate, index) => ({
+            candidateId: candidate.document.id,
+            ownerId: semanticSearchTraceOwnerId(candidate),
+            evidenceOccurrenceId: JSON.stringify([candidate.document.id, stage, index + 1]),
+            relativePath: candidate.document.relativePath,
+            startLine: candidate.document.startLine,
+            endLine: candidate.document.endLine,
+            language: typeof candidate.document.metadata.language === 'string'
+                ? candidate.document.metadata.language
+                : 'unknown',
+            rank: index + 1,
+            score: candidate.score,
+        }));
+    return {
+        stage,
+        totalOccurrences: ordered.length,
+        uniqueCandidates: new Set(ordered.map((candidate) => candidate.document.id)).size,
+        omittedOccurrences: Math.max(0, ordered.length - occurrences.length),
+        candidates: occurrences,
+    };
+}
+
+function buildSemanticSearchCandidateTrace(input: {
+    dense?: readonly VectorCandidate[];
+    lexical?: readonly VectorCandidate[];
+    lexicalFallback?: readonly VectorCandidate[];
+    result: readonly VectorCandidate[];
+    hybrid: boolean;
+    maxEntries: number;
+    productCandidateLimit: number;
+    queryEmbeddingSha256: string | null;
+    lexicalRequests: SemanticSearchCandidateTrace['lexicalRequests'];
+}): SemanticSearchCandidateTrace {
+    const stages: SemanticSearchCandidateTraceStage[] = [];
+    if (input.dense) {
+        stages.push(buildSemanticSearchTraceStage('raw_dense', input.dense, input.maxEntries));
+    }
+    if (input.lexical) {
+        stages.push(buildSemanticSearchTraceStage('raw_lexical', input.lexical, input.maxEntries));
+    }
+    if (input.lexicalFallback) {
+        stages.push(buildSemanticSearchTraceStage(
+            'raw_lexical_fallback',
+            input.lexicalFallback,
+            input.maxEntries,
+        ));
+    }
+    stages.push(buildSemanticSearchTraceStage(
+        input.hybrid ? 'core_fusion' : 'core_result',
+        input.result,
+        input.maxEntries,
+    ));
+
+    const resultIds = new Set(input.result.map((candidate) => candidate.document.id));
+    const removedIds = [...new Set([
+        ...(input.dense ?? []).map((candidate) => candidate.document.id),
+        ...(input.lexical ?? []).map((candidate) => candidate.document.id),
+    ])]
+        .filter((candidateId) => !resultIds.has(candidateId))
+        .sort(compareContractStrings);
+    const removals = removedIds.slice(0, input.maxEntries).map((candidateId) => ({
+        candidateId,
+        afterStage: 'core_fusion' as const,
+        reason: 'core_fusion_limit' as const,
+    }));
+    return {
+        schemaVersion: 'semantic_search_candidate_trace_v1',
+        maxEntriesPerStage: input.maxEntries,
+        productCandidateLimit: input.productCandidateLimit,
+        queryEmbeddingSha256: input.queryEmbeddingSha256,
+        lexicalRequests: input.lexicalRequests,
+        stages,
+        removals,
+        omittedRemovals: Math.max(0, removedIds.length - removals.length),
+    };
+}
+
+function hashSemanticSearchQueryEmbedding(vector: readonly number[]): string {
+    if (!vector.every(Number.isFinite)) {
+        throw new Error('Query embedding contains a non-finite value.');
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(vector), 'utf8').digest('hex');
+}
+
+function hashSemanticSearchLexicalQuery(query: string): string {
+    return crypto.createHash('sha256').update(query, 'utf8').digest('hex');
+}
+
+function semanticSearchLexicalMatchMode(
+    vectorDatabase: VectorDatabase,
+): SemanticSearchCandidateTrace['lexicalRequests'][number]['matchMode'] {
+    const backend = vectorDatabase.getBackendInfo?.();
+    if (!backend) return 'unspecified';
+    return backend.provider === 'lancedb' ? 'all_terms' : 'provider_sparse';
+}
 
 type IndexPolicyMutationLockMetadata = {
     pid: number;
@@ -3004,6 +3130,78 @@ export class Context {
         return this.semanticSearchWithReceipt(receipt, request, undefined, 5, 0.5, undefined, true);
     }
 
+    public async semanticSearchWithCandidateTraceInProvenGeneration(
+        receipt: ProvenVectorGenerationReceipt,
+        request: SemanticSearchRequest,
+        maxEntriesPerStage: number,
+        options: SemanticSearchCandidateTraceOptions = {},
+    ): Promise<SemanticSearchExecutionResult> {
+        if (
+            !Number.isSafeInteger(maxEntriesPerStage)
+            || maxEntriesPerStage < 1
+            || maxEntriesPerStage > MAX_SEMANTIC_SEARCH_TRACE_ENTRIES_PER_STAGE
+        ) {
+            throw new Error(
+                `Candidate trace maxEntriesPerStage must be an integer from 1 through ${MAX_SEMANTIC_SEARCH_TRACE_ENTRIES_PER_STAGE}.`,
+            );
+        }
+        if (
+            options.diagnosticCandidateLimit !== undefined
+            && (
+                !Number.isSafeInteger(options.diagnosticCandidateLimit)
+                || options.diagnosticCandidateLimit < 1
+                || options.diagnosticCandidateLimit > maxEntriesPerStage
+            )
+        ) {
+            throw new Error(
+                `Diagnostic candidate limit must be an integer from 1 through maxEntriesPerStage (${maxEntriesPerStage}).`,
+            );
+        }
+        if (options.lexicalFallbackTerms !== undefined) {
+            if (
+                options.captureLexicalFallback !== true
+                || options.lexicalFallbackTerms.length < 1
+                || options.lexicalFallbackTerms.length > 8
+                || options.lexicalFallbackTerms.some((term) => (
+                    typeof term !== 'string'
+                    || term.length === 0
+                    || term !== term.trim()
+                ))
+            ) {
+                throw new Error(
+                    'Lexical fallback terms require fallback capture and 1 through 8 non-empty canonical terms.',
+                );
+            }
+        }
+        let candidateTrace: SemanticSearchCandidateTrace | undefined;
+        let diagnosticCandidateArms: SemanticSearchExecutionResult['diagnosticCandidateArms'];
+        const results = await this.semanticSearchWithReceipt(
+            receipt,
+            request,
+            undefined,
+            5,
+            0.5,
+            undefined,
+            true,
+            (trace) => {
+                candidateTrace = trace;
+            },
+            maxEntriesPerStage,
+            options,
+            (arms) => {
+                diagnosticCandidateArms = arms;
+            },
+        );
+        if (!candidateTrace) {
+            throw new Error('Candidate trace was not produced for the semantic search.');
+        }
+        return {
+            results,
+            candidateTrace,
+            ...(diagnosticCandidateArms ? { diagnosticCandidateArms } : {}),
+        };
+    }
+
     private async semanticSearchWithReceipt(
         receipt: ProvenVectorGenerationReceipt | undefined,
         requestOrCodebasePath: SemanticSearchRequest | string,
@@ -3012,14 +3210,32 @@ export class Context {
         threshold: number = 0.5,
         filter?: VectorFilter,
         requestBoundReceipt = false,
+        candidateTraceConsumer?: (trace: SemanticSearchCandidateTrace) => void,
+        candidateTraceMaxEntries = MAX_SEMANTIC_SEARCH_TRACE_ENTRIES_PER_STAGE,
+        candidateTraceOptions: SemanticSearchCandidateTraceOptions = {},
+        diagnosticCandidateArmsConsumer?: (
+            arms: NonNullable<SemanticSearchExecutionResult['diagnosticCandidateArms']>,
+        ) => void,
     ): Promise<SemanticSearchResult[]> {
         const request = this.normalizeSemanticSearchRequest(requestOrCodebasePath, query, topK, threshold, filter);
         const resolvedRequest = this.resolveSemanticSearchRequest(request);
         const codebasePath = resolvedRequest.codebasePath;
+        const candidateRetrievalLimit = candidateTraceConsumer
+            ? Math.max(
+                resolvedRequest.topK,
+                candidateTraceOptions.diagnosticCandidateLimit ?? resolvedRequest.topK,
+            )
+            : resolvedRequest.topK;
         const hybridCollection = this.getIsHybrid() === true;
         const isSparseOnly = resolvedRequest.retrievalMode === 'lexical' && hybridCollection;
         const isHybrid = resolvedRequest.retrievalMode === 'hybrid' && hybridCollection;
-        const initialMutationObservation = isHybrid
+        const lexicalMatchMode = semanticSearchLexicalMatchMode(this.vectorDatabase);
+        const captureLexicalFallback = candidateTraceOptions.captureLexicalFallback === true
+            && lexicalMatchMode === 'all_terms'
+            && (isSparseOnly || isHybrid);
+        const lexicalFallbackTerms = candidateTraceOptions.lexicalFallbackTerms;
+        const lexicalFallbackQuery = lexicalFallbackTerms?.join(' ') ?? resolvedRequest.query;
+        const initialMutationObservation = isHybrid || captureLexicalFallback
             ? this.observeMutationGeneration(codebasePath)
             : null;
         if (initialMutationObservation?.mutationActive) {
@@ -3044,6 +3260,7 @@ export class Context {
             result: VectorCandidate,
             backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion',
         ): SemanticSearchResult => ({
+            candidateId: result.document.id,
             content: result.document.content,
             relativePath: result.document.relativePath,
             startLine: result.document.startLine,
@@ -3075,17 +3292,91 @@ export class Context {
         // Check if collection exists and has data
         if (!revalidatedReceipt) {
             console.log(`[Context] ⚠️  No proven collection exists for '${codebasePath}'. Please index the codebase first.`);
+            candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
+                ...(isSparseOnly ? { lexical: [] } : { dense: [] }),
+                ...(isHybrid ? { lexical: [] } : {}),
+                result: [],
+                hybrid: isHybrid,
+                maxEntries: candidateTraceMaxEntries,
+                productCandidateLimit: resolvedRequest.topK,
+                queryEmbeddingSha256: null,
+                lexicalRequests: [],
+            }));
             return [];
         }
         const collectionName = revalidatedReceipt.collectionName;
+        const assertCandidateReadAuthorityUnchanged = async (errorMessage: string): Promise<void> => {
+            const sameGenerationReceipt = await this.revalidateProvenVectorGeneration(
+                codebasePath,
+                revalidatedReceipt,
+            );
+            const finalMutationObservation = initialMutationObservation
+                ? this.observeMutationGeneration(codebasePath)
+                : null;
+            if (
+                !sameGenerationReceipt
+                || (initialMutationObservation && (
+                    !finalMutationObservation
+                    || finalMutationObservation.mutationActive
+                    || finalMutationObservation.generation !== initialMutationObservation.generation
+                ))
+            ) {
+                throw new Error(errorMessage);
+            }
+        };
 
         if (isSparseOnly) {
-            const searchResults = await this.vectorDatabase.retrieveLexical(collectionName, {
-                query: resolvedRequest.query,
-                limit: resolvedRequest.topK,
-                filter: resolvedRequest.filter,
+            const [searchResults, lexicalFallback] = await Promise.all([
+                this.vectorDatabase.retrieveLexical(collectionName, {
+                    query: resolvedRequest.query,
+                    limit: candidateRetrievalLimit,
+                    filter: resolvedRequest.filter,
+                }),
+                captureLexicalFallback
+                    ? this.vectorDatabase.retrieveLexical(collectionName, {
+                        query: lexicalFallbackQuery,
+                        limit: candidateRetrievalLimit,
+                        filter: resolvedRequest.filter,
+                        matchMode: 'any_terms',
+                    })
+                    : Promise.resolve(undefined),
+            ]);
+            if (captureLexicalFallback) {
+                await assertCandidateReadAuthorityUnchanged(
+                    'Index generation changed during diagnostic lexical retrieval.',
+                );
+            }
+            const productResults = searchResults.slice(0, resolvedRequest.topK);
+            diagnosticCandidateArmsConsumer?.({
+                preciseLexical: searchResults.map((result) => toSemanticSearchResult(result, 'lexical_rank')),
+                ...(lexicalFallback
+                    ? {
+                        fallbackLexical: lexicalFallback.map((result) => (
+                            toSemanticSearchResult(result, 'lexical_rank')
+                        )),
+                    }
+                    : {}),
             });
-            return searchResults.map((result) => toSemanticSearchResult(result, 'lexical_rank'));
+            candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
+                lexical: searchResults,
+                ...(lexicalFallback ? { lexicalFallback } : {}),
+                result: productResults,
+                hybrid: false,
+                maxEntries: candidateTraceMaxEntries,
+                productCandidateLimit: resolvedRequest.topK,
+                queryEmbeddingSha256: null,
+                lexicalRequests: [{
+                    role: 'primary',
+                    querySha256: hashSemanticSearchLexicalQuery(resolvedRequest.query),
+                    matchMode: lexicalMatchMode,
+                }, ...(lexicalFallback ? [{
+                    role: 'fallback_or' as const,
+                    querySha256: hashSemanticSearchLexicalQuery(lexicalFallbackQuery),
+                    matchMode: 'any_terms' as const,
+                    ...(lexicalFallbackTerms ? { terms: [...lexicalFallbackTerms] } : {}),
+                }] : [])],
+            }));
+            return productResults.map((result) => toSemanticSearchResult(result, 'lexical_rank'));
         }
 
         if (isHybrid) {
@@ -3102,41 +3393,64 @@ export class Context {
 
             // 3. Retrieve each backend-neutral arm and fuse under one Core-owned policy.
             console.log(`[Context] 🔍 Executing hybrid search with RRF reranking...`);
-            const [denseCandidates, lexicalCandidates] = await Promise.all([
+            const [denseCandidates, lexicalCandidates, lexicalFallback] = await Promise.all([
                 this.vectorDatabase.retrieveDense(collectionName, {
                     vector: queryEmbedding.vector,
-                    limit: resolvedRequest.topK,
+                    limit: candidateRetrievalLimit,
                     filter: resolvedRequest.filter,
                 }),
                 this.vectorDatabase.retrieveLexical(collectionName, {
                     query: resolvedRequest.query,
-                    limit: resolvedRequest.topK,
+                    limit: candidateRetrievalLimit,
                     filter: resolvedRequest.filter,
                 }),
+                captureLexicalFallback
+                    ? this.vectorDatabase.retrieveLexical(collectionName, {
+                        query: lexicalFallbackQuery,
+                        limit: candidateRetrievalLimit,
+                        filter: resolvedRequest.filter,
+                        matchMode: 'any_terms',
+                    })
+                    : Promise.resolve(undefined),
             ]);
-            const sameGenerationReceipt = await this.revalidateProvenVectorGeneration(
-                codebasePath,
-                revalidatedReceipt,
-            );
-            const finalMutationObservation = initialMutationObservation
-                ? this.observeMutationGeneration(codebasePath)
-                : null;
-            if (
-                !sameGenerationReceipt
-                || (initialMutationObservation && (
-                    !finalMutationObservation
-                    || finalMutationObservation.mutationActive
-                    || finalMutationObservation.generation !== initialMutationObservation.generation
-                ))
-            ) {
-                throw new Error('Index generation changed during hybrid retrieval.');
-            }
+            await assertCandidateReadAuthorityUnchanged('Index generation changed during hybrid retrieval.');
             const searchResults = fuseVectorCandidatesWithRrf({
-                dense: denseCandidates,
-                lexical: lexicalCandidates,
+                dense: denseCandidates.slice(0, resolvedRequest.topK),
+                lexical: lexicalCandidates.slice(0, resolvedRequest.topK),
                 k: VECTOR_CANDIDATE_RRF_K_V1,
                 limit: resolvedRequest.topK,
             });
+            diagnosticCandidateArmsConsumer?.({
+                dense: denseCandidates.map((result) => toSemanticSearchResult(result, 'dense_similarity')),
+                preciseLexical: lexicalCandidates.map((result) => toSemanticSearchResult(result, 'lexical_rank')),
+                ...(lexicalFallback
+                    ? {
+                        fallbackLexical: lexicalFallback.map((result) => (
+                            toSemanticSearchResult(result, 'lexical_rank')
+                        )),
+                    }
+                    : {}),
+            });
+            candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
+                dense: denseCandidates,
+                lexical: lexicalCandidates,
+                ...(lexicalFallback ? { lexicalFallback } : {}),
+                result: searchResults,
+                hybrid: true,
+                maxEntries: candidateTraceMaxEntries,
+                productCandidateLimit: resolvedRequest.topK,
+                queryEmbeddingSha256: hashSemanticSearchQueryEmbedding(queryEmbedding.vector),
+                lexicalRequests: [{
+                    role: 'primary',
+                    querySha256: hashSemanticSearchLexicalQuery(resolvedRequest.query),
+                    matchMode: lexicalMatchMode,
+                }, ...(lexicalFallback ? [{
+                    role: 'fallback_or' as const,
+                    querySha256: hashSemanticSearchLexicalQuery(lexicalFallbackQuery),
+                    matchMode: 'any_terms' as const,
+                    ...(lexicalFallbackTerms ? { terms: [...lexicalFallbackTerms] } : {}),
+                }] : [])],
+            }));
 
             console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
 
@@ -3162,13 +3476,26 @@ export class Context {
             // 2. Search in vector database
             const searchResults = await this.vectorDatabase.retrieveDense(collectionName, {
                 vector: queryEmbedding.vector,
-                limit: resolvedRequest.topK,
+                limit: candidateRetrievalLimit,
                 minimumScore: denseThreshold,
                 filter: resolvedRequest.filter,
             });
+            const productResults = searchResults.slice(0, resolvedRequest.topK);
+            diagnosticCandidateArmsConsumer?.({
+                dense: searchResults.map((result) => toSemanticSearchResult(result, 'dense_similarity')),
+            });
+            candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
+                dense: searchResults,
+                result: productResults,
+                hybrid: false,
+                maxEntries: candidateTraceMaxEntries,
+                productCandidateLimit: resolvedRequest.topK,
+                queryEmbeddingSha256: hashSemanticSearchQueryEmbedding(queryEmbedding.vector),
+                lexicalRequests: [],
+            }));
 
             // 3. Convert to semantic search result format
-            const results = searchResults.map((result) => toSemanticSearchResult(result, 'dense_similarity'));
+            const results = productResults.map((result) => toSemanticSearchResult(result, 'dense_similarity'));
 
             console.log(`[Context] ✅ Found ${results.length} relevant results`);
             return results;

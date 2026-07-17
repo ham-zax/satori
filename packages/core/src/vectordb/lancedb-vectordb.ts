@@ -677,7 +677,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                 let query = table.query().fullTextSearch(new MatchQuery(
                     request.query,
                     'lexicalText',
-                    { operator: Operator.And },
+                    { operator: request.matchMode === 'any_terms' ? Operator.Or : Operator.And },
                 ));
                 if (filter) query = query.where(filter);
                 const rows = await query

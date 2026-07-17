@@ -49,6 +49,39 @@ test('Milvus gRPC sparse search sends one BM25 request without dense data', asyn
     assert.equal(results[0]?.score, 0.91);
 });
 
+test('Milvus sparse adapters reject unsupported explicit lexical operators before provider work', async () => {
+    let providerCalls = 0;
+    const grpcTarget = {
+        ensureInitialized: async () => undefined,
+        ensureLoaded: async () => undefined,
+        client: { search: async () => { providerCalls += 1; return { results: [] }; } },
+    };
+    const restTarget = {
+        ensureInitialized: async () => undefined,
+        ensureLoaded: async () => undefined,
+        config: { database: 'default' },
+        makeRequest: async () => { providerCalls += 1; return { code: 0, data: [] }; },
+    };
+
+    await assert.rejects(
+        MilvusVectorDatabase.prototype.retrieveLexical.call(
+            grpcTarget as unknown as MilvusVectorDatabase,
+            'collection-v1',
+            { query: 'one two', limit: 7, matchMode: 'any_terms' },
+        ),
+        /does not support explicit lexical term operators/,
+    );
+    await assert.rejects(
+        MilvusRestfulVectorDatabase.prototype.retrieveLexical.call(
+            restTarget as unknown as MilvusRestfulVectorDatabase,
+            'collection-v1',
+            { query: 'one two', limit: 7, matchMode: 'any_terms' },
+        ),
+        /does not support explicit lexical term operators/,
+    );
+    assert.equal(providerCalls, 0);
+});
+
 test('Milvus REST sparse search sends one BM25 request through the search endpoint', async () => {
     const calls: Array<{ endpoint: string; method: string; body: Record<string, unknown> }> = [];
     const target = {

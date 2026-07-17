@@ -24,7 +24,53 @@ pnpm eval:useful-context:record -- \
   --dry-run
 ```
 
-`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. One warm sample emits observation version 1 for compatibility. `--warm-samples N` with `N > 1` emits version 2 with one cold sample and numbered warm samples per task. Metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation sync statistics, and the completed operation generation and runtime fingerprint for every task. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof.
+`--startup-timeout-ms`, `--call-timeout-ms`, and `--close-timeout-ms` bound every process phase. `--out` must be outside the measured repository. Recording requires the same clean Git worktree before and after the run. Current recordings emit observation version 3 with one cold sample and numbered warm samples. Version 3 preserves tagged file-versus-symbol result identities; archived versions 1 and 2 remain readable. Metadata binds the report to the canonical root, Git revision, normalized task-suite SHA-256, MCP server name/version, Node version/platform/architecture, preparation sync statistics, and the completed operation generation and runtime fingerprint for every task. It also hashes the task file and each repeated `--authority-file` artifact. If an authority artifact inside the indexed repository appears in recorded candidates, the run fails instead of post-filtering it. The current status envelope does not expose a separate indexed fingerprint; the completed sync receipt is the available compatibility-gated fingerprint proof.
+
+### Candidate capture and offline replay
+
+Full-debug recordings may request a trace-only candidate superset with
+`debugCandidateLimit=160`. That value does not replace the production
+32-to-80 retrieval policy or the visible result limit: Core retrieves the
+larger raw arms once for diagnostics, but returns and reranks only the normal
+product candidate set. The trace is source-free and binds every dense, precise
+lexical, and fallback lexical arm to its query/term digest and publication.
+
+Create a replay artifact outside the indexed repository:
+
+```bash
+pnpm eval:search-candidates:capture -- \
+  --tasks /absolute/evaluation/tasks.json \
+  --observations /absolute/evaluation/observations.json \
+  --require-replay-ready \
+  --out /absolute/evaluation/candidates.json
+
+pnpm eval:search-candidates:replay -- \
+  --capture /absolute/evaluation/candidates.json \
+  --out /absolute/evaluation/baseline-replay.json
+```
+
+The baseline replay recomputes both Core and MCP RRF stages and fails on any
+ordering or score mismatch. A contender is supplied with `--policy-file`; the
+policy explicitly freezes candidate depth, both RRF constants, source weights,
+source minimums, and the conditional-OR threshold. Replay always proves the
+baseline first. It performs no embeddings, storage reads, reranker calls, or
+indexing. Newly admitted candidates still require one separately budgeted live
+provider validation; the replay marks this requirement instead of inventing
+reranker outcomes.
+
+Candidate capture also requires mechanical measurement isolation: every timed
+search must report `skipped_recent`, its preparation sync must be zero-change,
+and its exact operation/publication proof must be unchanged after the samples.
+Replay output records the replay script, canonical-JSON helper, Node identity,
+measured-runtime digest, and exact policy-source bytes so later results can be
+attributed to one executable replay artifact.
+
+Capture readiness is classified separately. `fusionReady` covers the raw arms
+and Core/MCP RRF stages used by fusion replay; `survivalReady` additionally
+requires the local-scoring signals and removal evidence used by contender
+admission; `agentReady` is reserved for the later reranker-output, grouping,
+and disclosure replay contract. `--require-replay-ready` currently requires
+complete fusion and survival authority, not the unfinished agent replay.
 
 ## Grade
 
@@ -38,23 +84,27 @@ node scripts/satori-useful-context.mjs \
   --json
 ```
 
-An observation set records both `cold` and `warm` results for every committed task. Version 2 additionally records `sample`, `sourceReached`, nullable `callsToSource`, and `sourceMode` (`search_preview`, `read_file`, or `null`) so non-source tool calls are not mislabeled as source access:
-
-Version 1 observations produced by current recorders also preserve the explicit source-evidence tuple. When `callsToSource` is non-null it must identify an actual call in `1..toolCalls`; legacy records without the tuple remain unknown rather than being inferred as source-backed.
+An observation set records both `cold` and `warm` results for every committed task. Versions 2 and 3 record `sample`, `sourceReached`, nullable `callsToSource`, and `sourceMode` (`search_preview`, `read_file`, or `null`) so non-source tool calls are not mislabeled as source access. Version 3 result identities are tagged unions: symbol results contain `kind`, `file`, and `symbol`; file-level results contain only `kind` and `file`. Version 1 observations may contain an explicit source-evidence tuple. When `callsToSource` is non-null it must identify an actual call in `1..toolCalls`; legacy records without the tuple remain unknown rather than being inferred as source-backed.
 
 ```json
 {
-  "version": 1,
+  "version": 3,
+  "warmSampleCount": 1,
   "observations": [
     {
       "taskId": "find-search-handler",
       "phase": "cold",
+      "sample": 0,
       "status": "ok",
       "latencyMs": 120,
       "contextBytes": 2048,
+      "sourceReached": false,
+      "callsToSource": null,
+      "sourceMode": null,
       "response": { "status": "ok" },
       "results": [
         {
+          "kind": "symbol",
           "file": "packages/mcp/src/core/handlers.ts",
           "symbol": "handleSearchCode"
         }
@@ -63,12 +113,17 @@ Version 1 observations produced by current recorders also preserve the explicit 
     {
       "taskId": "find-search-handler",
       "phase": "warm",
+      "sample": 1,
       "status": "ok",
       "latencyMs": 40,
       "contextBytes": 2048,
+      "sourceReached": false,
+      "callsToSource": null,
+      "sourceMode": null,
       "response": { "status": "ok" },
       "results": [
         {
+          "kind": "symbol",
           "file": "packages/mcp/src/core/handlers.ts",
           "symbol": "handleSearchCode"
         }
@@ -78,7 +133,7 @@ Version 1 observations produced by current recorders also preserve the explicit 
 }
 ```
 
-The full observation set must contain exactly one observation for every task and phase. Exact-open tasks require a parser-derived expected span, an `ok` observation, and matching `openedSymbol` identity and boundaries. Caller recovery is derived from captured call-graph `nodes` and `edges`; the grader does not trust a separately claimed caller list. Stale-recovery evidence uses `staleIndexDetected` and `recoverySucceeded` where applicable.
+The full observation set must contain exactly one cold observation and the declared number of numbered warm observations for every task. Exact-open tasks require a parser-derived expected span, an `ok` observation, and matching `openedSymbol` identity and boundaries. Caller recovery is derived from captured call-graph `nodes` and `edges`; the grader does not trust a separately claimed caller list. Stale-recovery evidence uses `staleIndexDetected` and `recoverySucceeded` where applicable.
 
 ## Metrics
 

@@ -33,6 +33,8 @@
     "test:integration": "pnpm --filter @zokizuan/satori-core run test:integration",
     "eval:useful-context:record": "node scripts/satori-useful-context-record.mjs",
     "eval:vector-stacks": "node scripts/satori-vector-stack-compare.mjs",
+    "eval:search-candidates:capture": "node scripts/satori-search-candidate-capture.mjs",
+    "eval:search-candidates:replay": "node scripts/satori-search-candidate-replay.mjs",
     "eval:useful-context:fixtures": "node scripts/satori-useful-context-fixture-record.mjs",
     "eval:search-quality": "pnpm --filter @zokizuan/satori-mcp exec tsx ../../evals/search-quality/run.ts",
     "eval:agent-discovery": "node --no-warnings evals/agent-discovery/run-opencode.mjs",

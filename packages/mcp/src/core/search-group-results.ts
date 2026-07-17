@@ -519,6 +519,7 @@ export function buildVisibleGroupedSearchResults(input: {
 }): {
     visibleResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }>;
     rankedResults: Array<SearchGroupResult & { __exactLexicalMatch: boolean }>;
+    disclosureOrder: Array<SearchGroupResult & { __exactLexicalMatch: boolean }>;
     diversityOmissions: Array<{
         group: SearchGroupResult & { __exactLexicalMatch: boolean };
         reason: "file_diversity_cap" | "symbol_diversity_cap" | "visible_limit";
@@ -694,9 +695,15 @@ export function buildVisibleGroupedSearchResults(input: {
     }
 
     const diversityApplied = applyGroupDiversity(rankedGroupedResults, input.limit, input.groupBy);
+    const completeDiversityApplied = input.limit >= rankedGroupedResults.length
+        ? diversityApplied
+        : applyGroupDiversity(rankedGroupedResults, rankedGroupedResults.length, input.groupBy);
     return {
         visibleResults: diversityApplied.selected,
         rankedResults: rankedGroupedResults,
+        // Freeze one complete diversity pass so continuation can page through a
+        // stable order without re-running caps independently for every page.
+        disclosureOrder: completeDiversityApplied.selected,
         diversityOmissions: diversityApplied.omitted,
         invalidCandidateIds: Array.from(new Set(invalidCandidateIds)).sort(),
         warnings: Array.from(spanWarningCodes).sort(),

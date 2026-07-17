@@ -6,6 +6,7 @@ import type {
     SearchFreshnessDebugHint,
     SearchFreshnessSummary,
     SearchGroupResult,
+    SearchDisclosureSummary,
     SearchRankingDebugHint,
     SearchGroupedDebugV2,
     SearchGroupedResultV2,
@@ -127,7 +128,7 @@ function projectGroupedDebugV2(debug: SearchGroupedDebugV2): SearchGroupedDebugV
     };
 }
 
-function projectGroupedResultV2(result: SearchGroupResult): SearchGroupedResultV2 {
+export function projectGroupedResultV2(result: SearchGroupResult): SearchGroupedResultV2 {
     const navigation: SearchGroupedResultV2["navigation"] = result.navigation.graph === "ready"
         ? {
             graph: "ready",
@@ -176,6 +177,7 @@ function projectGroupedResultV2(result: SearchGroupResult): SearchGroupedResultV
 
 export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
     results: SearchGroupResult[];
+    disclosure?: SearchDisclosureSummary;
 }): SearchResponseEnvelope {
     const recommendedNextAction = buildTopRecommendedSearchAction(input.codebaseRoot, input.results);
     const results = input.results.map(projectGroupedResultV2);
@@ -191,6 +193,7 @@ export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
         resultMode: "grouped",
         freshnessDecision: input.freshnessDecision,
         freshnessSummary: input.freshnessSummary,
+        ...(input.disclosure ? { disclosure: input.disclosure } : {}),
         ...buildWarnings(input.warnings),
         ...(recommendedNextAction ? { recommendedNextAction } : {}),
         ...buildSearchResponseHints(input),

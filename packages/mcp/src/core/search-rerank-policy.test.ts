@@ -3,6 +3,7 @@ import test from "node:test";
 import type { PathCategory } from "./search-constants.js";
 import {
     selectRerankCandidates,
+    selectRerankInputWithinUtf8Budget,
     type RerankCandidateLike,
 } from "./search-rerank-policy.js";
 
@@ -52,6 +53,46 @@ function rank(candidates: TestCandidate[]): TestCandidate[] {
         || (left.result.startLine ?? 0) - (right.result.startLine ?? 0)
     ));
 }
+
+test("rerank input byte selection admits only a deterministic whole-document prefix", () => {
+    const candidates = [
+        candidate({ id: "first" }),
+        candidate({ id: "second" }),
+        candidate({ id: "third" }),
+    ];
+    const documents = ["abc", "éé", "tail"];
+    const selected = selectRerankInputWithinUtf8Budget({
+        candidates,
+        documents,
+        maxInputBytes: 7,
+    });
+
+    assert.deepEqual(selected.candidates.map(({ id }) => id), ["first", "second"]);
+    assert.deepEqual(selected.documents, ["abc", "éé"]);
+    assert.equal(selected.inputBytes, 7);
+    assert.equal(selected.omittedCandidateCount, 1);
+});
+
+test("rerank input byte selection never slices an oversized first document", () => {
+    const selected = selectRerankInputWithinUtf8Budget({
+        candidates: [candidate({ id: "oversized" }), candidate({ id: "later" })],
+        documents: ["12345", "x"],
+        maxInputBytes: 4,
+    });
+
+    assert.deepEqual(selected.candidates, []);
+    assert.deepEqual(selected.documents, []);
+    assert.equal(selected.inputBytes, 0);
+    assert.equal(selected.omittedCandidateCount, 2);
+});
+
+test("rerank input byte selection rejects mismatched input pairs", () => {
+    assert.throws(() => selectRerankInputWithinUtf8Budget({
+        candidates: [candidate({ id: "candidate" })],
+        documents: [],
+        maxInputBytes: 10,
+    }), /equal lengths/);
+});
 
 test("rerank selection gives distinct owners priority and retains bounded supplemental chunks", () => {
     const selected = selectRerankCandidates({

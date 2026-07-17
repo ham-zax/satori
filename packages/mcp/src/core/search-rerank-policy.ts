@@ -24,6 +24,13 @@ export type RerankCandidateSelection<T> = {
     budgetReason: RerankBudgetReason;
 };
 
+export type RerankInputByteSelection<T> = Readonly<{
+    candidates: readonly T[];
+    documents: readonly string[];
+    inputBytes: number;
+    omittedCandidateCount: number;
+}>;
+
 function normalizedString(value: unknown): string | null {
     if (typeof value !== "string") return null;
     const normalized = value.trim();
@@ -102,5 +109,36 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
         candidatePoolCount: candidatePool.length,
         budget,
         budgetReason,
+    };
+}
+
+export function selectRerankInputWithinUtf8Budget<T>(input: {
+    candidates: readonly T[];
+    documents: readonly string[];
+    maxInputBytes: number;
+}): RerankInputByteSelection<T> {
+    if (input.candidates.length !== input.documents.length) {
+        throw new Error("Reranker candidates and documents must have equal lengths.");
+    }
+    if (!Number.isSafeInteger(input.maxInputBytes) || input.maxInputBytes <= 0) {
+        throw new Error("Reranker input byte budget must be a positive safe integer.");
+    }
+
+    let inputBytes = 0;
+    let selectedCount = 0;
+    for (const document of input.documents) {
+        const documentBytes = Buffer.byteLength(document, "utf8");
+        if (inputBytes + documentBytes > input.maxInputBytes) {
+            break;
+        }
+        inputBytes += documentBytes;
+        selectedCount += 1;
+    }
+
+    return {
+        candidates: input.candidates.slice(0, selectedCount),
+        documents: input.documents.slice(0, selectedCount),
+        inputBytes,
+        omittedCandidateCount: input.candidates.length - selectedCount,
     };
 }

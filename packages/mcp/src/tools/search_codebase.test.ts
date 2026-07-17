@@ -194,6 +194,53 @@ test('search_codebase accepts bounded diagnostic candidate depth only with full 
     assert.match(rejectedAboveBound.content[0]?.text || '', /160|less than or equal/i);
 });
 
+test('search_codebase accepts a smaller grouped disclosure without lowering retrieval limit', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const calls: Array<Record<string, unknown>> = [];
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async (args: Record<string, unknown>) => {
+                calls.push(args);
+                return {
+                    content: [{ type: 'text' as const, text: JSON.stringify({
+                        status: 'ok',
+                        results: [],
+                    }) }],
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    const accepted = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        limit: 10,
+        disclosureLimit: 3,
+    }, ctx);
+    const rejectedAboveLimit = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        limit: 3,
+        disclosureLimit: 4,
+    }, ctx);
+    const rejectedRaw = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'auth',
+        resultMode: 'raw',
+        disclosureLimit: 1,
+    }, ctx);
+
+    assert.equal(accepted.isError, undefined);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.limit, 10);
+    assert.equal(calls[0]?.disclosureLimit, 3);
+    assert.equal(rejectedAboveLimit.isError, true);
+    assert.match(rejectedAboveLimit.content[0]?.text ?? '', /disclosureLimit.*limit/i);
+    assert.equal(rejectedRaw.isError, true);
+    assert.match(rejectedRaw.content[0]?.text ?? '', /disclosureLimit.*grouped/i);
+});
+
 test('search_codebase acquires embedding context only for routes that require dense retrieval', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const requestedOperations: string[] = [];

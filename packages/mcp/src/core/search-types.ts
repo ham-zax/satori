@@ -273,6 +273,7 @@ export interface SearchCandidateSurvivalRemoval {
         | "path_exclude_filter"
         | "must_filter"
         | "exclude_filter"
+        | "reranker_input_byte_budget"
         | "invalid_group_target"
         | "duplicate_group"
         | "file_diversity_cap"
@@ -545,6 +546,11 @@ export interface SearchDebugHint {
         candidatePoolCount?: number;
         candidateBudget?: number;
         budgetReason?: RerankBudgetReason;
+        /** Selected document-string bytes only; excludes query and provider request framing. */
+        inputByteBudget: number;
+        /** Selected document-string bytes only; excludes query and provider request framing. */
+        inputBytes: number;
+        byteBudgetOmittedCandidates: number;
         errorCode?: "RERANKER_FAILED";
         failurePhase?: "api_call" | "parse_results";
         topK: number;
@@ -659,7 +665,28 @@ interface SearchBaseResponseEnvelope {
 
 export interface SearchGroupedResponseEnvelope extends SearchBaseResponseEnvelope {
     resultMode: "grouped";
+    disclosure?: SearchDisclosureSummary;
+    continuation?: {
+        handle: string;
+        nextOffset: number;
+        remainingGroupCount: number;
+    };
     results: SearchGroupedResultV2[];
+}
+
+export type SearchDisclosureReason =
+    | "initial_budget"
+    | "caller_limit"
+    | "utf8_byte_budget"
+    | "group_content_truncated";
+
+export interface SearchDisclosureSummary {
+    policyVersion: "search_disclosure_v1";
+    availableGroupCount: number;
+    returnedGroupCount: number;
+    omittedGroupCount: number;
+    truncated: boolean;
+    reasons: SearchDisclosureReason[];
 }
 
 export interface SearchRawResponseEnvelope extends SearchBaseResponseEnvelope {
@@ -679,6 +706,7 @@ export interface SearchRequestInput {
     groupBy: SearchGroupBy;
     rankingMode: SearchRankingMode;
     limit: number;
+    disclosureLimit?: number;
     debugMode?: SearchDebugMode;
     debugCandidateLimit?: number;
 }

@@ -6,6 +6,7 @@ import {
     Context,
     COLLECTION_LIMIT_MESSAGE,
     type IndexCompletionMarkerDocument,
+    type ProvenGenerationReceipt,
     type ProvenVectorGenerationReceipt,
     type PreparedGenerationRevalidation,
     createRuntimeNavigationStore,
@@ -43,6 +44,8 @@ import {
     SEARCH_CHANGED_FILES_CACHE_TTL_MS,
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_GITIGNORE_FORCE_RELOAD_EVERY_N,
+    SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,
+    SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
     PathCategory,
     SearchGroupBy,
     SearchRankingMode,
@@ -62,11 +65,14 @@ import {
     SearchDebugHint,
     SearchGroupResult,
     SearchFreshnessSummary,
+    SearchGroupedResponseEnvelope,
+    SearchGroupedResultV2,
     SearchReadinessDebugHint,
     SearchReadinessInvalidationReason,
     SearchRecommendedNextAction,
     SearchRequestInput,
     SearchResponseEnvelope,
+    SearchResponseHints,
     SearchSpan,
 } from "./search-types.js";
 import {
@@ -176,6 +182,8 @@ import { resolveSearchPolicy } from './search-policy.js';
 import { SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE } from './search-candidate-survival.js';
 import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
 import { finalizeSearchResults } from "./search-result-finalization.js";
+import { SearchResultSetCache } from "./search-result-set-cache.js";
+import { projectGroupedDisclosure } from "./search-disclosure.js";
 import type {
     SearchQueryPlan,
     SearchResultLike,
@@ -217,6 +225,53 @@ type SearchPhaseTimingKey =
     | 'registryLoad'
     | 'grouping'
     | 'navigationValidation';
+
+type FrozenSearchResultSet = {
+    canonicalRoot: string;
+    vectorReceipt: ProvenVectorGenerationReceipt;
+    generationReceipt?: ProvenGenerationReceipt;
+    preparedObservation: string;
+    sourceObservation: string | null;
+    queryPolicyDigest: string;
+    responseByteLimit: number;
+    pageSize: number;
+    baseEnvelope: Omit<
+        SearchGroupedResponseEnvelope,
+        "results" | "disclosure" | "continuation" | "recommendedNextAction"
+    >;
+    orderedResults: SearchGroupedResultV2[];
+    recommendedActions: Array<SearchRecommendedNextAction | null>;
+};
+
+function freezeContinuationHints(
+    hints: SearchResponseHints | undefined,
+): SearchResponseHints | undefined {
+    if (!hints) return undefined;
+    const frozen = structuredClone(hints);
+    delete frozen.noiseMitigation;
+    if (frozen.verification) {
+        const verification = { ...frozen.verification };
+        delete verification.generatedArtifacts;
+        if (Object.keys(verification).length > 0) {
+            frozen.verification = verification;
+        } else {
+            delete frozen.verification;
+        }
+    }
+    if (frozen.debugSearch && "candidateSurvival" in frozen.debugSearch) {
+        const debugSearch = structuredClone(frozen.debugSearch);
+        if (debugSearch.candidateSurvival) {
+            debugSearch.candidateSurvival.stages = debugSearch.candidateSurvival.stages.filter(
+                (stage) => stage.stage !== "disclosed",
+            );
+            debugSearch.candidateSurvival.removals = debugSearch.candidateSurvival.removals.filter(
+                (removal) => removal.afterStage !== "disclosed",
+            );
+        }
+        frozen.debugSearch = debugSearch;
+    }
+    return Object.keys(frozen).length > 0 ? frozen : undefined;
+}
 
 type SearchPhaseTimings = Record<SearchPhaseTimingKey, number>;
 
@@ -335,6 +390,7 @@ type PreparedReadObservationSnapshot = {
 
 type PreparedReadCacheObservationResult = {
     observation: string | null;
+    sourceObservation: string | null;
     unavailableReason?: PreparedReadObservationUnavailableReason;
 };
 
@@ -536,6 +592,7 @@ export class ToolHandlers {
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
     private readonly preparedReadCache = new PreparedReadCache<Extract<TrackedRootReadinessState, { state: 'ready' }>>();
     private readonly preparedNavigationCache = new Map<string, PreparedNavigationCacheEntry>();
+    private readonly searchResultSetCache = new SearchResultSetCache<FrozenSearchResultSet>();
     private readonly gitignoreForceReloadEveryN: number;
     private readonly searchQuerySupport: SearchQuerySupport;
     private readonly trackedRootReadiness: TrackedRootReadiness;
@@ -1026,20 +1083,25 @@ export class ToolHandlers {
 
     private getPreparedReadCacheObservation(codebasePath: string): PreparedReadCacheObservationResult {
         const authorityObservation = this.getPreparedAuthorityObservation(codebasePath);
-        if (!authorityObservation) return { observation: null };
+        if (!authorityObservation) return { observation: null, sourceObservation: null };
 
         try {
             const sourceObservation = this.syncManager.getPreparedReadObservation(codebasePath);
             if (!sourceObservation.available) {
                 return {
                     observation: authorityObservation,
+                    sourceObservation: null,
                     unavailableReason: sourceObservation.reason,
                 };
             }
-            return { observation: authorityObservation };
+            return {
+                observation: authorityObservation,
+                sourceObservation: JSON.stringify(sourceObservation.observation),
+            };
         } catch {
             return {
                 observation: authorityObservation,
+                sourceObservation: null,
                 unavailableReason: 'source_observation_failed',
             };
         }
@@ -3105,6 +3167,9 @@ export class ToolHandlers {
             ? args.debugMode
             : 'none';
         const rawLimit = typeof args.limit === 'number' ? args.limit : Number(args.limit);
+        const rawDisclosureLimit = typeof args.disclosureLimit === 'number'
+            ? args.disclosureLimit
+            : Number(args.disclosureLimit);
         const rawDebugCandidateLimit = typeof args.debugCandidateLimit === 'number'
             ? args.debugCandidateLimit
             : Number(args.debugCandidateLimit);
@@ -3116,6 +3181,9 @@ export class ToolHandlers {
             groupBy,
             rankingMode,
             limit: Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 10,
+            ...(Number.isFinite(rawDisclosureLimit)
+                ? { disclosureLimit: rawDisclosureLimit }
+                : {}),
             debugMode,
             ...(Number.isFinite(rawDebugCandidateLimit)
                 ? { debugCandidateLimit: Math.max(1, rawDebugCandidateLimit) }
@@ -3131,8 +3199,13 @@ export class ToolHandlers {
             || (debugMode === 'full'
                 && Number.isInteger(input.debugCandidateLimit)
                 && input.debugCandidateLimit <= SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE);
+        const isDisclosureLimitValid = input.disclosureLimit === undefined
+            || (input.resultMode === 'grouped'
+                && Number.isInteger(input.disclosureLimit)
+                && input.disclosureLimit > 0
+                && input.disclosureLimit <= input.limit);
 
-        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || !isDebugCandidateLimitValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
+        if (!isScopeValid || !isResultModeValid || !isGroupByValid || !isRankingModeValid || !isDebugCandidateLimitValid || !isDisclosureLimitValid || typeof input.query !== 'string' || input.query.trim().length === 0) {
             const payload = this.buildInvalidSearchRequestPayload({
                 path: typeof input.path === 'string' ? input.path : '',
                 query: typeof input.query === 'string' ? input.query : '',
@@ -3140,7 +3213,7 @@ export class ToolHandlers {
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
                 limit: input.limit
-            }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first. debugCandidateLimit is an integer from 1 to 160 and requires debugMode=full.');
+            }, 'Invalid search arguments. Required: path, query. Valid scope: runtime|mixed|docs. Valid resultMode: grouped|raw. Valid groupBy: symbol|file. Valid rankingMode: default|auto_changed_first. disclosureLimit is a grouped-result integer no greater than limit. debugCandidateLimit is an integer from 1 to 160 and requires debugMode=full.');
             return {
                 content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true,
@@ -3392,6 +3465,7 @@ export class ToolHandlers {
             searchDiagnostics.retrievalMode = queryPlan.retrievalMode;
             const retrievalPolicy = resolveSearchPolicy({
                 resultLimit: input.limit,
+                disclosureResultLimit: input.disclosureLimit ?? input.limit,
                 hasMustOperators: parsedOperators.must.length > 0,
                 ...(input.debugCandidateLimit !== undefined
                     ? { diagnosticCandidateLimit: input.debugCandidateLimit }
@@ -3653,7 +3727,7 @@ export class ToolHandlers {
                 execution.searchWarnings.push(exactFastPath.warning);
             }
 
-            const envelope = await finalizeSearchResults({
+            const finalized = await finalizeSearchResults({
                 absolutePath,
                 effectiveRoot,
                 query: input.query,
@@ -3661,6 +3735,8 @@ export class ToolHandlers {
                 groupBy: input.groupBy,
                 resultMode: input.resultMode,
                 limit: input.limit,
+                disclosureLimit: retrievalPolicy.disclosureResultLimit,
+                rerankerResultLimit: retrievalPolicy.rerankerResultLimit,
                 debugMode,
                 rankingMode: input.rankingMode,
                 freshnessDecision,
@@ -3701,6 +3777,62 @@ export class ToolHandlers {
                 resolveSearchOwnerFromRegistry: (result, registry, plan) => this.resolveSearchOwnerFromRegistry(result, registry, plan),
                 now: this.now,
             });
+            let envelope = finalized.envelope;
+            if (
+                finalized.resultSet
+                && envelope.resultMode === "grouped"
+                && envelope.continuation
+            ) {
+                if (!vectorReceipt || !preparedObservation) {
+                    throw new Error("Search continuation requires a proven publication and source observation.");
+                }
+                const baseEnvelopeDraft: Partial<SearchGroupedResponseEnvelope> = structuredClone(envelope);
+                const resultSpecificHints = baseEnvelopeDraft.hints;
+                delete baseEnvelopeDraft.results;
+                delete baseEnvelopeDraft.disclosure;
+                delete baseEnvelopeDraft.continuation;
+                delete baseEnvelopeDraft.recommendedNextAction;
+                delete baseEnvelopeDraft.hints;
+                const frozenHints = freezeContinuationHints(resultSpecificHints);
+                const baseEnvelope = {
+                    ...baseEnvelopeDraft,
+                    ...(frozenHints ? { hints: frozenHints } : {}),
+                } as FrozenSearchResultSet["baseEnvelope"];
+                const queryPolicyDigest = crypto.createHash("sha256").update(JSON.stringify([
+                    input.query,
+                    input.scope,
+                    input.groupBy,
+                    input.rankingMode,
+                    retrievalPolicy,
+                    queryPlan,
+                ]), "utf8").digest("hex");
+                const stored = this.searchResultSetCache.store({
+                    value: {
+                        canonicalRoot: effectiveRoot,
+                        vectorReceipt,
+                        ...(generationReceipt ? { generationReceipt } : {}),
+                        preparedObservation,
+                        sourceObservation: finalSourceObservation.sourceObservation,
+                        queryPolicyDigest,
+                        responseByteLimit: debugMode === "full"
+                            ? SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES
+                            : SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
+                        pageSize: retrievalPolicy.disclosureResultLimit,
+                        baseEnvelope,
+                        orderedResults: [...finalized.resultSet.orderedResults],
+                        recommendedActions: [...finalized.resultSet.recommendedActions],
+                    },
+                    nextOffset: finalized.resultSet.initialReturnedCount,
+                    nowMs: this.now(),
+                });
+                envelope = {
+                    ...envelope,
+                    continuation: {
+                        ...envelope.continuation,
+                        handle: stored.handle,
+                    },
+                };
+            }
 
             await this.touchWatchedCodebaseBestEffort(effectiveRoot);
             this.seedPreparedRead(preparedReadState, preservePreparedProofAge);
@@ -3771,6 +3903,223 @@ export class ToolHandlers {
                 isError: true
             };
         }
+    }
+
+    public async handleContinueSearch(args: ToolArgs) {
+        const handle = typeof args.handle === "string" ? args.handle.trim() : "";
+        const expectedOffset = typeof args.expectedOffset === "number"
+            ? args.expectedOffset
+            : Number(args.expectedOffset);
+        const requestedLimit = typeof args.limit === "number" ? args.limit : Number(args.limit);
+        const fail = (code: string, message: string) => ({
+            content: [{
+                type: "text" as const,
+                text: this.stringifyToolJson({ status: "not_ready", code, message }),
+            }],
+            isError: true,
+        });
+        if (!/^[a-f0-9]{48}$/.test(handle)) {
+            return fail("SEARCH_RESULT_SET_HANDLE_INVALID", "Search continuation handle is invalid.");
+        }
+        if (
+            !Number.isSafeInteger(expectedOffset)
+            || expectedOffset < 0
+            || expectedOffset > this.capabilities.getMaxSearchLimit()
+        ) {
+            return fail(
+                "SEARCH_RESULT_SET_OFFSET_INVALID",
+                `Search continuation expectedOffset must be an integer from 0 to ${this.capabilities.getMaxSearchLimit()}.`,
+            );
+        }
+        if (
+            args.limit !== undefined
+            && (!Number.isSafeInteger(requestedLimit)
+                || requestedLimit <= 0
+                || requestedLimit > this.capabilities.getMaxSearchLimit())
+        ) {
+            return fail(
+                "SEARCH_RESULT_SET_LIMIT_INVALID",
+                `Search continuation limit must be an integer from 1 to ${this.capabilities.getMaxSearchLimit()}.`,
+            );
+        }
+
+        const nowMs = this.now();
+        const lookup = this.searchResultSetCache.lookup(handle, nowMs);
+        if (lookup.status === "expired") {
+            return fail("SEARCH_RESULT_SET_EXPIRED", "Search continuation handle has expired. Run search_codebase again.");
+        }
+        if (lookup.status === "not_found") {
+            return fail("SEARCH_RESULT_SET_NOT_FOUND", "Search continuation handle is unavailable in this process. Run search_codebase again.");
+        }
+
+        const entry = lookup.entry;
+        const observationBefore = this.getPreparedReadCacheObservation(entry.canonicalRoot);
+        const revalidate = this.contextLifecycle().revalidatePreparedGeneration;
+        if (
+            !observationBefore.observation
+            || observationBefore.observation !== entry.preparedObservation
+            || observationBefore.sourceObservation !== entry.sourceObservation
+            || typeof revalidate !== "function"
+        ) {
+            this.searchResultSetCache.remove(handle);
+            return fail("SEARCH_RESULT_SET_STALE", "Search publication or source observation changed. Run search_codebase again.");
+        }
+        const proof = await revalidate.call(this.context, entry.canonicalRoot, entry.vectorReceipt, {
+            ...(entry.generationReceipt ? { priorGenerationReceipt: entry.generationReceipt } : {}),
+        }).catch(() => null);
+        const observationAfter = this.getPreparedReadCacheObservation(entry.canonicalRoot);
+        if (
+            !proof
+            || proof.navigationProof.status === "requires_reindex"
+            || proof.navigationProof.status === "unsupported"
+            || observationAfter.observation !== observationBefore.observation
+            || observationAfter.sourceObservation !== observationBefore.sourceObservation
+        ) {
+            this.searchResultSetCache.remove(handle);
+            return fail("SEARCH_RESULT_SET_STALE", "Search publication changed while continuation was being prepared. Run search_codebase again.");
+        }
+
+        const pageSize = Number.isFinite(requestedLimit)
+            ? requestedLimit
+            : entry.pageSize;
+        if (lookup.nextOffset !== expectedOffset) {
+            if (
+                lookup.lastPage?.expectedOffset === expectedOffset
+                && lookup.lastPage.pageSize === pageSize
+            ) {
+                return { content: [{ type: "text", text: lookup.lastPage.responseText }] };
+            }
+            return fail(
+                "SEARCH_RESULT_SET_CONFLICT",
+                "Search continuation offset or page size does not match the current cursor. Retry the exact prior request or use the latest continuation response.",
+            );
+        }
+        const remainingResults = entry.orderedResults.slice(lookup.nextOffset);
+        if (remainingResults.length === 0) {
+            return fail(
+                "SEARCH_RESULT_SET_CONSUMED",
+                "Search continuation is complete. Reuse the prior expectedOffset only to retry its page, or run search_codebase again.",
+            );
+        }
+
+        const projection = projectGroupedDisclosure({
+            orderedResults: remainingResults,
+            callerLimit: remainingResults.length,
+            disclosureLimit: pageSize,
+            maxResponseBytes: entry.responseByteLimit,
+            includeSummary: true,
+            buildEnvelope: (results, disclosure) => {
+                const recommendedNextAction = entry.recommendedActions[lookup.nextOffset] ?? null;
+                const noiseMitigationHint = this.searchQuerySupport.buildNoiseMitigationHint(
+                    entry.canonicalRoot,
+                    results.map((result) => result.target.file),
+                    entry.baseEnvelope.scope,
+                );
+                const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(
+                    entry.canonicalRoot,
+                    results.map((result) => ({
+                        file: result.target.file,
+                        span: result.target.span,
+                    })),
+                );
+                const pageHints: SearchResponseHints = {
+                    ...(entry.baseEnvelope.hints ?? {}),
+                    ...(noiseMitigationHint ? { noiseMitigation: noiseMitigationHint } : {}),
+                    ...(generatedArtifactsHint
+                        ? {
+                            verification: {
+                                ...(entry.baseEnvelope.hints?.verification ?? {}),
+                                generatedArtifacts: generatedArtifactsHint,
+                            },
+                        }
+                        : {}),
+                };
+                const envelope: SearchGroupedResponseEnvelope = {
+                    ...entry.baseEnvelope,
+                    ...(Object.keys(pageHints).length > 0 ? { hints: pageHints } : {}),
+                    ...(recommendedNextAction ? { recommendedNextAction } : {}),
+                    ...(disclosure ? { disclosure } : {}),
+                    results: [...results],
+                };
+                return results.length < remainingResults.length
+                    ? {
+                        ...envelope,
+                        continuation: {
+                            handle,
+                            nextOffset: lookup.nextOffset + results.length,
+                            remainingGroupCount: remainingResults.length - results.length,
+                        },
+                    }
+                    : envelope;
+            },
+        });
+        if (projection.results.length === 0) {
+            return fail("SEARCH_RESULT_SET_PAGE_TOO_LARGE", "The next search result cannot fit within the response byte budget. Use read_file on an earlier target or run a narrower search.");
+        }
+        const proofAfterProjection = await revalidate.call(
+            this.context,
+            entry.canonicalRoot,
+            entry.vectorReceipt,
+            {
+                ...(entry.generationReceipt
+                    ? { priorGenerationReceipt: entry.generationReceipt }
+                    : {}),
+            },
+        ).catch(() => null);
+        const observationAfterProjection = this.getPreparedReadCacheObservation(entry.canonicalRoot);
+        if (
+            !proofAfterProjection
+            || proofAfterProjection.navigationProof.status === "requires_reindex"
+            || proofAfterProjection.navigationProof.status === "unsupported"
+            || observationAfterProjection.observation !== observationAfter.observation
+            || observationAfterProjection.sourceObservation !== observationAfter.sourceObservation
+        ) {
+            this.searchResultSetCache.remove(handle);
+            return fail(
+                "SEARCH_RESULT_SET_STALE",
+                "Search publication or source observation changed while the continuation page was being projected. Run search_codebase again.",
+            );
+        }
+        const nextOffset = lookup.nextOffset + projection.results.length;
+        const responseText = this.stringifyToolJson(projection.envelope);
+        const advanced = this.searchResultSetCache.advance({
+            handle,
+            expectedOffset: lookup.nextOffset,
+            nextOffset,
+            nowMs: this.now(),
+            replay: {
+                expectedOffset,
+                pageSize,
+                responseText,
+            },
+        });
+        if (advanced !== "advanced") {
+            if (advanced === "conflict") {
+                const concurrent = this.searchResultSetCache.lookup(handle, this.now());
+                if (
+                    concurrent.status === "hit"
+                    && concurrent.lastPage?.expectedOffset === expectedOffset
+                    && concurrent.lastPage.pageSize === pageSize
+                ) {
+                    return {
+                        content: [{ type: "text", text: concurrent.lastPage.responseText }],
+                    };
+                }
+            }
+            return fail(
+                advanced === "conflict"
+                    ? "SEARCH_RESULT_SET_CONFLICT"
+                    : advanced === "too_large"
+                        ? "SEARCH_RESULT_SET_PAGE_TOO_LARGE"
+                        : "SEARCH_RESULT_SET_STALE",
+                advanced === "too_large"
+                    ? "The continuation page plus its retry receipt exceeds the result-set cache byte budget. Run a narrower search."
+                    : "Search continuation was consumed or expired concurrently. Retry the exact prior request, use the latest continuation response, or run search_codebase again.",
+            );
+        }
+        return {
+            content: [{ type: "text", text: responseText }],
+        };
     }
 
     /** Internal Phase 4 entry point. MCP schema/transport wiring belongs to Phase 5. */

@@ -20,6 +20,11 @@ export const SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT = 2;
 export const SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY = 2;
 export const SEARCH_RERANK_DOC_MAX_LINES = 200;
 export const SEARCH_RERANK_DOC_MAX_CHARS = 4000;
+/** Aggregate UTF-8 bytes of selected reranker document strings; excludes query and transport framing. */
+export const SEARCH_RERANK_INPUT_MAX_UTF8_BYTES = 1024 * 1024;
+export const SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES = 128 * 1024;
+export const SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES = 2 * 1024 * 1024;
+export const SEARCH_RESULT_SET_HANDLE_PLACEHOLDER = "0".repeat(48);
 export const SEARCH_NOISE_HINT_TOP_K = 5;
 export const SEARCH_NOISE_HINT_THRESHOLD = 0.60;
 export const SEARCH_NOISE_HINT_PATTERNS = [

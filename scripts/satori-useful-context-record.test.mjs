@@ -100,7 +100,7 @@ function writeFakeMcp(file, options = {}) {
     fs.writeFileSync(file, `
 import fs from "node:fs";
 import readline from "node:readline";
-const tools = ["manage_index", "search_codebase", "call_graph", "file_outline", "read_file", "list_codebases"];
+const tools = ["manage_index", "search_codebase", "continue_search", "call_graph", "file_outline", "read_file", "list_codebases"];
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const dirtyFile = ${JSON.stringify(dirtyFile)};
 const searchFreshnessMode = ${JSON.stringify(searchFreshnessMode)};
@@ -649,7 +649,7 @@ function writeNonCooperativeFakeMcp(file, { sigtermMarker }) {
 import fs from "node:fs";
 import readline from "node:readline";
 
-const tools = ["manage_index", "search_codebase", "call_graph", "file_outline", "read_file", "list_codebases"];
+const tools = ["manage_index", "search_codebase", "continue_search", "call_graph", "file_outline", "read_file", "list_codebases"];
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const sigtermMarker = ${JSON.stringify(sigtermMarker)};
 

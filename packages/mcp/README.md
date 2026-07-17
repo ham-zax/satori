@@ -1,6 +1,6 @@
 # @zokizuan/satori-mcp
 
-Read-only MCP server for Satori. It gives coding agents six deterministic tools for repo search, symbol navigation, call graph context, bounded file reads, and index lifecycle management.
+Read-only MCP server for Satori. It gives coding agents seven deterministic tools for repo search, frozen-result continuation, symbol navigation, call graph context, bounded file reads, and index lifecycle management.
 
 ## Install
 
@@ -168,7 +168,7 @@ Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for 
 
 ### `search_codebase`
 
-Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. A concrete target opens through the returned canonical read_file request, which includes mode, open_symbol contractVersion 2, one identity, and one bounded context operation; a target without symbolId opens through its 1-based inclusive span. Pass a target directly to call_graph only when navigation.graph="ready". Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.
+Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. disclosureLimit can expose a smaller initial page without lowering retrieval or reranker admission; when continuation is present, pass its opaque handle and exact nextOffset to continue_search to reveal more groups from the same frozen ranking. A concrete target opens through the returned canonical read_file request, which includes mode, open_symbol contractVersion 2, one identity, and one bounded context operation; a target without symbolId opens through its 1-based inclusive span. Pass a target directly to call_graph only when navigation.graph="ready". Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -179,8 +179,20 @@ Unified semantic search with a runtime-first scope="runtime" default, grouped/ra
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
 | `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |
 | `limit` | integer | no | `50` | Maximum groups (grouped mode) or chunks (raw mode). |
+| `disclosureLimit` | integer | no |  | Optional initial grouped-result disclosure limit. Retrieval depth and reranker admission continue to use limit. Omit to preserve the existing response behavior. |
 | `debug` | boolean | no |  | Backward-compatible debug toggle. true selects full diagnostics when debugMode is omitted. |
 | `debugMode` | enum("summary", "ranking", "freshness", "full") | no |  | Bounded diagnostic projection. May be used without debug; debug=true remains an alias for full. |
+| `debugCandidateLimit` | integer | no |  | Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings. |
+
+### `continue_search`
+
+Return the next groups from a frozen search_codebase result set. Pass the response's exact nextOffset so transport retries are idempotent. Continuation performs no query embedding, vector-store retrieval, or reranking. Handles are process-local, bounded, and expire; stale or unavailable handles require a new search_codebase request.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `handle` | string | yes |  | Opaque handle returned by search_codebase for a frozen ranked result set. |
+| `expectedOffset` | integer | yes |  | Exact nextOffset from the search or continuation response. Retrying the same handle, expectedOffset, and limit replays the same page. |
+| `limit` | integer | no |  | Optional maximum number of additional groups. Defaults to the initial disclosure size. |
 
 ### `call_graph`
 

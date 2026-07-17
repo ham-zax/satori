@@ -53,6 +53,7 @@ export interface LanceDbProbeDependencies {
 const EXPECTED_TOOL_NAMES = [
     "manage_index",
     "search_codebase",
+    "continue_search",
     "call_graph",
     "file_outline",
     "read_file",

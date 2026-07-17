@@ -7,7 +7,10 @@ import path from 'node:path';
 import { ToolHandlers } from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
-import { SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES } from './search-constants.js';
+import {
+    SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
+    SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
+} from './search-constants.js';
 import { createLocalOnlyContext } from '../server/provider-runtime.js';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -1071,6 +1074,398 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
                 navigationValidationRuns: 0,
             },
         });
+    });
+});
+
+test('search continuation preserves the full grouped order without new retrieval or reranking', async () => {
+    await withTempRepo(async (repoPath) => {
+        const searchResults: SearchFixtureResult[] = [
+            {
+                content: 'export function alphaOwner() { return true; }',
+                relativePath: 'src/alpha.ts',
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.99,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            },
+            {
+                content: 'export function betaOwner() { return "é🙂\\quoted"; }',
+                relativePath: 'src/beta.ts',
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.89,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            },
+            {
+                content: 'export function gammaOwner() { return true; }',
+                relativePath: 'src/gamma.ts',
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.79,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            },
+        ];
+
+        const prepareHandlers = (initialSourceAvailable = true) => {
+            const handlers = createHandlers(repoPath, searchResults, undefined, {
+                enableVectorReceipt: true,
+                respectSemanticTopK: true,
+            });
+            const internals = handlers as unknown as {
+                context: HandlerContext & {
+                    getIndexAuthorityObservations: () => { vector: string; navigation: string };
+                    revalidatePreparedGeneration: () => Promise<{
+                        vectorReceipt: never;
+                        navigationProof: { status: 'not_bound' };
+                    }>;
+                    semanticSearchInProvenGeneration: (...args: unknown[]) => Promise<SearchFixtureResult[]>;
+                    semanticSearchWithCandidateTraceInProvenGeneration: (...args: unknown[]) => Promise<unknown>;
+                };
+                syncManager: HandlerSyncManager & {
+                    getPreparedReadObservation: () => {
+                        available: true;
+                        observation: { freshnessEpoch: number; watcherState: 'ready' };
+                    } | {
+                        available: false;
+                        reason: 'watcher_disabled';
+                        freshnessEpoch: number;
+                    };
+                };
+                buildGeneratedArtifactsVerificationHint: (...args: unknown[]) => unknown;
+                mutationLeaseCoordinator: {
+                    observe: () => { mutationActive: boolean; generation: number };
+                    getActiveLease: () => null;
+                };
+                now: () => number;
+            };
+            let retrievalCalls = 0;
+            let vectorAuthority = 'vector-stable';
+            let navigationAuthority = 'navigation-stable';
+            let freshnessEpoch = 0;
+            let sourceAvailable = initialSourceAvailable;
+            let changeSourceDuringProjection = false;
+            let nowMs = Date.now();
+            const originalSearch = internals.context.semanticSearchInProvenGeneration.bind(internals.context);
+            const originalTracedSearch = internals.context.semanticSearchWithCandidateTraceInProvenGeneration.bind(internals.context);
+            internals.context.semanticSearchInProvenGeneration = async (...args) => {
+                retrievalCalls += 1;
+                return originalSearch(...args);
+            };
+            internals.context.semanticSearchWithCandidateTraceInProvenGeneration = async (...args) => {
+                retrievalCalls += 1;
+                return originalTracedSearch(...args);
+            };
+            internals.context.getIndexAuthorityObservations = () => ({
+                vector: vectorAuthority,
+                navigation: navigationAuthority,
+            });
+            internals.context.revalidatePreparedGeneration = async () => ({
+                vectorReceipt: { collectionName: 'committed-v3' } as never,
+                navigationProof: { status: 'not_bound' },
+            });
+            internals.syncManager.getPreparedReadObservation = () => sourceAvailable
+                ? {
+                    available: true,
+                    observation: { freshnessEpoch, watcherState: 'ready' },
+                }
+                : {
+                    available: false,
+                    reason: 'watcher_disabled',
+                    freshnessEpoch,
+                };
+            const originalGeneratedArtifactsHint = internals.buildGeneratedArtifactsVerificationHint
+                .bind(internals);
+            internals.buildGeneratedArtifactsVerificationHint = (...args) => {
+                const result = originalGeneratedArtifactsHint(...args);
+                if (changeSourceDuringProjection) {
+                    freshnessEpoch += 1;
+                    changeSourceDuringProjection = false;
+                }
+                return result;
+            };
+            internals.mutationLeaseCoordinator = {
+                observe: () => ({ mutationActive: false, generation: 1 }),
+                getActiveLease: () => null,
+            };
+            internals.now = () => nowMs;
+            return {
+                handlers,
+                getRetrievalCalls: () => retrievalCalls,
+                changeAuthority: () => {
+                    vectorAuthority = 'vector-changed';
+                    navigationAuthority = 'navigation-changed';
+                },
+                changeSourceObservation: () => {
+                    freshnessEpoch += 1;
+                },
+                setSourceObservationAvailable: (available: boolean) => {
+                    sourceAvailable = available;
+                },
+                changeSourceObservationDuringNextProjection: () => {
+                    changeSourceDuringProjection = true;
+                },
+                expireResultSet: () => {
+                    nowMs += 15 * 60_000;
+                },
+            };
+        };
+
+        const baseline = prepareHandlers();
+        const baselineResponse = await baseline.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+        });
+        const baselinePayload = JSON.parse(baselineResponse.content[0]?.text || '{}');
+        const baselineFiles = baselinePayload.results.map((result: { target: { file: string } }) => result.target.file);
+        assert.equal(baselineFiles.length, 3, JSON.stringify(baselinePayload));
+
+        const paged = prepareHandlers();
+        const initialResponse = await paged.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const initialPayload = JSON.parse(initialResponse.content[0]?.text || '{}');
+        assert.equal(initialPayload.results.length, 1);
+        assert.deepEqual(initialPayload.disclosure, {
+            policyVersion: 'search_disclosure_v1',
+            availableGroupCount: 3,
+            returnedGroupCount: 1,
+            omittedGroupCount: 2,
+            truncated: true,
+            reasons: ['initial_budget'],
+        });
+        assert.match(initialPayload.continuation.handle, /^[a-f0-9]{48}$/);
+        assert.ok(Buffer.byteLength(initialResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
+
+        const retrievalCallsAfterInitialSearch = paged.getRetrievalCalls();
+        const pageTwoResponse = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: initialPayload.continuation.nextOffset,
+            limit: 1,
+        });
+        const pageTwoPayload = JSON.parse(pageTwoResponse.content[0]?.text || '{}');
+        const mismatchedRetry = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: initialPayload.continuation.nextOffset,
+            limit: 2,
+        });
+        assert.equal(mismatchedRetry.isError, true);
+        assert.equal(
+            JSON.parse(mismatchedRetry.content[0]?.text || '{}').code,
+            'SEARCH_RESULT_SET_CONFLICT',
+        );
+        const pageTwoRetry = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: initialPayload.continuation.nextOffset,
+            limit: 1,
+        });
+        assert.equal(pageTwoRetry.content[0]?.text, pageTwoResponse.content[0]?.text);
+        const pageThreeResponse = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: pageTwoPayload.continuation.nextOffset,
+            limit: 1,
+        });
+        const pageThreePayload = JSON.parse(pageThreeResponse.content[0]?.text || '{}');
+        const pageThreeRetry = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: pageTwoPayload.continuation.nextOffset,
+            limit: 1,
+        });
+        assert.equal(pageThreeRetry.content[0]?.text, pageThreeResponse.content[0]?.text);
+
+        assert.equal(paged.getRetrievalCalls(), retrievalCallsAfterInitialSearch);
+        assert.equal(pageTwoPayload.results.length, 1);
+        assert.equal(pageThreePayload.results.length, 1);
+        assert.equal(pageThreePayload.continuation, undefined);
+        assert.ok(Buffer.byteLength(pageTwoResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
+        assert.ok(Buffer.byteLength(pageThreeResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
+        assert.equal(pageTwoPayload.results[0]?.preview.includes('é🙂\\quoted'), true);
+
+        const pagedFiles = [
+            ...initialPayload.results,
+            ...pageTwoPayload.results,
+            ...pageThreePayload.results,
+        ].map((result: { target: { file: string } }) => result.target.file);
+        assert.deepEqual(pagedFiles, baselineFiles);
+
+        const consumedResponse = await paged.handlers.handleContinueSearch({
+            handle: initialPayload.continuation.handle,
+            expectedOffset: 3,
+        });
+        const consumedPayload = JSON.parse(consumedResponse.content[0]?.text || '{}');
+        assert.equal(consumedResponse.isError, true);
+        assert.equal(consumedPayload.code, 'SEARCH_RESULT_SET_CONSUMED');
+
+        const stale = prepareHandlers();
+        const staleInitialResponse = await stale.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const staleInitialPayload = JSON.parse(staleInitialResponse.content[0]?.text || '{}');
+        const staleRetrievalCalls = stale.getRetrievalCalls();
+        stale.changeAuthority();
+        const staleResponse = await stale.handlers.handleContinueSearch({
+            handle: staleInitialPayload.continuation.handle,
+            expectedOffset: staleInitialPayload.continuation.nextOffset,
+        });
+        const stalePayload = JSON.parse(staleResponse.content[0]?.text || '{}');
+        assert.equal(staleResponse.isError, true);
+        assert.equal(stalePayload.code, 'SEARCH_RESULT_SET_STALE');
+        assert.equal(stale.getRetrievalCalls(), staleRetrievalCalls);
+
+        const sourceStale = prepareHandlers();
+        const sourceStaleInitialResponse = await sourceStale.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const sourceStaleInitialPayload = JSON.parse(
+            sourceStaleInitialResponse.content[0]?.text || '{}',
+        );
+        const sourceStaleRetrievalCalls = sourceStale.getRetrievalCalls();
+        sourceStale.changeSourceObservation();
+        const sourceStaleResponse = await sourceStale.handlers.handleContinueSearch({
+            handle: sourceStaleInitialPayload.continuation.handle,
+            expectedOffset: sourceStaleInitialPayload.continuation.nextOffset,
+        });
+        const sourceStalePayload = JSON.parse(sourceStaleResponse.content[0]?.text || '{}');
+        assert.equal(sourceStaleResponse.isError, true);
+        assert.equal(sourceStalePayload.code, 'SEARCH_RESULT_SET_STALE');
+        assert.equal(sourceStale.getRetrievalCalls(), sourceStaleRetrievalCalls);
+
+        const unavailableStable = prepareHandlers(false);
+        const unavailableInitialResponse = await unavailableStable.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const unavailableInitialPayload = JSON.parse(
+            unavailableInitialResponse.content[0]?.text || '{}',
+        );
+        const unavailablePage = await unavailableStable.handlers.handleContinueSearch({
+            handle: unavailableInitialPayload.continuation.handle,
+            expectedOffset: unavailableInitialPayload.continuation.nextOffset,
+            limit: 1,
+        });
+        assert.equal(unavailablePage.isError, undefined, unavailablePage.content[0]?.text);
+
+        const appeared = prepareHandlers(false);
+        const appearedInitialResponse = await appeared.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const appearedInitialPayload = JSON.parse(appearedInitialResponse.content[0]?.text || '{}');
+        appeared.setSourceObservationAvailable(true);
+        const appearedResponse = await appeared.handlers.handleContinueSearch({
+            handle: appearedInitialPayload.continuation.handle,
+            expectedOffset: appearedInitialPayload.continuation.nextOffset,
+        });
+        assert.equal(JSON.parse(appearedResponse.content[0]?.text || '{}').code, 'SEARCH_RESULT_SET_STALE');
+
+        const disappeared = prepareHandlers();
+        const disappearedInitialResponse = await disappeared.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const disappearedInitialPayload = JSON.parse(
+            disappearedInitialResponse.content[0]?.text || '{}',
+        );
+        disappeared.setSourceObservationAvailable(false);
+        const disappearedResponse = await disappeared.handlers.handleContinueSearch({
+            handle: disappearedInitialPayload.continuation.handle,
+            expectedOffset: disappearedInitialPayload.continuation.nextOffset,
+        });
+        assert.equal(JSON.parse(disappearedResponse.content[0]?.text || '{}').code, 'SEARCH_RESULT_SET_STALE');
+
+        const projectionStale = prepareHandlers();
+        const projectionInitialResponse = await projectionStale.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const projectionInitialPayload = JSON.parse(
+            projectionInitialResponse.content[0]?.text || '{}',
+        );
+        projectionStale.changeSourceObservationDuringNextProjection();
+        const projectionStaleResponse = await projectionStale.handlers.handleContinueSearch({
+            handle: projectionInitialPayload.continuation.handle,
+            expectedOffset: projectionInitialPayload.continuation.nextOffset,
+        });
+        assert.equal(projectionStaleResponse.isError, true);
+        assert.equal(
+            JSON.parse(projectionStaleResponse.content[0]?.text || '{}').code,
+            'SEARCH_RESULT_SET_STALE',
+        );
+
+        const expired = prepareHandlers();
+        const expiredInitialResponse = await expired.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 3,
+            disclosureLimit: 1,
+        });
+        const expiredInitialPayload = JSON.parse(expiredInitialResponse.content[0]?.text || '{}');
+        const expiredRetrievalCalls = expired.getRetrievalCalls();
+        expired.expireResultSet();
+        const expiredResponse = await expired.handlers.handleContinueSearch({
+            handle: expiredInitialPayload.continuation.handle,
+            expectedOffset: expiredInitialPayload.continuation.nextOffset,
+        });
+        const expiredPayload = JSON.parse(expiredResponse.content[0]?.text || '{}');
+        assert.equal(expiredResponse.isError, true);
+        assert.equal(expiredPayload.code, 'SEARCH_RESULT_SET_EXPIRED');
+        assert.equal(expired.getRetrievalCalls(), expiredRetrievalCalls);
     });
 });
 

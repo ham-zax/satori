@@ -43,6 +43,7 @@ type SessionEnvResult = {
 const EXPECTED_TOOLS = [
     "manage_index",
     "search_codebase",
+    "continue_search",
     "call_graph",
     "file_outline",
     "read_file",
@@ -273,7 +274,7 @@ function toolNames(response: JsonRpcResponse): string[] {
     return (response.result?.tools || []).map((tool) => tool.name).sort();
 }
 
-test("empty provider env still handshakes and lists exactly the six MCP tools", async () => {
+test("empty provider env still handshakes and lists exactly the seven MCP tools", async () => {
     await withEmptyEnvSession(async (session) => {
         const response = await session.request("tools/list");
         assert.equal(response.error, undefined);

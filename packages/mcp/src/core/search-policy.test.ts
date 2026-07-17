@@ -31,6 +31,9 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
             diagnosticCandidateLimit: 160,
         }),
         {
+            retrievalResultLimit: 3,
+            rerankerResultLimit: 3,
+            disclosureResultLimit: 3,
             candidateLimit: 32,
             maxCandidateLimit: 80,
             maxAttempts: 3,
@@ -42,6 +45,9 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
         hasMustOperators: false,
         diagnosticCandidateLimit: 999,
     }), {
+        retrievalResultLimit: 3,
+        rerankerResultLimit: 3,
+        disclosureResultLimit: 3,
         candidateLimit: 32,
         maxCandidateLimit: 80,
         maxAttempts: 1,
@@ -56,4 +62,24 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
         resultLimit: 3,
         hasMustOperators: false,
     }).candidateLimit, 32);
+});
+
+test('resolveSearchPolicy separates retrieval, reranker, and disclosure budgets', () => {
+    assert.deepEqual(
+        resolveSearchPolicy({
+            resultLimit: 10,
+            retrievalResultLimit: 8,
+            rerankerResultLimit: 6,
+            disclosureResultLimit: 3,
+            hasMustOperators: false,
+        }),
+        {
+            retrievalResultLimit: 8,
+            rerankerResultLimit: 6,
+            disclosureResultLimit: 3,
+            candidateLimit: 64,
+            maxCandidateLimit: 80,
+            maxAttempts: 1,
+        },
+    );
 });

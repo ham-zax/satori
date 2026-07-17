@@ -6,6 +6,7 @@ import {
     SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
+    SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
     SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
     SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_RRF_K,
@@ -414,6 +415,9 @@ export async function runExactRegistryFastPath(
             weight: SEARCH_RERANK_WEIGHT,
             docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
             docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
+            inputByteBudget: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
+            inputBytes: 0,
+            byteBudgetOmittedCandidates: 0,
             requestedResultLimit: input.limit,
             selectionPolicy: {
                 minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,

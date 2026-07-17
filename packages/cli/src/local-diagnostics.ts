@@ -23,6 +23,7 @@ const TOOLS = new Set([
     "list_codebases",
     "manage_index",
     "search_codebase",
+    "continue_search",
     "file_outline",
     "call_graph",
     "read_file",
@@ -46,6 +47,7 @@ export type LocalDiagnosticTool =
     | "list_codebases"
     | "manage_index"
     | "search_codebase"
+    | "continue_search"
     | "file_outline"
     | "call_graph"
     | "read_file"

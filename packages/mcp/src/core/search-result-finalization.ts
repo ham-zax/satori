@@ -2,15 +2,19 @@ import type { SymbolRegistry } from "@zokizuan/satori-core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_CHANGED_FIRST_MULTIPLIER,
+    SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,
+    SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
     SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
+    SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
     SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
     SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_RRF_K,
     SEARCH_RERANK_TOP_K,
     SEARCH_RERANK_WEIGHT,
+    SEARCH_RESULT_SET_HANDLE_PLACEHOLDER,
     SEARCH_RRF_K,
     type SearchGroupBy,
     type SearchResultMode,
@@ -26,16 +30,25 @@ import type { SearchQuerySupport } from "./search-query-support.js";
 import {
     buildGroupedSearchEnvelope as buildGroupedSearchEnvelopeHelper,
     buildRawSearchEnvelope as buildRawSearchEnvelopeHelper,
+    projectGroupedResultV2,
 } from "./search-response-envelopes.js";
 import type {
     CallGraphHint,
     SearchDebugHint,
     SearchFreshnessSummary,
+    SearchGroupResult,
+    SearchGroupedResultV2,
+    SearchRecommendedNextAction,
     SearchReadinessDebugHint,
+    SearchGroupedResponseEnvelope,
     SearchResponseHints,
     SearchResponseEnvelope,
 } from "./search-types.js";
-import { buildSearchDebugSummary, SEARCH_GROUP_PREVIEW_MAX_BYTES } from "./search-response-helpers.js";
+import {
+    buildSearchDebugSummary,
+    buildSearchGroupRecommendedAction,
+    SEARCH_GROUP_PREVIEW_MAX_BYTES,
+} from "./search-response-helpers.js";
 import type { CompletionProbeDebugHint } from "./tracked-root-readiness.js";
 import type { FreshnessDecision } from "./sync.js";
 import type { ExactRegistryLookupDebug } from "./search/exact-registry.js";
@@ -45,6 +58,7 @@ import {
     appendSearchCandidateRemoval,
     appendSearchCandidateStage,
 } from "./search-candidate-survival.js";
+import { projectGroupedDisclosure } from "./search-disclosure.js";
 
 type CallGraphUnavailableReason = Extract<CallGraphHint, { supported: false }>["reason"];
 type ChangedFilesState = { available: boolean; files: Set<string> };
@@ -82,6 +96,8 @@ type FinalizeSearchResultsInput = {
     groupBy: SearchGroupBy;
     resultMode: SearchResultMode;
     limit: number;
+    disclosureLimit: number;
+    rerankerResultLimit: number;
     debugMode: "none" | "summary" | "ranking" | "freshness" | "full";
     rankingMode: "default" | "auto_changed_first";
     freshnessDecision: FreshnessDecision;
@@ -143,10 +159,21 @@ export type SearchResultFinalizationHost = {
     now: () => number;
 };
 
+export type FinalizedSearchResultSet = Readonly<{
+    orderedResults: readonly SearchGroupedResultV2[];
+    recommendedActions: readonly (SearchRecommendedNextAction | null)[];
+    initialReturnedCount: number;
+}>;
+
+export type FinalizedSearchResults = Readonly<{
+    envelope: SearchResponseEnvelope;
+    resultSet?: FinalizedSearchResultSet;
+}>;
+
 export async function finalizeSearchResults(
     input: FinalizeSearchResultsInput,
     host: SearchResultFinalizationHost,
-): Promise<SearchResponseEnvelope> {
+): Promise<FinalizedSearchResults> {
     let {
         scored,
         operatorSummary,
@@ -176,6 +203,7 @@ export async function finalizeSearchResults(
         rerankerCandidatePoolCount,
         rerankerCandidateBudget,
         rerankerBudgetReason,
+        rerankerByteBudgetOmittedCandidates,
         semanticExpansion,
         providerWork,
         candidateSurvival,
@@ -270,12 +298,15 @@ export async function finalizeSearchResults(
                 candidatePoolCount: rerankerCandidatePoolCount,
                 candidateBudget: rerankerCandidateBudget,
                 ...(rerankerBudgetReason ? { budgetReason: rerankerBudgetReason } : {}),
+                inputByteBudget: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
+                inputBytes: providerWork.rerankerInputBytes,
+                byteBudgetOmittedCandidates: rerankerByteBudgetOmittedCandidates,
                 topK: SEARCH_RERANK_TOP_K,
                 rankK: SEARCH_RERANK_RRF_K,
                 weight: SEARCH_RERANK_WEIGHT,
                 docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                 docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
-                requestedResultLimit: input.limit,
+                requestedResultLimit: input.rerankerResultLimit,
                 selectionPolicy: {
                     minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
                     ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
@@ -285,11 +316,23 @@ export async function finalizeSearchResults(
                 ...(rerankerFailurePhase ? { errorCode: "RERANKER_FAILED" as const, failurePhase: rerankerFailurePhase } : {}),
             },
         });
-    const buildDebugProjection = (diversitySummary?: SearchDebugHint["diversitySummary"]): {
+    const buildDebugProjection = (
+        diversitySummary?: SearchDebugHint["diversitySummary"],
+        disclosedResults?: readonly SearchGroupResult[],
+    ): {
         debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
         debugSearch?: NonNullable<SearchResponseHints["debugSearch"]>;
     } => {
         if (input.debugMode === "none") return {};
+        const projectedCandidateSurvival = candidateSurvival && disclosedResults
+            ? structuredClone(candidateSurvival)
+            : candidateSurvival;
+        if (projectedCandidateSurvival && disclosedResults) {
+            projectedCandidateSurvival.stages = projectedCandidateSurvival.stages.filter(
+                (stage) => stage.stage !== "disclosed",
+            );
+            appendGroupedCandidateStage(projectedCandidateSurvival, "disclosed", disclosedResults);
+        }
         const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
             ? buildRankingDebug(diversitySummary)
             : undefined;
@@ -323,12 +366,15 @@ export async function finalizeSearchResults(
                 candidatePoolCount: rerankerCandidatePoolCount,
                 candidateBudget: rerankerCandidateBudget,
                 ...(rerankerBudgetReason ? { budgetReason: rerankerBudgetReason } : {}),
+                inputByteBudget: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
+                inputBytes: providerWork.rerankerInputBytes,
+                byteBudgetOmittedCandidates: rerankerByteBudgetOmittedCandidates,
                 topK: SEARCH_RERANK_TOP_K,
                 rankK: SEARCH_RERANK_RRF_K,
                 weight: SEARCH_RERANK_WEIGHT,
                 docMaxLines: SEARCH_RERANK_DOC_MAX_LINES,
                 docMaxChars: SEARCH_RERANK_DOC_MAX_CHARS,
-                requestedResultLimit: input.limit,
+                requestedResultLimit: input.rerankerResultLimit,
                 selectionPolicy: {
                     minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
                     ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
@@ -344,7 +390,7 @@ export async function finalizeSearchResults(
                 phaseTimingsMs: input.phaseTimings,
                 readiness: input.readiness,
                 ...(changedCode ? { changedCode } : {}),
-                ...(candidateSurvival ? { candidateSurvival } : {}),
+                ...(projectedCandidateSurvival ? { candidateSurvival: projectedCandidateSurvival } : {}),
             }
             : input.debugMode === "ranking"
                 ? rankingDebug
@@ -383,22 +429,24 @@ export async function finalizeSearchResults(
                 span: result.span,
             })),
         );
-        return buildRawSearchEnvelopeHelper({
-            codebaseRoot: input.effectiveRoot,
-            absolutePath: input.absolutePath,
-            query: input.query,
-            scope: input.scope,
-            groupBy: input.groupBy,
-            limit: input.limit,
-            freshnessDecision: input.freshnessDecision,
-            freshnessSummary,
-            warnings: finalizedSearchWarnings,
-            ...buildDebugProjection(),
-            proofDebugHint: input.proofDebugHint,
-            noiseMitigationHint,
-            generatedArtifactsHint,
-            results: rawResults,
-        });
+        return {
+            envelope: buildRawSearchEnvelopeHelper({
+                codebaseRoot: input.effectiveRoot,
+                absolutePath: input.absolutePath,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                limit: input.limit,
+                freshnessDecision: input.freshnessDecision,
+                freshnessSummary,
+                warnings: finalizedSearchWarnings,
+                ...buildDebugProjection(),
+                proofDebugHint: input.proofDebugHint,
+                noiseMitigationHint,
+                generatedArtifactsHint,
+                results: rawResults,
+            }),
+        };
     }
 
     const needsRegistryRepair = input.groupBy === "symbol"
@@ -425,18 +473,20 @@ export async function finalizeSearchResults(
         } else if (registryState.status === "missing") {
             searchSymbolRegistryUnavailableReason = "missing_symbol_registry";
         } else if (registryState.status === "incompatible" && needsRegistryRepair) {
-            return host.buildRequiresReindexPayload(
-                input.effectiveRoot,
-                `Symbol registry is incompatible: ${registryState.reason}`,
-                {
-                    path: input.absolutePath,
-                    query: input.query,
-                    scope: input.scope,
-                    groupBy: input.groupBy,
-                    resultMode: input.resultMode,
-                    limit: input.limit,
-                },
-            );
+            return {
+                envelope: host.buildRequiresReindexPayload(
+                    input.effectiveRoot,
+                    `Symbol registry is incompatible: ${registryState.reason}`,
+                    {
+                        path: input.absolutePath,
+                        query: input.query,
+                        scope: input.scope,
+                        groupBy: input.groupBy,
+                        resultMode: input.resultMode,
+                        limit: input.limit,
+                    },
+                ),
+            };
         } else if (registryState.status === "incompatible") {
             searchSymbolRegistryUnavailableReason = "incompatible_symbol_registry";
             searchWarnings.push(`SEARCH_SYMBOL_REGISTRY_UNAVAILABLE:${registryState.status}`);
@@ -467,6 +517,9 @@ export async function finalizeSearchResults(
         scored,
         codebaseRoot: input.effectiveRoot,
         groupBy: input.groupBy,
+        // Freeze the complete caller-bounded diversity order before applying the
+        // smaller presentation budget. Otherwise disclosureLimit would also
+        // change which candidates can be reached by continuation.
         limit: input.limit,
         queryPlan: input.queryPlan,
         mustMatchesFirst: input.parsedOperators.must.length > 0,
@@ -490,7 +543,6 @@ export async function finalizeSearchResults(
 
     if (candidateSurvival) {
         appendGroupedCandidateStage(candidateSurvival, "grouped", groupedSearchResults.rankedResults);
-        appendGroupedCandidateStage(candidateSurvival, "disclosed", groupedSearchResults.visibleResults);
         for (const candidateId of groupedSearchResults.invalidCandidateIds) {
             appendSearchCandidateRemoval(candidateSurvival, {
                 candidateId,
@@ -521,33 +573,73 @@ export async function finalizeSearchResults(
     }
     rankingProvenance.registryRepairGroupCount += groupedSearchResults.registryRepairGroupCount;
 
-    const visibleGroupedResults = groupedSearchResults.visibleResults;
-    const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
-        input.effectiveRoot,
-        visibleGroupedResults.map((result) => result.target.file),
-        input.scope,
-    );
-    const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
-        input.effectiveRoot,
-        visibleGroupedResults.map((result) => ({
-            file: result.target.file,
-            span: result.target.span,
-        })),
-    );
-    return buildGroupedSearchEnvelopeHelper({
-        codebaseRoot: input.effectiveRoot,
-        absolutePath: input.absolutePath,
-        query: input.query,
-        scope: input.scope,
-        groupBy: input.groupBy,
-        limit: input.limit,
-        freshnessDecision: input.freshnessDecision,
-        freshnessSummary,
-        warnings: finalizedSearchWarnings,
-        ...buildDebugProjection(groupedSearchResults.diversitySummary),
-        proofDebugHint: input.proofDebugHint,
-        noiseMitigationHint,
-        generatedArtifactsHint,
-        results: visibleGroupedResults,
+    const completeDisclosureOrder = groupedSearchResults.disclosureOrder;
+    const eligibleResults = completeDisclosureOrder.slice(0, input.limit);
+    const disclosureProjection = projectGroupedDisclosure({
+        // The projector needs the complete order to report caller_limit
+        // truthfully, while the continuation cache below remains bounded by the
+        // caller's explicit limit.
+        orderedResults: completeDisclosureOrder,
+        callerLimit: input.limit,
+        disclosureLimit: input.disclosureLimit,
+        maxResponseBytes: input.debugMode === "full"
+            ? SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES
+            : SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
+        includeSummary: input.disclosureLimit < input.limit
+            || completeDisclosureOrder.length > input.limit,
+        buildEnvelope: (results, disclosure) => {
+            const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
+                input.effectiveRoot,
+                results.map((result) => result.target.file),
+                input.scope,
+            );
+            const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
+                input.effectiveRoot,
+                results.map((result) => ({
+                    file: result.target.file,
+                    span: result.target.span,
+                })),
+            );
+            const envelope = buildGroupedSearchEnvelopeHelper({
+                codebaseRoot: input.effectiveRoot,
+                absolutePath: input.absolutePath,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                limit: input.limit,
+                freshnessDecision: input.freshnessDecision,
+                freshnessSummary,
+                warnings: finalizedSearchWarnings,
+                ...buildDebugProjection(groupedSearchResults.diversitySummary, results),
+                proofDebugHint: input.proofDebugHint,
+                noiseMitigationHint,
+                generatedArtifactsHint,
+                ...(disclosure ? { disclosure } : {}),
+                results: [...results],
+            }) as SearchGroupedResponseEnvelope;
+            return results.length < eligibleResults.length
+                ? {
+                    ...envelope,
+                    continuation: {
+                        handle: SEARCH_RESULT_SET_HANDLE_PLACEHOLDER,
+                        nextOffset: results.length,
+                        remainingGroupCount: eligibleResults.length - results.length,
+                    },
+                }
+                : envelope;
+        },
     });
+    const resultSet = disclosureProjection.envelope.continuation
+        ? {
+            orderedResults: eligibleResults.map(projectGroupedResultV2),
+            recommendedActions: eligibleResults.map((result) => (
+                buildSearchGroupRecommendedAction(input.effectiveRoot, result) ?? null
+            )),
+            initialReturnedCount: disclosureProjection.results.length,
+        }
+        : undefined;
+    return {
+        envelope: disclosureProjection.envelope,
+        ...(resultSet ? { resultSet } : {}),
+    };
 }

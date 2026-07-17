@@ -88,6 +88,7 @@ import readline from "node:readline";
 const tools = ${JSON.stringify([
             "manage_index",
             "search_codebase",
+            "continue_search",
             "call_graph",
             "file_outline",
             "read_file",

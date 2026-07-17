@@ -34,16 +34,16 @@ function buildContext(overrides: Partial<ContextMcpConfig> = {}): ToolContext {
     } as ToolContext;
 }
 
-test('tool registry exposes exactly six public tools', () => {
+test('tool registry exposes the seven public tools', () => {
     const names = Object.keys(toolRegistry);
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'continue_search', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
 });
 
-test('generated ListTools payload returns exactly six tools', () => {
+test('generated ListTools payload returns the seven tools', () => {
     const list = getMcpToolList(buildContext());
     const names = list.map((tool) => tool.name);
 
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'continue_search', 'call_graph', 'file_outline', 'read_file', 'list_codebases']);
 });
 
 test('search_codebase and manage_index descriptions include ignore-remediation guidance', () => {
@@ -104,6 +104,21 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     const required = searchTool!.inputSchema.required as string[];
     assert.ok(required.includes('path'));
     assert.ok(required.includes('query'));
+});
+
+test('continue_search schema requires an idempotent cursor offset and bounds its optional page limit', () => {
+    const tools = getMcpToolList(buildContext());
+    const continueTool = tools.find((tool) => tool.name === 'continue_search');
+    assert.ok(continueTool);
+
+    const properties = continueTool!.inputSchema.properties as Record<string, SchemaProperty>;
+    assert.deepEqual(Object.keys(properties), ['handle', 'expectedOffset', 'limit']);
+    assert.equal(properties.expectedOffset.minimum, 0);
+    assert.equal(properties.expectedOffset.maximum, 50);
+    assert.equal(properties.limit.maximum, 50);
+
+    const required = continueTool!.inputSchema.required as string[];
+    assert.deepEqual(required, ['handle', 'expectedOffset']);
 });
 
 test('read_file schema includes optional start_line and end_line parameters', () => {

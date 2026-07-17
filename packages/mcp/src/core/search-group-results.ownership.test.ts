@@ -423,3 +423,46 @@ test("ordinary grouped evidence publishes a bounded deterministic window", () =>
         },
     );
 });
+
+test("grouped disclosure order preserves the visible prefix and global diversity caps", () => {
+    const result = buildVisibleGroupedSearchResults({
+        scored: [
+            candidate("src/a.ts", 1, 3, 0.9),
+            candidate("src/a.ts", 1_000, 1_002, 0.8),
+            candidate("src/a.ts", 2_000, 2_002, 0.75),
+            candidate("src/a.ts", 3_000, 3_002, 0.725),
+            candidate("src/b.ts", 1, 3, 0.7),
+            candidate("src/c.ts", 1, 3, 0.6),
+        ],
+        codebaseRoot: "/repo",
+        groupBy: "symbol",
+        limit: 2,
+        queryPlan: {
+            intent: "semantic",
+            exactMatchPinningEnabled: true,
+            referenceSeeking: false,
+        },
+        mustMatchesFirst: false,
+        navigationState: { relationshipReady: false },
+        debugMode: "none",
+        now: navigationHelpers.now,
+        previewMaxBytes: 4096,
+        navigationHelpers,
+        parseIndexedAtMs: () => undefined,
+        resolveOwner: () => ({}),
+    });
+
+    assert.deepEqual(
+        result.disclosureOrder.slice(0, result.visibleResults.length).map(({ __groupId }) => __groupId),
+        result.visibleResults.map(({ __groupId }) => __groupId),
+    );
+    assert.equal(
+        new Set(result.disclosureOrder.map(({ __groupId }) => __groupId)).size,
+        result.disclosureOrder.length,
+    );
+    assert.equal(
+        result.disclosureOrder.filter(({ target }) => target.file === "src/a.ts").length,
+        3,
+    );
+    assert.ok(result.disclosureOrder.length < result.rankedResults.length);
+});

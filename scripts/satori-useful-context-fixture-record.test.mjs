@@ -68,7 +68,7 @@ function writeFakeMcp(file) {
 import fs from "node:fs";
 import readline from "node:readline";
 const logFile = process.env.SATORI_FIXTURE_TEST_LOG;
-const tools = ["manage_index", "search_codebase", "call_graph", "file_outline", "read_file", "list_codebases"];
+const tools = ["manage_index", "search_codebase", "continue_search", "call_graph", "file_outline", "read_file", "list_codebases"];
 let lastMutationAction = "create";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const log = (entry) => fs.appendFileSync(logFile, JSON.stringify(entry) + "\\n");

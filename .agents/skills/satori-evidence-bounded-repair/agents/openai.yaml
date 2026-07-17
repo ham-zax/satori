@@ -1,0 +1,4 @@
+interface:
+  display_name: "Satori Evidence-Bounded Repair"
+  short_description: "Repair Satori defects without scope drift"
+  default_prompt: "Use $satori-evidence-bounded-repair to trace and repair this Satori defect at the smallest evidence-supported boundary."

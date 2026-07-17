@@ -33,11 +33,16 @@ focused end-to-end upgrade coverage.
 The later search-quality Phase 2 experiment is also complete. Its frozen
 top-160 LanceDB/Voyage capture exactly reproduces the baseline, but none of the
 four predeclared tuning contenders passed the owner-survival gate. The baseline
-therefore remains in production and validation remains unrevealed. Progressive-
-disclosure infrastructure is implemented, while its smaller-response and
-agent-answer qualification remains pending. The checksum-verified Phase 2
-evidence is under
+fusion/depth policy therefore remains in production. A later stage-localized
+query-route correction for natural-language queries containing path-like tokens
+passed its frozen tuning gate and a one-time seven-task validation-equivalence
+gate; that validation split is now consumed. Progressive-disclosure
+infrastructure is implemented, while its smaller-response and agent-answer
+qualification remains pending. The checksum-verified Phase 2 replay evidence is
+under
 `~/satori-evidence/search-phase2/648b47518c642410de713c01041ad17476feeab6/`.
+The accepted query-route evidence is under
+`~/satori-evidence/search-route-path-context/0a4118a775a1c4e7a37d4376c51972bbb9c2a55b/`.
 
 ## Decision
 
@@ -1005,8 +1010,13 @@ Relevance was close, with a narrow Milvus advantage on this sample.
 Both stores usually found the correct owner for clear technical ownership
 queries. LanceDB corrected two Milvus results that over-weighted evaluation or
 benchmark artifacts. Milvus ranked ignore reconciliation, outline ownership,
-and provider-runtime lifecycle ownership more precisely. The LanceDB miss on Q8
-is a concrete semantic-quality case to preserve in the next frozen suite.
+and provider-runtime lifecycle ownership more precisely. The reported LanceDB
+miss on Q8 is preserved as a tuning regression. A later frozen survival trace
+localized its expected owner to disclosed rank 14: it was present through
+retrieval, Core/MCP fusion, filtering, ranking, and grouping, but a path-first
+query-route decision and initial diversity ordering made it less visible. The
+accepted route correction moved that owner to rank 2 without changing the
+shared fusion/depth baseline.
 
 Because both arms used the same embedding model and reranker policy, these
 differences principally reflect backend candidate generation and ordering, not

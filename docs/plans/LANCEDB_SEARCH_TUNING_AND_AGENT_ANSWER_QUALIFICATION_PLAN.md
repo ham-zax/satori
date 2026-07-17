@@ -1,9 +1,11 @@
 # LanceDB Search Tuning and Agent-Answer Qualification Plan
 
-**Status:** Phase 0/1 authority and diagnostics are complete. The frozen Phase 2
-experiment is complete and negative: all four predeclared tuning contenders
-failed the `+1` owner-survival gate, no finalist was selected, validation remains
-unrevealed, and the production baseline is retained. Phase 3 infrastructure
+**Status:** Phase 0/1 authority and diagnostics are complete. The original
+frozen Phase 2 experiment is complete and negative: all four predeclared replay
+contenders failed the `+1` owner-survival gate, no finalist was selected, and
+the baseline fusion/depth policy is retained. A subsequent stage-localized
+query-route correction passed its frozen tuning gate and one-time validation
+equivalence gate; that validation split is now consumed. Phase 3 infrastructure
 steps 1–5 are complete, but smaller-disclosure and agent-answer qualification
 remain pending. Phase 4 and Phase 5 have not been admitted.
 **Date:** 2026-07-17
@@ -94,8 +96,10 @@ comparison's warm-p50 ratio, even though that independently happens to be about
 This bakeoff is provisional because its raw files remain under `/tmp`, and it
 does not freeze the answer key, scoring ledger, runtime identity, publication
 receipt, disclosure rule, or repetition rule. It suggests a narrow Milvus
-ranking advantage and one concrete LanceDB hard miss; it does not prove final
-agent-answer success.
+ranking advantage and one reported LanceDB miss; it does not prove final
+agent-answer success. The later frozen trace found that the expected owner was
+present in the initial grouped order at rank 14, so the report was not a
+candidate-generation hard miss.
 
 ### 1.3 Owner rank is a proxy, not the product outcome
 
@@ -635,7 +639,7 @@ Execute the phases in this order:
 4. capture the maximum dense, AND, OR, and MCP-pass supersets;
 5. prove that `policy=baseline` in the shared binary reproduces the frozen
    baseline capture;
-6. localize the ignore-reconciliation hard miss;
+6. localize the reported ignore-reconciliation miss;
 7. test conditional OR fallback and source quotas;
 8. replay fusion and depth contenders in one executable;
 9. split retrieval, reranker, and disclosure budgets before shrinking visible
@@ -703,9 +707,9 @@ Requirements:
 - add focused synthetic tests where the expected candidate is lost at each
   individual boundary.
 
-Exit: the Q8 hard miss and every tuning/validation miss can be localized to one
-first losing stage. Any miss revealed by the one final held-out run receives the
-same post-run diagnosis, but cannot feed another contender selection.
+Exit: the Q8 reported miss and every tuning/validation miss can be localized to
+one first losing stage. Any miss revealed by the one final held-out run receives
+the same post-run diagnosis, but cannot feed another contender selection.
 
 ### Phase 2 — query-time experiments without reindexing
 
@@ -721,8 +725,9 @@ Execution result on 2026-07-18:
   two policy-invariant exact-registry routes;
 - conditional OR fallback, precise lexical fallback, candidate depth 120, and
   lexical weight 1.5 each produced zero qualifying owner-survival gain;
-- no contender was selected, validation was not replayed or scored, and normal
-  production ranking remains unchanged; and
+- no contender was selected, validation was not replayed or scored for those
+  four policies, and the production fusion/depth baseline remains unchanged;
+  and
 - the frozen inputs, observations, capture, replays, scores, selection ledger,
   and committed harness manifest are checksum-verified under
   `~/satori-evidence/search-phase2/648b47518c642410de713c01041ad17476feeab6/`.
@@ -730,6 +735,46 @@ Execution result on 2026-07-18:
 The live capture consumed 20 reranker calls, 994 candidates, and 1,575,518
 reranker document UTF-8 bytes. Capture replay and scoring consumed no provider
 calls, synchronization, document embedding, or reindexing.
+
+#### Stage-localized query-route correction
+
+The frozen trace subsequently established the complete owner path for the
+ignore-reconciliation query:
+
+- raw precise lexical rank 20;
+- Core and MCP fusion rank 20;
+- post-filter/ranked position 4;
+- grouped position 3; and
+- disclosed position 14 after the two-per-file first diversity pass deferred
+  the third `sync.ts` owner.
+
+The candidate therefore survived retrieval, fusion, filtering, ranking, and
+grouping. The trace also exposed an independent routing defect: a natural-
+language query containing `.gitignore` and `satori.toml` was classified as an
+exact-path lexical request before its semantic configuration and ownership cues
+were considered.
+
+The smallest correction gives explicit `path:` syntax precedence, then evaluates
+semantic configuration, reference, ownership, structural, and implementation
+cues before treating a bare path-like token as an exact-path request. A frozen
+same-executable experiment at revision
+`53039bd543442932c9884f5bf0431daa6b814415` measured the same LanceDB/Voyage
+publication under both policy selectors:
+
+- baseline expected-owner rank: 14 cold and warm;
+- corrected-policy expected-owner rank: 2 cold and warm;
+- corrected-policy provider work: two query embeddings, two reranker calls, 88
+  reranker candidates, and 161,818 reranker document UTF-8 bytes in total;
+- synchronization, document embedding, reindexing, and Ollama work: zero.
+
+The predeclared tuning gates passed. Before revealing validation, the finalist,
+runtime tree, task authority, and no-runner-up rule were frozen. All seven
+validation tasks then produced byte-identical complete query plans under the
+baseline and corrected policies, so the one-time validation gate accepted the
+finalist without live provider work. That validation split is consumed and
+must not be reused for contender selection. The checksum-verified route evidence
+is under
+`~/satori-evidence/search-route-path-context/0a4118a775a1c4e7a37d4376c51972bbb9c2a55b/`.
 
 Before replay, capture top 160 for dense, precise-AND lexical, conditional-OR
 lexical, and each required MCP pass. Slice that immutable capture for depths 80,

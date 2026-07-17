@@ -5,9 +5,11 @@ frozen Phase 2 experiment is complete and negative: all four predeclared replay
 contenders failed the `+1` owner-survival gate, no finalist was selected, and
 the baseline fusion/depth policy is retained. A subsequent stage-localized
 query-route correction passed its frozen tuning gate and one-time validation
-equivalence gate; that validation split is now consumed. Phase 3 infrastructure
-steps 1–5 are complete, but smaller-disclosure and agent-answer qualification
-remain pending. Phase 4 and Phase 5 have not been admitted.
+equivalence gate on LanceDB, but failed the frozen Milvus cold-latency gate. The
+shared production default therefore remains the path-first baseline, and that
+validation split is now consumed. Phase 3 infrastructure steps 1–5 are complete,
+but smaller-disclosure and agent-answer qualification remain pending. Phase 4
+and Phase 5 have not been admitted.
 **Date:** 2026-07-17
 **Related implementation authority:**
 `docs/release/2026-07-15-lancedb-voyage-offline-plan.md`, current code under
@@ -771,10 +773,25 @@ The predeclared tuning gates passed. Before revealing validation, the finalist,
 runtime tree, task authority, and no-runner-up rule were frozen. All seven
 validation tasks then produced byte-identical complete query plans under the
 baseline and corrected policies, so the one-time validation gate accepted the
-finalist without live provider work. That validation split is consumed and
-must not be reused for contender selection. The checksum-verified route evidence
-is under
+LanceDB finalist without live provider work. That validation split is consumed
+and must not be reused for contender selection. The checksum-verified LanceDB
+route evidence is under
 `~/satori-evidence/search-route-path-context/0a4118a775a1c4e7a37d4376c51972bbb9c2a55b/`.
+
+Because query planning is shared, admission also required a separately frozen
+Milvus non-regression gate. On the same query and one immutable Milvus
+publication, the corrected policy recovered the previously absent exact owner
+at disclosed rank 2 in both observations. It consumed two query embeddings, two
+reranker calls, 60 reranker candidates, and 113,752 reranker document UTF-8
+bytes, with no synchronization, document embedding, or reindexing. The warm
+observation completed in 6,043 ms, but the cold observation took 10,521 ms and
+failed the predeclared 10,000 ms ceiling. The gate was not relaxed or rerun.
+
+The shared production default was consequently restored to
+`baseline_path_anywhere_v1`. Both versioned policies remain in the same
+executable for further controlled work. The checksum-verified Milvus rejection
+is under
+`~/satori-evidence/search-route-milvus-nonregression/47306fe1788d48cea6c2b8e589bfa0c4ceb43539/`.
 
 Before replay, capture top 160 for dense, precise-AND lexical, conditional-OR
 lexical, and each required MCP pass. Slice that immutable capture for depths 80,

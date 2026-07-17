@@ -36,13 +36,16 @@ four predeclared tuning contenders passed the owner-survival gate. The baseline
 fusion/depth policy therefore remains in production. A later stage-localized
 query-route correction for natural-language queries containing path-like tokens
 passed its frozen tuning gate and a one-time seven-task validation-equivalence
-gate; that validation split is now consumed. Progressive-disclosure
-infrastructure is implemented, while its smaller-response and agent-answer
-qualification remains pending. The checksum-verified Phase 2 replay evidence is
-under
+gate on LanceDB, but failed a separately frozen Milvus cold-latency gate. The
+shared production default therefore remains the path-first baseline, and that
+validation split is now consumed. Progressive-disclosure infrastructure is
+implemented, while its smaller-response and agent-answer qualification remains
+pending. The checksum-verified Phase 2 replay evidence is under
 `~/satori-evidence/search-phase2/648b47518c642410de713c01041ad17476feeab6/`.
-The accepted query-route evidence is under
+The LanceDB query-route evidence is under
 `~/satori-evidence/search-route-path-context/0a4118a775a1c4e7a37d4376c51972bbb9c2a55b/`.
+The Milvus non-regression rejection is under
+`~/satori-evidence/search-route-milvus-nonregression/47306fe1788d48cea6c2b8e589bfa0c4ceb43539/`.
 
 ## Decision
 
@@ -1015,8 +1018,10 @@ miss on Q8 is preserved as a tuning regression. A later frozen survival trace
 localized its expected owner to disclosed rank 14: it was present through
 retrieval, Core/MCP fusion, filtering, ranking, and grouping, but a path-first
 query-route decision and initial diversity ordering made it less visible. The
-accepted route correction moved that owner to rank 2 without changing the
-shared fusion/depth baseline.
+candidate route correction moved that owner to rank 2 without changing the
+shared fusion/depth baseline on either backend. It was not admitted as the
+shared default because Milvus's 10,521 ms cold observation exceeded the frozen
+10,000 ms gate; the versioned contender remains available for controlled work.
 
 Because both arms used the same embedding model and reranker policy, these
 differences principally reflect backend candidate generation and ordering, not

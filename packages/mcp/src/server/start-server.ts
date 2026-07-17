@@ -37,22 +37,22 @@ export interface StartMcpServerOptions {
     args?: string[];
 }
 
-interface StartupLifecycleSyncManager {
-    startBackgroundSync(): void;
-    startWatcherMode(): Promise<void>;
-}
-
 interface StartupLifecycleDependencies {
-    watchSyncEnabled: boolean;
     verifyCloudState: () => Promise<void>;
     onVerifyCloudStateError: (error: unknown) => void;
-    syncManager: StartupLifecycleSyncManager;
 }
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Post-connect recovery only. Periodic sync and watcher ownership belong to the
+ * embedding-capable ProviderRuntime SyncManager (startProviderSyncLifecycle).
+ * The local-only SyncManager uses UnconfiguredVectorDatabase and must never run
+ * ensureFreshness: it still shares MutationLeaseCoordinator, so a failed periodic
+ * pass bumps mutation generation and invalidates warm prepared-read observations.
+ */
 export async function runPostConnectStartupLifecycle(
     runMode: ServerRunMode,
     dependencies: StartupLifecycleDependencies
@@ -72,10 +72,6 @@ export async function runPostConnectStartupLifecycle(
     void dependencies.verifyCloudState().catch((error) => {
         dependencies.onVerifyCloudStateError(error);
     });
-    dependencies.syncManager.startBackgroundSync();
-    if (dependencies.watchSyncEnabled) {
-        await dependencies.syncManager.startWatcherMode();
-    }
 }
 
 function migrateLegacyStateDir(): void {
@@ -285,12 +281,10 @@ class ContextMcpServer {
 
         console.log("MCP server started and listening on stdio.");
         await runPostConnectStartupLifecycle(this.runMode, {
-            watchSyncEnabled: this.watchSyncEnabled,
             verifyCloudState: () => this.verifyCloudState(this.getToolContext()),
             onVerifyCloudStateError: (error) => {
                 console.error("[STARTUP] Error verifying cloud state:", errorMessage(error));
             },
-            syncManager: this.syncManager,
         });
     }
 

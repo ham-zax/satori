@@ -25,7 +25,11 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
-import type { IndexOperationPhase, IndexOperationReceipt } from "../config.js";
+import {
+    MANUAL_SYNC_FRESHNESS_THRESHOLD_MS,
+    type IndexOperationPhase,
+    type IndexOperationReceipt,
+} from "../config.js";
 import type {
     ManageIndexAction,
     ManageIndexReason,
@@ -930,7 +934,10 @@ export class ManageMaintenanceHandlers {
             }
 
             console.log(`[SYNC] Manually triggering incremental sync for: ${absolutePath}`);
-            const decision = await this.host.syncManager.ensureFreshness(absolutePath, 0);
+            const decision = await this.host.syncManager.ensureFreshness(
+                absolutePath,
+                MANUAL_SYNC_FRESHNESS_THRESHOLD_MS,
+            );
             const operationOptions = decision.operation ? { operation: decision.operation } : undefined;
 
             if (decision.mode === "ignore_reload_failed") {

@@ -9,7 +9,11 @@ import {
     type MutationLeaseProcessSnapshot,
     type RootMutationLease,
 } from './mutation-lease.js';
-import type { IndexFingerprint, IndexOperationReceipt } from '../config.js';
+import {
+    BACKGROUND_FRESHNESS_THRESHOLD_MS,
+    type IndexFingerprint,
+    type IndexOperationReceipt,
+} from '../config.js';
 
 type CodebaseStatus = 'indexed' | 'indexing' | 'indexfailed' | 'sync_completed' | 'requires_reindex' | 'not_found';
 type SyncContext = ConstructorParameters<typeof SyncManager>[0];
@@ -158,6 +162,55 @@ function createContext() {
         }
     };
 }
+
+test('background sync skips recent roots without lease churn and compares expired roots', async () => {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const context = createContext();
+    const snapshot = createSnapshot(statusByPath);
+    const coordinator = new MutationLeaseCoordinator({ stateDir, ownerId: 'background-owner' });
+    const originalAcquire = coordinator.acquire.bind(coordinator);
+    let acquireCalls = 0;
+    coordinator.acquire = (...args) => {
+        acquireCalls += 1;
+        return originalAcquire(...args);
+    };
+    let now = 10_000;
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        {
+            watchEnabled: false,
+            mutationLeaseCoordinator: coordinator,
+            now: () => now,
+        },
+    );
+    const access = manager as unknown as SyncManagerTestAccess;
+    access.lastSyncTimes.set(codebasePath, now);
+
+    try {
+        await manager.handleSyncIndex();
+        assert.equal(acquireCalls, 0);
+        assert.equal(context.calls, 0);
+        assert.equal(access.freshnessEpochs.get(codebasePath), undefined);
+        assert.deepEqual(snapshot.getReceiptHistory(), []);
+
+        now += BACKGROUND_FRESHNESS_THRESHOLD_MS;
+        await manager.handleSyncIndex();
+        assert.equal(acquireCalls, 1);
+        assert.equal(context.calls, 1);
+        assert.equal(access.freshnessEpochs.get(codebasePath), 2);
+        assert.deepEqual(snapshot.getReceiptHistory().map((receipt) => receipt.phase), [
+            'accepted',
+            'writing',
+            'completed',
+        ]);
+    } finally {
+        fs.rmSync(codebasePath, { recursive: true, force: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+});
 
 test('watch-triggered sync is dropped for non-searchable statuses', async () => {
     const codebasePath = createTempDir();

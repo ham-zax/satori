@@ -35,6 +35,7 @@ import {
     DEFAULT_WATCH_DEBOUNCE_MS,
     IndexFingerprint,
     indexFingerprintsEqual,
+    SEARCH_FRESHNESS_THRESHOLD_MS,
     summarizeIndexFingerprint,
     type CodebaseInfo,
 } from "../config.js";
@@ -1318,13 +1319,24 @@ export class ToolHandlers {
     ): void {
         const root = state.root.path;
         if (!state.vectorReceipt || !state.preparedObservation) {
-            this.evictPreparedRead(root);
+            // A warm hit already proved the prior entry. Do not discard it when the
+            // end-of-search snapshot is incomplete; the next search revalidates live.
+            if (!preserveProofAge) {
+                this.evictPreparedRead(root);
+            }
             return;
         }
         const observationResult = this.getPreparedReadCacheObservation(root);
         const observation = observationResult.observation;
         if (!observation || observation !== state.preparedObservation) {
-            this.evictPreparedRead(root);
+            // Mid-search authority/registry/navigation work can transiently change the
+            // prepared-read observation string after a successful warm revalidation.
+            // Evicting here turns the next identical search into a full cold recount
+            // (proofMode=cold, invalidationReason=cache_miss) and breaks warm recording.
+            // Cold seeds (preserveProofAge=false) still fail closed by eviction.
+            if (!preserveProofAge) {
+                this.evictPreparedRead(root);
+            }
             return;
         }
         const navigationIdentity = this.getPreparedNavigationIdentity(state);
@@ -3244,7 +3256,7 @@ export class ToolHandlers {
                     'ensureFreshness',
                     () => this.syncManager.ensureFreshness(
                         effectiveRoot,
-                        3 * 60 * 1000,
+                        SEARCH_FRESHNESS_THRESHOLD_MS,
                         preparedRead?.vectorReceipt
                             ? { preparedVectorReceipt: preparedRead.vectorReceipt }
                             : {},

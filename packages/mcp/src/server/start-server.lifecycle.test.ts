@@ -4,13 +4,10 @@ import { runPostConnectStartupLifecycle } from "./start-server.js";
 
 function createLifecycleDeps() {
     let verifyCalls = 0;
-    let bgCalls = 0;
-    let watcherCalls = 0;
     const events: string[] = [];
 
     return {
         deps: {
-            watchSyncEnabled: true,
             verifyCloudState: async () => {
                 verifyCalls += 1;
                 events.push("verify");
@@ -18,21 +15,9 @@ function createLifecycleDeps() {
             onVerifyCloudStateError: () => {
                 events.push("verify_error");
             },
-            syncManager: {
-                startBackgroundSync: () => {
-                    bgCalls += 1;
-                    events.push("bg");
-                },
-                startWatcherMode: async () => {
-                    watcherCalls += 1;
-                    events.push("watcher");
-                }
-            }
         },
         getCounts: () => ({
             verifyCalls,
-            bgCalls,
-            watcherCalls,
             events: events.slice(),
         }),
     };
@@ -45,8 +30,6 @@ test("runPostConnectStartupLifecycle runs one-shot recovery but skips loops in c
 
     const counts = getCounts();
     assert.equal(counts.verifyCalls, 1);
-    assert.equal(counts.bgCalls, 0);
-    assert.equal(counts.watcherCalls, 0);
     assert.deepEqual(counts.events, ["verify"]);
 });
 
@@ -57,21 +40,18 @@ test("runPostConnectStartupLifecycle performs no recovery or loops in postflight
 
     assert.deepEqual(getCounts(), {
         verifyCalls: 0,
-        bgCalls: 0,
-        watcherCalls: 0,
         events: [],
     });
 });
 
-test("runPostConnectStartupLifecycle starts reconciliation and loops in mcp mode", async () => {
+test("runPostConnectStartupLifecycle recovers in mcp mode without starting local-only sync loops", async () => {
     const { deps, getCounts } = createLifecycleDeps();
 
     await runPostConnectStartupLifecycle("mcp", deps);
 
     const counts = getCounts();
     assert.equal(counts.verifyCalls, 1);
-    assert.equal(counts.bgCalls, 1);
-    assert.equal(counts.watcherCalls, 1);
+    assert.deepEqual(counts.events, ["verify"]);
 });
 
 test("runPostConnectStartupLifecycle handles cli recovery errors without starting loops", async () => {
@@ -84,7 +64,5 @@ test("runPostConnectStartupLifecycle handles cli recovery errors without startin
 
     const counts = getCounts();
     assert.equal(counts.verifyCalls, 0);
-    assert.equal(counts.bgCalls, 0);
-    assert.equal(counts.watcherCalls, 0);
     assert.deepEqual(counts.events, ["verify_error"]);
 });

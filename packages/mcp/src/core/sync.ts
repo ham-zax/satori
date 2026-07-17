@@ -9,6 +9,9 @@ import {
 } from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
 import {
+    BACKGROUND_FRESHNESS_THRESHOLD_MS,
+    BACKGROUND_SYNC_INITIAL_DELAY_MS,
+    BACKGROUND_SYNC_INTERVAL_MS,
     DEFAULT_WATCH_DEBOUNCE_MS,
     type IndexOperationPhase,
     type IndexOperationReceipt,
@@ -1047,13 +1050,14 @@ export class SyncManager {
         const indexedCodebases = this.snapshotManager.getIndexedCodebases();
         if (indexedCodebases.length === 0) return;
 
-        // console.log(`[SYNC-DEBUG] Starting periodic sync via unified gate...`);
-
-        // Execute sequentially to avoid resource spikes, but through the ensureFreshness gate
+        // Execute sequentially to avoid resource spikes, but through the ensureFreshness gate.
+        // Use BACKGROUND_FRESHNESS_THRESHOLD_MS (not 0). thresholdMs=0 always acquires a
+        // mutation lease even for a no-op sync; that bumps mutationGeneration and invalidates
+        // warm prepared-read observations mid multi-sample search sessions.
+        // Recent search-driven syncs therefore skip; idle roots still recheck every interval.
         for (const codebasePath of indexedCodebases) {
             try {
-                // thresholdMs = 0 forces a check (unless coalesced)
-                await this.ensureFreshness(codebasePath, 0);
+                await this.ensureFreshness(codebasePath, BACKGROUND_FRESHNESS_THRESHOLD_MS);
             } catch (e) {
                 // Individual codebase failure shouldn't stop the loop
                 console.error(`[SYNC] Periodic sync failed for '${codebasePath}':`, e);
@@ -1070,11 +1074,11 @@ export class SyncManager {
             await this.handleSyncIndex();
 
             // recursive schedule to prevent overlap
-            this.backgroundSyncTimer = setTimeout(run, 3 * 60 * 1000); // 3 minutes
+            this.backgroundSyncTimer = setTimeout(run, BACKGROUND_SYNC_INTERVAL_MS);
         };
 
         // Initial delay
-        this.backgroundSyncTimer = setTimeout(run, 5000);
+        this.backgroundSyncTimer = setTimeout(run, BACKGROUND_SYNC_INITIAL_DELAY_MS);
     }
 
     public stopBackgroundSync(): void {

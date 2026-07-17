@@ -28,7 +28,25 @@ export type ResolvedVectorStoreConfig =
     | { vectorStoreProvider: 'Milvus' }
     | { vectorStoreProvider: 'LanceDB'; lanceDbPath: string };
 export type FingerprintSource = 'verified' | 'assumed_v2';
-export const DEFAULT_WATCH_DEBOUNCE_MS = 5000;
+/**
+ * Distinct freshness / sync timing knobs. Values may coincide numerically but
+ * must not be treated as one concept (see docs/plans/INCREMENTAL_INDEX_FRESHNESS_PLAN.md).
+ *
+ * WATCHER_DEBOUNCE_MS — quiet period after FS events before forced ensureFreshness(0).
+ * BACKGROUND_SYNC_INITIAL_DELAY_MS — first background tick after embedding runtime starts.
+ * BACKGROUND_SYNC_INTERVAL_MS — delay between background ticks (self-scheduling).
+ * SEARCH_FRESHNESS_THRESHOLD_MS — search-path ensureFreshness max age for skipped_recent.
+ * BACKGROUND_FRESHNESS_THRESHOLD_MS — background-path ensureFreshness max age.
+ * MANUAL_SYNC_FRESHNESS_THRESHOLD_MS — manage_index sync force-check (0 = always compare).
+ */
+export const WATCHER_DEBOUNCE_MS = 5_000;
+/** @deprecated Prefer WATCHER_DEBOUNCE_MS; kept for existing imports. */
+export const DEFAULT_WATCH_DEBOUNCE_MS = WATCHER_DEBOUNCE_MS;
+export const BACKGROUND_SYNC_INITIAL_DELAY_MS = 5_000;
+export const BACKGROUND_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+export const SEARCH_FRESHNESS_THRESHOLD_MS = 3 * 60 * 1000;
+export const BACKGROUND_FRESHNESS_THRESHOLD_MS = 3 * 60 * 1000;
+export const MANUAL_SYNC_FRESHNESS_THRESHOLD_MS = 0;
 export const DEFAULT_MANAGE_RETRY_AFTER_MS = 2000;
 
 export function resolveVectorStoreConfig(input: {
@@ -680,7 +698,7 @@ Environment Variables:
 
   Proactive Sync Configuration:
   MCP_ENABLE_WATCHER      Enable filesystem watch mode for near-real-time sync (default: true)
-  MCP_WATCH_DEBOUNCE_MS   Debounce window for watch-triggered sync in milliseconds (default: 5000)
+  MCP_WATCH_DEBOUNCE_MS   Quiet period after FS events before incremental sync (default: 5000; not "searchable in 5s")
 
 Examples:
   # Install resident MCP config without package-manager startup on every client launch

@@ -1119,6 +1119,62 @@ test('prepared-read seeding uses one authority snapshot and source observation f
     });
 });
 
+test('warm prepared-read reseed does not evict when end-of-search observation drifts', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, []);
+        const stableObservation = JSON.stringify({
+            vectorAuthority: 'vector-1',
+            navigationAuthority: 'navigation-1',
+            mutationGeneration: 1,
+        });
+        const driftedObservation = JSON.stringify({
+            vectorAuthority: 'vector-1',
+            navigationAuthority: 'navigation-changed-mid-search',
+            mutationGeneration: 1,
+        });
+        let evicted = false;
+        let seeded = false;
+        const internals = handlers as unknown as {
+            preparedReadCache: {
+                seed: () => void;
+                evict: () => void;
+            };
+            getPreparedReadCacheObservation: () => { observation: string | null };
+            seedPreparedRead: (state: unknown, preserveProofAge: boolean) => void;
+        };
+        internals.preparedReadCache.seed = () => {
+            seeded = true;
+        };
+        internals.preparedReadCache.evict = () => {
+            evicted = true;
+        };
+        internals.getPreparedReadCacheObservation = () => ({ observation: driftedObservation });
+
+        // Cold seed still fails closed on drift.
+        internals.seedPreparedRead({
+            state: 'ready',
+            root: { path: repoPath, info: { status: 'indexed' } },
+            vectorReceipt: { collectionName: 'committed-v3' },
+            preparedObservation: stableObservation,
+        }, false);
+        assert.equal(seeded, false);
+        assert.equal(evicted, true);
+
+        evicted = false;
+        seeded = false;
+        // Warm reseed after a successful hit must not discard the prior entry when
+        // mid-search registry/navigation work changes the live observation snapshot.
+        internals.seedPreparedRead({
+            state: 'ready',
+            root: { path: repoPath, info: { status: 'indexed' } },
+            vectorReceipt: { collectionName: 'committed-v3' },
+            preparedObservation: stableObservation,
+        }, true);
+        assert.equal(seeded, false);
+        assert.equal(evicted, false);
+    });
+});
+
 test('source observation failure preserves vector results with an unverified-freshness warning', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{

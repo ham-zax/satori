@@ -8,6 +8,7 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { canonicalJson, validateObservationSet, validateTaskSuite } from "./satori-useful-context.mjs";
+import { getSatoriRuntimeIdentity } from "./satori-runtime-identity.mjs";
 
 const EXPECTED_TOOLS = [
     "manage_index",
@@ -23,6 +24,13 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 
 function isRecord(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function resultIdentityKey(file, symbol) {
+    if (typeof file !== "string" || typeof symbol !== "string") {
+        throw new Error("Result identity requires string file and symbol values.");
+    }
+    return JSON.stringify([file, symbol]);
 }
 
 function positiveInteger(value, label) {
@@ -314,6 +322,81 @@ export function recorderNodeMetadata() {
     return { version: process.version, platform: process.platform, arch: process.arch };
 }
 
+function sha256File(file) {
+    const bytes = fs.readFileSync(file);
+    return { bytes: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") };
+}
+
+function existingCommandFiles(options) {
+    return [options.command, ...(options.commandArgs || [])].flatMap((candidate, index) => {
+        if (typeof candidate !== "string") return [];
+        const resolved = path.resolve(candidate);
+        const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+        if (!stat?.isFile()) return [];
+        const realPath = fs.realpathSync(resolved);
+        return [{ index, basename: path.basename(realPath), realPath, ...sha256File(realPath) }];
+    });
+}
+
+function inferSatoriRuntimeRoot(commandFiles) {
+    for (const file of commandFiles) {
+        const normalized = file.realPath.replaceAll("\\", "/");
+        if (normalized.endsWith("/packages/mcp/dist/index.js")) {
+            return path.resolve(path.dirname(file.realPath), "../../..");
+        }
+    }
+    return null;
+}
+
+function cleanRuntimeSourceIdentity(repoRoot) {
+    const git = (...args) => spawnSync("git", ["-C", repoRoot, ...args], { encoding: "utf8" });
+    const revision = git("rev-parse", "HEAD");
+    const tree = git("rev-parse", "HEAD^{tree}");
+    const status = git("status", "--porcelain=v1", "--untracked-files=all");
+    if (revision.status !== 0 || tree.status !== 0 || status.status !== 0) {
+        throw new Error(`Cannot bind Satori runtime source identity for '${repoRoot}'.`);
+    }
+    if (status.stdout.length > 0) {
+        throw new Error("Release qualification requires a clean Satori runtime worktree.");
+    }
+    return {
+        gitRevision: revision.stdout.trim().toLowerCase(),
+        gitTree: tree.stdout.trim().toLowerCase(),
+    };
+}
+
+export function qualificationRuntimeIdentity(options) {
+    const commandFiles = existingCommandFiles(options);
+    const runtimeRoot = inferSatoriRuntimeRoot(commandFiles);
+    const recorder = sha256File(fileURLToPath(import.meta.url));
+    const commandArtifacts = commandFiles.map(({ realPath: _realPath, ...identity }) => identity);
+    if (!runtimeRoot) {
+        const identity = {
+            schemaVersion: 1,
+            status: "unbound_runtime",
+            recorder,
+            commandArtifacts,
+        };
+        return { ...identity, sha256: hashTaskSuite(identity) };
+    }
+    const manifestFiles = [
+        "package.json",
+        "pnpm-lock.yaml",
+        "packages/core/package.json",
+        "packages/mcp/package.json",
+    ].map((relativePath) => ({ relativePath, ...sha256File(path.join(runtimeRoot, relativePath)) }));
+    const identity = {
+        schemaVersion: 1,
+        status: "bound",
+        source: cleanRuntimeSourceIdentity(runtimeRoot),
+        recorder,
+        commandArtifacts,
+        manifests: manifestFiles,
+        runtime: getSatoriRuntimeIdentity(runtimeRoot),
+    };
+    return { ...identity, sha256: hashTaskSuite(identity) };
+}
+
 function pathIsInside(root, candidate) {
     const relative = path.relative(root, candidate);
     return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -388,10 +471,16 @@ function assertSameIndexProof(expected, actual, taskId) {
     }
 }
 
+/**
+ * Published search identity for an arm. Mutation-lease generation advances on
+ * every lease acquire, including zero-change syncs, so it is not part of the
+ * frozen publication identity. Operation ids/timestamps may also differ.
+ * Collection + completion marker + policy digests + runtime fingerprint bind
+ * the searchable generation.
+ */
 function publicationIdentity(proof) {
     return {
         canonicalRoot: proof.canonicalRoot,
-        generation: proof.generation,
         runtimeFingerprint: structuredClone(proof.runtimeFingerprint),
         publication: structuredClone(proof.publication),
     };
@@ -437,10 +526,26 @@ function normalizeResultIdentities(payload, task, repoRoot) {
     const results = [];
     const seen = new Set();
     for (const candidate of candidates) {
-        const file = normalizeRelativeFile(candidate?.file || candidate?.relativePath, repoRoot);
-        const symbol = normalizeSymbol(candidate, task.expected.ownerSymbol);
+        // formatVersion 2 grouped search nests path/span under target and uses
+        // displayLabel / navigation.callerSearchTerm instead of flat file+symbol.
+        const target = isRecord(candidate?.target) ? candidate.target : null;
+        const file = normalizeRelativeFile(
+            candidate?.file
+            || candidate?.relativePath
+            || target?.file,
+            repoRoot,
+        );
+        const symbol = normalizeSymbol({
+            ...candidate,
+            symbol: candidate?.symbol
+                || target?.symbol
+                || candidate?.navigation?.callerSearchTerm,
+            symbolName: candidate?.symbolName,
+            name: candidate?.name || candidate?.navigation?.callerSearchTerm,
+            symbolLabel: candidate?.symbolLabel || candidate?.displayLabel,
+        }, task.expected.ownerSymbol);
         if (!file || !symbol) continue;
-        const key = `${file}#${symbol}`;
+        const key = resultIdentityKey(file, symbol);
         if (seen.has(key)) continue;
         seen.add(key);
         results.push({ file, symbol });
@@ -552,7 +657,7 @@ function responseUtf8Bytes(result) {
     ), 0);
 }
 
-function extractReadinessDiagnostics(payload) {
+export function extractReadinessDiagnostics(payload) {
     const readiness = payload?.hints?.debugSearch?.readiness;
     const operations = readiness?.operations;
     if (!isRecord(readiness)
@@ -571,28 +676,104 @@ function extractReadinessDiagnostics(payload) {
     return structuredClone(readiness);
 }
 
-function assertMeasuredReadiness(task, phase, invocation, readiness) {
+/**
+ * Fail readiness proofs with every failed predicate and the full readiness blob.
+ * Do not weaken cold/warm acceptance rules: the product path must prove them.
+ */
+export function assertMeasuredReadiness(task, phase, invocation, readiness, context = {}) {
     if (invocation.tool !== "search_codebase"
         || !["freshness", "full"].includes(invocation.args.debugMode)) {
         return;
     }
+    const invocations = Array.isArray(task?.workload?.invocations) ? task.workload.invocations : [];
+    const invocationIndex = Number.isSafeInteger(context.invocationIndex)
+        ? context.invocationIndex
+        : Math.max(0, invocations.indexOf(invocation));
+    const previousTool = invocationIndex > 0 ? invocations[invocationIndex - 1]?.tool : null;
+    const nextTool = invocationIndex + 1 < invocations.length
+        ? invocations[invocationIndex + 1]?.tool
+        : null;
+    const envelope = {
+        taskId: task.id,
+        phase,
+        sample: context.sample ?? null,
+        invocationIndex,
+        invocationCount: invocations.length,
+        tool: invocation.tool,
+        debugMode: invocation.args?.debugMode ?? null,
+        previousTool,
+        nextTool,
+        readiness: readiness ?? null,
+    };
+
     if (!readiness) {
-        throw new Error(`Task '${task.id}' ${phase} search returned no structured readiness diagnostics.`);
+        const message = `Task '${task.id}' ${phase} search returned no structured readiness diagnostics.`;
+        console.error(JSON.stringify({
+            event: "readiness_proof_failed",
+            message,
+            failedPredicates: ["readiness_present"],
+            ...envelope,
+        }));
+        throw new Error(`${message} diagnostics=${JSON.stringify(envelope)}`);
     }
-    if (phase === "cold" && (
-        readiness.proofMode !== "cold"
-        || readiness.operations.coldReadinessChecks < 1
-        || readiness.operations.exactPayloadRecounts < 1
-    )) {
-        throw new Error(`Task '${task.id}' cold search did not prove a cold authority check with an exact payload recount.`);
+
+    const failedPredicates = [];
+    if (phase === "cold") {
+        if (readiness.proofMode !== "cold") {
+            failedPredicates.push(`proofMode===cold (actual=${readiness.proofMode})`);
+        }
+        if (readiness.operations.coldReadinessChecks < 1) {
+            failedPredicates.push(
+                `coldReadinessChecks>=1 (actual=${readiness.operations.coldReadinessChecks})`,
+            );
+        }
+        if (readiness.operations.exactPayloadRecounts < 1) {
+            failedPredicates.push(
+                `exactPayloadRecounts>=1 (actual=${readiness.operations.exactPayloadRecounts})`,
+            );
+        }
+        if (failedPredicates.length > 0) {
+            const message = `Task '${task.id}' cold search did not prove a cold authority check with an exact payload recount.`;
+            console.error(JSON.stringify({
+                event: "readiness_proof_failed",
+                message,
+                failedPredicates,
+                ...envelope,
+            }));
+            throw new Error(`${message} failedPredicates=${JSON.stringify(failedPredicates)} diagnostics=${JSON.stringify(envelope)}`);
+        }
+        return;
     }
-    if (phase === "warm" && (
-        readiness.proofMode !== "warm"
-        || readiness.operations.preparedCacheHits < 1
-        || readiness.operations.warmReceiptRevalidations < 1
-        || readiness.operations.exactPayloadRecounts !== 0
-    )) {
-        throw new Error(`Task '${task.id}' warm search did not prove receipt revalidation without a payload recount.`);
+
+    if (phase === "warm") {
+        if (readiness.proofMode !== "warm") {
+            failedPredicates.push(`proofMode===warm (actual=${readiness.proofMode})`);
+        }
+        if (readiness.operations.preparedCacheHits < 1) {
+            failedPredicates.push(
+                `preparedCacheHits>=1 (actual=${readiness.operations.preparedCacheHits})`,
+            );
+        }
+        if (readiness.operations.warmReceiptRevalidations < 1) {
+            failedPredicates.push(
+                `warmReceiptRevalidations>=1 (actual=${readiness.operations.warmReceiptRevalidations})`,
+            );
+        }
+        if (readiness.operations.exactPayloadRecounts !== 0) {
+            failedPredicates.push(
+                `exactPayloadRecounts===0 (actual=${readiness.operations.exactPayloadRecounts})`,
+            );
+        }
+        if (failedPredicates.length > 0) {
+            const message = `Task '${task.id}' warm search did not prove receipt revalidation without a payload recount.`;
+            console.error(JSON.stringify({
+                event: "readiness_proof_failed",
+                message,
+                failedPredicates,
+                ...envelope,
+            }));
+            throw new Error(`${message} failedPredicates=${JSON.stringify(failedPredicates)} diagnostics=${JSON.stringify(envelope)}`);
+        }
     }
 }
 
@@ -675,7 +856,10 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
         const called = await callAndDecode(session, invocation);
         responseBytes += responseUtf8Bytes(called.result);
         const readinessDiagnostics = extractReadinessDiagnostics(called.payload);
-        assertMeasuredReadiness(task, phase, invocation, readinessDiagnostics);
+        assertMeasuredReadiness(task, phase, invocation, readinessDiagnostics, {
+            sample,
+            invocationIndex: toolCalls - 1,
+        });
         if (readinessDiagnostics) readiness.push(readinessDiagnostics);
         const freshnessMode = called.payload?.freshnessDecision?.mode;
         if (["synced", "reconciled_ignore_change", "coalesced"].includes(freshnessMode)) {
@@ -702,7 +886,7 @@ export async function recordPhase(session, task, phase, repoRoot, sample) {
             }
         }
         for (const identity of normalizeResultIdentities(called.payload, task, repoRoot)) {
-            const key = `${identity.file}#${identity.symbol}`;
+            const key = resultIdentityKey(identity.file, identity.symbol);
             if (!seen.has(key)) {
                 seen.add(key);
                 identities.push(identity);
@@ -762,6 +946,7 @@ export async function recordSuite(taskSuite, options) {
         return { version: outputVersion, dryRun: true, repoRoot, warmSampleCount, tasks: expanded.tasks };
     }
     const revision = cleanGitRevision(repoRoot);
+    const runtimeIdentity = qualificationRuntimeIdentity(options);
     const observations = [];
     const taskRuns = [];
     let armIndexProof;
@@ -818,6 +1003,10 @@ export async function recordSuite(taskSuite, options) {
     if (finalRevision !== revision) {
         throw new Error(`Repository revision changed during recording (${revision} -> ${finalRevision}); discard this run.`);
     }
+    const finalRuntimeIdentity = qualificationRuntimeIdentity(options);
+    if (canonicalJson(finalRuntimeIdentity) !== canonicalJson(runtimeIdentity)) {
+        throw new Error("Satori runtime or recorder artifacts changed during recording; discard this run.");
+    }
     if (!armIndexProof) {
         throw new Error("No arm-level index generation proof was recorded.");
     }
@@ -830,6 +1019,7 @@ export async function recordSuite(taskSuite, options) {
             taskSuiteSha256: hashTaskSuite(validated),
             serverInfo,
             node: recorderNodeMetadata(),
+            qualificationRuntime: runtimeIdentity,
             armIndexProof,
             taskRuns,
             warmSampleCount,

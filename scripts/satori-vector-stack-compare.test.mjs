@@ -53,6 +53,46 @@ function fingerprint(vectorStoreProvider, embeddingProvider) {
     };
 }
 
+function qualificationRuntime() {
+    const identity = {
+        schemaVersion: 1,
+        status: "bound",
+        source: {
+            gitRevision: "2".repeat(40),
+            gitTree: "3".repeat(40),
+        },
+        recorder: { bytes: 100, sha256: "4".repeat(64) },
+        commandArtifacts: [{
+            index: 1,
+            basename: "index.js",
+            bytes: 200,
+            sha256: "5".repeat(64),
+        }],
+        manifests: [
+            "package.json",
+            "pnpm-lock.yaml",
+            "packages/core/package.json",
+            "packages/mcp/package.json",
+        ].map((relativePath, index) => ({
+            relativePath,
+            bytes: 300 + index,
+            sha256: String(6 + index).repeat(64),
+        })),
+        runtime: {
+            schemaVersion: 1,
+            nodeVersion: process.version,
+            roots: ["packages/core/dist", "packages/mcp/dist"].map((relativeRoot, index) => ({
+                relativeRoot,
+                fileCount: 10 + index,
+                totalBytes: 1_000 + index,
+                sha256: String(index + 1).repeat(64),
+            })),
+        },
+    };
+    identity.runtime.sha256 = hashTaskSuite(identity.runtime);
+    return { ...identity, sha256: hashTaskSuite(identity) };
+}
+
 function observation(taskId, phase, sample, latencyMs, results, retrievalMode, generationReceipt) {
     return {
         taskId,
@@ -96,7 +136,6 @@ function observationSet(vectorStoreProvider, embeddingProvider, options = {}) {
     const runtimeFingerprint = fingerprint(vectorStoreProvider, embeddingProvider);
     const generationReceipt = {
         canonicalRoot: "/repo",
-        generation: 1,
         runtimeFingerprint,
         publication: {
             collectionName: "generation-1",
@@ -117,12 +156,13 @@ function observationSet(vectorStoreProvider, embeddingProvider, options = {}) {
             taskSuiteSha256: hashTaskSuite(normalizedSuite),
             serverInfo: { name: "satori", version: "1.0.0" },
             node: { version: "v22.13.0", platform: "linux", arch: "x64" },
+            qualificationRuntime: qualificationRuntime(),
             warmSampleCount: 1,
             armIndexProof: {
                 id: "sync-arm",
                 action: "sync",
                 canonicalRoot: generationReceipt.canonicalRoot,
-                generation: generationReceipt.generation,
+                generation: 1,
                 phase: "completed",
                 lastDurableTransitionAt: "2026-07-17T00:00:00.000Z",
                 runtimeFingerprint,
@@ -135,7 +175,7 @@ function observationSet(vectorStoreProvider, embeddingProvider, options = {}) {
                     id: `sync-task-${index}`,
                     action: "sync",
                     canonicalRoot: "/repo",
-                    generation: 1,
+                    generation: 1 + index,
                     phase: "completed",
                     lastDurableTransitionAt: `2026-07-17T00:00:0${index + 1}.000Z`,
                     runtimeFingerprint: index === 1 && options.secondFingerprint
@@ -191,6 +231,31 @@ test("rejects mismatched corpus revisions before producing paired metrics", () =
     ]), /different gitRevision/);
 });
 
+test("rejects missing or unequal qualification runtime artifacts", () => {
+    const left = observationSet("Milvus", "VoyageAI");
+    const missing = observationSet("LanceDB", "VoyageAI");
+    delete missing.metadata.qualificationRuntime;
+    assert.throws(
+        () => compareVectorStacks(TASK_SUITE, [
+            { id: "milvus", observations: left },
+            { id: "lancedb", observations: missing },
+        ]),
+        /qualification runtime must be an object/,
+    );
+
+    const changed = observationSet("LanceDB", "VoyageAI");
+    changed.metadata.qualificationRuntime.recorder.sha256 = "f".repeat(64);
+    const { sha256: _oldDigest, ...unsignedIdentity } = changed.metadata.qualificationRuntime;
+    changed.metadata.qualificationRuntime.sha256 = hashTaskSuite(unsignedIdentity);
+    assert.throws(
+        () => compareVectorStacks(TASK_SUITE, [
+            { id: "milvus", observations: left },
+            { id: "lancedb", observations: changed },
+        ]),
+        /different qualificationRuntime identity/,
+    );
+});
+
 test("rejects an arm whose runtime fingerprint changes between task runs", () => {
     assert.throws(() => compareVectorStacks(TASK_SUITE, [
         { id: "left", observations: observationSet("Milvus", "VoyageAI") },
@@ -217,7 +282,7 @@ test("accepts different no-change sync operation receipts for one published gene
     ]));
 });
 
-test("rejects changed syncs and observations from another generation", () => {
+test("rejects changed syncs and observations from another published generation", () => {
     const changed = observationSet("LanceDB", "VoyageAI");
     changed.metadata.taskRuns[0].syncStats.modified = 1;
     assert.throws(() => compareVectorStacks(TASK_SUITE, [
@@ -225,14 +290,26 @@ test("rejects changed syncs and observations from another generation", () => {
         { id: "changed", observations: changed },
     ]), /no-change syncStats\.modified=0/);
 
-    const mixedGeneration = observationSet("LanceDB", "VoyageAI");
-    mixedGeneration.observations[0].generationReceipt = {
-        ...mixedGeneration.observations[0].generationReceipt,
-        generation: 2,
+    // Mutation-lease generation may advance across no-change syncs; publication
+    // identity is what freezes the searchable arm.
+    const advancedLeaseGeneration = observationSet("LanceDB", "VoyageAI");
+    advancedLeaseGeneration.metadata.taskRuns[1].indexProof.generation = 99;
+    assert.doesNotThrow(() => compareVectorStacks(TASK_SUITE, [
+        { id: "baseline", observations: observationSet("Milvus", "VoyageAI") },
+        { id: "lease-advanced", observations: advancedLeaseGeneration },
+    ]));
+
+    const mixedPublication = observationSet("LanceDB", "VoyageAI");
+    mixedPublication.observations[0].generationReceipt = {
+        ...mixedPublication.observations[0].generationReceipt,
+        publication: {
+            ...mixedPublication.observations[0].generationReceipt.publication,
+            markerRunId: "other-marker-run",
+        },
     };
     assert.throws(() => compareVectorStacks(TASK_SUITE, [
         { id: "baseline", observations: observationSet("Milvus", "VoyageAI") },
-        { id: "mixed", observations: mixedGeneration },
+        { id: "mixed", observations: mixedPublication },
     ]), /not bound to the arm-level generation/);
 });
 

@@ -63,6 +63,118 @@ function requireString(value, label) {
     return value;
 }
 
+function requireSha256(value, label) {
+    const digest = requireString(value, label);
+    if (!/^[a-f0-9]{64}$/.test(digest)) {
+        throw new Error(`${label} must be a lowercase SHA-256 digest.`);
+    }
+    return digest;
+}
+
+function requireExactKeys(record, expectedKeys, label) {
+    if (canonicalJson(Object.keys(record).sort()) !== canonicalJson([...expectedKeys].sort())) {
+        throw new Error(`${label} must contain exactly ${expectedKeys.join(", ")}.`);
+    }
+}
+
+function parseQualificationRuntime(value, label) {
+    const identity = requireRecord(value, label);
+    const expectedKeys = [
+        "commandArtifacts",
+        "manifests",
+        "recorder",
+        "runtime",
+        "schemaVersion",
+        "sha256",
+        "source",
+        "status",
+    ];
+    requireExactKeys(identity, expectedKeys, label);
+    if (identity.schemaVersion !== 1 || identity.status !== "bound") {
+        throw new Error(`${label} must be a bound schema-version 1 runtime identity.`);
+    }
+    const source = requireRecord(identity.source, `${label}.source`);
+    requireExactKeys(source, ["gitRevision", "gitTree"], `${label}.source`);
+    for (const key of ["gitRevision", "gitTree"]) {
+        const value = requireString(source[key], `${label}.source.${key}`);
+        if (!/^[a-f0-9]{40}$/.test(value)) {
+            throw new Error(`${label}.source.${key} must be a full Git object id.`);
+        }
+    }
+    const recorder = requireRecord(identity.recorder, `${label}.recorder`);
+    requireExactKeys(recorder, ["bytes", "sha256"], `${label}.recorder`);
+    if (!Number.isSafeInteger(recorder.bytes) || recorder.bytes <= 0) {
+        throw new Error(`${label}.recorder.bytes must be a positive integer.`);
+    }
+    requireSha256(recorder.sha256, `${label}.recorder.sha256`);
+    if (!Array.isArray(identity.commandArtifacts) || identity.commandArtifacts.length === 0) {
+        throw new Error(`${label}.commandArtifacts must contain the launched runtime entry.`);
+    }
+    for (const [index, artifactValue] of identity.commandArtifacts.entries()) {
+        const artifact = requireRecord(artifactValue, `${label}.commandArtifacts[${index}]`);
+        requireExactKeys(artifact, ["basename", "bytes", "index", "sha256"], `${label}.commandArtifacts[${index}]`);
+        requireString(artifact.basename, `${label}.commandArtifacts[${index}].basename`);
+        if (!Number.isSafeInteger(artifact.index) || artifact.index < 0
+            || !Number.isSafeInteger(artifact.bytes) || artifact.bytes <= 0) {
+            throw new Error(`${label}.commandArtifacts[${index}] has invalid index or byte count.`);
+        }
+        requireSha256(artifact.sha256, `${label}.commandArtifacts[${index}].sha256`);
+    }
+    if (!identity.commandArtifacts.some((artifact) => artifact.basename === "index.js")) {
+        throw new Error(`${label}.commandArtifacts must bind the MCP dist entry.`);
+    }
+    if (!Array.isArray(identity.manifests) || identity.manifests.length !== 4) {
+        throw new Error(`${label}.manifests must bind the four runtime package manifests.`);
+    }
+    const expectedManifestPaths = [
+        "package.json",
+        "pnpm-lock.yaml",
+        "packages/core/package.json",
+        "packages/mcp/package.json",
+    ];
+    if (canonicalJson(identity.manifests.map((manifest) => manifest?.relativePath))
+        !== canonicalJson(expectedManifestPaths)) {
+        throw new Error(`${label}.manifests must use the canonical runtime manifest order.`);
+    }
+    for (const [index, manifestValue] of identity.manifests.entries()) {
+        const manifest = requireRecord(manifestValue, `${label}.manifests[${index}]`);
+        requireExactKeys(manifest, ["bytes", "relativePath", "sha256"], `${label}.manifests[${index}]`);
+        requireString(manifest.relativePath, `${label}.manifests[${index}].relativePath`);
+        if (!Number.isSafeInteger(manifest.bytes) || manifest.bytes <= 0) {
+            throw new Error(`${label}.manifests[${index}].bytes must be a positive integer.`);
+        }
+        requireSha256(manifest.sha256, `${label}.manifests[${index}].sha256`);
+    }
+    const runtime = requireRecord(identity.runtime, `${label}.runtime`);
+    requireExactKeys(runtime, ["nodeVersion", "roots", "schemaVersion", "sha256"], `${label}.runtime`);
+    if (runtime.schemaVersion !== 1 || !/^v\d+\./.test(requireString(runtime.nodeVersion, `${label}.runtime.nodeVersion`))) {
+        throw new Error(`${label}.runtime must contain a versioned Node identity.`);
+    }
+    if (!Array.isArray(runtime.roots)
+        || canonicalJson(runtime.roots.map((root) => root?.relativeRoot))
+            !== canonicalJson(["packages/core/dist", "packages/mcp/dist"])) {
+        throw new Error(`${label}.runtime must bind Core and MCP dist roots.`);
+    }
+    for (const [index, rootValue] of runtime.roots.entries()) {
+        const root = requireRecord(rootValue, `${label}.runtime.roots[${index}]`);
+        requireExactKeys(root, ["fileCount", "relativeRoot", "sha256", "totalBytes"], `${label}.runtime.roots[${index}]`);
+        requireSha256(root.sha256, `${label}.runtime.roots[${index}].sha256`);
+        if (!Number.isSafeInteger(root.fileCount) || root.fileCount <= 0
+            || !Number.isSafeInteger(root.totalBytes) || root.totalBytes <= 0) {
+            throw new Error(`${label}.runtime.roots[${index}] has invalid file or byte counts.`);
+        }
+    }
+    const { sha256: runtimeSha256, ...unsignedRuntime } = runtime;
+    if (requireSha256(runtimeSha256, `${label}.runtime.sha256`) !== hashTaskSuite(unsignedRuntime)) {
+        throw new Error(`${label}.runtime.sha256 does not match its canonical runtime payload.`);
+    }
+    const { sha256, ...unsignedIdentity } = identity;
+    if (requireSha256(sha256, `${label}.sha256`) !== hashTaskSuite(unsignedIdentity)) {
+        throw new Error(`${label}.sha256 does not match its canonical identity payload.`);
+    }
+    return structuredClone(identity);
+}
+
 function parsePublicationReceipt(value, label) {
     const receipt = requireRecord(value, label);
     const expectedKeys = [
@@ -171,7 +283,9 @@ function providerWorkSummary(observations) {
         );
         routeKinds.set(routeKind, (routeKinds.get(routeKind) ?? 0) + 1);
     }
-    const sortedCounts = (counts) => Object.fromEntries([...counts].sort(([left], [right]) => left.localeCompare(right)));
+    const sortedCounts = (counts) => Object.fromEntries(
+        [...counts].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+    );
     return {
         observationsWithDiagnostics,
         totals,
@@ -243,9 +357,10 @@ function extractFingerprint(metadata, taskIds, armId, repoRoot) {
         armIndexProof.publication,
         `Arm '${armId}' arm-level publication proof`,
     );
+    // Freeze searchable publication + runtime fingerprint. Mutation-lease
+    // generation advances on each no-change sync and must not fail the arm.
     const expectedPublication = canonicalJson({
         canonicalRoot: repoRoot,
-        generation: armIndexProof.generation,
         runtimeFingerprint: armFingerprint,
         publication: armPublication,
     });
@@ -283,7 +398,6 @@ function extractFingerprint(metadata, taskIds, armId, repoRoot) {
         );
         if (canonicalJson({
             canonicalRoot: proof.canonicalRoot,
-            generation: proof.generation,
             runtimeFingerprint: fingerprint,
             publication,
         }) !== expectedPublication) {
@@ -304,7 +418,6 @@ function extractFingerprint(metadata, taskIds, armId, repoRoot) {
         fingerprint: structuredClone(fingerprints[0]),
         generationReceipt: Object.freeze({
             canonicalRoot: repoRoot,
-            generation: armIndexProof.generation,
             runtimeFingerprint: structuredClone(armFingerprint),
             publication: structuredClone(armPublication),
         }),
@@ -347,6 +460,10 @@ function normalizeArm(input, suite) {
         requireString(node[key], `Arm '${input.id}' Node identity ${key}`);
     }
     const serverInfo = requireRecord(metadata.serverInfo, `Arm '${input.id}' serverInfo`);
+    const qualificationRuntime = parseQualificationRuntime(
+        metadata.qualificationRuntime,
+        `Arm '${input.id}' qualification runtime`,
+    );
     const repoRoot = requireString(metadata.repoRoot, `Arm '${input.id}' repository root`);
     const authority = extractFingerprint(
         metadata,
@@ -373,6 +490,7 @@ function normalizeArm(input, suite) {
             taskSuiteSha256: metadata.taskSuiteSha256,
             node: structuredClone(node),
             serverInfo: structuredClone(serverInfo),
+            qualificationRuntime,
             observationVersion: observations.version,
             warmSampleCount: observations.warmSampleCount ?? 1,
             generationReceipt: structuredClone(authority.generationReceipt),
@@ -461,7 +579,7 @@ export function compareVectorStacks(taskSuite, armInputs) {
                 throw new Error(`Arm '${arm.id}' has a different ${key}; paired comparison is invalid.`);
             }
         }
-        for (const key of ["node", "serverInfo"]) {
+        for (const key of ["node", "serverInfo", "qualificationRuntime"]) {
             if (canonicalJson(arm.corpus[key]) !== canonicalJson(baseline[key])) {
                 throw new Error(`Arm '${arm.id}' has a different ${key} identity; paired comparison is invalid.`);
             }
@@ -484,6 +602,7 @@ export function compareVectorStacks(taskSuite, armInputs) {
             warmSampleCount: baseline.warmSampleCount,
             node: baseline.node,
             serverInfo: baseline.serverInfo,
+            qualificationRuntime: baseline.qualificationRuntime,
         },
         arms: arms.map((arm) => ({
             id: arm.id,

@@ -21,6 +21,25 @@ function initializeRepo(repoRoot) {
     spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], { cwd: repoRoot });
 }
 
+function commitRuntimeFixture(runtimeRoot) {
+    fs.mkdirSync(path.join(runtimeRoot, "packages/core/dist"), { recursive: true });
+    fs.mkdirSync(path.join(runtimeRoot, "packages/mcp/dist"), { recursive: true });
+    fs.writeFileSync(path.join(runtimeRoot, "packages/core/dist/index.js"), "export {};\n");
+    for (const manifest of [
+        "package.json",
+        "packages/core/package.json",
+        "packages/mcp/package.json",
+    ]) {
+        const file = path.join(runtimeRoot, manifest);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        writeJson(file, { name: manifest, version: "1.0.0" });
+    }
+    fs.writeFileSync(path.join(runtimeRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    spawnSync("git", ["init", "-q"], { cwd: runtimeRoot });
+    spawnSync("git", ["add", "."], { cwd: runtimeRoot });
+    spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "runtime fixture"], { cwd: runtimeRoot });
+}
+
 function taskSuite(repoRoot) {
     return {
         version: 1,
@@ -174,10 +193,13 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         const repoRoot = path.join(temp, "repo");
         const tasksFile = path.join(temp, "tasks.json");
         const outputFile = path.join(temp, "observations.json");
-        const fakeMcp = path.join(temp, "fake-mcp.mjs");
+        const runtimeRoot = path.join(temp, "runtime");
+        const fakeMcp = path.join(runtimeRoot, "packages/mcp/dist/index.js");
         initializeRepo(repoRoot);
         writeJson(tasksFile, taskSuite(repoRoot));
+        fs.mkdirSync(path.dirname(fakeMcp), { recursive: true });
         writeFakeMcp(fakeMcp);
+        commitRuntimeFixture(runtimeRoot);
 
         const run = spawnSync(process.execPath, [
             SCRIPT_PATH,
@@ -201,6 +223,8 @@ test("recorder runs prepared-cold then warm in one runtime per task and emits gr
         assert.equal(output.metadata.node.version, process.version);
         assert.equal(output.metadata.node.platform, process.platform);
         assert.equal(output.metadata.node.arch, process.arch);
+        assert.equal(output.metadata.qualificationRuntime.status, "bound");
+        assert.match(output.metadata.qualificationRuntime.sha256, /^[0-9a-f]{64}$/);
         assert.equal(output.metadata.taskRuns.length, 2);
         assert.deepEqual(output.metadata.taskRuns.map((entry) => entry.indexProof.generation), [7, 7]);
         assert.equal(output.metadata.taskRuns[0].indexProof.runtimeFingerprint.schemaVersion, "hybrid_v3");

@@ -1,12 +1,11 @@
 # LanceDB Search Tuning and Agent-Answer Qualification Plan
 
-**Status:** Phase 0/1 authority and diagnostics, the Phase 2 capture/replay
-implementation, and Phase 3 infrastructure steps 1–5 are complete. No
-search-policy contender has been admitted; normal product ranking and the
-default visible-result count remain unchanged. The Phase 2 experimental exit
-still requires one frozen maximum-candidate capture and tuning/validation run.
-Phase 3's smaller-disclosure and agent-answer gates remain pending, and Phase 4
-remains conditional on localized lexical misses.
+**Status:** Phase 0/1 authority and diagnostics are complete. The frozen Phase 2
+experiment is complete and negative: all four predeclared tuning contenders
+failed the `+1` owner-survival gate, no finalist was selected, validation remains
+unrevealed, and the production baseline is retained. Phase 3 infrastructure
+steps 1–5 are complete, but smaller-disclosure and agent-answer qualification
+remain pending. Phase 4 and Phase 5 have not been admitted.
 **Date:** 2026-07-17
 **Related implementation authority:**
 `docs/release/2026-07-15-lancedb-voyage-offline-plan.md`, current code under
@@ -714,6 +713,24 @@ Run one-variable-at-a-time experiments from one maximum candidate superset. The
 baseline and all contenders execute in the same binary through the frozen policy
 selector.
 
+Execution result on 2026-07-18:
+
+- one status-only top-160 LanceDB/Voyage capture completed against a single
+  stable publication with 28/28 observations;
+- exact baseline replay reproduced all 14 tasks, including 12 fusion routes and
+  two policy-invariant exact-registry routes;
+- conditional OR fallback, precise lexical fallback, candidate depth 120, and
+  lexical weight 1.5 each produced zero qualifying owner-survival gain;
+- no contender was selected, validation was not replayed or scored, and normal
+  production ranking remains unchanged; and
+- the frozen inputs, observations, capture, replays, scores, selection ledger,
+  and committed harness manifest are checksum-verified under
+  `~/satori-evidence/search-phase2/648b47518c642410de713c01041ad17476feeab6/`.
+
+The live capture consumed 20 reranker calls, 994 candidates, and 1,575,518
+reranker document UTF-8 bytes. Capture replay and scoring consumed no provider
+calls, synchronization, document embedding, or reindexing.
+
 Before replay, capture top 160 for dense, precise-AND lexical, conditional-OR
 lexical, and each required MCP pass. Slice that immutable capture for depths 80,
 120, and 160. A smaller baseline capture cannot support a deeper replay.
@@ -781,10 +798,12 @@ Evaluate a small predeclared set of:
 Because Satori has both Core and MCP RRF stages, replay must cover the complete
 pipeline. Tuning the first RRF in isolation is not an acceptance result.
 
-Exit: choose at most one smallest contender using only tuning and validation
-evidence. It must improve the predeclared validation measure without violating
-latency, provider-work, or context budgets. Freeze its policy digest before
-revealing held-out evidence. Otherwise retain the current policy.
+Exit: choose at most one smallest contender using tuning evidence only. Freeze
+its policy digest before revealing validation exactly once. It must then satisfy
+the predeclared validation non-regression measure without violating latency,
+provider-work, or context budgets. If no tuning contender passes, or the frozen
+finalist fails validation, retain the current policy without selecting a
+runner-up. This experiment exited by retaining the baseline before validation.
 
 ### Phase 3 — progressive-disclosure and agent-answer qualification
 

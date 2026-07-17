@@ -30,6 +30,15 @@ maintenance outside publication authority. Exact-version runtime reuse,
 candidate preflight, failed-candidate cleanup, and launcher switching have
 focused end-to-end upgrade coverage.
 
+The later search-quality Phase 2 experiment is also complete. Its frozen
+top-160 LanceDB/Voyage capture exactly reproduces the baseline, but none of the
+four predeclared tuning contenders passed the owner-survival gate. The baseline
+therefore remains in production and validation remains unrevealed. Progressive-
+disclosure infrastructure is implemented, while its smaller-response and
+agent-answer qualification remains pending. The checksum-verified Phase 2
+evidence is under
+`~/satori-evidence/search-phase2/648b47518c642410de713c01041ad17476feeab6/`.
+
 ## Decision
 
 Satori will use LanceDB as its installer-owned local vector and full-text store.
@@ -922,8 +931,8 @@ must remain visible in the default-backend product decision.
    The corrected pair passes this boundary; only the superseded pair remains
    exploratory.
 
-For this connected-storage qualification exercise only, the operator cost
-ceiling is five full reindex attempts:
+The completed connected-storage qualification was planned with an experiment-
+specific ceiling of five full reindex attempts:
 
 ```text
 planned:     1 x Milvus/Voyage + 1 x LanceDB/Voyage
@@ -931,11 +940,13 @@ contingency: at most one complete paired rerun after a proven harness/runtime fi
 reserve:     1 same-artifact operational retry when no compared identity changed
 ```
 
-Search repetitions, comparator reruns, receipt checks, and deterministic tests
-reuse the frozen publications and do not consume this budget. If a runtime,
-projection, task, or harness change invalidates the pair after the contingency
-rerun, stop qualification and diagnose rather than purchasing more reindexes.
-No Ollama reindex is part of this connected-storage correction pass.
+That historical ceiling bounded only that frozen experiment; it is not a
+release-hardening or product reindex limit. Search repetitions, comparator
+reruns, receipt checks, and deterministic tests reuse frozen publications when
+their authority remains valid. Future qualification may perform additional
+reindexes after diagnosing why cached evidence is insufficient and freezing
+the new hypothesis, inputs, and outputs. No Ollama reindex was part of this
+connected-storage correction pass.
 
 This is not a product capacity limit. Satori does not cap LanceDB at four or
 five repositories or collections, and the installer/runtime must not enforce

@@ -21,6 +21,26 @@ function checkpointOptions(checkpointIdentity: string) {
     };
 }
 
+test('FileSynchronizer keeps Merkle checkpoints inside SATORI_STATE_ROOT', () => {
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-state-root-'));
+    const codebaseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-codebase-'));
+    process.env.SATORI_STATE_ROOT = stateRoot;
+    try {
+        const snapshotPath = FileSynchronizer.getSnapshotPathForCodebase(codebaseRoot);
+        assert.equal(path.dirname(snapshotPath), path.join(stateRoot, 'merkle'));
+        assert.equal(snapshotPath.startsWith(path.join(os.homedir(), '.satori')), false);
+    } finally {
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+        fs.rmSync(codebaseRoot, { recursive: true, force: true });
+    }
+});
+
 test('FileSynchronizer rejects a checkpoint identity owned by another collection', () => {
     const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-owner-mismatch-'));
     try {

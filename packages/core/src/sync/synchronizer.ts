@@ -261,8 +261,8 @@ export class FileSynchronizer {
     }
 
     public static snapshotPathFromCanonicalPath(canonicalPath: string, checkpointIdentity?: string): string {
-        const homeDir = os.homedir();
-        const merkleDir = path.join(homeDir, '.satori', 'merkle');
+        const stateRoot = process.env.SATORI_STATE_ROOT || path.join(os.homedir(), '.satori');
+        const merkleDir = path.join(stateRoot, 'merkle');
         const hash = crypto.createHash('md5').update(canonicalPath).digest('hex');
         if (!checkpointIdentity) {
             return path.join(merkleDir, `${hash}.json`);

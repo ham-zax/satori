@@ -25,7 +25,7 @@
     "release:smoke": "tsx scripts/release-smoke.ts",
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
     "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check && pnpm release:smoke",
-    "test": "pnpm --filter @zokizuan/satori-core build && node --import tsx --test --test-concurrency=1 src/core/**/*.test.ts src/server/**/*.test.ts src/tools/**/*.test.ts src/cli/**/*.test.ts"
+    "test": "pnpm --filter @zokizuan/satori-core build && node --import tsx --import ./src/test-state-root.ts --test --test-concurrency=1 src/core/**/*.test.ts src/server/**/*.test.ts src/tools/**/*.test.ts src/cli/**/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -24,7 +24,7 @@
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 src/**/*.test.ts",
+    "test": "node --import tsx --import ./src/test-state-root.ts --test --test-concurrency=1 src/**/*.test.ts",
     "test:integration": "pnpm run build && HOME=/tmp node --test --test-concurrency=1 --test-isolation=none ../../tests/integration/*.test.mjs"
   },
   "dependencies": {

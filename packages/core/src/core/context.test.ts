@@ -6,7 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Context, IndexPolicyPublicationError } from './context';
-import { EMBEDDING_NORMALIZATION_POLICY_VERSION } from './persisted-index-authority';
+import {
+    EMBEDDING_NORMALIZATION_POLICY_VERSION,
+    type CanonicalIndexPolicyDocument,
+} from './persisted-index-authority';
 import type { RepairProof } from './repair-proof';
 import {
     buildSearchProjections,
@@ -1389,7 +1392,9 @@ test('Context.reindexByChange activates one immutable vector, navigation, graph,
         assert.equal(checkpoint.status, 'valid');
         const policyFiles = fs.readdirSync(policyRoot).filter((file) => file.endsWith('.json'));
         assert.equal(policyFiles.length, 1);
-        const policy = JSON.parse(fs.readFileSync(path.join(policyRoot, policyFiles[0]!), 'utf8')) as Record<string, any>;
+        const policy = JSON.parse(
+            fs.readFileSync(path.join(policyRoot, policyFiles[0]!), 'utf8'),
+        ) as CanonicalIndexPolicyDocument;
         assert.equal(policy.schemaVersion, 'satori_index_policy_v4');
         assert.equal(policy.collectionName, current.collectionName);
         assert.equal(policy.publication.receipt.ownerId, 'sync-owner');

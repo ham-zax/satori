@@ -7,9 +7,12 @@ the baseline fusion/depth policy is retained. A subsequent stage-localized
 query-route correction passed its frozen tuning gate and one-time validation
 equivalence gate on LanceDB, but failed the frozen Milvus cold-latency gate. The
 shared production default therefore remains the path-first baseline, and that
-validation split is now consumed. Phase 3 infrastructure steps 1–5 are complete,
-but smaller-disclosure and agent-answer qualification remain pending. Phase 4
-and Phase 5 have not been admitted.
+validation split is now consumed. Phase 3 infrastructure steps 1–5 are complete.
+The sealed five-result agent experiment was withdrawn without a gate decision
+after its OpenCode model quota was exhausted and the product target changed.
+The adopted reversible compromise is 20 total results with 10 initially visible;
+it relies on the completed continuation mechanics and bounded sentinel evidence,
+not on the incomplete 96-cell experiment. Phase 4 and Phase 5 have not been admitted.
 **Date:** 2026-07-17
 **Related implementation authority:**
 `docs/release/2026-07-15-lancedb-voyage-offline-plan.md`, current code under
@@ -896,9 +899,39 @@ Implementation state on 2026-07-18:
   retries replay the prior serialized page; offset/limit conflict, expiry,
   process restart, and completed consumption fail with classified outcomes.
 - Continuation performs no query embedding, storage retrieval, or reranking.
-- Step 6 is deliberately not admitted. `disclosureLimit` is opt-in and omitting
-  it preserves the existing visible-result count. A smaller default still
-  requires the frozen held-out agent-answer gate on both backends.
+- The original Step 6 authority compared 20 visible results with a five-result
+  initial page. That execution is withdrawn: it did not complete, produced no
+  frozen gate decision, and must not be cited as qualification evidence.
+- Product adoption instead uses a reversible 10-of-20 default. Setting
+  `disclosureLimit` equal to `limit` restores immediate full disclosure.
+- The 10-of-20 choice is mechanically and sentinel-checked, but it does not
+  support numerical agent-answer or context-efficiency claims. The bounded
+  sentinel ledger is `~/satori-evidence/search-phase3/8f143e247d2ed95ce51a085361393cfac82cda2e/DISCLOSURE-10-SENTINELS.md`.
+
+Partial execution insight, retained as exploratory evidence only:
+
+- The cleanest comparable slice contained 36 cells: nine paired tasks across
+  LanceDB/Voyage and Milvus/Voyage. A 37th Milvus contender cell was incomplete
+  as a pair and is excluded from the comparison.
+- The full-disclosure baseline answered all nine tasks correctly on both
+  backends. The five-result contender answered eight of nine on both. The same
+  noncritical `provider-runtime-owner` task missed on each backend, so this did
+  not localize a storage-specific relevance defect.
+- Median initial tool-output bytes fell from 13,662 to 4,968 on LanceDB and
+  13,718 to 4,910 on Milvus, approximately 64%. Aggregate tool-output context
+  across the paired tasks fell approximately 23% on each backend.
+- Seven continuation pages were used on each backend. Recorded continuation
+  operations performed no embedding, retrieval, or reranking, and authority
+  remained stable in the completed cells.
+- The miss does not prove five-result disclosure hid the answer. That task's
+  baseline and contender each exposed the same single initial result and made a
+  follow-up search; only the one-trial agent behavior diverged.
+- The executor's field named `rankedResultSetDigest` hashed only identities the
+  agent happened to disclose across searches and continuation pages, not the
+  complete frozen ranked result set. All paired digests therefore differed and
+  the frozen digest-equality gate could not establish its claimed invariant.
+  This, the one-trial variance, repeated harness repairs, and quota exhaustion
+  prevent promotion of the partial cells into a product acceptance result.
 
 This phase does not invent a second source-expansion mechanism. Agents continue
 to use the existing file-reading tools for full source; the new continuation

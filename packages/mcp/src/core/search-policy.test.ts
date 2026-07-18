@@ -83,3 +83,15 @@ test('resolveSearchPolicy separates retrieval, reranker, and disclosure budgets'
         },
     );
 });
+
+test('resolveSearchPolicy discloses ten of twenty by default and supports an explicit full-page opt-out', () => {
+    assert.equal(resolveSearchPolicy({
+        resultLimit: 20,
+        hasMustOperators: false,
+    }).disclosureResultLimit, 10);
+    assert.equal(resolveSearchPolicy({
+        resultLimit: 20,
+        disclosureResultLimit: 20,
+        hasMustOperators: false,
+    }).disclosureResultLimit, 20);
+});

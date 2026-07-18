@@ -1,6 +1,7 @@
 import {
     SEARCH_MAX_DIAGNOSTIC_CANDIDATES,
     SEARCH_MAX_CANDIDATES,
+    SEARCH_DEFAULT_DISCLOSURE_LIMIT,
     SEARCH_MUST_RETRY_MULTIPLIER,
     SEARCH_MUST_RETRY_ROUNDS,
 } from './search-constants.js';
@@ -37,7 +38,8 @@ export function resolveSearchPolicy(input: {
     );
     const disclosureResultLimit = Math.max(
         1,
-        Math.floor(input.disclosureResultLimit ?? normalizedResultLimit),
+        Math.floor(input.disclosureResultLimit
+            ?? Math.min(normalizedResultLimit, SEARCH_DEFAULT_DISCLOSURE_LIMIT)),
     );
     const maxCandidateLimit = SEARCH_MAX_CANDIDATES;
     const candidateLimit = Math.max(

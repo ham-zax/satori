@@ -3596,7 +3596,9 @@ export class ToolHandlers {
             searchDiagnostics.retrievalMode = queryPlan.retrievalMode;
             const retrievalPolicy = resolveSearchPolicy({
                 resultLimit: input.limit,
-                disclosureResultLimit: input.disclosureLimit ?? input.limit,
+                ...(input.disclosureLimit !== undefined
+                    ? { disclosureResultLimit: input.disclosureLimit }
+                    : {}),
                 hasMustOperators: parsedOperators.must.length > 0,
                 ...(input.debugCandidateLimit !== undefined
                     ? { diagnosticCandidateLimit: input.debugCandidateLimit }

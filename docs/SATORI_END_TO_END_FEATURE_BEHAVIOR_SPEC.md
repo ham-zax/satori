@@ -226,10 +226,10 @@ Purpose: unified semantic retrieval with deterministic filtering/grouping/rankin
 
 Inputs/defaults:
 - Required: `path`, `query`.
-- Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=capability default`, `disclosureLimit=limit`, `debug=false`.
+- Defaults: `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`, `limit=20` for connected profiles (`10` for the slow/local profile), grouped `disclosureLimit=min(limit, 10)`, `debug=false`.
 - `disclosureLimit` is grouped-only and cannot exceed `limit`. It changes only
   the initial visible page; retrieval depth and reranker admission remain bound
-  to `limit`.
+  to `limit`. Set it equal to `limit` to expose all results immediately.
 
 Outputs:
 - Every search JSON envelope carries `formatVersion: 2`; successful envelopes include `status`, requested `path`, resolved `codebaseRoot`, `query`, `scope`, `groupBy`, `resultMode`, `limit`, `freshnessDecision`, `freshnessSummary`, `results`, optional structured `warnings`, one optional top-level `recommendedNextAction`, and `hints`.

@@ -97,6 +97,8 @@ test('search_codebase schema exposes scoped grouped/raw controls', () => {
     assert.equal(properties.resultMode.default, 'grouped');
     assert.equal(properties.groupBy.default, 'symbol');
     assert.equal(properties.rankingMode.default, 'auto_changed_first');
+    assert.equal(properties.limit.default, 20);
+    assert.match(String(properties.disclosureLimit.description), /at most 10 results initially/i);
     assert.deepEqual(properties.debugMode.enum, ['summary', 'ranking', 'freshness', 'full']);
     assert.equal(properties.debugCandidateLimit.maximum, 160);
     assert.equal(Object.prototype.hasOwnProperty.call(properties, 'useReranker'), false);

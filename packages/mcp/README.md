@@ -178,8 +178,8 @@ Unified semantic search with a runtime-first scope="runtime" default, grouped/ra
 | `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
 | `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
 | `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |
-| `limit` | integer | no | `50` | Maximum groups (grouped mode) or chunks (raw mode). |
-| `disclosureLimit` | integer | no |  | Optional initial grouped-result disclosure limit. Retrieval depth and reranker admission continue to use limit. Omit to preserve the existing response behavior. |
+| `limit` | integer | no | `20` | Maximum groups (grouped mode) or chunks (raw mode). |
+| `disclosureLimit` | integer | no |  | Optional initial grouped-result disclosure limit. Grouped searches show at most 10 results initially when omitted; set this equal to limit to expose the full result set immediately. Retrieval depth and reranker admission continue to use limit. |
 | `debug` | boolean | no |  | Backward-compatible debug toggle. true selects full diagnostics when debugMode is omitted. |
 | `debugMode` | enum("summary", "ranking", "freshness", "full") | no |  | Bounded diagnostic projection. May be used without debug; debug=true remains an alias for full. |
 | `debugCandidateLimit` | integer | no |  | Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings. |

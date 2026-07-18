@@ -40,10 +40,7 @@ export class CapabilityResolver {
         const hasReranker = this.config.networkPolicy.kind === 'remote-allowed'
             && Boolean(this.config.voyageKey);
 
-        const defaultSearchLimit =
-            performanceProfile === 'fast' ? 50 :
-                performanceProfile === 'standard' ? 25 :
-                    10;
+        const defaultSearchLimit = performanceProfile === 'slow' ? 10 : 20;
 
         const maxSearchLimit =
             performanceProfile === 'fast' ? 50 :

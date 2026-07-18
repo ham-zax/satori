@@ -1259,6 +1259,15 @@ test('search continuation preserves the full grouped order without new retrieval
                 score: 0.79,
                 indexedAt: '2026-01-01T00:30:00.000Z',
             },
+            ...Array.from({ length: 17 }, (_, index): SearchFixtureResult => ({
+                content: `export function additionalOwner${index + 1}() { return true; }`,
+                relativePath: `src/additional-${String(index + 1).padStart(2, '0')}.ts`,
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.78 - index / 100,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+            })),
         ];
 
         const prepareHandlers = (
@@ -1377,11 +1386,12 @@ test('search continuation preserves the full grouped order without new retrieval
             resultMode: 'grouped',
             groupBy: 'file',
             rankingMode: 'default',
-            limit: 3,
+            limit: 20,
+            disclosureLimit: 20,
         });
         const baselinePayload = JSON.parse(baselineResponse.content[0]?.text || '{}');
         const baselineFiles = baselinePayload.results.map((result: { target: { file: string } }) => result.target.file);
-        assert.equal(baselineFiles.length, 3, JSON.stringify(baselinePayload));
+        assert.equal(baselineFiles.length, 20, JSON.stringify(baselinePayload));
 
         const coordinator = new SearchContinuationCoordinator();
         const paged = prepareHandlers(true, coordinator);
@@ -1395,16 +1405,15 @@ test('search continuation preserves the full grouped order without new retrieval
             resultMode: 'grouped',
             groupBy: 'file',
             rankingMode: 'default',
-            limit: 3,
-            disclosureLimit: 1,
+            limit: 20,
         });
         const initialPayload = JSON.parse(initialResponse.content[0]?.text || '{}');
-        assert.equal(initialPayload.results.length, 1);
+        assert.equal(initialPayload.results.length, 10);
         assert.deepEqual(initialPayload.disclosure, {
             policyVersion: 'search_disclosure_v1',
-            availableGroupCount: 3,
-            returnedGroupCount: 1,
-            omittedGroupCount: 2,
+            availableGroupCount: 20,
+            returnedGroupCount: 10,
+            omittedGroupCount: 10,
             truncated: true,
             reasons: ['initial_budget'],
         });
@@ -1415,13 +1424,13 @@ test('search continuation preserves the full grouped order without new retrieval
         const pageTwoResponse = await startupHandlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
-            limit: 1,
+            limit: 5,
         });
         const pageTwoPayload = JSON.parse(pageTwoResponse.content[0]?.text || '{}');
         const mismatchedRetry = await paged.handlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
-            limit: 2,
+            limit: 6,
         });
         assert.equal(mismatchedRetry.isError, true);
         assert.equal(
@@ -1431,29 +1440,29 @@ test('search continuation preserves the full grouped order without new retrieval
         const pageTwoRetry = await startupHandlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
-            limit: 1,
+            limit: 5,
         });
         assert.equal(pageTwoRetry.content[0]?.text, pageTwoResponse.content[0]?.text);
         const pageThreeResponse = await paged.handlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: pageTwoPayload.continuation.nextOffset,
-            limit: 1,
+            limit: 5,
         });
         const pageThreePayload = JSON.parse(pageThreeResponse.content[0]?.text || '{}');
         const pageThreeRetry = await paged.handlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: pageTwoPayload.continuation.nextOffset,
-            limit: 1,
+            limit: 5,
         });
         assert.equal(pageThreeRetry.content[0]?.text, pageThreeResponse.content[0]?.text);
 
         assert.equal(paged.getRetrievalCalls(), retrievalCallsAfterInitialSearch);
-        assert.equal(pageTwoPayload.results.length, 1);
-        assert.equal(pageThreePayload.results.length, 1);
+        assert.equal(pageTwoPayload.results.length, 5);
+        assert.equal(pageThreePayload.results.length, 5);
         assert.equal(pageThreePayload.continuation, undefined);
         assert.ok(Buffer.byteLength(pageTwoResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
         assert.ok(Buffer.byteLength(pageThreeResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
-        assert.equal(pageTwoPayload.results[0]?.preview.includes('é🙂\\quoted'), true);
+        assert.equal(initialPayload.results[1]?.preview.includes('é🙂\\quoted'), true);
 
         const pagedFiles = [
             ...initialPayload.results,
@@ -1464,7 +1473,7 @@ test('search continuation preserves the full grouped order without new retrieval
 
         const consumedResponse = await paged.handlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
-            expectedOffset: 3,
+            expectedOffset: 20,
         });
         const consumedPayload = JSON.parse(consumedResponse.content[0]?.text || '{}');
         assert.equal(consumedResponse.isError, true);

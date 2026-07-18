@@ -27,6 +27,7 @@ test('capability resolver enables default rerank on fast profile with reranker c
     assert.equal(resolver.hasReranker(), true);
     assert.equal(resolver.getPerformanceProfile(), 'fast');
     assert.equal(resolver.getDefaultRerankEnabled(), true);
+    assert.equal(resolver.getDefaultSearchLimit(), 20);
 });
 
 test('capability resolver disables default rerank when reranker capability is missing', () => {
@@ -44,6 +45,7 @@ test('capability resolver disables default rerank on slow profile', () => {
 
     assert.equal(resolver.getPerformanceProfile(), 'slow');
     assert.equal(resolver.getDefaultRerankEnabled(), false);
+    assert.equal(resolver.getDefaultSearchLimit(), 10);
 });
 
 test('offline policy disables cloud reranking even when credentials remain configured', () => {

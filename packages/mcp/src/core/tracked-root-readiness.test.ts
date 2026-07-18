@@ -106,6 +106,8 @@ test("validated bound collection proof avoids a duplicate collection probe", asy
     host.validateCompletionProof = async () => ({
         outcome: "valid",
         collectionName: "bound-generation",
+        exactPayloadRecounts: 0,
+        proofSource: 'activation',
     });
     host.probeLocalSearchCollectionState = async () => {
         collectionProbes += 1;
@@ -116,6 +118,7 @@ test("validated bound collection proof avoids a duplicate collection probe", asy
 
     assert.equal(result.state, "ready");
     assert.equal(collectionProbes, 0);
+    assert.equal(result.state === 'ready' ? result.exactPayloadRecounts : undefined, 0);
 });
 
 test("tracked readiness binds one completion proof to one stable prepared-read observation", async () => {

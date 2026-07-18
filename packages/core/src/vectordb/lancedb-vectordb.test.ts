@@ -246,6 +246,62 @@ test('LanceDB adapter preserves exact retrieval, projections, controls, and idem
     assert.equal(await database.getControl(collectionName, marker.id), null);
 });
 
+test('LanceDB publication observation changes for payload marker and collection mutations', async (t) => {
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-observation-'));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const database = new LanceDbVectorDatabase({ databasePath });
+    t.after(() => database.close());
+    const collectionName = 'publication_observation';
+
+    await database.createHybridCollection(collectionName, 2, undefined, { deferIndexBuild: true });
+    await database.writeDocuments(collectionName, [
+        indexedDocument({ id: 'first', vector: [1, 0], lexicalText: 'first' }),
+    ]);
+    assert.equal(await database.getPublicationObservation(collectionName), null);
+
+    const marker = completionRecord('observation');
+    await database.insertControl(collectionName, marker);
+    const initial = await database.getPublicationObservation(collectionName);
+    const controlName = `__satori_control_${crypto.createHash('sha256').update(collectionName).digest('hex')}`;
+    const initialVersions = await Promise.all([
+        tableVersion(databasePath, collectionName),
+        tableVersion(databasePath, controlName),
+    ]);
+    assert.match(initial ?? '', /^[a-f0-9]{64}$/);
+    assert.equal(await database.getPublicationObservation(collectionName), initial);
+
+    await database.writeDocuments(collectionName, [
+        indexedDocument({ id: 'second', vector: [0, 1], lexicalText: 'second' }),
+    ]);
+    const afterPayload = await database.getPublicationObservation(collectionName);
+    assert.notEqual(afterPayload, initial);
+
+    await database.deleteControl(collectionName, marker.id);
+    const afterMarker = await database.getPublicationObservation(collectionName);
+    assert.notEqual(afterMarker, afterPayload);
+
+    await database.insertControl(collectionName, marker);
+    const afterMarkerAba = await database.getPublicationObservation(collectionName);
+    assert.notEqual(afterMarkerAba, afterMarker);
+    assert.notEqual(afterMarkerAba, afterPayload);
+
+    await database.dropCollection(collectionName);
+    assert.equal(await database.getPublicationObservation(collectionName), null);
+
+    await database.createHybridCollection(collectionName, 2, undefined, { deferIndexBuild: true });
+    await database.writeDocuments(collectionName, [
+        indexedDocument({ id: 'replacement', vector: [0.5, 0.5], lexicalText: 'replacement' }),
+    ]);
+    await database.insertControl(collectionName, marker);
+    const afterRecreate = await database.getPublicationObservation(collectionName);
+    assert.deepEqual(await Promise.all([
+        tableVersion(databasePath, collectionName),
+        tableVersion(databasePath, controlName),
+    ]), initialVersions);
+    assert.match(afterRecreate ?? '', /^[a-f0-9]{64}$/);
+    assert.notEqual(afterRecreate, initial);
+});
+
 test('LanceDB forks an independently retained searchable generation', async (t) => {
     const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-fork-'));
     t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));

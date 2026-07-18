@@ -1,5 +1,6 @@
 import {
     Context,
+    createGenerationProofCoordinator,
     Embedding,
     EmbeddingVector,
     type EmbeddingIdentity,
@@ -221,6 +222,7 @@ export class ProviderRuntime {
     private readonly mutationLeaseCoordinator: MutationLeaseCoordinator;
     private readonly now: () => number;
     private readonly searchContinuationCoordinator: SearchContinuationCoordinator;
+    private readonly generationProofCoordinator = createGenerationProofCoordinator();
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
     private activeContexts: ToolContext[] = [];
@@ -334,6 +336,7 @@ export class ProviderRuntime {
                 durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(
                     this.mutationLeaseCoordinator,
                 ),
+                generationProofCoordinator: this.generationProofCoordinator,
             });
             const syncManager = new SyncManager(context, this.snapshotManager, {
                 watchEnabled: this.watchSyncEnabled,

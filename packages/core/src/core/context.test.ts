@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { Context, IndexPolicyPublicationError } from './context';
+import { Context, createGenerationProofCoordinator, IndexPolicyPublicationError } from './context';
 import {
     EMBEDDING_NORMALIZATION_POLICY_VERSION,
     type CanonicalIndexPolicyDocument,
@@ -337,6 +337,18 @@ class InMemoryVectorDatabase implements VectorDatabase {
 
     async hasCollection(collectionName: string): Promise<boolean> {
         return this.collections.has(collectionName);
+    }
+
+    async getPublicationObservation(collectionName: string): Promise<string | null> {
+        const collection = this.collections.get(collectionName);
+        if (!collection) return null;
+        return crypto.createHash('sha256')
+            .update(JSON.stringify(
+                [...collection.entries()]
+                    .sort(([left], [right]) => left.localeCompare(right))
+                    .map(([id, document]) => [id, document]),
+            ), 'utf8')
+            .digest('hex');
     }
 
     async listCollections(): Promise<string[]> {
@@ -1587,14 +1599,19 @@ test('Context bounds deferred atomic publication generations without pruning act
 
         for (let version = 1; version <= 3; version += 1) {
             fs.writeFileSync(sourcePath, `export const runtime = ${version};\n`, 'utf8');
-            await context.reindexByChange(codebasePath);
+            const result = await context.reindexByChange(codebasePath);
+            assert.ok(result.generationReceipt);
             await (context as unknown as {
                 waitForPublicationRetention(canonicalRoot: string): Promise<void>;
             }).waitForPublicationRetention(fs.realpathSync(codebasePath));
         }
 
+        vectorDatabase.getControlCalls = 0;
+        vectorDatabase.queryCalls.length = 0;
         const current = await context.proveIndexedGeneration(codebasePath);
         assert.ok(current);
+        assert.equal(vectorDatabase.getControlCalls, 0);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
         assert.equal((await vectorDatabase.listCollections()).length, 2);
         assert.match(
             [...(vectorDatabase.collections.get(current.collectionName)?.values() ?? [])]
@@ -4958,7 +4975,7 @@ test('Context proven generation returns the sealed policy after ignore-file chan
     }
 });
 
-test('Context sealed generation proof avoids family scans and revalidates a prior receipt exactly', async () => {
+test('Context receipt-driven generation proof reuses activation authority and single-flights cold validation', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-proven-receipt-'));
     const stateRoot = path.join(tempRoot, 'state');
     const codebasePath = path.join(tempRoot, 'repo');
@@ -4966,11 +4983,19 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         fs.mkdirSync(codebasePath, { recursive: true });
         fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
         const vectorDatabase = new InMemoryVectorDatabase();
+        let mutationGeneration = 0;
+        let mutationActive = false;
+        const generationProofCoordinator = createGenerationProofCoordinator();
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
             symbolRegistryStateRoot: stateRoot,
             indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            mutationGenerationObserver: () => ({
+                generation: mutationGeneration,
+                mutationActive,
+            }),
+            generationProofCoordinator,
         });
         await context.indexCodebase(codebasePath);
 
@@ -4997,13 +5022,31 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         assert.deepEqual(second.observations, first.observations);
         assert.equal(context.getIndexAuthorityObservation(codebasePath), authorityObservation);
         assert.equal(vectorDatabase.listCollectionsCalls, 0);
-        assert.equal(vectorDatabase.getControlCalls, 2);
-        assert.equal(vectorDatabase.queryCalls.length, 1);
+        assert.equal(vectorDatabase.getControlCalls, 0);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
+        mutationGeneration += 1;
+        mutationActive = true;
+        const duringUnpublishedMutation = await context.proveIndexedGeneration(codebasePath, second);
+        assert.ok(duringUnpublishedMutation);
+        assert.equal(vectorDatabase.getControlCalls, 0);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
+        mutationActive = false;
+        const compatiblePeer = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            generationProofCoordinator,
+        });
+        const peerProof = await compatiblePeer.proveIndexedGeneration(codebasePath, second);
+        assert.ok(peerProof);
+        assert.equal(vectorDatabase.getControlCalls, 0);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
         vectorDatabase.queryCalls.length = 0;
         vectorDatabase.getControlCalls = 0;
         const warm = await context.revalidateProvenGeneration(codebasePath, second);
         assert.ok(warm);
-        assert.equal(vectorDatabase.getControlCalls, 1);
+        assert.equal(vectorDatabase.getControlCalls, 0);
         assert.equal(vectorDatabase.queryCalls.length, 0);
         assert.equal(await context.revalidateProvenGeneration(codebasePath, {
             ...second,
@@ -5021,9 +5064,125 @@ test('Context sealed generation proof avoids family scans and revalidates a prio
         if (validationEvidence.status === 'valid_v3') {
             assert.equal(validationEvidence.collectionName, first.collectionName);
             assert.equal(validationEvidence.navigationProof.status, 'valid');
+            assert.equal(validationEvidence.exactPayloadRecounts, 0);
+            assert.equal(validationEvidence.proofSource, 'reused');
         }
+
+        await context.clearIndexCompletionMarker(codebasePath);
+        assert.equal(await context.revalidateProvenGeneration(codebasePath, second), null);
+        await context.writeIndexCompletionMarker(
+            codebasePath,
+            second.marker,
+            second.collectionName,
+        );
+        vectorDatabase.getControlCalls = 0;
+        vectorDatabase.queryCalls.length = 0;
+        const restoredAfterAba = await context.proveIndexedGeneration(codebasePath, second);
+        assert.ok(restoredAfterAba);
+        assert.equal(vectorDatabase.queryCalls.length, 1);
+        assert.equal(vectorDatabase.getControlCalls, 2);
+
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        vectorDatabase.getControlCalls = 0;
+        vectorDatabase.queryCalls.length = 0;
+        vectorDatabase.queryHook = async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        };
+        const cold = await Promise.all([
+            restarted.proveIndexedGeneration(codebasePath),
+            restarted.proveIndexedGeneration(codebasePath),
+            restarted.proveIndexedGeneration(codebasePath),
+        ]);
+        assert.equal(cold.every(Boolean), true);
+        assert.equal(vectorDatabase.queryCalls.length, 1);
+        assert.equal(vectorDatabase.getControlCalls, 2);
+        vectorDatabase.queryHook = undefined;
+
         await vectorDatabase.dropCollection(second.collectionName);
         assert.equal(await context.revalidateProvenGeneration(codebasePath, second), null);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context accepts only coordinator-issued source receipts across compatible runtimes', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-source-receipt-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const generationProofCoordinator = createGenerationProofCoordinator();
+        const authority = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            generationProofCoordinator,
+        });
+        await authority.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(authority, codebasePath);
+        const checkpoint = await authority.inspectSourceFreshnessCheckpoint(codebasePath);
+        assert.equal(checkpoint.status, 'valid');
+        if (checkpoint.status !== 'valid') return;
+        assert.ok(checkpoint.generationReceipt);
+        const generationReceipt = checkpoint.generationReceipt;
+
+        const compatiblePeer = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            generationProofCoordinator,
+        });
+        vectorDatabase.queryCalls.length = 0;
+        const result = await compatiblePeer.reindexByChange(codebasePath, undefined, {
+            sourceGenerationReceipt: generationReceipt,
+        });
+        assert.deepEqual(result.changedFiles, []);
+        assert.equal(vectorDatabase.queryCalls.length, 0);
+
+        await assert.rejects(
+            compatiblePeer.reindexByChange(codebasePath, undefined, {
+                sourceGenerationReceipt: structuredClone(generationReceipt),
+            }),
+            /prepared source generation changed before publication/,
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context retains exact source-checkpoint validation without propagating receipts on unsupported backends', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-source-receipt-fallback-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'runtime.ts'), 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        Object.defineProperty(vectorDatabase, 'getPublicationObservation', { value: undefined });
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+        });
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+
+        const checkpoint = await context.inspectSourceFreshnessCheckpoint(codebasePath);
+
+        assert.equal(checkpoint.status, 'valid');
+        if (checkpoint.status === 'valid') {
+            assert.equal(checkpoint.generationReceipt, undefined);
+        }
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -6553,7 +6712,9 @@ test('Context proven generation rejects a navigation pointer changed after activ
         assert.ok(await context.resolveProvenGeneration(codebasePath));
 
         let rebound = false;
-        vectorDatabase.queryHook = () => {
+        const observePublication = vectorDatabase.getPublicationObservation.bind(vectorDatabase);
+        vectorDatabase.getPublicationObservation = async (collectionName) => {
+            const observation = await observePublication(collectionName);
             if (!rebound) {
                 rebound = true;
                 const currentPath = path.join(
@@ -6566,6 +6727,7 @@ test('Context proven generation rejects a navigation pointer changed after activ
                     generationId: `${String(current.generationId)}-rebound`,
                 }), 'utf8');
             }
+            return observation;
         };
 
         assert.equal(await context.resolveProvenGeneration(codebasePath), null);

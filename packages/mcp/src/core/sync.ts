@@ -949,6 +949,9 @@ export class SyncManager {
             // Incremental sync
             const syncOptions = {
                 maintainCompletionMarker: true,
+                ...(fencedCheckpoint?.status === 'valid' && fencedCheckpoint.generationReceipt ? {
+                    sourceGenerationReceipt: fencedCheckpoint.generationReceipt,
+                } : {}),
                 ...(lease ? {
                     publicationAuthority: {
                         ownerId: lease.ownerId,

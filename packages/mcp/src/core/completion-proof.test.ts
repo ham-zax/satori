@@ -256,11 +256,15 @@ test('validateCompletionProof accepts only a fully bound cloned generation recei
             collectionName: 'generation-b',
             marker: sealedMarker(),
             generationReceipt: supplied,
+            exactPayloadRecounts: 0,
+            proofSource: 'activation',
         }),
     });
     assert.equal(result.outcome, 'valid');
     assert.ok(result.generationReceipt);
     assert.equal(result.navigationStatus, 'valid');
+    assert.equal(result.exactPayloadRecounts, 0);
+    assert.equal(result.proofSource, 'activation');
     assert.notEqual(result.generationReceipt, supplied);
     (supplied.policy.customExtensions as string[]).push('.forged');
     assert.deepEqual(result.generationReceipt?.policy.customExtensions, []);

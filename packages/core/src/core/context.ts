@@ -507,6 +507,11 @@ export type MutationGenerationObserver = (
     canonicalRoot: string,
 ) => MutationGenerationObservation;
 
+declare const generationProofCoordinatorBrand: unique symbol;
+export type GenerationProofCoordinator = {
+    readonly [generationProofCoordinatorBrand]: true;
+};
+
 export interface ContextConfig {
     embedding?: Embedding;
     vectorDatabase?: VectorDatabase;
@@ -521,6 +526,7 @@ export interface ContextConfig {
     durableAuthorityRecoveryPublisher?: DurableAuthorityRecoveryPublisher;
     /** Required when hybrid reads can overlap externally coordinated mutations. */
     mutationGenerationObserver?: MutationGenerationObserver;
+    generationProofCoordinator?: GenerationProofCoordinator;
 }
 
 export interface CustomIndexPolicyUpdate {
@@ -598,6 +604,12 @@ export interface ProvenGenerationReceipt extends Omit<ProvenVectorGenerationRece
     };
 }
 
+export type ProvenSourceFreshnessCheckpointEvidence =
+    | (Extract<SourceFreshnessCheckpointEvidence, { status: 'valid' }> & {
+        readonly generationReceipt?: ProvenGenerationReceipt;
+    })
+    | Exclude<SourceFreshnessCheckpointEvidence, { status: 'valid' }>;
+
 export type NavigationGenerationProof =
     | { status: 'valid'; generation: CurrentNavigationGeneration; observationToken: string }
     | { status: 'not_bound' | 'missing' | 'incompatible' | 'corrupt' | 'requires_reindex' | 'unsupported' };
@@ -669,6 +681,8 @@ export type CompletionMarkerValidationEvidence =
         vectorReceipt: ProvenVectorGenerationReceipt;
         navigationProof: NavigationGenerationProof;
         generationReceipt?: ProvenGenerationReceipt;
+        exactPayloadRecounts: 0 | 1;
+        proofSource: 'activation' | 'exact' | 'joined' | 'reused';
     }
     | { status: 'invalid_v3' }
     | { status: 'requires_reindex' }
@@ -750,6 +764,7 @@ type ReindexByChangeOptions = {
     assertMutationCurrent?: () => void;
     publishMutation?: (publish: () => void) => void;
     publicationAuthority?: DurableAuthorityMutationOwner;
+    sourceGenerationReceipt?: ProvenGenerationReceipt;
 };
 
 type MutationGuardOptions = {
@@ -863,6 +878,7 @@ type ReindexByChangeResult = {
     indexedFiles?: number;
     totalChunks?: number;
     indexStatus?: 'completed' | 'limit_reached';
+    generationReceipt?: ProvenGenerationReceipt;
 };
 
 type ExpectedIndexedChunk = {
@@ -888,6 +904,43 @@ type PublicationReadGate = {
     resolveRetentionFinished?: () => void;
 };
 
+type CachedGenerationProof = {
+    identity: string;
+    vectorReceipt: ProvenVectorGenerationReceipt;
+    generationReceipt?: ProvenGenerationReceipt;
+    navigationArtifactsValidated: boolean;
+    source: 'activation' | 'exact';
+};
+
+type VectorGenerationProofResult = {
+    receipt: ProvenVectorGenerationReceipt | null;
+    exactPayloadRecounts: 0 | 1;
+    source: 'activation' | 'exact' | 'joined' | 'reused';
+};
+
+type GenerationProofCoordinatorState = {
+    readonly proofs: Map<string, CachedGenerationProof>;
+    readonly proofFlights: Map<string, Promise<CachedGenerationProof | null>>;
+    readonly navigationFlights: Map<string, Promise<NavigationGenerationProof>>;
+    readonly preparedReceipts: WeakMap<ProvenGenerationReceipt, string>;
+};
+
+const generationProofCoordinatorStates = new WeakMap<
+    GenerationProofCoordinator,
+    GenerationProofCoordinatorState
+>();
+
+export function createGenerationProofCoordinator(): GenerationProofCoordinator {
+    const coordinator = Object.freeze({}) as GenerationProofCoordinator;
+    generationProofCoordinatorStates.set(coordinator, {
+        proofs: new Map(),
+        proofFlights: new Map(),
+        navigationFlights: new Map(),
+        preparedReceipts: new WeakMap(),
+    });
+    return coordinator;
+}
+
 export class Context {
     private embedding: Embedding;
     private embeddingIdentity: Readonly<EmbeddingIdentity>;
@@ -912,6 +965,10 @@ export class Context {
     private reindexByChangeQueues = new Map<string, Promise<void>>();
     private publicationRetentionQueues = new Map<string, Promise<void>>();
     private publicationReadGates = new Map<string, PublicationReadGate>();
+    private readonly generationProofs: Map<string, CachedGenerationProof>;
+    private readonly generationProofFlights: Map<string, Promise<CachedGenerationProof | null>>;
+    private readonly navigationProofFlights: Map<string, Promise<NavigationGenerationProof>>;
+    private readonly preparedGenerationReceipts: WeakMap<ProvenGenerationReceipt, string>;
     private writeCollectionOverrides = new Map<string, string>();
     private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
@@ -919,6 +976,15 @@ export class Context {
     private vectorStoreProvider: VectorStoreProviderIdentity;
 
     constructor(config: ContextConfig = {}) {
+        const proofCoordinator = config.generationProofCoordinator ?? createGenerationProofCoordinator();
+        const proofCoordinatorState = generationProofCoordinatorStates.get(proofCoordinator);
+        if (!proofCoordinatorState) {
+            throw new Error('Generation proof coordinator must be created by createGenerationProofCoordinator().');
+        }
+        this.generationProofs = proofCoordinatorState.proofs;
+        this.generationProofFlights = proofCoordinatorState.proofFlights;
+        this.navigationProofFlights = proofCoordinatorState.navigationFlights;
+        this.preparedGenerationReceipts = proofCoordinatorState.preparedReceipts;
         // Initialize services
         if (config.embedding) {
             this.embedding = config.embedding;
@@ -1165,7 +1231,7 @@ export class Context {
         codebasePath: string,
         checkpointIdentity?: string,
         requestBoundReceipt?: ProvenVectorGenerationReceipt,
-    ): Promise<SourceFreshnessCheckpointEvidence> {
+    ): Promise<ProvenSourceFreshnessCheckpointEvidence> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const receipt = requestBoundReceipt
             && this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, requestBoundReceipt)
@@ -1176,6 +1242,18 @@ export class Context {
             return {
                 status: 'corrupt',
                 message: 'Source freshness checkpoint cannot be inspected because no matching authoritative completed generation is available.',
+            };
+        }
+        const generationReceipt = await this.resolveGenerationReceipt(
+            canonicalRoot,
+            receipt,
+            undefined,
+            true,
+        );
+        if (!generationReceipt) {
+            return {
+                status: 'corrupt',
+                message: 'Source freshness checkpoint cannot be inspected because its navigation generation is not authoritative.',
             };
         }
         const inspector = new FileSynchronizer(
@@ -1191,7 +1269,17 @@ export class Context {
                 },
             },
         );
-        return inspector.inspectOwnedSnapshot();
+        const checkpoint = await inspector.inspectOwnedSnapshot();
+        if (checkpoint.status !== 'valid') return checkpoint;
+        const preparedReceipt = this.cloneProvenGenerationReceipt(generationReceipt);
+        const preparedIdentity = await this.resolveGenerationProofIdentity(canonicalRoot);
+        if (!preparedIdentity) {
+            // Backends without a cheap immutable publication observation retain
+            // the exact validation above, but cannot safely propagate its proof.
+            return checkpoint;
+        }
+        this.preparedGenerationReceipts.set(preparedReceipt, preparedIdentity);
+        return { ...checkpoint, generationReceipt: preparedReceipt };
     }
 
     public isPreparedVectorReceiptBoundToCurrentAuthority(
@@ -1216,6 +1304,24 @@ export class Context {
                 === this.resolveCustomIndexPolicyFileToken(canonicalRoot)
             && this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) === true
             && this.markerMatchesSealedAuthority(receipt.marker, policy, binding);
+    }
+
+    private async acceptPreparedSourceGenerationReceipt(
+        canonicalRoot: string,
+        receipt: ProvenGenerationReceipt,
+    ): Promise<ProvenGenerationReceipt | null> {
+        const preparedIdentity = this.preparedGenerationReceipts.get(receipt);
+        if (!preparedIdentity) return null;
+        this.refreshRuntimePolicyAuthority(canonicalRoot);
+        if (!this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, receipt)) return null;
+        if (
+            receipt.marker.navigation.status !== 'sealed'
+            || receipt.navigation.generationId !== receipt.marker.navigation.generationId
+            || receipt.navigation.navigationSealHash !== receipt.marker.navigation.sealHash
+        ) return null;
+        const currentIdentity = await this.resolveGenerationProofIdentity(canonicalRoot);
+        if (currentIdentity !== preparedIdentity) return null;
+        return this.cloneProvenGenerationReceipt(receipt);
     }
 
     getRegisteredSourceFreshnessCheckpointObservation(codebasePath: string): string | null {
@@ -1507,14 +1613,14 @@ export class Context {
         navigationCandidate?: StagedNavigationSidecarGeneration,
         indexPolicyHash: string = this.buildIndexPolicyHash(codebasePath),
         runId: string = crypto.randomUUID(),
-    ): Promise<void> {
+    ): Promise<IndexCompletionMarkerDocument> {
         const currentNavigation = indexStatus === 'completed' && !navigationCandidate
             ? await resolveCurrentNavigationGeneration(
                 this.symbolRegistryStateRoot,
                 this.canonicalizeCodebasePath(codebasePath),
             ).catch(() => null)
             : null;
-        await this.writeIndexCompletionMarker(codebasePath, {
+        const marker: IndexCompletionMarkerDocument = {
             kind: 'satori_index_completion_v3',
             codebasePath: this.canonicalizeCodebasePath(codebasePath),
             fingerprint: this.buildIndexCompletionFingerprint(),
@@ -1537,7 +1643,9 @@ export class Context {
                 relationshipManifestHash: currentNavigation.relationshipManifestHash,
                 sealHash: currentNavigation.navigationSealHash,
             } : { status: 'not_bound' },
-        }, collectionName, assertMutationCurrent);
+        };
+        await this.writeIndexCompletionMarker(codebasePath, marker, collectionName, assertMutationCurrent);
+        return this.cloneIndexCompletionMarker(marker);
     }
 
     private async resolveActiveIndexedCollection(
@@ -1766,7 +1874,7 @@ export class Context {
         };
     }
 
-    private async proveGenerationAuthority(
+    private async proveGenerationAuthorityExactly(
         codebasePath: string,
         priorReceipt?: ProvenVectorGenerationReceipt,
         requireNavigation = true,
@@ -2000,18 +2108,398 @@ export class Context {
             : vectorReceipt;
     }
 
+    private cloneProvenVectorGenerationReceipt(
+        receipt: ProvenVectorGenerationReceipt,
+    ): ProvenVectorGenerationReceipt {
+        return {
+            collectionName: receipt.collectionName,
+            marker: this.cloneIndexCompletionMarker(receipt.marker),
+            policy: {
+                ...receipt.policy,
+                customExtensions: [...receipt.policy.customExtensions],
+                customIgnorePatterns: [...receipt.policy.customIgnorePatterns],
+                fileBasedIgnorePatterns: [...receipt.policy.fileBasedIgnorePatterns],
+                supportedExtensions: [...receipt.policy.supportedExtensions],
+                effectiveIgnorePatterns: [...receipt.policy.effectiveIgnorePatterns],
+            },
+            policyDocumentDigest: receipt.policyDocumentDigest,
+            exactPayloadCount: receipt.exactPayloadCount,
+            observations: { ...receipt.observations },
+        };
+    }
+
+    private cloneProvenGenerationReceipt(
+        receipt: ProvenGenerationReceipt,
+    ): ProvenGenerationReceipt {
+        return {
+            ...this.cloneProvenVectorGenerationReceipt(receipt),
+            navigation: { ...receipt.navigation },
+            observations: { ...receipt.observations },
+        };
+    }
+
+    private async resolveGenerationProofIdentity(
+        canonicalRoot: string,
+    ): Promise<string | null> {
+        const observations = this.getIndexAuthorityObservations(canonicalRoot);
+        if (!observations) return null;
+        const collectionName = this.publishedPolicyBindingsByCodebase.get(canonicalRoot)?.collectionName;
+        const observePublication = this.vectorDatabase.getPublicationObservation;
+        if (!collectionName || typeof observePublication !== 'function') return null;
+        const publicationObservation = await observePublication.call(this.vectorDatabase, collectionName);
+        if (!publicationObservation) return null;
+        return JSON.stringify({
+            vector: observations.vector,
+            navigation: observations.navigation,
+            publicationObservation,
+        });
+    }
+
+    private async recordActivatedGenerationProof(input: {
+        canonicalRoot: string;
+        marker: IndexCompletionMarkerDocument;
+        policy: ResolvedIndexPolicy;
+        navigation: CurrentNavigationGeneration;
+        exactPayloadCount: number;
+    }): Promise<ProvenGenerationReceipt | null> {
+        const policyDocumentDigest = this.policyDocumentDigestsByCodebase.get(input.canonicalRoot);
+        const navigationToken = this.resolveNavigationObservationToken(
+            input.canonicalRoot,
+            input.navigation.generationId,
+            false,
+        );
+        const identity = await this.resolveGenerationProofIdentity(input.canonicalRoot);
+        if (!policyDocumentDigest || !navigationToken || !identity) return null;
+        const receipt: ProvenGenerationReceipt = {
+            collectionName: this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot)?.collectionName ?? '',
+            marker: this.cloneIndexCompletionMarker(input.marker),
+            policy: {
+                ...input.policy,
+                customExtensions: [...input.policy.customExtensions],
+                customIgnorePatterns: [...input.policy.customIgnorePatterns],
+                fileBasedIgnorePatterns: [...input.policy.fileBasedIgnorePatterns],
+                supportedExtensions: [...input.policy.supportedExtensions],
+                effectiveIgnorePatterns: [...input.policy.effectiveIgnorePatterns],
+            },
+            policyDocumentDigest,
+            exactPayloadCount: input.exactPayloadCount,
+            navigation: { ...input.navigation },
+            observations: {
+                profileFileToken: this.resolveRepoConfigObservationToken(input.canonicalRoot),
+                policyFileToken: this.resolveCustomIndexPolicyFileToken(input.canonicalRoot)!,
+                navigationToken,
+            },
+        };
+        if (
+            receipt.collectionName.length === 0
+            || !receipt.observations.policyFileToken
+            || !this.isPreparedVectorReceiptBoundToCurrentAuthority(input.canonicalRoot, receipt)
+        ) return null;
+        this.generationProofs.set(input.canonicalRoot, {
+            identity,
+            vectorReceipt: this.cloneProvenVectorGenerationReceipt(receipt),
+            generationReceipt: this.cloneProvenGenerationReceipt(receipt),
+            navigationArtifactsValidated: true,
+            source: 'activation',
+        });
+        return this.cloneProvenGenerationReceipt(receipt);
+    }
+
+    private invalidateGenerationProofForCollection(collectionName: string): void {
+        for (const [canonicalRoot, proof] of this.generationProofs) {
+            if (proof.vectorReceipt.collectionName === collectionName) {
+                this.generationProofs.delete(canonicalRoot);
+            }
+        }
+    }
+
+    private cachedGenerationProofMatches(
+        canonicalRoot: string,
+        cached: CachedGenerationProof,
+        identity: string,
+        priorReceipt?: ProvenVectorGenerationReceipt,
+    ): boolean {
+        return cached.identity === identity
+            && this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, cached.vectorReceipt)
+            && (!priorReceipt || (
+                priorReceipt.collectionName === cached.vectorReceipt.collectionName
+                && priorReceipt.policyDocumentDigest === cached.vectorReceipt.policyDocumentDigest
+                && priorReceipt.exactPayloadCount === cached.vectorReceipt.exactPayloadCount
+                && priorReceipt.policy.canonicalRoot === canonicalRoot
+                && priorReceipt.policy.policyHash === cached.vectorReceipt.policy.policyHash
+                && priorReceipt.observations.profileFileToken
+                    === cached.vectorReceipt.observations.profileFileToken
+                && priorReceipt.observations.policyFileToken
+                    === cached.vectorReceipt.observations.policyFileToken
+                && this.indexCompletionMarkersEqual(priorReceipt.marker, cached.vectorReceipt.marker)
+            ));
+    }
+
+    private async revalidateReceiptWithoutPublicationObservation(
+        canonicalRoot: string,
+        receipt: ProvenVectorGenerationReceipt,
+    ): Promise<ProvenVectorGenerationReceipt | null> {
+        const initialProfileToken = this.resolveRepoConfigObservationToken(canonicalRoot);
+        const initialPolicyToken = this.resolveCustomIndexPolicyFileToken(canonicalRoot);
+        if (
+            receipt.policy.canonicalRoot !== canonicalRoot
+            || receipt.observations.profileFileToken !== initialProfileToken
+            || receipt.observations.policyFileToken !== initialPolicyToken
+        ) return null;
+
+        this.refreshRuntimePolicyAuthority(canonicalRoot);
+        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const binding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        if (
+            !policy
+            || !binding
+            || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true
+            || binding.collectionName !== receipt.collectionName
+            || !this.markerMatchesSealedAuthority(receipt.marker, policy, binding)
+            || this.policyDocumentDigestsByCodebase.get(canonicalRoot) !== receipt.policyDocumentDigest
+            || !(await this.vectorDatabase.hasCollection(receipt.collectionName))
+        ) return null;
+
+        const marker = await this.resolveCompletionMarkerForCollection(canonicalRoot, receipt.collectionName);
+        if (!marker || !this.indexCompletionMarkersEqual(marker, receipt.marker)) return null;
+        if (
+            this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
+            || this.resolveCustomIndexPolicyFileToken(canonicalRoot) !== initialPolicyToken
+        ) return null;
+        return {
+            collectionName: binding.collectionName,
+            marker: this.cloneIndexCompletionMarker(marker),
+            policy: {
+                ...policy,
+                customExtensions: [...policy.customExtensions],
+                customIgnorePatterns: [...policy.customIgnorePatterns],
+                fileBasedIgnorePatterns: [...policy.fileBasedIgnorePatterns],
+                supportedExtensions: [...policy.supportedExtensions],
+                effectiveIgnorePatterns: [...policy.effectiveIgnorePatterns],
+            },
+            policyDocumentDigest: receipt.policyDocumentDigest,
+            exactPayloadCount: marker.totalChunks,
+            observations: {
+                profileFileToken: initialProfileToken,
+                policyFileToken: initialPolicyToken,
+            },
+        };
+    }
+
+    private async proveVectorGenerationWithEvidence(
+        codebasePath: string,
+        priorReceipt?: ProvenVectorGenerationReceipt,
+        throwOnUnprovablePayload = false,
+    ): Promise<VectorGenerationProofResult> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.refreshRuntimePolicyAuthority(canonicalRoot);
+        if (priorReceipt && typeof this.vectorDatabase.getPublicationObservation !== 'function') {
+            const revalidated = await this.revalidateReceiptWithoutPublicationObservation(
+                canonicalRoot,
+                priorReceipt,
+            );
+            return {
+                receipt: revalidated,
+                exactPayloadRecounts: 0,
+                source: 'reused',
+            };
+        }
+        const identity = await this.resolveGenerationProofIdentity(canonicalRoot);
+        if (identity) {
+            const cached = this.generationProofs.get(canonicalRoot);
+            if (
+                cached
+                && this.cachedGenerationProofMatches(canonicalRoot, cached, identity, priorReceipt)
+            ) {
+                if (await this.resolveGenerationProofIdentity(canonicalRoot) !== identity) {
+                    return { receipt: null, exactPayloadRecounts: 0, source: 'reused' };
+                }
+                return {
+                    receipt: this.cloneProvenVectorGenerationReceipt(cached.vectorReceipt),
+                    exactPayloadRecounts: 0,
+                    source: 'reused',
+                };
+            }
+
+            const flightKey = JSON.stringify([canonicalRoot, identity]);
+            const joinedFlight = this.generationProofFlights.get(flightKey);
+            if (joinedFlight) {
+                const joined = await joinedFlight;
+                if (
+                    !joined
+                    || !this.cachedGenerationProofMatches(canonicalRoot, joined, identity, priorReceipt)
+                    || await this.resolveGenerationProofIdentity(canonicalRoot) !== identity
+                ) {
+                    return { receipt: null, exactPayloadRecounts: 0, source: 'joined' };
+                }
+                return {
+                    receipt: this.cloneProvenVectorGenerationReceipt(joined.vectorReceipt),
+                    exactPayloadRecounts: 0,
+                    source: 'joined',
+                };
+            }
+
+            const flight = (async (): Promise<CachedGenerationProof | null> => {
+                const exact = await this.proveGenerationAuthorityExactly(
+                    canonicalRoot,
+                    priorReceipt,
+                    false,
+                    throwOnUnprovablePayload,
+                ) as ProvenVectorGenerationReceipt | null;
+                if (!exact) return null;
+                const identityAfter = await this.resolveGenerationProofIdentity(canonicalRoot);
+                if (identityAfter !== identity) return null;
+                const proven: CachedGenerationProof = {
+                    identity,
+                    vectorReceipt: this.cloneProvenVectorGenerationReceipt(exact),
+                    navigationArtifactsValidated: false,
+                    source: 'exact',
+                };
+                this.generationProofs.set(canonicalRoot, proven);
+                return proven;
+            })();
+            this.generationProofFlights.set(flightKey, flight);
+            try {
+                const proven = await flight;
+                return {
+                    receipt: proven ? this.cloneProvenVectorGenerationReceipt(proven.vectorReceipt) : null,
+                    exactPayloadRecounts: proven ? 1 : 0,
+                    source: 'exact',
+                };
+            } finally {
+                if (this.generationProofFlights.get(flightKey) === flight) {
+                    this.generationProofFlights.delete(flightKey);
+                }
+            }
+        }
+
+        const exact = await this.proveGenerationAuthorityExactly(
+            canonicalRoot,
+            priorReceipt,
+            false,
+            throwOnUnprovablePayload,
+        ) as ProvenVectorGenerationReceipt | null;
+        return {
+            receipt: exact,
+            exactPayloadRecounts: exact ? 1 : 0,
+            source: 'exact',
+        };
+    }
+
+    private async proveNavigationForVectorReceipt(
+        codebasePath: string,
+        receipt: ProvenVectorGenerationReceipt,
+        validateArtifacts: boolean,
+    ): Promise<NavigationGenerationProof> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const identity = await this.resolveGenerationProofIdentity(canonicalRoot);
+        const cached = identity ? this.generationProofs.get(canonicalRoot) : undefined;
+        if (
+            cached
+            && this.cachedGenerationProofMatches(canonicalRoot, cached, identity!, receipt)
+            && cached.generationReceipt
+            && (!validateArtifacts || cached.navigationArtifactsValidated)
+        ) {
+            if (await this.resolveGenerationProofIdentity(canonicalRoot) !== identity) {
+                return { status: 'incompatible' };
+            }
+            return {
+                status: 'valid',
+                generation: { ...cached.generationReceipt.navigation },
+                observationToken: cached.generationReceipt.observations.navigationToken,
+            };
+        }
+
+        const flightKey = identity
+            ? JSON.stringify([canonicalRoot, identity, validateArtifacts])
+            : null;
+        const joinedFlight = flightKey ? this.navigationProofFlights.get(flightKey) : undefined;
+        if (joinedFlight) {
+            const joinedProof = await joinedFlight;
+            return await this.resolveGenerationProofIdentity(canonicalRoot) === identity
+                ? joinedProof
+                : { status: 'incompatible' };
+        }
+        const flight = this.proveNavigationGeneration(canonicalRoot, receipt.marker, validateArtifacts);
+        if (flightKey) this.navigationProofFlights.set(flightKey, flight);
+        let proof: NavigationGenerationProof;
+        try {
+            proof = await flight;
+        } finally {
+            if (flightKey && this.navigationProofFlights.get(flightKey) === flight) {
+                this.navigationProofFlights.delete(flightKey);
+            }
+        }
+        const identityAfter = await this.resolveGenerationProofIdentity(canonicalRoot);
+        if (identityAfter !== identity) return { status: 'incompatible' };
+        if (proof.status === 'valid' && identity) {
+            const generationReceipt: ProvenGenerationReceipt = {
+                ...this.cloneProvenVectorGenerationReceipt(receipt),
+                navigation: { ...proof.generation },
+                observations: {
+                    ...receipt.observations,
+                    navigationToken: proof.observationToken,
+                },
+            };
+            this.generationProofs.set(canonicalRoot, {
+                identity,
+                vectorReceipt: this.cloneProvenVectorGenerationReceipt(receipt),
+                generationReceipt,
+                navigationArtifactsValidated: validateArtifacts,
+                source: cached?.source ?? 'exact',
+            });
+        }
+        return proof;
+    }
+
+    private async resolveGenerationReceipt(
+        codebasePath: string,
+        vectorReceipt: ProvenVectorGenerationReceipt,
+        priorReceipt?: ProvenGenerationReceipt,
+        validateArtifacts = false,
+    ): Promise<ProvenGenerationReceipt | null> {
+        const navigation = await this.proveNavigationForVectorReceipt(
+            codebasePath,
+            vectorReceipt,
+            validateArtifacts,
+        );
+        if (navigation.status !== 'valid') return null;
+        if (
+            priorReceipt
+            && (
+                priorReceipt.observations.navigationToken !== navigation.observationToken
+                || priorReceipt.navigation.navigationSealHash !== navigation.generation.navigationSealHash
+            )
+        ) return null;
+        return {
+            ...this.cloneProvenVectorGenerationReceipt(vectorReceipt),
+            navigation: { ...navigation.generation },
+            observations: {
+                ...vectorReceipt.observations,
+                navigationToken: navigation.observationToken,
+            },
+        };
+    }
+
     public async proveVectorGeneration(
         codebasePath: string,
         priorReceipt?: ProvenVectorGenerationReceipt,
     ): Promise<ProvenVectorGenerationReceipt | null> {
-        return this.proveGenerationAuthority(codebasePath, priorReceipt, false) as Promise<ProvenVectorGenerationReceipt | null>;
+        return (await this.proveVectorGenerationWithEvidence(codebasePath, priorReceipt)).receipt;
     }
 
     public async proveIndexedGeneration(
         codebasePath: string,
         priorReceipt?: ProvenGenerationReceipt,
     ): Promise<ProvenGenerationReceipt | null> {
-        return this.proveGenerationAuthority(codebasePath, priorReceipt, true) as Promise<ProvenGenerationReceipt | null>;
+        const vectorProof = await this.proveVectorGenerationWithEvidence(codebasePath, priorReceipt);
+        if (!vectorProof.receipt) return null;
+        return this.resolveGenerationReceipt(
+            codebasePath,
+            vectorProof.receipt,
+            priorReceipt,
+            true,
+        );
     }
 
     private async proveNavigationGeneration(
@@ -2101,57 +2589,12 @@ export class Context {
         codebasePath: string,
         receipt: ProvenVectorGenerationReceipt,
     ): Promise<ProvenVectorGenerationReceipt | null> {
-        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         if (
             receipt.exactPayloadCount !== receipt.marker.totalChunks
             || receipt.policy.policyHash !== receipt.marker.indexPolicyHash
             || receipt.collectionName.length === 0
         ) return null;
-        const initialProfileToken = this.resolveRepoConfigObservationToken(canonicalRoot);
-        const initialPolicyToken = this.resolveCustomIndexPolicyFileToken(canonicalRoot);
-        if (
-            receipt.policy.canonicalRoot !== canonicalRoot
-            || receipt.observations.profileFileToken !== initialProfileToken
-            || receipt.observations.policyFileToken !== initialPolicyToken
-        ) return null;
-
-        this.refreshRuntimePolicyAuthority(canonicalRoot);
-        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
-        const binding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
-        if (
-            !policy
-            || !binding
-            || this.policyRuntimeCompatibilityByCodebase.get(canonicalRoot) !== true
-            || binding.collectionName !== receipt.collectionName
-            || !this.markerMatchesSealedAuthority(receipt.marker, policy, binding)
-            || this.policyDocumentDigestsByCodebase.get(canonicalRoot) !== receipt.policyDocumentDigest
-            || !(await this.vectorDatabase.hasCollection(receipt.collectionName))
-        ) return null;
-
-        const marker = await this.resolveCompletionMarkerForCollection(canonicalRoot, receipt.collectionName);
-        if (!marker || !this.indexCompletionMarkersEqual(marker, receipt.marker)) return null;
-        if (
-            this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
-            || this.resolveCustomIndexPolicyFileToken(canonicalRoot) !== initialPolicyToken
-        ) return null;
-        return {
-            collectionName: binding.collectionName,
-            marker: this.cloneIndexCompletionMarker(marker),
-            policy: {
-                ...policy,
-                customExtensions: [...policy.customExtensions],
-                customIgnorePatterns: [...policy.customIgnorePatterns],
-                fileBasedIgnorePatterns: [...policy.fileBasedIgnorePatterns],
-                supportedExtensions: [...policy.supportedExtensions],
-                effectiveIgnorePatterns: [...policy.effectiveIgnorePatterns],
-            },
-            policyDocumentDigest: receipt.policyDocumentDigest,
-            exactPayloadCount: marker.totalChunks,
-            observations: {
-                profileFileToken: initialProfileToken,
-                policyFileToken: initialPolicyToken,
-            },
-        };
+        return (await this.proveVectorGenerationWithEvidence(codebasePath, receipt)).receipt;
     }
 
     public async revalidateProvenGeneration(
@@ -2160,24 +2603,7 @@ export class Context {
     ): Promise<ProvenGenerationReceipt | null> {
         const vectorReceipt = await this.revalidateProvenVectorGeneration(codebasePath, receipt);
         if (!vectorReceipt) return null;
-        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const initialProfileToken = vectorReceipt.observations.profileFileToken;
-        const initialPolicyToken = vectorReceipt.observations.policyFileToken;
-        const navigationProof = await this.proveNavigationGeneration(canonicalRoot, vectorReceipt.marker);
-        if (
-            navigationProof.status !== 'valid'
-            || navigationProof.observationToken !== receipt.observations.navigationToken
-            || this.resolveRepoConfigObservationToken(canonicalRoot) !== initialProfileToken
-            || this.resolveCustomIndexPolicyFileToken(canonicalRoot) !== initialPolicyToken
-        ) return null;
-        return {
-            ...vectorReceipt,
-            navigation: navigationProof.generation,
-            observations: {
-                ...vectorReceipt.observations,
-                navigationToken: navigationProof.observationToken,
-            },
-        };
+        return this.resolveGenerationReceipt(codebasePath, vectorReceipt, receipt);
     }
 
     public async revalidatePreparedGeneration(
@@ -2190,9 +2616,9 @@ export class Context {
     ): Promise<PreparedGenerationRevalidation | null> {
         const vectorReceipt = await this.revalidateProvenVectorGeneration(codebasePath, receipt);
         if (!vectorReceipt) return null;
-        const navigationProof = await this.proveNavigationGeneration(
-            this.canonicalizeCodebasePath(codebasePath),
-            vectorReceipt.marker,
+        const navigationProof = await this.proveNavigationForVectorReceipt(
+            codebasePath,
+            vectorReceipt,
             options?.navigationObservationChanged === true,
         );
         if (
@@ -2951,7 +3377,7 @@ export class Context {
                 input.options.assertMutationCurrent,
             );
             checkpointStaged = true;
-            await this.writeCompletedIndexMarker(
+            const publishedMarker = await this.writeCompletedIndexMarker(
                 input.codebasePath,
                 input.preparedChanges.fileHashes.size,
                 totalChunks,
@@ -3002,6 +3428,20 @@ export class Context {
             );
             activated = true;
 
+            const activatedGenerationReceipt = await this.recordActivatedGenerationProof({
+                canonicalRoot: input.canonicalRoot,
+                marker: publishedMarker,
+                policy: input.sealedPolicy,
+                exactPayloadCount: totalChunks,
+                navigation: {
+                    generationId: navigationCandidate.generationId,
+                    generationRoot: navigationCandidate.rootPath,
+                    symbolRegistryManifestHash: navigationCandidate.manifestHash,
+                    relationshipManifestHash: navigationCandidate.relationshipManifestHash,
+                    navigationSealHash: navigationCandidate.navigationSealHash,
+                },
+            });
+
             const nextSynchronizer = new FileSynchronizer(
                 input.codebasePath,
                 this.getActiveIgnorePatterns(input.codebasePath),
@@ -3029,6 +3469,9 @@ export class Context {
                 indexedFiles: input.preparedChanges.fileHashes.size,
                 totalChunks,
                 indexStatus: 'completed',
+                ...(activatedGenerationReceipt
+                    ? { generationReceipt: activatedGenerationReceipt }
+                    : {}),
             };
         } catch (error) {
             if (
@@ -3081,6 +3524,12 @@ export class Context {
             throw new Error('externallyManagedPublication requires an explicit targetCollectionName.');
         }
         const maintainCompletionMarker = !externallyManagedPublication;
+        const sourceGenerationReceipt = options.sourceGenerationReceipt
+            ? await this.acceptPreparedSourceGenerationReceipt(canonicalRoot, options.sourceGenerationReceipt)
+            : null;
+        if (options.sourceGenerationReceipt && !sourceGenerationReceipt) {
+            throw new Error(`Cannot incrementally synchronize '${codebasePath}': prepared source generation changed before publication.`);
+        }
         let collectionName = typeof options.targetCollectionName === 'string' && options.targetCollectionName.trim().length > 0
             ? options.targetCollectionName.trim()
             : null;
@@ -3089,7 +3538,8 @@ export class Context {
                 throw new Error(`Cannot incremental sync '${codebasePath}': target collection '${collectionName}' does not exist.`);
             }
         } else {
-            const activeCollectionName = await this.getActiveIndexedCollectionName(codebasePath);
+            const activeCollectionName = sourceGenerationReceipt?.collectionName
+                ?? await this.getActiveIndexedCollectionName(codebasePath);
             collectionName = activeCollectionName;
             if (!collectionName) {
                 const proofCollection = await this.resolveCompletionProofCollection(codebasePath);
@@ -3151,7 +3601,9 @@ export class Context {
         }
 
         const previousMarker = maintainCompletionMarker
-            ? await this.resolveCompletionMarkerForCollection(codebasePath, collectionName)
+            ? sourceGenerationReceipt?.collectionName === collectionName
+                ? this.cloneIndexCompletionMarker(sourceGenerationReceipt.marker)
+                : await this.resolveCompletionMarkerForCollection(codebasePath, collectionName)
             : null;
         const checkpointAuthority = previousMarker ? {
             collectionName,
@@ -4087,6 +4539,7 @@ export class Context {
         }
         assertMutationCurrent?.();
         await this.vectorDatabase.deleteControl(collectionName, INDEX_COMPLETION_MARKER_DOC_ID);
+        this.invalidateGenerationProofForCollection(collectionName);
     }
 
     async clearIndexCompletionMarker(codebasePath: string, assertMutationCurrent?: () => void): Promise<void> {
@@ -4126,6 +4579,7 @@ export class Context {
 
         assertMutationCurrent?.();
         await this.vectorDatabase.insertControl(collectionName, markerRecord);
+        this.invalidateGenerationProofForCollection(collectionName);
     }
 
     async getIndexCompletionMarker(codebasePath: string): Promise<IndexCompletionMarkerDocument | null> {
@@ -4158,14 +4612,13 @@ export class Context {
         ) {
             return { status: 'runtime_policy_incompatible' };
         }
-        let vectorGeneration: ProvenVectorGenerationReceipt | null;
+        let vectorProof: VectorGenerationProofResult;
         try {
-            vectorGeneration = await this.proveGenerationAuthority(
+            vectorProof = await this.proveVectorGenerationWithEvidence(
                 codebasePath,
                 undefined,
-                false,
                 true,
-            ) as ProvenVectorGenerationReceipt | null;
+            );
         } catch (error) {
             if (error instanceof IndexFormatRequiresReindexError) {
                 return { status: 'requires_reindex' };
@@ -4178,8 +4631,13 @@ export class Context {
             }
             throw error;
         }
+        const vectorGeneration = vectorProof.receipt;
         if (vectorGeneration) {
-            const navigationProof = await this.proveNavigationGeneration(canonicalRoot, vectorGeneration.marker, true);
+            const navigationProof = await this.proveNavigationForVectorReceipt(
+                canonicalRoot,
+                vectorGeneration,
+                true,
+            );
             if (navigationProof.status === 'requires_reindex') {
                 return { status: 'requires_reindex' };
             }
@@ -4203,6 +4661,8 @@ export class Context {
                 vectorReceipt: vectorGeneration,
                 navigationProof,
                 ...(generationReceipt ? { generationReceipt } : {}),
+                exactPayloadRecounts: vectorProof.exactPayloadRecounts,
+                proofSource: vectorProof.source,
             };
         }
         const relatedCollections = await this.listRelatedCollectionNames(codebasePath);

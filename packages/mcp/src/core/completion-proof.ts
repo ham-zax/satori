@@ -36,6 +36,8 @@ export type CompletionProofValidationResult = {
     vectorReceipt?: ProvenVectorGenerationReceipt;
     generationReceipt?: ProvenGenerationReceipt;
     navigationStatus?: NavigationProofStatus;
+    exactPayloadRecounts?: number;
+    proofSource?: 'activation' | 'exact' | 'joined' | 'reused';
 };
 
 export type ValidatedCompletionMarker = {
@@ -72,6 +74,8 @@ type CompletionMarkerEvidence =
         vectorReceipt?: unknown;
         generationReceipt?: unknown;
         navigationStatus?: NavigationProofStatus;
+        exactPayloadRecounts?: number;
+        proofSource?: 'activation' | 'exact' | 'joined' | 'reused';
     }
     | { status: 'invalid_v3' }
     | { status: 'requires_reindex' }
@@ -119,6 +123,16 @@ function parseCompletionMarkerEvidence(value: unknown): CompletionMarkerEvidence
                 : {}),
             ...(record.vectorReceipt !== undefined
                 ? { vectorReceipt: record.vectorReceipt }
+                : {}),
+            ...(Number.isSafeInteger(record.exactPayloadRecounts)
+                && Number(record.exactPayloadRecounts) >= 0
+                ? { exactPayloadRecounts: Number(record.exactPayloadRecounts) }
+                : {}),
+            ...(record.proofSource === 'activation'
+                || record.proofSource === 'exact'
+                || record.proofSource === 'joined'
+                || record.proofSource === 'reused'
+                ? { proofSource: record.proofSource }
                 : {}),
             ...(isNavigationStatus((record.navigationProof as { status?: unknown } | undefined)?.status)
                 ? { navigationStatus: (record.navigationProof as { status: NavigationProofStatus }).status }
@@ -479,5 +493,11 @@ export async function validateCompletionProof(args: {
             ? { vectorReceipt }
             : {}),
         navigationStatus: navigationEvidence.status,
+        ...(evidence?.status === 'valid_v3' && evidence.exactPayloadRecounts !== undefined
+            ? { exactPayloadRecounts: evidence.exactPayloadRecounts }
+            : {}),
+        ...(evidence?.status === 'valid_v3' && evidence.proofSource
+            ? { proofSource: evidence.proofSource }
+            : {}),
     };
 }

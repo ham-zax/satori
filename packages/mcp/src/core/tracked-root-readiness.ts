@@ -533,9 +533,11 @@ export class TrackedRootReadiness {
             ...(completionProof.vectorReceipt ? { vectorReceipt: completionProof.vectorReceipt } : {}),
             ...(completionProof.generationReceipt ? { generationReceipt: completionProof.generationReceipt } : {}),
             navigationStatus: completionProof.navigationStatus ?? 'unverified',
-            exactPayloadRecounts: completionProof.outcome === "valid" || collectionState.state === "ready"
-                ? 1
-                : 0,
+            exactPayloadRecounts: completionProof.outcome === "valid"
+                ? completionProof.exactPayloadRecounts ?? 1
+                : collectionState.state === "ready"
+                    ? 1
+                    : 0,
             ...(preparedObservationBefore
                 && preparedObservationAfter === preparedObservationBefore
                 ? { preparedObservation: preparedObservationAfter }

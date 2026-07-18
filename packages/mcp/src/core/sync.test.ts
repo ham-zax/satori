@@ -509,10 +509,20 @@ test('ensureFreshness does not treat mutation lease loss as a missing root', asy
 test('ensureFreshness lets Core resolve incremental authority instead of trusting lifecycle metadata', async () => {
     const codebasePath = createTempDir();
     const committedCollection = 'hybrid_code_chunks_committed';
+    const generationReceipt = { collectionName: committedCollection } as never;
     let receivedOptions: unknown;
     let persistedCollection: string | undefined;
 
     const context = {
+        async inspectSourceFreshnessCheckpoint() {
+            return {
+                status: 'valid' as const,
+                observationToken: 'checkpoint-v1',
+                merkleRoot: 'a'.repeat(64),
+                documentDigest: 'b'.repeat(64),
+                generationReceipt,
+            };
+        },
         getActiveIgnorePatterns() {
             return ['node_modules/**'];
         },
@@ -549,6 +559,7 @@ test('ensureFreshness lets Core resolve incremental authority instead of trustin
     assert.equal(decision.mode, 'synced');
     assert.deepEqual(receivedOptions, {
         maintainCompletionMarker: true,
+        sourceGenerationReceipt: generationReceipt,
     });
     assert.equal(persistedCollection, committedCollection);
     fs.rmSync(codebasePath, { recursive: true, force: true });
@@ -559,6 +570,7 @@ test('ensureFreshness disables incremental sync when a completed generation chec
     const committedCollection = 'hybrid_code_chunks_checkpoint_evidence';
     let checkpointStatus: 'valid' | 'missing' | 'corrupt' = 'valid';
     let syncCalls = 0;
+    let receivedSyncOptions: unknown;
     const context = {
         async inspectSourceFreshnessCheckpoint() {
             return checkpointStatus === 'valid'
@@ -568,8 +580,9 @@ test('ensureFreshness disables incremental sync when a completed generation chec
         getRegisteredSourceFreshnessCheckpointObservation() {
             return checkpointStatus === 'valid' ? 'checkpoint-v1' : null;
         },
-        async reindexByChange() {
+        async reindexByChange(_path: string, _progress: unknown, options: unknown) {
             syncCalls += 1;
+            receivedSyncOptions = options;
             return { added: 0, removed: 0, modified: 0, changedFiles: [], collectionName: committedCollection };
         },
         getActiveIgnorePatterns() {
@@ -604,6 +617,7 @@ test('ensureFreshness disables incremental sync when a completed generation chec
     const initial = await manager.ensureFreshness(codebasePath, 0, { skipIgnoreControlCheck: true });
     assert.equal(initial.mode, 'synced');
     assert.equal(syncCalls, 1);
+    assert.deepEqual(receivedSyncOptions, { maintainCompletionMarker: true });
     assert.equal(manager.getPreparedReadObservation(codebasePath).available, true);
 
     const warm = await manager.ensureFreshness(codebasePath, 60_000, { skipIgnoreControlCheck: true });

@@ -602,6 +602,62 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         return this.hasTable(collectionName);
     }
 
+    async getPublicationObservation(collectionName: string): Promise<string | null> {
+        assertCollectionName(collectionName);
+        const currentManifest = async (tableName: string): Promise<string | null> => {
+            const versionsPath = path.join(
+                this.databasePath,
+                `${tableName}.lance`,
+                '_versions',
+            );
+            const hintPath = path.join(versionsPath, 'latest_version_hint.json');
+            try {
+                const hintBefore = await fs.promises.readFile(hintPath);
+                const parsed = JSON.parse(hintBefore.toString('utf8')) as { version?: unknown };
+                if (!Number.isSafeInteger(parsed.version) || Number(parsed.version) < 0) return null;
+                const version = BigInt(Number(parsed.version));
+                const manifestNames = [
+                    `${version}.manifest`,
+                    `${((1n << 64n) - 1n) - version}.manifest`,
+                ];
+                let manifest: Buffer | null = null;
+                for (const manifestName of manifestNames) {
+                    try {
+                        manifest = await fs.promises.readFile(path.join(versionsPath, manifestName));
+                        break;
+                    } catch (error) {
+                        const code = error && typeof error === 'object' && 'code' in error
+                            ? String((error as NodeJS.ErrnoException).code)
+                            : null;
+                        if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+                    }
+                }
+                if (!manifest) return null;
+                const hintAfter = await fs.promises.readFile(hintPath);
+                if (!hintBefore.equals(hintAfter)) return null;
+                return crypto.createHash('sha256')
+                    .update(hintBefore)
+                    .update(manifest)
+                    .digest('hex');
+            } catch (error) {
+                if (error instanceof SyntaxError) return null;
+                const code = error && typeof error === 'object' && 'code' in error
+                    ? String((error as NodeJS.ErrnoException).code)
+                    : null;
+                if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+                throw error;
+            }
+        };
+        const [dataVersion, controlVersion] = await Promise.all([
+            currentManifest(collectionName),
+            currentManifest(controlTableName(collectionName)),
+        ]);
+        if (!dataVersion || !controlVersion) return null;
+        return crypto.createHash('sha256')
+            .update(JSON.stringify([collectionName, dataVersion, controlVersion]), 'utf8')
+            .digest('hex');
+    }
+
     async listCollections(): Promise<string[]> {
         return (await this.tableNames())
             .filter((name) => !name.startsWith(CONTROL_TABLE_PREFIX))

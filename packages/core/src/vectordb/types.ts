@@ -245,6 +245,14 @@ export interface VectorDatabase {
     hasCollection(collectionName: string): Promise<boolean>;
 
     /**
+     * Cheap immutable-publication observation used to revalidate a process-local
+     * receipt without recounting payload. Changes committed through the backend,
+     * collection replacement, and missing current-generation metadata must change
+     * the token or return null.
+     */
+    getPublicationObservation?(collectionName: string): Promise<string | null>;
+
+    /**
      * List all collections
      */
     listCollections(): Promise<string[]>;

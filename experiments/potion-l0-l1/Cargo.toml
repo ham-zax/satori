@@ -1,0 +1,22 @@
+[package]
+name = "satori-potion-l0-l1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = "=1.0.100"
+half = "=2.6.0"
+libc = "=0.2.174"
+model2vec-rs = { git = "https://github.com/MinishLab/model2vec-rs.git", rev = "6f51c7afe2436bcb76fc467bad54eaa94f8db30d", default-features = false, features = ["local-only", "fancy-regex"] }
+safetensors = "=0.5.3"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.143"
+sha2 = "=0.10.9"
+tokenizers = { version = "=0.21.4", default-features = false, features = ["fancy-regex"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+

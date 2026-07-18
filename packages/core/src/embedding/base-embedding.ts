@@ -165,6 +165,11 @@ export abstract class Embedding {
     getOperationMetricsSnapshot(): EmbeddingOperationMetricsSnapshot | null {
         return null;
     }
+
+    /** Release provider-owned runtime resources. Remote providers are no-ops. */
+    async close(): Promise<void> {
+        return undefined;
+    }
 }
 
 export function resolveValidatedEmbeddingIdentity(embedding: Embedding): Readonly<EmbeddingIdentity> {

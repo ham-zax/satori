@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "modelRevision": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+  "model2vecRsRevision": "6f51c7afe2436bcb76fc467bad54eaa94f8db30d",
+  "tolerance": {
+    "maxAbsoluteDifference": 0.000001,
+    "minimumCosineSimilarity": 0.999999
+  },
+  "cases": [
+    {
+      "id": "query-runtime-owner",
+      "role": "query",
+      "text": "Where is runtime profile validation implemented?"
+    },
+    {
+      "id": "document-typescript",
+      "role": "document",
+      "text": "export function add(left: number, right: number): number { return left + right; }"
+    },
+    {
+      "id": "document-rust-unicode",
+      "role": "document",
+      "text": "pub fn normalize_path(input: &str) -> String { input.replace('\\\\', \"/\") } // deterministic ✓"
+    }
+  ]
+}
+

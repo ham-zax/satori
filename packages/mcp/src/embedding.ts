@@ -1,8 +1,15 @@
-import { OpenAIEmbedding, VoyageAIEmbedding, GeminiEmbedding, OllamaEmbedding } from "@zokizuan/satori-core";
+import {
+    Embedding,
+    GeminiEmbedding,
+    OllamaEmbedding,
+    OpenAIEmbedding,
+    PotionEmbedding,
+    VoyageAIEmbedding,
+} from "@zokizuan/satori-core";
 import { ContextMcpConfig } from "./config.js";
 
 // Helper function to create embedding instance based on provider
-export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbedding | VoyageAIEmbedding | GeminiEmbedding | OllamaEmbedding {
+export async function createEmbeddingInstance(config: ContextMcpConfig): Promise<Embedding> {
     console.log(`[EMBEDDING] Creating ${config.encoderProvider} embedding instance...`);
 
     switch (config.encoderProvider) {
@@ -67,13 +74,26 @@ export function createEmbeddingInstance(config: ContextMcpConfig): OpenAIEmbeddi
             return ollamaEmbedding;
         }
 
+        case 'Potion': {
+            if (!config.potionHelperPath || !config.potionModelPath) {
+                throw new Error('POTION_HELPER_PATH and POTION_MODEL_PATH are required for Potion');
+            }
+            const potionEmbedding = await PotionEmbedding.create({
+                helperPath: config.potionHelperPath,
+                modelPath: config.potionModelPath,
+                requestTimeoutMs: config.potionRequestTimeoutMs,
+            });
+            console.log(`[EMBEDDING] ✅ Experimental Potion embedding instance created successfully`);
+            return potionEmbedding;
+        }
+
         default:
             console.error(`[EMBEDDING] ❌ Unsupported embedding provider: ${config.encoderProvider}`);
             throw new Error(`Unsupported embedding provider: ${config.encoderProvider}`);
     }
 }
 
-export function logEmbeddingProviderInfo(config: ContextMcpConfig, embedding: OpenAIEmbedding | VoyageAIEmbedding | GeminiEmbedding | OllamaEmbedding): void {
+export function logEmbeddingProviderInfo(config: ContextMcpConfig, embedding: Embedding): void {
     console.log(`[EMBEDDING] ✅ Successfully initialized ${config.encoderProvider} embedding provider`);
     console.log(`[EMBEDDING] Provider details - Model: ${config.encoderModel}, Dimension: ${embedding.getDimension()}`);
 
@@ -90,6 +110,9 @@ export function logEmbeddingProviderInfo(config: ContextMcpConfig, embedding: Op
             break;
         case 'Ollama':
             console.log(`[EMBEDDING] Ollama configuration - Host: ${config.ollamaEndpoint || 'http://127.0.0.1:11434'}, Model: ${config.encoderModel}`);
+            break;
+        case 'Potion':
+            console.log(`[EMBEDDING] Potion configuration - pinned local worker, model: ${config.encoderModel}`);
             break;
     }
 }

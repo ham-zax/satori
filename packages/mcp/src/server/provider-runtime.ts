@@ -220,6 +220,7 @@ export class ProviderRuntime {
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
     private activeContexts: ToolContext[] = [];
+    private readonly activeEmbeddings = new Set<Embedding>();
 
     constructor(args: {
         config: ContextMcpConfig;
@@ -267,6 +268,10 @@ export class ProviderRuntime {
                     break;
                 case "Ollama":
                     break;
+                case "Potion":
+                    if (!this.config.potionHelperPath) missing.push("POTION_HELPER_PATH");
+                    if (!this.config.potionModelPath) missing.push("POTION_MODEL_PATH");
+                    break;
             }
         }
 
@@ -312,65 +317,71 @@ export class ProviderRuntime {
 
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
         const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
-        const embedding = this.createEmbeddingProvider(bootstrap);
-        const vectorDatabase = await this.createVectorBackend(bootstrap, embedding.getDimension());
-        const context = new Context({
-            embedding,
-            vectorDatabase,
-            vectorStoreProvider: this.config.vectorStoreProvider,
-            mutationGenerationObserver: (canonicalRoot) => (
-                this.mutationLeaseCoordinator.observe(canonicalRoot)
-            ),
-            durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(
+        const embedding = await this.createEmbeddingProvider(bootstrap);
+        try {
+            const vectorDatabase = await this.createVectorBackend(bootstrap, embedding.getDimension());
+            const context = new Context({
+                embedding,
+                vectorDatabase,
+                vectorStoreProvider: this.config.vectorStoreProvider,
+                mutationGenerationObserver: (canonicalRoot) => (
+                    this.mutationLeaseCoordinator.observe(canonicalRoot)
+                ),
+                durableAuthorityRecoveryPublisher: createDurableAuthorityRecoveryPublisher(
+                    this.mutationLeaseCoordinator,
+                ),
+            });
+            const syncManager = new SyncManager(context, this.snapshotManager, {
+                watchEnabled: this.watchSyncEnabled,
+                watchDebounceMs: this.watchDebounceMs,
+                onSyncCompleted: this.createSyncCompletionHook(context),
+                mutationLeaseCoordinator: this.mutationLeaseCoordinator,
+            });
+            const reranker = this.createReranker(bootstrap);
+            if (reranker) {
+                console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${this.config.rankerModel || "rerank-2.5"}`);
+            }
+            const toolHandlers = new ToolHandlers(
+                context,
+                this.snapshotManager,
+                syncManager,
+                this.runtimeFingerprint,
+                this.capabilities,
+                this.now,
+                this.callGraphManager,
+                reranker,
+                undefined,
+                undefined,
+                this.runtimeOwnerGate,
                 this.mutationLeaseCoordinator,
-            ),
-        });
-        const syncManager = new SyncManager(context, this.snapshotManager, {
-            watchEnabled: this.watchSyncEnabled,
-            watchDebounceMs: this.watchDebounceMs,
-            onSyncCompleted: this.createSyncCompletionHook(context),
-            mutationLeaseCoordinator: this.mutationLeaseCoordinator,
-        });
-        const reranker = this.createReranker(bootstrap);
-        if (reranker) {
-            console.log(`[RERANKER] VoyageAI Reranker initialized with model: ${this.config.rankerModel || "rerank-2.5"}`);
+                this.searchContinuationCoordinator,
+            );
+
+            await startProviderSyncLifecycle(syncManager, {
+                enabled: this.startSyncLifecycle,
+                embeddingCapable: bootstrap.embeddingCapable,
+                watcherEnabled: this.watchSyncEnabled,
+            });
+
+            const toolContext = {
+                context,
+                snapshotManager: this.snapshotManager,
+                syncManager,
+                capabilities: this.capabilities,
+                reranker,
+                runtimeFingerprint: this.runtimeFingerprint,
+                toolHandlers,
+                readFileMaxLines: this.readFileMaxLines,
+                runtimeOwnerGate: this.runtimeOwnerGate,
+                providerRuntime: this,
+            };
+            this.activeEmbeddings.add(embedding);
+            this.activeContexts.push(toolContext);
+            return toolContext;
+        } catch (error) {
+            await embedding.close();
+            throw error;
         }
-        const toolHandlers = new ToolHandlers(
-            context,
-            this.snapshotManager,
-            syncManager,
-            this.runtimeFingerprint,
-            this.capabilities,
-            this.now,
-            this.callGraphManager,
-            reranker,
-            undefined,
-            undefined,
-            this.runtimeOwnerGate,
-            this.mutationLeaseCoordinator,
-            this.searchContinuationCoordinator,
-        );
-
-        await startProviderSyncLifecycle(syncManager, {
-            enabled: this.startSyncLifecycle,
-            embeddingCapable: bootstrap.embeddingCapable,
-            watcherEnabled: this.watchSyncEnabled,
-        });
-
-        const toolContext = {
-            context,
-            snapshotManager: this.snapshotManager,
-            syncManager,
-            capabilities: this.capabilities,
-            reranker,
-            runtimeFingerprint: this.runtimeFingerprint,
-            toolHandlers,
-            readFileMaxLines: this.readFileMaxLines,
-            runtimeOwnerGate: this.runtimeOwnerGate,
-            providerRuntime: this,
-        };
-        this.activeContexts.push(toolContext);
-        return toolContext;
     }
 
     private async resolveRuntimeBootstrap(
@@ -417,7 +428,9 @@ export class ProviderRuntime {
         });
     }
 
-    private createEmbeddingProvider(bootstrap: ResolvedProviderRuntimeBootstrap): Embedding {
+    private async createEmbeddingProvider(
+        bootstrap: ResolvedProviderRuntimeBootstrap,
+    ): Promise<Embedding> {
         if (bootstrap.embedding.kind === 'metadata-only') {
             return new MetadataOnlyEmbedding(
                 bootstrap.embedding.provider,
@@ -425,7 +438,7 @@ export class ProviderRuntime {
                 bootstrap.embedding.dimension,
             );
         }
-        const embedding = createEmbeddingInstance(this.config);
+        const embedding = await createEmbeddingInstance(this.config);
         logEmbeddingProviderInfo(this.config, embedding);
         return embedding;
     }
@@ -497,11 +510,16 @@ export class ProviderRuntime {
     }
 
     public async shutdown(): Promise<void> {
-        await Promise.all(this.activeContexts.map(async (toolContext) => {
-            toolContext.toolHandlers.releaseSearchContinuationOwnership();
-            toolContext.syncManager.stopBackgroundSync();
-            await toolContext.syncManager.stopWatcherMode();
-            await toolContext.context.getVectorStore().close?.();
-        }));
+        await Promise.all([
+            Promise.all(this.activeContexts.map(async (toolContext) => {
+                toolContext.toolHandlers.releaseSearchContinuationOwnership();
+                toolContext.syncManager.stopBackgroundSync();
+                await toolContext.syncManager.stopWatcherMode();
+                await toolContext.context.getVectorStore().close?.();
+            })),
+            Promise.all([...this.activeEmbeddings].map((embedding) => embedding.close())),
+        ]);
+        this.activeContexts = [];
+        this.activeEmbeddings.clear();
     }
 }

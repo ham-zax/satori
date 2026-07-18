@@ -63,6 +63,22 @@ test('offline policy disables cloud reranking even when credentials remain confi
     assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
+test('Potion is a slow local embedding capability without cloud reranking', () => {
+    const resolver = new CapabilityResolver(baseConfig({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: '/tmp/satori-lancedb',
+        encoderProvider: 'Potion',
+        encoderModel: 'pinned-potion',
+        voyageKey: 'retained-cloud-key',
+    }));
+
+    assert.equal(resolver.getEmbeddingLocality(), 'local');
+    assert.equal(resolver.getPerformanceProfile(), 'slow');
+    assert.equal(resolver.hasReranker(), false);
+});
+
 test('capability resolver does not treat token-only Milvus config as vector-ready', () => {
     const resolver = new CapabilityResolver(baseConfig({
         milvusEndpoint: undefined,

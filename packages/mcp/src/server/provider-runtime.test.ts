@@ -21,6 +21,7 @@ import {
     startProviderSyncLifecycle,
 } from "./provider-runtime.js";
 import {
+    Embedding,
     EMBEDDING_PROJECTION_VERSION,
     LANGUAGE_PARSER_VERSION,
     LEXICAL_PROJECTION_VERSION,
@@ -69,6 +70,7 @@ test("embedding/vector operations require provider key and MILVUS_ADDRESS", () =
         { config: baseConfig({ encoderProvider: "OpenAI", encoderModel: "text-embedding-3-small", openaiKey: undefined }), expected: ["OPENAI_API_KEY", "MILVUS_ADDRESS"] },
         { config: baseConfig({ encoderProvider: "Gemini", encoderModel: "gemini-embedding-001", geminiKey: undefined }), expected: ["GEMINI_API_KEY", "MILVUS_ADDRESS"] },
         { config: baseConfig({ encoderProvider: "Ollama", encoderModel: "nomic-embed-text" }), expected: ["MILVUS_ADDRESS"] },
+        { config: baseConfig({ encoderProvider: "Potion", encoderModel: "pinned-potion" }), expected: ["POTION_HELPER_PATH", "POTION_MODEL_PATH", "MILVUS_ADDRESS"] },
     ];
 
     for (const item of cases) {
@@ -220,6 +222,22 @@ test("vector-only operations reuse an existing embedding-capable context", async
     assert.equal(searchContext, embeddingContext);
     assert.equal(followUpReadContext, searchContext);
     assert.deepEqual(createdCapabilities, [true]);
+});
+
+test("runtime shutdown closes each provider-owned embedding once", async () => {
+    const runtime = createRuntime(baseConfig());
+    let closeCalls = 0;
+    const runtimeInternals = runtime as unknown as {
+        activeEmbeddings: Set<Embedding>;
+    };
+    runtimeInternals.activeEmbeddings.add({
+        close: async () => { closeCalls += 1; },
+    } as Embedding);
+
+    await runtime.shutdown();
+    await runtime.shutdown();
+
+    assert.equal(closeCalls, 1);
 });
 
 function createSyncLifecycle(options: { watcherStartError?: Error } = {}) {

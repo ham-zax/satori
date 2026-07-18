@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EMBEDDING_NORMALIZATION_POLICY_VERSION } from '@zokizuan/satori-core';
+import {
+    EMBEDDING_NORMALIZATION_POLICY_VERSION,
+    POTION_DIMENSION,
+    POTION_INFERENCE_CONTRACT_DIGEST,
+    POTION_MODEL_ID,
+} from '@zokizuan/satori-core';
 import {
     createMcpConfig,
+    indexFingerprintsEqual,
+    parseIndexFingerprint,
     resolveMcpRuntimeBootstrap,
     type ContextMcpConfig,
 } from '../config.js';
@@ -71,6 +78,100 @@ test('connected cloud bootstrap resolves without local model I/O', async () => {
     assert.equal(
         resolved.runtimeFingerprint.embeddingNormalizationPolicy,
         EMBEDDING_NORMALIZATION_POLICY_VERSION,
+    );
+});
+
+test('experimental Potion bootstrap seals the frozen L1 inference identity', async () => {
+    const resolved = await resolveMcpRuntimeBootstrap(config({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        encoderProvider: 'Potion',
+        encoderModel: POTION_MODEL_ID,
+        encoderOutputDimension: POTION_DIMENSION,
+        potionHelperPath: '/opt/satori/potion-helper',
+        potionModelPath: '/opt/satori/potion-model',
+    }));
+
+    assert.equal(resolved.config.embeddingArtifactDigest, POTION_INFERENCE_CONTRACT_DIGEST);
+    assert.equal(resolved.runtimeFingerprint.embeddingProvider, 'Potion');
+    assert.equal(resolved.runtimeFingerprint.embeddingModel, POTION_MODEL_ID);
+    assert.equal(resolved.runtimeFingerprint.embeddingDimension, POTION_DIMENSION);
+    assert.equal(
+        resolved.runtimeFingerprint.embeddingArtifactDigest,
+        POTION_INFERENCE_CONTRACT_DIGEST,
+    );
+    assert.deepEqual(
+        parseIndexFingerprint(resolved.runtimeFingerprint),
+        resolved.runtimeFingerprint,
+    );
+    assert.equal(indexFingerprintsEqual({
+        ...resolved.runtimeFingerprint,
+        embeddingArtifactDigest: 'b'.repeat(64),
+    }, resolved.runtimeFingerprint), false);
+    const missingContractDigest = Object.fromEntries(
+        Object.entries(resolved.runtimeFingerprint)
+            .filter(([field]) => field !== 'embeddingArtifactDigest'),
+    );
+    assert.equal(
+        indexFingerprintsEqual(missingContractDigest, resolved.runtimeFingerprint),
+        false,
+    );
+});
+
+test('experimental Potion is selected only through explicit offline configuration', () => {
+    const keys = [
+        'SATORI_RUNTIME_PROFILE',
+        'VECTOR_STORE_PROVIDER',
+        'LANCEDB_PATH',
+        'EMBEDDING_PROVIDER',
+        'EMBEDDING_MODEL',
+        'EMBEDDING_OUTPUT_DIMENSION',
+        'POTION_HELPER_PATH',
+        'POTION_MODEL_PATH',
+        'POTION_REQUEST_TIMEOUT_MS',
+    ] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+        for (const key of keys) delete process.env[key];
+        Object.assign(process.env, {
+            SATORI_RUNTIME_PROFILE: 'offline',
+            VECTOR_STORE_PROVIDER: 'LanceDB',
+            LANCEDB_PATH: '/tmp/satori-potion-experimental',
+            EMBEDDING_PROVIDER: 'Potion',
+            POTION_HELPER_PATH: '/opt/satori/potion-helper',
+            POTION_MODEL_PATH: '/opt/satori/potion-model',
+            POTION_REQUEST_TIMEOUT_MS: '7000',
+        });
+
+        const parsed = createMcpConfig();
+        assert.equal(parsed.encoderProvider, 'Potion');
+        assert.equal(parsed.encoderModel, POTION_MODEL_ID);
+        assert.equal(parsed.encoderOutputDimension, POTION_DIMENSION);
+        assert.equal(parsed.potionHelperPath, '/opt/satori/potion-helper');
+        assert.equal(parsed.potionModelPath, '/opt/satori/potion-model');
+        assert.equal(parsed.potionRequestTimeoutMs, 7000);
+        process.env.POTION_REQUEST_TIMEOUT_MS = '300001';
+        assert.throws(createMcpConfig, /must be between 1 and 300000/);
+    } finally {
+        for (const key of keys) {
+            const value = previous[key];
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    }
+});
+
+test('experimental Potion bootstrap rejects changed inference identity', async () => {
+    await assert.rejects(
+        resolveMcpRuntimeBootstrap(config({
+            executionProfile: 'offline',
+            networkPolicy: { kind: 'local-only' },
+            encoderProvider: 'Potion',
+            encoderModel: POTION_MODEL_ID,
+            encoderOutputDimension: POTION_DIMENSION,
+            embeddingArtifactDigest: 'b'.repeat(64),
+        })),
+        /inference-contract digest does not match/,
     );
 });
 

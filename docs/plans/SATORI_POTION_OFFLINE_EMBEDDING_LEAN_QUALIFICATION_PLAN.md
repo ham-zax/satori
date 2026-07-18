@@ -1,7 +1,8 @@
 # Satori Potion Offline Embedding Lean Qualification Plan
 
-**Status:** proposed planning-only lean execution plan; no runtime behavior or
-production default has changed
+**Status:** L0 and L1 passed; L2 experimental provider integration passed
+focused conformance; no supported runtime configuration or production default
+has changed
 
 **Date:** 2026-07-18
 
@@ -9,9 +10,9 @@ production default has changed
 `minishlab/potion-code-16M-v2` can support a useful, safe, lightweight Satori
 offline-search mode.
 
-**Initial execution boundary:** after this plan and its follow-up are accepted
-and committed, only L0 and L1 may begin, and only under separate execution
-authorization. This document does not itself authorize implementation.
+**Current execution boundary:** stop after L2. L3 publication/indexing, L4
+product qualification, and every follow-up-plan track remain separately
+unauthorized.
 
 ---
 
@@ -168,14 +169,14 @@ Create a canonical Potion inference-contract manifest containing:
 Hash its canonical bytes as a lowercase SHA-256
 `embeddingInferenceContractDigest`.
 
-Carry this digest through Potion's Core embedding identity, MCP runtime
-fingerprint, completion marker, snapshot parser, and persisted publication
-comparison. A missing or changed Potion digest is incompatible and requires a
+For Potion, carry this complete inference-contract digest through the existing
+Core `artifactDigest` / persisted `embeddingArtifactDigest` authority seam. The
+value represents the full Potion inference contract, not merely the model-file
+checksum. A missing or changed Potion digest is incompatible and requires a
 fresh publication and full reindex.
 
-Do not use this field addition to rewrite or invalidate existing Voyage,
-OpenAI, Gemini, or Ollama publications. Existing providers retain their current
-accepted fingerprint shape until separately migrated.
+Reusing the existing field avoids a second fingerprint shape and does not
+rewrite or invalidate existing Voyage, OpenAI, Gemini, or Ollama publications.
 
 ### 3.5 Offline claim
 
@@ -240,6 +241,53 @@ configuration or index has changed.
 Exit: reject Potion immediately if inference correctness or basic CPU
 feasibility fails.
 
+#### Recorded L0/L1 result — 2026-07-18
+
+L0 and L1 ran from clean accepted revision
+`d04eac35af2addad7b68525f91b0c6dacd8b94da` in an isolated worktree. The
+checksum-sealed evidence root is
+`/home/hamza/repo/satori-l0-l1-evidence/20260718-d04eac35`; its manifest digest
+is `adf633304ed03e0e3611fd79cecf1d12ad68dbde8beed0cbfcc749b685666381`.
+
+Pinned authority:
+
+* Potion model revision:
+  `e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b`;
+* `model2vec-rs` revision:
+  `6f51c7afe2436bcb76fc467bad54eaa94f8db30d`;
+* Rust `1.97.1`, target `x86_64-unknown-linux-gnu`, with
+  `default-features=false`, `local-only`, and `fancy-regex`;
+* helper SHA-256:
+  `2e42f3165b96927bb365f74a11b0495661ac3c44e1a194c55a8f0613b5bb2e12`;
+  and
+* embedding inference-contract digest:
+  `bfda80d97aeb585e20650b1c54e9063a65068ce284317f0e0a812e20964dcee7`.
+
+The strict path disables the tokenizer artifact's serialized 512-token
+truncation and batch padding in memory before model load. It rejects more than
+`4096` retained tokens, empty/all-unknown input, zero-norm or non-finite output,
+and any output other than exactly 256 dimensions. A 513-token witness retained
+all 513 tokens. Frozen fixtures, a separately implemented raw pooling check,
+and symmetric query/document operations matched exactly under the declared
+`1e-6` maximum-absolute-difference and `0.999999` minimum-cosine tolerances.
+
+The persistent worker loaded the model once, contained an injected panic, and
+served the next request. The complete model repository plus helper measured
+`37,745,961` bytes; model-related RSS was `109,379,584` bytes; model load was
+`232.404` ms; the frozen short-input 64-item batch workload measured
+`19,282.79` items/s; warm per-item p95 was `0.03198` ms; and 50 repetitions had
+zero component variance. The load measurement used a cold process/model
+instance with uncontrolled OS page cache, and the throughput workload used
+short fixtures, so neither figure is production performance authority.
+
+All authoritative fixture, conformance, worker, and benchmark runs used a
+blocked network namespace and recorded zero runtime network attempts. No
+Satori provider, configuration, publication, index, or user state changed.
+
+**Decision:** L1 passed and supports L2 experimental integration only. It does
+not authorize L3 or establish product quality, production performance, or
+release support.
+
 ### L2 — minimal experimental provider integration
 
 1. Add Potion behind an explicit experimental provider value.
@@ -264,6 +312,31 @@ Productization Track A completes.
 
 Exit: the provider passes focused Core and MCP conformance tests without a paid
 service. No supported product configuration has been created.
+
+#### Recorded L2 result — 2026-07-18
+
+The experimental `Potion` provider is selectable only with the existing
+`offline` runtime profile. It requires explicit, manually provisioned absolute
+helper and model paths; verifies the pinned helper, model, tokenizer, and
+configuration checksums before starting native code; and always starts the
+persistent L1 worker with its network block enabled.
+
+The Core adapter reuses the sealed L1 worker and existing embedding contracts:
+one model-loaded worker per provider runtime, a bounded 32-item provider batch,
+bounded request frames, a five-second default request timeout, classified and
+redacted failures, output validation, worker-isolated native failure, and clean
+shutdown through `ProviderRuntime`. It passes exact source text through only the
+ephemeral local worker request and does not use Core's approximate character
+preprocessing.
+
+Potion's complete inference-contract digest is carried in the existing
+`artifactDigest` / `embeddingArtifactDigest` authority field. Focused tests prove
+that the pinned real L1 helper satisfies the Core adapter, changed or missing
+contract identity fails persisted compatibility, and existing local-provider
+policy and runtime shutdown behavior remain intact.
+
+**Decision:** L2 passed. Stop here. No LanceDB publication, document indexing,
+reranking, installer work, L3, or L4 was performed or authorized.
 
 ### L3 — real publication and lifecycle smoke test
 

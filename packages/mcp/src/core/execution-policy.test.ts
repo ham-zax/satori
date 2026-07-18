@@ -10,10 +10,15 @@ test('connected profile preserves existing provider and backend combinations', (
     }));
 });
 
-test('offline profile accepts only Ollama with LanceDB', () => {
+test('offline profile accepts only explicit local providers with LanceDB', () => {
     assert.doesNotThrow(() => assertExecutionPolicyAllowsRuntime({
         executionProfile: 'offline',
         encoderProvider: 'Ollama',
+        vectorStoreProvider: 'LanceDB',
+    }));
+    assert.doesNotThrow(() => assertExecutionPolicyAllowsRuntime({
+        executionProfile: 'offline',
+        encoderProvider: 'Potion',
         vectorStoreProvider: 'LanceDB',
     }));
 
@@ -23,7 +28,7 @@ test('offline profile accepts only Ollama with LanceDB', () => {
             encoderProvider: 'VoyageAI',
             vectorStoreProvider: 'LanceDB',
         }),
-        /offline requires EMBEDDING_PROVIDER=Ollama/,
+        /offline requires EMBEDDING_PROVIDER=Ollama or Potion/,
     );
     assert.throws(
         () => assertExecutionPolicyAllowsRuntime({
@@ -32,5 +37,14 @@ test('offline profile accepts only Ollama with LanceDB', () => {
             vectorStoreProvider: 'Milvus',
         }),
         /offline requires VECTOR_STORE_PROVIDER=LanceDB/,
+    );
+
+    assert.throws(
+        () => assertExecutionPolicyAllowsRuntime({
+            executionProfile: 'connected',
+            encoderProvider: 'Potion',
+            vectorStoreProvider: 'LanceDB',
+        }),
+        /Potion is experimental and requires SATORI_RUNTIME_PROFILE=offline/,
     );
 });

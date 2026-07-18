@@ -23,7 +23,10 @@ export class CapabilityResolver {
     }
 
     private buildMatrix(): CapabilityMatrix {
-        const embeddingLocality: EmbeddingLocality = this.config.encoderProvider === 'Ollama' ? 'local' : 'cloud';
+        const embeddingLocality: EmbeddingLocality = (
+            this.config.encoderProvider === 'Ollama'
+            || this.config.encoderProvider === 'Potion'
+        ) ? 'local' : 'cloud';
 
         let performanceProfile: PerformanceProfile;
         if (embeddingLocality === 'local') {

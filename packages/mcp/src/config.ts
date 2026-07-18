@@ -14,6 +14,10 @@ import {
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     parseIndexFingerprint as parseCoreIndexFingerprint,
+    POTION_DIMENSION,
+    POTION_INFERENCE_CONTRACT_DIGEST,
+    POTION_MAX_TIMEOUT_MS,
+    POTION_MODEL_ID,
     resolveExecutionPolicy,
     resolveOllamaModelIdentity,
     type ExecutionProfile,
@@ -22,7 +26,7 @@ import {
     type ResolvedOllamaModelIdentity,
 } from "@zokizuan/satori-core";
 
-export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama';
+export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama' | 'Potion';
 export type VectorStoreProvider = 'Milvus' | 'LanceDB';
 export type ResolvedVectorStoreConfig =
     | { vectorStoreProvider: 'Milvus' }
@@ -98,7 +102,7 @@ export function parseIndexFingerprint(value: unknown): IndexFingerprint | null {
     const record = parseCoreIndexFingerprint(value);
     if (
         !record
-        || !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama'].includes(record.embeddingProvider)
+        || !['OpenAI', 'VoyageAI', 'Gemini', 'Ollama', 'Potion'].includes(record.embeddingProvider)
         || !['Milvus', 'LanceDB'].includes(record.vectorStoreProvider)
         || (record.schemaVersion !== 'dense_v3' && record.schemaVersion !== 'hybrid_v3')
     ) {
@@ -191,6 +195,10 @@ export interface ContextMcpConfig {
     ollamaEncoderModel?: string;
     ollamaModelDigest?: string;
     ollamaEndpoint?: string;
+    // Experimental Potion configuration. Artifact installation remains out of scope.
+    potionHelperPath?: string;
+    potionModelPath?: string;
+    potionRequestTimeoutMs?: number;
     // Vector database configuration
     vectorStoreProvider: VectorStoreProvider;
     milvusEndpoint?: string; // Required for provider-backed tool calls
@@ -210,11 +218,16 @@ export function assertExecutionPolicyAllowsRuntime(input: {
     encoderProvider: EmbeddingProvider;
     vectorStoreProvider: VectorStoreProvider;
 }): void {
+    if (input.encoderProvider === 'Potion' && input.executionProfile !== 'offline') {
+        throw new Error(
+            'EMBEDDING_PROVIDER=Potion is experimental and requires SATORI_RUNTIME_PROFILE=offline.',
+        );
+    }
     if (input.executionProfile !== 'offline') return;
 
-    if (input.encoderProvider !== 'Ollama') {
+    if (input.encoderProvider !== 'Ollama' && input.encoderProvider !== 'Potion') {
         throw new Error(
-            'SATORI_RUNTIME_PROFILE=offline requires EMBEDDING_PROVIDER=Ollama.',
+            'SATORI_RUNTIME_PROFILE=offline requires EMBEDDING_PROVIDER=Ollama or Potion.',
         );
     }
     if (input.vectorStoreProvider !== 'LanceDB') {
@@ -340,6 +353,8 @@ export function getDefaultModelForProvider(provider: string): string {
             return 'gemini-embedding-001';
         case 'Ollama':
             return 'nomic-embed-text';
+        case 'Potion':
+            return POTION_MODEL_ID;
         default:
             return 'text-embedding-3-small';
     }
@@ -353,6 +368,8 @@ export function getEmbeddingModelForProvider(provider: string): string {
             const ollamaEncoderModel = envManager.get('OLLAMA_MODEL') || envManager.get('EMBEDDING_MODEL') || getDefaultModelForProvider(provider);
             return ollamaEncoderModel;
         }
+        case 'Potion':
+            return POTION_MODEL_ID;
         case 'OpenAI':
         case 'VoyageAI':
         case 'Gemini':
@@ -380,6 +397,8 @@ export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): n
             return 3072;
         case 'Ollama':
             return config.encoderOutputDimension || 768;
+        case 'Potion':
+            return POTION_DIMENSION;
         case 'VoyageAI':
         default:
             return config.encoderOutputDimension || 1024;
@@ -426,6 +445,44 @@ export async function resolveMcpRuntimeBootstrap(
     } = {},
     options: { useRecordedOllamaIdentity?: boolean } = {},
 ): Promise<ResolvedMcpRuntimeBootstrap> {
+    assertExecutionPolicyAllowsRuntime({
+        executionProfile: config.executionProfile,
+        encoderProvider: config.encoderProvider,
+        vectorStoreProvider: config.vectorStoreProvider,
+    });
+    if (config.encoderProvider === 'Potion') {
+        if (config.encoderModel !== POTION_MODEL_ID) {
+            throw new Error(`Potion requires the pinned model identity '${POTION_MODEL_ID}'.`);
+        }
+        if (
+            config.encoderOutputDimension !== undefined
+            && config.encoderOutputDimension !== POTION_DIMENSION
+        ) {
+            throw new Error(`Potion requires EMBEDDING_OUTPUT_DIMENSION=${POTION_DIMENSION}.`);
+        }
+        if (
+            config.embeddingArtifactDigest !== undefined
+            && config.embeddingArtifactDigest !== POTION_INFERENCE_CONTRACT_DIGEST
+        ) {
+            throw new Error('Potion inference-contract digest does not match the pinned L1 authority.');
+        }
+        const resolvedConfig = Object.freeze({
+            ...config,
+            encoderModel: POTION_MODEL_ID,
+            encoderOutputDimension: POTION_DIMENSION,
+            // Reuse the existing persisted artifact-digest authority field for
+            // Potion's complete inference contract rather than adding a second
+            // fingerprint shape that would invalidate existing providers.
+            embeddingArtifactDigest: POTION_INFERENCE_CONTRACT_DIGEST,
+        });
+        return Object.freeze({
+            config: resolvedConfig,
+            runtimeFingerprint: buildRuntimeIndexFingerprint(
+                resolvedConfig,
+                POTION_DIMENSION,
+            ),
+        });
+    }
     if (config.encoderProvider !== 'Ollama') {
         const resolvedConfig = Object.freeze({ ...config });
         return Object.freeze({
@@ -526,6 +583,7 @@ export function createMcpConfig(): ContextMcpConfig {
         if (
             (defaultProvider === 'VoyageAI' && [256, 512, 1024, 2048].includes(parsed))
             || (defaultProvider === 'Ollama' && Number.isSafeInteger(parsed) && parsed > 0)
+            || (defaultProvider === 'Potion' && parsed === POTION_DIMENSION)
         ) {
             encoderOutputDimension = parsed;
         } else {
@@ -533,12 +591,44 @@ export function createMcpConfig(): ContextMcpConfig {
                 ? '256, 512, 1024, or 2048'
                 : defaultProvider === 'Ollama'
                     ? 'a positive safe integer resolved from the installed model'
+                    : defaultProvider === 'Potion'
+                        ? String(POTION_DIMENSION)
                     : `unset because ${defaultProvider} ignores this setting`;
             console.warn(`[WARN] Invalid EMBEDDING_OUTPUT_DIMENSION value for ${defaultProvider}: ${outputDimensionStr}. Expected ${expected}.`);
         }
     } else if (defaultProvider === 'VoyageAI') {
         // Default to 1024 for VoyageAI to balance quality/cost.
         encoderOutputDimension = 1024;
+    } else if (defaultProvider === 'Potion') {
+        encoderOutputDimension = POTION_DIMENSION;
+    }
+
+    const configuredModel = envManager.get('EMBEDDING_MODEL');
+    if (
+        defaultProvider === 'Potion'
+        && configuredModel
+        && configuredModel !== POTION_MODEL_ID
+    ) {
+        throw new Error(`Potion requires EMBEDDING_MODEL=${POTION_MODEL_ID} when EMBEDDING_MODEL is set.`);
+    }
+
+    const potionRequestTimeoutRaw = envManager.get('POTION_REQUEST_TIMEOUT_MS');
+    let potionRequestTimeoutMs: number | undefined;
+    if (defaultProvider === 'Potion') {
+        potionRequestTimeoutMs = 5_000;
+        if (potionRequestTimeoutRaw) {
+            const parsed = Number(potionRequestTimeoutRaw);
+            if (
+                !Number.isSafeInteger(parsed)
+                || parsed <= 0
+                || parsed > POTION_MAX_TIMEOUT_MS
+            ) {
+                throw new Error(
+                    `POTION_REQUEST_TIMEOUT_MS must be between 1 and ${POTION_MAX_TIMEOUT_MS}.`,
+                );
+            }
+            potionRequestTimeoutMs = parsed;
+        }
     }
 
     // Parse reranker model from env var
@@ -596,6 +686,11 @@ export function createMcpConfig(): ContextMcpConfig {
         ollamaEncoderModel: envManager.get('OLLAMA_MODEL'),
         ollamaModelDigest: envManager.get('OLLAMA_MODEL_DIGEST'),
         ollamaEndpoint: envManager.get('OLLAMA_HOST'),
+        // Experimental Potion artifacts are provisioned manually through the
+        // L0 path. No installer or implicit download is introduced here.
+        potionHelperPath: envManager.get('POTION_HELPER_PATH'),
+        potionModelPath: envManager.get('POTION_MODEL_PATH'),
+        potionRequestTimeoutMs,
         // Vector database configuration
         vectorStoreProvider: vectorStore.vectorStoreProvider,
         milvusEndpoint: envManager.get('MILVUS_ADDRESS'),
@@ -651,6 +746,10 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
         case 'Ollama':
             console.log(`[MCP]   Ollama Host: ${config.ollamaEndpoint || 'http://127.0.0.1:11434'}`);
             console.log(`[MCP]   Ollama Model: ${config.encoderModel}`);
+            break;
+        case 'Potion':
+            console.log(`[MCP]   Potion Helper: ${config.potionHelperPath ? '✅ Configured' : '❌ Missing'}`);
+            console.log(`[MCP]   Potion Model Artifacts: ${config.potionModelPath ? '✅ Configured' : '❌ Missing'}`);
             break;
     }
 

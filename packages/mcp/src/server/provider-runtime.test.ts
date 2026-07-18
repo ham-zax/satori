@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CapabilityResolver } from "../core/capabilities.js";
+import { SearchContinuationCoordinator } from "../core/handlers.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import {
@@ -44,7 +45,10 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     };
 }
 
-function createRuntime(config: ContextMcpConfig): ProviderRuntime {
+function createRuntime(
+    config: ContextMcpConfig,
+    searchContinuationCoordinator?: SearchContinuationCoordinator,
+): ProviderRuntime {
     const runtimeFingerprint = buildRuntimeIndexFingerprint(config, resolveConfiguredEmbeddingDimension(config));
     return new ProviderRuntime({
         config,
@@ -55,6 +59,7 @@ function createRuntime(config: ContextMcpConfig): ProviderRuntime {
         watchSyncEnabled: false,
         watchDebounceMs: 5000,
         callGraphManager: new CallGraphSidecarManager(runtimeFingerprint),
+        searchContinuationCoordinator,
     });
 }
 
@@ -121,7 +126,8 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
     assert.equal(fingerprint.vectorStoreProvider, "LanceDB");
     assert.deepEqual(parseIndexFingerprint(fingerprint), fingerprint);
 
-    const runtime = createRuntime(config);
+    const searchContinuationCoordinator = new SearchContinuationCoordinator();
+    const runtime = createRuntime(config, searchContinuationCoordinator);
     assert.equal(runtime.validate("vector_only"), null);
     const toolContext = await runtime.requireToolContext("vector_only");
     assert.equal("ok" in toolContext, false);
@@ -143,7 +149,18 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
     ).buildIndexCompletionFingerprint();
     assert.equal(contextFingerprint.vectorStoreProvider, "LanceDB");
 
+    const stored = searchContinuationCoordinator.store(toolContext.toolHandlers, {
+        value: {} as never,
+        nextOffset: 0,
+        nowMs: 0,
+    });
+    assert.equal(searchContinuationCoordinator.lookup(stored.handle, 1).status, "hit");
+
     await runtime.shutdown();
+    assert.equal(
+        searchContinuationCoordinator.lookup(stored.handle, 1).status,
+        "owner_unavailable",
+    );
     await assert.rejects(vectorStore.listCollections(), /closed/);
 });
 

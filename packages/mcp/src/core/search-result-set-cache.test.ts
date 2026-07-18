@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SearchResultSetCache } from "./search-result-set-cache.js";
+import {
+    SearchResultSetCache,
+    SearchResultSetCoordinator,
+} from "./search-result-set-cache.js";
 
 test("search result-set cache is bounded by bytes and evicts least-recently-used entries", () => {
     const entryBytes = Buffer.byteLength(JSON.stringify({ value: "a".repeat(20) }), "utf8");
@@ -74,4 +77,50 @@ test("search result-set cache rejects an entry larger than its total byte budget
         nextOffset: 0,
         nowMs: 0,
     }), /byte budget/);
+});
+
+test("search result-set coordinator routes one bounded cache entry to its registered owner", () => {
+    const coordinator = new SearchResultSetCoordinator<{ value: string }, object>(1, 4096, 100);
+    const firstOwner = {};
+    const secondOwner = {};
+    coordinator.registerOwner(firstOwner);
+    coordinator.registerOwner(secondOwner);
+
+    const first = coordinator.store(firstOwner, {
+        value: { value: "first" },
+        nextOffset: 1,
+        nowMs: 0,
+    });
+    const second = coordinator.store(secondOwner, {
+        value: { value: "second" },
+        nextOffset: 2,
+        nowMs: 1,
+    });
+
+    assert.equal(coordinator.lookup(first.handle, 2).status, "not_found");
+    const hit = coordinator.lookup(second.handle, 2);
+    assert.equal(hit.status, "hit");
+    if (hit.status === "hit") {
+        assert.equal(hit.owner, secondOwner);
+        assert.deepEqual(hit.entry, { value: "second" });
+    }
+
+    coordinator.unregisterOwner(secondOwner);
+    assert.equal(coordinator.lookup(second.handle, 2).status, "owner_unavailable");
+    assert.equal(coordinator.lookup(second.handle, 2).status, "not_found");
+    assert.equal(coordinator.lookup("f".repeat(48), 2).status, "not_found");
+});
+
+test("search result-set coordinator removes expired ownership with the cached entry", () => {
+    const coordinator = new SearchResultSetCoordinator<{ value: string }, object>(2, 4096, 10);
+    const owner = {};
+    coordinator.registerOwner(owner);
+    const stored = coordinator.store(owner, {
+        value: { value: "result" },
+        nextOffset: 1,
+        nowMs: 0,
+    });
+
+    assert.equal(coordinator.lookup(stored.handle, 10).status, "expired");
+    assert.equal(coordinator.lookup(stored.handle, 11).status, "not_found");
 });

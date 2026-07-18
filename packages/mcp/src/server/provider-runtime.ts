@@ -9,7 +9,10 @@ import {
 } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
-import { ToolHandlers } from "../core/handlers.js";
+import {
+    SearchContinuationCoordinator,
+    ToolHandlers,
+} from "../core/handlers.js";
 import type { RuntimeOwnerMutationGate } from "../core/runtime-owner.js";
 import { MutationLeaseCoordinator } from "../core/mutation-lease.js";
 import { SnapshotManager } from "../core/snapshot.js";
@@ -213,6 +216,7 @@ export class ProviderRuntime {
     private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
     private readonly mutationLeaseCoordinator: MutationLeaseCoordinator;
     private readonly now: () => number;
+    private readonly searchContinuationCoordinator: SearchContinuationCoordinator;
     private embeddingRuntimePromise: Promise<ToolContext> | null = null;
     private vectorRuntimePromise: Promise<ToolContext> | null = null;
     private activeContexts: ToolContext[] = [];
@@ -229,6 +233,7 @@ export class ProviderRuntime {
         callGraphManager: CallGraphSidecarManager;
         runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
         mutationLeaseCoordinator?: MutationLeaseCoordinator;
+        searchContinuationCoordinator?: SearchContinuationCoordinator;
         now?: () => number;
     }) {
         this.config = args.config;
@@ -242,6 +247,8 @@ export class ProviderRuntime {
         this.callGraphManager = args.callGraphManager;
         this.runtimeOwnerGate = args.runtimeOwnerGate || null;
         this.mutationLeaseCoordinator = args.mutationLeaseCoordinator || new MutationLeaseCoordinator();
+        this.searchContinuationCoordinator = args.searchContinuationCoordinator
+            ?? new SearchContinuationCoordinator();
         this.now = args.now || (() => Date.now());
     }
 
@@ -341,6 +348,7 @@ export class ProviderRuntime {
             undefined,
             this.runtimeOwnerGate,
             this.mutationLeaseCoordinator,
+            this.searchContinuationCoordinator,
         );
 
         await startProviderSyncLifecycle(syncManager, {
@@ -490,6 +498,7 @@ export class ProviderRuntime {
 
     public async shutdown(): Promise<void> {
         await Promise.all(this.activeContexts.map(async (toolContext) => {
+            toolContext.toolHandlers.releaseSearchContinuationOwnership();
             toolContext.syncManager.stopBackgroundSync();
             await toolContext.syncManager.stopWatcherMode();
             await toolContext.context.getVectorStore().close?.();

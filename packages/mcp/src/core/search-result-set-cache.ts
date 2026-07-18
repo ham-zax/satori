@@ -17,6 +17,24 @@ export type SearchResultSetReplay = {
     responseText: string;
 };
 
+type OwnedSearchResultSet<T> = {
+    ownerId: string;
+    value: T;
+};
+
+export type SearchResultSetCoordinatorLookup<T, TOwner extends object> =
+    | {
+        status: "hit";
+        owner: TOwner;
+        entry: Readonly<T>;
+        nextOffset: number;
+        expiresAtMs: number;
+        lastPage: Readonly<SearchResultSetReplay> | null;
+    }
+    | { status: "expired" }
+    | { status: "not_found" }
+    | { status: "owner_unavailable" };
+
 type CacheEntry<T> = {
     value: T;
     nextOffset: number;
@@ -133,5 +151,87 @@ export class SearchResultSetCache<T> {
     private delete(handle: string, entry: CacheEntry<T>): void {
         if (!this.entries.delete(handle)) return;
         this.totalBytes -= entry.valueBytes + entry.replayBytes;
+    }
+}
+
+/**
+ * Server-scoped ownership for continuation result sets. The cache entry owns
+ * the routing identity, so eviction and expiry cannot leave a per-handle route
+ * behind. Owner identities are generated internally and never derived from an
+ * opaque client handle.
+ */
+export class SearchResultSetCoordinator<T, TOwner extends object> {
+    private readonly cache: SearchResultSetCache<OwnedSearchResultSet<T>>;
+    private readonly owners = new Map<string, TOwner>();
+    private readonly ownerIds = new WeakMap<TOwner, string>();
+
+    constructor(
+        maxEntries = 32,
+        maxBytes = 16 * 1024 * 1024,
+        ttlMs = 15 * 60_000,
+    ) {
+        this.cache = new SearchResultSetCache(maxEntries, maxBytes, ttlMs);
+    }
+
+    public registerOwner(owner: TOwner): void {
+        if (this.ownerIds.has(owner)) return;
+        const ownerId = crypto.randomBytes(24).toString("hex");
+        this.ownerIds.set(owner, ownerId);
+        this.owners.set(ownerId, owner);
+    }
+
+    public unregisterOwner(owner: TOwner): void {
+        const ownerId = this.ownerIds.get(owner);
+        if (!ownerId) return;
+        this.ownerIds.delete(owner);
+        this.owners.delete(ownerId);
+    }
+
+    public store(owner: TOwner, input: {
+        value: T;
+        nextOffset: number;
+        nowMs: number;
+    }): { handle: string; expiresAtMs: number } {
+        const ownerId = this.ownerIds.get(owner);
+        if (!ownerId || this.owners.get(ownerId) !== owner) {
+            throw new Error("Search continuation owner is not registered.");
+        }
+        return this.cache.store({
+            value: { ownerId, value: input.value },
+            nextOffset: input.nextOffset,
+            nowMs: input.nowMs,
+        });
+    }
+
+    public lookup(handle: string, nowMs: number): SearchResultSetCoordinatorLookup<T, TOwner> {
+        const lookup = this.cache.lookup(handle, nowMs);
+        if (lookup.status !== "hit") return lookup;
+        const owner = this.owners.get(lookup.entry.ownerId);
+        if (!owner) {
+            this.cache.remove(handle);
+            return { status: "owner_unavailable" };
+        }
+        return {
+            status: "hit",
+            owner,
+            entry: lookup.entry.value,
+            nextOffset: lookup.nextOffset,
+            expiresAtMs: lookup.expiresAtMs,
+            lastPage: lookup.lastPage,
+        };
+    }
+
+    public advance(input: {
+        handle: string;
+        expectedOffset: number;
+        nextOffset: number;
+        nowMs: number;
+        replay: SearchResultSetReplay;
+    }): "advanced" | "conflict" | "expired" | "not_found" | "too_large" {
+        return this.cache.advance(input);
+    }
+
+    public remove(handle: string): void {
+        this.cache.remove(handle);
     }
 }

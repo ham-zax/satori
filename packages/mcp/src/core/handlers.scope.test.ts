@@ -4,7 +4,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ToolHandlers } from './handlers.js';
+import {
+    SearchContinuationCoordinator,
+    ToolHandlers,
+} from './handlers.js';
 import { CapabilityResolver } from './capabilities.js';
 import { IndexFingerprint } from '../config.js';
 import {
@@ -559,6 +562,7 @@ function createHandlers(
             fallbackLexical?: SearchFixtureResult[];
         };
         enableVectorReceipt?: boolean;
+        searchContinuationCoordinator?: SearchContinuationCoordinator;
     }
 ) {
     const tracedSearchResults = searchResults.map((result, index) => ({
@@ -685,7 +689,11 @@ function createHandlers(
         () => Date.parse('2026-01-01T01:00:00.000Z'),
         callGraphManager,
         reranker || null,
-        options?.gitignoreForceReloadEveryN
+        options?.gitignoreForceReloadEveryN,
+        undefined,
+        null,
+        null,
+        options?.searchContinuationCoordinator,
     );
     (handlers as unknown as ToolHandlersTestOverrides).validateCompletionProof = async () => ({
         outcome: 'valid',
@@ -1253,10 +1261,14 @@ test('search continuation preserves the full grouped order without new retrieval
             },
         ];
 
-        const prepareHandlers = (initialSourceAvailable = true) => {
+        const prepareHandlers = (
+            initialSourceAvailable = true,
+            searchContinuationCoordinator?: SearchContinuationCoordinator,
+        ) => {
             const handlers = createHandlers(repoPath, searchResults, undefined, {
                 enableVectorReceipt: true,
                 respectSemanticTopK: true,
+                searchContinuationCoordinator,
             });
             const internals = handlers as unknown as {
                 context: HandlerContext & {
@@ -1371,7 +1383,11 @@ test('search continuation preserves the full grouped order without new retrieval
         const baselineFiles = baselinePayload.results.map((result: { target: { file: string } }) => result.target.file);
         assert.equal(baselineFiles.length, 3, JSON.stringify(baselinePayload));
 
-        const paged = prepareHandlers();
+        const coordinator = new SearchContinuationCoordinator();
+        const paged = prepareHandlers(true, coordinator);
+        const startupHandlers = createHandlers(repoPath, [], undefined, {
+            searchContinuationCoordinator: coordinator,
+        });
         const initialResponse = await paged.handlers.handleSearchCode({
             path: repoPath,
             query: 'find the owner implementations',
@@ -1396,7 +1412,7 @@ test('search continuation preserves the full grouped order without new retrieval
         assert.ok(Buffer.byteLength(initialResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
 
         const retrievalCallsAfterInitialSearch = paged.getRetrievalCalls();
-        const pageTwoResponse = await paged.handlers.handleContinueSearch({
+        const pageTwoResponse = await startupHandlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
             limit: 1,
@@ -1412,7 +1428,7 @@ test('search continuation preserves the full grouped order without new retrieval
             JSON.parse(mismatchedRetry.content[0]?.text || '{}').code,
             'SEARCH_RESULT_SET_CONFLICT',
         );
-        const pageTwoRetry = await paged.handlers.handleContinueSearch({
+        const pageTwoRetry = await startupHandlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
             limit: 1,

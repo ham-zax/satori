@@ -17,7 +17,10 @@ import {
 import { CapabilityResolver } from "../core/capabilities.js";
 import { SnapshotManager } from "../core/snapshot.js";
 import { SyncManager } from "../core/sync.js";
-import { ToolHandlers } from "../core/handlers.js";
+import {
+    SearchContinuationCoordinator,
+    ToolHandlers,
+} from "../core/handlers.js";
 import { CallGraphSidecarManager } from "../core/call-graph.js";
 import {
     RuntimeOwnerRegistry,
@@ -115,6 +118,7 @@ class ContextMcpServer {
     private providerRuntime: ProviderRuntime;
     private runtimeOwnerRegistry: RuntimeOwnerRegistry;
     private mutationLeaseCoordinator: MutationLeaseCoordinator;
+    private searchContinuationCoordinator: SearchContinuationCoordinator;
     private runMode: ServerRunMode;
     private protocolStdin?: Readable;
     private protocolStdout?: Writable;
@@ -162,6 +166,7 @@ class ContextMcpServer {
             console.warn(`[RUNTIME-OWNER] Failed to register current Satori runtime owner; index mutations will fail closed until the owner registry is writable: ${message}`);
         }
         this.mutationLeaseCoordinator = new MutationLeaseCoordinator();
+        this.searchContinuationCoordinator = new SearchContinuationCoordinator();
 
         this.snapshotManager = new SnapshotManager(this.runtimeFingerprint);
         this.callGraphManager = new CallGraphSidecarManager(this.runtimeFingerprint);
@@ -184,6 +189,7 @@ class ContextMcpServer {
             undefined,
             this.runtimeOwnerRegistry,
             this.mutationLeaseCoordinator,
+            this.searchContinuationCoordinator,
         );
         this.providerRuntime = new ProviderRuntime({
             config,
@@ -197,6 +203,7 @@ class ContextMcpServer {
             callGraphManager: this.callGraphManager,
             runtimeOwnerGate: this.runtimeOwnerRegistry,
             mutationLeaseCoordinator: this.mutationLeaseCoordinator,
+            searchContinuationCoordinator: this.searchContinuationCoordinator,
         });
         this.toolContext = {
             context: localContext,
@@ -297,6 +304,7 @@ class ContextMcpServer {
         this.syncManager.stopBackgroundSync();
         await this.syncManager.stopWatcherMode();
         await this.providerRuntime.shutdown();
+        this.toolHandlers.releaseSearchContinuationOwnership();
         this.runtimeOwnerRegistry.unregisterCurrentOwner();
     }
 }

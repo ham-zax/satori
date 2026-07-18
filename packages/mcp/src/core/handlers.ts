@@ -186,7 +186,10 @@ import { resolveSearchPolicy } from './search-policy.js';
 import { SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE } from './search-candidate-survival.js';
 import { runExactRegistryFastPath } from "./search-exact-fast-path.js";
 import { finalizeSearchResults } from "./search-result-finalization.js";
-import { SearchResultSetCache } from "./search-result-set-cache.js";
+import {
+    SearchResultSetCoordinator,
+    type SearchResultSetCoordinatorLookup,
+} from "./search-result-set-cache.js";
 import { projectGroupedDisclosure } from "./search-disclosure.js";
 import type {
     SearchQueryPlan,
@@ -230,7 +233,7 @@ type SearchPhaseTimingKey =
     | 'grouping'
     | 'navigationValidation';
 
-type FrozenSearchResultSet = {
+export type FrozenSearchResultSet = {
     canonicalRoot: string;
     vectorReceipt: ProvenVectorGenerationReceipt;
     generationReceipt?: ProvenGenerationReceipt;
@@ -246,6 +249,16 @@ type FrozenSearchResultSet = {
     orderedResults: SearchGroupedResultV2[];
     recommendedActions: Array<SearchRecommendedNextAction | null>;
 };
+
+export class SearchContinuationCoordinator extends SearchResultSetCoordinator<
+    FrozenSearchResultSet,
+    ToolHandlers
+> {}
+
+type SearchContinuationLookup = SearchResultSetCoordinatorLookup<
+    FrozenSearchResultSet,
+    ToolHandlers
+>;
 
 function freezeContinuationHints(
     hints: SearchResponseHints | undefined,
@@ -607,7 +620,7 @@ export class ToolHandlers {
     private readonly preparedReadCache = new PreparedReadCache<Extract<TrackedRootReadinessState, { state: 'ready' }>>();
     private readonly statusPreparedReadObservations = new Map<string, StatusPreparedReadObservation>();
     private readonly preparedNavigationCache = new Map<string, PreparedNavigationCacheEntry>();
-    private readonly searchResultSetCache = new SearchResultSetCache<FrozenSearchResultSet>();
+    private readonly searchContinuationCoordinator: SearchContinuationCoordinator;
     private readonly gitignoreForceReloadEveryN: number;
     private readonly searchQuerySupport: SearchQuerySupport;
     private readonly trackedRootReadiness: TrackedRootReadiness;
@@ -631,6 +644,7 @@ export class ToolHandlers {
         navigationStore: NavigationStore = createRuntimeNavigationStore(),
         private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null = null,
         private readonly mutationLeaseCoordinator: MutationLeaseCoordinator | null = null,
+        searchContinuationCoordinator?: SearchContinuationCoordinator,
     ) {
         this.context = context;
         this.snapshotManager = snapshotManager;
@@ -641,6 +655,9 @@ export class ToolHandlers {
         this.now = now;
         this.callGraphManager = callGraphManager || new CallGraphSidecarManager(runtimeFingerprint, { now });
         this.reranker = reranker || null;
+        this.searchContinuationCoordinator = searchContinuationCoordinator
+            ?? new SearchContinuationCoordinator();
+        this.searchContinuationCoordinator.registerOwner(this);
         this.gitignoreForceReloadEveryN = Math.max(1, Math.trunc(gitignoreForceReloadEveryN));
         this.navigationStore = navigationStore;
         const searchQuerySupportHost: ConstructorParameters<typeof SearchQuerySupport>[0] = {
@@ -3942,7 +3959,7 @@ export class ToolHandlers {
                     retrievalPolicy,
                     queryPlan,
                 ]), "utf8").digest("hex");
-                const stored = this.searchResultSetCache.store({
+                const stored = this.searchContinuationCoordinator.store(this, {
                     value: {
                         canonicalRoot: effectiveRoot,
                         vectorReceipt,
@@ -4042,6 +4059,16 @@ export class ToolHandlers {
     }
 
     public async handleContinueSearch(args: ToolArgs) {
+        return this.handleContinueSearchOwned(args);
+    }
+
+    private async handleContinueSearchOwned(
+        args: ToolArgs,
+        routedLookup?: SearchContinuationLookup,
+    ): Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        isError?: boolean;
+    }> {
         const handle = typeof args.handle === "string" ? args.handle.trim() : "";
         const expectedOffset = typeof args.expectedOffset === "number"
             ? args.expectedOffset
@@ -4080,12 +4107,18 @@ export class ToolHandlers {
         }
 
         const nowMs = this.now();
-        const lookup = this.searchResultSetCache.lookup(handle, nowMs);
+        const lookup = routedLookup ?? this.searchContinuationCoordinator.lookup(handle, nowMs);
         if (lookup.status === "expired") {
             return fail("SEARCH_RESULT_SET_EXPIRED", "Search continuation handle has expired. Run search_codebase again.");
         }
         if (lookup.status === "not_found") {
             return fail("SEARCH_RESULT_SET_NOT_FOUND", "Search continuation handle is unavailable in this process. Run search_codebase again.");
+        }
+        if (lookup.status === "owner_unavailable") {
+            return fail("SEARCH_RESULT_SET_STALE", "Search continuation runtime is no longer available. Run search_codebase again.");
+        }
+        if (lookup.owner !== this) {
+            return lookup.owner.handleContinueSearchOwned(args, lookup);
         }
 
         const entry = lookup.entry;
@@ -4097,7 +4130,7 @@ export class ToolHandlers {
             || observationBefore.sourceObservation !== entry.sourceObservation
             || typeof revalidate !== "function"
         ) {
-            this.searchResultSetCache.remove(handle);
+            this.searchContinuationCoordinator.remove(handle);
             return fail("SEARCH_RESULT_SET_STALE", "Search publication or source observation changed. Run search_codebase again.");
         }
         const proof = await revalidate.call(this.context, entry.canonicalRoot, entry.vectorReceipt, {
@@ -4111,7 +4144,7 @@ export class ToolHandlers {
             || observationAfter.observation !== observationBefore.observation
             || observationAfter.sourceObservation !== observationBefore.sourceObservation
         ) {
-            this.searchResultSetCache.remove(handle);
+            this.searchContinuationCoordinator.remove(handle);
             return fail("SEARCH_RESULT_SET_STALE", "Search publication changed while continuation was being prepared. Run search_codebase again.");
         }
 
@@ -4210,7 +4243,7 @@ export class ToolHandlers {
             || observationAfterProjection.observation !== observationAfter.observation
             || observationAfterProjection.sourceObservation !== observationAfter.sourceObservation
         ) {
-            this.searchResultSetCache.remove(handle);
+            this.searchContinuationCoordinator.remove(handle);
             return fail(
                 "SEARCH_RESULT_SET_STALE",
                 "Search publication or source observation changed while the continuation page was being projected. Run search_codebase again.",
@@ -4218,7 +4251,7 @@ export class ToolHandlers {
         }
         const nextOffset = lookup.nextOffset + projection.results.length;
         const responseText = this.stringifyToolJson(projection.envelope);
-        const advanced = this.searchResultSetCache.advance({
+        const advanced = this.searchContinuationCoordinator.advance({
             handle,
             expectedOffset: lookup.nextOffset,
             nextOffset,
@@ -4231,7 +4264,7 @@ export class ToolHandlers {
         });
         if (advanced !== "advanced") {
             if (advanced === "conflict") {
-                const concurrent = this.searchResultSetCache.lookup(handle, this.now());
+                const concurrent = this.searchContinuationCoordinator.lookup(handle, this.now());
                 if (
                     concurrent.status === "hit"
                     && concurrent.lastPage?.expectedOffset === expectedOffset
@@ -4256,6 +4289,10 @@ export class ToolHandlers {
         return {
             content: [{ type: "text", text: responseText }],
         };
+    }
+
+    public releaseSearchContinuationOwnership(): void {
+        this.searchContinuationCoordinator.unregisterOwner(this);
     }
 
     /** Internal Phase 4 entry point. MCP schema/transport wiring belongs to Phase 5. */

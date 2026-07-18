@@ -939,7 +939,7 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
         const internals = handlers as unknown as {
             now: () => number;
             context: HandlerContext & {
-                getIndexAuthorityObservations: () => { vector: string; navigation: string };
+                getIndexAuthorityObservations: () => { vector: string; navigation: string } | null;
                 revalidatePreparedGeneration: () => Promise<{
                     vectorReceipt: never;
                     navigationProof: { status: 'not_bound' };
@@ -1124,10 +1124,13 @@ test('manage status prepares one reusable proof and genuine authority drift stil
         };
         const semanticSearch = internals.context.semanticSearchInProvenGeneration
             .bind(internals.context);
-        internals.context.getIndexAuthorityObservations = () => ({
-            vector: 'vector-authority',
-            navigation: 'navigation-authority',
-        });
+        let authorityInitialized = false;
+        internals.context.getIndexAuthorityObservations = () => authorityInitialized
+            ? {
+                vector: 'vector-authority',
+                navigation: 'navigation-authority',
+            }
+            : null;
         internals.context.isPreparedVectorReceiptBoundToCurrentAuthority = () => true;
         internals.context.revalidatePreparedGeneration = async () => {
             throw new Error('status-prepared reuse must not reread the completion proof');
@@ -1151,6 +1154,7 @@ test('manage status prepares one reusable proof and genuine authority drift stil
         };
         internals.validateCompletionProof = async () => {
             completionProofReads += 1;
+            authorityInitialized = true;
             return {
                 outcome: 'valid',
                 navigationStatus: 'not_bound',

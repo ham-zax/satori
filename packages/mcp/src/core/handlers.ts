@@ -1496,7 +1496,18 @@ export class ToolHandlers {
             () => undefined,
         );
         if (state.state === 'ready') {
-            this.seedPreparedRead(state, false, true);
+            // A process-cold status proof may initialize Core's published policy
+            // binding, so no observation existed before the proof. Bind the proven
+            // receipt to the first stable post-proof observation; seedPreparedRead
+            // immediately rechecks it and refuses any intervening authority change.
+            const preparedObservation = state.preparedObservation
+                ?? this.getPreparedAuthorityObservation(state.root.path)
+                ?? undefined;
+            this.seedPreparedRead(
+                { ...state, ...(preparedObservation ? { preparedObservation } : {}) },
+                false,
+                true,
+            );
         }
         return state;
     }

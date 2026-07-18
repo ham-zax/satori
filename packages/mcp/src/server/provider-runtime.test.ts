@@ -123,6 +123,7 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
         lanceDbPath: databasePath,
         milvusEndpoint: undefined,
         milvusApiToken: undefined,
+        embeddingArtifactDigest: "a".repeat(64),
     });
     const fingerprint = buildRuntimeIndexFingerprint(config, 1024);
     assert.equal(fingerprint.vectorStoreProvider, "LanceDB");
@@ -146,10 +147,14 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
 
     const contextFingerprint = (
         toolContext.context as unknown as {
-            buildIndexCompletionFingerprint(): { vectorStoreProvider: string };
+            buildIndexCompletionFingerprint(): {
+                vectorStoreProvider: string;
+                embeddingArtifactDigest: string | null;
+            };
         }
     ).buildIndexCompletionFingerprint();
     assert.equal(contextFingerprint.vectorStoreProvider, "LanceDB");
+    assert.equal(contextFingerprint.embeddingArtifactDigest, "a".repeat(64));
 
     const stored = searchContinuationCoordinator.store(toolContext.toolHandlers, {
         value: {} as never,
@@ -166,19 +171,24 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
     await assert.rejects(vectorStore.listCollections(), /closed/);
 });
 
-test("vector-only context preserves the configured embedding model fingerprint", () => {
+test("vector-only context preserves the configured embedding identity", () => {
     const config = baseConfig({
         encoderProvider: "VoyageAI",
         encoderModel: "voyage-code-3",
+        embeddingArtifactDigest: "b".repeat(64),
     });
     const context = createLocalOnlyContext(config);
     const fingerprint = (
         context as unknown as {
-            buildIndexCompletionFingerprint(): { embeddingModel: string };
+            buildIndexCompletionFingerprint(): {
+                embeddingModel: string;
+                embeddingArtifactDigest: string | null;
+            };
         }
     ).buildIndexCompletionFingerprint();
 
     assert.equal(fingerprint.embeddingModel, "voyage-code-3");
+    assert.equal(fingerprint.embeddingArtifactDigest, "b".repeat(64));
 });
 
 test("MILVUS_TOKEN is not a substitute for MILVUS_ADDRESS", () => {

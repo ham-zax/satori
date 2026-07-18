@@ -43,6 +43,7 @@ type ResolvedProviderRuntimeBootstrap = Readonly<{
             provider: string;
             model: string;
             dimension: number;
+            artifactDigest: string | null;
         }
     >;
     vectorBackend: Readonly<
@@ -92,12 +93,14 @@ class MetadataOnlyEmbedding extends Embedding {
     protected maxTokens = 1;
     private readonly provider: string;
     private readonly dimension: number;
+    private readonly artifactDigest: string | null;
     readonly config: { model: string };
 
-    constructor(provider: string, model: string, dimension: number) {
+    constructor(provider: string, model: string, dimension: number, artifactDigest: string | null) {
         super();
         this.provider = provider;
         this.dimension = dimension;
+        this.artifactDigest = artifactDigest;
         this.config = { model };
     }
 
@@ -122,7 +125,7 @@ class MetadataOnlyEmbedding extends Embedding {
     }
 
     override getIdentity(): Readonly<EmbeddingIdentity> {
-        return this.buildIdentity(this.config.model);
+        return this.buildIdentity(this.config.model, this.artifactDigest);
     }
 }
 
@@ -176,6 +179,7 @@ export function createLocalOnlyContext(
             config.encoderProvider,
             config.encoderModel,
             resolveConfiguredEmbeddingDimension(config),
+            config.embeddingArtifactDigest ?? null,
         ),
         vectorDatabase: new UnconfiguredVectorDatabase(),
         vectorStoreProvider: config.vectorStoreProvider,
@@ -419,6 +423,7 @@ export class ProviderRuntime {
                 provider: this.config.encoderProvider,
                 model: this.config.encoderModel,
                 dimension: resolveConfiguredEmbeddingDimension(this.config),
+                artifactDigest: this.config.embeddingArtifactDigest ?? null,
             });
         return Object.freeze({
             embedding,
@@ -436,6 +441,7 @@ export class ProviderRuntime {
                 bootstrap.embedding.provider,
                 bootstrap.embedding.model,
                 bootstrap.embedding.dimension,
+                bootstrap.embedding.artifactDigest,
             );
         }
         const embedding = await createEmbeddingInstance(this.config);

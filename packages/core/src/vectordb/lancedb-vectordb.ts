@@ -58,24 +58,82 @@ const DATA_FIELDS = [
     'metadataJson',
 ] as const;
 
-async function copyDirectoryWithClone(sourcePath: string, targetPath: string): Promise<void> {
+type CollectionForkPhysicalStats = Readonly<{
+    logicalBytes: number;
+    physicallyCopiedBytes: number;
+    sharedFiles: number;
+    copiedFiles: number;
+}>;
+
+function isIndependentlyMutableLanceFile(relativePath: string): boolean {
+    return relativePath === path.join('_versions', 'latest_version_hint.json');
+}
+
+function structuralSharingError(sourcePath: string, targetPath: string, error: unknown): Error {
+    const code = error && typeof error === 'object' && 'code' in error
+        ? String((error as NodeJS.ErrnoException).code)
+        : 'unknown';
+    return new Error(
+        'LanceDB atomic candidate publication requires same-filesystem hard-link support; '
+        + `cannot share '${sourcePath}' into '${targetPath}' (${code}). `
+        + 'Run a safe full rebuild instead.',
+    );
+}
+
+async function shareDirectoryForCandidate(
+    sourcePath: string,
+    targetPath: string,
+    relativeRoot = '',
+): Promise<CollectionForkPhysicalStats> {
     await fs.promises.mkdir(targetPath);
+    let logicalBytes = 0;
+    let physicallyCopiedBytes = 0;
+    let sharedFiles = 0;
+    let copiedFiles = 0;
     const entries = await fs.promises.readdir(sourcePath, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => compareContractStrings(left.name, right.name))) {
         const sourceEntryPath = path.join(sourcePath, entry.name);
         const targetEntryPath = path.join(targetPath, entry.name);
+        const relativePath = path.join(relativeRoot, entry.name);
         if (entry.isDirectory()) {
-            await copyDirectoryWithClone(sourceEntryPath, targetEntryPath);
-        } else if (entry.isFile()) {
-            await fs.promises.copyFile(
+            const child = await shareDirectoryForCandidate(
                 sourceEntryPath,
                 targetEntryPath,
-                fs.constants.COPYFILE_FICLONE,
+                relativePath,
             );
+            logicalBytes += child.logicalBytes;
+            physicallyCopiedBytes += child.physicallyCopiedBytes;
+            sharedFiles += child.sharedFiles;
+            copiedFiles += child.copiedFiles;
+        } else if (entry.isFile()) {
+            const sourceStat = await fs.promises.stat(sourceEntryPath);
+            logicalBytes += sourceStat.size;
+            if (isIndependentlyMutableLanceFile(relativePath)) {
+                await fs.promises.copyFile(
+                    sourceEntryPath,
+                    targetEntryPath,
+                    fs.constants.COPYFILE_FICLONE,
+                );
+                physicallyCopiedBytes += sourceStat.size;
+                copiedFiles += 1;
+            } else {
+                try {
+                    await fs.promises.link(sourceEntryPath, targetEntryPath);
+                } catch (error) {
+                    throw structuralSharingError(sourceEntryPath, targetEntryPath, error);
+                }
+                sharedFiles += 1;
+            }
         } else {
             throw new Error(`LanceDB collection contains unsupported entry '${entry.name}'.`);
         }
     }
+    return {
+        logicalBytes,
+        physicallyCopiedBytes,
+        sharedFiles,
+        copiedFiles,
+    };
 }
 
 async function collectClonePaths(
@@ -92,7 +150,7 @@ async function collectClonePaths(
     directories.push(rootPath);
 }
 
-async function fsyncCloneTree(rootPath: string): Promise<void> {
+async function fsyncCandidateTree(rootPath: string): Promise<void> {
     const files: string[] = [];
     const directories: string[] = [];
     await collectClonePaths(rootPath, files, directories);
@@ -105,8 +163,13 @@ async function fsyncCloneTree(rootPath: string): Promise<void> {
         }
     };
     const concurrency = 64;
-    for (let offset = 0; offset < files.length; offset += concurrency) {
-        await Promise.all(files.slice(offset, offset + concurrency).map(syncPath));
+    const independentlyWrittenFiles: string[] = [];
+    for (const filePath of files) {
+        const stat = await fs.promises.stat(filePath);
+        if (stat.nlink === 1) independentlyWrittenFiles.push(filePath);
+    }
+    for (let offset = 0; offset < independentlyWrittenFiles.length; offset += concurrency) {
+        await Promise.all(independentlyWrittenFiles.slice(offset, offset + concurrency).map(syncPath));
     }
     for (const directory of directories) await syncPath(directory);
     await syncPath(path.dirname(rootPath));
@@ -476,8 +539,8 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         const sourceUri = path.join(this.databasePath, `${sourceCollectionName}.lance`);
         const targetUri = path.join(this.databasePath, `${targetCollectionName}.lance`);
         try {
-            await copyDirectoryWithClone(sourceUri, targetUri);
-            await fsyncCloneTree(targetUri);
+            const physical = await shareDirectoryForCandidate(sourceUri, targetUri);
+            await fsyncCandidateTree(targetUri);
             const candidate = await connection.openTable(targetCollectionName);
             try {
                 if (await candidate.countRows() !== copiedDocuments) {
@@ -486,16 +549,17 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             } finally {
                 candidate.close();
             }
+            return {
+                sourceCollectionName,
+                targetCollectionName,
+                strategy: 'filesystem_hardlink_cow',
+                copiedDocuments,
+                ...physical,
+            };
         } catch (error) {
             await fs.promises.rm(targetUri, { recursive: true, force: true }).catch(() => undefined);
             throw error;
         }
-        return {
-            sourceCollectionName,
-            targetCollectionName,
-            strategy: 'filesystem_clone',
-            copiedDocuments,
-        };
     }
 
     async dropCollection(collectionName: string): Promise<void> {

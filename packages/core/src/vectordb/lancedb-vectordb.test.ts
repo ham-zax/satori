@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,36 @@ import type {
 } from './types';
 
 const execFileAsync = promisify(execFile);
+
+type PhysicalFileSnapshot = Readonly<{
+    hash: string;
+    inode: bigint;
+}>;
+
+async function snapshotPhysicalFiles(rootPath: string): Promise<Map<string, PhysicalFileSnapshot>> {
+    const snapshot = new Map<string, PhysicalFileSnapshot>();
+    const visit = async (directory: string, relativeRoot = ''): Promise<void> => {
+        const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+        for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+            const entryPath = path.join(directory, entry.name);
+            const relativePath = path.join(relativeRoot, entry.name);
+            if (entry.isDirectory()) {
+                await visit(entryPath, relativePath);
+            } else if (entry.isFile()) {
+                const [bytes, stat] = await Promise.all([
+                    fs.promises.readFile(entryPath),
+                    fs.promises.stat(entryPath, { bigint: true }),
+                ]);
+                snapshot.set(relativePath, {
+                    hash: crypto.createHash('sha256').update(bytes).digest('hex'),
+                    inode: stat.ino,
+                });
+            }
+        }
+    };
+    await visit(rootPath);
+    return snapshot;
+}
 
 function indexedDocument(input: {
     id: string;
@@ -228,12 +259,27 @@ test('LanceDB forks an independently retained searchable generation', async (t) 
     await database.finalizeCollectionForSearch('source__gen_one');
 
     const receipt = await database.forkCollection('source__gen_one', 'source__gen_two');
-    assert.deepEqual(receipt, {
-        sourceCollectionName: 'source__gen_one',
-        targetCollectionName: 'source__gen_two',
-        strategy: 'filesystem_clone',
-        copiedDocuments: 1,
-    });
+    assert.equal(receipt.sourceCollectionName, 'source__gen_one');
+    assert.equal(receipt.targetCollectionName, 'source__gen_two');
+    assert.equal(receipt.strategy, 'filesystem_hardlink_cow');
+    assert.equal(receipt.copiedDocuments, 1);
+    assert.ok((receipt.sharedFiles ?? 0) > 0);
+    assert.equal(receipt.copiedFiles, 1);
+    assert.ok((receipt.physicallyCopiedBytes ?? Number.POSITIVE_INFINITY) < (receipt.logicalBytes ?? 0));
+
+    const sourcePath = path.join(databasePath, 'source__gen_one.lance');
+    const candidatePath = path.join(databasePath, 'source__gen_two.lance');
+    const sourceBeforeMutation = await snapshotPhysicalFiles(sourcePath);
+    const candidateBeforeMutation = await snapshotPhysicalFiles(candidatePath);
+    const sharedPaths = [...sourceBeforeMutation].filter(([relativePath, sourceFile]) => (
+        candidateBeforeMutation.get(relativePath)?.inode === sourceFile.inode
+    ));
+    assert.ok(sharedPaths.length > 0);
+    const sourceHint = sourceBeforeMutation.get(path.join('_versions', 'latest_version_hint.json'));
+    const candidateHint = candidateBeforeMutation.get(path.join('_versions', 'latest_version_hint.json'));
+    assert.ok(sourceHint);
+    assert.ok(candidateHint);
+    assert.notEqual(candidateHint.inode, sourceHint.inode);
 
     await database.writeDocuments('source__gen_two', [
         indexedDocument({ id: 'new', vector: [0, 1], lexicalText: 'newterm' }),
@@ -248,6 +294,10 @@ test('LanceDB forks an independently retained searchable generation', async (t) 
     assert.deepEqual(sourceRows.map((row) => row.id), ['old']);
     assert.deepEqual(candidateRows.map((row) => row.id), ['new', 'old']);
     assert.deepEqual(candidateLexical.map((row) => row.document.id), ['new']);
+    assert.deepEqual(
+        [...await snapshotPhysicalFiles(sourcePath)].map(([relativePath, file]) => [relativePath, file.hash]),
+        [...sourceBeforeMutation].map(([relativePath, file]) => [relativePath, file.hash]),
+    );
 
     await database.dropCollection('source__gen_one');
     assert.deepEqual(
@@ -257,6 +307,42 @@ test('LanceDB forks an independently retained searchable generation', async (t) 
     assert.deepEqual(
         (await database.retrieveLexical('source__gen_two', { query: 'oldterm', limit: 2 }))
             .map((row) => row.document.id),
+        ['old'],
+    );
+
+    await database.close();
+    const reopened = new LanceDbVectorDatabase({ databasePath });
+    t.after(() => reopened.close());
+    assert.deepEqual(
+        (await reopened.queryDocuments('source__gen_two', { fields: ['id'] })).map((row) => row.id),
+        ['new', 'old'],
+    );
+});
+
+test('LanceDB candidate publication fails closed without hard-link support', async (t) => {
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-no-hardlinks-'));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const database = new LanceDbVectorDatabase({ databasePath });
+    t.after(() => database.close());
+
+    await database.createHybridCollection('source__gen_one', 2, undefined, { deferIndexBuild: true });
+    await database.writeDocuments('source__gen_one', [
+        indexedDocument({ id: 'old', vector: [1, 0], lexicalText: 'oldterm' }),
+    ]);
+    await database.finalizeCollectionForSearch('source__gen_one');
+
+    t.mock.method(fs.promises, 'link', async () => {
+        const error = new Error('cross-device link') as NodeJS.ErrnoException;
+        error.code = 'EXDEV';
+        throw error;
+    });
+    await assert.rejects(
+        database.forkCollection('source__gen_one', 'source__gen_two'),
+        /requires same-filesystem hard-link support.*EXDEV.*Run a safe full rebuild instead/,
+    );
+    assert.equal(fs.existsSync(path.join(databasePath, 'source__gen_two.lance')), false);
+    assert.deepEqual(
+        (await database.queryDocuments('source__gen_one', { fields: ['id'] })).map((row) => row.id),
         ['old'],
     );
 });

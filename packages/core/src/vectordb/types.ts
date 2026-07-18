@@ -154,8 +154,16 @@ export type CollectionCreateOptions = {
 export type CollectionForkReceipt = Readonly<{
     sourceCollectionName: string;
     targetCollectionName: string;
-    strategy: 'filesystem_clone' | 'row_copy';
+    strategy: 'filesystem_hardlink_cow' | 'row_copy';
     copiedDocuments: number;
+    /** Logical bytes visible through the candidate collection. */
+    logicalBytes?: number;
+    /** Bytes physically copied while preparing the candidate. */
+    physicallyCopiedBytes?: number;
+    /** Immutable files shared with the source generation by hard link. */
+    sharedFiles?: number;
+    /** Mutable files copied into independent candidate storage. */
+    copiedFiles?: number;
 }>;
 
 export type VectorPublicationCapabilities = Readonly<{

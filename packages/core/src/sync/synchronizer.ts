@@ -103,6 +103,13 @@ export type PreparedFileChangeCommitReceipt = {
     readonly merkleRoot: string;
 };
 
+export type StagedSourceFreshnessCheckpoint = Readonly<{
+    checkpointIdentity: string;
+    snapshotPath: string;
+    merkleRoot: string;
+    documentDigest: string;
+}>;
+
 export class SynchronizerCheckpointPublicationError extends Error {
     readonly committed = true;
 
@@ -124,6 +131,11 @@ export interface PreparedFileChangeSet {
         publishMutation?: (publish: () => void) => void,
         checkpointAuthority?: SourceFreshnessCheckpointAuthority,
     ): Promise<PreparedFileChangeCommitReceipt>;
+    stageCheckpoint(
+        checkpointAuthority: SourceFreshnessCheckpointAuthority,
+        assertMutationCurrent?: () => void,
+    ): Promise<StagedSourceFreshnessCheckpoint>;
+    assertSourceObservationCurrent(): Promise<void>;
 }
 
 export interface FileSynchronizerInitializeOptions {
@@ -163,6 +175,7 @@ export type SourceFreshnessCheckpointEvidence =
         readonly status: 'valid';
         readonly observationToken: string;
         readonly merkleRoot: string;
+        readonly documentDigest: string;
     }
     | {
         readonly status: 'missing' | 'corrupt';
@@ -740,6 +753,90 @@ export class FileSynchronizer {
         return true;
     }
 
+    private buildSnapshotPayload(
+        checkpoint: SynchronizerCheckpointState,
+        checkpointIdentity: string | null,
+        checkpointAuthority: SourceFreshnessCheckpointAuthority | null,
+    ): SnapshotV2 | SnapshotV3 {
+        const fileHashes = Array.from(checkpoint.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
+        const fileStats = Array.from(checkpoint.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
+        const basePayload: SnapshotV2 = {
+            snapshotVersion: SNAPSHOT_VERSION,
+            fileHashes,
+            fileStats,
+            merkleRoot: checkpoint.merkleRoot,
+            partialScan: checkpoint.partialScan,
+            unscannedDirPrefixes: [...checkpoint.unscannedDirPrefixes],
+            fullHashCounter: checkpoint.fullHashCounter,
+        };
+        if (!checkpointIdentity) return basePayload;
+        if (!checkpointAuthority) {
+            throw new Error('[Synchronizer] Cannot publish an authority-scoped checkpoint without marker ownership evidence.');
+        }
+        if (checkpointAuthority.collectionName !== checkpointIdentity) {
+            throw new Error('[Synchronizer] Candidate checkpoint identity must match its collection authority.');
+        }
+        const generationPayload: Omit<SnapshotV3, 'documentDigest'> = {
+            ...basePayload,
+            snapshotVersion: GENERATION_SNAPSHOT_VERSION,
+            canonicalRoot: this.rootDir,
+            checkpointIdentity,
+            collectionName: checkpointAuthority.collectionName,
+            markerRunId: checkpointAuthority.markerRunId,
+            indexPolicyHash: checkpointAuthority.indexPolicyHash,
+        };
+        return {
+            ...generationPayload,
+            documentDigest: crypto.createHash('sha256')
+                .update(JSON.stringify(generationPayload))
+                .digest('hex'),
+        };
+    }
+
+    private async stageCheckpointState(
+        checkpoint: SynchronizerCheckpointState,
+        checkpointAuthority: SourceFreshnessCheckpointAuthority,
+        assertMutationCurrent?: () => void,
+    ): Promise<StagedSourceFreshnessCheckpoint> {
+        const authority = FileSynchronizer.normalizeCheckpointAuthority(checkpointAuthority);
+        const checkpointIdentity = authority.collectionName;
+        const snapshotPath = FileSynchronizer.getSnapshotPathForGeneration(this.rootDir, checkpointIdentity);
+        const payload = this.buildSnapshotPayload(checkpoint, checkpointIdentity, authority) as SnapshotV3;
+        const serializedPayload = JSON.stringify(payload);
+        const merkleDir = path.dirname(snapshotPath);
+        const tempSnapshotPath = `${snapshotPath}.candidate-${process.pid}-${crypto.randomUUID()}`;
+        assertMutationCurrent?.();
+        await fsp.mkdir(merkleDir, { recursive: true });
+        if (fsSync.existsSync(snapshotPath)) {
+            throw new Error(`[Synchronizer] Candidate checkpoint already exists at ${snapshotPath}.`);
+        }
+        try {
+            const temporaryFile = await fsp.open(tempSnapshotPath, 'wx', 0o600);
+            try {
+                await temporaryFile.writeFile(serializedPayload, 'utf-8');
+                await temporaryFile.sync();
+            } finally {
+                await temporaryFile.close();
+            }
+            assertMutationCurrent?.();
+            await fsp.rename(tempSnapshotPath, snapshotPath);
+            const directory = fsSync.openSync(merkleDir, 'r');
+            try {
+                fsSync.fsyncSync(directory);
+            } finally {
+                fsSync.closeSync(directory);
+            }
+        } finally {
+            await fsp.unlink(tempSnapshotPath).catch(() => undefined);
+        }
+        return {
+            checkpointIdentity,
+            snapshotPath,
+            merkleRoot: checkpoint.merkleRoot,
+            documentDigest: payload.documentDigest,
+        };
+    }
+
     private async saveSnapshot(
         state?: SynchronizerCheckpointState,
         assertMutationCurrent?: () => void,
@@ -762,40 +859,11 @@ export class FileSynchronizer {
             merkleRoot: this.merkleRoot,
             fullHashCounter: this.fullHashCounter,
         };
-        const fileHashes = Array.from(checkpoint.fileHashes.entries()).sort(([a], [b]) => compareContractStrings(a, b));
-        const fileStats = Array.from(checkpoint.fileStats.entries()).sort(([a], [b]) => compareContractStrings(a, b));
-
-        const basePayload: SnapshotV2 = {
-            snapshotVersion: SNAPSHOT_VERSION,
-            fileHashes,
-            fileStats,
-            merkleRoot: checkpoint.merkleRoot,
-            partialScan: checkpoint.partialScan,
-            unscannedDirPrefixes: [...checkpoint.unscannedDirPrefixes],
-            fullHashCounter: checkpoint.fullHashCounter
-        };
-        const payload: SnapshotV2 | SnapshotV3 = this.checkpointIdentity
-            ? (() => {
-                if (!checkpointAuthority) {
-                    throw new Error('[Synchronizer] Cannot publish an authority-scoped checkpoint without marker ownership evidence.');
-                }
-                const generationPayload = {
-                    ...basePayload,
-                    snapshotVersion: GENERATION_SNAPSHOT_VERSION,
-                    canonicalRoot: this.rootDir,
-                    checkpointIdentity: this.checkpointIdentity,
-                    collectionName: checkpointAuthority.collectionName,
-                    markerRunId: checkpointAuthority.markerRunId,
-                    indexPolicyHash: checkpointAuthority.indexPolicyHash,
-                };
-                return {
-                    ...generationPayload,
-                    documentDigest: crypto.createHash('sha256')
-                        .update(JSON.stringify(generationPayload))
-                        .digest('hex'),
-                };
-            })()
-            : basePayload;
+        const payload = this.buildSnapshotPayload(
+            checkpoint,
+            this.checkpointIdentity,
+            checkpointAuthority,
+        );
 
         const serializedPayload = JSON.stringify(payload);
         const publishedDocumentDigest: string | null = 'documentDigest' in payload
@@ -1110,6 +1178,7 @@ export class FileSynchronizer {
                     documentDigest: snapshot.documentDigest,
                 }),
                 merkleRoot: snapshot.merkleRoot!,
+                documentDigest: snapshot.documentDigest!,
             };
         } catch (error: unknown) {
             if (errorCode(error) === 'ENOENT') {
@@ -1362,6 +1431,25 @@ export class FileSynchronizer {
         return {
             changes,
             fileHashes: new Map(nextState.fileHashes),
+            assertSourceObservationCurrent: async () => {
+                const { effective } = await this.scanCurrentState(
+                    new Map(nextState.fileHashes),
+                    new Map(nextState.fileStats),
+                    false,
+                );
+                const observedMerkleRoot = computeMerkleRoot(effective.fileHashes);
+                if (
+                    observedMerkleRoot !== nextState.merkleRoot
+                    || effective.partialScan !== nextState.partialScan
+                    || !this.arraysEqual(effective.unscannedDirPrefixes, nextState.unscannedDirPrefixes)
+                ) {
+                    throw new Error('[Synchronizer] Source observation changed while the candidate publication was being prepared.');
+                }
+            },
+            stageCheckpoint: (
+                checkpointAuthority: SourceFreshnessCheckpointAuthority,
+                assertMutationCurrent?: () => void,
+            ) => this.stageCheckpointState(nextState, checkpointAuthority, assertMutationCurrent),
             commit: (
                 assertMutationCurrent?: () => void,
                 publishMutation?: (publish: () => void) => void,
@@ -1482,6 +1570,43 @@ export class FileSynchronizer {
         }
         assertMutationCurrent?.();
         FileSynchronizer.deleteSnapshotPathSync(snapshotPath);
+    }
+
+    static async pruneSnapshotsForGenerations(
+        codebasePath: string,
+        keepCheckpointIdentities: ReadonlySet<string>,
+    ): Promise<string[]> {
+        const canonicalPath = FileSynchronizer.canonicalizeSnapshotIdentityPath(codebasePath);
+        const rootSnapshotPath = FileSynchronizer.snapshotPathFromCanonicalPath(canonicalPath);
+        const snapshotDirectory = path.dirname(rootSnapshotPath);
+        const rootSnapshotName = path.basename(rootSnapshotPath, '.json');
+        const keepPaths = new Set(
+            [...keepCheckpointIdentities].map((identity) => (
+                FileSynchronizer.snapshotPathFromCanonicalPath(canonicalPath, identity)
+            )),
+        );
+        let entries: fsSync.Dirent[];
+        try {
+            entries = await fsp.readdir(snapshotDirectory, { withFileTypes: true });
+        } catch (error) {
+            if (errorCode(error) === 'ENOENT') return [];
+            throw error;
+        }
+        const removed: string[] = [];
+        for (const entry of entries
+            .filter((candidate) => candidate.isFile())
+            .filter((candidate) => (
+                candidate.name.startsWith(`${rootSnapshotName}.`)
+                && candidate.name.endsWith('.json')
+            ))
+            .sort((left, right) => left.name.localeCompare(right.name))) {
+            const snapshotPath = path.join(snapshotDirectory, entry.name);
+            if (keepPaths.has(snapshotPath)) continue;
+            await fsp.unlink(snapshotPath);
+            removed.push(snapshotPath);
+        }
+        if (removed.length > 0) FileSynchronizer.fsyncDirectory(snapshotDirectory);
+        return removed;
     }
 
     private static deleteSnapshotPathSync(snapshotPath: string): void {

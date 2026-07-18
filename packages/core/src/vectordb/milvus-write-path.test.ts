@@ -32,6 +32,17 @@ const controlRecord: VectorControlRecord = {
     },
 };
 
+test('Milvus adapters truthfully reject atomic candidate publication', () => {
+    assert.deepEqual(
+        MilvusVectorDatabase.prototype.getPublicationCapabilities.call({} as MilvusVectorDatabase),
+        { atomicCandidatePublication: 'unsupported' },
+    );
+    assert.deepEqual(
+        MilvusRestfulVectorDatabase.prototype.getPublicationCapabilities.call({} as MilvusRestfulVectorDatabase),
+        { atomicCandidatePublication: 'unsupported' },
+    );
+});
+
 test('Milvus control-row translation round-trips generic metadata without requiring a fingerprint', () => {
     const document = toLegacyMilvusControlDocument(controlRecord, 2);
     const decoded = fromLegacyMilvusControlRow({

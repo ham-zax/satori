@@ -24,6 +24,7 @@ import {
     CollectionCreateOptions,
     VectorWriteFlushReason,
     VectorWriteMetricsSnapshot,
+    VectorPublicationCapabilities,
 } from './types';
 import {
     fromLegacyMilvusControlRow,
@@ -814,6 +815,10 @@ export class MilvusVectorDatabase implements VectorDatabase {
             transport: 'grpc',
             address,
         };
+    }
+
+    getPublicationCapabilities(): VectorPublicationCapabilities {
+        return { atomicCandidatePublication: 'unsupported' };
     }
 
     getWriteMetricsSnapshot(): VectorWriteMetricsSnapshot {

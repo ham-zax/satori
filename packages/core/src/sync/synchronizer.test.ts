@@ -895,3 +895,31 @@ test('FileSynchronizer forceFullHash hashes every selected source despite unchan
         fs.rmSync(tempHome, { recursive: true, force: true });
     }
 });
+
+test('FileSynchronizer rejects a prepared publication after its source observation changes', async () => {
+    const previousHome = process.env.HOME;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-observation-home-'));
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-observation-repo-'));
+    try {
+        process.env.HOME = tempHome;
+        const sourcePath = path.join(tempRepo, 'owner.ts');
+        fs.writeFileSync(sourcePath, 'export const owner = 1;\n', 'utf8');
+        const synchronizer = new FileSynchronizer(tempRepo, [], ['.ts']);
+        await synchronizer.initialize();
+
+        fs.writeFileSync(sourcePath, 'export const owner = 2;\n', 'utf8');
+        const prepared = await synchronizer.prepareChanges();
+        await prepared.assertSourceObservationCurrent();
+
+        fs.writeFileSync(sourcePath, 'export const owner = 3;\n', 'utf8');
+        await assert.rejects(
+            () => prepared.assertSourceObservationCurrent(),
+            /source observation changed while the candidate publication was being prepared/i,
+        );
+    } finally {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+});

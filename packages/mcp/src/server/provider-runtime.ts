@@ -483,34 +483,12 @@ export class ProviderRuntime {
     }
 
     private createSyncCompletionHook(context: Context): SyncCompletionHook {
-        return async (codebasePath, stats, assertMutationCurrent) => {
-            try {
-                assertMutationCurrent();
-                const sidecar = await this.callGraphManager.rebuildIfSupportedDelta(
-                    codebasePath,
-                    stats.changedFiles,
-                    context.getActiveIgnorePatterns(codebasePath),
-                    assertMutationCurrent,
-                );
-                if (sidecar) {
-                    assertMutationCurrent();
-                    const committed = this.snapshotManager.commitCodebaseCallGraphSidecar(
-                        codebasePath,
-                        sidecar,
-                        assertMutationCurrent,
-                    );
-                    if (!committed) {
-                        console.warn(
-                            `[CALL-GRAPH] Sync lifecycle rebuild discarded for '${codebasePath}': `
-                            + 'fenced snapshot commit failed; in-memory sidecar rolled back.',
-                        );
-                        return;
-                    }
-                    console.log(`[CALL-GRAPH] Rebuilt sidecar for '${codebasePath}' from sync lifecycle callback.`);
-                }
-            } catch (error: unknown) {
-                const message = error instanceof Error ? error.message : String(error);
-                console.warn(`[CALL-GRAPH] Sync lifecycle rebuild failed for '${codebasePath}': ${message}`);
+        return async (codebasePath, _stats, assertMutationCurrent) => {
+            assertMutationCurrent();
+            const publication = await context.proveIndexedGeneration(codebasePath);
+            assertMutationCurrent();
+            if (!publication) {
+                throw new Error(`Incremental publication for '${codebasePath}' is not readable as one complete generation.`);
             }
         };
     }

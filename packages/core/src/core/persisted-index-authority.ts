@@ -120,8 +120,7 @@ export type CanonicalPolicyNavigationBinding =
     | { status: 'not_bound' }
     | { status: 'sealed'; generationId: string; sealHash: string };
 
-export interface CanonicalIndexPolicyPayload {
-    schemaVersion: 'satori_index_policy_v3';
+interface CanonicalIndexPolicyBase {
     canonicalRoot: string;
     customExtensions: string[];
     customIgnorePatterns: string[];
@@ -134,9 +133,40 @@ export interface CanonicalIndexPolicyPayload {
     navigation: CanonicalPolicyNavigationBinding;
 }
 
-export interface CanonicalIndexPolicyDocument extends CanonicalIndexPolicyPayload {
-    documentDigest: string;
+export interface CanonicalPublicationBinding {
+    activationId: string;
+    sourceCheckpoint: {
+        collectionName: string;
+        markerRunId: string;
+        indexPolicyHash: string;
+        merkleRoot: string;
+        documentDigest: string;
+    };
+    graph: {
+        kind: 'relationship_manifest_v2';
+        manifestHash: string;
+    };
+    receipt: {
+        ownerId: string;
+        generation: number;
+        operationId: string;
+    };
 }
+
+export interface CanonicalIndexPolicyV3Payload extends CanonicalIndexPolicyBase {
+    schemaVersion: 'satori_index_policy_v3';
+}
+
+export interface CanonicalIndexPolicyV4Payload extends CanonicalIndexPolicyBase {
+    schemaVersion: 'satori_index_policy_v4';
+    publication: CanonicalPublicationBinding;
+}
+
+export type CanonicalIndexPolicyPayload = CanonicalIndexPolicyV3Payload | CanonicalIndexPolicyV4Payload;
+
+export type CanonicalIndexPolicyDocument = CanonicalIndexPolicyPayload & {
+    documentDigest: string;
+};
 
 export type IndexPolicyDocumentInspection =
     | { status: 'current'; value: CanonicalIndexPolicyDocument }
@@ -442,11 +472,67 @@ function parsePolicyNavigation(value: unknown): CanonicalPolicyNavigationBinding
     return { status: 'sealed', generationId: value.generationId, sealHash: value.sealHash };
 }
 
+function parsePublicationBinding(value: unknown): CanonicalPublicationBinding | null {
+    if (!isRecord(value) || !hasExactKeys(value, [
+        'activationId',
+        'sourceCheckpoint',
+        'graph',
+        'receipt',
+    ])) return null;
+    const checkpoint = value.sourceCheckpoint;
+    const graph = value.graph;
+    const receipt = value.receipt;
+    if (
+        !isNonemptyString(value.activationId)
+        || !GENERATION_ID.test(value.activationId)
+        || !isRecord(checkpoint)
+        || !hasExactKeys(checkpoint, ['collectionName', 'markerRunId', 'indexPolicyHash', 'merkleRoot', 'documentDigest'])
+        || !isNonemptyString(checkpoint.collectionName)
+        || !isNonemptyString(checkpoint.markerRunId)
+        || typeof checkpoint.indexPolicyHash !== 'string'
+        || !SHA256.test(checkpoint.indexPolicyHash)
+        || typeof checkpoint.merkleRoot !== 'string'
+        || !SHA256.test(checkpoint.merkleRoot)
+        || typeof checkpoint.documentDigest !== 'string'
+        || !SHA256.test(checkpoint.documentDigest)
+        || !isRecord(graph)
+        || !hasExactKeys(graph, ['kind', 'manifestHash'])
+        || graph.kind !== 'relationship_manifest_v2'
+        || typeof graph.manifestHash !== 'string'
+        || !SHA256.test(graph.manifestHash)
+        || !isRecord(receipt)
+        || !hasExactKeys(receipt, ['ownerId', 'generation', 'operationId'])
+        || !isNonemptyString(receipt.ownerId)
+        || !isNonNegativeInteger(receipt.generation)
+        || receipt.generation < 1
+        || !isNonemptyString(receipt.operationId)
+    ) return null;
+    return {
+        activationId: value.activationId,
+        sourceCheckpoint: {
+            collectionName: checkpoint.collectionName,
+            markerRunId: checkpoint.markerRunId,
+            indexPolicyHash: checkpoint.indexPolicyHash,
+            merkleRoot: checkpoint.merkleRoot,
+            documentDigest: checkpoint.documentDigest,
+        },
+        graph: {
+            kind: 'relationship_manifest_v2',
+            manifestHash: graph.manifestHash,
+        },
+        receipt: {
+            ownerId: receipt.ownerId,
+            generation: receipt.generation,
+            operationId: receipt.operationId,
+        },
+    };
+}
+
 function parsePolicyPayload(
     value: Record<string, unknown>,
     expectedRoot: string,
 ): CanonicalIndexPolicyPayload | null {
-    const payloadKeys = [
+    const basePayloadKeys = [
         'schemaVersion',
         'canonicalRoot',
         'customExtensions',
@@ -459,10 +545,12 @@ function parsePolicyPayload(
         'collectionName',
         'navigation',
     ] as const;
+    const isV4 = value.schemaVersion === 'satori_index_policy_v4';
+    const payloadKeys = isV4 ? [...basePayloadKeys, 'publication'] : basePayloadKeys;
     if (
         (!hasExactKeys(value, payloadKeys)
             && !hasExactKeys(value, [...payloadKeys, 'documentDigest']))
-        || value.schemaVersion !== 'satori_index_policy_v3'
+        || (value.schemaVersion !== 'satori_index_policy_v3' && !isV4)
         || value.canonicalRoot !== expectedRoot
         || !isStringArray(value.customExtensions)
         || !isStringArray(value.customIgnorePatterns)
@@ -476,19 +564,32 @@ function parsePolicyPayload(
     ) return null;
     const navigation = parsePolicyNavigation(value.navigation);
     if (!navigation) return null;
-    return {
-        schemaVersion: 'satori_index_policy_v3',
+    const publication = isV4 ? parsePublicationBinding(value.publication) : null;
+    if (isV4 && !publication) return null;
+    if (
+        publication
+        && (
+            publication.sourceCheckpoint.collectionName !== value.collectionName
+            || publication.sourceCheckpoint.indexPolicyHash !== value.policyHash
+            || navigation.status !== 'sealed'
+            || publication.graph.manifestHash.length === 0
+        )
+    ) return null;
+    const base = {
         canonicalRoot: expectedRoot,
         customExtensions: [...value.customExtensions],
         customIgnorePatterns: [...value.customIgnorePatterns],
         fileBasedIgnorePatterns: [...value.fileBasedIgnorePatterns],
-        profile: value.profile,
+        profile: value.profile as CanonicalIndexPolicyBase['profile'],
         supportedExtensions: [...value.supportedExtensions],
         effectiveIgnorePatterns: [...value.effectiveIgnorePatterns],
         policyHash: value.policyHash,
         collectionName: value.collectionName,
         navigation,
     };
+    return publication
+        ? { ...base, schemaVersion: 'satori_index_policy_v4', publication }
+        : { ...base, schemaVersion: 'satori_index_policy_v3' };
 }
 
 function digestPolicyPayload(payload: CanonicalIndexPolicyPayload): string {
@@ -513,11 +614,11 @@ export function inspectIndexPolicyDocument(
     if (value.schemaVersion === 'satori_index_policy_v2') {
         return { status: 'requires_reindex', reason: 'index policy v2 requires reindex' };
     }
-    if (value.schemaVersion !== 'satori_index_policy_v3') {
+    if (value.schemaVersion !== 'satori_index_policy_v3' && value.schemaVersion !== 'satori_index_policy_v4') {
         const futureVersion = typeof value.schemaVersion === 'string'
             ? /^satori_index_policy_v([1-9]\d*)$/.exec(value.schemaVersion)
             : null;
-        return futureVersion && Number(futureVersion[1]) > 3
+        return futureVersion && Number(futureVersion[1]) > 4
             ? { status: 'unsupported', reason: 'index policy schema is unsupported' }
             : { status: 'corrupt', reason: 'index policy schema is invalid' };
     }

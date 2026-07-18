@@ -948,6 +948,13 @@ export class SyncManager {
             // Incremental sync
             const syncOptions = {
                 maintainCompletionMarker: true,
+                ...(lease ? {
+                    publicationAuthority: {
+                        ownerId: lease.ownerId,
+                        generation: lease.generation,
+                        operationId: lease.operationId,
+                    },
+                } : {}),
                 ...(assertCurrent && publishCurrent ? {
                     assertMutationCurrent: assertCurrent,
                     publishMutation: publishCurrent,

@@ -22,6 +22,7 @@ import {
     VectorRecord,
     VectorDocumentQuery,
     VectorFilter,
+    VectorPublicationCapabilities,
 } from './types';
 import {
     fromLegacyMilvusControlRow,
@@ -492,6 +493,10 @@ export class MilvusRestfulVectorDatabase implements VectorDatabase {
             transport: 'rest',
             address,
         };
+    }
+
+    getPublicationCapabilities(): VectorPublicationCapabilities {
+        return { atomicCandidatePublication: 'unsupported' };
     }
 
     async writeDocuments(collectionName: string, documents: IndexedVectorDocument[]): Promise<void> {

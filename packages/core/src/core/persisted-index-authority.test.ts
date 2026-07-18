@@ -277,6 +277,33 @@ test('policy inspector uses one fixed canonical v3 digest payload', () => {
     });
 });
 
+test('policy inspector binds one canonical v4 publication tuple', () => {
+    const document = buildCanonicalIndexPolicyDocument({
+        ...policyPayload({ status: 'sealed', generationId: 'generation-1', sealHash: SHA_C }),
+        schemaVersion: 'satori_index_policy_v4',
+        publication: {
+            activationId: 'activation-1',
+            sourceCheckpoint: {
+                collectionName: 'collection-1',
+                markerRunId: 'marker-1',
+                indexPolicyHash: SHA_A,
+                merkleRoot: SHA_B,
+                documentDigest: SHA_C,
+            },
+            graph: { kind: 'relationship_manifest_v2', manifestHash: SHA_B },
+            receipt: { ownerId: 'sync', generation: 4, operationId: 'operation-1' },
+        },
+    });
+    assert.equal(inspectIndexPolicyDocument(document, '/repo').status, 'current');
+
+    const tampered = structuredClone(document);
+    tampered.publication.sourceCheckpoint.merkleRoot = SHA_C;
+    assert.deepEqual(inspectIndexPolicyDocument(tampered, '/repo'), {
+        status: 'corrupt',
+        reason: 'canonical index policy document digest is invalid',
+    });
+});
+
 test('policy inspector requires reindex for every retired policy schema', () => {
     const payloadBase = {
         schemaVersion: 'satori_index_policy_v2',
@@ -318,7 +345,7 @@ test('authority inspectors reserve unsupported for recognizable numeric future s
             reason: 'completion marker schema is unsupported',
         });
     }
-    for (const schemaVersion of ['satori_index_policy_v4', 'satori_index_policy_v99']) {
+    for (const schemaVersion of ['satori_index_policy_v5', 'satori_index_policy_v99']) {
         assert.deepEqual(inspectIndexPolicyDocument({ schemaVersion }, '/repo'), {
             status: 'unsupported',
             reason: 'index policy schema is unsupported',

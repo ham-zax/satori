@@ -57,7 +57,7 @@ function normalizeTruthiness(value: string | undefined): boolean {
 }
 
 function parityKey(input: NavigationStoreInput): string {
-    return `${input.stateRoot || ''}\0${input.normalizedRootPath}`;
+    return `${input.stateRoot || ''}\0${input.normalizedRootPath}\0${input.generationId || ''}`;
 }
 
 function hasExplicitRuntimeNavigationStoreOptions(options: RuntimeNavigationStoreOptions): boolean {
@@ -159,6 +159,7 @@ export class RuntimeNavigationStore implements NavigationStore {
                     const parity = await this.parityValidator({
                         normalizedRootPath: input.normalizedRootPath,
                         stateRoot: input.stateRoot,
+                        generationId: input.generationId,
                         referenceStore: this.jsonStore,
                         candidateStore: this.sqliteStore,
                     });

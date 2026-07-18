@@ -49,6 +49,7 @@ export type NavigationRelationshipsState = NavigationStoreRelationshipsOk | Navi
 export interface NavigationStoreInput {
     normalizedRootPath: string;
     stateRoot?: string;
+    generationId?: string;
 }
 
 export interface NavigationSymbolsByFileInput extends NavigationStoreInput {
@@ -203,6 +204,7 @@ async function readRelationshipState(input: NavigationRelationshipsQueryInput): 
     const result = await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
         stateRoot: input.stateRoot,
+        generationId: input.generationId,
         expectedSymbolRegistryManifestHash: expectedManifestHash,
     });
     if (result.status !== 'ok') {
@@ -351,6 +353,7 @@ export class JsonNavigationStore implements NavigationStore {
         const relationships = await readRelationshipState({
             normalizedRootPath: input.normalizedRootPath,
             stateRoot: input.stateRoot,
+            generationId: input.generationId,
             expectedSymbolRegistryManifestHash: expectedManifestHash,
         });
 

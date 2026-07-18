@@ -7,7 +7,7 @@ import {
     createSymbolKey,
     createSynthesizedFileSymbol,
 } from '../symbols';
-import { buildCallRelationshipsForRegistry, buildRelationshipsForRegistry } from './builder';
+import { buildCallRelationshipsForRegistry, buildRelationshipDelta, buildRelationshipsForRegistry } from './builder';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifest } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
 import { getLanguageIdFromFilename } from '../language';
@@ -913,4 +913,158 @@ test('buildRelationshipsForRegistry resolves NodeNext source extensions and reje
     assert.deepEqual(records.filter((record) => record.type === 'IMPORTS').map((record) => record.targetPath), [
         'src/b.ts',
     ]);
+});
+
+test('buildRelationshipDelta matches a full rebuild when a call target becomes ambiguous and resolves again', async () => {
+    const callerPath = 'src/caller.ts';
+    const targetAPath = 'src/target-a.ts';
+    const targetBPath = 'src/target-b.ts';
+    const sources = {
+        [callerPath]: 'export function run() { return target(); }\n',
+        [targetAPath]: 'export function target() { return 1; }\n',
+        [targetBPath]: 'export function target() { return 2; }\n',
+    };
+    const registry = (includeSecondTarget: boolean) => {
+        const files = includeSecondTarget
+            ? [callerPath, targetAPath, targetBPath]
+            : [callerPath, targetAPath];
+        const symbols = files.map((file) => createSynthesizedFileSymbol({
+            relativePath: file,
+            language: 'typescript',
+            content: sources[file]!,
+            fileHash: `hash-${file}`,
+            extractorVersion: 'test-extractor-v1',
+        }));
+        symbols.push(createSymbol({
+            file: callerPath,
+            kind: 'function',
+            name: 'run',
+            qualifiedName: 'run',
+            label: 'function run',
+            startLine: 1,
+            endLine: 1,
+            fileHash: `hash-${callerPath}`,
+        }));
+        for (const file of files.filter((candidate) => candidate !== callerPath)) {
+            symbols.push(createSymbol({
+                file,
+                kind: 'function',
+                name: 'target',
+                qualifiedName: 'target',
+                label: 'function target',
+                startLine: 1,
+                endLine: 1,
+                fileHash: `hash-${file}`,
+            }));
+        }
+        return buildSymbolRegistry({
+            manifest: {
+                ...manifest(),
+                files: files.map((file) => ({
+                    path: file,
+                    hash: `hash-${file}`,
+                    language: 'typescript',
+                    symbolCount: 2,
+                })),
+            },
+            symbols,
+        });
+    };
+    const analysis = await analyzeFiles(sources);
+    const uniqueRegistry = registry(false);
+    const ambiguousRegistry = registry(true);
+    const uniqueRecords = buildRelationshipsForRegistry({ registry: uniqueRegistry, analysisByFile: analysis });
+
+    const ambiguousDelta = buildRelationshipDelta({
+        previousRegistry: uniqueRegistry,
+        registry: ambiguousRegistry,
+        existingRecords: uniqueRecords,
+        analysisByFile: analysis,
+        changedFiles: new Set([targetBPath]),
+    });
+    assert.deepEqual(
+        ambiguousDelta.records,
+        buildRelationshipsForRegistry({ registry: ambiguousRegistry, analysisByFile: analysis }),
+    );
+    assert.deepEqual(ambiguousDelta.affectedFiles, [callerPath, targetBPath]);
+
+    const resolvedDelta = buildRelationshipDelta({
+        previousRegistry: ambiguousRegistry,
+        registry: uniqueRegistry,
+        existingRecords: ambiguousDelta.records,
+        analysisByFile: analysis,
+        changedFiles: new Set([targetBPath]),
+    });
+    assert.deepEqual(resolvedDelta.records, uniqueRecords);
+    assert.deepEqual(resolvedDelta.affectedFiles, [callerPath, targetBPath]);
+});
+
+test('buildRelationshipDelta revisits an unresolved relative import when its target file appears', async () => {
+    const callerPath = 'src/caller.ts';
+    const targetPath = 'src/target.ts';
+    const sources = {
+        [callerPath]: 'import { target } from "./target";\nexport function run() { return target(); }\n',
+        [targetPath]: 'export function target() { return 1; }\n',
+    };
+    const buildRegistry = (includeTarget: boolean) => {
+        const files = includeTarget ? [callerPath, targetPath] : [callerPath];
+        const symbols: SymbolRecord[] = files.map((file) => createSynthesizedFileSymbol({
+            relativePath: file,
+            language: 'typescript',
+            content: sources[file]!,
+            fileHash: `hash-${file}`,
+            extractorVersion: 'test-extractor-v1',
+        }));
+        symbols.push(createSymbol({
+            file: callerPath,
+            kind: 'function',
+            name: 'run',
+            qualifiedName: 'run',
+            label: 'function run',
+            startLine: 2,
+            endLine: 2,
+            fileHash: `hash-${callerPath}`,
+        }));
+        if (includeTarget) {
+            symbols.push(createSymbol({
+                file: targetPath,
+                kind: 'function',
+                name: 'target',
+                qualifiedName: 'target',
+                label: 'function target',
+                startLine: 1,
+                endLine: 1,
+                fileHash: `hash-${targetPath}`,
+            }));
+        }
+        return buildSymbolRegistry({
+            manifest: {
+                ...manifest(),
+                files: files.map((file) => ({
+                    path: file,
+                    hash: `hash-${file}`,
+                    language: 'typescript',
+                    symbolCount: 2,
+                })),
+            },
+            symbols,
+        });
+    };
+    const analysis = await analyzeFiles(sources);
+    const before = buildRegistry(false);
+    const after = buildRegistry(true);
+    const delta = buildRelationshipDelta({
+        previousRegistry: before,
+        registry: after,
+        existingRecords: buildRelationshipsForRegistry({ registry: before, analysisByFile: analysis }),
+        analysisByFile: analysis,
+        changedFiles: new Set([targetPath]),
+    });
+
+    assert.deepEqual(
+        delta.records,
+        buildRelationshipsForRegistry({ registry: after, analysisByFile: analysis }),
+    );
+    assert.deepEqual(delta.affectedFiles, [callerPath, targetPath]);
+    assert.ok(delta.records.some((record) => record.type === 'IMPORTS' && record.targetPath === targetPath));
 });

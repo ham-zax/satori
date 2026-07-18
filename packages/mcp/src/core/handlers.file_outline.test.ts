@@ -13,6 +13,7 @@ import {
     createSymbolKey,
     resetSharedRuntimeNavigationStoreForTests,
     resolveNavigationSidecarRoot,
+    writeNavigationSidecarGeneration,
     writeRelationshipSidecar,
     writeSymbolRegistrySidecar,
 } from '@zokizuan/satori-core';
@@ -167,7 +168,11 @@ function createTestSymbol(input: {
     };
 }
 
-async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]) {
+async function writeTestSymbolRegistry(
+    repoPath: string,
+    symbols: SymbolRecord[],
+    options: { generation?: boolean } = {},
+) {
     const filesByPath = new Map<string, { hash: string; language: string; symbolCount: number }>();
     for (const symbol of symbols) {
         const existing = filesByPath.get(symbol.file);
@@ -200,6 +205,18 @@ async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]
     };
 
     const registry = buildSymbolRegistry({ manifest, symbols });
+    const analysisByFile = new Map(manifest.files.map((file) => [file.path, {
+        moduleBindings: [],
+        callSites: [],
+    }]));
+    if (options.generation) {
+        const result = await writeNavigationSidecarGeneration({
+            registry,
+            records: [],
+            analysisByFile,
+        });
+        return { registry, result };
+    }
     const result = await writeSymbolRegistrySidecar({ registry });
     await writeRelationshipSidecar({
         normalizedRootPath: repoPath,
@@ -208,10 +225,7 @@ async function writeTestSymbolRegistry(repoPath: string, symbols: SymbolRecord[]
         builtAt: manifest.builtAt,
         files: manifest.files,
         records: [],
-        analysisByFile: new Map(manifest.files.map((file) => [file.path, {
-            moduleBindings: [],
-            callSites: [],
-        }])),
+        analysisByFile,
     });
     return { registry, result };
 }
@@ -595,7 +609,7 @@ test('handleFileOutline reuses navigation evidence only within the same marker g
             startLine: 1,
             endLine: 1,
         });
-        const { result: registryResult } = await writeTestSymbolRegistry(repoPath, [symbol]);
+        const { result: registryResult } = await writeTestSymbolRegistry(repoPath, [symbol], { generation: true });
 
         const vectorReceipt = { collectionName: 'generation-1' } as never;
         let markerRunId = 'run-1';
@@ -609,11 +623,15 @@ test('handleFileOutline reuses navigation evidence only within the same marker g
             policyDocumentDigest: '1'.repeat(64),
             exactPayloadCount: 1,
             navigation: {
-                generationId: 'navigation-generation-1',
-                generationRoot: path.join(repoPath, '.satori-navigation-generation-1'),
+                generationId: registryResult.generationId,
+                generationRoot: path.join(
+                    resolveNavigationSidecarRoot(undefined, repoPath),
+                    'generations',
+                    registryResult.generationId,
+                ),
                 symbolRegistryManifestHash: registryResult.manifestHash,
-                relationshipManifestHash: '2'.repeat(64),
-                navigationSealHash: '3'.repeat(64),
+                relationshipManifestHash: registryResult.relationshipManifestHash,
+                navigationSealHash: registryResult.navigationSealHash,
             },
             observations: {
                 profileFileToken: null,

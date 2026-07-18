@@ -1249,7 +1249,12 @@ export class ToolHandlers {
         ) return cached;
 
         if (operations) operations.registryLoads += 1;
-        const result = await this.navigationStore.getManifest({ normalizedRootPath: root });
+        const result = await this.navigationStore.getManifest({
+            normalizedRootPath: root,
+            ...(preparedRead.generationReceipt
+                ? { generationId: preparedRead.generationReceipt.navigation.generationId }
+                : {}),
+        });
         if (
             result.status === 'ok'
             && identityBefore
@@ -1278,6 +1283,9 @@ export class ToolHandlers {
 
         const result = await this.navigationStore.getSymbolsByFile({
             normalizedRootPath: root,
+            ...(preparedRead.generationReceipt
+                ? { generationId: preparedRead.generationReceipt.navigation.generationId }
+                : {}),
             file,
         });
         if (
@@ -1316,6 +1324,9 @@ export class ToolHandlers {
         if (operations) operations.navigationValidationRuns += 1;
         const result = await this.navigationStore.getCompatibilityState({
             normalizedRootPath: root,
+            ...(preparedRead.generationReceipt
+                ? { generationId: preparedRead.generationReceipt.navigation.generationId }
+                : {}),
             expectedSymbolRegistryManifestHash,
         });
         if (

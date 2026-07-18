@@ -159,6 +159,7 @@ export type ReadNavigationGenerationSealResult =
 export interface ReadSymbolRegistrySidecarInput {
     normalizedRootPath: string;
     stateRoot?: string;
+    generationId?: string;
 }
 
 export type ReadSymbolRegistrySidecarResult =
@@ -182,6 +183,7 @@ export interface ReadRelationshipSidecarInput {
     normalizedRootPath: string;
     expectedSymbolRegistryManifestHash: string;
     stateRoot?: string;
+    generationId?: string;
 }
 
 export type ReadRelationshipSidecarResult =
@@ -238,6 +240,43 @@ function fileShardName(filePath: string, fileHash: string): string {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await fs.promises.writeFile(filePath, serializeJson(value), 'utf8');
+}
+
+async function fsyncPath(targetPath: string): Promise<void> {
+    const handle = await fs.promises.open(targetPath, 'r');
+    try {
+        await handle.sync();
+    } finally {
+        await handle.close();
+    }
+}
+
+async function collectDirectoryTreePaths(
+    rootPath: string,
+    files: string[],
+    directories: string[],
+): Promise<void> {
+    const entries = await fs.promises.readdir(rootPath, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => compareStrings(left.name, right.name))) {
+        const entryPath = path.join(rootPath, entry.name);
+        if (entry.isDirectory()) {
+            await collectDirectoryTreePaths(entryPath, files, directories);
+        } else if (entry.isFile()) {
+            files.push(entryPath);
+        }
+    }
+    directories.push(rootPath);
+}
+
+async function fsyncDirectoryTree(rootPath: string): Promise<void> {
+    const files: string[] = [];
+    const directories: string[] = [];
+    await collectDirectoryTreePaths(rootPath, files, directories);
+    const concurrency = 64;
+    for (let offset = 0; offset < files.length; offset += concurrency) {
+        await Promise.all(files.slice(offset, offset + concurrency).map(fsyncPath));
+    }
+    for (const directory of directories) await fsyncPath(directory);
 }
 
 function serializeJson(value: unknown): string {
@@ -668,6 +707,9 @@ export async function stageNavigationSidecarGeneration(
         };
         await writeJson(path.join(generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME), seal);
         const navigationSealHash = computeNavigationGenerationSealHash(seal);
+        await fsyncDirectoryTree(generationRoot);
+        await fsyncPath(path.dirname(generationRoot));
+        await fsyncPath(rootPath);
 
         return {
             rootPath,
@@ -713,6 +755,38 @@ export async function discardNavigationSidecarGeneration(
         path.join(candidate.rootPath, GENERATIONS_DIR_NAME, candidate.generationId),
         { recursive: true, force: true },
     );
+}
+
+export async function pruneNavigationSidecarGenerations(input: {
+    stateRoot?: string;
+    normalizedRootPath: string;
+    keepGenerationIds: ReadonlySet<string>;
+}): Promise<string[]> {
+    const rootPath = resolveNavigationSidecarRoot(input.stateRoot, input.normalizedRootPath);
+    const generationsRoot = path.join(rootPath, GENERATIONS_DIR_NAME);
+    const keepGenerationIds = new Set(input.keepGenerationIds);
+    const current = await resolveCurrentNavigationGeneration(
+        input.stateRoot,
+        input.normalizedRootPath,
+    ).catch(() => null);
+    if (current) keepGenerationIds.add(current.generationId);
+
+    let entries: fs.Dirent[];
+    try {
+        entries = await fs.promises.readdir(generationsRoot, { withFileTypes: true });
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+    }
+    const removed: string[] = [];
+    for (const entry of entries
+        .filter((candidate) => candidate.isDirectory() && !keepGenerationIds.has(candidate.name))
+        .sort((left, right) => compareStrings(left.name, right.name))) {
+        await fs.promises.rm(path.join(generationsRoot, entry.name), { recursive: true, force: true });
+        removed.push(entry.name);
+    }
+    if (removed.length > 0) await fsyncPath(generationsRoot);
+    return removed;
 }
 
 export async function clearSymbolRegistrySidecar(input: ClearSymbolRegistrySidecarInput): Promise<void> {
@@ -962,11 +1036,14 @@ export function parseNavigationGenerationSeal(value: unknown): NavigationGenerat
 export async function readNavigationGenerationSeal(
     stateRoot: string | undefined,
     normalizedRootPath: string,
+    generationId?: string,
 ): Promise<ReadNavigationGenerationSealResult> {
     const rootPath = resolveNavigationSidecarRoot(stateRoot, normalizedRootPath);
     let generation: CurrentNavigationGeneration | null;
     try {
-        generation = await resolveCurrentNavigationGeneration(stateRoot, normalizedRootPath);
+        generation = generationId
+            ? await resolveNavigationGeneration(stateRoot, normalizedRootPath, generationId)
+            : await resolveCurrentNavigationGeneration(stateRoot, normalizedRootPath);
     } catch (error) {
         return {
             status: error instanceof RetiredNavigationPointerError
@@ -1004,12 +1081,19 @@ export async function readNavigationGenerationSeal(
 export async function verifyNavigationGenerationSealArtifacts(input: {
     stateRoot?: string;
     normalizedRootPath: string;
+    generationId?: string;
     registry: SymbolRegistry;
     relationshipManifest: RelationshipManifest;
 }): Promise<ReadNavigationGenerationSealResult> {
-    const sealRead = await readNavigationGenerationSeal(input.stateRoot, input.normalizedRootPath);
+    const sealRead = await readNavigationGenerationSeal(
+        input.stateRoot,
+        input.normalizedRootPath,
+        input.generationId,
+    );
     if (sealRead.status !== 'ok') return sealRead;
-    const generation = await resolveCurrentNavigationGeneration(input.stateRoot, input.normalizedRootPath);
+    const generation = input.generationId
+        ? await resolveNavigationGeneration(input.stateRoot, input.normalizedRootPath, input.generationId)
+        : await resolveCurrentNavigationGeneration(input.stateRoot, input.normalizedRootPath);
     if (!generation) {
         return { status: 'missing', rootPath: sealRead.rootPath, reason: 'navigation generation pointer is missing' };
     }
@@ -1095,12 +1179,44 @@ export async function resolveCurrentNavigationGeneration(
     };
 }
 
+export async function resolveNavigationGeneration(
+    stateRoot: string | undefined,
+    normalizedRootPath: string,
+    generationId: string,
+): Promise<CurrentNavigationGeneration> {
+    if (!/^[a-zA-Z0-9_-]+$/.test(generationId)) {
+        throw new Error('navigation generation id is invalid');
+    }
+    const rootPath = resolveNavigationSidecarRoot(stateRoot, normalizedRootPath);
+    const generationsRoot = path.join(rootPath, GENERATIONS_DIR_NAME);
+    const generationRoot = path.resolve(generationsRoot, generationId);
+    const relative = path.relative(generationsRoot, generationRoot);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error('navigation generation escapes the generations root');
+    }
+    const rawSeal = await readJson(path.join(generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME));
+    const seal = parseNavigationGenerationSeal(rawSeal);
+    if (!seal || seal.generationId !== generationId) {
+        throw new Error('navigation generation seal is invalid or incompatible');
+    }
+    return {
+        generationId,
+        generationRoot,
+        symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
+        relationshipManifestHash: seal.relationshipManifestHash,
+        navigationSealHash: computeNavigationGenerationSealHash(seal),
+    };
+}
+
 async function resolveReadableNavigationRoot(
     stateRoot: string | undefined,
     normalizedRootPath: string,
+    generationId?: string,
 ): Promise<{ rootPath: string; readableRoot: string; generation: CurrentNavigationGeneration | null }> {
     const rootPath = resolveNavigationSidecarRoot(stateRoot, normalizedRootPath);
-    const generation = await resolveCurrentNavigationGeneration(stateRoot, normalizedRootPath);
+    const generation = generationId
+        ? await resolveNavigationGeneration(stateRoot, normalizedRootPath, generationId)
+        : await resolveCurrentNavigationGeneration(stateRoot, normalizedRootPath);
     return { rootPath, readableRoot: generation?.generationRoot || rootPath, generation };
 }
 
@@ -1109,7 +1225,11 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
     let readableRoot: string;
     let generation: CurrentNavigationGeneration | null;
     try {
-        ({ readableRoot, generation } = await resolveReadableNavigationRoot(input.stateRoot, input.normalizedRootPath));
+        ({ readableRoot, generation } = await resolveReadableNavigationRoot(
+            input.stateRoot,
+            input.normalizedRootPath,
+            input.generationId,
+        ));
     } catch (error) {
         return {
             status: 'incompatible',
@@ -1323,7 +1443,11 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
     let readableRoot: string;
     let generation: CurrentNavigationGeneration | null;
     try {
-        ({ readableRoot, generation } = await resolveReadableNavigationRoot(input.stateRoot, input.normalizedRootPath));
+        ({ readableRoot, generation } = await resolveReadableNavigationRoot(
+            input.stateRoot,
+            input.normalizedRootPath,
+            input.generationId,
+        ));
     } catch (error) {
         return {
             status: 'incompatible',

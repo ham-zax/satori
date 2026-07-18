@@ -12,6 +12,17 @@ export interface BuildCallRelationshipsForRegistryInput {
 
 export type BuildRelationshipsForRegistryInput = BuildCallRelationshipsForRegistryInput;
 
+export interface BuildRelationshipDeltaInput extends BuildRelationshipsForRegistryInput {
+    previousRegistry: SymbolRegistry;
+    existingRecords: readonly RelationshipRecord[];
+    changedFiles: ReadonlySet<string>;
+}
+
+export interface BuildRelationshipDeltaResult {
+    records: RelationshipRecord[];
+    affectedFiles: string[];
+}
+
 function compareStrings(a: string, b: string): number {
     return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -317,4 +328,66 @@ export function buildRelationshipsForRegistry(input: BuildRelationshipsForRegist
         recordsByKey.set(relationshipKey(record), record);
     }
     return [...recordsByKey.values()].sort(compareRelationshipRecords);
+}
+
+export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): BuildRelationshipDeltaResult {
+    const affectedFiles = new Set(input.changedFiles);
+    const changedTargetNames = new Set<string>();
+    for (const symbol of [...input.previousRegistry.symbols, ...input.registry.symbols]) {
+        if (symbol.kind !== 'file' && input.changedFiles.has(symbol.file)) {
+            changedTargetNames.add(symbol.name);
+        }
+    }
+
+    for (const file of input.registry.manifest.files) {
+        if (affectedFiles.has(file.path)) continue;
+        const evidence = getEvidence(input.analysisByFile, file.path);
+        if (!evidence) continue;
+        if (evidence.callSites.some((call) => changedTargetNames.has(call.calleeName))) {
+            affectedFiles.add(file.path);
+            continue;
+        }
+        const previousFile = input.previousRegistry.manifest.files.find((candidate) => candidate.path === file.path);
+        const language = previousFile?.language ?? file.language;
+        const resolutionChanged = evidence.moduleBindings.some((binding) => {
+            if ((binding.kind !== 'import' && binding.kind !== 'reexport') || !binding.moduleSpecifier) {
+                return false;
+            }
+            const previousTarget = resolveRelativeModulePath(
+                file.path,
+                binding.moduleSpecifier,
+                input.previousRegistry,
+                language,
+            );
+            const nextTarget = resolveRelativeModulePath(
+                file.path,
+                binding.moduleSpecifier,
+                input.registry,
+                file.language,
+            );
+            return previousTarget !== nextTarget
+                || (previousTarget !== undefined && input.changedFiles.has(previousTarget))
+                || (nextTarget !== undefined && input.changedFiles.has(nextTarget));
+        });
+        if (resolutionChanged) affectedFiles.add(file.path);
+    }
+
+    const affectedEvidence = new Map<string, RelationshipAnalysisEvidence>();
+    for (const filePath of [...affectedFiles].sort(compareStrings)) {
+        const evidence = getEvidence(input.analysisByFile, filePath);
+        if (evidence) affectedEvidence.set(filePath, evidence);
+    }
+    const retained = input.existingRecords.filter((record) => !affectedFiles.has(record.file));
+    const rebuilt = buildRelationshipsForRegistry({
+        registry: input.registry,
+        analysisByFile: affectedEvidence,
+    });
+    const recordsByKey = new Map<string, RelationshipRecord>();
+    for (const record of [...retained, ...rebuilt]) {
+        recordsByKey.set(relationshipKey(record), record);
+    }
+    return {
+        records: [...recordsByKey.values()].sort(compareRelationshipRecords),
+        affectedFiles: [...affectedFiles].sort(compareStrings),
+    };
 }

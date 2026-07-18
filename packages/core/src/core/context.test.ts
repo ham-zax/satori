@@ -459,6 +459,35 @@ class InMemoryLanceVectorDatabase extends InMemoryVectorDatabase {
     }
 }
 
+class ForkingInMemoryLanceVectorDatabase extends InMemoryLanceVectorDatabase {
+    async forkCollection(sourceCollectionName: string, targetCollectionName: string) {
+        const source = this.collections.get(sourceCollectionName);
+        if (!source || this.collections.has(targetCollectionName)) {
+            throw new Error('invalid in-memory generation fork');
+        }
+        this.collections.set(targetCollectionName, new Map(source));
+        return {
+            sourceCollectionName,
+            targetCollectionName,
+            strategy: 'row_copy' as const,
+            copiedDocuments: [...source.values()].filter((document) => document.fileExtension !== '.satori_meta').length,
+        };
+    }
+}
+
+class NonAtomicInMemoryMilvusVectorDatabase extends InMemoryVectorDatabase {
+    getBackendInfo() {
+        return {
+            provider: 'milvus' as const,
+            transport: 'grpc' as const,
+        };
+    }
+
+    getPublicationCapabilities() {
+        return { atomicCandidatePublication: 'unsupported' as const };
+    }
+}
+
 class DeferredIndexVectorDatabase extends InMemoryVectorDatabase {
     readonly lifecycleEvents: string[] = [];
     private finalized = false;
@@ -1307,6 +1336,507 @@ test('Context.reindexByChange withdraws and republishes completion proof by defa
         assert.ok(progress.every((entry) => entry.percentage >= 0 && entry.percentage <= 100));
         assert.deepEqual(progress.map((entry) => entry.percentage), [...progress.map((entry) => entry.percentage)].sort((a, b) => a - b));
     } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange activates one immutable vector, navigation, graph, checkpoint, and receipt tuple', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-atomic-delta-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const previous = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(previous);
+        const previousRows = vectorDatabase.collections.get(previous.collectionName);
+        const previousContent = [...(previousRows?.values() ?? [])]
+            .find((document) => document.relativePath === 'runtime.ts')?.content;
+
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        const result = await context.reindexByChange(codebasePath, undefined, {
+            publicationAuthority: { ownerId: 'sync-owner', generation: 7, operationId: 'sync-operation' },
+        });
+        const current = await context.proveIndexedGeneration(codebasePath);
+
+        assert.ok(current);
+        assert.ok(await context.revalidateProvenGeneration(codebasePath, current));
+        assert.notEqual(current.collectionName, previous.collectionName);
+        assert.equal(result.collectionName, current.collectionName);
+        assert.equal(
+            [...(vectorDatabase.collections.get(previous.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content,
+            previousContent,
+        );
+        assert.match(
+            [...(vectorDatabase.collections.get(current.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content ?? '',
+            /runtime = 2/,
+        );
+        const checkpoint = await context.inspectSourceFreshnessCheckpoint(codebasePath, current.collectionName, current);
+        assert.equal(checkpoint.status, 'valid');
+        const policyFiles = fs.readdirSync(policyRoot).filter((file) => file.endsWith('.json'));
+        assert.equal(policyFiles.length, 1);
+        const policy = JSON.parse(fs.readFileSync(path.join(policyRoot, policyFiles[0]!), 'utf8')) as Record<string, any>;
+        assert.equal(policy.schemaVersion, 'satori_index_policy_v4');
+        assert.equal(policy.collectionName, current.collectionName);
+        assert.equal(policy.publication.receipt.ownerId, 'sync-owner');
+        assert.equal(policy.publication.receipt.generation, 7);
+        assert.equal(policy.publication.receipt.operationId, 'sync-operation');
+        assert.equal(policy.publication.graph.manifestHash, current.navigation.relationshipManifestHash);
+        if (checkpoint.status === 'valid') {
+            assert.equal(policy.publication.sourceCheckpoint.merkleRoot, checkpoint.merkleRoot);
+            assert.equal(policy.publication.sourceCheckpoint.documentDigest, checkpoint.documentDigest);
+        }
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        const restartedReceipt = await restarted.proveIndexedGeneration(codebasePath);
+        assert.ok(restartedReceipt);
+        assert.equal(restartedReceipt.collectionName, current.collectionName);
+        assert.equal(restartedReceipt.navigation.generationId, current.navigation.generationId);
+        assert.ok(await restarted.revalidateProvenGeneration(codebasePath, restartedReceipt));
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange preserves a durably activated candidate when receipt delivery fails', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-atomic-receipt-failure-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const previous = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(previous);
+
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        await assert.rejects(
+            () => context.reindexByChange(codebasePath, undefined, {
+                publicationAuthority: { ownerId: 'sync-owner', generation: 8, operationId: 'sync-operation' },
+                publishMutation: (publish) => {
+                    publish();
+                    throw new Error('receipt delivery failed');
+                },
+            }),
+            (error: unknown) => error instanceof IndexPolicyPublicationError,
+        );
+
+        const current = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(current);
+        assert.notEqual(current.collectionName, previous.collectionName);
+        assert.equal(await vectorDatabase.hasCollection(current.collectionName), true);
+        assert.match(
+            [...(vectorDatabase.collections.get(current.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content ?? '',
+            /runtime = 2/,
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange discards an unactivated candidate and preserves the previous generation', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-atomic-before-activation-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const previous = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(previous);
+
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        await assert.rejects(
+            () => context.reindexByChange(codebasePath, undefined, {
+                publishMutation: () => {
+                    throw new Error('activation fence lost');
+                },
+            }),
+            /activation fence lost/,
+        );
+
+        const current = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(current);
+        assert.equal(current.collectionName, previous.collectionName);
+        assert.deepEqual(await vectorDatabase.listCollections(), [previous.collectionName]);
+        assert.match(
+            [...(vectorDatabase.collections.get(previous.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content ?? '',
+            /runtime = 1/,
+        );
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        assert.equal((await restarted.proveIndexedGeneration(codebasePath))?.collectionName, previous.collectionName);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.reindexByChange leaves a non-atomic backend unchanged and requires a full rebuild', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-non-atomic-backend-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        const vectorDatabase = new NonAtomicInMemoryMilvusVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const previous = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(previous);
+        const previousMarkerRunId = previous.marker.runId;
+        const mutationCount = vectorDatabase.mutationCalls.length;
+
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        await assert.rejects(
+            () => context.reindexByChange(codebasePath),
+            /cannot stage an atomic incremental publication; a full rebuild is required/i,
+        );
+
+        const current = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(current);
+        assert.equal(current.collectionName, previous.collectionName);
+        assert.equal(current.marker.runId, previousMarkerRunId);
+        assert.equal(vectorDatabase.mutationCalls.length, mutationCount);
+        assert.match(
+            [...(vectorDatabase.collections.get(current.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content ?? '',
+            /runtime = 1/,
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context bounds deferred atomic publication generations without pruning active authority', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-atomic-retention-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 0;\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+
+        for (let version = 1; version <= 3; version += 1) {
+            fs.writeFileSync(sourcePath, `export const runtime = ${version};\n`, 'utf8');
+            await context.reindexByChange(codebasePath);
+            await (context as unknown as {
+                waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+            }).waitForPublicationRetention(fs.realpathSync(codebasePath));
+        }
+
+        const current = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(current);
+        assert.equal((await vectorDatabase.listCollections()).length, 2);
+        assert.match(
+            [...(vectorDatabase.collections.get(current.collectionName)?.values() ?? [])]
+                .find((document) => document.relativePath === 'runtime.ts')?.content ?? '',
+            /runtime = 3/,
+        );
+
+        const generationsRoot = path.join(
+            resolveNavigationSidecarRoot(stateRoot, fs.realpathSync(codebasePath)),
+            'generations',
+        );
+        const navigationGenerations = fs.readdirSync(generationsRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory());
+        assert.ok(navigationGenerations.length <= 3);
+
+        const canonicalRootHash = crypto.createHash('md5')
+            .update(FileSynchronizer.canonicalizeSnapshotIdentityPath(codebasePath))
+            .digest('hex');
+        const snapshotDirectory = path.dirname(FileSynchronizer.getSnapshotPathForCodebase(codebasePath));
+        const generationSnapshots = fs.readdirSync(snapshotDirectory)
+            .filter((entry) => entry.startsWith(`${canonicalRootHash}.`) && entry.endsWith('.json'));
+        assert.ok(generationSnapshots.length <= 2);
+
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        const restartedReceipt = await restarted.proveIndexedGeneration(codebasePath);
+        assert.equal(restartedReceipt?.collectionName, current.collectionName);
+        assert.equal(restartedReceipt?.navigation.generationId, current.navigation.generationId);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context fails closed when active delta navigation metadata is missing or corrupt', async (t) => {
+    for (const failureMode of ['missing', 'corrupt'] as const) {
+        await t.test(failureMode, async () => {
+            const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-context-delta-${failureMode}-`));
+            const stateRoot = path.join(tempRoot, 'state');
+            const policyRoot = path.join(tempRoot, 'policies');
+            const codebasePath = path.join(tempRoot, 'repo');
+            const sourcePath = path.join(codebasePath, 'runtime.ts');
+            try {
+                fs.mkdirSync(codebasePath, { recursive: true });
+                fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+                const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+                const context = new Context({
+                    embedding: new TestEmbedding(),
+                    vectorDatabase,
+                    symbolRegistryStateRoot: stateRoot,
+                    indexPolicyStateRoot: policyRoot,
+                });
+                await context.recreateSynchronizerForCodebase(codebasePath);
+                await context.indexCodebase(codebasePath);
+                await publishCurrentAuthorityCheckpoint(context, codebasePath);
+                fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+                await context.reindexByChange(codebasePath);
+                await (context as unknown as {
+                    waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+                }).waitForPublicationRetention(fs.realpathSync(codebasePath));
+                const active = await context.proveIndexedGeneration(codebasePath);
+                assert.ok(active);
+
+                const sealPath = path.join(
+                    resolveNavigationSidecarRoot(stateRoot, fs.realpathSync(codebasePath)),
+                    'generations',
+                    active.navigation.generationId,
+                    'seal.json',
+                );
+                if (failureMode === 'missing') fs.rmSync(sealPath);
+                else fs.writeFileSync(sealPath, '{', 'utf8');
+
+                const collectionsBefore = await vectorDatabase.listCollections();
+                const restarted = new Context({
+                    embedding: new TestEmbedding(),
+                    vectorDatabase,
+                    symbolRegistryStateRoot: stateRoot,
+                    indexPolicyStateRoot: policyRoot,
+                });
+                assert.equal(await restarted.proveIndexedGeneration(codebasePath), null);
+                assert.equal(await restarted.getActiveIndexedCollectionName(codebasePath), null);
+
+                fs.writeFileSync(sourcePath, 'export const runtime = 3;\n', 'utf8');
+                await assert.rejects(
+                    () => restarted.reindexByChange(codebasePath),
+                    /source navigation metadata|reindex is required/i,
+                );
+                assert.deepEqual(await vectorDatabase.listCollections(), collectionsBefore);
+            } finally {
+                fs.rmSync(tempRoot, { recursive: true, force: true });
+            }
+        });
+    }
+});
+
+test('Context atomic deltas remain semantically equal to clean rebuilds across deterministic mutations', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-delta-oracle-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const deltaStateRoot = path.join(tempRoot, 'delta-state');
+    const deltaPolicyRoot = path.join(tempRoot, 'delta-policies');
+    const originalSatoriStateRoot = process.env.SATORI_STATE_ROOT;
+    const write = (relativePath: string, content: string) => {
+        const absolutePath = path.join(codebasePath, relativePath);
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+        fs.writeFileSync(absolutePath, content, 'utf8');
+    };
+    const canonicalPayload = (database: InMemoryVectorDatabase, collectionName: string) => (
+        [...(database.collections.get(collectionName)?.values() ?? [])]
+            .filter((document) => document.id !== INDEX_COMPLETION_MARKER_DOC_ID)
+            .map((document) => {
+                const metadata = { ...document.metadata };
+                delete metadata.indexedAt;
+                return { ...document, metadata };
+            })
+            .sort((left, right) => left.id.localeCompare(right.id))
+    );
+    const readCanonicalNavigation = async (
+        stateRoot: string,
+        receipt: NonNullable<Awaited<ReturnType<Context['proveIndexedGeneration']>>>,
+        explicitGeneration: boolean,
+    ) => {
+        const generation = explicitGeneration ? { generationId: receipt.navigation.generationId } : {};
+        const registry = await readSymbolRegistrySidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            ...generation,
+        });
+        assert.equal(registry.status, 'ok');
+        if (registry.status !== 'ok') throw new Error(registry.reason);
+        const relationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
+            ...generation,
+        });
+        assert.equal(relationships.status, 'ok');
+        if (relationships.status !== 'ok') throw new Error(relationships.reason);
+        return {
+            manifestHash: registry.manifestHash,
+            files: registry.registry.manifest.files,
+            symbols: registry.registry.symbols,
+            relationships: relationships.records,
+            analysis: [...relationships.analysisByFile.entries()].sort(([left], [right]) => left.localeCompare(right)),
+        };
+    };
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        write('src/target.ts', 'export function target() { return 1; }\n');
+        write('src/caller.ts', 'import { target } from "./target";\nexport function run() { return target(); }\n');
+        write('src/extra.ts', 'export const extra = 1;\n');
+        process.env.SATORI_STATE_ROOT = deltaStateRoot;
+        const deltaDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const deltaContext = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: deltaDatabase,
+            symbolRegistryStateRoot: deltaStateRoot,
+            indexPolicyStateRoot: deltaPolicyRoot,
+        });
+        await deltaContext.recreateSynchronizerForCodebase(codebasePath);
+        await deltaContext.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(deltaContext, codebasePath);
+
+        const mutations: Array<() => void> = [
+            () => write('src/added.ts', 'export const added = 1;\n'),
+            () => write('src/target.ts', 'export function target() { return 2; }\n'),
+            () => write('src/target.ts', 'export function target(input = 2) { return input; }\n'),
+            () => write('src/ambiguous.ts', 'export function target() { return 3; }\n'),
+            () => fs.rmSync(path.join(codebasePath, 'src/ambiguous.ts')),
+            () => fs.renameSync(path.join(codebasePath, 'src/added.ts'), path.join(codebasePath, 'src/renamed.ts')),
+            () => {
+                write('src/caller.ts', 'import { target } from "./target";\nexport function run() { return target(4); }\n');
+                write('src/renamed.ts', 'export const renamed = 2;\n');
+            },
+            () => fs.rmSync(path.join(codebasePath, 'src/renamed.ts')),
+        ];
+
+        for (const [index, mutate] of mutations.entries()) {
+            mutate();
+            process.env.SATORI_STATE_ROOT = deltaStateRoot;
+            await deltaContext.reindexByChange(codebasePath);
+            const deltaReceipt = await deltaContext.proveIndexedGeneration(codebasePath);
+            assert.ok(deltaReceipt, `delta generation ${index + 1} must be provable`);
+
+            const oracleRoot = path.join(tempRoot, `oracle-${index + 1}`);
+            process.env.SATORI_STATE_ROOT = oracleRoot;
+            const oracleDatabase = new InMemoryLanceVectorDatabase();
+            const oracleContext = new Context({
+                embedding: new TestEmbedding(),
+                vectorDatabase: oracleDatabase,
+                symbolRegistryStateRoot: oracleRoot,
+                indexPolicyStateRoot: path.join(oracleRoot, 'policies'),
+            });
+            await oracleContext.recreateSynchronizerForCodebase(codebasePath);
+            await oracleContext.indexCodebase(codebasePath);
+            await publishCurrentAuthorityCheckpoint(oracleContext, codebasePath);
+            const oracleReceipt = await oracleContext.proveIndexedGeneration(codebasePath);
+            assert.ok(oracleReceipt, `oracle generation ${index + 1} must be provable`);
+
+            assert.deepEqual(
+                canonicalPayload(deltaDatabase, deltaReceipt.collectionName),
+                canonicalPayload(oracleDatabase, oracleReceipt.collectionName),
+                `vector and lexical membership diverged after mutation ${index + 1}`,
+            );
+            assert.deepEqual(
+                await readCanonicalNavigation(deltaStateRoot, deltaReceipt, true),
+                await readCanonicalNavigation(oracleRoot, oracleReceipt, false),
+                `navigation or graph state diverged after mutation ${index + 1}`,
+            );
+            assert.deepEqual(
+                {
+                    indexedFiles: deltaReceipt.marker.indexedFiles,
+                    totalChunks: deltaReceipt.marker.totalChunks,
+                    fingerprint: deltaReceipt.marker.fingerprint,
+                    indexPolicyHash: deltaReceipt.marker.indexPolicyHash,
+                },
+                {
+                    indexedFiles: oracleReceipt.marker.indexedFiles,
+                    totalChunks: oracleReceipt.marker.totalChunks,
+                    fingerprint: oracleReceipt.marker.fingerprint,
+                    indexPolicyHash: oracleReceipt.marker.indexPolicyHash,
+                },
+                `publication identity diverged after mutation ${index + 1}`,
+            );
+            process.env.SATORI_STATE_ROOT = deltaStateRoot;
+            const deltaCheckpoint = await deltaContext.inspectSourceFreshnessCheckpoint(
+                codebasePath,
+                deltaReceipt.collectionName,
+                deltaReceipt,
+            );
+            process.env.SATORI_STATE_ROOT = oracleRoot;
+            const oracleCheckpoint = await oracleContext.inspectSourceFreshnessCheckpoint(
+                codebasePath,
+                oracleReceipt.collectionName,
+                oracleReceipt,
+            );
+            assert.equal(deltaCheckpoint.status, 'valid');
+            assert.equal(oracleCheckpoint.status, 'valid');
+            if (deltaCheckpoint.status === 'valid' && oracleCheckpoint.status === 'valid') {
+                assert.equal(deltaCheckpoint.merkleRoot, oracleCheckpoint.merkleRoot);
+            }
+        }
+    } finally {
+        if (originalSatoriStateRoot === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = originalSatoriStateRoot;
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
@@ -2827,6 +3357,53 @@ test('Context keeps durable and runtime policy consistent when the publication w
             indexPolicyStateRoot: stateRoot,
         });
         assert.equal(restarted.getActiveIgnorePatterns(codebasePath).includes('private/**'), false);
+        assert.equal(restarted.getActiveIgnorePatterns(codebasePath).includes('generated/**'), true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context preserves a visible policy activation when the parent-directory fsync fails', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-policy-directory-fsync-'));
+    const stateRoot = path.join(tempRoot, 'policy-state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            indexPolicyStateRoot: stateRoot,
+        });
+        const policy = await context.resolveIndexPolicyForCodebase(codebasePath, {
+            customIgnorePatterns: ['generated/**'],
+        });
+        const privateContext = context as unknown as {
+            fsyncPath(targetPath: string): void;
+        };
+        const originalFsyncPath = privateContext.fsyncPath.bind(context);
+        privateContext.fsyncPath = (targetPath) => {
+            if (targetPath === stateRoot) {
+                throw new Error('directory fsync failed');
+            }
+            originalFsyncPath(targetPath);
+        };
+
+        assert.throws(
+            () => context.publishResolvedIndexPolicy(policy, unboundPolicyBinding('generation-b')),
+            (error: unknown) => {
+                assert.ok(error instanceof IndexPolicyPublicationError);
+                assert.equal(error.committed, true);
+                assert.match(error.message, /directory fsync failed/);
+                return true;
+            },
+        );
+        assert.equal(context.getActiveIgnorePatterns(codebasePath).includes('generated/**'), true);
+
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            indexPolicyStateRoot: stateRoot,
+        });
         assert.equal(restarted.getActiveIgnorePatterns(codebasePath).includes('generated/**'), true);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -4510,7 +5087,7 @@ test('Context distinguishes unsupported future marker and policy schemas without
                     const policy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
                     fs.writeFileSync(policyPath, JSON.stringify({
                         ...policy,
-                        schemaVersion: 'satori_index_policy_v4',
+                        schemaVersion: 'satori_index_policy_v5',
                     }), 'utf8');
                 }
                 const markerBefore = structuredClone(markerDocument.metadata);
@@ -5544,7 +6121,7 @@ test('Context acknowledges committed restoration of unsupported policy authority
             'current.json',
         );
         const futurePolicy = JSON.parse(fs.readFileSync(policyPath, 'utf8')) as Record<string, unknown>;
-        futurePolicy.schemaVersion = 'satori_index_policy_v4';
+        futurePolicy.schemaVersion = 'satori_index_policy_v5';
         const futurePolicyBytes = `${JSON.stringify(futurePolicy, null, 2)}\n`;
         const currentPointerBytes = fs.readFileSync(pointerPath, 'utf8');
         fs.writeFileSync(policyPath, futurePolicyBytes, 'utf8');

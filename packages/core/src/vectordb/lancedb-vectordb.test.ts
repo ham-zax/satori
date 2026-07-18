@@ -215,6 +215,52 @@ test('LanceDB adapter preserves exact retrieval, projections, controls, and idem
     assert.equal(await database.getControl(collectionName, marker.id), null);
 });
 
+test('LanceDB forks an independently retained searchable generation', async (t) => {
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-fork-'));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const database = new LanceDbVectorDatabase({ databasePath });
+    t.after(() => database.close());
+
+    await database.createHybridCollection('source__gen_one', 2, undefined, { deferIndexBuild: true });
+    await database.writeDocuments('source__gen_one', [
+        indexedDocument({ id: 'old', vector: [1, 0], lexicalText: 'oldterm' }),
+    ]);
+    await database.finalizeCollectionForSearch('source__gen_one');
+
+    const receipt = await database.forkCollection('source__gen_one', 'source__gen_two');
+    assert.deepEqual(receipt, {
+        sourceCollectionName: 'source__gen_one',
+        targetCollectionName: 'source__gen_two',
+        strategy: 'filesystem_clone',
+        copiedDocuments: 1,
+    });
+
+    await database.writeDocuments('source__gen_two', [
+        indexedDocument({ id: 'new', vector: [0, 1], lexicalText: 'newterm' }),
+    ]);
+    const candidateLexical = await database.retrieveLexical('source__gen_two', {
+        query: 'newterm',
+        limit: 2,
+    });
+    const sourceRows = await database.queryDocuments('source__gen_one', { fields: ['id'] });
+    const candidateRows = await database.queryDocuments('source__gen_two', { fields: ['id'] });
+
+    assert.deepEqual(sourceRows.map((row) => row.id), ['old']);
+    assert.deepEqual(candidateRows.map((row) => row.id), ['new', 'old']);
+    assert.deepEqual(candidateLexical.map((row) => row.document.id), ['new']);
+
+    await database.dropCollection('source__gen_one');
+    assert.deepEqual(
+        (await database.queryDocuments('source__gen_two', { fields: ['id'] })).map((row) => row.id),
+        ['new', 'old'],
+    );
+    assert.deepEqual(
+        (await database.retrieveLexical('source__gen_two', { query: 'oldterm', limit: 2 }))
+            .map((row) => row.document.id),
+        ['old'],
+    );
+});
+
 test('LanceDB control tables are family-scoped and generation drops remain fail-closed', async (t) => {
     const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-controls-'));
     t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));

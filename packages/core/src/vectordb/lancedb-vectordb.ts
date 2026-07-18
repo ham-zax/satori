@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -26,6 +27,7 @@ import {
     INDEX_COMPLETION_MARKER_FILE_EXTENSION,
     type CollectionCreateOptions,
     type CollectionDetails,
+    type CollectionForkReceipt,
     type DenseCandidateRequest,
     type IndexedVectorDocument,
     type LexicalCandidateRequest,
@@ -36,6 +38,7 @@ import {
     type VectorDocumentMetadata,
     type VectorDocumentQuery,
     type VectorFilter,
+    type VectorPublicationCapabilities,
     type VectorRecord,
     type VectorStoreBackendInfo,
 } from './types';
@@ -54,6 +57,60 @@ const DATA_FIELDS = [
     'fileExtension',
     'metadataJson',
 ] as const;
+
+async function copyDirectoryWithClone(sourcePath: string, targetPath: string): Promise<void> {
+    await fs.promises.mkdir(targetPath);
+    const entries = await fs.promises.readdir(sourcePath, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => compareContractStrings(left.name, right.name))) {
+        const sourceEntryPath = path.join(sourcePath, entry.name);
+        const targetEntryPath = path.join(targetPath, entry.name);
+        if (entry.isDirectory()) {
+            await copyDirectoryWithClone(sourceEntryPath, targetEntryPath);
+        } else if (entry.isFile()) {
+            await fs.promises.copyFile(
+                sourceEntryPath,
+                targetEntryPath,
+                fs.constants.COPYFILE_FICLONE,
+            );
+        } else {
+            throw new Error(`LanceDB collection contains unsupported entry '${entry.name}'.`);
+        }
+    }
+}
+
+async function collectClonePaths(
+    rootPath: string,
+    files: string[],
+    directories: string[],
+): Promise<void> {
+    const entries = await fs.promises.readdir(rootPath, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => compareContractStrings(left.name, right.name))) {
+        const entryPath = path.join(rootPath, entry.name);
+        if (entry.isDirectory()) await collectClonePaths(entryPath, files, directories);
+        else if (entry.isFile()) files.push(entryPath);
+    }
+    directories.push(rootPath);
+}
+
+async function fsyncCloneTree(rootPath: string): Promise<void> {
+    const files: string[] = [];
+    const directories: string[] = [];
+    await collectClonePaths(rootPath, files, directories);
+    const syncPath = async (targetPath: string) => {
+        const handle = await fs.promises.open(targetPath, 'r');
+        try {
+            await handle.sync();
+        } finally {
+            await handle.close();
+        }
+    };
+    const concurrency = 64;
+    for (let offset = 0; offset < files.length; offset += concurrency) {
+        await Promise.all(files.slice(offset, offset + concurrency).map(syncPath));
+    }
+    for (const directory of directories) await syncPath(directory);
+    await syncPath(path.dirname(rootPath));
+}
 
 type LanceDbPhysicalRow = Record<string, unknown>;
 
@@ -393,6 +450,54 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         });
     }
 
+    async forkCollection(
+        sourceCollectionName: string,
+        targetCollectionName: string,
+    ): Promise<CollectionForkReceipt> {
+        assertCollectionName(sourceCollectionName);
+        assertCollectionName(targetCollectionName);
+        if (sourceCollectionName === targetCollectionName) {
+            throw new Error('LanceDB candidate collection must differ from its source collection.');
+        }
+        const connection = await this.getConnection();
+        if (!await this.hasTable(sourceCollectionName, connection)) {
+            throw new Error(`Cannot fork missing LanceDB collection '${sourceCollectionName}'.`);
+        }
+        if (await this.hasTable(targetCollectionName, connection)) {
+            throw new Error(`Cannot fork into existing LanceDB collection '${targetCollectionName}'.`);
+        }
+        const source = await connection.openTable(sourceCollectionName);
+        let copiedDocuments: number;
+        try {
+            copiedDocuments = await source.countRows();
+        } finally {
+            source.close();
+        }
+        const sourceUri = path.join(this.databasePath, `${sourceCollectionName}.lance`);
+        const targetUri = path.join(this.databasePath, `${targetCollectionName}.lance`);
+        try {
+            await copyDirectoryWithClone(sourceUri, targetUri);
+            await fsyncCloneTree(targetUri);
+            const candidate = await connection.openTable(targetCollectionName);
+            try {
+                if (await candidate.countRows() !== copiedDocuments) {
+                    throw new Error('LanceDB candidate collection row count differs from its source generation.');
+                }
+            } finally {
+                candidate.close();
+            }
+        } catch (error) {
+            await fs.promises.rm(targetUri, { recursive: true, force: true }).catch(() => undefined);
+            throw error;
+        }
+        return {
+            sourceCollectionName,
+            targetCollectionName,
+            strategy: 'filesystem_clone',
+            copiedDocuments,
+        };
+    }
+
     async dropCollection(collectionName: string): Promise<void> {
         assertCollectionName(collectionName);
         const connection = await this.getConnection();
@@ -434,6 +539,10 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             transport: 'embedded',
             address: this.databasePath,
         };
+    }
+
+    getPublicationCapabilities(): VectorPublicationCapabilities {
+        return { atomicCandidatePublication: 'collection_fork' };
     }
 
     private async vectorDimension(table: Table): Promise<number> {

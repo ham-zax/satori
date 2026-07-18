@@ -151,6 +151,17 @@ export type CollectionCreateOptions = {
     deferIndexBuild?: boolean;
 };
 
+export type CollectionForkReceipt = Readonly<{
+    sourceCollectionName: string;
+    targetCollectionName: string;
+    strategy: 'filesystem_clone' | 'row_copy';
+    copiedDocuments: number;
+}>;
+
+export type VectorPublicationCapabilities = Readonly<{
+    atomicCandidatePublication: 'collection_fork' | 'unsupported';
+}>;
+
 export type VectorWriteFlushReason = 'row_limit' | 'byte_limit' | 'logical_write_end' | 'retry';
 
 export type VectorWriteAttemptSample = {
@@ -203,6 +214,17 @@ export interface VectorDatabase {
     finalizeCollectionForSearch?(collectionName: string): Promise<void>;
 
     /**
+     * Create an independently writable candidate collection from one proven
+     * source generation. The source must remain byte-for-byte searchable while
+     * the candidate is mutated. Adapters that do not implement this capability
+     * cannot provide atomic incremental publication.
+     */
+    forkCollection?(
+        sourceCollectionName: string,
+        targetCollectionName: string,
+    ): Promise<CollectionForkReceipt>;
+
+    /**
      * Drop collection
      * @param collectionName Collection name
      */
@@ -228,6 +250,7 @@ export interface VectorDatabase {
      * Backend metadata for provider-specific behaviors (e.g. Zilliz guidance)
      */
     getBackendInfo?(): VectorStoreBackendInfo;
+    getPublicationCapabilities?(): VectorPublicationCapabilities;
 
     /**
      * Cumulative adapter-boundary write metrics. Implementations that expose

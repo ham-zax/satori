@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { SyncManager, SyncOperationError } from './sync.js';
 import {
+    AtomicIncrementalPublicationUnsupportedError,
+} from '@zokizuan/satori-core';
+import {
     MutationLeaseCoordinator,
     type MutationLeaseProcessSnapshot,
     type RootMutationLease,
@@ -955,6 +958,40 @@ test('ensureFreshness marks requires_reindex when incremental navigation recover
     assert.equal(decision.mode, 'skipped_requires_reindex');
     assert.equal(statusByPath.get(codebasePath), 'requires_reindex');
     assert.equal(snapshot.getCodebaseRequiresReindex(codebasePath)?.reason, 'navigation_recovery_failed');
+
+    await manager.stopWatcherMode();
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness truthfully routes non-atomic backends to the supported full-rebuild lifecycle', async () => {
+    const codebasePath = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    const context = {
+        getActiveIgnorePatterns() {
+            return ['node_modules/**'];
+        },
+        hasSynchronizerForCodebase() {
+            return false;
+        },
+        async reindexByChange() {
+            throw new AtomicIncrementalPublicationUnsupportedError();
+        },
+    };
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        { watchEnabled: false },
+    );
+
+    const decision = await manager.ensureFreshness(codebasePath, 0);
+
+    assert.equal(decision.mode, 'skipped_requires_reindex');
+    assert.equal(statusByPath.get(codebasePath), 'requires_reindex');
+    assert.deepEqual(snapshot.getCodebaseRequiresReindex(codebasePath), {
+        reason: 'backend_requires_full_rebuild',
+        message: 'The active vector backend cannot stage an atomic incremental publication; a full rebuild is required.',
+    });
 
     await manager.stopWatcherMode();
     fs.rmSync(codebasePath, { recursive: true, force: true });

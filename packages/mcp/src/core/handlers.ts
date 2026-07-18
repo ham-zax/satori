@@ -22,7 +22,7 @@ import {
     recordSourceProcessing,
     sourceIoOwnerForCurrentOperation,
 } from "@zokizuan/satori-core";
-import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "./capabilities.js";
 import { AccessGateReason, SnapshotManager } from "./snapshot.js";
 import { absolutePathOrRaw } from "../utils.js";
@@ -401,6 +401,7 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
         maxEntriesPerStage: number,
         options?: import('@zokizuan/satori-core').SemanticSearchCandidateTraceOptions,
     ) => Promise<import('@zokizuan/satori-core').SemanticSearchExecutionResult>;
+    acquirePublicationReadLease?: (codebasePath: string) => Promise<() => void>;
 };
 
 type PreparedReadObservationSnapshot = {
@@ -766,6 +767,7 @@ export class ToolHandlers {
         const navigationHandlersHost: ConstructorParameters<typeof NavigationHandlers>[0] = {
             trackedRootReadiness: this.trackedRootReadiness,
             prepareNavigationRead: this.prepareNavigationRead.bind(this),
+            acquirePublicationReadLease: this.acquirePublicationReadLease.bind(this),
             loadPreparedNavigationSymbolsByFile: this.loadPreparedNavigationSymbolsByFile.bind(this),
             loadPreparedNavigationCompatibility: this.loadPreparedNavigationCompatibility.bind(this),
             stringifyToolJson: this.stringifyToolJson.bind(this),
@@ -792,6 +794,7 @@ export class ToolHandlers {
             buildStaleSymbolRefCallGraphPayload: this.buildStaleSymbolRefCallGraphPayload.bind(this),
             buildRelationshipBackedCallGraph: (input) => this.buildRelationshipBackedCallGraph(input as {
                 codebaseRoot: string;
+                generationId?: string;
                 registry: SymbolRegistry;
                 registryManifestHash: string;
                 resolvedSymbol: SymbolRecord;
@@ -809,6 +812,7 @@ export class ToolHandlers {
             syncManager: this.syncManager,
             trackedRootReadiness: this.trackedRootReadiness,
             prepareStatusTrackedRootRead: this.prepareStatusTrackedRootRead.bind(this),
+            acquirePublicationReadLease: this.acquirePublicationReadLease.bind(this),
             getSnapshotAllCodebases: getSnapshotAllCodebasePaths,
             getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
             getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
@@ -1602,95 +1606,100 @@ export class ToolHandlers {
             };
         }
 
-        const initialNavigationIdentity = this.getPreparedNavigationIdentity(preparedRead);
-        if (!initialNavigationIdentity) {
-            return { status: 'unavailable', reason: 'prepared_navigation_identity_unavailable' };
-        }
-        const registryState = await this.loadPreparedNavigationSymbolsByFile(
-            preparedRead,
-            input.relativeFile,
-        );
-        if (registryState.status !== 'ok') {
-            return {
-                status: 'unavailable',
-                reason: `symbol_registry_${registryState.status}`,
-            };
-        }
-        const navigationBinding = preparedRead.generationReceipt?.navigation;
-        if (
-            !navigationBinding
-            || registryState.manifestHash !== navigationBinding.symbolRegistryManifestHash
-        ) {
-            return {
-                status: 'unavailable',
-                reason: 'prepared_navigation_registry_manifest_changed',
-            };
-        }
-
-        const compatibility = await this.loadPreparedNavigationCompatibility(
-            preparedRead,
-            registryState.manifestHash,
-        );
-        const relationshipState = compatibility.relationships;
-        const relationshipManifestMatchesBinding = relationshipState.status === 'ok'
-            && relationshipState.manifestHash === navigationBinding.relationshipManifestHash;
-        const exactTargets = findExactRegistrySymbols({
-            symbols: registryState.registry.symbolsByFile.get(input.relativeFile) || [],
-            ...(input.symbolId ? { symbolIdExact: input.symbolId } : {}),
-            ...(input.symbolLabel ? { symbolLabelExact: input.symbolLabel } : {}),
-        });
-        const preparedTraversals = relationshipState.status === 'ok'
-            && relationshipManifestMatchesBinding
-            && exactTargets.length === 1
-            ? await prepareRelationshipTraversals({
-                rootPath: preparedRead.root.path,
-                registryManifestIdentity: registryState.manifestHash,
-                relationshipManifestIdentity: relationshipState.manifestHash,
-                registry: registryState.registry,
-                target: exactTargets[0],
-                relationshipManifest: relationshipState.manifest,
-                relationshipRecords: relationshipState.records,
-                relationshipWarnings: relationshipState.warnings || [],
-            })
-            : undefined;
-        const relationships: PreparedRelationshipSnapshot = relationshipManifestMatchesBinding
-            && preparedTraversals
-            ? {
-                status: 'available',
-                // getPreparedNavigationIdentity gates this adapter on navigationStatus=valid
-                // plus a proven generation receipt; local-only readiness cannot reach here.
-                authority: 'remote_generation_proven',
-                manifestIdentity: navigationBinding.relationshipManifestHash,
-                callers: preparedTraversals.callers,
-                callees: preparedTraversals.callees,
+        const releasePublicationReadLease = await this.acquirePublicationReadLease(preparedRead.root.path);
+        try {
+            const initialNavigationIdentity = this.getPreparedNavigationIdentity(preparedRead);
+            if (!initialNavigationIdentity) {
+                return { status: 'unavailable', reason: 'prepared_navigation_identity_unavailable' };
             }
-            : {
-                status: 'unavailable',
-                authority: 'unavailable',
-                reason: relationshipState.status === 'ok'
-                    ? relationshipManifestMatchesBinding
-                        ? 'relationship_traversal_unavailable'
-                        : 'relationship_manifest_identity_changed'
-                    : `relationship_sidecar_${relationshipState.status}`,
-            };
-        if (this.getPreparedNavigationIdentity(preparedRead) !== initialNavigationIdentity) {
-            return { status: 'unavailable', reason: 'prepared_navigation_changed' };
-        }
+            const registryState = await this.loadPreparedNavigationSymbolsByFile(
+                preparedRead,
+                input.relativeFile,
+            );
+            if (registryState.status !== 'ok') {
+                return {
+                    status: 'unavailable',
+                    reason: `symbol_registry_${registryState.status}`,
+                };
+            }
+            const navigationBinding = preparedRead.generationReceipt?.navigation;
+            if (
+                !navigationBinding
+                || registryState.manifestHash !== navigationBinding.symbolRegistryManifestHash
+            ) {
+                return {
+                    status: 'unavailable',
+                    reason: 'prepared_navigation_registry_manifest_changed',
+                };
+            }
 
-        return {
-            status: 'ready',
-            snapshot: {
-                canonicalRoot: preparedRead.root.path,
-                registryManifestIdentity: navigationBinding.symbolRegistryManifestHash,
-                registry: registryState.registry,
-                // The same proven-generation gate above owns this classification.
-                navigationAuthority: 'remote_generation_proven',
-                relationships,
-                validateAuthority: async () => (
-                    this.getPreparedNavigationIdentity(preparedRead) === initialNavigationIdentity
-                ),
-            },
-        };
+            const compatibility = await this.loadPreparedNavigationCompatibility(
+                preparedRead,
+                registryState.manifestHash,
+            );
+            const relationshipState = compatibility.relationships;
+            const relationshipManifestMatchesBinding = relationshipState.status === 'ok'
+                && relationshipState.manifestHash === navigationBinding.relationshipManifestHash;
+            const exactTargets = findExactRegistrySymbols({
+                symbols: registryState.registry.symbolsByFile.get(input.relativeFile) || [],
+                ...(input.symbolId ? { symbolIdExact: input.symbolId } : {}),
+                ...(input.symbolLabel ? { symbolLabelExact: input.symbolLabel } : {}),
+            });
+            const preparedTraversals = relationshipState.status === 'ok'
+                && relationshipManifestMatchesBinding
+                && exactTargets.length === 1
+                ? await prepareRelationshipTraversals({
+                    rootPath: preparedRead.root.path,
+                    registryManifestIdentity: registryState.manifestHash,
+                    relationshipManifestIdentity: relationshipState.manifestHash,
+                    registry: registryState.registry,
+                    target: exactTargets[0],
+                    relationshipManifest: relationshipState.manifest,
+                    relationshipRecords: relationshipState.records,
+                    relationshipWarnings: relationshipState.warnings || [],
+                })
+                : undefined;
+            const relationships: PreparedRelationshipSnapshot = relationshipManifestMatchesBinding
+                && preparedTraversals
+                ? {
+                    status: 'available',
+                    // getPreparedNavigationIdentity gates this adapter on navigationStatus=valid
+                    // plus a proven generation receipt; local-only readiness cannot reach here.
+                    authority: 'remote_generation_proven',
+                    manifestIdentity: navigationBinding.relationshipManifestHash,
+                    callers: preparedTraversals.callers,
+                    callees: preparedTraversals.callees,
+                }
+                : {
+                    status: 'unavailable',
+                    authority: 'unavailable',
+                    reason: relationshipState.status === 'ok'
+                        ? relationshipManifestMatchesBinding
+                            ? 'relationship_traversal_unavailable'
+                            : 'relationship_manifest_identity_changed'
+                        : `relationship_sidecar_${relationshipState.status}`,
+                };
+            if (this.getPreparedNavigationIdentity(preparedRead) !== initialNavigationIdentity) {
+                return { status: 'unavailable', reason: 'prepared_navigation_changed' };
+            }
+
+            return {
+                status: 'ready',
+                snapshot: {
+                    canonicalRoot: preparedRead.root.path,
+                    registryManifestIdentity: navigationBinding.symbolRegistryManifestHash,
+                    registry: registryState.registry,
+                    // The same proven-generation gate above owns this classification.
+                    navigationAuthority: 'remote_generation_proven',
+                    relationships,
+                    validateAuthority: async () => (
+                        this.getPreparedNavigationIdentity(preparedRead) === initialNavigationIdentity
+                    ),
+                },
+            };
+        } finally {
+            releasePublicationReadLease?.();
+        }
     }
 
     private getSyncWatchDebounceMs(): number {
@@ -1705,6 +1714,13 @@ export class ToolHandlers {
 
     private contextLifecycle(): ContextLifecycleCapabilities {
         return this.context as unknown as ContextLifecycleCapabilities;
+    }
+
+    private async acquirePublicationReadLease(codebasePath: string): Promise<(() => void) | undefined> {
+        const acquire = this.contextLifecycle().acquirePublicationReadLease;
+        return typeof acquire === 'function'
+            ? acquire.call(this.context, codebasePath)
+            : undefined;
     }
 
     private snapshotCapabilities(): SnapshotManagerCapabilities {
@@ -2999,12 +3015,68 @@ export class ToolHandlers {
         };
     }
 
-    private buildChangedCodeDebug(
-        codebaseRoot: string,
+    private async buildChangedCodeDebug(
+        preparedRead: Extract<TrackedRootReadinessState, { state: 'ready' }>,
         changedFilesState: { available: boolean; files: Set<string> }
-    ): SearchDebugHint['changedCode'] | undefined {
+    ): Promise<SearchDebugHint['changedCode'] | undefined> {
+        if (!changedFilesState.available || changedFilesState.files.size === 0) {
+            return undefined;
+        }
+        const manifest = await this.loadPreparedNavigationManifest(preparedRead);
+        const navigation = preparedRead.generationReceipt?.navigation;
+        if (
+            manifest.status !== 'ok'
+            || !navigation
+            || manifest.manifestHash !== navigation.symbolRegistryManifestHash
+        ) return undefined;
+        const compatibility = await this.loadPreparedNavigationCompatibility(
+            preparedRead,
+            manifest.manifestHash,
+        );
+        if (
+            compatibility.relationships.status !== 'ok'
+            || compatibility.relationships.manifestHash !== navigation.relationshipManifestHash
+        ) return undefined;
+        const confidenceScore = (confidence: RelationshipRecord['confidence']): number => {
+            if (confidence === 'high') return 0.95;
+            if (confidence === 'medium') return 0.65;
+            return 0.35;
+        };
+        const nodes: CallGraphNode[] = manifest.registry.symbols.map((symbol) => ({
+            symbolId: symbol.symbolInstanceId,
+            symbolLabel: symbol.label,
+            file: symbol.file,
+            language: symbol.language,
+            span: {
+                startLine: symbol.span.startLine,
+                endLine: symbol.span.endLine,
+            },
+        }));
+        const symbolsByInstanceId = manifest.registry.symbolsByInstanceId;
+        const edges: CallGraphEdge[] = compatibility.relationships.records.flatMap((record) => {
+            if (
+                record.type !== 'CALLS'
+                || !record.sourceInstanceId
+                || !record.targetInstanceId
+                || !symbolsByInstanceId.has(record.sourceInstanceId)
+                || !symbolsByInstanceId.has(record.targetInstanceId)
+            ) return [];
+            const source = symbolsByInstanceId.get(record.sourceInstanceId)!;
+            const startLine = record.span?.startLine ?? source.span.startLine;
+            return [{
+                srcSymbolId: record.sourceInstanceId,
+                dstSymbolId: record.targetInstanceId,
+                kind: 'call' as const,
+                site: {
+                    file: record.file,
+                    startLine,
+                    ...(record.span?.endLine !== undefined ? { endLine: record.span.endLine } : {}),
+                },
+                confidence: confidenceScore(record.confidence),
+            }];
+        });
         return buildSearchChangedCodeDebug({
-            sidecar: this.callGraphManager.loadSidecar(codebaseRoot),
+            sidecar: { nodes, edges },
             changedFilesState,
             normalizeRelativeFilePath: (relativeFilePath: string) => this.normalizeRelativeFilePath(relativeFilePath),
             normalizeSearchSymbolLabel: (label) => normalizeSearchSymbolLabelHelper(label),
@@ -3216,6 +3288,7 @@ export class ToolHandlers {
 
     private async buildRelationshipBackedCallGraph(input: {
         codebaseRoot: string;
+        generationId?: string;
         registry: SymbolRegistry;
         registryManifestHash: string;
         resolvedSymbol: SymbolRecord;
@@ -3395,6 +3468,7 @@ export class ToolHandlers {
             },
         };
         let preservePreparedProofAge = false;
+        let releasePublicationReadLease: (() => void) | undefined;
 
         const readinessPhaseToSearchPhase = {
             snapshot_reload: 'snapshotReload',
@@ -3561,6 +3635,7 @@ export class ToolHandlers {
                 navigationStatus,
                 preparedObservation,
             } = frontDoor;
+            releasePublicationReadLease = await this.acquirePublicationReadLease(effectiveRoot);
             const finalSourceObservation = this.getPreparedReadCacheObservation(effectiveRoot);
             if (debugMode === 'full' && finalSourceObservation.unavailableReason) {
                 readinessDebug.observationUnavailableReason = finalSourceObservation.unavailableReason;
@@ -3735,8 +3810,13 @@ export class ToolHandlers {
                     preparedRead: preparedReadState,
                     operations: readinessDebug.operations,
                 }),
-                buildRelationshipBackedCallGraph: (exactInput) => this.buildRelationshipBackedCallGraph(exactInput),
-                buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
+                buildRelationshipBackedCallGraph: (exactInput) => this.buildRelationshipBackedCallGraph({
+                    ...exactInput,
+                    ...(generationReceipt
+                        ? { generationId: generationReceipt.navigation.generationId }
+                        : {}),
+                }),
+                buildChangedCodeDebug: (_codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(preparedReadState, changedFilesState),
                 buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
                 getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),
                 now: this.now,
@@ -3936,7 +4016,7 @@ export class ToolHandlers {
                     operations: readinessDebug.operations,
                 }),
                 buildRequiresReindexPayload: (codebasePath, detail, searchContext) => this.buildRequiresReindexPayload(codebasePath, detail, searchContext) as unknown as SearchResponseEnvelope,
-                buildChangedCodeDebug: (codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(codebaseRoot, changedFilesState),
+                buildChangedCodeDebug: (_codebaseRoot, changedFilesState) => this.buildChangedCodeDebug(preparedReadState, changedFilesState),
                 buildGeneratedArtifactsVerificationHint: (codebaseRoot, results) => this.buildGeneratedArtifactsVerificationHint(codebaseRoot, results),
                 getSearchNavigationHelpers: () => this.getSearchNavigationHelpers(),
                 parseIndexedAtMs: (indexedAt?: string) => this.parseIndexedAtMs(indexedAt),
@@ -4068,6 +4148,8 @@ export class ToolHandlers {
                 content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                 isError: true
             };
+        } finally {
+            releasePublicationReadLease?.();
         }
     }
 

@@ -633,6 +633,13 @@ export class IndexPolicyPublicationError extends Error {
     }
 }
 
+export class AtomicIncrementalPublicationUnsupportedError extends Error {
+    constructor() {
+        super('The active vector backend cannot stage an atomic incremental publication; a full rebuild is required.');
+        this.name = 'AtomicIncrementalPublicationUnsupportedError';
+    }
+}
+
 class IndexPolicyAuthorityError extends Error {
     constructor(message: string, readonly authorityCause: unknown) {
         super(message);
@@ -872,6 +879,15 @@ type CollectionPayloadVerification =
     | { ok: true; indexedFiles: number; totalChunks: number }
     | { ok: false; message: string };
 
+type PublicationReadGate = {
+    activeReaders: number;
+    retentionPending: boolean;
+    readersDrained?: Promise<void>;
+    resolveReadersDrained?: () => void;
+    retentionFinished?: Promise<void>;
+    resolveRetentionFinished?: () => void;
+};
+
 export class Context {
     private embedding: Embedding;
     private embeddingIdentity: Readonly<EmbeddingIdentity>;
@@ -895,6 +911,7 @@ export class Context {
     private synchronizerMutationTargets = new Map<string, string>();
     private reindexByChangeQueues = new Map<string, Promise<void>>();
     private publicationRetentionQueues = new Map<string, Promise<void>>();
+    private publicationReadGates = new Map<string, PublicationReadGate>();
     private writeCollectionOverrides = new Map<string, string>();
     private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
@@ -2685,6 +2702,65 @@ export class Context {
         await this.publicationRetentionQueues.get(canonicalRoot);
     }
 
+    /**
+     * Retention is the only owner allowed to remove inactive physical generations.
+     * A publication-bound reader holds this lease for its complete operation so a
+     * second activation cannot prune the collection or navigation generation it uses.
+     */
+    public async acquirePublicationReadLease(codebasePath: string): Promise<() => void> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        let gate = this.publicationReadGates.get(canonicalRoot);
+        if (!gate) {
+            gate = { activeReaders: 0, retentionPending: false };
+            this.publicationReadGates.set(canonicalRoot, gate);
+        }
+        while (gate.retentionPending) {
+            await gate.retentionFinished;
+        }
+        gate.activeReaders += 1;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            gate!.activeReaders -= 1;
+            if (gate!.activeReaders === 0) {
+                gate!.resolveReadersDrained?.();
+                gate!.readersDrained = undefined;
+                gate!.resolveReadersDrained = undefined;
+            }
+        };
+    }
+
+    private async acquirePublicationRetentionLease(canonicalRoot: string): Promise<() => void> {
+        let gate = this.publicationReadGates.get(canonicalRoot);
+        if (!gate) {
+            gate = { activeReaders: 0, retentionPending: false };
+            this.publicationReadGates.set(canonicalRoot, gate);
+        }
+        if (gate.retentionPending) {
+            throw new Error(`Publication retention is already active for '${canonicalRoot}'.`);
+        }
+        gate.retentionPending = true;
+        gate.retentionFinished = new Promise<void>((resolve) => {
+            gate!.resolveRetentionFinished = resolve;
+        });
+        if (gate.activeReaders > 0) {
+            gate.readersDrained = new Promise<void>((resolve) => {
+                gate!.resolveReadersDrained = resolve;
+            });
+            await gate.readersDrained;
+        }
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            gate!.retentionPending = false;
+            gate!.resolveRetentionFinished?.();
+            gate!.retentionFinished = undefined;
+            gate!.resolveRetentionFinished = undefined;
+        };
+    }
+
     private schedulePublicationRetention(input: {
         canonicalRoot: string;
         activationId: string;
@@ -2697,40 +2773,45 @@ export class Context {
         const retention = previous
             .catch(() => undefined)
             .then(async () => {
-                this.refreshRuntimePolicyAuthority(input.canonicalRoot);
-                const activeBinding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
-                if (
-                    activeBinding?.collectionName !== input.activeCollectionName
-                    || activeBinding.publication?.activationId !== input.activationId
-                ) return;
-
-                const retainedCollections = new Set([
-                    input.activeCollectionName,
-                    input.previousCollectionName,
-                ]);
-                for (const collectionName of await this.listRelatedCollectionNames(input.canonicalRoot)) {
-                    if (retainedCollections.has(collectionName)) continue;
+                const releaseRetention = await this.acquirePublicationRetentionLease(input.canonicalRoot);
+                try {
                     this.refreshRuntimePolicyAuthority(input.canonicalRoot);
-                    const currentBinding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
+                    const activeBinding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
                     if (
-                        currentBinding?.collectionName !== input.activeCollectionName
-                        || currentBinding.publication?.activationId !== input.activationId
+                        activeBinding?.collectionName !== input.activeCollectionName
+                        || activeBinding.publication?.activationId !== input.activationId
                     ) return;
-                    await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
-                }
 
-                await pruneNavigationSidecarGenerations({
-                    stateRoot: this.symbolRegistryStateRoot,
-                    normalizedRootPath: input.canonicalRoot,
-                    keepGenerationIds: new Set([
-                        input.activeNavigationGenerationId,
-                        input.previousNavigationGenerationId,
-                    ]),
-                });
-                await FileSynchronizer.pruneSnapshotsForGenerations(
-                    input.canonicalRoot,
-                    retainedCollections,
-                );
+                    const retainedCollections = new Set([
+                        input.activeCollectionName,
+                        input.previousCollectionName,
+                    ]);
+                    for (const collectionName of await this.listRelatedCollectionNames(input.canonicalRoot)) {
+                        if (retainedCollections.has(collectionName)) continue;
+                        this.refreshRuntimePolicyAuthority(input.canonicalRoot);
+                        const currentBinding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
+                        if (
+                            currentBinding?.collectionName !== input.activeCollectionName
+                            || currentBinding.publication?.activationId !== input.activationId
+                        ) return;
+                        await deleteCollectionWithVerification(this.vectorDatabase, collectionName);
+                    }
+
+                    await pruneNavigationSidecarGenerations({
+                        stateRoot: this.symbolRegistryStateRoot,
+                        normalizedRootPath: input.canonicalRoot,
+                        keepGenerationIds: new Set([
+                            input.activeNavigationGenerationId,
+                            input.previousNavigationGenerationId,
+                        ]),
+                    });
+                    await FileSynchronizer.pruneSnapshotsForGenerations(
+                        input.canonicalRoot,
+                        retainedCollections,
+                    );
+                } finally {
+                    releaseRetention();
+                }
             })
             .catch((error) => {
                 console.warn(
@@ -2766,7 +2847,7 @@ export class Context {
             throw new Error('Atomic delta publication requires a sealed source navigation generation; reindex is required.');
         }
         if (!this.vectorDatabase.forkCollection) {
-            throw new Error('The active vector backend does not support atomic candidate publication; reindex is required.');
+            throw new AtomicIncrementalPublicationUnsupportedError();
         }
         const existingRegistry = await readSymbolRegistrySidecar({
             stateRoot: this.symbolRegistryStateRoot,
@@ -3193,9 +3274,7 @@ export class Context {
             && previousMarker
             && this.vectorDatabase.getPublicationCapabilities?.().atomicCandidatePublication === 'unsupported'
         ) {
-            throw new Error(
-                'The active vector backend cannot stage an atomic incremental publication; a full rebuild is required.',
-            );
+            throw new AtomicIncrementalPublicationUnsupportedError();
         }
         if (maintainCompletionMarker && previousMarker && this.vectorDatabase.forkCollection) {
             return this.performAtomicDeltaPublication({

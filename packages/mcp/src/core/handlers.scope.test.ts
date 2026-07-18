@@ -96,6 +96,15 @@ type SearchPayloadResultView = {
     };
 };
 type ChangedFilesState = { available: boolean; files: Set<string> };
+type SearchDebugChangedCodeView = {
+    files: string[];
+    symbols: unknown[];
+    directCallers: unknown[];
+    totalFiles: number;
+    totalSymbols: number;
+    totalDirectCallers: number;
+    truncated: boolean;
+};
 type ChangedFilesCacheEntry = ChangedFilesState & { expiresAtMs: number };
 type SearchFreshnessDecisionPayload = {
     status: string;
@@ -6239,99 +6248,77 @@ test('handleSearchCode uses real synchronizer tracked paths for exact path-scope
     });
 });
 
-test('handleSearchCode debug exposes changed tracked symbols and direct callers from sidecar data', async () => {
+test('changed-code debug derives symbols and callers from the prepared relationship generation', async () => {
     await withTempRepo(async (repoPath) => {
-        const context = {
-            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async () => ([
-                {
-                    content: 'export function changed() { return true; }',
-                    relativePath: 'src/changed.ts',
-                    startLine: 1,
-                    endLine: 3,
-                    language: 'typescript',
-                    score: 0.98,
-                    indexedAt: '2026-01-01T00:30:00.000Z',
-                    symbolId: 'sym_changed',
-                    symbolLabel: 'function changed()'
-                }
-            ])
-        } as unknown as HandlerContext;
-
-        const snapshotManager = {
-            getAllCodebases: () => [],
-            getIndexedCodebases: () => [repoPath],
-            getIndexingCodebases: () => [],
-            getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
-            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as unknown as HandlerSnapshotManager;
-
-        const syncManager = {
-            ensureFreshness: async () => ({
-                mode: 'skipped_recent',
-                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
-                thresholdMs: 180000
-            })
-        } as unknown as HandlerSyncManager;
-
+        const handlers = createHandlers(repoPath, []);
         const callGraphManager = {
-            loadSidecar: () => ({
-                nodes: [
-                    {
-                        symbolId: 'sym_changed',
-                        symbolLabel: 'function changed()',
-                        file: 'src/changed.ts',
-                        language: 'typescript',
-                        span: { startLine: 1, endLine: 3 }
-                    },
-                    {
-                        symbolId: 'sym_caller',
-                        symbolLabel: 'function caller()',
-                        file: 'src/caller.ts',
-                        language: 'typescript',
-                        span: { startLine: 5, endLine: 7 }
-                    }
-                ],
-                edges: [
-                    {
-                        srcSymbolId: 'sym_caller',
-                        dstSymbolId: 'sym_changed',
-                        kind: 'call',
-                        site: { file: 'src/caller.ts', startLine: 6 },
-                        confidence: 0.8
-                    }
-                ],
-                notes: []
-            })
-        } as unknown as HandlerCallGraphManager;
+            loadSidecar: () => {
+                throw new Error('legacy call-graph sidecar must not be read');
+            },
+        };
+        Object.assign(handlers as object, { callGraphManager });
+        const symbols = [
+            {
+                symbolInstanceId: 'sym_changed',
+                label: 'function changed()',
+                file: 'src/changed.ts',
+                language: 'typescript',
+                span: { startLine: 1, endLine: 3 },
+            },
+            {
+                symbolInstanceId: 'sym_caller',
+                label: 'function caller()',
+                file: 'src/caller.ts',
+                language: 'typescript',
+                span: { startLine: 5, endLine: 7 },
+            },
+        ] as unknown as SymbolRecord[];
+        const symbolRegistryManifestHash = `symmanifest_${'a'.repeat(32)}`;
+        const relationshipManifestHash = 'b'.repeat(64);
+        const overrides = handlers as unknown as {
+            loadPreparedNavigationManifest: () => Promise<unknown>;
+            loadPreparedNavigationCompatibility: () => Promise<unknown>;
+            buildChangedCodeDebug: (preparedRead: unknown, changedFilesState: ChangedFilesState) => Promise<unknown>;
+        };
+        overrides.loadPreparedNavigationManifest = async () => ({
+            status: 'ok',
+            manifestHash: symbolRegistryManifestHash,
+            registry: {
+                symbols,
+                symbolsByInstanceId: new Map(symbols.map((symbol) => [symbol.symbolInstanceId, symbol])),
+            },
+        });
+        overrides.loadPreparedNavigationCompatibility = async () => ({
+            relationships: {
+                status: 'ok',
+                manifestHash: relationshipManifestHash,
+                records: [{
+                    sourceInstanceId: 'sym_caller',
+                    targetInstanceId: 'sym_changed',
+                    type: 'CALLS',
+                    file: 'src/caller.ts',
+                    span: { startLine: 6, endLine: 6 },
+                    confidence: 'medium',
+                }],
+            },
+        });
 
-        const handlers = new ToolHandlers(
-            context,
-            snapshotManager,
-            syncManager,
-            DENSE_RUNTIME_FINGERPRINT,
-            CAPABILITIES_NO_RERANK,
-            () => Date.parse('2026-01-01T01:00:00.000Z'),
-            callGraphManager
-        );
-        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+        const changedCode = await overrides.buildChangedCodeDebug({
+            root: { path: repoPath },
+            generationReceipt: {
+                navigation: {
+                    generationId: 'receipt-generation',
+                    symbolRegistryManifestHash,
+                    relationshipManifestHash,
+                },
+            },
+        }, {
             available: true,
-            files: new Set(['src/changed.ts'])
-        });
+            files: new Set(['src/changed.ts']),
+        }) as SearchDebugChangedCodeView;
 
-        const response = await handlers.handleSearchCode({
-            path: repoPath,
-            query: 'changed symbol',
-            scope: 'runtime',
-            resultMode: 'grouped',
-            groupBy: 'symbol',
-            limit: 2,
-            debugMode: 'full'
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.files, ['src/changed.ts']);
-        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.symbols, [
+        assert.deepEqual(changedCode.files, ['src/changed.ts']);
+        assert.deepEqual(changedCode.symbols, [
             {
                 file: 'src/changed.ts',
                 symbolId: 'sym_changed',
@@ -6339,22 +6326,22 @@ test('handleSearchCode debug exposes changed tracked symbols and direct callers 
                 span: { startLine: 1, endLine: 3 }
             }
         ]);
-        assert.deepEqual(payload.hints?.debugSearch?.changedCode?.directCallers, [
+        assert.deepEqual(changedCode.directCallers, [
             {
                 targetSymbolId: 'sym_changed',
                 file: 'src/caller.ts',
                 symbolId: 'sym_caller',
                 symbolLabel: 'function caller()',
                 span: { startLine: 5, endLine: 7 },
-                site: { file: 'src/caller.ts', startLine: 6 },
+                site: { file: 'src/caller.ts', startLine: 6, endLine: 6 },
                 kind: 'call',
-                confidence: 0.8
+                confidence: 0.65
             }
         ]);
     });
 });
 
-test('handleSearchCode debug changed-code payload is capped with totals and truncation flag', async () => {
+test('prepared-generation changed-code debug is capped with totals and truncation flag', async () => {
     await withTempRepo(async (repoPath) => {
         const changedFiles = Array.from({ length: 12 }, (_, index) => `src/changed-${index}.ts`);
         const changedNodes = Array.from({ length: 25 }, (_, index) => ({
@@ -6372,84 +6359,66 @@ test('handleSearchCode debug changed-code payload is capped with totals and trun
             span: { startLine: index + 30, endLine: index + 31 }
         }));
 
-        const context = {
-            getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-            semanticSearch: async () => ([
-                {
-                    content: 'export function changed_0() { return true; }',
-                    relativePath: changedFiles[0],
-                    startLine: 1,
-                    endLine: 3,
-                    language: 'typescript',
-                    score: 0.98,
-                    indexedAt: '2026-01-01T00:30:00.000Z',
-                    symbolId: 'sym_changed_00',
-                    symbolLabel: 'function changed_0()'
-                }
-            ])
-        } as unknown as HandlerContext;
-        const snapshotManager = {
-            getAllCodebases: () => [],
-            getIndexedCodebases: () => [repoPath],
-            getIndexingCodebases: () => [],
-            getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
-            ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false })
-        } as unknown as HandlerSnapshotManager;
-        const syncManager = {
-            ensureFreshness: async () => ({
-                mode: 'skipped_recent',
-                checkedAt: new Date('2026-01-01T00:00:00.000Z').toISOString(),
-                thresholdMs: 180000
-            })
-        } as unknown as HandlerSyncManager;
-        const callGraphManager = {
-            loadSidecar: () => ({
-                nodes: [...changedNodes, ...callerNodes],
-                edges: changedNodes.map((node, index) => ({
-                    srcSymbolId: callerNodes[index].symbolId,
-                    dstSymbolId: node.symbolId,
-                    kind: 'call',
-                    site: { file: callerNodes[index].file, startLine: index + 30 },
-                    confidence: 0.8
+        const handlers = createHandlers(repoPath, []);
+        const symbols = [...changedNodes, ...callerNodes].map((node) => ({
+            symbolInstanceId: node.symbolId,
+            label: node.symbolLabel,
+            file: node.file,
+            language: node.language,
+            span: node.span,
+        })) as unknown as SymbolRecord[];
+        const symbolRegistryManifestHash = `symmanifest_${'c'.repeat(32)}`;
+        const relationshipManifestHash = 'd'.repeat(64);
+        const overrides = handlers as unknown as {
+            loadPreparedNavigationManifest: () => Promise<unknown>;
+            loadPreparedNavigationCompatibility: () => Promise<unknown>;
+            buildChangedCodeDebug: (preparedRead: unknown, changedFilesState: ChangedFilesState) => Promise<unknown>;
+        };
+        overrides.loadPreparedNavigationManifest = async () => ({
+            status: 'ok',
+            manifestHash: symbolRegistryManifestHash,
+            registry: {
+                symbols,
+                symbolsByInstanceId: new Map(symbols.map((symbol) => [symbol.symbolInstanceId, symbol])),
+            },
+        });
+        overrides.loadPreparedNavigationCompatibility = async () => ({
+            relationships: {
+                status: 'ok',
+                manifestHash: relationshipManifestHash,
+                records: changedNodes.map((node, index) => ({
+                    sourceInstanceId: callerNodes[index].symbolId,
+                    targetInstanceId: node.symbolId,
+                    type: 'CALLS',
+                    file: callerNodes[index].file,
+                    span: { startLine: index + 30, endLine: index + 30 },
+                    confidence: 'medium',
                 })),
-                notes: []
-            })
-        } as unknown as HandlerCallGraphManager;
-        const handlers = new ToolHandlers(
-            context,
-            snapshotManager,
-            syncManager,
-            DENSE_RUNTIME_FINGERPRINT,
-            CAPABILITIES_NO_RERANK,
-            () => Date.parse('2026-01-01T01:00:00.000Z'),
-            callGraphManager
-        );
-        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            },
+        });
+
+        const changedCode = await overrides.buildChangedCodeDebug({
+            root: { path: repoPath },
+            generationReceipt: {
+                navigation: {
+                    generationId: 'receipt-generation',
+                    symbolRegistryManifestHash,
+                    relationshipManifestHash,
+                },
+            },
+        }, {
             available: true,
-            files: new Set(changedFiles)
-        });
+            files: new Set(changedFiles),
+        }) as SearchDebugChangedCodeView;
 
-        const response = await handlers.handleSearchCode({
-            path: repoPath,
-            query: 'changed symbol',
-            scope: 'runtime',
-            resultMode: 'grouped',
-            groupBy: 'symbol',
-            limit: 2,
-            debugMode: 'full'
-        });
-
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        const changedCode = payload.hints?.debugSearch?.changedCode;
-        assert.equal(changedCode?.files.length, 10);
-        assert.equal(changedCode?.symbols.length, 20);
-        assert.equal(changedCode?.directCallers.length, 20);
-        assert.equal(changedCode?.totalFiles, 12);
-        assert.equal(changedCode?.totalSymbols, 25);
-        assert.equal(changedCode?.totalDirectCallers, 25);
-        assert.equal(changedCode?.truncated, true);
-        assert.equal(payload.hints?.debugSummary?.changedCodeTruncated, true);
-        assert.equal(changedCode?.symbols[0].symbolLabel, 'function changed_0');
+        assert.equal(changedCode.files.length, 10);
+        assert.equal(changedCode.symbols.length, 20);
+        assert.equal(changedCode.directCallers.length, 20);
+        assert.equal(changedCode.totalFiles, 12);
+        assert.equal(changedCode.totalSymbols, 25);
+        assert.equal(changedCode.totalDirectCallers, 25);
+        assert.equal(changedCode.truncated, true);
+        assert.equal((changedCode.symbols[0] as { symbolLabel?: string }).symbolLabel, 'function changed_0');
     });
 });
 

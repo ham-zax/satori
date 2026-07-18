@@ -308,7 +308,7 @@ export interface FingerprintCompatibilityDiagnostics {
     runtimeFingerprint: IndexFingerprint;
     indexedFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
-    reindexReason?: "legacy_unverified_fingerprint" | "fingerprint_mismatch" | "missing_fingerprint" | "navigation_recovery_failed";
+    reindexReason?: "legacy_unverified_fingerprint" | "fingerprint_mismatch" | "missing_fingerprint" | "navigation_recovery_failed" | "backend_requires_full_rebuild";
     statusAtCheck?: "indexed" | "indexing" | "indexfailed" | "sync_completed" | "requires_reindex" | "not_found";
 }
 

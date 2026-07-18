@@ -159,6 +159,7 @@ export async function resolveLanguageCapabilityEvidence(input: {
     normalizedRootPath: string;
     searchable: boolean;
     stateRoot?: string;
+    generationId?: string;
     registryRead?: ReadSymbolRegistrySidecarResult;
 }): Promise<LanguageCapabilityEvidenceSummary> {
     const registry = input.registryRead ?? await readSymbolRegistrySidecar(input);
@@ -175,6 +176,7 @@ export async function resolveLanguageCapabilityEvidence(input: {
     const relationships = await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
         stateRoot: input.stateRoot,
+        generationId: input.generationId,
         expectedSymbolRegistryManifestHash: registry.manifestHash,
     });
     return computeLanguageCapabilityEvidence({

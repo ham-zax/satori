@@ -38,7 +38,7 @@ const POLICY_HASH = 'a'.repeat(64);
 function buildContext(
     entries: Array<{ path: string; info: Record<string, unknown> }>,
     markers: MarkerMap = {},
-    options?: { throwOnProbe?: boolean }
+    options?: { throwOnProbe?: boolean; readLeaseEvents?: string[] }
 ): ToolContext {
     return {
         context: {
@@ -49,7 +49,15 @@ function buildContext(
                 return Object.prototype.hasOwnProperty.call(markers, codebasePath)
                     ? markers[codebasePath]
                     : null;
-            }
+            },
+            ...(options?.readLeaseEvents
+                ? {
+                    acquirePublicationReadLease: async (codebasePath: string) => {
+                        options.readLeaseEvents!.push(`acquire:${codebasePath}`);
+                        return () => options.readLeaseEvents!.push(`release:${codebasePath}`);
+                    },
+                }
+                : {}),
         },
         snapshotManager: {
             getAllCodebases: () => entries
@@ -80,6 +88,7 @@ async function runListCodebases(
     options?: {
         throwOnProbe?: boolean;
         runtimeOwnerGate?: ToolContext["runtimeOwnerGate"];
+        readLeaseEvents?: string[];
     }
 ) {
     const ctx = buildContext(entries, markers, options);
@@ -365,14 +374,26 @@ test('list_codebases derives symbol quality from the seal bound by a valid gener
             },
         };
         const navigationSealHash = computeNavigationGenerationSealHash(seal);
+        const currentSeal = {
+            ...seal,
+            generationId: 'newer-generation',
+            symbolQuality: {
+                indexedFileCount: 0,
+                languages: [],
+            },
+        };
+        const currentSealHash = computeNavigationGenerationSealHash(currentSeal);
+        const currentGenerationRoot = path.join(navigationRoot, 'generations', currentSeal.generationId);
         fs.mkdirSync(generationRoot, { recursive: true });
+        fs.mkdirSync(currentGenerationRoot, { recursive: true });
         fs.writeFileSync(path.join(generationRoot, 'seal.json'), JSON.stringify(seal), 'utf8');
+        fs.writeFileSync(path.join(currentGenerationRoot, 'seal.json'), JSON.stringify(currentSeal), 'utf8');
         fs.writeFileSync(path.join(navigationRoot, 'current.json'), JSON.stringify({
             schemaVersion: 'navigation_current_v3',
-            generationId,
-            symbolRegistryManifestHash: seal.symbolRegistryManifestHash,
-            relationshipManifestHash: seal.relationshipManifestHash,
-            navigationSealHash,
+            generationId: currentSeal.generationId,
+            symbolRegistryManifestHash: currentSeal.symbolRegistryManifestHash,
+            relationshipManifestHash: currentSeal.relationshipManifestHash,
+            navigationSealHash: currentSealHash,
         }), 'utf8');
 
         const marker = createMarker(codebasePath, {
@@ -384,6 +405,7 @@ test('list_codebases derives symbol quality from the seal bound by a valid gener
                 sealHash: navigationSealHash,
             },
         });
+        const readLeaseEvents: string[] = [];
         const response = await runListCodebases(
             [{ path: codebasePath, info: { status: 'indexed' } }],
             {
@@ -422,9 +444,14 @@ test('list_codebases derives symbol quality from the seal bound by a valid gener
                     },
                 },
             },
+            { readLeaseEvents },
         );
 
         assert.match(response.content[0]?.text || '', /`\/repo\/sealed-quality` symbolQuality=symbol_rich/);
+        assert.deepEqual(readLeaseEvents, [
+            `acquire:${codebasePath}`,
+            `release:${codebasePath}`,
+        ]);
         assert.equal(fs.existsSync(path.join(generationRoot, 'manifest.json')), false);
         assert.equal(fs.existsSync(path.join(generationRoot, 'symbols')), false);
     } finally {

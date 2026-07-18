@@ -149,7 +149,7 @@ export type SearchExactFastPathHost = {
     buildChangedCodeDebug: (
         codebaseRoot: string,
         changedFilesState: ChangedFilesState,
-    ) => SearchDebugHint["changedCode"] | undefined;
+    ) => Promise<SearchDebugHint["changedCode"] | undefined>;
     buildGeneratedArtifactsVerificationHint: (
         codebaseRoot: string,
         results: Array<{ file: string; span: { startLine: number; endLine: number } }>,
@@ -428,7 +428,7 @@ export async function runExactRegistryFastPath(
         }
         : undefined;
     const changedCode = input.debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
-        ? host.buildChangedCodeDebug(input.effectiveRoot, input.debugChangedFilesState)
+        ? await host.buildChangedCodeDebug(input.effectiveRoot, input.debugChangedFilesState)
         : undefined;
     const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
         ? {

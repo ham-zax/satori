@@ -27,6 +27,7 @@ export interface GetRelationshipManifestInput {
     expectedSymbolRegistryManifestHash: string;
     stateRoot?: string;
     navigationStore?: NavigationStore;
+    generationId?: string;
 }
 
 export interface GetRelationshipsForSymbolInput extends GetRelationshipManifestInput {
@@ -96,6 +97,7 @@ async function readCompatibleRelationshipState(input: GetRelationshipManifestInp
     const result = await getNavigationStore(input.navigationStore).getRelationships({
         stateRoot: input.stateRoot,
         normalizedRootPath: input.normalizedRootPath,
+        generationId: input.generationId,
         expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
     });
     if (result.status !== 'ok') {
@@ -384,12 +386,14 @@ async function loadMatchingSymbolSupportIndex(input: {
     stateRoot?: string;
     normalizedRootPath: string;
     navigationStore?: NavigationStore;
+    generationId?: string;
     relationshipSymbolRegistryManifestHash: string;
 }): Promise<SymbolSupportIndex | undefined> {
     try {
         const registryState = await getNavigationStore(input.navigationStore).getManifest({
             stateRoot: input.stateRoot,
             normalizedRootPath: input.normalizedRootPath,
+            generationId: input.generationId,
         });
         if (registryState.status !== 'ok') {
             return undefined;
@@ -483,6 +487,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
             stateRoot: input.stateRoot,
             normalizedRootPath: input.normalizedRootPath,
             navigationStore: input.navigationStore,
+            generationId: input.generationId,
             relationshipSymbolRegistryManifestHash: relationshipSidecar.manifest.symbolRegistryManifestHash,
         });
         symbolSupportLoadState = symbolSupport ? 'loaded' : 'unavailable';

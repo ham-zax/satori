@@ -197,21 +197,35 @@ export const listCodebasesTool: McpTool = {
                     qualityByPath.set(item.path, 'symbolQuality=unknown');
                     return;
                 }
-                const sealRead = await readNavigationGenerationSeal(undefined, item.path);
                 const receiptNavigation = item.generationReceipt.navigation;
-                const sealMatchesReceipt = sealRead.status === 'ok'
-                    && sealRead.seal.generationId === receiptNavigation.generationId
-                    && sealRead.seal.symbolRegistryManifestHash === receiptNavigation.symbolRegistryManifestHash
-                    && sealRead.seal.relationshipManifestHash === receiptNavigation.relationshipManifestHash
-                    && computeNavigationGenerationSealHash(sealRead.seal) === receiptNavigation.navigationSealHash;
-                const summary = sealMatchesReceipt
-                    ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
-                    : unknownSymbolQualitySummary(
-                        sealRead.status === 'ok'
-                            ? 'Observed symbol quality is not bound by the accepted generation.'
-                            : `Observed symbol quality unavailable (${sealRead.reason}).`,
+                const leaseOwner = proofContext.context as unknown as {
+                    acquirePublicationReadLease?: (codebasePath: string) => Promise<() => void>;
+                };
+                const releasePublicationReadLease = typeof leaseOwner.acquirePublicationReadLease === 'function'
+                    ? await leaseOwner.acquirePublicationReadLease.call(proofContext.context, item.path)
+                    : undefined;
+                try {
+                    const sealRead = await readNavigationGenerationSeal(
+                        undefined,
+                        item.path,
+                        receiptNavigation.generationId,
                     );
-                qualityByPath.set(item.path, formatSymbolQualityMarker(summary));
+                    const sealMatchesReceipt = sealRead.status === 'ok'
+                        && sealRead.seal.generationId === receiptNavigation.generationId
+                        && sealRead.seal.symbolRegistryManifestHash === receiptNavigation.symbolRegistryManifestHash
+                        && sealRead.seal.relationshipManifestHash === receiptNavigation.relationshipManifestHash
+                        && computeNavigationGenerationSealHash(sealRead.seal) === receiptNavigation.navigationSealHash;
+                    const summary = sealMatchesReceipt
+                        ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
+                        : unknownSymbolQualitySummary(
+                            sealRead.status === 'ok'
+                                ? 'Observed symbol quality is not bound by the accepted generation.'
+                                : `Observed symbol quality unavailable (${sealRead.reason}).`,
+                        );
+                    qualityByPath.set(item.path, formatSymbolQualityMarker(summary));
+                } finally {
+                    releasePublicationReadLease?.();
+                }
             }));
             for (const item of byStatus.indexed) {
                 const quality = qualityByPath.get(item.path) || "symbolQuality=unknown";

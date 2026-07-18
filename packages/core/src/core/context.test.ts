@@ -17,7 +17,7 @@ import {
     LEXICAL_PROJECTION_VERSION,
 } from './search-projections';
 import type { RelationshipAnalysisEvidence } from '../relationships';
-import { resolveNavigationSqlitePath, SQLiteNavigationStore, validateNavigationStoreParity } from '../navigation';
+import { getGraphNeighbors, resolveNavigationSqlitePath, SQLiteNavigationStore, validateNavigationStoreParity } from '../navigation';
 import { clearSymbolRegistrySidecar, readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import { resolveNavigationSidecarRoot } from '../symbols/sidecar';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols';
@@ -1632,6 +1632,48 @@ test('Context bounds deferred atomic publication generations without pruning act
     }
 });
 
+test('Context retention cannot pass an active publication reader through two activations', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-read-lease-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 0;\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: path.join(tempRoot, 'state'),
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const initial = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(initial);
+
+        const releaseRead = await context.acquirePublicationReadLease(codebasePath);
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        await context.reindexByChange(codebasePath);
+
+        let secondActivationCompleted = false;
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        const secondActivation = context.reindexByChange(codebasePath).then(() => {
+            secondActivationCompleted = true;
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        assert.equal(secondActivationCompleted, false);
+        assert.equal(await vectorDatabase.hasCollection(initial.collectionName), true);
+
+        releaseRead();
+        await secondActivation;
+        assert.equal(secondActivationCompleted, true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context fails closed when active delta navigation metadata is missing or corrupt', async (t) => {
     for (const failureMode of ['missing', 'corrupt'] as const) {
         await t.test(failureMode, async () => {
@@ -1690,6 +1732,98 @@ test('Context fails closed when active delta navigation metadata is missing or c
                 fs.rmSync(tempRoot, { recursive: true, force: true });
             }
         });
+    }
+});
+
+test('Context activation publishes changed call edges and failed activation preserves the prior graph', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-call-edge-activation-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const callerPath = path.join(codebasePath, 'caller.ts');
+    const writeCaller = (target: 'targetA' | 'targetB') => {
+        fs.writeFileSync(
+            callerPath,
+            `import { targetA, targetB } from "./targets";\nexport function run() { return ${target}(); }\n`,
+            'utf8',
+        );
+    };
+    const readCalleeLabel = async (
+        receipt: NonNullable<Awaited<ReturnType<Context['proveIndexedGeneration']>>>,
+    ): Promise<string> => {
+        const registry = await readSymbolRegistrySidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            generationId: receipt.navigation.generationId,
+        });
+        assert.equal(registry.status, 'ok');
+        if (registry.status !== 'ok') throw new Error(registry.reason);
+        const run = registry.registry.symbols.find((symbol) => symbol.name === 'run');
+        assert.ok(run);
+        const neighbors = await getGraphNeighbors({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            generationId: receipt.navigation.generationId,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
+            symbolInstanceId: run.symbolInstanceId,
+            depth: 1,
+            direction: 'callees',
+            allowedTypes: ['CALLS'],
+            allowedConfidences: ['high', 'medium', 'low'],
+            limit: 20,
+        });
+        assert.equal(neighbors.status, 'ok');
+        if (neighbors.status !== 'ok') throw new Error(neighbors.reason);
+        const calleeId = neighbors.records.find((record) => record.sourceInstanceId === run.symbolInstanceId)
+            ?.targetInstanceId;
+        assert.ok(calleeId);
+        const callee = registry.registry.symbolsByInstanceId.get(calleeId);
+        assert.ok(callee);
+        return callee.name;
+    };
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(
+            path.join(codebasePath, 'targets.ts'),
+            'export function targetA() { return 1; }\nexport function targetB() { return 2; }\n',
+            'utf8',
+        );
+        writeCaller('targetA');
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new ForkingInMemoryLanceVectorDatabase(),
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const initial = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(initial);
+        assert.equal(await readCalleeLabel(initial), 'targetA');
+
+        writeCaller('targetB');
+        await context.reindexByChange(codebasePath);
+        const activated = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(activated);
+        assert.notEqual(activated.navigation.generationId, initial.navigation.generationId);
+        assert.equal(await readCalleeLabel(activated), 'targetB');
+        assert.equal(await readCalleeLabel(initial), 'targetA');
+
+        writeCaller('targetA');
+        await assert.rejects(
+            () => context.reindexByChange(codebasePath, undefined, {
+                publishMutation: () => {
+                    throw new Error('activation fence lost');
+                },
+            }),
+            /activation fence lost/,
+        );
+        const afterFailure = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(afterFailure);
+        assert.equal(afterFailure.navigation.generationId, activated.navigation.generationId);
+        assert.equal(await readCalleeLabel(afterFailure), 'targetB');
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
 

@@ -64,6 +64,7 @@ type ManageMaintenanceHandlersHost = {
         "buildMissingLocalCollectionMessage"
     >;
     prepareStatusTrackedRootRead(absolutePath: string): Promise<TrackedRootReadinessState>;
+    acquirePublicationReadLease(codebasePath: string): Promise<(() => void) | undefined>;
     getSnapshotAllCodebases(): string[];
     getSnapshotIndexedCodebases(): string[];
     getSnapshotIndexingCodebases(): string[];
@@ -721,53 +722,69 @@ export class ManageMaintenanceHandlers {
             let languageCapabilities: LanguageCapabilityEvidenceSummary | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
-                const sealRead = await readNavigationGenerationSeal(undefined, envelopePath);
-                if (includeCapabilities) {
-                    const registryRead = await readSymbolRegistrySidecar({
-                        normalizedRootPath: envelopePath,
-                    });
-                    const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
-                        trackedRootState.state === 'ready'
-                            && trackedRootState.navigationStatus === 'valid'
-                            && sealRead.status === 'ok'
-                            && registryRead.status === 'ok'
-                            ? 'ready'
-                            : sealRead.status === 'missing' || registryRead.status === 'missing'
-                                ? 'missing'
-                                : 'unverified';
-                    symbolQuality = {
-                        ...computeSymbolQualitySummaryFromSidecarRead(registryRead),
-                        evidenceAvailability,
-                    };
-                    languageCapabilities = await resolveLanguageCapabilityEvidence({
-                        normalizedRootPath: envelopePath,
-                        searchable: envelopeStatus === "ok" && evidenceAvailability === 'ready',
-                        registryRead,
-                    });
-                } else {
-                    const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
-                        trackedRootState.state === 'ready'
-                            && trackedRootState.navigationStatus === 'valid'
-                            && sealRead.status === 'ok'
-                            ? 'ready'
-                            : sealRead.status === 'missing'
-                                ? 'missing'
-                                : 'unverified';
-                    const compactSymbolQuality = sealRead.status === 'ok'
-                        ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
-                        : unknownSymbolQualitySummary(
-                            `Observed symbol quality unavailable (${sealRead.reason}).`,
-                        );
-                    symbolQuality = {
-                        ...compactSymbolQuality,
-                        evidenceAvailability,
-                    };
-                }
-                if (envelopeStatus === "ok") {
-                    const observedSymbolQuality = symbolQuality;
-                    if (observedSymbolQuality) {
-                        statusMessage += `\n🧭 ${formatSymbolQualityMarker(observedSymbolQuality)}: ${observedSymbolQuality.message}`;
+                const navigationGenerationId = trackedRootState.state === 'ready'
+                    ? trackedRootState.generationReceipt?.navigation.generationId
+                    : undefined;
+                const releasePublicationReadLease = navigationGenerationId
+                    ? await this.host.acquirePublicationReadLease(envelopePath)
+                    : undefined;
+                try {
+                    const sealRead = await readNavigationGenerationSeal(
+                        undefined,
+                        envelopePath,
+                        navigationGenerationId,
+                    );
+                    if (includeCapabilities) {
+                        const registryRead = await readSymbolRegistrySidecar({
+                            normalizedRootPath: envelopePath,
+                            ...(navigationGenerationId ? { generationId: navigationGenerationId } : {}),
+                        });
+                        const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
+                            trackedRootState.state === 'ready'
+                                && trackedRootState.navigationStatus === 'valid'
+                                && sealRead.status === 'ok'
+                                && registryRead.status === 'ok'
+                                ? 'ready'
+                                : sealRead.status === 'missing' || registryRead.status === 'missing'
+                                    ? 'missing'
+                                    : 'unverified';
+                        symbolQuality = {
+                            ...computeSymbolQualitySummaryFromSidecarRead(registryRead),
+                            evidenceAvailability,
+                        };
+                        languageCapabilities = await resolveLanguageCapabilityEvidence({
+                            normalizedRootPath: envelopePath,
+                            searchable: envelopeStatus === "ok" && evidenceAvailability === 'ready',
+                            ...(navigationGenerationId ? { generationId: navigationGenerationId } : {}),
+                            registryRead,
+                        });
+                    } else {
+                        const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
+                            trackedRootState.state === 'ready'
+                                && trackedRootState.navigationStatus === 'valid'
+                                && sealRead.status === 'ok'
+                                ? 'ready'
+                                : sealRead.status === 'missing'
+                                    ? 'missing'
+                                    : 'unverified';
+                        const compactSymbolQuality = sealRead.status === 'ok'
+                            ? computeSymbolQualitySummaryFromAggregate(sealRead.seal.symbolQuality)
+                            : unknownSymbolQualitySummary(
+                                `Observed symbol quality unavailable (${sealRead.reason}).`,
+                            );
+                        symbolQuality = {
+                            ...compactSymbolQuality,
+                            evidenceAvailability,
+                        };
                     }
+                    if (envelopeStatus === "ok") {
+                        const observedSymbolQuality = symbolQuality;
+                        if (observedSymbolQuality) {
+                            statusMessage += `\n🧭 ${formatSymbolQualityMarker(observedSymbolQuality)}: ${observedSymbolQuality.message}`;
+                        }
+                    }
+                } finally {
+                    releasePublicationReadLease?.();
                 }
             }
 

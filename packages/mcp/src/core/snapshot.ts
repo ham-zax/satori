@@ -23,7 +23,7 @@ import {
 } from "../config.js";
 import type { RootMutationLease } from "./mutation-lease.js";
 
-export type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
+export type AccessGateReason = 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed' | 'backend_requires_full_rebuild';
 export interface SnapshotCorruptionWarning {
     snapshotPath: string;
     quarantinedPath?: string;

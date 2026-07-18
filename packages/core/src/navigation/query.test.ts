@@ -87,6 +87,55 @@ function createFunctionSymbol(input: {
     };
 }
 
+test('getGraphNeighbors binds relationship reads to the requested navigation generation', async () => {
+    const seenGenerationIds: Array<string | undefined> = [];
+    const navigationStore = {
+        async getRelationships(input: { generationId?: string }) {
+            seenGenerationIds.push(input.generationId);
+            return {
+                status: 'ok' as const,
+                rootPath: '/state/navigation',
+                manifestHash: 'relationship-manifest',
+                manifest: {
+                    schemaVersion: 1,
+                    normalizedRootPath: '/repo',
+                    symbolRegistryManifestHash: 'registry-manifest',
+                    relationshipVersion: 'relationship-v1',
+                    builtAt: '2026-07-18T00:00:00.000Z',
+                    files: [],
+                    recordCount: 1,
+                },
+                records: [{
+                    sourceKey: 'source-key',
+                    sourceInstanceId: 'source-id',
+                    targetKey: 'target-key',
+                    targetInstanceId: 'target-id',
+                    type: 'CALLS' as const,
+                    file: 'src/runtime.ts',
+                    span: { startLine: 1, endLine: 1 },
+                    confidence: 'high' as const,
+                }],
+                warnings: [],
+            };
+        },
+    } as unknown as NavigationStore;
+
+    const result = await getGraphNeighbors({
+        normalizedRootPath: '/repo',
+        generationId: 'generation-bound-to-receipt',
+        expectedSymbolRegistryManifestHash: 'registry-manifest',
+        navigationStore,
+        symbolInstanceId: 'source-id',
+        depth: 1,
+        direction: 'callees',
+        allowedTypes: ['CALLS'],
+        limit: 20,
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(seenGenerationIds, ['generation-bound-to-receipt']);
+});
+
 test('getRelationshipsForSymbol returns deterministic caller and callee records from relationship sidecars', async () => {
     await withTempDir(async (stateRoot) => {
         const login = createFunctionSymbol({

@@ -269,7 +269,7 @@ interface CodebaseInfoBase {
     collectionName?: string;
     indexFingerprint?: IndexFingerprint;
     fingerprintSource?: FingerprintSource;
-    reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed';
+    reindexReason?: 'legacy_unverified_fingerprint' | 'fingerprint_mismatch' | 'missing_fingerprint' | 'navigation_recovery_failed' | 'backend_requires_full_rebuild';
     callGraphSidecar?: CallGraphSidecarInfo;
     indexManifest?: CodebaseIndexManifest;
     ignoreRulesVersion?: number;

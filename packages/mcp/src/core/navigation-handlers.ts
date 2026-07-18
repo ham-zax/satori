@@ -58,6 +58,7 @@ type NavigationHandlersHost = {
         | "buildMissingLocalCollectionCallGraphPayload"
     >;
     prepareNavigationRead(absolutePath: string): Promise<TrackedRootReadinessState>;
+    acquirePublicationReadLease(codebasePath: string): Promise<(() => void) | undefined>;
     loadPreparedNavigationSymbolsByFile(
         preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
         file: string,
@@ -141,6 +142,7 @@ type NavigationHandlersHost = {
     }): CallGraphResponseEnvelope;
     buildRelationshipBackedCallGraph(input: {
         codebaseRoot: string;
+        generationId?: string;
         registry: {
             symbolsByInstanceId: Map<string, SymbolRecord>;
         };
@@ -252,6 +254,7 @@ export class NavigationHandlers {
         const symbolIdExact = typeof args?.symbolIdExact === "string" ? args.symbolIdExact.trim() : undefined;
         const symbolLabelExact = typeof args?.symbolLabelExact === "string" ? args.symbolLabelExact.trim() : undefined;
 
+        let releasePublicationReadLease: (() => void) | undefined;
         try {
             const absoluteRootResult = requireAbsoluteFilesystemPath(args.path, "path");
             if (!absoluteRootResult.ok) {
@@ -378,6 +381,7 @@ export class NavigationHandlers {
 
             const matchedRoot = trackedRootState.root;
             const effectiveRoot = matchedRoot.path;
+            releasePublicationReadLease = await this.host.acquirePublicationReadLease(effectiveRoot);
             const absoluteFile = path.resolve(effectiveRoot, normalizedFile);
             const relativeToRoot = path.relative(effectiveRoot, absoluteFile);
             if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
@@ -575,6 +579,8 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
                 isError: true,
             };
+        } finally {
+            releasePublicationReadLease?.();
         }
     }
 
@@ -647,6 +653,7 @@ export class NavigationHandlers {
             };
         }
 
+        let releasePublicationReadLease: (() => void) | undefined;
         try {
             const absolutePath = absolutePathResult.absolutePath;
             if (!fs.existsSync(absolutePath)) {
@@ -785,6 +792,7 @@ export class NavigationHandlers {
 
             const searchableRoot = trackedRootState.root;
             const effectiveRoot = searchableRoot.path;
+            releasePublicationReadLease = await this.host.acquirePublicationReadLease(effectiveRoot);
             const proofDebugHint = trackedRootState.proofDebugHint;
 
             if (this.host.isPartialIndexNavigationUnavailable(searchableRoot.info)) {
@@ -988,6 +996,9 @@ export class NavigationHandlers {
 
             const relationshipBackedGraph = await this.host.buildRelationshipBackedCallGraph({
                 codebaseRoot: effectiveRoot,
+                ...(trackedRootState.generationReceipt
+                    ? { generationId: trackedRootState.generationReceipt.navigation.generationId }
+                    : {}),
                 registry: registryState.registry,
                 registryManifestHash: registryState.manifestHash,
                 resolvedSymbol,
@@ -1042,6 +1053,8 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
                 isError: true,
             };
+        } finally {
+            releasePublicationReadLease?.();
         }
     }
 }

@@ -32,6 +32,7 @@ type RelationshipBackedCallGraphHost = {
 
 export type RelationshipBackedCallGraphInput = {
     codebaseRoot: string;
+    generationId?: string;
     registry: SymbolRegistry;
     registryManifestHash: string;
     resolvedSymbol: SymbolRecord;
@@ -305,6 +306,7 @@ export class RelationshipBackedCallGraph {
     public async build(input: RelationshipBackedCallGraphInput): Promise<RelationshipBackedCallGraphResult | null> {
         const neighbors = await getGraphNeighbors({
             normalizedRootPath: input.codebaseRoot,
+            generationId: input.generationId,
             expectedSymbolRegistryManifestHash: input.registryManifestHash,
             navigationStore: this.host.navigationStore,
             symbolInstanceId: input.resolvedSymbol.symbolInstanceId,

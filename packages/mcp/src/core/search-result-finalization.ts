@@ -145,7 +145,7 @@ export type SearchResultFinalizationHost = {
     buildChangedCodeDebug: (
         codebaseRoot: string,
         changedFilesState: ChangedFilesState,
-    ) => SearchDebugHint["changedCode"] | undefined;
+    ) => Promise<SearchDebugHint["changedCode"] | undefined>;
     buildGeneratedArtifactsVerificationHint: (
         codebaseRoot: string,
         results: Array<{ file: string; span: { startLine: number; endLine: number } }>,
@@ -319,6 +319,9 @@ export async function finalizeSearchResults(
                 ...(rerankerFailurePhase ? { errorCode: "RERANKER_FAILED" as const, failurePhase: rerankerFailurePhase } : {}),
             },
         });
+    const changedCode = debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
+        ? await host.buildChangedCodeDebug(input.effectiveRoot, debugChangedFilesState)
+        : undefined;
     const buildDebugProjection = (
         diversitySummary?: SearchDebugHint["diversitySummary"],
         disclosedResults?: readonly SearchGroupResult[],
@@ -338,9 +341,6 @@ export async function finalizeSearchResults(
         }
         const rankingDebug = input.debugMode === "ranking" || input.debugMode === "full"
             ? buildRankingDebug(diversitySummary)
-            : undefined;
-        const changedCode = debugChangedFilesState && (input.debugMode === "freshness" || input.debugMode === "full")
-            ? host.buildChangedCodeDebug(input.effectiveRoot, debugChangedFilesState)
             : undefined;
         const debugSummary = buildSearchDebugSummary({
             passesUsed: Array.from(passesUsed).sort(),

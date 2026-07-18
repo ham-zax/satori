@@ -4,6 +4,7 @@ import { createHash } from "crypto";
 import chokidar, { FSWatcher } from "chokidar";
 import ignore from "ignore";
 import {
+    AtomicIncrementalPublicationUnsupportedError,
     Context,
     type ProvenVectorGenerationReceipt,
 } from "@zokizuan/satori-core";
@@ -1038,6 +1039,24 @@ export class SyncManager {
             return { mode: 'synced', stats, operation: lastDurableOperation };
         } catch (error) {
             console.error(`[SYNC] Failed to sync '${codebasePath}':`, error);
+            if (error instanceof AtomicIncrementalPublicationUnsupportedError) {
+                const operation = this.persistOwnedOperationPhase(lease, releaseLease, 'blocked', () => {
+                    this.snapshotManager.setCodebaseRequiresReindex(
+                        codebasePath,
+                        'backend_requires_full_rebuild',
+                        error.message,
+                    );
+                });
+                if (operation) {
+                    lastDurableOperation = operation;
+                } else {
+                    this.snapshotManager.saveCodebaseSnapshot();
+                }
+                return {
+                    mode: 'skipped_requires_reindex',
+                    operation: lastDurableOperation,
+                };
+            }
             if (releaseLease && lease && this.mutationLeaseCoordinator?.isCurrent(lease)) {
                 try {
                     lastDurableOperation = this.persistOwnedOperationPhase(lease, true, "failed") ?? lastDurableOperation;

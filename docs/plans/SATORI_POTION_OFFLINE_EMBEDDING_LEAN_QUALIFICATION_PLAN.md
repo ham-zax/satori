@@ -2,8 +2,9 @@
 
 **Status:** L0 and L1 passed; L2 experimental provider integration passed
 focused conformance; L3 functional qualification passed and its frozen resource
-qualification failed; no supported runtime configuration or production default
-has changed
+qualification failed; atomic delta publication and bounded generation staging
+are correct, but the prospective delta resource qualification still fails; no
+supported runtime configuration or production default has changed
 
 **Date:** 2026-07-18
 
@@ -11,10 +12,11 @@ has changed
 `minishlab/potion-code-16M-v2` can support a useful, safe, lightweight Satori
 offline-search mode.
 
-**Current execution boundary:** the bounded delta-publication qualification
-stopped at `shared_bottleneck_relocalized`; its required atomic publication
-change exceeds that task's authority. Stop here. L4 product qualification and
-every follow-up-plan track remain unauthorized.
+**Current execution boundary:** the authorized atomic-publication follow-up is
+complete and stopped at `shared_bottleneck_relocalized`: physical full-generation
+copying is removed, while publication verification and readiness proof now own
+the remaining latency miss. Stop here. L4 product qualification and every
+follow-up-plan track remain unauthorized.
 
 ---
 
@@ -500,6 +502,94 @@ was changed. No performance qualification or representative reindex was run.
 The prospective latency targets remain unqualified, and L4 remains blocked.
 The task-owned decision evidence is recorded under
 `/home/hamza/repo/satori-delta-publication-evidence/20260718-b651fbb`.
+
+#### Recorded atomic delta-publication follow-up
+
+The broader shared-publication follow-up started from
+`c803bba6a29bac25beb42dd402af5e64bdc5647c`. Commit
+`75c3e2ca00dec4de9234e8ea6d48b6f0f7cbc081` established one durable
+activation authority for vector and lexical state, navigation, relationship
+graph, source checkpoint, completion proof, and receipt. Its frozen baseline
+was atomic and correct but physically copied complete LanceDB and navigation
+generations. That baseline remains immutable under
+`/home/hamza/repo/satori-delta-publication-evidence/20260718-75c3e2c`; its
+existing decision SHA-256 is
+`9dbe2da3e153475941d261274485b49f3d4aa8fd187117be4693ddb6c603dc01`.
+
+Subsequent commits removed only the two demonstrated physical-copy owners:
+
+* `338a5e5` shares immutable Lance generation files through same-filesystem
+  hard links and independently copies the mutable 15-byte version hint;
+* `c9d7365` persists versioned per-file symbol and relationship contributions,
+  writes only changed or affected shards, and shares exact-hash-compatible
+  shards; and
+* `c99a681` batches Lance generation sharing without changing activation or
+  compatibility semantics.
+
+Both mechanisms fail closed to a safe full rebuild when the filesystem cannot
+provide the required same-filesystem link behavior. Active and retained
+generations have independent directory entries, cleanup remains outside the
+activation path, and removing an older generation does not remove files still
+owned by another generation. Milvus continues to reject unsupported atomic
+candidate publication truthfully rather than claiming an unimplemented
+guarantee.
+
+Focused failure, restart, retention, missing/corrupt-metadata, reverse-resolution,
+and deterministic full-rebuild-oracle tests passed. The oracle covers additions,
+body and signature/export edits, deletion, rename, multi-file mutation,
+resolution and ambiguity changes. The complete Core run passed 532 tests with
+one skip, the focused Core run passed 244 tests, and the affected MCP run passed
+158 tests. Unchanged chunks were not embedded, a single Potion worker was reused
+within the measured MCP runtime, and network-blocked qualification recorded zero
+runtime network attempts.
+
+The one authorized representative run used revision
+`c99a681af0f14e81eadd28d4a1e8f63bcf782408`, 488 files, 10,951 chunks,
+and 256-dimensional Potion vectors. It produced these nearest-rank empirical
+results:
+
+| Operation | Samples | Median | p95 | Prospective target | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Zero change | 20 | 1,264.50 ms | 1,287.52 ms | 1,000 ms | fail |
+| One-file addition | 20 | 3,201.16 ms | 3,338.09 ms | 1,000 ms | fail |
+| One-file body edit | 20 | 3,290.47 ms | 3,365.13 ms | 1,000 ms | fail |
+| One-file signature edit | 20 | 3,308.31 ms | 3,719.98 ms | 1,000 ms | fail |
+| One-file deletion | 20 | 3,252.26 ms | 3,501.85 ms | 1,000 ms | fail |
+| Rename | 10 | 3,321.77 ms | 3,395.66 ms | 1,500 ms | fail |
+| Warm public search | 30 | not used as a gate | 157.04 ms | 500 ms | pass |
+
+The cold public publication took 45.142 seconds against the prospective
+40-second envelope and also failed. Its internal index timer was 39.822 seconds,
+including 8.818 seconds of first-generation navigation construction. This does
+not change the original 34.457-second L3 measurement or its frozen 30-second
+failure, and cold optimization was outside this follow-up's priority.
+
+The authorized physical-copy repairs worked. Lance candidate staging fell from
+a 2,778.85 ms baseline median to 200.59 ms in the isolated representative-size
+stage check; a changed representative generation shared 1,043--1,433 files and
+copied one 15-byte file before applying changed-row mutations. Navigation and
+graph staging fell from a 3,665.56 ms baseline median to 272.91 ms in its
+isolated stage check. Representative changed-file generations shared
+986--1,064 files and physically wrote 489,820--523,494 bytes across four to
+seven changed contribution/manifest files instead of copying the complete
+approximately 27.5 MB tree.
+
+The remaining miss is no longer physical generation copying. Warm changed-file
+samples spent median 1,055.19--1,072.71 ms in readiness proof plus
+497.13--507.40 ms in publication verification. Zero-change synchronization
+spent a 997.60 ms median in readiness proof alone. Ordinary changed-file
+publication performed seven exact proof reads; rename performed eight. These
+shared proof/readiness owners are now the demonstrated stopping boundary.
+
+**Decision:** `shared_bottleneck_relocalized`. Atomic/delta correctness and
+physical generation sharing pass, but the prospective cold, zero-change,
+ordinary changed-file, and rename latency gates remain failed. L4 remains
+blocked and is not authorized automatically. The checksum-sealed evidence root
+is `/home/hamza/repo/satori-delta-publication-evidence/20260718-c99a681`;
+the decision SHA-256 is
+`5b12d53cbc9e653e3e3c13e33aa5bc471de89c8e5b64250393111c0eb5fe4598`,
+and the checksum-manifest seal is
+`7c31c5dc81cdfe57ec99b4b65d13cb12687a05028751ef9fc93a9eacf83dc082`.
 
 ### L4 — frozen 36-task product qualification
 

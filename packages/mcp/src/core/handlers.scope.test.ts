@@ -1078,6 +1078,145 @@ test('handleSearchCode reports warm proof reuse and forces a cold recount after 
     });
 });
 
+test('manage status prepares one reusable proof and genuine authority drift still invalidates it', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'return session.isValid();',
+            relativePath: 'src/auth.ts',
+            startLine: 3,
+            endLine: 6,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+        }], undefined, { enableVectorReceipt: true });
+        const vectorReceipt = { collectionName: 'committed-v3' } as never;
+        let mutationGeneration = 1;
+        let completionProofReads = 0;
+        let freshnessCalls = 0;
+        let semanticReceipt: unknown;
+        const internals = handlers as unknown as {
+            context: HandlerContext & {
+                getIndexAuthorityObservations: () => { vector: string; navigation: string };
+                isPreparedVectorReceiptBoundToCurrentAuthority: () => boolean;
+                revalidatePreparedGeneration: () => Promise<never>;
+                semanticSearchInProvenGeneration: (
+                    receipt: unknown,
+                    request: { topK: number },
+                ) => Promise<SearchFixtureResult[]>;
+            };
+            syncManager: HandlerSyncManager & {
+                ensureFreshness: () => Promise<never>;
+                getPreparedReadObservation: () => {
+                    available: false;
+                    reason: 'watcher_disabled';
+                    freshnessEpoch: number;
+                };
+            };
+            mutationLeaseCoordinator: {
+                observe: () => { mutationActive: boolean; generation: number };
+                getActiveLease: () => null;
+            };
+            validateCompletionProof: () => Promise<{
+                outcome: 'valid';
+                navigationStatus: 'not_bound';
+                vectorReceipt: never;
+            }>;
+        };
+        const semanticSearch = internals.context.semanticSearchInProvenGeneration
+            .bind(internals.context);
+        internals.context.getIndexAuthorityObservations = () => ({
+            vector: 'vector-authority',
+            navigation: 'navigation-authority',
+        });
+        internals.context.isPreparedVectorReceiptBoundToCurrentAuthority = () => true;
+        internals.context.revalidatePreparedGeneration = async () => {
+            throw new Error('status-prepared reuse must not reread the completion proof');
+        };
+        internals.context.semanticSearchInProvenGeneration = async (receipt, request) => {
+            semanticReceipt = receipt;
+            return semanticSearch(receipt, request);
+        };
+        internals.syncManager.getPreparedReadObservation = () => ({
+            available: false,
+            reason: 'watcher_disabled',
+            freshnessEpoch: 1,
+        });
+        internals.syncManager.ensureFreshness = async () => {
+            freshnessCalls += 1;
+            throw new Error('status-prepared reuse must not synchronize');
+        };
+        internals.mutationLeaseCoordinator = {
+            observe: () => ({ mutationActive: false, generation: mutationGeneration }),
+            getActiveLease: () => null,
+        };
+        internals.validateCompletionProof = async () => {
+            completionProofReads += 1;
+            return {
+                outcome: 'valid',
+                navigationStatus: 'not_bound',
+                vectorReceipt,
+            };
+        };
+
+        await handlers.handleGetIndexingStatus({ path: repoPath, detail: 'summary' });
+        assert.equal(completionProofReads, 1);
+        const firstSearch = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is session validation handled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'freshness',
+        });
+        const firstPayload = JSON.parse(firstSearch.content[0]?.text || '{}');
+        assert.equal(firstPayload.status, 'ok');
+        assert.equal(completionProofReads, 1);
+        assert.equal(freshnessCalls, 0);
+        assert.deepEqual(semanticReceipt, vectorReceipt);
+        assert.deepEqual(firstPayload.hints.debugSearch.readiness, {
+            proofMode: 'warm',
+            invalidationReason: 'none',
+            operations: {
+                preparedCacheLookups: 1,
+                preparedCacheHits: 1,
+                coldReadinessChecks: 0,
+                postFreshnessColdChecks: 0,
+                warmReceiptRevalidations: 0,
+                exactPayloadRecounts: 0,
+                registryLoads: 0,
+                navigationValidationRuns: 0,
+            },
+        });
+        assert.equal(firstPayload.freshnessDecision.operation, undefined);
+
+        await handlers.handleGetIndexingStatus({ path: repoPath, detail: 'summary' });
+        assert.equal(completionProofReads, 2);
+        mutationGeneration += 1;
+        internals.syncManager.ensureFreshness = async () => ({
+            mode: 'skipped_recent',
+            checkedAt: '2026-01-01T01:00:00.000Z',
+            thresholdMs: 180_000,
+        });
+        const changedSearch = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'where is session validation handled',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'freshness',
+        });
+        const changedPayload = JSON.parse(changedSearch.content[0]?.text || '{}');
+        assert.equal(completionProofReads, 3);
+        assert.equal(changedPayload.hints.debugSearch.readiness.proofMode, 'cold');
+        assert.equal(
+            changedPayload.hints.debugSearch.readiness.invalidationReason,
+            'observation_changed',
+        );
+    });
+});
+
 test('search continuation preserves the full grouped order without new retrieval or reranking', async () => {
     await withTempRepo(async (repoPath) => {
         const searchResults: SearchFixtureResult[] = [

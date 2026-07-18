@@ -61,12 +61,9 @@ type ManageMaintenanceHandlersHost = {
     syncManager: Pick<SyncManager, "ensureFreshness">;
     trackedRootReadiness: Pick<
         TrackedRootReadiness,
-        "prepareTrackedRootForRead" | "buildMissingLocalCollectionMessage"
+        "buildMissingLocalCollectionMessage"
     >;
-    seedPreparedRead?(
-        state: Extract<TrackedRootReadinessState, { state: "ready" }>,
-        preserveProofAge: boolean,
-    ): void;
+    prepareStatusTrackedRootRead(absolutePath: string): Promise<TrackedRootReadinessState>;
     getSnapshotAllCodebases(): string[];
     getSnapshotIndexedCodebases(): string[];
     getSnapshotIndexingCodebases(): string[];
@@ -515,13 +512,7 @@ export class ManageMaintenanceHandlers {
                 );
             }
 
-            const trackedRootState = await this.host.trackedRootReadiness.prepareTrackedRootForRead(absolutePath);
-            if (trackedRootState.state === "ready") {
-                // Status already paid for the same marker and generation proof that a
-                // following read needs. Publish it to the bounded prepared-read cache;
-                // the normal observation and receipt revalidation still guards reuse.
-                this.host.seedPreparedRead?.(trackedRootState, false);
-            }
+            const trackedRootState = await this.host.prepareStatusTrackedRootRead(absolutePath);
             if (trackedRootState.state === "requires_reindex") {
                 const operation = typeof this.host.snapshotManager.getLatestOperation === "function"
                     ? this.host.snapshotManager.getLatestOperation(trackedRootState.codebasePath)

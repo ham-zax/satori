@@ -1160,7 +1160,7 @@ export class Context {
         return inspector.inspectOwnedSnapshot();
     }
 
-    private isPreparedVectorReceiptBoundToCurrentAuthority(
+    public isPreparedVectorReceiptBoundToCurrentAuthority(
         canonicalRoot: string,
         receipt: ProvenVectorGenerationReceipt,
     ): boolean {
@@ -3284,9 +3284,13 @@ export class Context {
             backendScoreKind,
         });
 
-        const revalidatedReceipt = receipt && !requestBoundReceipt
-            ? await this.revalidateProvenVectorGeneration(codebasePath, receipt)
-            : receipt ?? await this.proveVectorGeneration(codebasePath);
+        const revalidatedReceipt = receipt
+            ? requestBoundReceipt
+                ? this.isPreparedVectorReceiptBoundToCurrentAuthority(codebasePath, receipt)
+                    ? receipt
+                    : null
+                : await this.revalidateProvenVectorGeneration(codebasePath, receipt)
+            : await this.proveVectorGeneration(codebasePath);
         console.log(`[Context] 🔍 Using collection: ${revalidatedReceipt?.collectionName ?? null}`);
 
         // Check if collection exists and has data
@@ -3306,13 +3310,25 @@ export class Context {
         }
         const collectionName = revalidatedReceipt.collectionName;
         const assertCandidateReadAuthorityUnchanged = async (errorMessage: string): Promise<void> => {
-            const sameGenerationReceipt = await this.revalidateProvenVectorGeneration(
-                codebasePath,
-                revalidatedReceipt,
-            );
             const finalMutationObservation = initialMutationObservation
                 ? this.observeMutationGeneration(codebasePath)
                 : null;
+            // A request-bound receipt was proven by the MCP readiness boundary. When
+            // a durable monotonic mutation observation is available, the unchanged
+            // local authority plus an unchanged generation is the reader side of that
+            // proof. Avoid rereading the remote marker for every split retrieval arm.
+            // Runtimes without a mutation observer retain the remote marker proof.
+            const sameGenerationReceipt = requestBoundReceipt && initialMutationObservation
+                ? this.isPreparedVectorReceiptBoundToCurrentAuthority(
+                    codebasePath,
+                    revalidatedReceipt,
+                )
+                    ? revalidatedReceipt
+                    : null
+                : await this.revalidateProvenVectorGeneration(
+                    codebasePath,
+                    revalidatedReceipt,
+                );
             if (
                 !sameGenerationReceipt
                 || (initialMutationObservation && (

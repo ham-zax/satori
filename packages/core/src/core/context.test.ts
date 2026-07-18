@@ -4653,11 +4653,16 @@ test('Context hybrid search uses the proven collection without a non-gating quer
         }
         const vectorDatabase = new InMemoryLanceVectorDatabase();
         const embedding = new CountingTestEmbedding();
+        const mutationGeneration = 1;
         const context = new Context({
             embedding,
             vectorDatabase,
             symbolRegistryStateRoot: stateRoot,
             indexPolicyStateRoot: path.join(stateRoot, 'policies'),
+            mutationGenerationObserver: () => ({
+                generation: mutationGeneration,
+                mutationActive: false,
+            }),
         });
         await context.indexCodebase(codebasePath);
         const vectorReceipt = await context.proveVectorGeneration(codebasePath);
@@ -4666,6 +4671,12 @@ test('Context hybrid search uses the proven collection without a non-gating quer
         vectorDatabase.queryCalls.length = 0;
         vectorDatabase.denseRequests.length = 0;
         vectorDatabase.lexicalRequests.length = 0;
+        let completionMarkerReads = 0;
+        const getControl = vectorDatabase.getControl.bind(vectorDatabase);
+        vectorDatabase.getControl = async (...args) => {
+            completionMarkerReads += 1;
+            return getControl(...args);
+        };
         const embedCallsBefore = embedding.embedCalls;
         vectorDatabase.queryHook = () => {
             throw new Error('hybrid search must not issue a query probe');
@@ -4703,6 +4714,7 @@ test('Context hybrid search uses the proven collection without a non-gating quer
         assert.ok((execution.diagnosticCandidateArms?.dense?.[0]?.content.length ?? 0) > 0);
         assert.equal(embedding.embedCalls, embedCallsBefore + 2);
         assert.equal(vectorDatabase.queryCalls.length, 0);
+        assert.equal(completionMarkerReads, 0);
         assert.deepEqual(vectorDatabase.denseRequests.map((request) => request.limit), [8]);
         assert.deepEqual(vectorDatabase.lexicalRequests.map((request) => request.limit), [8, 8]);
         assert.deepEqual(vectorDatabase.lexicalRequests.map((request) => request.matchMode), [

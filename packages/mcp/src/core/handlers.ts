@@ -366,6 +366,10 @@ type ContextLifecycleCapabilities = IndexCompletionMarkerContext & {
     getIndexedExtensionsForCodebase?: (codebasePath: string) => string[];
     getIndexedExtensions?: () => string[];
     getTrackedRelativePaths?: (codebasePath: string) => string[];
+    isPreparedVectorReceiptBoundToCurrentAuthority?: (
+        codebasePath: string,
+        receipt: ProvenVectorGenerationReceipt,
+    ) => boolean;
     revalidatePreparedGeneration?: (
         codebasePath: string,
         receipt: ProvenVectorGenerationReceipt,
@@ -396,6 +400,12 @@ type PreparedReadCacheObservationResult = {
     observation: string | null;
     sourceObservation: string | null;
     unavailableReason?: PreparedReadObservationUnavailableReason;
+};
+
+type StatusPreparedReadObservation = {
+    observation: string;
+    sourceObservation: string | null;
+    unavailableReason: PreparedReadObservationUnavailableReason | null;
 };
 
 type CachedPreparedReadResult =
@@ -595,6 +605,7 @@ export class ToolHandlers {
     private readonly changedFilesCache = new Map<string, ChangedFilesCacheEntry>();
     private readonly rootGitignoreMatcherCache = new Map<string, GitignoreMatcherCacheEntry>();
     private readonly preparedReadCache = new PreparedReadCache<Extract<TrackedRootReadinessState, { state: 'ready' }>>();
+    private readonly statusPreparedReadObservations = new Map<string, StatusPreparedReadObservation>();
     private readonly preparedNavigationCache = new Map<string, PreparedNavigationCacheEntry>();
     private readonly searchResultSetCache = new SearchResultSetCache<FrozenSearchResultSet>();
     private readonly gitignoreForceReloadEveryN: number;
@@ -780,7 +791,7 @@ export class ToolHandlers {
             snapshotManager: this.snapshotManager,
             syncManager: this.syncManager,
             trackedRootReadiness: this.trackedRootReadiness,
-            seedPreparedRead: this.seedPreparedRead.bind(this),
+            prepareStatusTrackedRootRead: this.prepareStatusTrackedRootRead.bind(this),
             getSnapshotAllCodebases: getSnapshotAllCodebasePaths,
             getSnapshotIndexedCodebases: this.getSnapshotIndexedCodebases.bind(this),
             getSnapshotIndexingCodebases: this.getSnapshotIndexingCodebases.bind(this),
@@ -1114,6 +1125,7 @@ export class ToolHandlers {
 
     private evictPreparedRead(codebasePath: string): void {
         this.preparedReadCache.evict(codebasePath);
+        this.statusPreparedReadObservations.delete(codebasePath);
         this.preparedNavigationCache.delete(codebasePath);
     }
 
@@ -1329,6 +1341,39 @@ export class ToolHandlers {
         const root = cached.root.path;
         const observationBeforeResult = this.getPreparedReadCacheObservation(root);
         const observationBefore = observationBeforeResult.observation;
+        const statusPreparedObservation = this.statusPreparedReadObservations.get(root);
+        if (statusPreparedObservation) {
+            this.statusPreparedReadObservations.delete(root);
+            const receiptIsCurrent = this.contextLifecycle()
+                .isPreparedVectorReceiptBoundToCurrentAuthority?.(root, cached.vectorReceipt) === true;
+            if (
+                !observationBefore
+                || observationBefore !== lookup.observation
+                || observationBefore !== statusPreparedObservation.observation
+                || observationBeforeResult.sourceObservation !== statusPreparedObservation.sourceObservation
+                || (observationBeforeResult.unavailableReason ?? null)
+                    !== statusPreparedObservation.unavailableReason
+                || !receiptIsCurrent
+            ) {
+                this.evictPreparedRead(root);
+                return {
+                    status: "miss",
+                    reason: observationBefore ? "observation_changed" : "observation_unavailable",
+                    ...(observationBeforeResult.unavailableReason
+                        ? { observationUnavailableReason: observationBeforeResult.unavailableReason }
+                        : {}),
+                };
+            }
+            operations.preparedCacheHits += 1;
+            return {
+                status: "hit",
+                state: {
+                    ...cached,
+                    preparedObservation: observationBefore,
+                    statusPrepared: true,
+                },
+            };
+        }
         const revalidate = this.contextLifecycle().revalidatePreparedGeneration;
         if (!observationBefore || typeof revalidate !== 'function') {
             this.evictPreparedRead(root);
@@ -1390,6 +1435,7 @@ export class ToolHandlers {
     private seedPreparedRead(
         state: Extract<TrackedRootReadinessState, { state: 'ready' }>,
         preserveProofAge: boolean,
+        statusPrepared = false,
     ): void {
         const root = state.root.path;
         if (!state.vectorReceipt || !state.preparedObservation) {
@@ -1413,17 +1459,46 @@ export class ToolHandlers {
             }
             return;
         }
+        if (statusPrepared) {
+            setBoundedCacheEntry(
+                this.statusPreparedReadObservations,
+                root,
+                {
+                    observation,
+                    sourceObservation: observationResult.sourceObservation,
+                    unavailableReason: observationResult.unavailableReason ?? null,
+                },
+                PREPARED_NAVIGATION_CACHE_MAX_ROOTS,
+            );
+        } else {
+            this.statusPreparedReadObservations.delete(root);
+        }
         const navigationIdentity = this.getPreparedNavigationIdentity(state);
         if (this.preparedNavigationCache.get(root)?.identity !== navigationIdentity) {
             this.preparedNavigationCache.delete(root);
         }
+        const cacheableState = { ...state };
+        delete cacheableState.statusPrepared;
         this.preparedReadCache.seed(
             root,
-            state,
+            cacheableState,
             observation,
             this.now(),
             preserveProofAge,
         );
+    }
+
+    private async prepareStatusTrackedRootRead(
+        absolutePath: string,
+    ): Promise<TrackedRootReadinessState> {
+        const state = await this.prepareTrackedRootReadWithObservation(
+            absolutePath,
+            () => undefined,
+        );
+        if (state.state === 'ready') {
+            this.seedPreparedRead(state, false, true);
+        }
+        return state;
     }
 
     private async prepareTrackedRootReadWithObservation(
@@ -3364,13 +3439,22 @@ export class ToolHandlers {
                 ensureSearchFreshness: (effectiveRoot, preparedRead) => this.measureSearchPhase(
                     phaseTimings,
                     'ensureFreshness',
-                    () => this.syncManager.ensureFreshness(
-                        effectiveRoot,
-                        SEARCH_FRESHNESS_THRESHOLD_MS,
-                        preparedRead?.vectorReceipt
-                            ? { preparedVectorReceipt: preparedRead.vectorReceipt }
-                            : {},
-                    ),
+                    // Status-prepared proof reuse is one-shot and already compared the
+                    // complete local authority/source observation. It does not claim a
+                    // new filesystem comparison; the existing source warning remains.
+                    () => preparedRead?.statusPrepared === true
+                        ? Promise.resolve({
+                            mode: 'skipped_recent' as const,
+                            checkedAt: new Date(this.now()).toISOString(),
+                            thresholdMs: SEARCH_FRESHNESS_THRESHOLD_MS,
+                        })
+                        : this.syncManager.ensureFreshness(
+                            effectiveRoot,
+                            SEARCH_FRESHNESS_THRESHOLD_MS,
+                            preparedRead?.vectorReceipt
+                                ? { preparedVectorReceipt: preparedRead.vectorReceipt }
+                                : {},
+                        ),
                 ),
                 noteFreshnessMode: (mode) => {
                     searchDiagnostics.freshnessMode = mode;

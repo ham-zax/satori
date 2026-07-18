@@ -38,7 +38,7 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
             owners: [{ pid: 42, satoriVersion: "4.11.15", lastSeenAt: "t", configSource: "env" }],
         };
         let summaryCalls = 0;
-        let preparedReadSeed: { state: unknown; preserveProofAge: boolean } | undefined;
+        let statusPreparationCalls = 0;
         const readyState = {
             state: "ready" as const,
             navigationStatus: "valid" as const,
@@ -52,11 +52,11 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
             snapshotManager: { removeCodebaseCompletely: () => undefined },
             syncManager: { ensureFreshness: async () => ({ mode: "skipped_recent" as const }) },
             trackedRootReadiness: {
-                prepareTrackedRootForRead: async () => readyState,
                 buildMissingLocalCollectionMessage: () => "missing",
             },
-            seedPreparedRead: (state: unknown, preserveProofAge: boolean) => {
-                preparedReadSeed = { state, preserveProofAge };
+            prepareStatusTrackedRootRead: async () => {
+                statusPreparationCalls += 1;
+                return readyState;
             },
             getSnapshotAllCodebases: () => [repoPath],
             getSnapshotIndexedCodebases: () => [repoPath],
@@ -123,7 +123,7 @@ test("handleGetIndexingStatus includes runtimeOwners hint and status line", asyn
         const envelope = parseManageEnvelope(response);
 
         assert.equal(summaryCalls, 1);
-        assert.deepEqual(preparedReadSeed, { state: readyState, preserveProofAge: false });
+        assert.equal(statusPreparationCalls, 1);
         assert.match(String(envelope.humanText || ""), /Runtime owners: 1 live \(pid=42 satori@4\.11\.15\)/);
         const hints = envelope.hints as Record<string, unknown> | undefined;
         assert.deepEqual(hints?.runtimeOwners, summary);
@@ -160,16 +160,16 @@ test("handleGetIndexingStatus does not fail when getLiveOwnersSummary returns nu
             snapshotManager: { removeCodebaseCompletely: () => undefined },
             syncManager: { ensureFreshness: async () => ({ mode: "skipped_recent" as const }) },
             trackedRootReadiness: {
-                prepareTrackedRootForRead: async () => ({
-                    state: "ready" as const,
-                    navigationStatus: "valid" as const,
-                    root: {
-                        path: repoPath,
-                        info: { status: "indexed" as const, lastUpdated: new Date().toISOString() },
-                    },
-                }),
                 buildMissingLocalCollectionMessage: () => "missing",
             },
+            prepareStatusTrackedRootRead: async () => ({
+                state: "ready" as const,
+                navigationStatus: "valid" as const,
+                root: {
+                    path: repoPath,
+                    info: { status: "indexed" as const, lastUpdated: new Date().toISOString() },
+                },
+            }),
             getSnapshotAllCodebases: () => [repoPath],
             getSnapshotIndexedCodebases: () => [repoPath],
             getSnapshotIndexingCodebases: () => [],

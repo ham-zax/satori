@@ -77,6 +77,8 @@ export type TrackedRootReadinessState =
         generationReceipt?: ProvenGenerationReceipt;
         navigationStatus?: CompletionProofValidationResult['navigationStatus'];
         preparedObservation?: string;
+        /** One-use proof prepared by manage_index status in this process. */
+        statusPrepared?: true;
         exactPayloadRecounts?: number;
     }
     | { state: "requires_reindex"; codebasePath: string; message?: string }

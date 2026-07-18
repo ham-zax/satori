@@ -42,6 +42,18 @@ A repair request does not automatically authorize cleanup, redesign, migration, 
 
 Treat the requested outcome and stated acceptance criteria as the task boundary.
 
+The task boundary applies equally to investigation, edits, tests, recommendations, and proposed next steps.
+
+Authorization does not cascade. Completing one batch does not authorize the next batch.
+
+Do not turn a bounded task into release preparation, generalized hardening, an observability project, or a roadmap for adjacent work.
+
+Before proposing work outside the stated acceptance criteria, require:
+
+`concrete risk | evidence it applies | current decision it could change`
+
+If any part is missing, omit the work.
+
 Ask a blocking question only when the answer would materially change:
 
 * architecture;
@@ -161,6 +173,20 @@ Match the depth of investigation and verification to the risk. Do not attach a f
 
 ## Verify the outcome
 
+### Add tests only for changed behavior
+
+Before adding a test, identify:
+
+`changed behavior | realistic regression caused by this change | missing existing coverage`
+
+Add the test only when all three exist.
+
+Preserving unchanged behavior normally means running its existing tests, not adding new tests for it.
+
+Do not add duplicate cases, broad matrices, or multiple malformed-input tests that exercise the same failure path.
+
+After the smallest sufficient regression set passes, stop adding tests.
+
 Verification should be capable of disproving the change.
 
 During iteration, run the smallest deterministic check that tests the current claim.
@@ -173,17 +199,17 @@ Change expectations only when authoritative evidence shows that the contract cha
 
 Passing unrelated tests does not prove the requested behavior. Green tests are evidence, not a substitute for the observable outcome.
 
-Run broader package, integration, repository, migration, security, or release checks only when:
+Run broader package, integration, repository, security, or release checks only when:
 
-* the affected boundary requires them;
-* repository policy requires them;
-* a public contract changed;
-* the risk justifies them; or
-* release readiness is explicitly in scope.
+* the request or repository policy explicitly requires them;
+* the changed boundary invalidates an existing broader result; or
+* a demonstrated or directly implicated failure mode cannot be disproved by a smaller check.
 
-For stateful behavior, test the relevant success path and the most important failure, retry, recovery, rollback, restart, or restoration path.
+Difficulty, caution, proximity to release, or desire for extra confidence are not sufficient reasons.
 
-For concurrent behavior, test the specific ordering, race, lease, deduplication, or partial-failure mechanism implicated by the change.
+Choose the smallest non-overlapping checks capable of disproving the requested outcome.
+
+For stateful or concurrent behavior, test the path changed and only the specific failure, retry, restart, race, or recovery mechanism implicated by the change. Do not automatically test the full lifecycle.
 
 Reuse a green result while its relevant code, configuration, fixtures, environment, and inputs remain unchanged.
 
@@ -273,6 +299,14 @@ Prefer authoritative local evidence. Use authoritative external sources when ups
 
 ## Communication
 
+When recommending what happens next, provide only:
+
+`next action | why it is necessary now | stopping condition`
+
+Do not list later batches, optional qualifications, release gates, or adjacent improvements unless I explicitly request a roadmap.
+
+When the requested outcome is complete and no demonstrated in-scope blocker remains, stop.
+
 Be direct, concrete, and concise.
 
 Lead with the result or current blocker.
@@ -297,12 +331,7 @@ For small work, report:
 * the focused verification performed; and
 * any concrete limitation.
 
-For material or high-risk work, also report:
-
-* how the requested outcomes map to the diff and evidence;
-* what remains incomplete;
-* material checks not run and why; and
-* any concrete remaining risk.
+For material or high-risk work, report only additional information needed to make the current acceptance decision.
 
 Before claiming completion, confirm that the requested observable outcome passed, the diff matches the request, and no demonstrated in-scope blocker remains.
 

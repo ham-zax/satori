@@ -217,6 +217,14 @@ Treat validation as a dependency graph. Avoid overlapping checks that prove the 
 
 Before a benchmark or comparison, freeze the expected truth, relevant revision, environment, runtime and data identity, configuration, instructions, and repetition method. Keep exploratory measurements separate from acceptance evidence.
 
+Start experiments and benchmarks at the lowest layer that can answer the current decision. If two existing indexes, providers, or implementations can be compared directly, exercise the same inputs against both and compare their authoritative outputs before adding agents, judges, orchestration, new harnesses, or generalized infrastructure.
+
+Add another experimental layer only when the simpler result cannot answer a specific decision. State:
+
+`missing evidence | why the direct test cannot produce it | smallest added mechanism | stopping condition`
+
+Do not make an exploratory benchmark more complex merely to resemble a release qualification. Do not build a reusable benchmark framework before a bounded direct pilot proves that the framework is necessary.
+
 Establish correctness before comparing speed, cost, token usage, or volume. A faster incorrect result is still a failure.
 
 Inspect the complete diff before broad validation and before claiming completion.

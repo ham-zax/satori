@@ -5,8 +5,10 @@ focused conformance; L3 functional qualification passed and its frozen resource
 qualification failed; atomic delta publication and bounded generation staging
 are correct; receipt-driven readiness proof reuse passed focused qualification,
 but the prospective delta resource qualification still fails in other measured
-publication stages; no supported runtime configuration or production default
-has changed
+publication stages; the direct paired L4 retrieval-relevance comparison is
+complete and shows Potion is useful but weaker than Voyage overall, with a
+specific Java gap; opt-in experimental productization is separately authorized
+under Follow-up Track A0, while no production default has changed
 
 **Date:** 2026-07-19
 
@@ -18,8 +20,11 @@ offline-search mode.
 follow-up is complete. Redundant exact publication proofs are removed, but the
 prospective ordinary delta and rename latency gates still fail in navigation and
 graph delta work, candidate publication verification, discovery and hashing,
-and remaining generation-finalization work. Stop here. L4 product qualification
-and every follow-up-plan track remain unauthorized.
+and remaining generation-finalization work. L4 now directly compares retrieval
+relevance on the two existing publications; no agent or judge layer is part of
+that decision. Follow-up Track A0 is separately authorized for opt-in
+experimental installation; Track A1 and all other follow-up tracks remain
+unauthorized.
 
 ---
 
@@ -314,8 +319,9 @@ behavior. The helper may be provisioned only through the recorded experimental
 path established by L0.
 
 L2 may merge behind an experimental, undocumented-by-default provider flag,
-but it is not a supported product configuration until L4 passes and
-Productization Track A completes.
+but the manually provisioned L2 path is not an installer-supported product
+configuration. Follow-up Track A0 may add the explicit experimental installer;
+L4 and Track A1 govern later default or recommended promotion.
 
 Exit: the provider passes focused Core and MCP conformance tests without a paid
 service. No supported product configuration has been created.
@@ -415,8 +421,9 @@ preserves the configured digest. Focused MCP tests and the same publication's
 incremental synchronization verified the repair without another full index.
 
 No measurement, threshold, or original L3 evidence is changed by this record.
-L4 remains blocked pending an explicit decision about the confirmed resource
-miss.
+At this decision point L4 remained blocked pending an explicit decision about
+the confirmed resource miss. The later execution-boundary decision recorded at
+the top of this plan authorizes L4 independently without changing this result.
 
 #### Recorded L3 resource investigation
 
@@ -502,7 +509,9 @@ change than this qualification permits.
 
 No navigation, call-graph, vector, lexical, ranking, provider, or retrieval code
 was changed. No performance qualification or representative reindex was run.
-The prospective latency targets remain unqualified, and L4 remains blocked.
+The prospective latency targets remained unqualified, and L4 was blocked at
+this decision point. The later independent L4 authorization does not
+reinterpret this evidence.
 The task-owned decision evidence is recorded under
 `/home/hamza/repo/satori-delta-publication-evidence/20260718-b651fbb`.
 
@@ -673,15 +682,16 @@ suite is green.
 
 **Decision:** `readiness_proof_pass_delta_latency_fail`. Receipt reuse and
 single-flight cold validation pass, but the prospective add, edit, delete, and
-rename gates remain failed under the last representative evidence. L4 remains
-blocked. The checksum-sealed evidence root is
+rename gates remain failed under the last representative evidence. This remains
+a performance miss, but it no longer blocks the independently authorized L4
+direct retrieval-relevance comparison. The checksum-sealed evidence root is
 `/home/hamza/repo/satori-readiness-proof-evidence/20260719-80045d8`; the
 decision SHA-256 is
 `d1c193b850d001053eb2f36ab8c9c48bfdd7597d7a5f8d1ecd1eec264cb186d8`,
 and the checksum-manifest seal is
 `5c9952b64a6af198254b87800e6c00625c6ab5c2b0c3efc2becc8610f86cc173`.
 
-### L4 — frozen 36-task product qualification
+### L4 — direct paired retrieval-relevance qualification
 
 Freeze exactly 36 tasks:
 
@@ -700,72 +710,94 @@ language contributes exactly one task in each of these primary cells:
 5. changed-file or freshness-sensitive retrieval; and
 6. negative or no-supported-answer behavior.
 
-Every task has one primary language and cell for counting.
+Every task has one primary language and cell for counting. The six negative
+tasks remain useful future answer-behavior cases, but direct retrieval alone
+cannot determine whether an agent would make a confident false claim. L4
+therefore reports retrieval relevance on the 30 tasks with a required owner and
+does not manufacture a negative-answer result.
 
-Compare only:
+Compare only the two already-published indexes:
 
-* **Arm A:** Voyage connected reference using the existing production-quality
-  path.
+* **Arm A:** Voyage connected reference using the existing production path.
 * **Arm B:** Potion plus the existing Satori lexical, exact-evidence, fusion,
   grouping, and disclosure path, with no neural reranker.
 
-Before either arm runs, checksum-seal:
+For each frozen query, call `search_codebase` directly against both compatible
+publications with the same grouped runtime scope and the same `limit: 15` and
+`disclosureLimit: 15`. Record required-owner file rank, required symbol-label
+rank when available, the first five result identities and scores, and wall
+latency. Do not call an answering model, judge, OpenCode, MimoCode, or another
+agent harness. Those layers answer a different question and are not required to
+decide whether Potion retrieves relevant repository evidence.
+
+Before either arm runs, freeze:
 
 * repositories and revisions;
 * expected owners, acceptable evidence, and answer facts;
-* criticality, the ambiguous-task adjudication rule, and the exact classifier
-  for a confident false answer;
 * task and answer-key hashes;
-* agent and judge versions, system prompts, and whether each is local or remote;
-* tool schemas and descriptions;
-* tool-call ceiling plus continuation-page and source-read ceilings;
-* temperature and seed where supported, trial count, and execution order;
-* blind cell labels and the complete adjudication procedure;
 * publication identities;
-* hardware and measurement method; and
-* the acceptance gates below.
+* the exact search request and result projection; and
+* hardware and measurement method.
 
 Arm B reuses the single network-blocked Potion publication created in L3. L4
 does not authorize another full Potion publication. If its frozen repositories,
 revisions, or identity cannot use that publication, stop and revise the plan
 before running either arm.
 
-The L4 diagnostic capture freezes the exact candidate arms, per-arm depths, and
-candidate union produced by Arm B's frozen production configuration. It also
-captures a predeclared diagnostic superset without feeding additional candidates
-into production ranking or disclosure. For each candidate it records the
-candidate ID, dense/lexical/exact provenance, original source rank, owner ID,
-exact source-projection digest, and final survival stage. Do not copy additional
-source text into the evidence bundle. A later Track C experiment reconstructs
-candidate text from the frozen source revision and rejects a projection whose
-digest does not match.
+The completed comparison produced these results on the 30 positive tasks:
 
-Arm B passes only if all of these are true:
+| Metric | Potion | Voyage |
+| --- | ---: | ---: |
+| Required owner file at rank 1 | 13/30 | 14/30 |
+| Required owner file in top 5 | 23/30 | 25/30 |
+| Required owner file in top 15 | 25/30 | 27/30 |
+| Required symbol label in top 5 | 16/30 | 21/30 |
+| Required symbol label in top 15 | 20/30 | 24/30 |
+| Search latency p50 | 94.64 ms | 1,009.46 ms |
+| Search latency p95 | 1,251.00 ms | 1,813.34 ms |
 
-* correctness is at least `30/36`;
-* correctness is no more than two answers behind Arm A;
-* correctness is at least `4/6` in every language;
-* correctness is no more than one answer behind Arm A in every language;
-* there is no additional critical hard miss versus Arm A;
-* the required exact-identifier or path owner is reachable `6/6` through the
-  frozen result and continuation path;
-* no paired exact-identifier or path task is correct under Arm A and incorrect
-  under Arm B;
-* there is no critical configuration/runtime owner miss;
-* at most one paired configuration/runtime task is correct under Arm A and
-  incorrect under Arm B;
-* there are zero confident false answers across all six negative tasks;
-* any ambiguous result is decided under the frozen adjudication rule without
-  rewriting the task or answer key;
-* required evidence comes only from the frozen result and continuation path;
-  and
-* Satori-runtime offline, resource, fingerprint, publication, and lifecycle
-  checks pass.
+Paired required-owner file rank favored Potion on 3 tasks, Voyage on 11, and
+tied on 16. Top-five owner-file reachability by language was:
 
-Unresolved ambiguity is not a separate veto: frozen adjudication assigns the
-task outcome consumed by the integer gates.
+| Language | Potion | Voyage |
+| --- | ---: | ---: |
+| TypeScript | 5/5 | 5/5 |
+| JavaScript | 4/5 | 4/5 |
+| Python | 4/5 | 4/5 |
+| Go | 3/5 | 3/5 |
+| Java | 2/5 | 4/5 |
+| Rust | 5/5 | 5/5 |
 
-Exit: record pass or fail without tuning against the 36-task result.
+Both arms missed the frozen owner within the top 15 for the JavaScript path,
+Python runtime-configuration, and Go path cases. Potion additionally missed the
+Java natural-language owner and Java runtime-configuration owners that Voyage
+reached. Exact/path top-five reachability tied at 4/6. Potion led freshness
+top-one reachability 5/6 to 3/6; Voyage led configuration/runtime top-one
+reachability 4/6 to 1/6.
+
+The latency numbers are descriptive for this paired run, not replacements for
+the frozen resource qualification. They include each arm's normal query-time
+path and were not collected with the repetition contract required for a product
+latency gate.
+
+The frozen and prospective resource results are reported alongside L4 but are
+not retrieval-relevance gates. L4 must not reinterpret either result, revise its
+thresholds, or describe the original L3 resource qualification as passing.
+
+**Decision:** `direct_relevance_useful_with_java_gap`. Potion retrieves the
+required owner in the top five for 23/30 positive tasks and is materially faster
+at the median in this run, so it is a useful offline first-stage baseline. It
+does not match Voyage overall and has a clear Java weakness that must be
+disclosed or addressed before making a broad cross-language quality claim. This
+result is retrieval evidence, not agent-answer or negative-answer evidence.
+
+The local result artifact is
+`/home/hamza/repo/satori-l4-evidence/20260719-c6511bb/execution/direct-relevance-results.json`
+with SHA-256
+`1ba9db86314f9d6b66a5392e92a1484232c00d14f8ead37e38cabbcfaa35e939`.
+
+Exit: complete. Do not tune against these revealed tasks and then describe them
+as fresh evidence.
 
 ---
 
@@ -817,10 +849,10 @@ revise a threshold after observing contender quality results.
 | ------ | ------ |
 | Native inference or resource feasibility fails | Stop; do not implement a production provider. |
 | Publication works but critical owners are absent from candidates | Do not ship; record the first retrieval-failure boundary. |
-| Potion stays close to Voyage and meets offline/resource gates | Approve explicit `offline_lite` productization under Follow-up Track A. |
+| Direct paired retrieval shows useful owner reachability with bounded, disclosed gaps | Proceed with the separately authorized Track A0 lifecycle without claiming agent-answer or negative-answer qualification. |
 | Owners survive retrieval but answers are lost after retrieval | Open Follow-up Track C; do not add a reranker in this plan. |
-| Quality is useful but below the release floor | Keep the provider experimental or do not expose it. |
-| Potion passes | Proceed only to the independently triggered follow-up tracks needed for the intended release claim. |
+| A broader release claim needs agent-answer, negative-answer, or multi-repository evidence | Open Track B only for that explicit claim. |
+| Retrieval quality is not useful for the intended offline mode | Keep the provider experimental or do not expose it. |
 
 The desired result is not proof that Potion beats Voyage. It is proof that
 Potion supports a genuinely useful, small, private, and operationally simple

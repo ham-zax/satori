@@ -3,20 +3,23 @@
 **Status:** L0 and L1 passed; L2 experimental provider integration passed
 focused conformance; L3 functional qualification passed and its frozen resource
 qualification failed; atomic delta publication and bounded generation staging
-are correct, but the prospective delta resource qualification still fails; no
-supported runtime configuration or production default has changed
+are correct; receipt-driven readiness proof reuse passed focused qualification,
+but the prospective delta resource qualification still fails in other measured
+publication stages; no supported runtime configuration or production default
+has changed
 
-**Date:** 2026-07-18
+**Date:** 2026-07-19
 
 **Primary decision:** determine whether
 `minishlab/potion-code-16M-v2` can support a useful, safe, lightweight Satori
 offline-search mode.
 
-**Current execution boundary:** the authorized atomic-publication follow-up is
-complete and stopped at `shared_bottleneck_relocalized`: physical full-generation
-copying is removed, while publication verification and readiness proof now own
-the remaining latency miss. Stop here. L4 product qualification and every
-follow-up-plan track remain unauthorized.
+**Current execution boundary:** the authorized receipt-driven readiness-proof
+follow-up is complete. Redundant exact publication proofs are removed, but the
+prospective ordinary delta and rename latency gates still fail in navigation and
+graph delta work, candidate publication verification, discovery and hashing,
+and remaining generation-finalization work. Stop here. L4 product qualification
+and every follow-up-plan track remain unauthorized.
 
 ---
 
@@ -590,6 +593,93 @@ the decision SHA-256 is
 `5b12d53cbc9e653e3e3c13e33aa5bc471de89c8e5b64250393111c0eb5fe4598`,
 and the checksum-manifest seal is
 `7c31c5dc81cdfe57ec99b4b65d13cb12687a05028751ef9fc93a9eacf83dc082`.
+
+#### Recorded receipt-driven readiness-proof follow-up
+
+The readiness follow-up started from
+`80045d800777c07dfc59de2d186fceb226d2c6fc`. Commit
+`89c567d4a0f1c613564b1a02e617172350d043b3` implements the smallest
+backend-capability-bound proof reuse:
+
+* successful activation publishes a process-local generation receipt;
+* compatible Core contexts owned by one provider runtime share a single-flight
+  proof coordinator;
+* warm status, search, and synchronization validate the receipt against current
+  policy, navigation, and backend publication observations without an exact
+  payload recount;
+* a restarted compatible process performs one exact proof, while concurrent
+  callers join it;
+* Lance observations bind the data and control version hints to the content of
+  both current manifests, so drop/recreate with the same collection name and
+  version numbers cannot reuse a prior receipt; and
+* backends without a safe cheap observation, including Milvus, retain their
+  established receipt-bound marker and policy validation and do not receive a
+  cache guarantee that they cannot prove.
+
+There is no TTL. Policy drift, navigation changes, completion-marker loss or
+replacement, same-name Lance collection replacement, missing metadata, and
+restart invalidate reuse. Identity is checked again before a cached or joined
+proof is returned. Activation establishes the receipt, cold validation reports
+`exact`, concurrent callers report `joined`, and later cache hits report
+`reused`.
+
+The final clean-commit focused run used 24 files and 48 chunks. Across 20 warm
+proofs, median latency was 5.96 ms and empirical p95 was 6.73 ms. Every sample
+reported `reused` and zero exact payload recounts. A three-caller restart
+performed exactly one exact recount; the other two callers reported `joined`.
+The focused zero-change synchronization took 21.23 ms, and the first proof read
+after activation took 11.54 ms with no exact recount. These are focused proof
+and lifecycle measurements, not representative product gates.
+
+One preserved 20-sample representative run from the intermediate receipt-reuse
+implementation established that removing redundant readiness proofs was not
+enough to satisfy ordinary delta latency:
+
+| Operation | Samples | Median | p95 | Prospective target | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Zero change | 20 | 255.69 ms | 276.54 ms | 1,000 ms | pass |
+| One-file addition | 20 | 2,917.60 ms | 2,970.33 ms | 1,000 ms | fail |
+| One-file body edit | 20 | 3,125.01 ms | 3,515.08 ms | 1,000 ms | fail |
+| One-file signature edit | 20 | 3,204.83 ms | 3,649.93 ms | 1,000 ms | fail |
+| One-file deletion | 20 | 2,978.00 ms | 3,012.30 ms | 1,000 ms | fail |
+| Rename | 10 | 2,717.96 ms | 3,357.59 ms | 1,500 ms | fail |
+| Warm public search | 30 | 146.91 ms | 154.38 ms | 500 ms | pass |
+
+The later bounded diagnostic used only two or three mutation samples per type,
+so its p95 values are descriptive rather than qualification evidence. It
+reduced ordinary operations to approximately 2.1--2.7 seconds and localized
+the remaining inclusive owners to navigation and graph delta work
+(approximately 0.63--0.72 seconds), candidate publication verification
+(approximately 0.46--0.49 seconds), discovery and hashing (approximately
+0.20--0.23 seconds), and remaining generation, finalization, checkpoint, and
+snapshot work. Readiness proof itself was approximately 1.4--2.2 ms before the
+final current-manifest binding; the final focused p95 with manifest binding is
+6.73 ms.
+
+No representative rerun or full reindex was purchased after the final review
+corrections. The focused committed-runtime measurement showed that proof cost
+remains negligible while the measured ordinary path is still more than twice
+the target, so another representative qualification was not yet plausible.
+The preserved representative run recorded zero runtime network attempts, and
+the final focused run used only the embedded local backend.
+
+Focused and affected verification passed 210 Core tests and 88 MCP tests, plus
+Core and MCP typecheck, focused lint, Core build, MCP runtime build, and diff
+checks. A broad MCP run passed 1,001 of 1,007 tests. The one readiness-affected
+cached-navigation failure was repaired and passed; five failures remain outside
+the affected readiness verification set, including the already recorded
+tracked-lexical fixture, so this record does not claim that the complete broad
+suite is green.
+
+**Decision:** `readiness_proof_pass_delta_latency_fail`. Receipt reuse and
+single-flight cold validation pass, but the prospective add, edit, delete, and
+rename gates remain failed under the last representative evidence. L4 remains
+blocked. The checksum-sealed evidence root is
+`/home/hamza/repo/satori-readiness-proof-evidence/20260719-80045d8`; the
+decision SHA-256 is
+`d1c193b850d001053eb2f36ab8c9c48bfdd7597d7a5f8d1ecd1eec264cb186d8`,
+and the checksum-manifest seal is
+`5c9952b64a6af198254b87800e6c00625c6ab5c2b0c3efc2becc8610f86cc173`.
 
 ### L4 — frozen 36-task product qualification
 

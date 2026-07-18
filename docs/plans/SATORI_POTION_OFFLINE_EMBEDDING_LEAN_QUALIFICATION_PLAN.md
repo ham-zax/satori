@@ -26,6 +26,10 @@ This plan answers one question:
 Voyage remains the connected-quality reference. Existing Ollama configurations
 remain unchanged.
 
+Potion plus Satori's existing BM25 and exact-evidence paths remains the offline
+first-stage baseline. A later second-stage scorer is optional and must not
+replace or weaken that baseline.
+
 A successful result may authorize an explicit experimental or release-candidate
 `offline_lite` configuration. It does not authorize a local neural reranker, a
 new freshness model, a model tournament, broad release packaging, or a
@@ -57,6 +61,8 @@ The following belong to
 `SATORI_OFFLINE_SEARCH_PRODUCTIZATION_AND_QUALITY_FOLLOW_UP_PLAN.md`:
 
 * local neural reranking;
+* Late-interaction scoring, LateOn artifacts, multi-vector caching, and sidecar
+  indexes, all of which belong to Follow-up Track C;
 * a full Semble benchmark arm;
 * a 90-task release benchmark;
 * generic native artifact installation infrastructure;
@@ -336,6 +342,16 @@ Arm B reuses the single network-blocked Potion publication created in L3. L4
 does not authorize another full Potion publication. If its frozen repositories,
 revisions, or identity cannot use that publication, stop and revise the plan
 before running either arm.
+
+The L4 diagnostic capture freezes the exact candidate arms, per-arm depths, and
+candidate union produced by Arm B's frozen production configuration. It also
+captures a predeclared diagnostic superset without feeding additional candidates
+into production ranking or disclosure. For each candidate it records the
+candidate ID, dense/lexical/exact provenance, original source rank, owner ID,
+exact source-projection digest, and final survival stage. Do not copy additional
+source text into the evidence bundle. A later Track C experiment reconstructs
+candidate text from the frozen source revision and rejects a projection whose
+digest does not match.
 
 Arm B passes only if all of these are true:
 

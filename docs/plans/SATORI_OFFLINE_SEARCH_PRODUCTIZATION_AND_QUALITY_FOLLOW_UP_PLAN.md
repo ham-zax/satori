@@ -81,51 +81,259 @@ rejected without revising held-out tasks or gates.
 
 ---
 
-## Track C — local reranker
+## Track C — late-interaction or reranking improvement
 
-**Trigger:** lean evidence shows that expected owners survive candidate
-admission, but scoring or ordering remains the first responsible boundary for
-the answer loss.
+**Trigger:** Potion passes candidate-owner recall, but expected owners are lost
+or poorly exposed after retrieval.
 
-If a retrieved owner is first lost through deterministic grouping or
-disclosure, correct that responsible stage. Such a loss does not by itself
-justify or trigger a neural reranker.
+First localize the responsible stage:
 
-Before evaluating a model:
+```text
+grouping or disclosure loss
+-> correct grouping or disclosure
 
-1. prove that the owner survives candidate admission and localize scoring or
-   ordering as the first wrong boundary;
-2. determine whether a bounded deterministic fusion or ranking correction
-   resolves the demonstrated failures;
-3. introduce a backend-neutral reranker interface only if a neural reranker
-   remains justified; and
-4. preserve Voyage's current behavior through that interface.
+fusion or deterministic-ranking loss
+-> test a bounded deterministic correction
 
-Then:
+semantic ordering remains responsible
+-> admit a second-stage model experiment
+```
 
-* freeze at most two small ONNX candidates;
-* pin complete model, tokenizer, runtime, checksum, and license bundles;
-* disallow Python, mutable remote code, and runtime code fetching;
-* replay bounded candidate counts from identical frozen captures;
-* preserve exact-evidence pinning and required path/symbol evidence;
-* measure answer improvement, truncation, latency, RSS, and context;
-* select at most one finalist from tuning tasks; and
-* run it on held-out tasks only if it crosses the predeclared improvement gate.
+A neural scorer must not disguise a grouping or disclosure defect. Any shared
+Core/MCP fusion, admission, grouping, ranking, or disclosure change requires
+focused Milvus non-regression evidence for the changed boundary. A LateOn-only
+adapter that leaves those shared paths unchanged does not require Milvus
+requalification.
 
-Admission requires material answer value, such as removing a hard miss or
-correcting several answer failures without introducing a new hard miss. The
-exact integer rule must be checksum-sealed before candidate scores are visible.
+### C0 — LateOn artifact and runtime conformance
 
-A Potion-only reranker adapter that does not alter shared retrieval or ranking
-behavior does not require Milvus requalification. Any shared Core/MCP fusion,
-admission, grouping, ranking, or disclosure change requires focused Milvus
-non-regression evidence for the changed boundary before admission.
+Public artifacts exist for `lightonai/LateOn-Code-edge` and
+`lightonai/LateOn-Code-edge-pretrain`. No checkpoint is admitted until its
+exact revision, files, checksums, tokenizer behavior, ONNX output contract,
+MaxSim implementation, and reference conformance are frozen. Record the pinned
+Apache-2.0 license and required notices as routine artifact provenance.
 
-If no candidate adds material value, retain `offline_lite` without a neural
-reranker.
+When Track C's semantic-ordering trigger is satisfied, LateOn edge is the first
+conditional second-stage candidate. It is not part of the offline first-stage
+baseline.
 
-**Exit:** zero or one local reranker is admitted by the frozen rule; otherwise
-the no-reranker path remains authoritative.
+The default checkpoint is:
+
+```text
+lightonai/LateOn-Code-edge
+```
+
+Use the pre-trained checkpoint instead only if contamination analysis shows
+that the fine-tuned checkpoint's CoIR training data overlaps the frozen Satori
+evaluation repositories or tasks. CoIR training is not itself leakage when the
+evaluation repositories and tasks are disjoint. Do not score both checkpoints
+and choose retrospectively.
+
+The proposal-time public description reports Apache-2.0 licensing,
+48-dimensional token vectors, MaxSim scoring, a 2048-token document limit, and
+a 256-token query limit. The repository currently exposes FP32 ONNX and
+safetensors files plus an approximately 17.2 MB INT8 ONNX file and 3.58 MB
+tokenizer. These mutable observations are discovery evidence only; C0 replaces
+them with an exact revision and file hashes.
+
+Freeze:
+
+* repository revision and every required file hash;
+* tokenizer and special-token behavior;
+* query/document distinction;
+* query and document limits;
+* output shape and runtime dtype;
+* token masking and pruning;
+* normalization;
+* exact MaxSim reduction;
+* ONNX Runtime version and target;
+* model load, model-related RSS, and warm latency; and
+* reference query vectors, document vectors, masks, and scores from the pinned
+  official PyLate path.
+
+Hash the canonical artifact, runtime, and inference contract as the
+`lateOnContractDigest`. The Satori runtime must reproduce the pinned PyLate
+vectors, masks, and scores within a checksum-sealed numerical tolerance. Python
+may create reference evidence but must not become a Satori runtime dependency.
+
+Do not assume that the INT8 ONNX file emits INT8 token vectors. Quantized model
+weights may still produce FP32 output; measure and freeze the actual output
+dtype.
+
+LightOn's NextPlaid/ColGrep implementation is a Rust/ONNX reference and possible
+bounded component. It does not replace Satori's chunks, primary retrieval,
+publication identity, freshness, grouping, or disclosure authority.
+
+Authority used to start C0:
+
+* model card and comparison:
+  https://huggingface.co/lightonai/LateOn-Code-edge
+* artifact files:
+  https://huggingface.co/lightonai/LateOn-Code-edge/tree/main
+* pre-trained checkpoint:
+  https://huggingface.co/lightonai/LateOn-Code-edge-pretrain
+* Rust/ONNX multi-vector reference:
+  https://github.com/lightonai/next-plaid
+
+**Exit:** exactly one checkpoint and native runtime pass artifact provenance,
+shape, mask, vector, MaxSim, determinism, and resource conformance. Otherwise
+close Track C without scoring Satori tasks.
+
+### C1 — query-time scoring prototype
+
+Reuse the exact frozen production candidate arms and diagnostic superset
+captured by the lean L4 authority. Do not substitute fixed BM25 or Potion depths
+and do not rerun retrieval at altered depths. This experiment must not change
+production ranking or retrieval depth.
+
+Reconstruct candidate text from the frozen source revision and require the
+source-projection digest captured by L4 to match before encoding. Do not store a
+second source-text copy in Track C evidence.
+
+Compare only:
+
+| Arm | Second stage |
+| --- | ------------ |
+| B | Baseline ordering |
+| B-L16 | LateOn scores at most 16 eligible candidates |
+| B-L32 | LateOn scores at most 32 eligible candidates |
+
+Rules:
+
+* Candidate membership is identical across all three arms.
+* Mandatory exact/path/configuration evidence remains pinned and cannot be
+  displaced below required disclosure.
+* LateOn changes only eligible semantic ordering.
+* Canonical per-file, per-owner, and repository-region diversity is applied
+  before selecting eligible candidates.
+* Dense, lexical, and exact provenance remains attached to every candidate.
+* The unscored tail retains baseline relative order.
+* Candidate text uses the frozen Satori source projection.
+* One query embedding is reused across all candidate scoring for that query.
+* LateOn semantic order passes through Satori's unchanged grouping and
+  diversity stages; their resulting final ranked result set is frozen before
+  initial disclosure.
+* `continue_search` performs no encoding or scoring; it exposes more of the
+  frozen result set.
+* Load failure, timeout, malformed output, out-of-memory failure, or explicit
+  disablement returns the byte-equivalent baseline result.
+
+Measure cold and warm operation separately:
+
+* query encoding;
+* candidate-document encoding;
+* MaxSim scoring;
+* end-to-end total latency;
+* peak model-related and total RSS;
+* retained token-vector count and bytes per candidate; and
+* answer corrections, regressions, and candidate-owner recall.
+
+Do not change LanceDB schema, publication identity, incremental indexing,
+chunk lifecycle, sidecar recovery, primary retrieval, or Milvus behavior in C1.
+
+### C2 — bounded experimental cache
+
+Only if C1 passes the net-positive qualification gate, add an in-memory LRU
+keyed by:
+
+```text
+lateOnContractDigest
++ candidate ID
++ exact source-projection digest
+```
+
+The cache is experimental and non-authoritative:
+
+* missing entries are recomputed;
+* invalid or mismatched entries are discarded;
+* it cannot affect source freshness or candidate membership;
+* entry count, bytes, TTL, and LRU behavior are bounded; and
+* cold-cache and warm-cache latency are reported separately.
+
+If any candidate required by the selected LateOn policy cannot be loaded or
+encoded within the deadline, discard all LateOn scores for that query and return
+the complete byte-equivalent baseline ordering. Never partially rerank from
+whichever cache entries happened to exist.
+
+### C3 — persisted sidecar
+
+Admit a persisted multi-vector sidecar only when all of these are true:
+
+* C1 passes the net-positive qualification gate;
+* candidate-document encoding materially harms search latency;
+* observed token-vector count and storage are acceptable;
+* incremental invalidation is proven against Satori chunk identity and exact
+  source-projection digest; and
+* missing or corrupt sidecar state safely returns the byte-equivalent baseline
+  result.
+
+If any candidate required by the selected LateOn policy cannot be loaded or
+encoded within the deadline, discard all LateOn scores for that query and return
+the complete byte-equivalent baseline ordering. Never partially rerank from the
+subset available in the sidecar or cache.
+
+The sidecar is optional derived ranking acceleration. It is not source,
+freshness, primary retrieval, or LanceDB publication authority. Missing entries
+are recomputed within the all-or-nothing deadline; sidecar state never makes the
+primary publication unsearchable. The `lateOnContractDigest` enters ranking and
+evaluation identity.
+
+If runtime output is FP32, each retained token vector costs at least:
+
+```text
+48 dimensions x 4 bytes = 192 bytes
+```
+
+For illustration only:
+
+```text
+128 retained tokens per chunk ~= 24.6 KB per chunk
+10,000 chunks ~= 246 MB before metadata and index overhead
+```
+
+These are warnings, not predictions. C1 must measure the actual output dtype,
+retained-token distribution, bytes per encoded chunk, and runtime pruning
+before C3 can estimate or gate sidecar storage.
+
+### C4 — cross-encoder fallback
+
+Consider a small MiniLM or Jina ONNX cross-encoder only if:
+
+* LateOn is unavailable, operationally unsuitable, or ineffective; and
+* evidence still proves a post-retrieval semantic-ordering problem.
+
+Do not test LateOn plus multiple cross-encoders simultaneously. A fallback
+experiment requires its own checksum-sealed artifact, runtime, input, scoring,
+latency, memory, and admission contract.
+
+### Track C qualification rule
+
+The revealed 36-task Potion suite may decide whether LateOn deserves further
+engineering. Once used to design or select C0–C3, it is diagnostic evidence and
+cannot become fresh held-out evidence.
+
+The C1 prototype may continue only if one of these quality conditions holds:
+
+* it fixes at least two previously incorrect answers; or
+* it removes at least one hard miss.
+
+It must also satisfy all of these:
+
+* total correct-answer count is at least one higher than baseline Arm B;
+* introduce no critical, exact-identifier, path, or configuration regression;
+* preserve mandatory exact/path/configuration evidence;
+* preserve candidate membership and candidate-owner recall;
+* remain deterministic for identical fixed candidates; and
+* remain within the checksum-sealed latency and memory envelope.
+
+Passing this gate authorizes at most C2 or C3 investigation; it does not
+authorize production. Production admission requires a new checksum-sealed
+held-out evaluation, normally under Track B expanded release qualification.
+
+**Exit:** stop unless C1 produces net-positive Satori answer evidence under the
+frozen gate. Persist token vectors only when quality passes and measured
+document encoding makes persistence decision-relevant. Otherwise retain the
+Potion + BM25 + exact baseline.
 
 ---
 
@@ -217,8 +425,15 @@ lean qualification passes
     -> Track A productization, when a supported configuration is intended
     -> Track B expanded release qualification, when the release claim requires it
 
-candidate recall passes but later ranking loses answers
-    -> Track C local reranker
+Potion candidate recall passes but post-retrieval exposure loses answers
+    -> preserve the lean candidate authority
+    -> localize grouping, disclosure, fusion, ranking, or semantic ordering
+    -> correct the deterministic owner when it is responsible
+    -> C0 LateOn conformance only when semantic ordering remains responsible
+    -> C1 B / B-L16 / B-L32 on the revealed diagnostic tasks
+    -> stop if there is no material answer gain
+    -> C2 cache or C3 sidecar only when its own trigger passes
+    -> fresh Track B held-out evidence before production admission
 
 Satori-specific quality remains causally unexplained
     -> Track D Semble diagnostic

@@ -47,6 +47,7 @@ const CONTROL_TABLE_PREFIX = '__satori_control_';
 const DEFAULT_MAX_WRITE_BATCH_SIZE = 512;
 const STABLE_TIE_INITIAL_MULTIPLIER = 2;
 const STABLE_TIE_MINIMUM_FETCH = 32;
+const COLLECTION_IO_CONCURRENCY = 64;
 
 const DATA_FIELDS = [
     'id',
@@ -83,49 +84,58 @@ function structuralSharingError(sourcePath: string, targetPath: string, error: u
 async function shareDirectoryForCandidate(
     sourcePath: string,
     targetPath: string,
-    relativeRoot = '',
 ): Promise<CollectionForkPhysicalStats> {
     await fs.promises.mkdir(targetPath);
+    const directories: string[] = [];
+    const files: Array<{ sourcePath: string; relativePath: string }> = [];
+    const collect = async (sourceDirectory: string, relativeRoot = ''): Promise<void> => {
+        const entries = await fs.promises.readdir(sourceDirectory, { withFileTypes: true });
+        for (const entry of entries.sort((left, right) => compareContractStrings(left.name, right.name))) {
+            const sourceEntryPath = path.join(sourceDirectory, entry.name);
+            const relativePath = path.join(relativeRoot, entry.name);
+            if (entry.isDirectory()) {
+                directories.push(relativePath);
+                await collect(sourceEntryPath, relativePath);
+            } else if (entry.isFile()) {
+                files.push({ sourcePath: sourceEntryPath, relativePath });
+            } else {
+                throw new Error(`LanceDB collection contains unsupported entry '${entry.name}'.`);
+            }
+        }
+    };
+    await collect(sourcePath);
+    for (const relativePath of directories) {
+        await fs.promises.mkdir(path.join(targetPath, relativePath));
+    }
+
     let logicalBytes = 0;
     let physicallyCopiedBytes = 0;
     let sharedFiles = 0;
     let copiedFiles = 0;
-    const entries = await fs.promises.readdir(sourcePath, { withFileTypes: true });
-    for (const entry of entries.sort((left, right) => compareContractStrings(left.name, right.name))) {
-        const sourceEntryPath = path.join(sourcePath, entry.name);
-        const targetEntryPath = path.join(targetPath, entry.name);
-        const relativePath = path.join(relativeRoot, entry.name);
-        if (entry.isDirectory()) {
-            const child = await shareDirectoryForCandidate(
-                sourceEntryPath,
-                targetEntryPath,
-                relativePath,
-            );
-            logicalBytes += child.logicalBytes;
-            physicallyCopiedBytes += child.physicallyCopiedBytes;
-            sharedFiles += child.sharedFiles;
-            copiedFiles += child.copiedFiles;
-        } else if (entry.isFile()) {
-            const sourceStat = await fs.promises.stat(sourceEntryPath);
-            logicalBytes += sourceStat.size;
-            if (isIndependentlyMutableLanceFile(relativePath)) {
-                await fs.promises.copyFile(
-                    sourceEntryPath,
-                    targetEntryPath,
-                    fs.constants.COPYFILE_FICLONE,
-                );
-                physicallyCopiedBytes += sourceStat.size;
+    for (let offset = 0; offset < files.length; offset += COLLECTION_IO_CONCURRENCY) {
+        const batch = files.slice(offset, offset + COLLECTION_IO_CONCURRENCY);
+        const results = await Promise.all(batch.map(async (file) => {
+            const sourceStat = await fs.promises.stat(file.sourcePath);
+            const targetEntryPath = path.join(targetPath, file.relativePath);
+            if (isIndependentlyMutableLanceFile(file.relativePath)) {
+                await fs.promises.copyFile(file.sourcePath, targetEntryPath, fs.constants.COPYFILE_FICLONE);
+                return { size: sourceStat.size, copied: true };
+            }
+            try {
+                await fs.promises.link(file.sourcePath, targetEntryPath);
+            } catch (error) {
+                throw structuralSharingError(file.sourcePath, targetEntryPath, error);
+            }
+            return { size: sourceStat.size, copied: false };
+        }));
+        for (const result of results) {
+            logicalBytes += result.size;
+            if (result.copied) {
+                physicallyCopiedBytes += result.size;
                 copiedFiles += 1;
             } else {
-                try {
-                    await fs.promises.link(sourceEntryPath, targetEntryPath);
-                } catch (error) {
-                    throw structuralSharingError(sourceEntryPath, targetEntryPath, error);
-                }
                 sharedFiles += 1;
             }
-        } else {
-            throw new Error(`LanceDB collection contains unsupported entry '${entry.name}'.`);
         }
     }
     return {
@@ -162,14 +172,19 @@ async function fsyncCandidateTree(rootPath: string): Promise<void> {
             await handle.close();
         }
     };
-    const concurrency = 64;
     const independentlyWrittenFiles: string[] = [];
-    for (const filePath of files) {
-        const stat = await fs.promises.stat(filePath);
-        if (stat.nlink === 1) independentlyWrittenFiles.push(filePath);
+    for (let offset = 0; offset < files.length; offset += COLLECTION_IO_CONCURRENCY) {
+        const batch = files.slice(offset, offset + COLLECTION_IO_CONCURRENCY);
+        const stats = await Promise.all(batch.map(async (filePath) => ({
+            filePath,
+            stat: await fs.promises.stat(filePath),
+        })));
+        for (const { filePath, stat } of stats) {
+            if (stat.nlink === 1) independentlyWrittenFiles.push(filePath);
+        }
     }
-    for (let offset = 0; offset < independentlyWrittenFiles.length; offset += concurrency) {
-        await Promise.all(independentlyWrittenFiles.slice(offset, offset + concurrency).map(syncPath));
+    for (let offset = 0; offset < independentlyWrittenFiles.length; offset += COLLECTION_IO_CONCURRENCY) {
+        await Promise.all(independentlyWrittenFiles.slice(offset, offset + COLLECTION_IO_CONCURRENCY).map(syncPath));
     }
     for (const directory of directories) await syncPath(directory);
     await syncPath(path.dirname(rootPath));

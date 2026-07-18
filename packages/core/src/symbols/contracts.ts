@@ -4,6 +4,7 @@ export { isRepositoryRelativePath } from '../paths/repository-path';
 
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v1';
 export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v2';
+export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v1';
 
 export const SYMBOL_KINDS = [
     'file',
@@ -126,6 +127,7 @@ export interface RelationshipRecord {
 
 export interface RelationshipManifest {
     schemaVersion: typeof RELATIONSHIP_MANIFEST_SCHEMA_VERSION;
+    fileContributionSchemaVersion?: typeof RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION;
     symbolRegistryManifestHash: string;
     relationshipVersion: string;
     builtAt: string;
@@ -214,6 +216,8 @@ export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistr
 export function isRelationshipManifest(value: unknown): value is RelationshipManifest {
     if (!(isRecord(value)
         && value.schemaVersion === RELATIONSHIP_MANIFEST_SCHEMA_VERSION
+        && (value.fileContributionSchemaVersion === undefined
+            || value.fileContributionSchemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION)
         && isNonEmptyString(value.symbolRegistryManifestHash)
         && isNonEmptyString(value.relationshipVersion)
         && isNonEmptyString(value.builtAt)

@@ -6458,8 +6458,18 @@ export class Context {
                 registry,
                 records: relationshipDelta.records,
                 analysisByFile: retainedAnalysisByFile,
+                deltaReuse: {
+                    baseGenerationId: existingGenerationId,
+                    symbolFilesToRewrite: [...replacedPaths],
+                    relationshipFilesToRewrite: relationshipDelta.affectedFiles,
+                },
             });
-            console.log(`[Context] 🧭 Staged navigation delta '${candidate.generationId}' affecting ${relationshipDelta.affectedFiles.length} relationship owner(s).`);
+            console.log(
+                `[Context] 🧭 Staged navigation delta '${candidate.generationId}' affecting `
+                + `${relationshipDelta.affectedFiles.length} relationship owner(s); `
+                + `shared ${candidate.physical.sharedFiles} file(s) and wrote `
+                + `${candidate.physical.physicallyWrittenBytes} physical byte(s).`,
+            );
             return candidate;
         }
 

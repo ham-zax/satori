@@ -230,9 +230,12 @@ test('writeSymbolRegistrySidecar writes sharding-ready registry files and read r
 
         assert.equal(JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')).schemaVersion, 'symbol_registry_v1');
         const index = JSON.parse(await fs.promises.readFile(indexPath, 'utf8'));
+        assert.equal(index.schemaVersion, 'symbol_index_v3');
         assert.equal(index.manifestHash, result.manifestHash);
         const authShardPath = path.join(result.rootPath, index.files.find((file: { path: string }) => file.path === 'src/auth.ts').shardPath);
-        assert.equal(JSON.parse(await fs.promises.readFile(authShardPath, 'utf8')).symbols[0].file, 'src/auth.ts');
+        const authShard = JSON.parse(await fs.promises.readFile(authShardPath, 'utf8'));
+        assert.equal(authShard.schemaVersion, 'symbol_file_contribution_v1');
+        assert.equal(authShard.symbols[0].file, 'src/auth.ts');
         const relationships = await readRelationshipSidecar({
             stateRoot,
             normalizedRootPath: '/repo',
@@ -1099,9 +1102,9 @@ test('readRelationshipSidecar rejects malformed relationship shard metadata', as
         expectedReason: RegExp;
     }> = [
         {
-            name: 'mismatched shard hash',
-            mutate: (shard) => ({ ...shard, manifestHash: 'other-manifest-hash' }),
-            expectedReason: /relationship shard hash does not match/,
+            name: 'mismatched contribution schema',
+            mutate: (shard) => ({ ...shard, schemaVersion: 'other-contribution-version' }),
+            expectedReason: /relationship shard contribution identity does not match/,
         },
         {
             name: 'missing shard path',
@@ -1605,5 +1608,200 @@ test('staged navigation remains unreadable until its generation pointer is publi
         const published = await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' });
         assert.equal(published.status, 'ok');
         assert.equal(published.manifestHash, candidate.manifestHash);
+    });
+});
+
+test('staged navigation delta shares only unchanged contributions and survives source pruning', async () => {
+    await withTempDir(async (stateRoot) => {
+        const authV1 = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth-v1',
+            extractorVersion: 'extractor-v1',
+        });
+        const authV2 = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = false;\n',
+            fileHash: 'hash-auth-v2',
+            extractorVersion: 'extractor-v1',
+        });
+        const routes = createSynthesizedFileSymbol({
+            relativePath: 'src/routes.ts',
+            language: 'typescript',
+            content: 'export const routes = true;\n',
+            fileHash: 'hash-routes',
+            extractorVersion: 'extractor-v1',
+        });
+        const baseRegistry = buildSymbolRegistry({
+            manifest: manifest([
+                { path: 'src/auth.ts', hash: 'hash-auth-v1', language: 'typescript', symbolCount: 1 },
+                { path: 'src/routes.ts', hash: 'hash-routes', language: 'typescript', symbolCount: 1 },
+            ]),
+            symbols: [authV1, routes],
+        });
+        const nextRegistry = buildSymbolRegistry({
+            manifest: {
+                ...manifest([
+                    { path: 'src/auth.ts', hash: 'hash-auth-v2', language: 'typescript', symbolCount: 1 },
+                    { path: 'src/routes.ts', hash: 'hash-routes', language: 'typescript', symbolCount: 1 },
+                ]),
+                builtAt: '2026-06-17T00:01:00.000Z',
+            },
+            symbols: [authV2, routes],
+        });
+        const baseEvidence = new Map([
+            ['src/auth.ts', { moduleBindings: [], callSites: [] }],
+            ['src/routes.ts', { moduleBindings: [], callSites: [] }],
+        ]);
+        const base = await stageNavigationSidecarGeneration({
+            stateRoot,
+            registry: baseRegistry,
+            records: [],
+            analysisByFile: baseEvidence,
+        });
+        await publishNavigationSidecarGeneration(base);
+
+        const candidate = await stageNavigationSidecarGeneration({
+            stateRoot,
+            registry: nextRegistry,
+            records: [],
+            analysisByFile: baseEvidence,
+            deltaReuse: {
+                baseGenerationId: base.generationId,
+                symbolFilesToRewrite: ['src/auth.ts'],
+                relationshipFilesToRewrite: ['src/auth.ts'],
+            },
+        });
+        assert.equal(candidate.physical.sharedFiles, 2);
+        assert.equal(candidate.physical.writtenFiles, 6);
+        assert.ok(candidate.physical.physicallyWrittenBytes < candidate.physical.logicalBytes);
+
+        const generationRoot = (generationId: string) => path.join(
+            candidate.rootPath,
+            'generations',
+            generationId,
+        );
+        const shardFor = async (
+            generationId: string,
+            component: 'symbols' | 'relationships',
+            filePath: string,
+        ): Promise<string> => {
+            const manifestPath = component === 'symbols'
+                ? path.join(generationRoot(generationId), 'symbols', 'index.json')
+                : path.join(generationRoot(generationId), 'relationships', 'manifest.json');
+            const artifact = await readJsonFile<{ files: Array<{ path: string; shardPath: string }> }>(manifestPath);
+            const entry = artifact.files.find((file) => file.path === filePath);
+            assert.ok(entry);
+            return path.join(generationRoot(generationId), entry.shardPath);
+        };
+        for (const component of ['symbols', 'relationships'] as const) {
+            const baseRoutes = await fs.promises.stat(await shardFor(base.generationId, component, 'src/routes.ts'), { bigint: true });
+            const candidateRoutes = await fs.promises.stat(await shardFor(candidate.generationId, component, 'src/routes.ts'), { bigint: true });
+            assert.equal(candidateRoutes.ino, baseRoutes.ino);
+
+            const baseAuth = await fs.promises.stat(await shardFor(base.generationId, component, 'src/auth.ts'), { bigint: true });
+            const candidateAuth = await fs.promises.stat(await shardFor(candidate.generationId, component, 'src/auth.ts'), { bigint: true });
+            assert.notEqual(candidateAuth.ino, baseAuth.ino);
+        }
+
+        const oracleStateRoot = path.join(stateRoot, 'oracle');
+        const oracle = await stageNavigationSidecarGeneration({
+            stateRoot: oracleStateRoot,
+            registry: nextRegistry,
+            records: [],
+            analysisByFile: baseEvidence,
+        });
+        await publishNavigationSidecarGeneration(oracle);
+        await publishNavigationSidecarGeneration(candidate);
+
+        const [deltaRegistry, oracleRegistry, deltaRelationships, oracleRelationships] = await Promise.all([
+            readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' }),
+            readSymbolRegistrySidecar({ stateRoot: oracleStateRoot, normalizedRootPath: '/repo' }),
+            readRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: candidate.manifestHash,
+            }),
+            readRelationshipSidecar({
+                stateRoot: oracleStateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: oracle.manifestHash,
+            }),
+        ]);
+        assert.equal(deltaRegistry.status, 'ok');
+        assert.equal(oracleRegistry.status, 'ok');
+        assert.deepEqual(deltaRegistry.registry, oracleRegistry.registry);
+        assert.equal(deltaRelationships.status, 'ok');
+        assert.equal(oracleRelationships.status, 'ok');
+        assert.deepEqual(deltaRelationships.records, oracleRelationships.records);
+        assert.deepEqual(
+            [...(deltaRelationships.analysisByFile ?? new Map()).entries()],
+            [...(oracleRelationships.analysisByFile ?? new Map()).entries()],
+        );
+
+        await fs.promises.rm(generationRoot(base.generationId), { recursive: true, force: true });
+        assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' })).status, 'ok');
+        assert.equal((await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: '/repo',
+            expectedSymbolRegistryManifestHash: candidate.manifestHash,
+        })).status, 'ok');
+    });
+});
+
+test('staged navigation delta fails closed when shard hard links are unavailable', async (t) => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const baseRegistry = buildSymbolRegistry({
+            manifest: manifest([
+                { path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 },
+            ]),
+            symbols: [symbol],
+        });
+        const nextRegistry = buildSymbolRegistry({
+            manifest: { ...baseRegistry.manifest, builtAt: '2026-06-17T00:01:00.000Z' },
+            symbols: [symbol],
+        });
+        const analysisByFile = new Map([
+            ['src/auth.ts', { moduleBindings: [], callSites: [] }],
+        ]);
+        const base = await stageNavigationSidecarGeneration({
+            stateRoot,
+            registry: baseRegistry,
+            records: [],
+            analysisByFile,
+        });
+        await publishNavigationSidecarGeneration(base);
+
+        t.mock.method(fs.promises, 'link', async () => {
+            const error = new Error('hard links unavailable') as NodeJS.ErrnoException;
+            error.code = 'EOPNOTSUPP';
+            throw error;
+        });
+        await assert.rejects(
+            stageNavigationSidecarGeneration({
+                stateRoot,
+                registry: nextRegistry,
+                records: [],
+                analysisByFile,
+                deltaReuse: {
+                    baseGenerationId: base.generationId,
+                    symbolFilesToRewrite: [],
+                    relationshipFilesToRewrite: [],
+                },
+            }),
+            /requires same-filesystem hard-link support.*EOPNOTSUPP.*Run a safe full rebuild instead/,
+        );
+        const current = await resolveCurrentNavigationGeneration(stateRoot, '/repo');
+        assert.equal(current?.generationId, base.generationId);
+        assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' })).status, 'ok');
     });
 });

@@ -195,7 +195,7 @@ export interface ContextMcpConfig {
     ollamaEncoderModel?: string;
     ollamaModelDigest?: string;
     ollamaEndpoint?: string;
-    // Experimental Potion configuration. Artifact installation remains out of scope.
+    // Installer-managed Potion configuration.
     potionHelperPath?: string;
     potionModelPath?: string;
     potionRequestTimeoutMs?: number;
@@ -220,7 +220,7 @@ export function assertExecutionPolicyAllowsRuntime(input: {
 }): void {
     if (input.encoderProvider === 'Potion' && input.executionProfile !== 'offline') {
         throw new Error(
-            'EMBEDDING_PROVIDER=Potion is experimental and requires SATORI_RUNTIME_PROFILE=offline.',
+            'EMBEDDING_PROVIDER=Potion requires SATORI_RUNTIME_PROFILE=offline.',
         );
     }
     if (input.executionProfile !== 'offline') return;
@@ -686,8 +686,7 @@ export function createMcpConfig(): ContextMcpConfig {
         ollamaEncoderModel: envManager.get('OLLAMA_MODEL'),
         ollamaModelDigest: envManager.get('OLLAMA_MODEL_DIGEST'),
         ollamaEndpoint: envManager.get('OLLAMA_HOST'),
-        // Experimental Potion artifacts are provisioned manually through the
-        // L0 path. No installer or implicit download is introduced here.
+        // The installer pins these paths to its checksum-verified runtime bundle.
         potionHelperPath: envManager.get('POTION_HELPER_PATH'),
         potionModelPath: envManager.get('POTION_MODEL_PATH'),
         potionRequestTimeoutMs,

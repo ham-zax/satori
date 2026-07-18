@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { POTION_DIMENSION, POTION_MODEL_ID } from "@zokizuan/satori-core";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
 import type { InstallClient, InstallProfile, InstallRuntime, InstallVectorStore } from "./args.js";
@@ -49,6 +50,9 @@ const SATORI_RUNTIME_ENV_VARS = [
     "OLLAMA_HOST",
     "OLLAMA_MODEL",
     "OLLAMA_MODEL_DIGEST",
+    "POTION_HELPER_PATH",
+    "POTION_MODEL_PATH",
+    "POTION_REQUEST_TIMEOUT_MS",
     "MILVUS_ADDRESS",
     "MILVUS_TOKEN",
     "READ_FILE_MAX_LINES",
@@ -163,7 +167,7 @@ export type InstallCommandInput =
     | (InstallCommandBase & {
         runtime: "offline";
         vectorStore?: "LanceDB";
-        ollamaModel: string;
+        ollamaModel?: string;
     })
     | {
         kind: "uninstall";
@@ -180,6 +184,7 @@ export interface InstallCommandOptions {
     execFileSyncImpl?: ExecFileSyncLike;
     env?: NodeJS.ProcessEnv;
     preflightDependencies?: InstallPreflightDependencies;
+    potionAssetsRoot?: string;
     preflightRunner?: (
         input: InstallPreflightInput,
         dependencies?: InstallPreflightDependencies,
@@ -255,6 +260,7 @@ interface ManagedRuntimeCandidate {
         readonly version: string;
     };
     readonly runtimeRoot: string;
+    readonly packageRoot: string;
     readonly newlyInstalled: boolean;
 }
 
@@ -521,6 +527,10 @@ function resolveRuntimePackageRootFromRoot(runtimeRoot: string, packageSpecifier
     return path.join(runtimeRoot, "node_modules", ...packageNameFromSpecifier(packageSpecifier).split("/"));
 }
 
+function resolvePotionAssetsRoot(packageRoot: string): string {
+    return path.join(packageRoot, "assets", "potion", "linux-x64");
+}
+
 function resolveRuntimeEntryPath(packageRoot: string, packageJson?: { bin?: unknown; main?: unknown }): string {
     const bin = packageJson?.bin;
     let relativeEntry = "dist/index.js";
@@ -678,7 +688,7 @@ function resolveInstalledRuntimeCommand(
     runtimeRoot: string,
     packageSpecifier: string,
     forReuse: boolean,
-): Pick<ManagedRuntimeCandidate, "command" | "identity"> | null {
+): Pick<ManagedRuntimeCandidate, "command" | "identity" | "packageRoot"> | null {
     const packageRoot = resolveRuntimePackageRootFromRoot(runtimeRoot, packageSpecifier);
     const packageJsonPath = path.join(packageRoot, "package.json");
     let packageJson: { name?: unknown; version?: unknown; bin?: unknown; main?: unknown };
@@ -708,6 +718,7 @@ function resolveInstalledRuntimeCommand(
     }
     return {
         command,
+        packageRoot,
         identity: {
             name: packageJson.name,
             version: packageJson.version,
@@ -1460,6 +1471,63 @@ function runtimeEnvironmentWithManagedFallbacks(
     return fallbacks;
 }
 
+function resolveOfflineOllamaModel(
+    command: Extract<InstallCommandInput, { kind: "install"; runtime: "offline" }>,
+    managedEnvironment: Readonly<Record<string, string>>,
+    env: NodeJS.ProcessEnv,
+): string | undefined {
+    if (command.ollamaModel) {
+        return command.ollamaModel;
+    }
+    const managedOffline = managedEnvironment.SATORI_RUNTIME_PROFILE === "offline";
+    const managedProvider = managedOffline ? managedEnvironment.EMBEDDING_PROVIDER : undefined;
+    if (managedProvider && managedProvider !== "Ollama" && managedProvider !== "Potion") {
+        throw new CliError(
+            "E_USAGE",
+            `Existing offline installation uses EMBEDDING_PROVIDER=${managedProvider}; expected Potion or Ollama. Reconcile the managed configuration before reinstalling.`,
+            2,
+        );
+    }
+    const preservedOllamaModel = managedProvider === "Ollama"
+        ? managedEnvironment.OLLAMA_MODEL
+        : undefined;
+    if (managedProvider === "Ollama" && !preservedOllamaModel) {
+        throw new CliError(
+            "E_USAGE",
+            "Existing managed Ollama installation has no OLLAMA_MODEL. Re-run with an explicit --ollama-model.",
+            2,
+        );
+    }
+    const expectedProvider = preservedOllamaModel ? "Ollama" : "Potion";
+    const configuredProvider = env.EMBEDDING_PROVIDER?.trim();
+    if (configuredProvider && configuredProvider !== expectedProvider) {
+        throw new CliError(
+            "E_USAGE",
+            `EMBEDDING_PROVIDER=${configuredProvider} conflicts with the ${expectedProvider} offline installation selection. Remove the conflicting environment value or select Ollama explicitly with --ollama-model.`,
+            2,
+        );
+    }
+    if (!preservedOllamaModel) {
+        const configuredModel = env.EMBEDDING_MODEL?.trim();
+        if (configuredModel && configuredModel !== POTION_MODEL_ID) {
+            throw new CliError(
+                "E_USAGE",
+                `EMBEDDING_MODEL=${configuredModel} conflicts with the pinned Potion model ${POTION_MODEL_ID}. Remove the conflicting environment value.`,
+                2,
+            );
+        }
+        const configuredDimension = env.EMBEDDING_OUTPUT_DIMENSION?.trim();
+        if (configuredDimension && configuredDimension !== String(POTION_DIMENSION)) {
+            throw new CliError(
+                "E_USAGE",
+                `EMBEDDING_OUTPUT_DIMENSION=${configuredDimension} conflicts with Potion dimension ${POTION_DIMENSION}. Remove the conflicting environment value.`,
+                2,
+            );
+        }
+    }
+    return preservedOllamaModel;
+}
+
 function readConfiguredClientVectorStore(homeDir: string): InstallVectorStore | undefined {
     const selections = resolveClientTargets(homeDir)
         .filter(hasSatoriClientEntry)
@@ -1721,23 +1789,30 @@ export async function executeInstallCommand(
                 ? resolveConnectedVectorStoreForInstallOrThrow(command, homeDir, env, managedRuntimeEnvironment)
                 : "LanceDB";
             const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedRuntimeEnvironment, env);
-            const preflightInput = {
-                runtime: command.runtime,
-                homeDir,
-                env: effectiveEnv,
-                vectorStore,
-                ollamaModel: command.ollamaModel,
-            };
+            const preservedOllamaModel = command.runtime === "offline"
+                ? resolveOfflineOllamaModel(command, managedRuntimeEnvironment, env)
+                : undefined;
+            const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
+            let potionAssetsRoot = options.potionAssetsRoot
+                ?? resolvePotionAssetsRoot(resolveRuntimePackageRoot(homeDir, packageSpecifier));
             if (command.dryRun) {
-                preflight = { runtimeEnvironment: planInstallRuntimeEnvironment(preflightInput) };
+                preflight = { runtimeEnvironment: planInstallRuntimeEnvironment({
+                    runtime: command.runtime,
+                    homeDir,
+                    env: effectiveEnv,
+                    vectorStore,
+                    ollamaModel: preservedOllamaModel,
+                    potionAssetsRoot,
+                }) };
             } else {
                 if (!installedRuntimeCommand) {
                     managedRuntimeCandidate = installManagedRuntimeCandidate(
                         homeDir,
-                        options.packageSpecifier ?? resolveDefaultPackageSpecifier(),
+                        packageSpecifier,
                         options.execFileSyncImpl ?? execFileSync,
                     );
                     installedRuntimeCommand = managedRuntimeCandidate.command;
+                    potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot);
                 }
                 const preflightDependencies: InstallPreflightDependencies = {
                     ...options.preflightDependencies,
@@ -1746,7 +1821,14 @@ export async function executeInstallCommand(
                 };
                 try {
                     preflight = await (options.preflightRunner ?? runInstallPreflight)(
-                        preflightInput,
+                        {
+                            runtime: command.runtime,
+                            homeDir,
+                            env: effectiveEnv,
+                            vectorStore,
+                            ollamaModel: preservedOllamaModel,
+                            potionAssetsRoot,
+                        },
                         preflightDependencies,
                     );
                     if (managedRuntimeCandidate) {
@@ -1784,7 +1866,7 @@ export async function executeInstallCommand(
                 );
             }
             const currentManagedRuntimeEnvironment = readManagedRuntimeEnvironment(homeDir);
-            for (const key of ["LANCEDB_PATH", "OLLAMA_HOST"] as const) {
+            for (const key of ["LANCEDB_PATH", "OLLAMA_HOST", "EMBEDDING_PROVIDER", "OLLAMA_MODEL"] as const) {
                 if (currentManagedRuntimeEnvironment[key] !== managedRuntimeEnvironment[key]) {
                     throw new CliError(
                         "E_INSTALL_PLAN_STALE",

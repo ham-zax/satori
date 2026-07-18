@@ -36,7 +36,7 @@ export type ParsedCommand =
         profile?: InstallProfile;
         runtime: "offline";
         vectorStore?: "LanceDB";
-        ollamaModel: string;
+        ollamaModel?: string;
     }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
     | { kind: "tools-list" }
@@ -263,9 +263,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     }
 
     if (kind === "install") {
-        if (runtime === "offline" && !ollamaModel) {
-            throw new CliError("E_USAGE", "--runtime offline requires --ollama-model <model>.", 2);
-        }
         if (runtime !== "offline" && ollamaModel) {
             throw new CliError("E_USAGE", "--ollama-model is only valid with --runtime offline.", 2);
         }
@@ -286,7 +283,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             profile,
             runtime,
             vectorStore: vectorStore === "LanceDB" ? "LanceDB" : undefined,
-            ollamaModel: ollamaModel!,
+            ...(ollamaModel ? { ollamaModel } : {}),
         };
     }
     return { kind, client, dryRun, installGuidanceHook, profile, runtime, vectorStore };

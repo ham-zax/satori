@@ -45,6 +45,6 @@ test('offline profile accepts only explicit local providers with LanceDB', () =>
             encoderProvider: 'Potion',
             vectorStoreProvider: 'LanceDB',
         }),
-        /Potion is experimental and requires SATORI_RUNTIME_PROFILE=offline/,
+        /Potion requires SATORI_RUNTIME_PROFILE=offline/,
     );
 });

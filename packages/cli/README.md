@@ -23,9 +23,9 @@ merely because its entry file still exists. A rejected newly installed candidate
 is removed without touching the active launcher target.
 A selected LanceDB backend proves native write/FTS/reopen behavior on the configured target
 filesystem; a selected Milvus backend does not load or validate LanceDB. The
-offline profile additionally resolves and probes the selected local Ollama
-artifact. A rejected preflight leaves the prior launcher target and managed client
-files unchanged. After a
+offline profile verifies the bundled Potion runtime or resolves and probes an
+explicitly selected local Ollama artifact. A rejected preflight leaves the prior
+launcher target and managed client files unchanged. After a
 non-dry-run install, the CLI runs a bounded postflight against that exact
 launcher. It verifies managed client
 wiring, MCP initialization and installed server version, the fixed seven-tool
@@ -49,6 +49,7 @@ Grouped search responses use `formatVersion: 2`: each result has one canonical `
 npx -y @zokizuan/satori-cli@latest install --client codex
 npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage
 npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage --vector-store milvus
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
 npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 npx -y @zokizuan/satori-cli@latest install --client all --profile minimal
 npx -y @zokizuan/satori-cli@latest install --client codex --install-guidance-hook
@@ -65,7 +66,8 @@ configuration, and every configured Codex/Claude/OpenCode Satori entry. For a
 managed LanceDB runtime it read-only loads that runtime's Core LanceDB subpath
 and native dependency; the install preflight, not doctor, owns the temporary
 write/FTS/reopen capability proof. Offline diagnostics also resolve the local
-Ollama artifact and compare its digest with the installer-recorded identity.
+Ollama artifact and compare its digest with the installer-recorded identity, or
+validate the installer-owned Potion artifact paths.
 Doctor reads runtime owners with process-start
 evidence when the platform provides it, errors on stale installed versions or
 conflicting fingerprints/config identities, and reports active, abandoned, or
@@ -105,8 +107,8 @@ launcher is shared by every installed client, so an explicit `--vector-store`
 changes the effective backend for all of them regardless of `--client`.
 Conflicting environment, managed-launcher, or literal client selections fail
 until literal settings are reconciled and the backend is chosen explicitly.
-Reinstall preserves the managed LanceDB path and offline Ollama endpoint unless
-the current installer environment explicitly supplies replacements.
+Reinstall preserves the managed LanceDB path and an existing managed Ollama
+selection unless the command explicitly selects another Ollama model.
 
 Repo profile config is separate from client/provider config:
 
@@ -165,18 +167,29 @@ environment values. MCP startup and `tools list` do not require provider
 credentials; provider-backed tool calls return `MISSING_PROVIDER_CONFIG` when
 setup is incomplete.
 
-The offline installer candidate requires a local Ollama model and rejects
-non-loopback endpoints before changing managed client configuration:
+On Linux x64, new offline installations default to the bundled, checksum-verified
+Potion Code 16M v2 helper and model with LanceDB hybrid search:
+
+```bash
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
+```
+
+The managed package carries the pinned native helper and model artifacts; the
+installer verifies their manifest, sizes, SHA-256 checksums, executable mode,
+model identity, and inference-contract identity before activating the launcher.
+No Rust toolchain is required on the end-user machine. Other platforms fail
+before configuration changes and may use the existing Ollama path explicitly:
 
 ```bash
 npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 ```
 
-It persists the resolved model name/digest and selected LanceDB path in the
-non-secret managed launcher environment. The runtime prohibits cloud embedding,
-reranking, and Milvus construction even if old cloud credentials remain in the
-ambient environment. Offline release qualification remains pending until the
-live Ollama lifecycle and paired quality matrix pass.
+The explicit Ollama path rejects non-loopback endpoints before changing managed
+configuration and persists the resolved model identity. Reinstalling an existing
+managed Ollama configuration without a new model selection preserves Ollama;
+the installer does not migrate it to Potion. Both offline paths prohibit cloud
+embedding, reranking, and Milvus construction even when old cloud credentials
+remain in the ambient environment.
 
 ## Development
 

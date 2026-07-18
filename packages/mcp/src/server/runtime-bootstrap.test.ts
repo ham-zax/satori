@@ -81,7 +81,7 @@ test('connected cloud bootstrap resolves without local model I/O', async () => {
     );
 });
 
-test('experimental Potion bootstrap seals the frozen L1 inference identity', async () => {
+test('Potion bootstrap seals the frozen L1 inference identity', async () => {
     const resolved = await resolveMcpRuntimeBootstrap(config({
         executionProfile: 'offline',
         networkPolicy: { kind: 'local-only' },
@@ -118,7 +118,7 @@ test('experimental Potion bootstrap seals the frozen L1 inference identity', asy
     );
 });
 
-test('experimental Potion is selected only through explicit offline configuration', () => {
+test('Potion is selected only through explicit offline configuration', () => {
     const keys = [
         'SATORI_RUNTIME_PROFILE',
         'VECTOR_STORE_PROVIDER',
@@ -161,7 +161,7 @@ test('experimental Potion is selected only through explicit offline configuratio
     }
 });
 
-test('experimental Potion bootstrap rejects changed inference identity', async () => {
+test('Potion bootstrap rejects changed inference identity', async () => {
     await assert.rejects(
         resolveMcpRuntimeBootstrap(config({
             executionProfile: 'offline',

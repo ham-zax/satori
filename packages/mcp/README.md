@@ -103,9 +103,11 @@ The default runtime is connected VoyageAI plus installer-owned LanceDB. Milvus
 SDK and REST/Zilliz adapters remain supported when
 `VECTOR_STORE_PROVIDER=Milvus` is explicit (or for legacy connected installs
 that provide `MILVUS_ADDRESS` without a backend selector). Supported embedding
-providers are OpenAI, VoyageAI, Gemini, and Ollama. Changing provider, model,
-dimension, vector store, projection version, or schema requires a reindex
-because those values are part of the index fingerprint.
+providers are OpenAI, VoyageAI, Gemini, Ollama, and Potion. New Linux x64
+offline installations use the installer-bundled Potion runtime unless an
+Ollama model is selected explicitly. Changing provider, model, dimension,
+vector store, projection version, or schema requires a reindex because those
+values are part of the index fingerprint.
 
 MCP startup, `tools/list`, and installer operations are lazy with respect to provider credentials. Missing provider values become `MISSING_PROVIDER_CONFIG` only when a provider-backed tool call needs them.
 

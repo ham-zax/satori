@@ -44,6 +44,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "assets/potion/linux-x64/**/*",
     "README.md"
   ],
   "repository": {

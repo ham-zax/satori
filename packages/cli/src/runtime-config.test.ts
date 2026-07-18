@@ -36,6 +36,38 @@ test("static runtime config accepts an installer-resolved Ollama dimension", () 
     assert.equal(checks.find((check) => check.name === "embedding_dimension")?.status, "ok");
 });
 
+test("static runtime config accepts the installer-owned Potion offline identity", () => {
+    const checks = evaluateStaticRuntimeConfig({
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        LANCEDB_PATH: "/tmp/satori-lancedb",
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+        EMBEDDING_OUTPUT_DIMENSION: "256",
+        POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
+        POTION_MODEL_PATH: "/opt/satori/potion/model",
+    });
+
+    assert.equal(checks.some((check) => check.status === "error"), false);
+    assert.equal(checks.find((check) => check.name === "potion_artifacts")?.status, "ok");
+});
+
+test("static runtime config rejects a changed Potion model identity", () => {
+    const checks = evaluateStaticRuntimeConfig({
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@mutable",
+        EMBEDDING_OUTPUT_DIMENSION: "256",
+        POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
+        POTION_MODEL_PATH: "/opt/satori/potion/model",
+    });
+
+    const model = checks.find((check) => check.name === "embedding_model");
+    assert.equal(model?.status, "error");
+    assert.match(model?.message || "", /requires the pinned model identity/);
+});
+
 test("static runtime config reports a complete Ollama and local Milvus setup", () => {
     const checks = evaluateStaticRuntimeConfig({
         EMBEDDING_PROVIDER: "Ollama",

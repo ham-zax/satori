@@ -200,17 +200,25 @@ literal Milvus selection already stored in the selected client configurations
 is preserved on reinstall. Changing backends requires a reindex and never
 deletes or imports the other backend's collections automatically.
 
-The explicit offline installer candidate uses the same LanceDB adapter and a
-resolved local Ollama artifact:
+On Linux x64, a new offline install uses the bundled, checksum-verified Potion
+Code 16M v2 runtime with LanceDB hybrid search:
+
+```bash
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
+```
+
+Select the existing Ollama path explicitly when desired or when Potion is not
+supported on the current platform:
 
 ```bash
 npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
 ```
 
-It persists only non-secret profile/model identity in the managed launcher and
-rejects non-loopback Ollama endpoints. Offline release qualification remains
-pending until the live Ollama lifecycle and paired quality matrix pass; local
-storage by itself does not make a Voyage runtime offline.
+The installer persists only non-secret profile/model identity in the managed
+launcher. Existing managed Ollama installations remain Ollama on reinstall, and
+the Ollama path rejects non-loopback endpoints. Neither offline path turns a
+connected Voyage publication into an offline one; each provider identity needs
+its own compatible index.
 
 Provider, model, dimension, vector store, and schema are part of the index fingerprint. If they change, Satori blocks search with `requires_reindex` until you rebuild the index.
 
@@ -273,7 +281,7 @@ Satori is focused on making repo investigation easier for coding agents without 
 
 Planned work includes:
 
-- **Local-first setup:** keep improving the Ollama-backed local embedding path and evaluate Zvec as an embedded vector-store backend, reducing the need for cloud keys or a separate Milvus/Zilliz setup.
+- **Local-first setup:** qualify and improve the Potion-first offline path while preserving explicit Ollama support, reducing the need for cloud keys or a separate Milvus/Zilliz setup.
 - **Retrieval quality:** improve symbol-owned retrieval, ranking, exact evidence selection, and noisy-result handling.
 - **Language support:** expand caller/callee and relationship-backed navigation beyond the currently supported languages.
 - **Team workflows:** explore shared indexes, hosted indexing, multi-user freshness state, and managed repo context for engineering teams.

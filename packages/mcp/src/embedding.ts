@@ -83,7 +83,7 @@ export async function createEmbeddingInstance(config: ContextMcpConfig): Promise
                 modelPath: config.potionModelPath,
                 requestTimeoutMs: config.potionRequestTimeoutMs,
             });
-            console.log(`[EMBEDDING] ✅ Experimental Potion embedding instance created successfully`);
+            console.log(`[EMBEDDING] ✅ Potion embedding instance created successfully`);
             return potionEmbedding;
         }
 

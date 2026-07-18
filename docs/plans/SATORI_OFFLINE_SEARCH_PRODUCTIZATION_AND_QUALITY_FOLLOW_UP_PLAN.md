@@ -1,16 +1,17 @@
 # Satori Offline Search Productization and Quality Follow-up Plan
 
 **Status:** the direct paired Potion/Voyage retrieval comparison is complete;
-Track A0 is authorized for opt-in Linux x64 experimental productization; Track
-A0.1, Track A1 implementation, and Tracks B--F remain conditional
+Linux x64 Track A productization and the Potion default for new offline
+installations are authorized and implemented; Track A0.1 and Tracks B--F remain
+conditional
 
 **Date:** 2026-07-19
 
-**Entry condition:** each track has its own authority. Track A0 may proceed
-under the explicit authorization recorded here. Lean L4 directly compared the
-two existing publications and recorded `direct_relevance_useful_with_java_gap`.
-That result does not activate Track A0.1, Track A1 implementation, or Tracks
-B--F.
+**Entry condition:** each track has its own authority. Lean L4 directly compared
+the two existing publications and recorded
+`direct_relevance_useful_with_observed_java_and_configuration_gaps`. The user
+subsequently authorized Linux x64 productization and the new-offline default.
+That decision does not activate Track A0.1 or Tracks B--F.
 
 This plan owns work deliberately excluded from lean qualification. Each track
 has its own trigger, decision, and stopping condition. A track may begin only
@@ -21,34 +22,34 @@ existing Potion and Voyage publications without an agent or judge. On the 30
 tasks with a required owner, Potion placed the owner file in the top five on
 23 tasks and Voyage on 25; paired owner rank favored Potion on 3 tasks, Voyage
 on 11, and tied on 16. Potion's main gap was Java (`2/5` top-five owner
-reachability versus Voyage's `4/5`). This supports Potion as a useful offline
-first-stage baseline while requiring the Java limitation to remain explicit.
-It does not establish agent-answer or negative-answer behavior.
+reachability versus Voyage's `4/5`); configuration/runtime top-one reachability
+was also lower (`1/6` versus `4/6`). This supports Potion as a useful offline
+first-stage baseline while requiring both observed limitations to remain
+explicit. It does not establish agent-answer or negative-answer behavior.
 
 ---
 
-## Track A0 — opt-in experimental productization
+## Track A0 — Linux x64 managed Potion productization
 
-**Authority:** authorized now. This authorization covers an explicit Linux x64
-experimental installation path. It does not represent an L4 quality pass, a
-default change, a recommendation, or GA support.
+**Authority:** authorized and implemented for the existing managed installer.
+This is bounded Linux x64 support; it is not a multi-platform quality claim.
 
 ### A0 public configuration contract
 
-Add one public CLI selection:
+The existing offline runtime selection is the public entry point:
 
 ```text
---offline-lite
+satori-cli install --runtime offline
 ```
 
-The option is explicit and mutually exclusive with `--offline` and connected
-runtime selection. Existing `--offline` behavior remains the existing Ollama
-installation path. Do not migrate an installation, infer Potion from available
-artifacts, or change a provider because Potion happens to be installed.
+For a new Linux x64 offline installation with no model override, the installer
+selects Potion. `--ollama-model <model>` explicitly selects the existing Ollama
+path. Reinstalling an installer-owned Ollama configuration without a new model
+retains Ollama; it is never silently migrated to Potion. The runtime profile
+remains `offline`, and the existing `default | minimal | all-text` index profiles
+are unchanged.
 
-`--offline-lite` is an installer preset, not a new value of
-`SATORI_RUNTIME_PROFILE` and not an index profile. It expands to the ordinary
-runtime configuration below:
+The Potion selection expands to the ordinary runtime configuration below:
 
 ```text
 SATORI_RUNTIME_PROFILE=offline
@@ -70,67 +71,46 @@ license, file-size, and SHA-256 authorities; it must not substitute a mutable
 model name or download a newer revision. Runtime bootstrap derives and verifies
 the inference-contract digest rather than accepting a user-selected digest.
 
-Preflight must reject conflicting selection-defining CLI, environment, or
-persisted configuration. The error identifies the conflicting field, its
-observed value, and the value required by `--offline-lite`, with guidance to
-remove the conflict or choose the existing `--offline` path. Agreeing explicit
-values may be retained. A separately configurable, valid request timeout is an
-operational override, not a provider-identity conflict.
+Preflight rejects conflicting provider, model, or dimension state instead of
+silently overriding it. An explicit Ollama model is the supported provider
+override. Existing installer-owned Ollama identity is preserved.
 
 ### A0 platform and artifact lifecycle
 
-Initial support is exactly Linux x64. Preflight checks the operating system and
-architecture before downloading, extracting, or changing active configuration.
-Every other platform fails with an actionable unsupported-platform error and
-leaves the existing installation unchanged. A0 makes no portability claim and
-does not require Rust or another development toolchain on the end-user machine.
+Initial support is exactly Linux x64. Other platforms fail during preflight with
+guidance to select Ollama explicitly. The exact qualified helper, model,
+tokenizer, configuration, model card, dependency license, file sizes, and
+SHA-256 checksums ship inside the managed MCP package. The package manifest pins
+the model revision, helper source revision, model2vec-rs revision, Rust
+toolchain, target, features, and inference-contract digest.
 
-Implement only the Potion-specific managed lifecycle, reusing existing managed
-runtime seams where they fit:
+The existing managed-runtime candidate lifecycle remains the activation owner:
+the package candidate is installed outside the active generation, its LanceDB
+runtime and Potion closure are verified, and only then is the stable launcher
+switched. Failure leaves the previous launcher target unchanged. npm normalizes
+non-bin package files to mode 0644, so preflight restores only the owner's
+execute bit after the helper bytes pass checksum verification. The MCP package
+continues to expose only its established `satori` binary.
 
-* a network-assisted artifact manifest with immutable URLs, sizes, SHA-256
-  checksums, target identity, license, and required notices;
-* an air-gapped bundle containing the same manifest and complete artifact
-  closure;
-* download or import into task-owned candidate storage;
-* checksum and completeness verification before activation;
-* atomic activation only after the complete candidate passes validation;
-* rollback that preserves the previously active installation after download,
-  verification, extraction, configuration, or activation failure;
-* idempotent reinstall plus restart, corrupt-artifact, upgrade, downgrade, and
-  uninstall coverage; and
-* uninstall behavior that removes only installer-owned artifacts and
-  configuration, not user indexes or repository state.
-
-Air-gapped installation must perform no network request. After installation,
-Potion embedding and Satori runtime telemetry make zero network requests.
-Source content is never part of installation traffic, manifests, diagnostics,
-or logs.
-
-The CLI help and installation result label `--offline-lite` experimental and
-opt-in. A0 may not change ranking, disclosure, freshness, default-provider, or
-automatic-migration behavior.
+No Rust toolchain or separate runtime model fetch is required on the end-user
+machine; the model arrives inside the managed package. After installation,
+Potion embedding and Satori runtime telemetry make zero network requests. Source
+content is never part of installation traffic, manifests, diagnostics, or logs.
+A0 changes no ranking, disclosure, freshness, or existing publication.
 
 ### A0 experimental performance disposition
 
-Preserve the original L3 resource failure and the later prospective latency
-misses unchanged. The one-second warm add/edit/delete target and 1.5-second
-rename target remain performance goals, not A0 installation blockers.
+Preserve the original L3 resource failure unchanged. The later checksum-sealed
+qualification at `c6511bb` separately recorded `delta_publication_pass` under
+the prospective one-second add/edit/delete, 1.5-second rename, and 500 ms warm
+search gates. This later result supersedes the intermediate prospective latency
+misses; it does not revise the original L3 thresholds or reinterpret L3 as
+passing.
 
-For the experimental-release decision, report the observed approximately
-three-second changed-file publication separately from installation correctness.
-It may be accepted for A0 only when atomic publication remains proven, the
-previous complete generation stays searchable while the replacement is being
-prepared, freshness/status does not claim the replacement is active early, and
-the measured delay is disclosed as an experimental limitation. Otherwise A0
-records a lifecycle or correctness failure. Do not revise the frozen threshold
-or reinterpret the original L3 result as passing.
-
-**Exit:** on Linux x64, both network-assisted and air-gapped `--offline-lite`
-installation are reproducible, checksum-verified, reversible, license-complete,
-and exercised through the bounded lifecycle above without an end-user
-development toolchain. Existing `--offline` Ollama installation remains
-unchanged. Record the experimental performance disposition separately.
+**Exit:** on Linux x64, the managed offline installation is reproducible,
+checksum-verified, reversible before launcher activation, and usable without an
+end-user development toolchain. Explicit and existing managed Ollama
+installations remain Ollama. The historical resource evidence remains separate.
 
 ---
 
@@ -139,7 +119,7 @@ unchanged. Record the experimental performance disposition separately.
 **Trigger:** the Linux x64 A0 lifecycle passes and a platform-specific
 qualification is separately authorized. This track expands experimental
 installer coverage only. It does not authorize default, recommended, or GA
-promotion.
+promotion for the candidate platform.
 
 A platform becomes experimentally supported only when all of these are true:
 
@@ -176,43 +156,38 @@ build a general native-runtime platform framework solely for these candidates.
 
 **Exit:** record a separate experimental support or rejection decision for the
 authorized candidate. Its pass adds only that platform to experimental
-`--offline-lite` support and does not activate A1.
+`--runtime offline` support and does not extend the Linux x64 default decision
+to another platform automatically.
 
 ---
 
 ## Track A1 — default or recommended promotion
 
-**Trigger:** the direct L4 relevance result remains accepted with its Java
-limitation disclosed; the A0 lifecycle passes for every platform included in
-the intended release claim; and a separate product decision authorizes
-promotion. Agent-answer or negative-answer evidence is required only when the
-intended release claim explicitly makes those claims.
+**Trigger:** satisfied by the accepted direct retrieval result, the bounded
+Linux x64 lifecycle, and the user's explicit promotion decision. The promotion
+claim remains narrow: Potion is the default dense provider for a **new Linux x64
+offline installation**. The CLI's general install default remains the connected
+Voyage runtime.
 
-A0 does not authorize A1. Until A1 passes:
+The implementation rules are:
 
-* do not change any default;
-* do not recommend Potion as the general offline choice;
-* do not migrate existing Ollama or manually configured Potion installations;
-* do not promote any A0.1 platform beyond its separately proven experimental
-  support; and
-* do not describe `--offline-lite` as GA or fully supported.
+* `install --runtime offline` with no model override selects Potion;
+* `install --runtime offline --ollama-model <model>` selects Ollama;
+* reinstalling an existing managed Ollama configuration preserves Ollama;
+* conflicting ambient provider/model/dimension values fail rather than silently
+  overriding the selected contract;
+* unsupported platforms receive an explicit Ollama fallback instruction; and
+* no existing publication or installation is automatically migrated.
 
-A1 owns the exact new-install recommendation or default decision, release
-documentation and disclosures, complete licenses/notices/SBOM, release-candidate
-upgrade/downgrade/uninstall evidence, and multiple-repository qualification.
-Any platform beyond Linux x64 requires a passing A0.1 decision before it may
-enter an A1 release claim. If the intended release claim requires broader
-answer-quality evidence, Track B must also pass; A1 does not implicitly
-authorize Track B.
+The promotion does not claim Potion matches Voyage, does not erase the observed
+Java and configuration/runtime gaps, and does not establish agent-answer or
+negative-answer quality. Any platform beyond Linux x64 still requires a passing
+A0.1 decision. Broader quality claims still require the separately triggered
+Track B.
 
-The existing explicit `--offline` Ollama behavior and the prohibition on
-automatic migration remain compatibility contracts even if `--offline-lite`
-later becomes the recommended path for new installations. Any proposal to
-change those contracts requires separate authority.
-
-**Exit:** approve or reject default/recommended promotion under the direct L4
-retrieval result and release-lifecycle evidence. A1 may not reinterpret an A0
-experimental pass as release evidence.
+**Exit:** the new-offline default, explicit Ollama override, existing-Ollama
+preservation, immutable bundled identity, and unsupported-platform failure are
+implemented and pass focused installer, runtime, and package checks.
 
 ---
 
@@ -590,23 +565,16 @@ without implementation.
 ## Program order
 
 ```text
-A0 explicit authorization
-    -> implement opt-in Linux x64 --offline-lite installation lifecycle
-    -> retain Ollama --offline behavior and every existing default
+direct L4 retrieval-relevance comparison accepted
+    -> package and checksum-verify the pinned Linux x64 Potion runtime
+    -> make Potion the default for new Linux x64 offline installations
+    -> preserve explicit and existing managed Ollama installations
+    -> keep the general connected Voyage install default unchanged
 
 separately authorized A0.1 platform candidate
     -> evaluate one candidate in the fixed order
     -> add only a passing candidate to experimental support
-    -> retain every existing default
-
-direct L4 retrieval-relevance comparison
-    -> query the existing Potion and Voyage publications with identical inputs
-    -> compare required-owner ranks without an agent or judge layer
-    -> record the Java gap and keep negative-answer claims out of scope
-
-direct L4 result is accepted and A0 release-lifecycle evidence passes
-    -> consider Track A1 under a separate promotion decision
-    -> Track B only when the intended claim requires evidence L4 did not measure
+    -> do not extend the default decision automatically
 
 Potion candidate recall passes but post-retrieval exposure loses answers
     -> capture the current production candidate union once for C1
@@ -628,11 +596,10 @@ Potion retrieval or resources fail
     -> Track F under a new proposal
 ```
 
-Track A0 is the only active follow-up track. The direct lean L4 comparison is
-complete. Track A0.1, Track A1 implementation, and Tracks B--F may run only when
-their triggers are demonstrated and they receive their required authority.
-Track order does not grant authority, and no track is a prerequisite merely
-because it appears in this document.
+The direct lean L4 comparison and Linux x64 Track A implementation are complete.
+Track A0.1 and Tracks B--F may run only when their triggers are demonstrated and
+they receive their required authority. Track order does not grant authority, and
+no track is a prerequisite merely because it appears in this document.
 
 The comprehensive offline plan that preceded this split remains historical
 source material in version control. It is not an active execution sequence.

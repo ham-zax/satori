@@ -126,7 +126,7 @@ export async function verifyPinnedPotionArtifacts(
         throw providerError({
             code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
             retryable: false,
-            message: 'The pinned experimental Potion helper supports Linux x64 only.',
+            message: 'The pinned Potion helper supports Linux x64 only.',
         });
     }
     if (!path.isAbsolute(config.helperPath) || !path.isAbsolute(config.modelPath)) {

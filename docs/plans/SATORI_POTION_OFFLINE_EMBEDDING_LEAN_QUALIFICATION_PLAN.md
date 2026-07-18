@@ -4,11 +4,11 @@
 focused conformance; L3 functional qualification passed and its frozen resource
 qualification failed; atomic delta publication and bounded generation staging
 are correct; receipt-driven readiness proof reuse passed focused qualification,
-but the prospective delta resource qualification still fails in other measured
-publication stages; the direct paired L4 retrieval-relevance comparison is
-complete and shows Potion is useful but weaker than Voyage overall, with a
-specific Java gap; opt-in experimental productization is separately authorized
-under Follow-up Track A0, while no production default has changed
+and the later `c6511bb` qualification passed every prospective delta resource
+gate; the direct paired L4 retrieval-relevance comparison is complete and shows
+Potion is useful but weaker than Voyage overall, with observed Java and
+configuration/runtime gaps; Linux x64 productization and the Potion default for
+new offline installations are separately owned by Follow-up Track A
 
 **Date:** 2026-07-19
 
@@ -16,15 +16,14 @@ under Follow-up Track A0, while no production default has changed
 `minishlab/potion-code-16M-v2` can support a useful, safe, lightweight Satori
 offline-search mode.
 
-**Current execution boundary:** the authorized receipt-driven readiness-proof
-follow-up is complete. Redundant exact publication proofs are removed, but the
-prospective ordinary delta and rename latency gates still fail in navigation and
-graph delta work, candidate publication verification, discovery and hashing,
-and remaining generation-finalization work. L4 now directly compares retrieval
-relevance on the two existing publications; no agent or judge layer is part of
-that decision. Follow-up Track A0 is separately authorized for opt-in
-experimental installation; Track A1 and all other follow-up tracks remain
-unauthorized.
+**Current execution boundary:** lean qualification is complete. The historical
+decision at `e235871` was `readiness_proof_pass_delta_latency_fail`; its
+receipt-reuse result and evidence remain valid. Its prospective delta-latency
+result was subsequently superseded by `c6511bb`, which recorded
+`delta_publication_pass` under new checksum-sealed evidence. The original L3
+resource failure remains unchanged. L4 directly compared retrieval relevance
+on the two existing publications without an agent or judge. Productization and
+new-install defaults are governed only by Follow-up Track A.
 
 ---
 
@@ -43,10 +42,10 @@ Potion plus Satori's existing BM25 and exact-evidence paths remains the offline
 first-stage baseline. A later second-stage scorer is optional and must not
 replace or weaken that baseline.
 
-A successful result may authorize an explicit experimental or release-candidate
-`offline_lite` configuration. It does not authorize a local neural reranker, a
-new freshness model, a model tournament, broad release packaging, or a
-production-default change.
+A successful result may support a separately authorized offline productization
+decision. It does not itself authorize a local neural reranker, a new freshness
+model, a model tournament, broad release packaging, or a production-default
+change.
 
 ### 1.1 Repository boundary
 
@@ -691,6 +690,17 @@ decision SHA-256 is
 and the checksum-manifest seal is
 `5c9952b64a6af198254b87800e6c00625c6ab5c2b0c3efc2becc8610f86cc173`.
 
+That historical latency decision was superseded by the later bounded
+qualification at implementation revision
+`c6511bbd19cb98a4958b9df94e906af6c6d890b1`. It recorded
+`delta_publication_pass`: zero-change p95 185.662 ms, add 789.310 ms, body edit
+792.245 ms, signature edit 811.632 ms, deletion 864.802 ms, rename 880.937 ms,
+and warm search 154.543 ms. Its canonical decision is
+`/home/hamza/repo/satori-readiness-proof-evidence/20260719-e235871-delta-readiness-final/manifests/delta-readiness-decision.json`
+with SHA-256
+`cd8a0d5a659d83e972940f84204a5543ea9804023af9c907d2da1f5c8ca43e27`.
+The earlier receipt-reuse evidence and the original L3 failure remain unchanged.
+
 ### L4 — direct paired retrieval-relevance qualification
 
 Freeze exactly 36 tasks:
@@ -722,6 +732,10 @@ Compare only the two already-published indexes:
 * **Arm B:** Potion plus the existing Satori lexical, exact-evidence, fusion,
   grouping, and disclosure path, with no neural reranker.
 
+Both arms use identical BM25/FTS, exact evidence, fusion, grouping, disclosure,
+source projection, and search-request policy. Only the dense embedding
+provider/model and its compatible vector publication differ.
+
 For each frozen query, call `search_codebase` directly against both compatible
 publications with the same grouped runtime scope and the same `limit: 15` and
 `disclosureLimit: 15`. Record required-owner file rank, required symbol-label
@@ -751,8 +765,8 @@ The completed comparison produced these results on the 30 positive tasks:
 | Required owner file at rank 1 | 13/30 | 14/30 |
 | Required owner file in top 5 | 23/30 | 25/30 |
 | Required owner file in top 15 | 25/30 | 27/30 |
-| Required symbol label in top 5 | 16/30 | 21/30 |
-| Required symbol label in top 15 | 20/30 | 24/30 |
+| Required symbol label in top 5 | 16/27 applicable | 21/27 applicable |
+| Required symbol label in top 15 | 20/27 applicable | 24/27 applicable |
 | Search latency p50 | 94.64 ms | 1,009.46 ms |
 | Search latency p95 | 1,251.00 ms | 1,813.34 ms |
 
@@ -784,12 +798,14 @@ The frozen and prospective resource results are reported alongside L4 but are
 not retrieval-relevance gates. L4 must not reinterpret either result, revise its
 thresholds, or describe the original L3 resource qualification as passing.
 
-**Decision:** `direct_relevance_useful_with_java_gap`. Potion retrieves the
-required owner in the top five for 23/30 positive tasks and is materially faster
-at the median in this run, so it is a useful offline first-stage baseline. It
-does not match Voyage overall and has a clear Java weakness that must be
-disclosed or addressed before making a broad cross-language quality claim. This
-result is retrieval evidence, not agent-answer or negative-answer evidence.
+**Decision:**
+`direct_relevance_useful_with_observed_java_and_configuration_gaps`. Potion
+retrieves the required owner in the top five for 23/30 positive tasks and had a
+lower observed median latency in this run, so it is a useful offline first-stage
+baseline. It does not match Voyage overall and has observed Java and
+configuration/runtime weaknesses that must be disclosed before making a broad
+quality claim. This result is retrieval evidence, not agent-answer or
+negative-answer evidence.
 
 The local result artifact is
 `/home/hamza/repo/satori-l4-evidence/20260719-c6511bb/execution/direct-relevance-results.json`
@@ -847,9 +863,10 @@ revise a threshold after observing contender quality results.
 
 | Result | Action |
 | ------ | ------ |
-| Native inference or resource feasibility fails | Stop; do not implement a production provider. |
+| Native inference correctness, memory feasibility, or offline operation fails | Stop. |
+| A nonfatal resource target is missed while the system remains operational | Preserve and disclose the miss; proceed only under separate experimental authority. |
 | Publication works but critical owners are absent from candidates | Do not ship; record the first retrieval-failure boundary. |
-| Direct paired retrieval shows useful owner reachability with bounded, disclosed gaps | Proceed with the separately authorized Track A0 lifecycle without claiming agent-answer or negative-answer qualification. |
+| Direct retrieval is useful with bounded, disclosed gaps | Proceed with the separately authorized Track A lifecycle without authorizing broader quality claims. |
 | Owners survive retrieval but answers are lost after retrieval | Open Follow-up Track C; do not add a reranker in this plan. |
 | A broader release claim needs agent-answer, negative-answer, or multi-repository evidence | Open Track B only for that explicit claim. |
 | Retrieval quality is not useful for the intended offline mode | Keep the provider experimental or do not expose it. |

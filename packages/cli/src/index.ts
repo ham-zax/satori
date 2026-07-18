@@ -122,7 +122,7 @@ function buildHelpPayload() {
     return {
         usage: "satori-cli <command>",
         commands: [
-            "install [--client all|codex|claude|opencode] [--runtime voyage|offline] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook]",
+            "install [--client all|codex|claude|opencode] [--runtime voyage|offline] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook] (offline defaults to Potion on Linux x64; --ollama-model selects Ollama)",
             "uninstall [--client all|codex|claude|opencode] [--dry-run]",
             "doctor",
             "tools list",

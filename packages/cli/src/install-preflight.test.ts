@@ -3,15 +3,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { executeInstallCommand, type InstallCommandInput } from "./install.js";
 import {
     probeLanceDbRuntime,
     probeManagedRuntimeCandidate,
     runInstallPreflight,
+    verifyBundledPotionRuntime,
 } from "./install-preflight.js";
 import { buildLauncherScript, parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
 
 const DIGEST = "b".repeat(64);
+const POTION_ASSETS_ROOT = fileURLToPath(new URL("../../mcp/assets/potion/linux-x64/", import.meta.url));
 
 function installRuntimeWithProbeMarker(markerPath: string) {
     return ((_command: string, args: string[]) => {
@@ -264,6 +267,88 @@ test("offline install preflight records resolved local model identity", async ()
     }
 });
 
+test("offline install defaults to the checksum-verified bundled Potion runtime", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-preflight-"));
+    try {
+        const result = await runInstallPreflight({
+            runtime: "offline",
+            homeDir,
+            env: {},
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            platform: "linux",
+            architecture: "x64",
+        }, {
+            probeLanceDb: async () => undefined,
+        });
+
+        assert.deepEqual(result.runtimeEnvironment, {
+            SATORI_RUNTIME_PROFILE: "offline",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
+            EMBEDDING_PROVIDER: "Potion",
+            EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+            EMBEDDING_OUTPUT_DIMENSION: "256",
+            POTION_HELPER_PATH: path.join(POTION_ASSETS_ROOT, "satori-potion"),
+            POTION_MODEL_PATH: path.join(POTION_ASSETS_ROOT, "model"),
+            POTION_REQUEST_TIMEOUT_MS: "5000",
+        });
+        await verifyBundledPotionRuntime(POTION_ASSETS_ROOT);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("new offline install persists the verified Potion identity in the managed launcher", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-install-"));
+    try {
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+        }, {
+            homeDir,
+            env: {},
+            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
+            preflightDependencies: {
+                probeLanceDb: async () => undefined,
+            },
+        });
+
+        const launcherEnvironment = parseManagedLauncherEnvironment(
+            fs.readFileSync(path.join(homeDir, ".satori", "bin", "satori-mcp.js"), "utf8"),
+        );
+        assert.equal(launcherEnvironment.EMBEDDING_PROVIDER, "Potion");
+        assert.equal(launcherEnvironment.EMBEDDING_OUTPUT_DIMENSION, "256");
+        assert.equal(launcherEnvironment.POTION_HELPER_PATH, path.join(POTION_ASSETS_ROOT, "satori-potion"));
+        assert.equal(launcherEnvironment.POTION_MODEL_PATH, path.join(POTION_ASSETS_ROOT, "model"));
+        assert.equal(launcherEnvironment.OLLAMA_MODEL, undefined);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("Potion default fails before artifact verification on unsupported platforms", async () => {
+    let verificationCalls = 0;
+    await assert.rejects(
+        runInstallPreflight({
+            runtime: "offline",
+            homeDir: "/tmp/satori-potion-unsupported",
+            env: {},
+            potionAssetsRoot: "/tmp/potion-assets",
+            platform: "darwin",
+            architecture: "arm64",
+        }, {
+            probeLanceDb: async () => undefined,
+            verifyPotionRuntime: async () => { verificationCalls += 1; },
+        }),
+        /supports Linux x64/,
+    );
+    assert.equal(verificationCalls, 0);
+});
+
 test("the real LanceDB preflight proves FTS and dense reads after reopen", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lancedb-preflight-"));
     try {
@@ -473,6 +558,73 @@ test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"L
     }
 });
 }
+
+test("offline reinstall without a model preserves an existing managed Ollama selection", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-ollama-preserve-"));
+    const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
+    fs.writeFileSync(launcherPath, buildLauncherScript({
+        command: process.execPath,
+        args: ["/tmp/old-runtime.js"],
+        managedEnv: {
+            SATORI_RUNTIME_PROFILE: "offline",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            LANCEDB_PATH: path.join(homeDir, "lancedb"),
+            EMBEDDING_PROVIDER: "Ollama",
+            OLLAMA_MODEL: "nomic-embed-text:latest",
+            OLLAMA_MODEL_DIGEST: DIGEST,
+            EMBEDDING_OUTPUT_DIMENSION: "768",
+            OLLAMA_HOST: "http://localhost:11434",
+        },
+    }), "utf8");
+    let selectedModel: string | undefined;
+    try {
+        const result = await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: false,
+            runtime: "offline",
+        }, {
+            homeDir,
+            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            runtimeCommand: { command: process.execPath, args: ["/tmp/new-runtime.js"] },
+            preflightRunner: async (input) => {
+                selectedModel = input.ollamaModel;
+                return {
+                    runtimeEnvironment: Object.freeze({
+                        SATORI_RUNTIME_PROFILE: "offline",
+                        VECTOR_STORE_PROVIDER: "LanceDB",
+                        EMBEDDING_PROVIDER: "Ollama",
+                        OLLAMA_MODEL: input.ollamaModel || "",
+                        OLLAMA_MODEL_DIGEST: DIGEST,
+                    }),
+                };
+            },
+        });
+
+        assert.equal(selectedModel, "nomic-embed-text:latest");
+        assert.equal(result.runtimeEnvironment?.EMBEDDING_PROVIDER, "Ollama");
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("new Potion offline install rejects a conflicting ambient provider", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-potion-conflict-"));
+    try {
+        await assert.rejects(executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            dryRun: true,
+            runtime: "offline",
+        }, {
+            homeDir,
+            env: { EMBEDDING_PROVIDER: "VoyageAI" },
+        }), /conflicts with the Potion offline installation selection/);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
 
 test("connected reinstall reads a literal Milvus selection from Codex config", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-connected-client-selection-"));

@@ -1,10 +1,15 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import {
     assertNetworkPolicyAllowsEndpoint,
     EMBEDDING_PROJECTION_VERSION,
     LEXICAL_PROJECTION_VERSION,
+    POTION_DIMENSION,
+    POTION_INFERENCE_CONTRACT_DIGEST,
+    POTION_MODEL_ID,
     resolveOllamaModelIdentity,
+    verifyPinnedPotionArtifacts,
     type ResolvedOllamaModelIdentity,
     type VectorDatabase,
 } from "@zokizuan/satori-core";
@@ -12,6 +17,7 @@ import { connectCliMcpSession } from "./client.js";
 import type { InstallRuntime, InstallVectorStore } from "./args.js";
 
 const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
+const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
 
 export interface InstallPreflightInput {
@@ -20,6 +26,9 @@ export interface InstallPreflightInput {
     env: NodeJS.ProcessEnv;
     vectorStore?: InstallVectorStore;
     ollamaModel?: string;
+    potionAssetsRoot?: string;
+    platform?: NodeJS.Platform;
+    architecture?: string;
 }
 
 export interface InstallPreflightResult {
@@ -30,6 +39,7 @@ export interface InstallPreflightResult {
 export interface InstallPreflightDependencies {
     probeLanceDb?: (databasePath: string) => Promise<void>;
     resolveOllamaIdentity?: typeof resolveOllamaModelIdentity;
+    verifyPotionRuntime?: (assetsRoot: string) => Promise<void>;
     probeCandidateRuntime?: (input: ManagedRuntimeCandidateProbeInput) => Promise<void>;
 }
 
@@ -48,6 +58,112 @@ export type LanceDbModule = {
 
 export interface LanceDbProbeDependencies {
     loadLanceDb?: () => Promise<LanceDbModule>;
+}
+
+interface PotionArtifactManifest {
+    schemaVersion: number;
+    platform: string;
+    architecture: string;
+    model: { identity: string };
+    embeddingInferenceContractDigest: string;
+    files: Array<{
+        path: string;
+        bytes: number;
+        sha256: string;
+        executable?: boolean;
+    }>;
+}
+
+const REQUIRED_POTION_ARTIFACT_PATHS = new Set([
+    "satori-potion",
+    "model/config.json",
+    "model/model.safetensors",
+    "model/tokenizer.json",
+    "MODEL_CARD.md",
+    "MODEL2VEC_RS_LICENSE",
+]);
+
+function potionRuntimePaths(assetsRoot: string): { helperPath: string; modelPath: string } {
+    if (!path.isAbsolute(assetsRoot)) {
+        throw new Error("Potion asset root must be absolute.");
+    }
+    return {
+        helperPath: path.join(assetsRoot, "satori-potion"),
+        modelPath: path.join(assetsRoot, "model"),
+    };
+}
+
+function sha256File(filePath: string): string {
+    return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+export async function verifyBundledPotionRuntime(assetsRoot: string): Promise<void> {
+    const manifestPath = path.join(assetsRoot, "manifest.json");
+    let manifest: PotionArtifactManifest;
+    try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PotionArtifactManifest;
+    } catch {
+        throw new Error(`Bundled Potion manifest is missing or invalid at '${manifestPath}'.`);
+    }
+    if (
+        manifest.schemaVersion !== 1
+        || manifest.platform !== "linux"
+        || manifest.architecture !== "x64"
+        || manifest.model?.identity !== POTION_MODEL_ID
+        || manifest.embeddingInferenceContractDigest !== POTION_INFERENCE_CONTRACT_DIGEST
+        || !Array.isArray(manifest.files)
+    ) {
+        throw new Error("Bundled Potion manifest does not match the pinned runtime authority.");
+    }
+    const manifestedPaths = manifest.files.map((artifact) => artifact.path);
+    if (
+        manifestedPaths.length !== REQUIRED_POTION_ARTIFACT_PATHS.size
+        || new Set(manifestedPaths).size !== REQUIRED_POTION_ARTIFACT_PATHS.size
+        || manifestedPaths.some((artifactPath) => !REQUIRED_POTION_ARTIFACT_PATHS.has(artifactPath))
+    ) {
+        throw new Error("Bundled Potion manifest does not contain the complete pinned artifact closure.");
+    }
+    for (const artifact of manifest.files) {
+        if (
+            typeof artifact.path !== "string"
+            || path.isAbsolute(artifact.path)
+            || artifact.path.split(/[\\/]/).includes("..")
+            || !Number.isSafeInteger(artifact.bytes)
+            || artifact.bytes < 0
+            || !/^[a-f0-9]{64}$/.test(artifact.sha256)
+        ) {
+            throw new Error("Bundled Potion manifest contains an invalid artifact entry.");
+        }
+        const artifactPath = path.join(assetsRoot, artifact.path);
+        const stat = fs.lstatSync(artifactPath);
+        if (!stat.isFile() || stat.isSymbolicLink()) {
+            throw new Error(`Bundled Potion artifact '${artifact.path}' must be a regular file.`);
+        }
+        if (stat.size !== artifact.bytes || sha256File(artifactPath) !== artifact.sha256) {
+            throw new Error(`Bundled Potion artifact '${artifact.path}' failed checksum verification.`);
+        }
+        if (artifact.executable) {
+            // npm normalizes non-bin package files to 0644. Restore only the
+            // owning user's execute bit after the immutable bytes are proven.
+            if ((stat.mode & fs.constants.S_IXUSR) === 0) {
+                fs.chmodSync(artifactPath, stat.mode | fs.constants.S_IXUSR);
+            }
+            fs.accessSync(artifactPath, fs.constants.X_OK);
+        }
+    }
+    const { helperPath, modelPath } = potionRuntimePaths(assetsRoot);
+    await verifyPinnedPotionArtifacts({ helperPath, modelPath });
+}
+
+function assertSupportedPotionPlatform(input: InstallPreflightInput): void {
+    const platform = input.platform ?? process.platform;
+    const architecture = input.architecture ?? process.arch;
+    if (platform !== "linux" || architecture !== "x64") {
+        throw new Error(
+            `Potion offline installation supports Linux x64; received ${platform} ${architecture}. `
+            + "Use an explicit --ollama-model for the existing portable offline path.",
+        );
+    }
 }
 
 const EXPECTED_TOOL_NAMES = [
@@ -277,7 +393,22 @@ export function planInstallRuntimeEnvironment(
 
     const model = input.ollamaModel?.trim();
     if (!model) {
-        throw new Error("Offline install requires an Ollama model.");
+        assertSupportedPotionPlatform(input);
+        if (!input.potionAssetsRoot) {
+            throw new Error("Potion offline installation requires the bundled runtime asset root.");
+        }
+        const { helperPath, modelPath } = potionRuntimePaths(input.potionAssetsRoot);
+        return Object.freeze({
+            SATORI_RUNTIME_PROFILE: "offline",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            LANCEDB_PATH: resolveLanceDbPath(input.homeDir, input.env),
+            EMBEDDING_PROVIDER: "Potion",
+            EMBEDDING_MODEL: POTION_MODEL_ID,
+            EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+            POTION_HELPER_PATH: helperPath,
+            POTION_MODEL_PATH: modelPath,
+            POTION_REQUEST_TIMEOUT_MS: DEFAULT_POTION_REQUEST_TIMEOUT_MS,
+        });
     }
     const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
     assertNetworkPolicyAllowsEndpoint({ kind: "local-only" }, host, "OLLAMA_HOST");
@@ -311,7 +442,12 @@ export async function runInstallPreflight(
     await (dependencies.probeLanceDb ?? probeLanceDbRuntime)(databasePath);
     const model = input.ollamaModel?.trim();
     if (!model) {
-        throw new Error("Offline install preflight requires an Ollama model.");
+        assertSupportedPotionPlatform(input);
+        if (!input.potionAssetsRoot) {
+            throw new Error("Potion offline install preflight requires the bundled runtime asset root.");
+        }
+        await (dependencies.verifyPotionRuntime ?? verifyBundledPotionRuntime)(input.potionAssetsRoot);
+        return { runtimeEnvironment: proposedEnvironment };
     }
     const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
     assertNetworkPolicyAllowsEndpoint({ kind: "local-only" }, host, "OLLAMA_HOST");

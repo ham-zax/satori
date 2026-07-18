@@ -1,7 +1,8 @@
 # Satori Potion Offline Embedding Lean Qualification Plan
 
 **Status:** L0 and L1 passed; L2 experimental provider integration passed
-focused conformance; no supported runtime configuration or production default
+focused conformance; L3 functional qualification passed and its frozen resource
+qualification failed; no supported runtime configuration or production default
 has changed
 
 **Date:** 2026-07-18
@@ -10,9 +11,10 @@ has changed
 `minishlab/potion-code-16M-v2` can support a useful, safe, lightweight Satori
 offline-search mode.
 
-**Current execution boundary:** stop after L2. L3 publication/indexing, L4
-product qualification, and every follow-up-plan track remain separately
-unauthorized.
+**Current execution boundary:** the bounded delta-publication qualification
+stopped at `shared_bottleneck_relocalized`; its required atomic publication
+change exceeds that task's authority. Stop here. L4 product qualification and
+every follow-up-plan track remain unauthorized.
 
 ---
 
@@ -335,8 +337,9 @@ that the pinned real L1 helper satisfies the Core adapter, changed or missing
 contract identity fails persisted compatibility, and existing local-provider
 policy and runtime shutdown behavior remain intact.
 
-**Decision:** L2 passed. Stop here. No LanceDB publication, document indexing,
-reranking, installer work, L3, or L4 was performed or authorized.
+**Recorded L2 decision:** L2 passed. At that boundary no LanceDB publication,
+document indexing, reranking, installer work, L3, or L4 had been performed or
+authorized.
 
 ### L3 — real publication and lifecycle smoke test
 
@@ -366,6 +369,137 @@ reranking, installer work, L3, or L4 was performed or authorized.
 Exit: proceed only if every critical smoke-task owner survives in the captured
 candidate union and all publication/lifecycle checks pass. Otherwise stop and
 record the first failing retrieval or lifecycle boundary.
+
+#### Recorded L3 result
+
+The immutable L3 decision is `functional_pass_resource_fail`. Its canonical
+manifest is
+`/home/hamza/repo/satori-l3-evidence/20260718-8f637bc/manifests/l3-final-decision.json`
+with SHA-256
+`6ecc3654ec6574f5371eac362574fd22145ed7b836bbd0704b859f7f22e4ebf8`.
+The complete evidence root is
+`/home/hamza/repo/satori-l3-evidence/20260718-8f637bc`.
+
+Functional qualification passed. The single completed publication contains
+488 files, 10,830 chunks, and 256-dimensional Potion vectors. Fingerprint and
+dimension compatibility, restart and search, zero-change synchronization,
+add/edit/rename/delete lifecycle behavior, runtime-failure recovery, and zero
+Satori-runtime network attempts passed. All 12 base smoke calls returned `ok`;
+all 7 critical and all 11 positive expected owners survived the captured
+candidate union. Ten of the 11 positive owners reached disclosure, and the
+negative task disclosed no result.
+
+The frozen resource qualification failed and remains a failure:
+
+* cold public publication was 34.457 seconds against 30 seconds;
+* the internal indexing timer was 29.985 seconds, leaving 4.472 seconds of
+  public accepted-to-completed time outside that internal timer;
+* one-file incremental publication p95 was 6,517.76 ms against 1,000 ms; and
+* warm public search p95 was 139.72 ms against 500 ms and passed.
+
+The incremental result came from 10 measured edits after 2 discarded warmups,
+not from only the add/edit/rename/delete lifecycle observations. The samples
+ranged from 6,231.75 to 6,517.76 ms. They establish a large and consistent
+resource miss, but nearest-rank p95 over 10 samples is the maximum and is
+descriptive rather than a statistically stable tail estimate.
+
+L3 also exposed a publication-fingerprint propagation defect: the persisted
+Potion inference digest was lost by the vector-only runtime identity used for
+public search. Commit `b651fbb2769b5592fbc3e12eadaf772eaf19a6ca`
+preserves the configured digest. Focused MCP tests and the same publication's
+incremental synchronization verified the repair without another full index.
+
+No measurement, threshold, or original L3 evidence is changed by this record.
+L4 remains blocked pending an explicit decision about the confirmed resource
+miss.
+
+#### Recorded L3 resource investigation
+
+The bounded investigation decision is `resource_miss_confirmed` (decision C).
+Its canonical manifest is
+`/home/hamza/repo/satori-l3-resource-evidence/20260718-b651fbb/manifests/l3-resource-investigation-decision.json`
+with SHA-256
+`414b00729e5ce25616867aa3b9b06c70205b0618847b421d17c645f656c616c5`.
+The task-owned evidence root is
+`/home/hamza/repo/satori-l3-resource-evidence/20260718-b651fbb`.
+
+The 4.472-second cold value is an arithmetic residual, not a directly observed
+post-index-only interval: it includes work before and after the Context timer.
+Bounded measurements on the compatible 488-file task copy attributed 4.369
+seconds (97.7%) to the same cold-path owners: synchronizer initialization
+(658.68 ms), the forced full-hash checkpoint (573.78 ms), full call-graph
+rebuild (2,144.01 ms comparable mean), and navigation publication (992.08 ms
+comparable mean).
+
+Four warm changed-file cases averaged 6,719.16 ms. Repository-wide navigation
+rebuild averaged 2,973.06 ms (44.25%) and full call-graph rebuild averaged
+2,144.01 ms (31.91%). Potion embedding itself averaged 1.90 ms as nested
+attribution. Each add, edit, or rename embedded exactly two changed chunks;
+deletion embedded none, zero-change synchronization embedded none, and no
+incremental FTS finalization occurred. One model-loaded Potion worker was reused
+within each MCP runtime; restart created one new worker for the new runtime.
+
+No repair was made. Crossing the frozen 1,000 ms incremental gate would require
+delta-safe changes to both immutable navigation publication and call-graph
+sidecar ownership. Skipping either current publication step would weaken
+searchable-publication correctness, while implementing both is not a bounded
+repair. No additional full publication was run, and the isolated diagnostic
+recorded zero network attempts. The frozen L3 resource failure and its original
+gates remain unchanged.
+
+#### Prospective delta-publication decision
+
+This is a separate product decision for a delta-publication follow-up. It does
+not modify or reinterpret the immutable L3 measurements, thresholds, or failed
+resource decision.
+
+* A one-time CPU-only publication of approximately 10,000 chunks may be
+  accepted under a future 40-second cold-publication envelope; the observed
+  34.457-second L3 publication is within that prospective envelope.
+* The observed 139.72 ms warm-search p95 passes its existing 500 ms gate.
+* Warm zero-change synchronization below one second passes.
+* Ordinary changed-file publication at the observed 6.5--8.1 seconds is not
+  acceptable. The prospective empirical p95 target remains 1,000 ms for an
+  ordinary warm one-file add, edit, or deletion.
+* Rename is measured and reported separately against a prospective 1,500 ms
+  empirical p95 target.
+
+Only a separately qualified delta-publication result may satisfy this
+prospective envelope. Such a result does not convert the original L3 resource
+failure into a pass and does not authorize L4 automatically.
+
+#### Recorded delta-publication qualification stop
+
+The bounded delta-publication qualification started from
+`b651fbb2769b5592fbc3e12eadaf772eaf19a6ca` and stopped with
+`shared_bottleneck_relocalized` before implementation. The existing L3 decision
+seal above was verified without regenerating or modifying it.
+
+The shared publication lifecycle, rather than Potion, is the blocking owner.
+Incremental synchronization currently withdraws the completion marker and
+mutates the active vector and lexical collection in place before navigation is
+rebuilt. Navigation then publishes its generation pointer before the source
+checkpoint and replacement completion marker are committed. The MCP call-graph
+sidecar is rebuilt afterward, before the final MCP operation receipt is marked
+complete. Existing focused tests confirm that a failed incremental mutation
+leaves the marker and navigation authority absent so the exact mutation can be
+retried; the previous generation is not left searchable.
+
+Consequently, adding delta symbol, relationship, or call-graph artifacts alone
+cannot meet the required invariant that readers see the complete previous
+generation or the complete new generation and that a failed or crashed
+publication leaves the previous generation searchable. The minimum next
+architectural change is to extend the existing staged-generation authority to
+the vector and lexical delta and bind the staged collection, navigation
+generation, call-graph generation, source checkpoint, completion proof, and MCP
+receipt under one publication decision. That is a broader publication-authority
+change than this qualification permits.
+
+No navigation, call-graph, vector, lexical, ranking, provider, or retrieval code
+was changed. No performance qualification or representative reindex was run.
+The prospective latency targets remain unqualified, and L4 remains blocked.
+The task-owned decision evidence is recorded under
+`/home/hamza/repo/satori-delta-publication-evidence/20260718-b651fbb`.
 
 ### L4 — frozen 36-task product qualification
 

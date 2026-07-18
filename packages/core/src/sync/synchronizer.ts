@@ -56,6 +56,12 @@ interface ScanCandidate {
     signature: FileStatSignature;
 }
 
+type DirectoryEntryObservation =
+    | { kind: 'skip' }
+    | { kind: 'unreadable'; relativePath: string; directory: boolean; message: string }
+    | { kind: 'directory'; relativePath: string; absolutePath: string }
+    | { kind: 'file'; relativePath: string; absolutePath: string; signature: FileStatSignature };
+
 interface ScanResult {
     scannedHashes: Map<string, string>;
     scannedStats: Map<string, FileStatSignature>;
@@ -471,6 +477,95 @@ export class FileSynchronizer {
         }
     }
 
+    private async inspectDirectoryEntries(
+        entries: fsSync.Dirent[],
+        descriptorPath: string,
+        relativeDirectoryPath: string,
+    ): Promise<DirectoryEntryObservation[]> {
+        const observations = new Array<DirectoryEntryObservation>(entries.length);
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(this.getHashConcurrency(), entries.length) }).map(async () => {
+            while (true) {
+                const currentIndex = cursor;
+                cursor += 1;
+                if (currentIndex >= entries.length) {
+                    return;
+                }
+
+                const entry = entries[currentIndex];
+                if (entry.isSymbolicLink()) {
+                    observations[currentIndex] = { kind: 'skip' };
+                    continue;
+                }
+
+                const absolutePath = path.join(descriptorPath, entry.name);
+                const relativePath = this.normalizeRelPath(
+                    relativeDirectoryPath ? `${relativeDirectoryPath}/${entry.name}` : entry.name,
+                );
+                if (!relativePath || this.shouldIgnore(relativePath, entry.isDirectory())) {
+                    observations[currentIndex] = { kind: 'skip' };
+                    continue;
+                }
+
+                let stat: fsSync.Stats;
+                try {
+                    stat = await fsp.lstat(absolutePath);
+                } catch (error: unknown) {
+                    observations[currentIndex] = {
+                        kind: 'unreadable',
+                        relativePath,
+                        directory: entry.isDirectory(),
+                        message: errorMessage(error),
+                    };
+                    continue;
+                }
+
+                if (stat.isSymbolicLink()) {
+                    observations[currentIndex] = { kind: 'skip' };
+                    continue;
+                }
+                if (stat.isDirectory()) {
+                    observations[currentIndex] = this.shouldIgnore(relativePath, true)
+                        ? { kind: 'skip' }
+                        : { kind: 'directory', relativePath, absolutePath };
+                    continue;
+                }
+                if (!stat.isFile() || this.shouldIgnore(relativePath, false)) {
+                    observations[currentIndex] = { kind: 'skip' };
+                    continue;
+                }
+
+                const fileReal = await resolveInsideRoot(absolutePath, this.rootDir);
+                if (!fileReal || fileReal !== path.join(this.rootDir, relativePath)) {
+                    observations[currentIndex] = {
+                        kind: 'unreadable',
+                        relativePath,
+                        directory: false,
+                        message: 'path no longer resolves to the indexed root entry',
+                    };
+                    continue;
+                }
+                if (!await this.isSupportedFile(relativePath, fileReal, stat.size)) {
+                    observations[currentIndex] = { kind: 'skip' };
+                    continue;
+                }
+
+                observations[currentIndex] = {
+                    kind: 'file',
+                    relativePath,
+                    absolutePath: fileReal,
+                    signature: {
+                        size: stat.size,
+                        mtimeMs: Number(stat.mtimeMs),
+                        ctimeMs: Number(stat.ctimeMs),
+                    },
+                };
+            }
+        });
+        await Promise.all(workers);
+        return observations;
+    }
+
     private async scanDirectory(
         directoryPath: string,
         relativeDirectoryPath: string,
@@ -517,93 +612,57 @@ export class FileSynchronizer {
 
             entries.sort((a, b) => compareContractStrings(a.name, b.name));
 
-            for (const entry of entries) {
-                // Dirent symlink bit is best-effort; lstat below is authoritative.
-                if (entry.isSymbolicLink()) {
+            // Filesystem checks within one directory are independent. Resolve them
+            // concurrently, then apply observations in canonical entry order so the
+            // resulting maps, diagnostics, and recursive traversal remain stable.
+            const observations = await this.inspectDirectoryEntries(
+                entries,
+                openedDirectory.descriptorPath,
+                relativeDirectoryPath,
+            );
+            for (const observation of observations) {
+                if (observation.kind === 'skip') {
                     continue;
                 }
-
-                const absolutePath = path.join(openedDirectory.descriptorPath, entry.name);
-                const relativePath = this.normalizeRelPath(
-                    relativeDirectoryPath ? `${relativeDirectoryPath}/${entry.name}` : entry.name
-                );
-                if (!relativePath) {
-                    continue;
-                }
-
-                if (this.shouldIgnore(relativePath, entry.isDirectory())) {
-                    continue;
-                }
-
-                let stat: fsSync.Stats;
-                try {
-                    stat = await fsp.lstat(absolutePath);
-                } catch (error: unknown) {
-                    if (entry.isDirectory()) {
-                        result.unscannedDirPrefixes.add(relativePath);
+                if (observation.kind === 'unreadable') {
+                    if (observation.directory) {
+                        result.unscannedDirPrefixes.add(observation.relativePath);
                     } else {
-                        result.unreadableFiles.add(relativePath);
+                        result.unreadableFiles.add(observation.relativePath);
                     }
-                    console.warn(`[Synchronizer] Cannot lstat ${relativePath}: ${errorMessage(error)}`);
+                    console.warn(`[Synchronizer] Cannot inspect ${observation.relativePath}: ${observation.message}`);
+                    continue;
+                }
+                if (observation.kind === 'directory') {
+                    await this.scanDirectory(
+                        observation.absolutePath,
+                        observation.relativePath,
+                        previousHashes,
+                        previousStats,
+                        forceFullHash,
+                        result,
+                    );
                     continue;
                 }
 
-                if (stat.isSymbolicLink()) {
-                    continue;
-                }
+                result.scannedStats.set(observation.relativePath, observation.signature);
 
-                if (stat.isDirectory()) {
-                    if (!this.shouldIgnore(relativePath, true)) {
-                        await this.scanDirectory(
-                            absolutePath,
-                            relativePath,
-                            previousHashes,
-                            previousStats,
-                            forceFullHash,
-                            result
-                        );
-                    }
-                    continue;
-                }
-
-                if (!stat.isFile()) {
-                    continue;
-                }
-
-                if (this.shouldIgnore(relativePath, false)) {
-                    continue;
-                }
-
-                const fileReal = await resolveInsideRoot(absolutePath, this.rootDir);
-                if (!fileReal || fileReal !== path.join(this.rootDir, relativePath)) {
-                    result.unreadableFiles.add(relativePath);
-                    continue;
-                }
-
-                if (!await this.isSupportedFile(relativePath, fileReal, stat.size)) {
-                    continue;
-                }
-
-                const signature: FileStatSignature = {
-                    size: stat.size,
-                    mtimeMs: Number(stat.mtimeMs),
-                    ctimeMs: Number(stat.ctimeMs)
-                };
-
-                result.scannedStats.set(relativePath, signature);
-
-                const previousSignature = previousStats.get(relativePath);
-                const previousHash = previousHashes.get(relativePath);
+                const previousSignature = previousStats.get(observation.relativePath);
+                const previousHash = previousHashes.get(observation.relativePath);
                 const canReuseHash = !forceFullHash
-                    && this.isSignatureEqual(previousSignature, signature)
+                    && this.isSignatureEqual(previousSignature, observation.signature)
                     && typeof previousHash === 'string';
 
                 if (canReuseHash) {
-                    result.scannedHashes.set(relativePath, previousHash!);
+                    result.scannedHashes.set(observation.relativePath, previousHash!);
                     continue;
                 }
 
-                result.hashCandidates.push({ relativePath, absolutePath: fileReal, signature });
+                result.hashCandidates.push({
+                    relativePath: observation.relativePath,
+                    absolutePath: observation.absolutePath,
+                    signature: observation.signature,
+                });
             }
         } finally {
             await openedDirectory.handle.close().catch(() => undefined);

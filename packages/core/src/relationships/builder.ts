@@ -163,13 +163,13 @@ function resolveRelativeModulePath(
     specifier: string,
     registry: SymbolRegistry,
     language: string,
+    availableFiles: ReadonlySet<string> = new Set(registry.manifest.files.map((file) => file.path)),
 ): string | undefined {
     if (!specifier.startsWith('.')) return undefined;
     const candidates = language === 'python'
         ? resolvePythonRelativeModuleCandidates(sourceFile, specifier)
         : resolveJsRelativeModuleCandidates(sourceFile, specifier);
-    const files = new Set(registry.manifest.files.map((file) => file.path));
-    return candidates.find((candidate) => files.has(candidate));
+    return candidates.find((candidate) => availableFiles.has(candidate));
 }
 
 function pathJoinPosix(...parts: string[]): string | undefined {
@@ -269,6 +269,8 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
 
 function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForRegistryInput): RelationshipRecord[] {
     const fileOwners = getFileOwners(input.registry.symbols);
+    const symbolsByFile = input.registry.symbolsByFile;
+    const availableFiles = new Set(input.registry.manifest.files.map((file) => file.path));
     const recordsByKey = new Map<string, RelationshipRecord>();
 
     for (const source of input.registry.symbols.filter((symbol) => symbol.kind === 'file')) {
@@ -278,7 +280,13 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
             if (binding.kind === 'import' || binding.kind === 'reexport') {
                 const specifier = binding.moduleSpecifier;
                 const targetPath = specifier
-                    ? resolveRelativeModulePath(source.file, specifier, input.registry, source.language)
+                    ? resolveRelativeModulePath(
+                        source.file,
+                        specifier,
+                        input.registry,
+                        source.language,
+                        availableFiles,
+                    )
                     : undefined;
                 const target = targetPath ? fileOwners.get(targetPath) : undefined;
                 if (!target) continue;
@@ -299,7 +307,7 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
 
             const localName = binding.localName ?? binding.exportedName;
             const target = localName
-                ? resolveUniqueLocalSymbol(source.file, localName, input.registry.symbols)
+                ? resolveUniqueLocalSymbol(source.file, localName, symbolsByFile.get(source.file) ?? [])
                 : undefined;
             if (!target) continue;
             const record: RelationshipRecord = {
@@ -333,6 +341,11 @@ export function buildRelationshipsForRegistry(input: BuildRelationshipsForRegist
 export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): BuildRelationshipDeltaResult {
     const affectedFiles = new Set(input.changedFiles);
     const changedTargetNames = new Set<string>();
+    const previousFilesByPath = new Map(
+        input.previousRegistry.manifest.files.map((file) => [file.path, file]),
+    );
+    const previousAvailableFiles = new Set(previousFilesByPath.keys());
+    const availableFiles = new Set(input.registry.manifest.files.map((file) => file.path));
     for (const symbol of [...input.previousRegistry.symbols, ...input.registry.symbols]) {
         if (symbol.kind !== 'file' && input.changedFiles.has(symbol.file)) {
             changedTargetNames.add(symbol.name);
@@ -347,7 +360,7 @@ export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): Buil
             affectedFiles.add(file.path);
             continue;
         }
-        const previousFile = input.previousRegistry.manifest.files.find((candidate) => candidate.path === file.path);
+        const previousFile = previousFilesByPath.get(file.path);
         const language = previousFile?.language ?? file.language;
         const resolutionChanged = evidence.moduleBindings.some((binding) => {
             if ((binding.kind !== 'import' && binding.kind !== 'reexport') || !binding.moduleSpecifier) {
@@ -358,12 +371,14 @@ export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): Buil
                 binding.moduleSpecifier,
                 input.previousRegistry,
                 language,
+                previousAvailableFiles,
             );
             const nextTarget = resolveRelativeModulePath(
                 file.path,
                 binding.moduleSpecifier,
                 input.registry,
                 file.language,
+                availableFiles,
             );
             return previousTarget !== nextTarget
                 || (previousTarget !== undefined && input.changedFiles.has(previousTarget))

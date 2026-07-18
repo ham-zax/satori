@@ -253,6 +253,13 @@ export interface VectorDatabase {
     getPublicationObservation?(collectionName: string): Promise<string | null>;
 
     /**
+     * Observation of searchable collection data only, excluding shared control
+     * metadata. Retention uses this to prove that pruning an inactive sibling did
+     * not mutate the active collection before rebinding a cached receipt.
+     */
+    getCollectionDataObservation?(collectionName: string): Promise<string | null>;
+
+    /**
      * List all collections
      */
     listCollections(): Promise<string[]>;

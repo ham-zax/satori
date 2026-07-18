@@ -510,11 +510,18 @@ test('ensureFreshness lets Core resolve incremental authority instead of trustin
     const codebasePath = createTempDir();
     const committedCollection = 'hybrid_code_chunks_committed';
     const generationReceipt = { collectionName: committedCollection } as never;
+    const activatedGenerationReceipt = { collectionName: `${committedCollection}_next` } as never;
+    const inspectedReceipts: unknown[] = [];
     let receivedOptions: unknown;
     let persistedCollection: string | undefined;
 
     const context = {
-        async inspectSourceFreshnessCheckpoint() {
+        async inspectSourceFreshnessCheckpoint(
+            _path: string,
+            _checkpointIdentity?: string,
+            requestBoundReceipt?: unknown,
+        ) {
+            inspectedReceipts.push(requestBoundReceipt);
             return {
                 status: 'valid' as const,
                 observationToken: 'checkpoint-v1',
@@ -531,7 +538,14 @@ test('ensureFreshness lets Core resolve incremental authority instead of trustin
         },
         async reindexByChange(_path: string, _progress: unknown, options: unknown) {
             receivedOptions = options;
-            return { added: 1, removed: 0, modified: 0, changedFiles: ['src/new.ts'], collectionName: committedCollection };
+            return {
+                added: 1,
+                removed: 0,
+                modified: 0,
+                changedFiles: ['src/new.ts'],
+                collectionName: committedCollection,
+                generationReceipt: activatedGenerationReceipt,
+            };
         },
         getTrackedRelativePaths() {
             return ['src/new.ts'];
@@ -561,6 +575,7 @@ test('ensureFreshness lets Core resolve incremental authority instead of trustin
         maintainCompletionMarker: true,
         sourceGenerationReceipt: generationReceipt,
     });
+    assert.equal(inspectedReceipts.at(-1), activatedGenerationReceipt);
     assert.equal(persistedCollection, committedCollection);
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });

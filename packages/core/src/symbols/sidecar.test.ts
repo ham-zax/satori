@@ -1805,3 +1805,51 @@ test('staged navigation delta fails closed when shard hard links are unavailable
         assert.equal((await readSymbolRegistrySidecar({ stateRoot, normalizedRootPath: '/repo' })).status, 'ok');
     });
 });
+
+test('staged navigation delta rejects reusable manifest entries outside the base generation seal', async () => {
+    await withTempDir(async (stateRoot) => {
+        const symbol = createSynthesizedFileSymbol({
+            relativePath: 'src/auth.ts',
+            language: 'typescript',
+            content: 'export const auth = true;\n',
+            fileHash: 'hash-auth',
+            extractorVersion: 'extractor-v1',
+        });
+        const registry = buildSymbolRegistry({
+            manifest: manifest([
+                { path: 'src/auth.ts', hash: 'hash-auth', language: 'typescript', symbolCount: 1 },
+            ]),
+            symbols: [symbol],
+        });
+        const analysisByFile = new Map([
+            ['src/auth.ts', { moduleBindings: [], callSites: [] }],
+        ]);
+        const base = await stageNavigationSidecarGeneration({
+            stateRoot,
+            registry,
+            records: [],
+            analysisByFile,
+        });
+        await publishNavigationSidecarGeneration(base);
+
+        const indexPath = path.join(base.rootPath, 'generations', base.generationId, 'symbols', 'index.json');
+        const index = await readJsonFile<{ files: Array<{ shardHash: string }> }>(indexPath);
+        index.files[0]!.shardHash = '0'.repeat(64);
+        await writeJsonFile(indexPath, index);
+
+        await assert.rejects(
+            stageNavigationSidecarGeneration({
+                stateRoot,
+                registry,
+                records: [],
+                analysisByFile,
+                deltaReuse: {
+                    baseGenerationId: base.generationId,
+                    symbolFilesToRewrite: [],
+                    relationshipFilesToRewrite: [],
+                },
+            }),
+            /source artifact identity is incompatible; reindex is required/,
+        );
+    });
+});

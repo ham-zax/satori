@@ -257,11 +257,14 @@ test('LanceDB publication observation changes for payload marker and collection 
     await database.writeDocuments(collectionName, [
         indexedDocument({ id: 'first', vector: [1, 0], lexicalText: 'first' }),
     ]);
+    const initialData = await database.getCollectionDataObservation(collectionName);
+    assert.match(initialData ?? '', /^[a-f0-9]{64}$/);
     assert.equal(await database.getPublicationObservation(collectionName), null);
 
     const marker = completionRecord('observation');
     await database.insertControl(collectionName, marker);
     const initial = await database.getPublicationObservation(collectionName);
+    assert.equal(await database.getCollectionDataObservation(collectionName), initialData);
     const controlName = `__satori_control_${crypto.createHash('sha256').update(collectionName).digest('hex')}`;
     const initialVersions = await Promise.all([
         tableVersion(databasePath, collectionName),
@@ -274,11 +277,14 @@ test('LanceDB publication observation changes for payload marker and collection 
         indexedDocument({ id: 'second', vector: [0, 1], lexicalText: 'second' }),
     ]);
     const afterPayload = await database.getPublicationObservation(collectionName);
+    const afterPayloadData = await database.getCollectionDataObservation(collectionName);
     assert.notEqual(afterPayload, initial);
+    assert.notEqual(afterPayloadData, initialData);
 
     await database.deleteControl(collectionName, marker.id);
     const afterMarker = await database.getPublicationObservation(collectionName);
     assert.notEqual(afterMarker, afterPayload);
+    assert.equal(await database.getCollectionDataObservation(collectionName), afterPayloadData);
 
     await database.insertControl(collectionName, marker);
     const afterMarkerAba = await database.getPublicationObservation(collectionName);
@@ -312,6 +318,10 @@ test('LanceDB forks an independently retained searchable generation', async (t) 
     await database.writeDocuments('source__gen_one', [
         indexedDocument({ id: 'old', vector: [1, 0], lexicalText: 'oldterm' }),
     ]);
+    await database.writeDocuments('source__gen_one', [
+        indexedDocument({ id: 'history', vector: [0.5, 0.5], lexicalText: 'historyterm' }),
+    ]);
+    await database.deleteDocuments('source__gen_one', ['history']);
     await database.finalizeCollectionForSearch('source__gen_one');
 
     const receipt = await database.forkCollection('source__gen_one', 'source__gen_two');
@@ -325,6 +335,14 @@ test('LanceDB forks an independently retained searchable generation', async (t) 
 
     const sourcePath = path.join(databasePath, 'source__gen_one.lance');
     const candidatePath = path.join(databasePath, 'source__gen_two.lance');
+    const sourceManifestCount = fs.readdirSync(path.join(sourcePath, '_versions'))
+        .filter((name) => name.endsWith('.manifest')).length;
+    const candidateManifestCount = fs.readdirSync(path.join(candidatePath, '_versions'))
+        .filter((name) => name.endsWith('.manifest')).length;
+    assert.ok(sourceManifestCount > 1);
+    assert.equal(candidateManifestCount, 1);
+    assert.ok(fs.readdirSync(path.join(sourcePath, '_transactions')).length > 0);
+    assert.equal(fs.readdirSync(path.join(candidatePath, '_transactions')).length, 0);
     const sourceBeforeMutation = await snapshotPhysicalFiles(sourcePath);
     const candidateBeforeMutation = await snapshotPhysicalFiles(candidatePath);
     const sharedPaths = [...sourceBeforeMutation].filter(([relativePath, sourceFile]) => (

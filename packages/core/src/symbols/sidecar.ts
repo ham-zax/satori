@@ -146,6 +146,8 @@ export interface StagedNavigationSidecarGeneration extends WriteNavigationSideca
     normalizedRootPath: string;
     relationshipManifestHash: string;
     navigationSealHash: string;
+    sourceFileCount: number;
+    sourceFilesDigest: string;
     physical: {
         logicalBytes: number;
         physicallyWrittenBytes: number;
@@ -283,7 +285,10 @@ async function collectDirectoryTreePaths(
     directories.push(rootPath);
 }
 
-async function fsyncDirectoryTree(rootPath: string): Promise<StagedNavigationSidecarGeneration['physical']> {
+async function fsyncDirectoryTree(
+    rootPath: string,
+    sharedFileSizes: ReadonlyMap<string, number> = new Map(),
+): Promise<StagedNavigationSidecarGeneration['physical']> {
     const files: string[] = [];
     const directories: string[] = [];
     await collectDirectoryTreePaths(rootPath, files, directories);
@@ -293,16 +298,19 @@ async function fsyncDirectoryTree(rootPath: string): Promise<StagedNavigationSid
     const writtenFiles: string[] = [];
     for (let offset = 0; offset < files.length; offset += SHARD_IO_CONCURRENCY) {
         const batch = files.slice(offset, offset + SHARD_IO_CONCURRENCY);
-        const stats = await Promise.all(batch.map(async (filePath) => ({
-            filePath,
-            stat: await fs.promises.stat(filePath),
-        })));
-        for (const { filePath, stat } of stats) {
-            logicalBytes += stat.size;
-            if (stat.nlink > 1) {
+        const stats = await Promise.all(batch.map(async (filePath) => {
+            const relativePath = path.relative(rootPath, filePath).replace(/\\/g, '/');
+            const sharedSize = sharedFileSizes.get(relativePath);
+            return sharedSize === undefined
+                ? { filePath, size: (await fs.promises.stat(filePath)).size, shared: false }
+                : { filePath, size: sharedSize, shared: true };
+        }));
+        for (const { filePath, size, shared } of stats) {
+            logicalBytes += size;
+            if (shared) {
                 sharedFiles += 1;
             } else {
-                physicallyWrittenBytes += stat.size;
+                physicallyWrittenBytes += size;
                 writtenFiles.push(filePath);
             }
         }
@@ -325,6 +333,16 @@ function serializeJson(value: unknown): string {
 
 function hashSerializedJson(value: unknown): string {
     return crypto.createHash('sha256').update(serializeJson(value), 'utf8').digest('hex');
+}
+
+export function computeNavigationSourceFilesDigest(
+    files: readonly Pick<SymbolRegistryManifestFile, 'path' | 'hash'>[],
+): string {
+    return hashSerializedJson(
+        files
+            .map((file) => ({ path: file.path, hash: file.hash }))
+            .sort((left, right) => compareStrings(left.path, right.path)),
+    );
 }
 
 export function computeRelationshipManifestHash(manifest: RelationshipManifest): string {
@@ -518,12 +536,14 @@ type SymbolShardReuse = Readonly<{
     sourceRoot: string;
     filesByPath: ReadonlyMap<string, SymbolIndexFileEntry>;
     filesToRewrite: ReadonlySet<string>;
+    sharedFileSizes: Map<string, number>;
 }>;
 
 type RelationshipShardReuse = Readonly<{
     sourceRoot: string;
     filesByPath: ReadonlyMap<string, RelationshipManifestFile>;
     filesToRewrite: ReadonlySet<string>;
+    sharedFileSizes: Map<string, number>;
 }>;
 
 function shardSharingError(sourcePath: string, targetPath: string, error: unknown): Error {
@@ -537,13 +557,14 @@ function shardSharingError(sourcePath: string, targetPath: string, error: unknow
     );
 }
 
-async function linkReusableShard(sourcePath: string, targetPath: string): Promise<void> {
+async function linkReusableShard(sourcePath: string, targetPath: string): Promise<number> {
     try {
         const sourceStat = await fs.promises.lstat(sourcePath);
         if (!sourceStat.isFile()) {
             throw new Error('source contribution is not a regular file');
         }
         await fs.promises.link(sourcePath, targetPath);
+        return sourceStat.size;
     } catch (error) {
         throw shardSharingError(sourcePath, targetPath, error);
     }
@@ -558,7 +579,11 @@ async function writeSymbolRegistrySidecarInternal(
     const temporarySymbolsDir = path.join(rootPath, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
     const byFileDir = path.join(temporarySymbolsDir, 'by-file');
     const manifestHash = computeSymbolRegistryManifestHash(input.registry.manifest);
-    const groupedSymbols = groupSymbolsByFile(input.registry.symbols);
+    const groupedSymbols = groupSymbolsByFile(
+        reuse
+            ? input.registry.symbols.filter((symbol) => reuse.filesToRewrite.has(symbol.file))
+            : input.registry.symbols,
+    );
 
     try {
         await fs.promises.mkdir(rootPath, { recursive: true });
@@ -568,18 +593,8 @@ async function writeSymbolRegistrySidecarInternal(
         for (let offset = 0; offset < input.registry.manifest.files.length; offset += SHARD_IO_CONCURRENCY) {
             const batch = input.registry.manifest.files.slice(offset, offset + SHARD_IO_CONCURRENCY);
             await Promise.all(batch.map(async (file) => {
-                const symbols = groupedSymbols.get(file.path) || [];
-                const shard = {
-                    schemaVersion: SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION,
-                    path: file.path,
-                    hash: file.hash,
-                    language: file.language,
-                    symbols,
-                };
-                const shardHash = hashSerializedJson(shard);
                 const shardFileName = fileShardName(file.path, file.hash);
                 const targetPath = path.join(byFileDir, shardFileName);
-                shardHashes.set(file.path, shardHash);
                 if (reuse && !reuse.filesToRewrite.has(file.path)) {
                     const source = reuse.filesByPath.get(file.path);
                     if (
@@ -587,13 +602,30 @@ async function writeSymbolRegistrySidecarInternal(
                         || source.hash !== file.hash
                         || source.language !== file.language
                         || source.symbolCount !== file.symbolCount
-                        || source.shardHash !== shardHash
                         || path.basename(source.shardPath) !== shardFileName
                     ) {
                         throw new Error(`Reusable symbol contribution is incompatible for '${file.path}'; reindex is required.`);
                     }
-                    await linkReusableShard(path.join(reuse.sourceRoot, source.shardPath), targetPath);
+                    // The base generation seal already binds this immutable shard's
+                    // hash and metadata. Reusing that authority avoids serializing
+                    // unchanged symbols merely to derive the same hash again.
+                    shardHashes.set(file.path, source.shardHash);
+                    const sharedSize = await linkReusableShard(
+                        path.join(reuse.sourceRoot, source.shardPath),
+                        targetPath,
+                    );
+                    reuse.sharedFileSizes.set(source.shardPath, sharedSize);
                 } else {
+                    const symbols = groupedSymbols.get(file.path) || [];
+                    const shard = {
+                        schemaVersion: SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION,
+                        path: file.path,
+                        hash: file.hash,
+                        language: file.language,
+                        symbols,
+                    };
+                    const shardHash = hashSerializedJson(shard);
+                    shardHashes.set(file.path, shardHash);
                     await writeJson(targetPath, shard);
                 }
             }));
@@ -634,7 +666,12 @@ async function writeRelationshipSidecarInternal(
     const relationshipsDir = path.join(rootPath, RELATIONSHIPS_DIR_NAME);
     const temporaryRelationshipsDir = path.join(rootPath, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
     const relationshipByFileDir = path.join(temporaryRelationshipsDir, 'by-file');
-    const groupedRelationships = groupRelationshipsByFile([...input.records].sort(compareRelationshipRecords));
+    const groupedRelationships = groupRelationshipsByFile(
+        (reuse
+            ? input.records.filter((record) => reuse.filesToRewrite.has(record.file))
+            : [...input.records]
+        ).sort(compareRelationshipRecords),
+    );
     const filesByPath = new Map((input.files || []).map((file) => [file.path, file]));
     const allowedEvidencePaths = input.files ? new Set(filesByPath.keys()) : undefined;
     if (allowedEvidencePaths) {
@@ -662,8 +699,29 @@ async function writeRelationshipSidecarInternal(
         for (let offset = 0; offset < sortedShardPaths.length; offset += SHARD_IO_CONCURRENCY) {
             const batch = sortedShardPaths.slice(offset, offset + SHARD_IO_CONCURRENCY);
             const batchFiles = await Promise.all(batch.map(async (filePath): Promise<RelationshipManifestFile> => {
-                const records = groupedRelationships.get(filePath) ?? [];
                 const fileHash = filesByPath.get(filePath)?.hash || input.symbolRegistryManifestHash;
+                const shardPath = path.posix.join(RELATIONSHIPS_DIR_NAME, 'by-file', fileShardName(filePath, fileHash));
+                const targetPath = path.join(temporaryRelationshipsDir, 'by-file', path.basename(shardPath));
+                if (reuse && !reuse.filesToRewrite.has(filePath)) {
+                    const source = reuse.filesByPath.get(filePath);
+                    if (
+                        !source
+                        || source.hash !== fileHash
+                        || source.shardPath !== shardPath
+                    ) {
+                        throw new Error(`Reusable relationship contribution is incompatible for '${filePath}'; reindex is required.`);
+                    }
+                    // As with symbol shards, the sealed base manifest is the
+                    // authority for an explicitly unchanged contribution.
+                    const sharedSize = await linkReusableShard(
+                        path.join(reuse.sourceRoot, source.shardPath),
+                        targetPath,
+                    );
+                    reuse.sharedFileSizes.set(source.shardPath, sharedSize);
+                    return { ...source };
+                }
+
+                const records = groupedRelationships.get(filePath) ?? [];
                 const analysisEvidence = !allowedEvidencePaths || allowedEvidencePaths.has(filePath)
                     ? getRelationshipAnalysisEvidence(input.analysisByFile, filePath)
                     : undefined;
@@ -674,25 +732,8 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                const shardPath = path.posix.join(RELATIONSHIPS_DIR_NAME, 'by-file', fileShardName(filePath, fileHash));
                 const shardHash = hashSerializedJson(shard);
-                const targetPath = path.join(temporaryRelationshipsDir, 'by-file', path.basename(shardPath));
-                if (reuse && !reuse.filesToRewrite.has(filePath)) {
-                    const source = reuse.filesByPath.get(filePath);
-                    if (
-                        !source
-                        || source.hash !== fileHash
-                        || source.relationshipCount !== records.length
-                        || source.analysisEvidencePresent !== (analysisEvidence !== undefined)
-                        || source.shardHash !== shardHash
-                        || source.shardPath !== shardPath
-                    ) {
-                        throw new Error(`Reusable relationship contribution is incompatible for '${filePath}'; reindex is required.`);
-                    }
-                    await linkReusableShard(path.join(reuse.sourceRoot, source.shardPath), targetPath);
-                } else {
-                    await writeJson(targetPath, shard);
-                }
+                await writeJson(targetPath, shard);
                 return {
                     path: filePath,
                     hash: fileHash,
@@ -822,6 +863,15 @@ async function loadNavigationShardReuse(
     if (relationshipManifestHash !== generation.relationshipManifestHash) {
         throw new Error('Atomic navigation delta source relationship identity is incompatible; reindex is required.');
     }
+    const rawSeal = await readJson(path.join(generation.generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME));
+    const seal = parseNavigationGenerationSeal(rawSeal);
+    const artifactSet = [
+        ...rawSymbolIndex.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+        ...rawRelationshipManifest.files.map((file) => ({ path: file.shardPath, hash: file.shardHash })),
+    ].sort((left, right) => compareStrings(left.path, right.path));
+    if (!seal || hashSerializedJson(artifactSet) !== seal.artifactSetHash) {
+        throw new Error('Atomic navigation delta source artifact identity is incompatible; reindex is required.');
+    }
 
     const validateRewritePaths = (paths: readonly string[], kind: string): Set<string> => {
         const normalized = new Set<string>();
@@ -834,16 +884,19 @@ async function loadNavigationShardReuse(
         }
         return normalized;
     };
+    const sharedFileSizes = new Map<string, number>();
     return {
         symbols: {
             sourceRoot: generation.generationRoot,
             filesByPath: new Map(rawSymbolIndex.files.map((file) => [file.path, file])),
             filesToRewrite: validateRewritePaths(input.symbolFilesToRewrite, 'symbol'),
+            sharedFileSizes,
         },
         relationships: {
             sourceRoot: generation.generationRoot,
             filesByPath: new Map(rawRelationshipManifest.files.map((file) => [file.path, file])),
             filesToRewrite: validateRewritePaths(input.relationshipFilesToRewrite, 'relationship'),
+            sharedFileSizes,
         },
     };
 }
@@ -911,7 +964,10 @@ export async function stageNavigationSidecarGeneration(
         };
         await writeJson(path.join(generationRoot, NAVIGATION_GENERATION_SEAL_FILE_NAME), seal);
         const navigationSealHash = computeNavigationGenerationSealHash(seal);
-        const physical = await fsyncDirectoryTree(generationRoot);
+        const physical = await fsyncDirectoryTree(
+            generationRoot,
+            reuse?.symbols.sharedFileSizes,
+        );
         await fsyncPath(path.dirname(generationRoot));
         await fsyncPath(rootPath);
 
@@ -926,6 +982,8 @@ export async function stageNavigationSidecarGeneration(
             relationshipCount: relationshipResult.relationshipCount,
             relationshipFileShardCount: relationshipResult.fileShardCount,
             navigationSealHash,
+            sourceFileCount: input.registry.manifest.files.length,
+            sourceFilesDigest: computeNavigationSourceFilesDigest(input.registry.manifest.files),
             physical,
         };
     } finally {

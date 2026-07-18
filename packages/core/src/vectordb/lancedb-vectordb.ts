@@ -81,10 +81,98 @@ function structuralSharingError(sourcePath: string, targetPath: string, error: u
     );
 }
 
+async function resolveCurrentManifestFileName(collectionPath: string): Promise<string> {
+    const versionsPath = path.join(collectionPath, '_versions');
+    const hintPath = path.join(versionsPath, 'latest_version_hint.json');
+    const hintBefore = await fs.promises.readFile(hintPath);
+    let parsed: { version?: unknown };
+    try {
+        parsed = JSON.parse(hintBefore.toString('utf8')) as { version?: unknown };
+    } catch (error) {
+        throw new Error(`LanceDB candidate source has a malformed latest-version hint: ${String(error)}`);
+    }
+    if (!Number.isSafeInteger(parsed.version) || Number(parsed.version) < 0) {
+        throw new Error('LanceDB candidate source has an invalid latest-version hint.');
+    }
+    const version = BigInt(Number(parsed.version));
+    const candidates = [
+        `${version}.manifest`,
+        `${((1n << 64n) - 1n) - version}.manifest`,
+    ];
+    let currentManifest: string | null = null;
+    for (const candidate of candidates) {
+        try {
+            const stat = await fs.promises.stat(path.join(versionsPath, candidate));
+            if (stat.isFile()) {
+                currentManifest = candidate;
+                break;
+            }
+        } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error
+                ? String((error as NodeJS.ErrnoException).code)
+                : null;
+            if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+        }
+    }
+    if (!currentManifest) {
+        throw new Error('LanceDB candidate source is missing its current manifest.');
+    }
+    const hintAfter = await fs.promises.readFile(hintPath);
+    if (!hintBefore.equals(hintAfter)) {
+        throw new Error('LanceDB candidate source advanced while its current manifest was resolved.');
+    }
+    return currentManifest;
+}
+
+async function currentManifestObservation(
+    databasePath: string,
+    tableName: string,
+): Promise<string | null> {
+    const versionsPath = path.join(databasePath, `${tableName}.lance`, '_versions');
+    const hintPath = path.join(versionsPath, 'latest_version_hint.json');
+    try {
+        const hintBefore = await fs.promises.readFile(hintPath);
+        const parsed = JSON.parse(hintBefore.toString('utf8')) as { version?: unknown };
+        if (!Number.isSafeInteger(parsed.version) || Number(parsed.version) < 0) return null;
+        const version = BigInt(Number(parsed.version));
+        const manifestNames = [
+            `${version}.manifest`,
+            `${((1n << 64n) - 1n) - version}.manifest`,
+        ];
+        let manifest: Buffer | null = null;
+        for (const manifestName of manifestNames) {
+            try {
+                manifest = await fs.promises.readFile(path.join(versionsPath, manifestName));
+                break;
+            } catch (error) {
+                const code = error && typeof error === 'object' && 'code' in error
+                    ? String((error as NodeJS.ErrnoException).code)
+                    : null;
+                if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+            }
+        }
+        if (!manifest) return null;
+        const hintAfter = await fs.promises.readFile(hintPath);
+        if (!hintBefore.equals(hintAfter)) return null;
+        return crypto.createHash('sha256')
+            .update(hintBefore)
+            .update(manifest)
+            .digest('hex');
+    } catch (error) {
+        if (error instanceof SyntaxError) return null;
+        const code = error && typeof error === 'object' && 'code' in error
+            ? String((error as NodeJS.ErrnoException).code)
+            : null;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+        throw error;
+    }
+}
+
 async function shareDirectoryForCandidate(
     sourcePath: string,
     targetPath: string,
 ): Promise<CollectionForkPhysicalStats> {
+    const currentManifest = await resolveCurrentManifestFileName(sourcePath);
     await fs.promises.mkdir(targetPath);
     const directories: string[] = [];
     const files: Array<{ sourcePath: string; relativePath: string }> = [];
@@ -97,6 +185,16 @@ async function shareDirectoryForCandidate(
                 directories.push(relativePath);
                 await collect(sourceEntryPath, relativePath);
             } else if (entry.isFile()) {
+                if (relativeRoot === '_transactions') {
+                    continue;
+                }
+                if (
+                    relativeRoot === '_versions'
+                    && entry.name.endsWith('.manifest')
+                    && entry.name !== currentManifest
+                ) {
+                    continue;
+                }
                 files.push({ sourcePath: sourceEntryPath, relativePath });
             } else {
                 throw new Error(`LanceDB collection contains unsupported entry '${entry.name}'.`);
@@ -604,58 +702,19 @@ export class LanceDbVectorDatabase implements VectorDatabase {
 
     async getPublicationObservation(collectionName: string): Promise<string | null> {
         assertCollectionName(collectionName);
-        const currentManifest = async (tableName: string): Promise<string | null> => {
-            const versionsPath = path.join(
-                this.databasePath,
-                `${tableName}.lance`,
-                '_versions',
-            );
-            const hintPath = path.join(versionsPath, 'latest_version_hint.json');
-            try {
-                const hintBefore = await fs.promises.readFile(hintPath);
-                const parsed = JSON.parse(hintBefore.toString('utf8')) as { version?: unknown };
-                if (!Number.isSafeInteger(parsed.version) || Number(parsed.version) < 0) return null;
-                const version = BigInt(Number(parsed.version));
-                const manifestNames = [
-                    `${version}.manifest`,
-                    `${((1n << 64n) - 1n) - version}.manifest`,
-                ];
-                let manifest: Buffer | null = null;
-                for (const manifestName of manifestNames) {
-                    try {
-                        manifest = await fs.promises.readFile(path.join(versionsPath, manifestName));
-                        break;
-                    } catch (error) {
-                        const code = error && typeof error === 'object' && 'code' in error
-                            ? String((error as NodeJS.ErrnoException).code)
-                            : null;
-                        if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
-                    }
-                }
-                if (!manifest) return null;
-                const hintAfter = await fs.promises.readFile(hintPath);
-                if (!hintBefore.equals(hintAfter)) return null;
-                return crypto.createHash('sha256')
-                    .update(hintBefore)
-                    .update(manifest)
-                    .digest('hex');
-            } catch (error) {
-                if (error instanceof SyntaxError) return null;
-                const code = error && typeof error === 'object' && 'code' in error
-                    ? String((error as NodeJS.ErrnoException).code)
-                    : null;
-                if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-                throw error;
-            }
-        };
         const [dataVersion, controlVersion] = await Promise.all([
-            currentManifest(collectionName),
-            currentManifest(controlTableName(collectionName)),
+            currentManifestObservation(this.databasePath, collectionName),
+            currentManifestObservation(this.databasePath, controlTableName(collectionName)),
         ]);
         if (!dataVersion || !controlVersion) return null;
         return crypto.createHash('sha256')
             .update(JSON.stringify([collectionName, dataVersion, controlVersion]), 'utf8')
             .digest('hex');
+    }
+
+    async getCollectionDataObservation(collectionName: string): Promise<string | null> {
+        assertCollectionName(collectionName);
+        return currentManifestObservation(this.databasePath, collectionName);
     }
 
     async listCollections(): Promise<string[]> {

@@ -351,6 +351,10 @@ class InMemoryVectorDatabase implements VectorDatabase {
             .digest('hex');
     }
 
+    async getCollectionDataObservation(collectionName: string): Promise<string | null> {
+        return this.getPublicationObservation(collectionName);
+    }
+
     async listCollections(): Promise<string[]> {
         this.listCollectionsCalls += 1;
         return Array.from(this.collections.keys());
@@ -1587,6 +1591,50 @@ test('Context bounds deferred atomic publication generations without pruning act
         fs.mkdirSync(codebasePath, { recursive: true });
         fs.writeFileSync(sourcePath, 'export const runtime = 0;\n', 'utf8');
         const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        let sharedControlObservation = 0;
+        let latestForkTarget: string | null = null;
+        let mutateActiveDuringRetention = false;
+        const observePublication = vectorDatabase.getPublicationObservation.bind(vectorDatabase);
+        vectorDatabase.getPublicationObservation = async (collectionName) => {
+            const observation = await observePublication(collectionName);
+            return observation ? `${observation}:${sharedControlObservation}` : null;
+        };
+        vectorDatabase.getCollectionDataObservation = async (collectionName) => {
+            const collection = vectorDatabase.collections.get(collectionName);
+            if (!collection) return null;
+            return crypto.createHash('sha256')
+                .update(JSON.stringify(
+                    [...collection.entries()]
+                        .filter(([, document]) => (
+                            document.fileExtension !== COMPLETION_MARKER_EXTENSION
+                        ))
+                        .sort(([left], [right]) => left.localeCompare(right))
+                        .map(([id, document]) => [id, document]),
+                ), 'utf8')
+                .digest('hex');
+        };
+        const forkCollection = vectorDatabase.forkCollection.bind(vectorDatabase);
+        vectorDatabase.forkCollection = async (sourceCollectionName, targetCollectionName) => {
+            const receipt = await forkCollection(sourceCollectionName, targetCollectionName);
+            latestForkTarget = targetCollectionName;
+            return receipt;
+        };
+        const dropCollection = vectorDatabase.dropCollection.bind(vectorDatabase);
+        vectorDatabase.dropCollection = async (collectionName) => {
+            await dropCollection(collectionName);
+            sharedControlObservation += 1;
+            if (mutateActiveDuringRetention && latestForkTarget) {
+                const active = vectorDatabase.collections.get(latestForkTarget);
+                const source = [...(active?.values() ?? [])]
+                    .find((document) => document.fileExtension !== COMPLETION_MARKER_EXTENSION);
+                if (active && source) {
+                    active.set('__retention_active_mutation__', {
+                        ...source,
+                        id: '__retention_active_mutation__',
+                    });
+                }
+            }
+        };
         const context = new Context({
             embedding: new TestEmbedding(),
             vectorDatabase,
@@ -1601,6 +1649,43 @@ test('Context bounds deferred atomic publication generations without pruning act
             fs.writeFileSync(sourcePath, `export const runtime = ${version};\n`, 'utf8');
             const result = await context.reindexByChange(codebasePath);
             assert.ok(result.generationReceipt);
+            if (version === 1) {
+                const internals = context as unknown as {
+                    waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+                    publicationRetentionQueues: Map<string, Promise<void>>;
+                };
+                const waitForRetention = internals.waitForPublicationRetention.bind(context);
+                let retentionWaits = 0;
+                internals.waitForPublicationRetention = async (canonicalRoot: string) => {
+                    retentionWaits += 1;
+                    await waitForRetention(canonicalRoot);
+                };
+                const checkpoint = await context.inspectSourceFreshnessCheckpoint(
+                    codebasePath,
+                    undefined,
+                    result.generationReceipt,
+                );
+                internals.waitForPublicationRetention = waitForRetention;
+                assert.equal(checkpoint.status, 'valid');
+                assert.equal(retentionWaits, 0);
+
+                const canonicalRoot = fs.realpathSync(codebasePath);
+                const scheduledRetention = internals.publicationRetentionQueues.get(canonicalRoot);
+                internals.publicationRetentionQueues.set(canonicalRoot, new Promise<void>(() => undefined));
+                internals.waitForPublicationRetention = async (root: string) => {
+                    retentionWaits += 1;
+                    await waitForRetention(root);
+                };
+                const duringRetention = await context.inspectSourceFreshnessCheckpoint(codebasePath);
+                internals.waitForPublicationRetention = waitForRetention;
+                if (scheduledRetention) {
+                    internals.publicationRetentionQueues.set(canonicalRoot, scheduledRetention);
+                } else {
+                    internals.publicationRetentionQueues.delete(canonicalRoot);
+                }
+                assert.equal(duringRetention.status, 'valid');
+                assert.equal(retentionWaits, 0);
+            }
             await (context as unknown as {
                 waitForPublicationRetention(canonicalRoot: string): Promise<void>;
             }).waitForPublicationRetention(fs.realpathSync(codebasePath));
@@ -1644,6 +1729,79 @@ test('Context bounds deferred atomic publication generations without pruning act
         const restartedReceipt = await restarted.proveIndexedGeneration(codebasePath);
         assert.equal(restartedReceipt?.collectionName, current.collectionName);
         assert.equal(restartedReceipt?.navigation.generationId, current.navigation.generationId);
+
+        mutateActiveDuringRetention = true;
+        fs.writeFileSync(sourcePath, 'export const runtime = 4;\n', 'utf8');
+        await context.reindexByChange(codebasePath);
+        await (context as unknown as {
+            waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+        }).waitForPublicationRetention(fs.realpathSync(codebasePath));
+        vectorDatabase.queryCalls.length = 0;
+        assert.equal(await context.proveIndexedGeneration(codebasePath), null);
+        assert.ok(vectorDatabase.queryCalls.length > 0);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context invalidates warm navigation delta state when the bound seal observation drifts', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-navigation-cache-seal-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const runtime = 1;\n', 'utf8');
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new ForkingInMemoryLanceVectorDatabase(),
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: path.join(tempRoot, 'policies'),
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+
+        fs.writeFileSync(sourcePath, 'export const runtime = 2;\n', 'utf8');
+        await context.reindexByChange(codebasePath);
+        await (context as unknown as {
+            waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+        }).waitForPublicationRetention(fs.realpathSync(codebasePath));
+        const current = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(current);
+
+        const internals = context as unknown as {
+            navigationDeltaState?: unknown;
+            resolveReusableNavigationDeltaState(
+                canonicalRoot: string,
+                navigation: NonNullable<typeof current>['navigation'],
+            ): unknown;
+        };
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        assert.ok(internals.resolveReusableNavigationDeltaState(canonicalRoot, current.navigation));
+
+        const sealPath = path.join(
+            resolveNavigationSidecarRoot(stateRoot, canonicalRoot),
+            'generations',
+            current.navigation.generationId,
+            'seal.json',
+        );
+        const seal = JSON.parse(fs.readFileSync(sealPath, 'utf8')) as Record<string, unknown>;
+        fs.writeFileSync(sealPath, `${JSON.stringify({
+            ...seal,
+            artifactSetHash: 'f'.repeat(64),
+        })}\n`, 'utf8');
+
+        assert.equal(
+            internals.resolveReusableNavigationDeltaState(canonicalRoot, current.navigation),
+            undefined,
+        );
+        assert.equal(internals.navigationDeltaState, undefined);
+        fs.writeFileSync(sourcePath, 'export const runtime = 3;\n', 'utf8');
+        await assert.rejects(
+            context.reindexByChange(codebasePath),
+            /cannot prove its source navigation metadata/,
+        );
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

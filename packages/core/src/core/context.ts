@@ -62,7 +62,9 @@ import {
     clearSymbolRegistrySidecar,
     computeSymbolRegistryManifestHash,
     computeNavigationGenerationSealHash,
+    computeNavigationSourceFilesDigest,
     parseNavigationGenerationSeal,
+    readNavigationGenerationSeal,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     RetiredNavigationPointerError,
@@ -79,6 +81,7 @@ import {
 } from '../symbols';
 import type {
     CurrentNavigationGeneration,
+    RelationshipRecord,
     StagedNavigationSidecarGeneration,
     SymbolRecord,
     SymbolRegistry,
@@ -925,6 +928,23 @@ type GenerationProofCoordinatorState = {
     readonly preparedReceipts: WeakMap<ProvenGenerationReceipt, string>;
 };
 
+type CachedNavigationDeltaState = {
+    readonly canonicalRoot: string;
+    readonly generationId: string;
+    readonly symbolRegistryManifestHash: string;
+    readonly relationshipManifestHash: string;
+    readonly navigationSealHash: string;
+    readonly navigationObservationToken?: string;
+    readonly registry: SymbolRegistry;
+    readonly records: readonly RelationshipRecord[];
+    readonly analysisByFile: Map<string, RelationshipAnalysisEvidence>;
+};
+
+type NavigationDeltaBuildResult = {
+    readonly candidate?: StagedNavigationSidecarGeneration;
+    readonly state?: CachedNavigationDeltaState;
+};
+
 const generationProofCoordinatorStates = new WeakMap<
     GenerationProofCoordinator,
     GenerationProofCoordinatorState
@@ -969,6 +989,9 @@ export class Context {
     private readonly generationProofFlights: Map<string, Promise<CachedGenerationProof | null>>;
     private readonly navigationProofFlights: Map<string, Promise<NavigationGenerationProof>>;
     private readonly preparedGenerationReceipts: WeakMap<ProvenGenerationReceipt, string>;
+    // Derived warm-path state only. The durable generation remains authoritative,
+    // and a restart or generation mismatch returns to exact sidecar validation.
+    private navigationDeltaState?: CachedNavigationDeltaState;
     private writeCollectionOverrides = new Map<string, string>();
     private preparedIndexCollectionReceipts = new WeakSet<PreparedIndexCollectionReceipt>();
     private symbolRegistryStateRoot?: string;
@@ -1233,7 +1256,28 @@ export class Context {
         requestBoundReceipt?: ProvenVectorGenerationReceipt,
     ): Promise<ProvenSourceFreshnessCheckpointEvidence> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const receipt = requestBoundReceipt
+        const activationReceipt = requestBoundReceipt && 'navigation' in requestBoundReceipt
+            ? this.consumeActivationSourceGenerationReceipt(
+                canonicalRoot,
+                requestBoundReceipt as ProvenGenerationReceipt,
+            )
+            : null;
+        const retainedActiveReceipt = activationReceipt
+            ? null
+            : this.resolveActiveGenerationDuringRetention(canonicalRoot);
+        // Retention can advance a shared backend observation while deleting only
+        // inactive generations. Reuse the already-proven active tuple while that
+        // owned mutation is live; otherwise join it before deciding whether the
+        // backend observation still matches. The exact receipt returned by this
+        // runtime's activation is likewise consumed once by the immediate
+        // post-sync checkpoint inspection.
+        if (!activationReceipt && !retainedActiveReceipt) {
+            await this.waitForPublicationRetention(canonicalRoot);
+        }
+        const trustedGenerationReceipt = activationReceipt ?? retainedActiveReceipt;
+        const receipt = trustedGenerationReceipt
+            ? this.cloneProvenVectorGenerationReceipt(trustedGenerationReceipt)
+            : requestBoundReceipt
             && this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, requestBoundReceipt)
             ? requestBoundReceipt
             : await this.proveVectorGeneration(canonicalRoot);
@@ -1244,7 +1288,7 @@ export class Context {
                 message: 'Source freshness checkpoint cannot be inspected because no matching authoritative completed generation is available.',
             };
         }
-        const generationReceipt = await this.resolveGenerationReceipt(
+        const generationReceipt = trustedGenerationReceipt ?? await this.resolveGenerationReceipt(
             canonicalRoot,
             receipt,
             undefined,
@@ -1280,6 +1324,51 @@ export class Context {
         }
         this.preparedGenerationReceipts.set(preparedReceipt, preparedIdentity);
         return { ...checkpoint, generationReceipt: preparedReceipt };
+    }
+
+    private consumeActivationSourceGenerationReceipt(
+        canonicalRoot: string,
+        receipt: ProvenGenerationReceipt,
+    ): ProvenGenerationReceipt | null {
+        const preparedIdentity = this.preparedGenerationReceipts.get(receipt);
+        const cached = this.generationProofs.get(canonicalRoot);
+        if (
+            !preparedIdentity
+            || !cached
+            || cached.source !== 'activation'
+            || cached.identity !== preparedIdentity
+            || !cached.generationReceipt
+            || !cached.navigationArtifactsValidated
+            || !this.cachedGenerationProofMatches(canonicalRoot, cached, cached.identity, receipt)
+            || receipt.observations.navigationToken
+                !== cached.generationReceipt.observations.navigationToken
+            || receipt.navigation.generationId
+                !== cached.generationReceipt.navigation.generationId
+            || receipt.navigation.navigationSealHash
+                !== cached.generationReceipt.navigation.navigationSealHash
+        ) {
+            return null;
+        }
+        this.preparedGenerationReceipts.delete(receipt);
+        return this.cloneProvenGenerationReceipt(cached.generationReceipt);
+    }
+
+    private resolveActiveGenerationDuringRetention(
+        canonicalRoot: string,
+    ): ProvenGenerationReceipt | null {
+        if (!this.publicationRetentionQueues.has(canonicalRoot)) return null;
+        const cached = this.generationProofs.get(canonicalRoot);
+        if (
+            !cached
+            || cached.source !== 'activation'
+            || !cached.generationReceipt
+            || !cached.navigationArtifactsValidated
+            || !this.isPreparedVectorReceiptBoundToCurrentAuthority(
+                canonicalRoot,
+                cached.vectorReceipt,
+            )
+        ) return null;
+        return this.cloneProvenGenerationReceipt(cached.generationReceipt);
     }
 
     public isPreparedVectorReceiptBoundToCurrentAuthority(
@@ -2202,7 +2291,9 @@ export class Context {
             navigationArtifactsValidated: true,
             source: 'activation',
         });
-        return this.cloneProvenGenerationReceipt(receipt);
+        const preparedReceipt = this.cloneProvenGenerationReceipt(receipt);
+        this.preparedGenerationReceipts.set(preparedReceipt, identity);
+        return preparedReceipt;
     }
 
     private invalidateGenerationProofForCollection(collectionName: string): void {
@@ -3187,6 +3278,69 @@ export class Context {
         };
     }
 
+    private async rebindGenerationProofAfterRetention(input: {
+        canonicalRoot: string;
+        activationId: string;
+        activeCollectionName: string;
+        expectedDataObservation?: string;
+    }): Promise<void> {
+        const cached = this.generationProofs.get(input.canonicalRoot);
+        if (!cached || cached.vectorReceipt.collectionName !== input.activeCollectionName) return;
+        const invalidate = () => {
+            if (this.generationProofs.get(input.canonicalRoot) === cached) {
+                this.generationProofs.delete(input.canonicalRoot);
+            }
+        };
+
+        this.refreshRuntimePolicyAuthority(input.canonicalRoot);
+        const binding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
+        if (
+            binding?.collectionName !== input.activeCollectionName
+            || binding.publication?.activationId !== input.activationId
+            || !this.isPreparedVectorReceiptBoundToCurrentAuthority(
+                input.canonicalRoot,
+                cached.vectorReceipt,
+            )
+        ) {
+            invalidate();
+            return;
+        }
+
+        const observeData = this.vectorDatabase.getCollectionDataObservation;
+        if (!input.expectedDataObservation || !observeData) {
+            invalidate();
+            return;
+        }
+        const activeStateMatches = async (): Promise<boolean> => {
+            const [dataObservation, marker] = await Promise.all([
+                observeData.call(this.vectorDatabase, input.activeCollectionName),
+                this.resolveCompletionMarkerForCollection(
+                    input.canonicalRoot,
+                    input.activeCollectionName,
+                ),
+            ]);
+            return dataObservation === input.expectedDataObservation
+                && marker !== null
+                && this.indexCompletionMarkersEqual(marker, cached.vectorReceipt.marker);
+        };
+        if (!await activeStateMatches()) {
+            invalidate();
+            return;
+        }
+
+        const identity = await this.resolveGenerationProofIdentity(input.canonicalRoot);
+        if (!identity || !await activeStateMatches()) {
+            invalidate();
+            return;
+        }
+
+        // Lance generations share a control table. Removing an inactive sibling
+        // advances that table's manifest. Carry the proof only after independently
+        // proving that both the active data manifest and its marker remained exact
+        // across the combined-observation read.
+        this.generationProofs.set(input.canonicalRoot, { ...cached, identity });
+    }
+
     private schedulePublicationRetention(input: {
         canonicalRoot: string;
         activationId: string;
@@ -3194,6 +3348,7 @@ export class Context {
         previousCollectionName: string;
         activeNavigationGenerationId: string;
         previousNavigationGenerationId: string;
+        activeDataObservation?: string;
     }): void {
         const previous = this.publicationRetentionQueues.get(input.canonicalRoot) ?? Promise.resolve();
         const retention = previous
@@ -3235,6 +3390,12 @@ export class Context {
                         input.canonicalRoot,
                         retainedCollections,
                     );
+                    await this.rebindGenerationProofAfterRetention({
+                        canonicalRoot: input.canonicalRoot,
+                        activationId: input.activationId,
+                        activeCollectionName: input.activeCollectionName,
+                        expectedDataObservation: input.activeDataObservation,
+                    });
                 } finally {
                     releaseRetention();
                 }
@@ -3250,6 +3411,44 @@ export class Context {
                 this.publicationRetentionQueues.delete(input.canonicalRoot);
             }
         });
+    }
+
+    private resolveReusableNavigationDeltaState(
+        canonicalRoot: string,
+        sourceNavigation: {
+            generationId: string;
+            symbolRegistryManifestHash: string;
+            relationshipManifestHash: string;
+            navigationSealHash?: string;
+            sealHash?: string;
+        },
+    ): CachedNavigationDeltaState | undefined {
+        const cached = this.navigationDeltaState;
+        const expectedSealHash = sourceNavigation.navigationSealHash ?? sourceNavigation.sealHash;
+        const currentObservation = cached
+            && cached.canonicalRoot === canonicalRoot
+            && cached.generationId === sourceNavigation.generationId
+            ? this.resolveNavigationObservationToken(
+                canonicalRoot,
+                sourceNavigation.generationId,
+                false,
+            )
+            : null;
+        if (
+            cached
+            && cached.canonicalRoot === canonicalRoot
+            && cached.generationId === sourceNavigation.generationId
+            && cached.symbolRegistryManifestHash === sourceNavigation.symbolRegistryManifestHash
+            && cached.relationshipManifestHash === sourceNavigation.relationshipManifestHash
+            && cached.navigationSealHash === expectedSealHash
+            && cached.navigationObservationToken === currentObservation
+        ) {
+            return cached;
+        }
+        if (cached?.canonicalRoot === canonicalRoot) {
+            this.navigationDeltaState = undefined;
+        }
+        return undefined;
     }
 
     private async performAtomicDeltaPublication(input: {
@@ -3275,14 +3474,36 @@ export class Context {
         if (!this.vectorDatabase.forkCollection) {
             throw new AtomicIncrementalPublicationUnsupportedError();
         }
-        const existingRegistry = await readSymbolRegistrySidecar({
-            stateRoot: this.symbolRegistryStateRoot,
-            normalizedRootPath: input.canonicalRoot,
-            generationId: sourceNavigation.generationId,
-        });
-        if (existingRegistry.status !== 'ok'
-            || existingRegistry.manifestHash !== sourceNavigation.symbolRegistryManifestHash) {
-            throw new Error('Atomic delta publication cannot prove its source navigation metadata; reindex is required.');
+        const reusableNavigationState = this.resolveReusableNavigationDeltaState(
+            input.canonicalRoot,
+            sourceNavigation,
+        );
+        let existingRegistry: SymbolRegistry;
+        if (reusableNavigationState) {
+            existingRegistry = reusableNavigationState.registry;
+        } else {
+            const expectedSealHash = sourceNavigation.sealHash;
+            const sealRead = await readNavigationGenerationSeal(
+                this.symbolRegistryStateRoot,
+                input.canonicalRoot,
+                sourceNavigation.generationId,
+            );
+            const registryRead = await readSymbolRegistrySidecar({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: input.canonicalRoot,
+                generationId: sourceNavigation.generationId,
+            });
+            if (sealRead.status !== 'ok'
+                || sealRead.seal.symbolRegistryManifestHash
+                    !== sourceNavigation.symbolRegistryManifestHash
+                || sealRead.seal.relationshipManifestHash
+                    !== sourceNavigation.relationshipManifestHash
+                || computeNavigationGenerationSealHash(sealRead.seal) !== expectedSealHash
+                || registryRead.status !== 'ok'
+                || registryRead.manifestHash !== sourceNavigation.symbolRegistryManifestHash) {
+                throw new Error('Atomic delta publication cannot prove its source navigation metadata; reindex is required.');
+            }
+            existingRegistry = registryRead.registry;
         }
 
         const activationId = crypto.randomUUID();
@@ -3344,9 +3565,14 @@ export class Context {
                 throw new Error('Atomic delta publication produced an invalid payload count.');
             }
 
-            navigationCandidate = await this.rebuildNavigationArtifactsForSyncDelta(
+            const checkpointAuthority = {
+                collectionName: candidateCollectionName,
+                markerRunId,
+                indexPolicyHash: input.sealedPolicy.policyHash,
+            };
+            const navigationPromise = this.rebuildNavigationArtifactsForSyncDelta(
                 input.codebasePath,
-                existingRegistry.registry,
+                existingRegistry,
                 changedFiles,
                 indexedDelta.symbolRecords,
                 indexedDelta.symbolManifestFiles,
@@ -3355,28 +3581,55 @@ export class Context {
                 undefined,
                 sourceNavigation.generationId,
                 true,
+                reusableNavigationState,
+            ).then((result) => {
+                const candidate = result.candidate;
+                if (!candidate) {
+                    throw new Error('Atomic delta publication cannot publish a repository without navigation state.');
+                }
+                navigationCandidate = candidate;
+                return result;
+            });
+            const checkpointPromise = input.preparedChanges.stageCheckpoint(
+                checkpointAuthority,
+                input.options.assertMutationCurrent,
+            ).then((checkpoint) => {
+                checkpointStaged = true;
+                return checkpoint;
+            });
+            const payloadCountPromise = this.countIndexedPayloadExactly(
+                candidateCollectionName,
+                undefined,
+                totalChunks,
             );
-            if (!navigationCandidate) {
-                throw new Error('Atomic delta publication cannot publish a repository without navigation state.');
+            let candidateResults: Awaited<ReturnType<typeof Promise.all<[
+                typeof navigationPromise,
+                typeof checkpointPromise,
+                typeof payloadCountPromise,
+            ]>>>;
+            try {
+                candidateResults = await Promise.all([
+                    navigationPromise,
+                    checkpointPromise,
+                    payloadCountPromise,
+                ]);
+            } catch (error) {
+                await Promise.allSettled([navigationPromise, checkpointPromise, payloadCountPromise]);
+                throw error;
             }
-
+            const [preparedNavigationResult, checkpoint, observedTotalChunks] = candidateResults;
+            const preparedNavigation = preparedNavigationResult.candidate;
+            if (!preparedNavigation || !preparedNavigationResult.state) {
+                throw new Error('Atomic delta publication did not prepare reusable navigation state.');
+            }
             await this.verifyPreparedSyncPublication(
                 input.codebasePath,
                 candidateCollectionName,
                 input.preparedChanges.fileHashes,
                 totalChunks,
-                navigationCandidate.generationId,
+                preparedNavigation,
+                observedTotalChunks,
             );
-            const checkpointAuthority = {
-                collectionName: candidateCollectionName,
-                markerRunId,
-                indexPolicyHash: input.sealedPolicy.policyHash,
-            };
-            const checkpoint = await input.preparedChanges.stageCheckpoint(
-                checkpointAuthority,
-                input.options.assertMutationCurrent,
-            );
-            checkpointStaged = true;
             const publishedMarker = await this.writeCompletedIndexMarker(
                 input.codebasePath,
                 input.preparedChanges.fileHashes.size,
@@ -3384,10 +3637,13 @@ export class Context {
                 candidateCollectionName,
                 'completed',
                 input.options.assertMutationCurrent,
-                navigationCandidate,
+                preparedNavigation,
                 input.sealedPolicy.policyHash,
                 markerRunId,
             );
+            const activeDataObservation = this.vectorDatabase.getCollectionDataObservation
+                ? await this.vectorDatabase.getCollectionDataObservation(candidateCollectionName)
+                : undefined;
 
             const authority = input.options.publicationAuthority ?? {
                 ownerId: 'core-internal',
@@ -3403,7 +3659,7 @@ export class Context {
                 },
                 graph: {
                     kind: 'relationship_manifest_v2',
-                    manifestHash: navigationCandidate.relationshipManifestHash,
+                    manifestHash: preparedNavigation.relationshipManifestHash,
                 },
                 receipt: {
                     ownerId: authority.ownerId,
@@ -3419,14 +3675,25 @@ export class Context {
                     collectionName: candidateCollectionName,
                     navigation: {
                         status: 'sealed',
-                        generationId: navigationCandidate.generationId,
-                        sealHash: navigationCandidate.navigationSealHash,
+                        generationId: preparedNavigation.generationId,
+                        sealHash: preparedNavigation.navigationSealHash,
                     },
                     publication,
                 },
                 input.options.publishMutation,
             );
             activated = true;
+            const navigationObservationToken = this.resolveNavigationObservationToken(
+                input.canonicalRoot,
+                preparedNavigation.generationId,
+                false,
+            );
+            this.navigationDeltaState = navigationObservationToken
+                ? {
+                    ...preparedNavigationResult.state,
+                    navigationObservationToken,
+                }
+                : undefined;
 
             const activatedGenerationReceipt = await this.recordActivatedGenerationProof({
                 canonicalRoot: input.canonicalRoot,
@@ -3434,11 +3701,11 @@ export class Context {
                 policy: input.sealedPolicy,
                 exactPayloadCount: totalChunks,
                 navigation: {
-                    generationId: navigationCandidate.generationId,
-                    generationRoot: navigationCandidate.rootPath,
-                    symbolRegistryManifestHash: navigationCandidate.manifestHash,
-                    relationshipManifestHash: navigationCandidate.relationshipManifestHash,
-                    navigationSealHash: navigationCandidate.navigationSealHash,
+                    generationId: preparedNavigation.generationId,
+                    generationRoot: preparedNavigation.rootPath,
+                    symbolRegistryManifestHash: preparedNavigation.manifestHash,
+                    relationshipManifestHash: preparedNavigation.relationshipManifestHash,
+                    navigationSealHash: preparedNavigation.navigationSealHash,
                 },
             });
 
@@ -3456,8 +3723,9 @@ export class Context {
                 activationId,
                 activeCollectionName: candidateCollectionName,
                 previousCollectionName: input.sourceCollectionName,
-                activeNavigationGenerationId: navigationCandidate.generationId,
+                activeNavigationGenerationId: preparedNavigation.generationId,
                 previousNavigationGenerationId: sourceNavigation.generationId,
+                ...(activeDataObservation ? { activeDataObservation } : {}),
             });
 
             return {
@@ -6165,48 +6433,71 @@ export class Context {
         collectionName: string,
         preparedFileHashes: ReadonlyMap<string, string>,
         expectedTotalChunks: number,
-        navigationGenerationId?: string,
+        navigationCandidate?: StagedNavigationSidecarGeneration,
+        preparedObservedTotalChunks?: number | null,
     ): Promise<void> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const registryState = await readSymbolRegistrySidecar({
-            stateRoot: this.symbolRegistryStateRoot,
-            normalizedRootPath: canonicalRoot,
-            ...(navigationGenerationId ? { generationId: navigationGenerationId } : {}),
-        });
-        if (registryState.status !== 'ok') {
-            throw new Error(`Cannot publish incremental completion proof: navigation registry is ${registryState.status}.`);
-        }
-        const relationshipState = await readRelationshipSidecar({
-            stateRoot: this.symbolRegistryStateRoot,
-            normalizedRootPath: canonicalRoot,
-            expectedSymbolRegistryManifestHash: registryState.manifestHash,
-            ...(navigationGenerationId ? { generationId: navigationGenerationId } : {}),
-        });
-        if (relationshipState.status !== 'ok') {
-            throw new Error(`Cannot publish incremental completion proof: relationship evidence is ${relationshipState.status}.`);
-        }
-
-        const manifestHashes = new Map(
-            registryState.registry.manifest.files.map((file) => [file.path, file.hash]),
-        );
-        if (manifestHashes.size !== preparedFileHashes.size) {
-            throw new Error(
-                `Cannot publish incremental completion proof: synchronizer tracks ${preparedFileHashes.size} files but navigation seals ${manifestHashes.size}.`,
-            );
-        }
-        for (const [relativePath, expectedHash] of preparedFileHashes) {
-            if (manifestHashes.get(relativePath) !== expectedHash) {
+        if (navigationCandidate) {
+            const preparedFiles = [...preparedFileHashes].map(([filePath, hash]) => ({ path: filePath, hash }));
+            if (
+                navigationCandidate.normalizedRootPath !== canonicalRoot
+                || navigationCandidate.sourceFileCount !== preparedFileHashes.size
+                || navigationCandidate.sourceFilesDigest !== computeNavigationSourceFilesDigest(preparedFiles)
+            ) {
                 throw new Error(
-                    `Cannot publish incremental completion proof: source hash for '${relativePath}' does not match the prepared synchronizer checkpoint.`,
+                    'Cannot publish incremental completion proof: staged navigation does not match the prepared synchronizer checkpoint.',
                 );
+            }
+            const sealState = await readNavigationGenerationSeal(
+                this.symbolRegistryStateRoot,
+                canonicalRoot,
+                navigationCandidate.generationId,
+            );
+            if (
+                sealState.status !== 'ok'
+                || sealState.seal.symbolRegistryManifestHash !== navigationCandidate.manifestHash
+                || sealState.seal.relationshipManifestHash !== navigationCandidate.relationshipManifestHash
+                || computeNavigationGenerationSealHash(sealState.seal) !== navigationCandidate.navigationSealHash
+            ) {
+                throw new Error('Cannot publish incremental completion proof: staged navigation seal is incompatible.');
+            }
+        } else {
+            const registryState = await readSymbolRegistrySidecar({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+            });
+            if (registryState.status !== 'ok') {
+                throw new Error(`Cannot publish incremental completion proof: navigation registry is ${registryState.status}.`);
+            }
+            const relationshipState = await readRelationshipSidecar({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+                expectedSymbolRegistryManifestHash: registryState.manifestHash,
+            });
+            if (relationshipState.status !== 'ok') {
+                throw new Error(`Cannot publish incremental completion proof: relationship evidence is ${relationshipState.status}.`);
+            }
+
+            const manifestHashes = new Map(
+                registryState.registry.manifest.files.map((file) => [file.path, file.hash]),
+            );
+            if (manifestHashes.size !== preparedFileHashes.size) {
+                throw new Error(
+                    `Cannot publish incremental completion proof: synchronizer tracks ${preparedFileHashes.size} files but navigation seals ${manifestHashes.size}.`,
+                );
+            }
+            for (const [relativePath, expectedHash] of preparedFileHashes) {
+                if (manifestHashes.get(relativePath) !== expectedHash) {
+                    throw new Error(
+                        `Cannot publish incremental completion proof: source hash for '${relativePath}' does not match the prepared synchronizer checkpoint.`,
+                    );
+                }
             }
         }
 
-        const observedTotalChunks = await this.countIndexedPayloadExactly(
-            collectionName,
-            undefined,
-            expectedTotalChunks,
-        );
+        const observedTotalChunks = preparedObservedTotalChunks === undefined
+            ? await this.countIndexedPayloadExactly(collectionName, undefined, expectedTotalChunks)
+            : preparedObservedTotalChunks;
         if (observedTotalChunks === null) {
             throw new Error(
                 `Cannot publish incremental completion proof: backend cannot prove the exact payload count for '${collectionName}'.`,
@@ -6924,18 +7215,25 @@ export class Context {
         publishMutation?: (publish: () => void) => void,
         existingGenerationId?: string,
         deferPublication = false,
-    ): Promise<StagedNavigationSidecarGeneration | undefined> {
+        existingRelationshipState?: CachedNavigationDeltaState,
+    ): Promise<NavigationDeltaBuildResult> {
         const replacedPaths = new Set<string>([
             ...changedRelativePaths.map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, '')),
             ...rebuiltManifestFiles.map((file) => file.path),
         ]);
         const retainedAnalysisByFile = new Map<string, RelationshipAnalysisEvidence>();
-        const existingRelationships = await readRelationshipSidecar({
-            stateRoot: this.symbolRegistryStateRoot,
-            normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
-            expectedSymbolRegistryManifestHash: computeSymbolRegistryManifestHash(existingRegistry.manifest),
-            ...(existingGenerationId ? { generationId: existingGenerationId } : {}),
-        });
+        const existingRelationships = existingRelationshipState
+            ? {
+                status: 'ok' as const,
+                records: existingRelationshipState.records,
+                analysisByFile: existingRelationshipState.analysisByFile,
+            }
+            : await readRelationshipSidecar({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: this.canonicalizeCodebasePath(codebasePath),
+                expectedSymbolRegistryManifestHash: computeSymbolRegistryManifestHash(existingRegistry.manifest),
+                ...(existingGenerationId ? { generationId: existingGenerationId } : {}),
+            });
         if (existingRelationships.status === 'ok') {
             for (const file of existingRegistry.manifest.files) {
                 if (replacedPaths.has(file.path)) continue;
@@ -6958,7 +7256,7 @@ export class Context {
                 assertMutationCurrent,
                 publishMutation,
             );
-            return undefined;
+            return {};
         }
 
         const mergedSymbolRecords = [
@@ -7009,18 +7307,32 @@ export class Context {
                 + `shared ${candidate.physical.sharedFiles} file(s) and wrote `
                 + `${candidate.physical.physicallyWrittenBytes} physical byte(s).`,
             );
-            return candidate;
+            return {
+                candidate,
+                state: {
+                    canonicalRoot: this.canonicalizeCodebasePath(codebasePath),
+                    generationId: candidate.generationId,
+                    symbolRegistryManifestHash: candidate.manifestHash,
+                    relationshipManifestHash: candidate.relationshipManifestHash,
+                    navigationSealHash: candidate.navigationSealHash,
+                    registry,
+                    records: relationshipDelta.records,
+                    analysisByFile: retainedAnalysisByFile,
+                },
+            };
         }
 
-        return this.writeSymbolRegistryForCompletedIndex(
-            codebasePath,
-            mergedSymbolRecords,
-            mergedManifestFiles,
-            assertMutationCurrent,
-            retainedAnalysisByFile,
-            publishMutation,
-            deferPublication,
-        );
+        return {
+            candidate: await this.writeSymbolRegistryForCompletedIndex(
+                codebasePath,
+                mergedSymbolRecords,
+                mergedManifestFiles,
+                assertMutationCurrent,
+                retainedAnalysisByFile,
+                publishMutation,
+                deferPublication,
+            ),
+        };
     }
 
     private async writeSymbolRegistryForCompletedIndex(

@@ -6,6 +6,7 @@ import ignore from "ignore";
 import {
     AtomicIncrementalPublicationUnsupportedError,
     Context,
+    type ProvenGenerationReceipt,
     type ProvenVectorGenerationReceipt,
 } from "@zokizuan/satori-core";
 import { SnapshotManager } from "./snapshot.js";
@@ -137,6 +138,7 @@ interface SyncStats {
     indexedFiles?: number;
     totalChunks?: number;
     indexStatus?: 'completed' | 'limit_reached';
+    generationReceipt?: ProvenGenerationReceipt;
 }
 
 type WatchSyncReason = 'watch_event' | 'ignore_rules_changed';
@@ -593,7 +595,10 @@ export class SyncManager {
 
         this.activeSyncs.set(codebasePath, syncPromise);
         const outcome = await syncPromise;
-        const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+        const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(
+            codebasePath,
+            outcome.stats?.generationReceipt,
+        );
         if (committedCheckpoint?.status === 'valid') {
             this.sourceCheckpointStatuses.set(codebasePath, 'valid');
             this.sourceCheckpointObservations.set(codebasePath, committedCheckpoint.observationToken);

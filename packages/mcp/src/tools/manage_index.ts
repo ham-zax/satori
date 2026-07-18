@@ -79,7 +79,7 @@ export const manageIndexTool: McpTool = {
                 ? { detail: statusDetail }
                 : {}),
         };
-        const providerOperation = input.action === "clear" || input.action === "status"
+        const providerOperation = input.action === "clear"
             ? "vector_only"
             : (input.action === "create" || input.action === "reindex" || input.action === "sync" || input.action === "repair")
                 ? "embedding_vector"
@@ -87,9 +87,16 @@ export const manageIndexTool: McpTool = {
         let executionContext: ToolContext | MissingProviderConfigIssue;
         let statusProviderIssue: MissingProviderConfigIssue | null = null;
         try {
-            executionContext = providerOperation && ctx.providerRuntime
-                ? await ctx.providerRuntime.requireToolContext(providerOperation)
-                : ctx;
+            if (input.action === "status" && ctx.providerRuntime) {
+                const preferredContext = await ctx.providerRuntime.requireToolContext("embedding_vector");
+                executionContext = isMissingProviderConfigIssue(preferredContext)
+                    ? await ctx.providerRuntime.requireToolContext("vector_only")
+                    : preferredContext;
+            } else {
+                executionContext = providerOperation && ctx.providerRuntime
+                    ? await ctx.providerRuntime.requireToolContext(providerOperation)
+                    : ctx;
+            }
         } catch (error) {
             const diagnostic = classifyVectorBackendError(error);
             if (input.action === "status" && diagnostic) {

@@ -365,9 +365,9 @@ test("manage_index returns structured backend diagnostics when provider runtime 
     assert.doesNotMatch(payload.message, /Connection closed/);
 });
 
-test("manage_index status uses provider vector context when available", async () => {
+test("manage_index status prefers the embedding-capable provider context", async () => {
     const capabilities = new CapabilityResolver(buildConfig());
-    let requestedOperation: string | null = null;
+    const requestedOperations: string[] = [];
     const providerContext = {
         toolHandlers: {
             handleGetIndexingStatus: async () => ({
@@ -379,7 +379,7 @@ test("manage_index status uses provider vector context when available", async ()
         capabilities,
         providerRuntime: {
             requireToolContext: async (operation: string) => {
-                requestedOperation = operation;
+                requestedOperations.push(operation);
                 return providerContext;
             }
         },
@@ -395,8 +395,57 @@ test("manage_index status uses provider vector context when available", async ()
         path: "/repo",
     }, ctx);
 
-    assert.equal(requestedOperation, "vector_only");
+    assert.deepEqual(requestedOperations, ["embedding_vector"]);
     assert.equal(response.content[0].text, "provider-backed status");
+});
+
+test("manage_index status falls back to the vector-only context without embedding credentials", async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const requestedOperations: string[] = [];
+    const providerContext = {
+        toolHandlers: {
+            handleGetIndexingStatus: async () => ({
+                content: [{ type: "text", text: "vector-only status" }],
+            }),
+        },
+    } as unknown as ToolContext;
+    const missingEmbedding = {
+        ok: false as const,
+        code: "MISSING_PROVIDER_CONFIG" as const,
+        missingEnv: ["VOYAGEAI_API_KEY"],
+        message: "Missing embedding credentials.",
+        hints: {
+            setup: {
+                code: "MISSING_PROVIDER_CONFIG" as const,
+                missingEnv: ["VOYAGEAI_API_KEY"],
+                nextSteps: [],
+            },
+        },
+    };
+    const ctx = {
+        capabilities,
+        providerRuntime: {
+            requireToolContext: async (operation: string) => {
+                requestedOperations.push(operation);
+                return operation === "embedding_vector"
+                    ? missingEmbedding
+                    : providerContext;
+            },
+        },
+        toolHandlers: {
+            handleGetIndexingStatus: async () => {
+                throw new Error("startup context should not handle provider-backed status");
+            },
+        },
+    } as unknown as ToolContext;
+
+    const response = await manageIndexTool.execute({
+        action: "status",
+        path: "/repo",
+    }, ctx);
+
+    assert.deepEqual(requestedOperations, ["embedding_vector", "vector_only"]);
+    assert.equal(response.content[0].text, "vector-only status");
 });
 
 test("manage_index status prefers missing_provider_config over fingerprint requires_reindex when provider is incomplete", async () => {

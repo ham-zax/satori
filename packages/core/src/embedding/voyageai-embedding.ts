@@ -19,6 +19,48 @@ const VOYAGE_CODE_3_TARGET_ESTIMATED_TOKENS = 100_000;
 const VOYAGE_INDEXING_REQUEST_TIMEOUT_SECONDS = 180;
 const VOYAGE_REQUEST_MAX_ATTEMPTS = 3;
 const VOYAGE_RETRY_BASE_DELAY_MS = 1_000;
+const FLOAT32_BYTES = 4;
+
+function decodeBase64FloatEmbedding(value: string, expectedDimension: number): number[] {
+    if (value.length === 0) {
+        throw new Error('VoyageAI API returned empty Base64 embedding data');
+    }
+
+    const decoded = Buffer.from(value, 'base64');
+    if (decoded.length === 0 || decoded.toString('base64') !== value) {
+        throw new Error('VoyageAI API returned invalid Base64 embedding data');
+    }
+
+    const expectedBytes = expectedDimension * FLOAT32_BYTES;
+    if (decoded.length !== expectedBytes) {
+        throw new Error(
+            `VoyageAI API returned ${decoded.length} embedding bytes; expected ${expectedBytes}`,
+        );
+    }
+
+    const vector = new Array<number>(expectedDimension);
+    for (let index = 0; index < expectedDimension; index += 1) {
+        const valueAtIndex = decoded.readFloatLE(index * FLOAT32_BYTES);
+        if (!Number.isFinite(valueAtIndex)) {
+            throw new Error('VoyageAI API returned non-finite embedding data');
+        }
+        vector[index] = valueAtIndex;
+    }
+    return vector;
+}
+
+function decodeVoyageEmbedding(value: unknown, expectedDimension: number): number[] {
+    if (typeof value === 'string') {
+        return decodeBase64FloatEmbedding(value, expectedDimension);
+    }
+    if (
+        Array.isArray(value)
+        && value.every((item) => typeof item === 'number' && Number.isFinite(item))
+    ) {
+        return value;
+    }
+    throw new Error('VoyageAI API returned invalid embedding data');
+}
 
 function isRetryableVoyageError(error: unknown): boolean {
     if (error instanceof VoyageAITimeoutError) return true;
@@ -224,11 +266,9 @@ export class VoyageAIEmbedding extends Embedding {
             }
 
             return response.data.map((item) => {
-                if (!item.embedding) {
-                    throw new Error('VoyageAI API returned invalid embedding data');
-                }
+                const runtimeEmbedding: unknown = item.embedding;
                 return {
-                    vector: item.embedding,
+                    vector: decodeVoyageEmbedding(runtimeEmbedding, this.dimension),
                     dimension: this.dimension,
                 };
             });
@@ -272,6 +312,7 @@ export class VoyageAIEmbedding extends Embedding {
                     model,
                     inputType,
                     truncation: false,
+                    encodingFormat: 'base64',
                     ...(this.config.outputDimension && { outputDimension: this.config.outputDimension }),
                     ...(this.config.outputDtype && { outputDtype: this.config.outputDtype }),
                 }, {

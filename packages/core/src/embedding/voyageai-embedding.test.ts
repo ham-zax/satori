@@ -9,6 +9,9 @@ type EmbedRequest = {
     model: string;
     inputType?: string;
     truncation?: boolean;
+    encodingFormat?: string;
+    outputDimension?: number;
+    outputDtype?: string;
 };
 
 type EmbedOptions = {
@@ -17,7 +20,7 @@ type EmbedOptions = {
 };
 
 type EmbedResponse = {
-    data: Array<{ embedding: number[] }>;
+    data: Array<{ embedding?: unknown }>;
     usage?: { totalTokens?: number };
 };
 
@@ -55,7 +58,12 @@ test('Voyage code indexing declares the live-probed provider batch limits', () =
 });
 
 test('Voyage embedding disables truncation and records actual provider usage', async () => {
-    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    const embedding = new VoyageAIEmbedding({
+        apiKey: 'test-key',
+        model: 'voyage-code-3',
+        outputDimension: 1024,
+        outputDtype: 'float',
+    });
     const calls: Array<{ request: EmbedRequest; options: EmbedOptions }> = [];
     stubEmbedClient(embedding, async (request, options) => {
         calls.push({ request, options });
@@ -72,6 +80,9 @@ test('Voyage embedding disables truncation and records actual provider usage', a
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.request.inputType, 'document');
     assert.equal(calls[0]?.request.truncation, false);
+    assert.equal(calls[0]?.request.encodingFormat, 'base64');
+    assert.equal(calls[0]?.request.outputDimension, 1024);
+    assert.equal(calls[0]?.request.outputDtype, 'float');
     assert.deepEqual(calls[0]?.options, {
         timeoutInSeconds: 180,
         maxRetries: 0,
@@ -86,6 +97,100 @@ test('Voyage embedding disables truncation and records actual provider usage', a
         durationMs: undefined,
     });
     assert.ok(metrics.durationMs >= 0);
+});
+
+test('Voyage embedding decodes canonical Base64 as little-endian FP32', async () => {
+    const embedding = new VoyageAIEmbedding({
+        apiKey: 'test-key',
+        model: 'voyage-code-3',
+        outputDimension: 1024,
+        outputDtype: 'float',
+    });
+    const bytes = Buffer.concat([
+        Buffer.from([
+            0x00, 0x00, 0x80, 0x3f,
+            0x00, 0x00, 0x00, 0xc0,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x3f,
+        ]),
+        Buffer.alloc((1024 - 4) * 4),
+    ]);
+    stubEmbedClient(embedding, async () => ({
+        data: [{ embedding: bytes.toString('base64') }],
+    }));
+
+    const result = await embedding.embedQuery('fixed input');
+
+    assert.equal(result.vector.length, 1024);
+    assert.deepEqual(result.vector.slice(0, 4), [1, -2, 0, 0.5]);
+    assert.ok(result.vector.slice(4).every((value) => value === 0));
+});
+
+test('Voyage embedding rejects invalid Base64 and unsupported response values', async () => {
+    const cases: Array<{ name: string; embedding?: unknown }> = [
+        { name: 'empty Base64', embedding: '' },
+        { name: 'non-canonical Base64', embedding: 'AAAA\n' },
+        { name: 'wrong decoded length', embedding: Buffer.alloc(4).toString('base64') },
+        { name: 'missing embedding' },
+        { name: 'unsupported embedding', embedding: { encoded: true } },
+    ];
+
+    for (const fixture of cases) {
+        const embedding = new VoyageAIEmbedding({
+            apiKey: 'test-key',
+            model: 'voyage-code-3',
+            outputDimension: 1024,
+            outputDtype: 'float',
+        });
+        stubEmbedClient(embedding, async () => ({
+            data: [{ embedding: fixture.embedding }],
+        }));
+
+        await assert.rejects(
+            embedding.embedQuery('fixed input'),
+            (error: unknown) => {
+                assert.ok(error instanceof EmbeddingProviderError, fixture.name);
+                assert.equal(error.code, 'EMBEDDING_PROVIDER_ERROR', fixture.name);
+                assert.equal(error.message, 'VoyageAI embedding request failed.', fixture.name);
+                return true;
+            },
+        );
+    }
+});
+
+test('Voyage embedding rejects non-finite decoded FP32 values', async () => {
+    const embedding = new VoyageAIEmbedding({
+        apiKey: 'test-key',
+        model: 'voyage-code-3',
+        outputDimension: 1024,
+        outputDtype: 'float',
+    });
+    const bytes = Buffer.alloc(1024 * 4);
+    bytes.writeFloatLE(Number.NaN, 0);
+    stubEmbedClient(embedding, async () => ({
+        data: [{ embedding: bytes.toString('base64') }],
+    }));
+
+    await assert.rejects(
+        embedding.embedQuery('fixed input'),
+        (error: unknown) => {
+            assert.ok(error instanceof EmbeddingProviderError);
+            assert.equal(error.code, 'EMBEDDING_PROVIDER_ERROR');
+            return true;
+        },
+    );
+});
+
+test('Voyage embedding accepts numeric-array responses as a compatibility fallback', async () => {
+    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    const numeric = [1, -2, 0, 0.5];
+    stubEmbedClient(embedding, async () => ({
+        data: [{ embedding: numeric }],
+    }));
+
+    const result = await embedding.embedQuery('fixed input');
+
+    assert.deepEqual(result.vector, numeric);
 });
 
 test('Voyage embedding exposes retries instead of hiding them inside the SDK', async () => {

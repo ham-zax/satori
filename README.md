@@ -4,9 +4,26 @@
 [![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=npm)](https://www.npmjs.com/package/@zokizuan/satori-cli)
 
-Local, freshness-aware code retrieval for AI coding agents.
+Give your coding agent a map of the repository before it edits.
 
-Satori indexes a repository once, combines semantic and lexical search, and gives MCP-compatible agents seven bounded tools for finding owners, tracing nearby relationships, and reading exact source. It does not edit source code.
+Satori turns a repository into a freshness-aware code map. MCP-compatible agents can find behavior by intent, open the real owner, follow nearby relationships, and read only the source needed to act. Offline search uses bundled Potion embeddings, BM25, and LanceDB—no model API key required.
+
+## Install
+
+Requirements: Node.js 22.13+ and Linux x64 (native Linux or WSL2).
+
+```bash
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
+npx -y @zokizuan/satori-cli@latest doctor
+```
+
+Restart your coding agent and tell it:
+
+```text
+Index /absolute/path/to/repo with Satori, then find where auth refresh is handled.
+```
+
+That is the complete local path. Satori installs a stable launcher under `~/.satori/`; your agent does not download the server again on every startup.
 
 ```text
 plain-English question
@@ -21,6 +38,18 @@ symbol-owned results
 outline, call graph, and bounded source reads
 ```
 
+## What changes for your agent
+
+| Without a code map | With Satori |
+|---|---|
+| Guess filenames and repeat broad searches | Ask where behavior lives in plain English |
+| Read large files to reconstruct ownership | Open an exact symbol or bounded source span |
+| Lose lexical identifiers in semantic-only search | Combine exact evidence, BM25, and dense retrieval |
+| Work from an index that may have drifted | Detect source changes before returning evidence |
+| Assemble relationships from scattered reads | Follow owner-oriented navigation and advisory call graphs |
+
+Satori does not edit source code. It gives the agent better evidence before the edit.
+
 ## Why Satori
 
 - Find behavior by intent when filenames and exact identifiers are unknown.
@@ -30,6 +59,9 @@ outline, call graph, and bounded source reads
 - Detect source drift and publish complete searchable generations atomically.
 - Run fully local retrieval with Potion Code 16M v2 and LanceDB on Linux x64.
 - Install one managed MCP runtime for Codex, Claude Code, OpenCode, or all three.
+
+<details>
+<summary><strong>Measured evidence from the Satori repository</strong></summary>
 
 ## Measured on Satori
 
@@ -41,7 +73,6 @@ A checksum-sealed run on the Satori repository published 488 files and 10,830 ch
 
 | Operation | Measured result |
 |---|---:|
-| First CPU-only publication | 34.46 s |
 | Warm search p95 | 154.543 ms |
 | Zero-change synchronization p95 | 185.662 ms |
 | One-file addition p95 | 789.310 ms |
@@ -68,38 +99,20 @@ Potion is a useful local first stage, not a claim of Voyage parity. The comparis
 
 ### Less context waste
 
-Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. In one correct exploratory exact-owner pair, the Satori arm used 10 tool calls and 36,591 model-visible bytes versus 19 calls and 86,401 bytes for native file-by-file exploration. That is 47% fewer calls and 58% fewer visible bytes in that task; it is not presented as a universal token-reduction percentage.
+Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. In a fresh two-task OpenCode comparison, both the Satori and native file-discovery arms produced correct answers:
 
-The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md). Context-efficiency numbers will be replaced by the fresh release benchmark before publication.
+| Correct paired tasks | Satori tools | Native `grep` / `glob` / `read` |
+|---|---:|---:|
+| Tool calls | 16 | 25 |
+| Tool-output bytes shown to the model | 76,113 | 96,801 |
+| Agent wall time | 51.65 s | 96.04 s |
+| Total model tokens | 46,767 | 46,759 |
 
-## Quick Start
+That exploratory run used 36% fewer tool calls, 21% fewer tool-output bytes, and 46% less wall time. Total model tokens were effectively unchanged, so this is evidence of a shorter evidence route—not a universal token-savings claim. It was one run per task, and OpenCode recovered from two rejected Satori tool calls in the exact-owner task.
 
-Requirements:
+The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md).
 
-- Node.js 22.13 or newer
-- Linux x64, including Windows through WSL2
-- an MCP-compatible coding agent
-
-Install the local offline runtime:
-
-```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
-npx -y @zokizuan/satori-cli@latest doctor
-```
-
-Restart the coding agent, then ask it to index the repository:
-
-```text
-manage_index action="create" path="/absolute/path/to/repo"
-```
-
-Search it:
-
-```text
-search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
-```
-
-Satori installs a stable launcher under `~/.satori/`. MCP clients do not run the server through `npx` on every startup.
+</details>
 
 ## Runtime Choices
 

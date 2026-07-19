@@ -39,6 +39,8 @@ A checksum-sealed Potion/LanceDB run on Satori published 488 files and 10,830 ch
 
 On 30 frozen positive retrieval tasks, Potion placed the required owner in the top five on 23 tasks versus Voyage on 25. Potion's observed median search latency was 94.64 ms versus 1,009.46 ms for Voyage in that paired run, but the provider latency observations were descriptive and Potion showed weaker Java and configuration/runtime retrieval.
 
+In a fresh two-task OpenCode comparison where both arms answered correctly, Satori used 16 tool calls and returned 76,113 tool-output bytes versus 25 calls and 96,801 bytes for native `grep` / `glob` / `read`. Wall time was 51.65 versus 96.04 seconds; total model tokens were effectively unchanged. This is a small exploratory context-route result, not a universal token-reduction claim.
+
 <!-- TOOLS_START -->
 
 ## Tools

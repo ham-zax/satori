@@ -135,8 +135,10 @@ function operationLease(codebasePath: string, generation = 1): RootMutationLease
 
 function withTempHome<T>(fn: (homeDir: string) => T): T {
     const prevHome = process.env.HOME;
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mcp-test-'));
     process.env.HOME = tempHome;
+    process.env.SATORI_STATE_ROOT = path.join(tempHome, '.satori');
     try {
         return fn(tempHome);
     } finally {
@@ -144,6 +146,11 @@ function withTempHome<T>(fn: (homeDir: string) => T): T {
             delete process.env.HOME;
         } else {
             process.env.HOME = prevHome;
+        }
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
         }
         fs.rmSync(tempHome, { recursive: true, force: true });
     }
@@ -155,6 +162,22 @@ function snapshotPathsFor(homeDir: string): { dir: string; file: string; lock: s
     const lock = `${file}.lock`;
     return { dir, file, lock };
 }
+
+test('SnapshotManager stores its authority under SATORI_STATE_ROOT', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo');
+        fs.mkdirSync(codebase, { recursive: true });
+        const manager = new SnapshotManager(FINGERPRINT_A);
+        manager.setCodebaseIndexed(codebase, {
+            indexedFiles: 1,
+            totalChunks: 1,
+            status: 'completed',
+        }, FINGERPRINT_A, 'verified');
+        manager.saveCodebaseSnapshot();
+
+        assert.equal(fs.existsSync(snapshotPathsFor(homeDir).file), true);
+    });
+});
 
 test('v2 snapshot migrates to v3 and first access hard-blocks assumed_v2 entries', () => {
     withTempHome((homeDir) => {

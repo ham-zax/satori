@@ -3391,6 +3391,32 @@ test('Context.indexCodebase uses filename-aware language routing for symbol regi
     }
 });
 
+test('Context stores default index-policy authority under SATORI_STATE_ROOT', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-policy-root-'));
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+        });
+        const policy = await context.resolveIndexPolicyForCodebase(codebasePath);
+        context.publishResolvedIndexPolicy(policy, {
+            collectionName: 'generation-a',
+            navigation: { status: 'not_bound' },
+        });
+
+        const policyRoot = path.join(testSatoriStateRoot, 'index-policy');
+        const publishedRoots = fs.readdirSync(policyRoot)
+            .filter((entry) => entry.endsWith('.json'))
+            .map((entry) => JSON.parse(fs.readFileSync(path.join(policyRoot, entry), 'utf8')).canonicalRoot);
+        assert.equal(publishedRoots.includes(fs.realpathSync(codebasePath)), true);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context custom index policy preserves omitted fields, supports explicit reset, and survives restart', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-root-policy-'));
     const stateRoot = path.join(tempRoot, 'policy-state');

@@ -1079,7 +1079,10 @@ export class Context {
         this.publishedPolicyBindingsByCodebase = new Map();
         this.publishedResolvedPoliciesByCodebase = new Map();
         this.indexPolicyStateRoot = config.indexPolicyStateRoot
-            ?? path.join(os.homedir(), '.satori', 'index-policy');
+            ?? path.join(
+                process.env.SATORI_STATE_ROOT || path.join(os.homedir(), '.satori'),
+                'index-policy',
+            );
         this.ignoreStateByCollection = new Map();
         this.symbolRegistryStateRoot = config.symbolRegistryStateRoot;
         this.recoverDurableIndexAuthorityTransactions(config.durableAuthorityRecoveryPublisher);

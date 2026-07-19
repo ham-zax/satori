@@ -201,7 +201,8 @@ export class SnapshotManager {
 
     constructor(runtimeFingerprint: IndexFingerprint) {
         this.runtimeFingerprint = runtimeFingerprint;
-        this.snapshotFilePath = path.join(os.homedir(), '.satori', 'mcp-codebase-snapshot.json');
+        const stateRoot = process.env.SATORI_STATE_ROOT || path.join(os.homedir(), '.satori');
+        this.snapshotFilePath = path.join(stateRoot, 'mcp-codebase-snapshot.json');
     }
 
     public setRuntimeFingerprint(fingerprint: IndexFingerprint): void {

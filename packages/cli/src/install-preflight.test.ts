@@ -298,6 +298,21 @@ test("offline install defaults to the checksum-verified bundled Potion runtime",
     }
 });
 
+test("bundled Potion verification rejects a modified provenance manifest", async () => {
+    const assetsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-manifest-"));
+    try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(POTION_ASSETS_ROOT, "manifest.json"), "utf8"));
+        manifest.helper.rustToolchain = "untrusted-toolchain";
+        fs.writeFileSync(path.join(assetsRoot, "manifest.json"), JSON.stringify(manifest), "utf8");
+        await assert.rejects(
+            verifyBundledPotionRuntime(assetsRoot),
+            /missing, invalid, or untrusted/,
+        );
+    } finally {
+        fs.rmSync(assetsRoot, { recursive: true, force: true });
+    }
+});
+
 test("new offline install persists the verified Potion identity in the managed launcher", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-install-"));
     try {
@@ -347,6 +362,27 @@ test("Potion default fails before artifact verification on unsupported platforms
         /supports Linux x64/,
     );
     assert.equal(verificationCalls, 0);
+});
+
+test("unsupported Potion platform fails before managed package installation", async () => {
+    let installCalls = 0;
+    await assert.rejects(executeInstallCommand({
+        kind: "install",
+        client: "codex",
+        dryRun: false,
+        runtime: "offline",
+    }, {
+        homeDir: "/tmp/satori-potion-unsupported-install",
+        env: {},
+        packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+        platform: "darwin",
+        architecture: "arm64",
+        execFileSyncImpl: (() => {
+            installCalls += 1;
+            return "";
+        }) as never,
+    }), /supports Linux x64/);
+    assert.equal(installCalls, 0);
 });
 
 test("the real LanceDB preflight proves FTS and dense reads after reopen", async () => {

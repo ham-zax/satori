@@ -9,6 +9,7 @@ import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-
 import { CliError } from "./errors.js";
 import type { InstallClient, InstallProfile, InstallRuntime, InstallVectorStore } from "./args.js";
 import {
+    assertSupportedPotionPlatform,
     planInstallRuntimeEnvironment,
     probeLanceDbRuntime,
     probeManagedRuntimeCandidate,
@@ -185,6 +186,8 @@ export interface InstallCommandOptions {
     env?: NodeJS.ProcessEnv;
     preflightDependencies?: InstallPreflightDependencies;
     potionAssetsRoot?: string;
+    platform?: NodeJS.Platform;
+    architecture?: string;
     preflightRunner?: (
         input: InstallPreflightInput,
         dependencies?: InstallPreflightDependencies,
@@ -1792,6 +1795,12 @@ export async function executeInstallCommand(
             const preservedOllamaModel = command.runtime === "offline"
                 ? resolveOfflineOllamaModel(command, managedRuntimeEnvironment, env)
                 : undefined;
+            if (command.runtime === "offline" && !preservedOllamaModel) {
+                assertSupportedPotionPlatform({
+                    platform: options.platform,
+                    architecture: options.architecture,
+                });
+            }
             const packageSpecifier = options.packageSpecifier ?? resolveDefaultPackageSpecifier();
             let potionAssetsRoot = options.potionAssetsRoot
                 ?? resolvePotionAssetsRoot(resolveRuntimePackageRoot(homeDir, packageSpecifier));
@@ -1803,6 +1812,8 @@ export async function executeInstallCommand(
                     vectorStore,
                     ollamaModel: preservedOllamaModel,
                     potionAssetsRoot,
+                    platform: options.platform,
+                    architecture: options.architecture,
                 }) };
             } else {
                 if (!installedRuntimeCommand) {
@@ -1828,6 +1839,8 @@ export async function executeInstallCommand(
                             vectorStore,
                             ollamaModel: preservedOllamaModel,
                             potionAssetsRoot,
+                            platform: options.platform,
+                            architecture: options.architecture,
                         },
                         preflightDependencies,
                     );

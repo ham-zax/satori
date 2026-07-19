@@ -19,6 +19,7 @@ import type { InstallRuntime, InstallVectorStore } from "./args.js";
 const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
+const POTION_MANIFEST_SHA256 = "2a4da35d7a339c94c100457296fc221e1aff64fbc33594215bb369c19f3b8211";
 
 export interface InstallPreflightInput {
     runtime: InstallRuntime;
@@ -101,9 +102,14 @@ export async function verifyBundledPotionRuntime(assetsRoot: string): Promise<vo
     const manifestPath = path.join(assetsRoot, "manifest.json");
     let manifest: PotionArtifactManifest;
     try {
-        manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PotionArtifactManifest;
+        const manifestBytes = fs.readFileSync(manifestPath);
+        const manifestDigest = crypto.createHash("sha256").update(manifestBytes).digest("hex");
+        if (manifestDigest !== POTION_MANIFEST_SHA256) {
+            throw new Error("checksum mismatch");
+        }
+        manifest = JSON.parse(manifestBytes.toString("utf8")) as PotionArtifactManifest;
     } catch {
-        throw new Error(`Bundled Potion manifest is missing or invalid at '${manifestPath}'.`);
+        throw new Error(`Bundled Potion manifest is missing, invalid, or untrusted at '${manifestPath}'.`);
     }
     if (
         manifest.schemaVersion !== 1
@@ -155,7 +161,7 @@ export async function verifyBundledPotionRuntime(assetsRoot: string): Promise<vo
     await verifyPinnedPotionArtifacts({ helperPath, modelPath });
 }
 
-function assertSupportedPotionPlatform(input: InstallPreflightInput): void {
+export function assertSupportedPotionPlatform(input: Pick<InstallPreflightInput, "platform" | "architecture">): void {
     const platform = input.platform ?? process.platform;
     const architecture = input.architecture ?? process.arch;
     if (platform !== "linux" || architecture !== "x64") {

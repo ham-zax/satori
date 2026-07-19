@@ -22,6 +22,8 @@ npx -y @zokizuan/satori-cli@latest doctor
 
 Restart the MCP client after installation.
 
+The offline package carries a checksum-pinned 36.0 MiB Potion model/helper closure. A representative Satori publication indexed 10,830 chunks in 34.46 seconds on CPU, with 154.543 ms warm-search p95 after publication.
+
 ## Commands
 
 ```text
@@ -62,6 +64,8 @@ profile = "minimal"
 ```
 
 Do not place provider keys, model names, or backend credentials in `satori.toml`.
+
+Supported runtime paths include bundled Potion + LanceDB, Voyage + LanceDB, explicit loopback Ollama + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
 
 ## Development
 

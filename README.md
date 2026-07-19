@@ -70,7 +70,7 @@ Potion is a useful local first stage, not a claim of Voyage parity. The comparis
 
 Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. In one correct exploratory exact-owner pair, the Satori arm used 10 tool calls and 36,591 model-visible bytes versus 19 calls and 86,401 bytes for native file-by-file exploration. That is 47% fewer calls and 58% fewer visible bytes in that task; it is not presented as a universal token-reduction percentage.
 
-The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md) and [bounded-context evidence](./docs/release/2026-07-15-bounded-symbol-context-plan.md).
+The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md). Context-efficiency numbers will be replaced by the fresh release benchmark before publication.
 
 ## Quick Start
 

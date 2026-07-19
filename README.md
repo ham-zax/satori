@@ -2,396 +2,244 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
-[![npm CLI](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=satori-cli)](https://www.npmjs.com/package/@zokizuan/satori-cli)
+[![npm](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=npm)](https://www.npmjs.com/package/@zokizuan/satori-cli)
 
-A codebase map for AI coding agents working on real repos.
+Local, freshness-aware code retrieval for AI coding agents.
 
-Grep finds strings. Satori gives coding agents a route through the codebase before they edit.
+Satori indexes a repository once, combines semantic and lexical search, and gives MCP-compatible agents seven bounded tools for finding owners, tracing nearby relationships, and reading exact source. It does not edit source code.
 
-Satori indexes a repo and gives MCP-compatible agents a fixed investigation path from plain-English intent to structured code evidence: symbol-owned results, file outlines, exact symbol or line-range reads, caller/callee context when supported, freshness checks, and recovery guidance when context is stale. Satori does not edit your source code; edits stay in your editor or agent host.
+```text
+plain-English question
+        |
+        v
+exact evidence + BM25 + dense retrieval
+        |
+        v
+symbol-owned results
+        |
+        v
+outline, call graph, and bounded source reads
+```
 
-## What You Get
+## Why Satori
 
-- Find behavior by plain-English intent, not just filenames or exact tokens.
-- Give agents a structured route instead of making them assemble context through grep chains.
-- Keep search focused on runtime code before pulling in docs or tests.
-- Group search around owner symbols; chunks are supporting evidence, not the final unit of navigation.
-- Open exact files, line ranges, and symbols instead of dumping broad context.
-- Check nearby callers/callees when graph support is available (advisory only — not blast-radius proof).
-- Build derived symbol registry and relationship sidecars during completed full indexes.
-- See observed `symbolQuality` on ready roots and `manage_index status` before treating outline/graph as rich.
-- Treat graph-ready `navigation.inbound="verify"` as explicit caller-confidence state; use the optional `callerSearchTerm` identifier in a separate `must:` lexical search.
-- Get clear recovery steps when context is stale, partial, not ready, or multi-runtime owners conflict.
-- Install the MCP server and first-party workflow skill with one command.
-- Avoid resident MCP startup through `npx`; clients launch an installer-owned Node launcher.
+- Find behavior by intent when filenames and exact identifiers are unknown.
+- Keep exact paths, symbols, configuration keys, and lexical evidence in the retrieval path.
+- Return owner-oriented groups instead of flooding the agent with duplicate chunks.
+- Open exact symbols or bounded line ranges instead of dumping entire files.
+- Detect source drift and publish complete searchable generations atomically.
+- Run fully local retrieval with Potion Code 16M v2 and LanceDB on Linux x64.
+- Install one managed MCP runtime for Codex, Claude Code, OpenCode, or all three.
 
-## Packages
+## Measured on Satori
 
-| Package | Purpose |
-|---|---|
-| `@zokizuan/satori-core` | Oxc/Tree-sitter-WASM language analysis, indexing, embeddings, LanceDB and Milvus/Zilliz storage, retrieval, incremental sync |
-| `@zokizuan/satori-mcp` | MCP server with the seven agent-facing tools and lifecycle gates |
-| `@zokizuan/satori-cli` | Installer, doctor command, and shell access to MCP tools |
+These are repository measurements, not borrowed model-card claims.
+
+### Local Potion + LanceDB
+
+A checksum-sealed run on the Satori repository published 488 files and 10,830 chunks with 256-dimensional Potion vectors:
+
+| Operation | Measured result |
+|---|---:|
+| First CPU-only publication | 34.46 s |
+| Warm search p95 | 154.543 ms |
+| Zero-change synchronization p95 | 185.662 ms |
+| One-file addition p95 | 789.310 ms |
+| One-file body edit p95 | 792.245 ms |
+| One-file signature edit p95 | 811.632 ms |
+| One-file deletion p95 | 864.802 ms |
+| Rename p95 | 880.937 ms |
+
+The bundled native feasibility run measured a 36.0 MiB model/helper closure, 104.3 MiB model-related RSS, and 232.404 ms model load. Its short-text microbenchmark reached 19,282 items/s, but that isolated throughput number is not a full indexing claim.
+
+### Potion versus Voyage
+
+The same frozen 30 positive retrieval tasks were queried against compatible Potion and Voyage hybrid publications. BM25, exact evidence, fusion, grouping, source projection, and request policy were held constant; only the dense model/publication differed.
+
+| Retrieval result | Potion | Voyage |
+|---|---:|---:|
+| Required owner at rank 1 | 13/30 | 14/30 |
+| Required owner in top 5 | 23/30 | 25/30 |
+| Required owner in top 15 | 25/30 | 27/30 |
+| Observed search latency p50 | 94.64 ms | 1,009.46 ms |
+| Observed search latency p95 | 1,251.00 ms | 1,813.34 ms |
+
+Potion is a useful local first stage, not a claim of Voyage parity. The comparison found weaker Java and configuration/runtime retrieval for Potion. The paired latency observations are descriptive rather than a repeated cross-provider performance qualification.
+
+### Less context waste
+
+Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. In one correct exploratory exact-owner pair, the Satori arm used 10 tool calls and 36,591 model-visible bytes versus 19 calls and 86,401 bytes for native file-by-file exploration. That is 47% fewer calls and 58% fewer visible bytes in that task; it is not presented as a universal token-reduction percentage.
+
+The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md) and [bounded-context evidence](./docs/release/2026-07-15-bounded-symbol-context-plan.md).
 
 ## Quick Start
 
-Filesystem indexing binds opens to the canonical codebase root with Linux descriptor semantics: required `O_NOFOLLOW`/`O_DIRECTORY` flags, `/proc/self/fd` containment, and post-open identity checks. Indexing fails closed with a capability error on platforms that cannot provide those guarantees; no weaker pathname-only fallback is supported.
+Requirements:
 
-Install managed MCP config for every supported local client:
+- Node.js 22.13 or newer
+- Linux x64, including Windows through WSL2
+- an MCP-compatible coding agent
+
+Install the local offline runtime:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 
-Satori requires Node.js 22.13 or newer. This release uses UTF-8-normalized `language-analysis-v4` and `relationship-v3` evidence; indexes built with `language-analysis-v3` or `relationship-v2` return `requires_reindex` and must be rebuilt once. `sync` does not migrate an incompatible index.
+Restart the coding agent, then ask it to index the repository:
 
-Supported installers: `codex`, `claude`, `opencode`, and `all`.
-
-Choose an index profile during install when the repo should not use the default safe-broad policy:
-
-```bash
-npx -y @zokizuan/satori-cli@latest install --client all --profile minimal
+```text
+manage_index action="create" path="/absolute/path/to/repo"
 ```
 
-The installer writes or updates repo-local `satori.toml` in the current working directory:
+Search it:
+
+```text
+search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
+```
+
+Satori installs a stable launcher under `~/.satori/`. MCP clients do not run the server through `npx` on every startup.
+
+## Runtime Choices
+
+| Runtime | Retrieval | Storage | Requirement |
+|---|---|---|---|
+| Offline | Potion Code 16M v2 + BM25 | LanceDB | Linux x64; no model API key |
+| Connected | Voyage Code 3 + BM25 | LanceDB | `VOYAGEAI_API_KEY` |
+| Ollama | selected Ollama model + BM25 | LanceDB | local loopback Ollama |
+| Connected Milvus | Voyage Code 3 + BM25 | Milvus or Zilliz | explicit Milvus configuration |
+
+Connected install:
+
+```bash
+npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage
+npx -y @zokizuan/satori-cli@latest doctor
+```
+
+Existing Milvus deployments can select `--vector-store milvus`. Existing Ollama installations can select or retain an explicit model:
+
+```bash
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
+```
+
+Changing the embedding provider, model, dimensions, vector backend, or persisted projection changes index compatibility and requires a reindex. Satori never silently converts or deletes the previous backend's publication.
+
+## MCP Tools
+
+| Tool | Purpose |
+|---|---|
+| `manage_index` | Create, synchronize, inspect, repair, reindex, or clear a repository index. Use status and repair guidance instead of guessing whether an index is ready. |
+| `search_codebase` | Run freshness-aware hybrid search and return symbol-owned evidence. Start here for behavior, ownership, configuration, or path discovery. |
+| `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. |
+| `file_outline` | List the indexed symbols and spans in one file. Use it to choose an exact owner before reading implementation. |
+| `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
+| `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
+| `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |
+
+Public paths are absolute. `read_file` is restricted to tracked searchable roots; it is not a general host-filesystem reader.
+
+## Recommended Agent Workflow
+
+```text
+1. search_codebase for behavior or ownership
+2. follow recommendedNextAction when returned
+3. use file_outline to inspect one file's owners
+4. use call_graph for advisory relationship context
+5. use read_file for exact proof
+6. use continue_search only when the frozen result has more useful evidence
+```
+
+If a tool returns `requires_reindex`, reindex before retrying the original call. Use `sync` for ordinary source changes. Treat inbound call-graph results as leads to verify, not compiler-grade blast-radius proof.
+
+## Index Profiles
+
+Install with `--profile default|minimal|all-text` to write repository policy to `satori.toml`:
 
 ```toml
 [index]
 profile = "minimal"
 ```
 
-`satori.toml` is repository policy, not MCP client config and not provider config. Keep API keys, tokens, model names, and vector-store endpoints in the MCP client's runtime environment instead.
-
-Profiles are:
-
-- `default`: safe-broad indexing for source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile`, `Makefile`, `Justfile`, `Taskfile`, `Procfile`, `Jenkinsfile`, and `.dockerignore`.
-- `minimal`: source plus docs/text only; useful when you want lower index cost and do not need config/script/infra files in the index.
-- `all-text`: safe-broad plus unknown UTF-8 text files under the configured size limit; useful for uncommon text extensions after the denylist has removed unsafe paths.
-
-All profiles still honor `.satoriignore`, `.gitignore`, and the hard denylist for secrets, generated output, dependency folders, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. `all-text` also probes files as UTF-8 and uses `SATORI_ALL_TEXT_MAX_BYTES` as the size cap override.
-
-Index profiles control what enters the index; `search_codebase` scope controls what gets searched. Search still defaults to `scope=runtime` for implementation-first discovery, so indexing docs/config does not make documentation outrank runtime code by default. `satori.toml` is treated as an index-policy control file with `.gitignore` and `.satoriignore`: ordinary changes can reconcile through search freshness or `manage_index action="sync"`, while incompatible fingerprints still return `requires_reindex`.
-
-The installer writes Satori-managed config and copies the first-party workflow skill:
-
-- `satori`
-
-It also installs the MCP server once under `~/.satori/mcp-runtime/`, writes a stable launcher at `~/.satori/bin/satori-mcp.js`, and points client config at that launcher with Node. Resident MCP startup should not perform package-manager resolution.
-
-A non-dry-run install then performs a bounded postflight through that exact launcher. It proves managed client wiring, MCP initialization and installed version, the canonical seven-tool surface, runtime-owner registration, and complete child termination. Missing provider or vector configuration is a warning because the proof is static and non-provider-backed. Launcher, protocol, tool, owner, or shutdown failures return a non-zero exit while preserving the installed artifacts and the emitted postflight receipt. The dedicated postflight runtime mode does not recover indexes, start watchers or background sync, call lifecycle tools, search, or create remote state.
-
-Treat `~/.satori/` paths as installer-owned. Do not hand-write `npx @zokizuan/satori-mcp` into resident MCP config unless you are intentionally accepting package-manager startup latency.
-
-For Codex, the installer also writes a marked Satori guidance block to `~/.codex/AGENTS.md` by default. That block positions Satori as semantic-first code exploration: start with `search_codebase` for behavior/ownership context, prefer `recommendedNextAction` when present, then narrow with `file_outline`, `call_graph`, and `read_file` for proof.
-
-Restart every Satori MCP client after changing runtime config. In particular, after changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, stop old clients before running `manage_index create`, `reindex`, `sync`, `clear`, or `repair`. Satori records live runtime owners under `~/.satori/runtime/owners.json` and blocks those mutations with `status="blocked"` / `reason="runtime_owner_conflict"` when multiple live Satori runtimes with different fingerprints, package versions, or configs are active. A canonical-root mutation lease separately prevents concurrent writers with otherwise compatible configs; contention returns `reason="mutation_in_progress"`, and `manage_index status` exposes the live lease as `hints.activeMutation` without a wall-clock expiry. `manage_index status` and `list_codebases` show a compact **Runtime owners** line when the registry is readable. `satori-cli doctor` also compares live owner versions and identities with the installed runtime, uses process-start evidence to detect PID reuse when available, inspects lease files read-only, and verifies the managed launcher and configured client entries.
-
-For Codex, `satori-cli install --client codex --install-guidance-hook` also installs a marked `SessionStart` reminder that prints the Satori tool workflow. The hook is guidance-only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
-
-## First Repo Workflow
-
-1. Run the CLI installer and `doctor`.
-2. Restart your MCP client.
-3. Index one absolute repository path.
-4. Search with plain-English intent, then outline, graph, and open exact symbols (or direct spans) before edits.
-
-```text
-manage_index action="create" path="/absolute/path/to/repo"
-search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
-file_outline path="/absolute/path/to/repo" file="src/auth.ts"
-call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
-# Exact symbol open (mode required; contractVersion 2; one identity; one context or continuation):
-read_file path="/absolute/path/to/repo/src/auth.ts" mode="plain" open_symbol={contractVersion:2,symbolId:"...",context:{preset:"implementation"}}
-# Direct span remains an unversioned source read:
-read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
-```
-
-If any tool returns `requires_reindex`, run the hinted `manage_index action="reindex"` call first, then retry the original tool call. Use `manage_index action="sync"` for ordinary file or ignore-rule convergence.
-
-If `manage_index` returns `reason="runtime_owner_conflict"`, follow the envelope’s listed pids/versions and `hints.nextStep`: leave a single package version/config running, then retry. MCP tools never kill processes or ask interactive cleanup questions.
-
-## Runtime Setup
-
-The installer default is the connected `LanceDB + VoyageAI` runtime. LanceDB is
-stored under installer-owned local state and Milvus/Zilliz remains an explicit
-optional backend. MCP startup and `tools list` do not require provider
-credentials; provider-backed tool calls report `MISSING_PROVIDER_CONFIG` when
-setup is incomplete.
-
-Run `npx -y @zokizuan/satori-cli@latest doctor` after setting env values to check the local setup before indexing. Doctor also prints the installed Satori package set (`satori-cli`, `satori-mcp`, `satori-core`); those packages use independent versions by design. Install postflight proves the installed launcher and MCP protocol path; it does not replace doctor or prove provider connectivity.
-
-Installer-owned runtime identity and client-owned secrets are intentionally
-separate:
-
-- The installer owns the launcher and MCP client wiring and pins the selected
-  non-secret profile, backend, embedding model, and dimension that passed
-  preflight.
-- Provider credentials and Milvus connection values come from environment
-  variables forwarded by the MCP client at startup.
-- Supported client installs expose the Satori runtime variable names in native client config so the setup is visible and editable:
-  - Codex writes active `env_vars` forwarding plus an optional commented `[mcp_servers.satori.env]` template in `~/.codex/config.toml`.
-  - Claude Code writes per-server `mcpServers.satori.env` entries in `~/.claude.json` using `${VAR:-}` pass-through values.
-  - OpenCode writes per-server `mcp.satori.environment` entries in `~/.config/opencode/opencode.json` using `{env:VAR}` pass-through values.
-- If you prefer storing literal values in a client config, replace the generated pass-through value for that client. In Codex, uncomment or add this table outside the installer-managed launcher block so reinstalls keep your edits:
-
-```toml
-[mcp_servers.satori.env]
-SATORI_RUNTIME_PROFILE = "connected"
-VECTOR_STORE_PROVIDER = "LanceDB"
-LANCEDB_PATH = "/absolute/path/to/.satori/vector/lancedb"
-EMBEDDING_PROVIDER = "VoyageAI"
-EMBEDDING_MODEL = "voyage-code-3"
-EMBEDDING_OUTPUT_DIMENSION = "1024"
-VOYAGEAI_API_KEY = "pa-..."
-VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
-```
-
-Claude example:
-
-```json
-{
-  "mcpServers": {
-    "satori": {
-      "env": {
-        "SATORI_RUNTIME_PROFILE": "connected",
-        "VECTOR_STORE_PROVIDER": "LanceDB",
-        "VOYAGEAI_API_KEY": "pa-..."
-      }
-    }
-  }
-}
-```
-
-OpenCode example:
-
-```json
-{
-  "mcp": {
-    "satori": {
-      "environment": {
-        "SATORI_RUNTIME_PROFILE": "connected",
-        "VECTOR_STORE_PROVIDER": "LanceDB",
-        "VOYAGEAI_API_KEY": "pa-..."
-      }
-    }
-  }
-}
-```
-
-Cloud quality start:
-
-```bash
-SATORI_RUNTIME_PROFILE=connected
-VECTOR_STORE_PROVIDER=LanceDB
-LANCEDB_PATH=/absolute/path/to/.satori/vector/lancedb
-EMBEDDING_PROVIDER=VoyageAI
-EMBEDDING_MODEL=voyage-code-3
-EMBEDDING_OUTPUT_DIMENSION=1024
-VOYAGEAI_API_KEY=your-api-key
-VOYAGEAI_RERANKER_MODEL=rerank-2.5
-```
-
-Get `VOYAGEAI_API_KEY` from the Voyage AI dashboard API keys page. To retain a
-Milvus/Zilliz deployment in an installer-managed runtime, install with
-`--runtime voyage --vector-store milvus` and forward `MILVUS_ADDRESS`;
-`MILVUS_TOKEN` is optional for local unauthenticated Milvus. A consistent
-literal Milvus selection already stored in the selected client configurations
-is preserved on reinstall. Changing backends requires a reindex and never
-deletes or imports the other backend's collections automatically.
-
-On Linux x64, a new offline install uses the bundled, checksum-verified Potion
-Code 16M v2 runtime with LanceDB hybrid search:
-
-```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
-```
-
-Select the existing Ollama path explicitly when desired or when Potion is not
-supported on the current platform:
-
-```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
-```
-
-The installer persists only non-secret profile/model identity in the managed
-launcher. Existing managed Ollama installations remain Ollama on reinstall, and
-the Ollama path rejects non-loopback endpoints. Neither offline path turns a
-connected Voyage publication into an offline one; each provider identity needs
-its own compatible index.
-
-Provider, model, dimension, vector store, and schema are part of the index fingerprint. If they change, Satori blocks search with `requires_reindex` until you rebuild the index.
-
-## Search Defaults
-
-Default search behavior is developer-oriented:
-
-- `scope="runtime"` so documentation does not dominate first results (tests stay demoted unless test intent is explicit; use `scope="docs"` for docs-only).
-- `resultMode="grouped"` and `groupBy="symbol"` to reduce duplicate chunks.
-- `rankingMode="auto_changed_first"` to prefer active work when safe.
-- `debug=false` unless you are inspecting ranking/filter behavior.
-
-Search is freshness-aware. It can sync on read, warn when dirty files were not freshened, and supplement exact path-scoped dirty-file evidence with bounded live reads so recent test or regression lines are not hidden behind stale vector chunks. If a full index stops at `limit_reached`, search may still return partial chunks, but it warns that results may be incomplete and navigation sidecars were not published as complete.
-
-## Symbol-Owned Navigation
-
-Satori's grouped search is symbol-owned: retrieval finds candidate chunks, ownership maps those chunks to a derived symbol registry, and `search_codebase` returns symbol groups with supporting evidence. Files remain the source of truth; the symbol registry is a deterministic navigation view for the indexed snapshot.
-
-Completed full indexes write navigation sidecars:
-
-- Symbol registry sidecar with candidate-lookup `symbolKey`, exact `symbolInstanceId`, file-owner fallback symbols, and outline data for exact navigation.
-- Relationship sidecar with conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges used by `call_graph`.
-- Compatibility manifests so stale, missing, or incompatible sidecars degrade explicitly instead of being silently trusted.
-- Canonical JSON navigation state plus an additive `navigation.sqlite` cache. JSON remains the source that runtime navigation serves by default; SQLite is optional for validation or explicit experimental reads and may serve only after proving parity with the canonical JSON registry and relationship sidecars.
-
-Current relationship limits are intentional. `CALLS v0` is heuristic/name-based (not a compiler-grade call graph): unique same-file targets can be high confidence; cross-file edges stay low unless `IMPORTS`/`EXPORTS` evidence upgrades them, or an imported module has a unique same-name target (for example class methods without a top-level `EXPORTS` record). Generic names like `push`/`get` stay suppressed without `EXPORTS`. Ambiguous same-name targets are skipped. Empty or short edge lists are not proof of “no callers.” Every graph-ready grouped result carries `navigation.inbound="verify"`; when `callerSearchTerm` is present, use it in a separate `must:<term> <term>` search, tests, and direct references before blast-radius edits. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
-
-Language capability is explicit. TypeScript, JavaScript, and Python are the only production-ready `call_graph` languages. Go, Rust, Java, C#, C++, and Scala are `symbol_only`: `file_outline` and `read_file(open_symbol)` use compatible sidecar symbols and current-source validation, while `call_graph` returns `unsupported_language`. Broader catalog/parser support does not imply graph-ready navigation.
-
-Exact navigation is keyed by `symbolInstanceId`. `symbolKey` stays stable-ish across small edits, but it is candidate lookup only and is not exact identity.
-
-Grouped search responses use `formatVersion: 2`. Each result carries one canonical `target` with a repo-relative file, a 1-based inclusive span, and an optional registry-proven concrete `symbolId`; display data, quality, source-only preview evidence, and navigation state are separate facts. Pass a graph-ready `target` directly to `call_graph` with the envelope `codebaseRoot`, and treat its required `navigation.inbound="verify"` as the caller-confidence contract. For reads, resolve `target.file` under `codebaseRoot`. When `target.symbolId` exists, call `read_file` with required `mode` and the one canonical exact open: `open_symbol.contractVersion=2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`. Success is one bounded structured `symbol_context` JSON package in both plain and annotated modes; accepted exact failures use bounded structured errors. Direct `startLine`/`endLine` (or top-level line range) opens remain unversioned source reads and do not expand to a full symbol span. Raw result objects are unchanged.
-
-`call_graph` now uses compatible relationship sidecars as the canonical traversal source for symbol-owned navigation. Completed incremental syncs reuse changed-file symbol output, preserve unchanged registry state, and avoid re-embedding or rewriting unchanged vector chunks. Current source may still be reparsed to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, recovery fails, or a partial full index hits a limit, Satori clears or withholds navigation state instead of publishing a mixed generation. Public reasons prefer precise values such as `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `stale_symbol_ref`, `navigation_recovery_failed`, and `partial_index_navigation_unavailable`.
-
-## Seven MCP Tools
-
-| Tool | Use it for |
+| Profile | Includes |
 |---|---|
-| `list_codebases` | See indexed roots and lifecycle buckets; ready roots include compact `symbolQuality=…` and optional Runtime owners summary |
-| `manage_index` | JSON-envelope lifecycle: create, reindex, sync, status, clear, repair (clear is destructive; repair only when vector payload + trusted fingerprint proof allow). `status` may include structured `symbolQuality` and Runtime owners |
-| `search_codebase` | Runtime-first plain-English discovery with exact operators, compact v2 symbol groups, freshness, warnings, one `recommendedNextAction`, explicit inbound verification, and optional `callerSearchTerm` evidence |
-| `continue_search` | Reveal the next groups from a frozen `search_codebase` ranking without new embedding, retrieval, or reranking work |
-| `file_outline` | Read sidecar symbol outlines and resolve exact symbols without guessing (`ok` / `ambiguous` / `not_found`) |
-| `call_graph` | Bounded advisory caller/callee context from a search `symbolRef` when relationship-backed navigation is ready (TS/JS/Python; not sole blast-radius authority) |
-| `read_file` | Bounded reads under indexed/searchable roots only (absolute paths; not a general host FS reader): line ranges and annotated plain source, unversioned direct-span opens, or exact `open_symbol` contractVersion 2 context packages |
+| `default` | Source, documentation, config, scripts, infrastructure files, queries, and known extensionless text files. |
+| `minimal` | Source and documentation text. |
+| `all-text` | `default` plus additional bounded UTF-8 text files. |
 
-## What Satori Is Not
+Every profile honors `.satoriignore`, `.gitignore`, and the hard denylist for secrets, dependencies, generated output, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Profiles control what is indexed; `search_codebase` still defaults to implementation-first `scope="runtime"`.
 
-- Not an agent framework.
-- Not a source-code write server.
-- Not a replacement for tests, typecheck, code review, or grep.
-- Not a promise that static call graph hints prove runtime or assertion coverage.
+## Configuration
 
-Satori gives the agent better evidence. It does not remove engineering judgment.
+The installer owns the launcher and non-secret runtime identity. Provider credentials remain in the MCP client's environment.
 
-## Roadmap
-
-Satori is focused on making repo investigation easier for coding agents without requiring heavyweight setup.
-
-Planned work includes:
-
-- **Local-first setup:** qualify and improve the Potion-first offline path while preserving explicit Ollama support, reducing the need for cloud keys or a separate Milvus/Zilliz setup.
-- **Retrieval quality:** improve symbol-owned retrieval, ranking, exact evidence selection, and noisy-result handling.
-- **Language support:** expand caller/callee and relationship-backed navigation beyond the currently supported languages.
-- **Team workflows:** explore shared indexes, hosted indexing, multi-user freshness state, and managed repo context for engineering teams.
-- **Evaluation:** improve deterministic retrieval tests and comparison harnesses for real repositories.
-
-## Repository Layout
+Common variables:
 
 ```text
-packages/core   indexing, retrieval, embeddings, vector store, sync
-packages/mcp    MCP server, tool schemas, lifecycle gates, generated tool docs
-packages/cli    managed installer, doctor, direct shell tool calls
-docs/           current docs map, behavior specs, active plans, dated evidence
-satori-landing/ static website HTML source
+SATORI_RUNTIME_PROFILE
+VECTOR_STORE_PROVIDER
+LANCEDB_PATH
+EMBEDDING_PROVIDER
+EMBEDDING_MODEL
+EMBEDDING_OUTPUT_DIMENSION
+VOYAGEAI_API_KEY
+MILVUS_ADDRESS
+MILVUS_TOKEN
 ```
+
+Run `doctor` after changing runtime configuration. Restart every Satori MCP client before mutating an index under a new provider, model, backend, dimension, or package version; incompatible live runtime owners are blocked instead of racing one publication.
+
+## How Publication Works
+
+Satori keeps source-derived navigation separate from model-specific vectors. A completed publication binds vector and lexical state, navigation, relationship evidence, source observation, checkpoint, and receipt to one generation. Readers use the complete previous generation or the complete new generation; failed candidate work does not replace the active publication.
+
+Incremental synchronization scans for changed files, embeds changed chunks only, updates per-file navigation and graph contributions, and activates the complete replacement generation. Missing, corrupt, stale, or incompatible authority fails closed to repair or reindex guidance.
+
+## Future Local Reranking
+
+The current offline product is intentionally simple: exact evidence + BM25 + Potion retrieval, followed by Satori grouping and disclosure. It does not ship a local neural reranker today.
+
+Candidate identity and provenance are kept separate from primary publication authority so a future local second stage can score a complete bounded candidate set and fall back entirely to the existing ordering on failure. Optional LateOn/NextPLAID-style state remains future work; it will never control source freshness or baseline search availability.
+
+## Language Support
+
+Search and bounded reads work across the indexed text and language catalog. Rich symbol navigation depends on parser evidence. TypeScript, JavaScript, and Python currently have the strongest call-graph support; other supported languages may provide symbols without authoritative graph traversal. Inspect `manage_index status` instead of assuming every indexed language is graph-ready.
+
+## Privacy and Limits
+
+- Offline Potion embedding, LanceDB storage, search, and runtime telemetry make no network requests after installation.
+- Connected providers receive the projected embedding or reranking input required for their service.
+- Satori does not edit repository source.
+- Local diagnostics exclude source, queries, paths, symbols, and repository identifiers and are never uploaded by Satori.
+- Native Windows and macOS are not supported in this release. On Windows, run Satori inside WSL2.
+- The relationship graph is conservative navigation evidence, not a full static-analysis proof.
+
+## Packages
+
+| Package | Purpose |
+|---|---|
+| [`@zokizuan/satori-cli`](./packages/cli) | Installer, doctor, and command-line access to MCP tools. |
+| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and seven public tools. |
+| [`@zokizuan/satori-core`](./packages/core) | Indexing, analysis, embeddings, storage, and retrieval. |
 
 ## Development
 
 ```bash
 pnpm install
 pnpm build
-pnpm run versions:check
-pnpm -C packages/mcp docs:check
-pnpm -C packages/mcp manifest:check
+pnpm run check
+```
+
+Focused package tests:
+
+```bash
+pnpm --filter @zokizuan/satori-core test
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-cli test
-pnpm test:integration
 ```
 
-Run the deterministic Satori-vs-codebase-memory comparison harness:
-
-```bash
-pnpm run build:mcp
-pnpm run vs:code-intelligence -- \
-  --cmm-command /home/hamza/.local/bin/codebase-memory-mcp \
-  --out /tmp/satori-vs-both.json
-```
-
-To test the current checkout in your local MCP clients before publishing, rewrite the existing stable Satori launcher to point at this repo's built MCP runtime:
-
-```bash
-pnpm run dev:install-local-mcp
-```
-
-Use `pnpm run dev:install-local-mcp:no-build` after a previous build when you only need to rewrite the launcher. Restart the MCP client after either command.
-
-## Release Commands
-
-Current release versions:
-
-- `@zokizuan/satori-core@2.0.0`
-- `@zokizuan/satori-mcp@6.0.0`
-- `@zokizuan/satori-cli@0.5.0` (install examples may use `@latest`)
-
-Preflight before publishing:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm run versions:check
-pnpm build
-pnpm -C packages/mcp docs:check
-pnpm -C packages/mcp manifest:check
-pnpm --filter @zokizuan/satori-mcp test
-pnpm --filter @zokizuan/satori-cli test
-pnpm run release:smoke:mcp
-pnpm run release:smoke:cli
-```
-
-Recommended public release path (tag matches the monorepo version in root `package.json`):
-
-```bash
-git tag v0.5.15
-git push origin v0.5.15
-```
-
-The GitHub Actions release uses npm provenance and requires the `NPM_TOKEN` secret. Use the manual fallback only when you intentionally want to publish from a local authenticated shell without CI provenance:
-
-```bash
-pnpm run release:login
-pnpm run release:all
-pnpm run release:verify
-```
-
-## Release Proof
-
-The tag release workflow runs generated-doc checks, manifest checks, MCP tarball smoke tests, and CLI tarball smoke tests before publishing. The CLI installer tests also smoke `install --client all` against Codex, Claude, and OpenCode config in a temp home, asserting that resident client config launches the installer-owned Node launcher without `npx`, runtime cache paths, or custom startup timeout fields.
-
-Release publishes use npm provenance from GitHub Actions. After publish, inspect registry integrity metadata with:
-
-```bash
-npm view @zokizuan/satori-core@<version> dist.integrity dist.shasum
-npm view @zokizuan/satori-mcp@<version> dist.integrity dist.shasum
-npm view @zokizuan/satori-cli@<version> dist.integrity dist.shasum
-```
-
-## More Docs
-
-- [Documentation map](./docs/README.md)
-- [Architecture](./ARCHITECTURE.md)
-- [End-to-end behavior spec](./docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md)
-- [Features and use cases](./docs/SATORI_FEATURES_AND_USE_CASES.md)
-- [Public launch checklist](./docs/LAUNCH_CHECKLIST.md)
-- [Contributing](./CONTRIBUTING.md)
-- [Security policy](./SECURITY.md)
-- [Code of conduct](./CODE_OF_CONDUCT.md)
-- [MCP package README](./packages/mcp/README.md)
-
-## Open Source
-
-Satori is open source under the MIT License. The public MCP surface is fixed to seven tools and does not expose source-code write tools, so users can inspect behavior, self-host the index runtime, and contribute without expanding the agent edit surface.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for repository conventions, [SECURITY.md](./SECURITY.md) for private vulnerability reporting, and [THIRD_PARTY.md](./THIRD_PARTY.md) for attribution.
 
 ## License
 
-Satori is released under the [MIT License](./LICENSE).
+MIT

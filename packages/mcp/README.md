@@ -1,59 +1,29 @@
 # @zokizuan/satori-mcp
 
-Read-only MCP server for Satori. It gives coding agents seven deterministic tools for repo search, frozen-result continuation, symbol navigation, call graph context, bounded file reads, and index lifecycle management.
+The MCP server for [Satori](https://github.com/ham-zax/satori): freshness-aware hybrid code search, symbol navigation, advisory call graphs, bounded source reads, and index lifecycle management.
+
+Most users should install Satori through `@zokizuan/satori-cli`. The installer writes a stable local launcher and configures supported MCP clients; this package does not manage client configuration by itself.
 
 ## Install
 
-Installer ownership is **`@zokizuan/satori-cli` only** (this package serves MCP tools; it does not install client configs). Use the CLI installer for normal setup:
-
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all
+npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 
-The CLI installer supports `codex`, `claude`, `opencode`, and `all`. It creates the runtime cache, writes the stable launcher, and writes client config for you. Avoid using `npx` as the resident MCP server command; first-run package resolution can exceed normal MCP startup timeouts.
+The local Potion runtime currently supports Linux x64, including Windows through WSL2. Connected Voyage and explicit local Ollama configurations are also available. See the [main README](https://github.com/ham-zax/satori#quick-start) for runtime choices.
 
-Use `--profile default|minimal|all-text` to write repo-local `satori.toml` during install:
-
-```bash
-npx -y @zokizuan/satori-cli@latest install --client all --profile minimal
-```
-
-Profiles control indexing breadth, not search scope. `default` is safe-broad, `minimal` indexes source plus docs/text, and `all-text` indexes additional UTF-8 text files under the size limit. `search_codebase` still defaults to `scope=runtime`.
-
-The repo-local config shape is:
-
-```toml
-[index]
-profile = "minimal"
-```
-
-`satori.toml` is repository index policy, not MCP client config and not provider config. Do not put API keys, model names, Milvus endpoints, or tokens in it. Provider settings belong in the MCP client's runtime environment.
-
-Profile behavior:
-
-- `default`: source, docs/text, config, scripts, infra/query files, and known extensionless files such as `Dockerfile`, `Makefile`, `Justfile`, `Taskfile`, `Procfile`, `Jenkinsfile`, and `.dockerignore`.
-- `minimal`: source plus docs/text only.
-- `all-text`: default plus unknown UTF-8 text files under the size limit. `SATORI_ALL_TEXT_MAX_BYTES` can override the text-file cap.
-
-All profiles still honor `.gitignore`, `.satoriignore`, and the hard denylist for secrets, lockfiles, generated output, dependency folders, binaries, bundles, logs, database dumps, source maps, and snapshots. `satori.toml` is treated as an index-policy control file; search freshness and `manage_index action="sync"` can reconcile ordinary profile/ignore changes, while incompatible fingerprints still return `requires_reindex`.
-
-Codex installs write two companion artifacts by default: the first-party `satori` skill under `~/.codex/skills` and a marked Satori guidance block in `~/.codex/AGENTS.md`. The AGENTS block tells Codex to use Satori for semantic ownership/context discovery first, then use exact navigation and reads for proof.
-
-For Codex, add `--install-guidance-hook` only when you want an installer-managed `SessionStart` reminder in `~/.codex/config.toml`. The hook prints guidance only, suppresses duplicate startup prints for the same working directory, and does not run indexing, search, or provider-backed work.
-
-Advanced direct execution is available through the package bin:
+Direct package execution is intended for inspection and custom harnesses:
 
 ```bash
-npx -y @zokizuan/satori-mcp@6.0.0 --help
+npx -y @zokizuan/satori-mcp@latest --help
 ```
 
-Use direct package execution for inspection, smoke tests, or unsupported harnesses. For supported clients, prefer `satori-cli install` so startup does not depend on package-manager resolution.
+Do not use `npx` as the resident MCP command when the CLI installer supports your client; package resolution can exceed normal MCP startup timeouts.
 
-## Agent Workflow
+## Workflow
 
 ```text
-list_codebases
 manage_index action="create" path="/absolute/path/to/repo"
 search_codebase path="/absolute/path/to/repo" query="where is auth refresh handled"
 file_outline path="/absolute/path/to/repo" file="src/auth.ts"
@@ -61,205 +31,38 @@ call_graph path="/absolute/path/to/repo" symbolRef={...} direction="both"
 read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 ```
 
-Important defaults:
-
-- Public paths for tools are **absolute filesystem paths**. Relative paths are rejected (not CWD-resolved).
-- `search_codebase` starts with `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`, `rankingMode=auto_changed_first`.
-- `search_codebase` is the sync-on-read freshness tool; other tools may gate compatibility but do not replace it.
-- Grouped search is symbol-owned: chunks are supporting evidence for an owner symbol, not the final navigation unit.
-- Exact symbol navigation uses `symbolInstanceId`. `symbolKey` is stable-ish candidate lookup only, not exact identity.
-- Ready/`indexed` means searchable-readable, not automatically symbol-rich. Check `manage_index status` `symbolQuality` or Ready-line `symbolQuality=…` before treating outline/graph as rich navigation evidence (`symbol_rich` \| `mixed` \| `symbol_sparse` \| `search_only` \| `unknown` — observed registry evidence, not a parser diagnosis).
-- Warm search readiness is receipt-bound, not TTL trust: reuse rechecks the bound collection, exact completion marker, policy/profile observations, navigation manifests, watcher epoch, and mutation generation before skipping the full payload recount. Missing or damaged local navigation preserves valid vector completion evidence but emits `NAVIGATION_REPAIR_REQUIRED`; use `manage_index repair` to rebuild navigation rather than reindexing a valid vector generation.
-- Summary status derives compact symbol quality from the immutable navigation generation seal and does not deserialize the per-file registry manifest or symbol shards. `capabilities` and `full` load full symbol evidence when the language matrix is requested.
-- Index profiles still honor `.satoriignore`, `.gitignore`, `satori.toml`, and the hard denylist for secrets, lockfiles, generated output, dependencies, binaries, bundles, logs, and database dumps.
-- `read_file` only reads under tracked searchable roots (`indexed` / `sync_completed`); it is not a general host filesystem reader. Relative paths and root escapes are denied.
-- Prefer the envelope `recommendedNextAction` when present. In grouped `formatVersion: 2` output, derive navigation from `codebaseRoot` plus the canonical `target`; never reconstruct spans from prose.
-- `requires_reindex` means reindex first, then retry the original call (do not substitute `sync`).
-- `manage_index action="clear"` is destructive and should be explicit. `repair` reports structured proof across collection, snapshot, marker, fingerprint, payload, stale remote chunks, and navigation. Only no related collection routes to create; existing incompatible, incomplete, stale, malformed, or unprovable generations route to reindex. Backend failures preserve partial proof when available and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but never re-embeds or rewrites source chunks.
-- After changing `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, embedding dimension, `HYBRID_MODE`, vector backend settings, or the Satori runtime version, restart **all** Satori MCP clients before running `manage_index create`, `reindex`, `sync`, `clear`, or `repair`.
-- Satori records live runtime owners in `~/.satori/runtime/owners.json` and blocks those index mutations with `status="blocked"` / `reason="runtime_owner_conflict"` if another live Satori MCP runtime has a different fingerprint, package version, or config identity.
-- On `runtime_owner_conflict`, the manage envelope lists conflicting **pids**, **versions**, and conflict reasons, plus a concrete `hints.nextStep`. MCP tools never kill other processes. Stop the listed host clients (or only orphaned Satori MCP node PIDs), leave a single package version/config running, then retry. `manage_index status` and `list_codebases` also show a compact **Runtime owners** line (live pids/versions); multi-version means mutations may block. `satori-cli doctor` reports multi-version live owners.
-- A separate canonical-root mutation lease permits multiple readers but only one create/reindex/sync/repair/clear writer across processes. Contention returns `reason="mutation_in_progress"`; `manage_index status` exposes `hints.activeMutation`. Leases do not have a time-based expiry, and a live owner is never evicted by age alone.
-- `zillizDropCollection` is fail-closed: Satori must prove the selected collection's owning codebase root and lease both affected roots before deletion. Unknown ownership or an active writer leaves the collection and local snapshot unchanged.
-- Every graph-ready grouped result carries `navigation.inbound="verify"`. When it also includes `callerSearchTerm`, use a separate `must:<term> <term>` search before blast-radius edits (`call_graph` inbound stays advisory/low).
-
-## Navigation Sidecars
-
-Completed full indexes write a derived symbol registry and relationship sidecar. Files remain the source of truth; the registry is the deterministic navigation view for the indexed snapshot.
-
-- The symbol registry stores candidate owner keys, exact symbol instances, file-owner fallback symbols, and outline records used by grouped search, `file_outline`, and exact reads.
-- The relationship sidecar stores conservative `CALLS v0` edges plus TypeScript/JavaScript `IMPORTS`/`EXPORTS v0` edges with manifest compatibility gates.
-- Runtime navigation still serves canonical JSON sidecars by default. When the default shared runtime store is created at process startup, `SATORI_NAVIGATION_BACKEND=sqlite` can opt that shared store into SQLite-backed reads only after SQLite proves parity with the canonical JSON symbol registry and relationship sidecars. If canonical JSON is missing or incompatible, SQLite is not served as truth; if SQLite is missing, stale, incompatible, or parity-mismatched while JSON is compatible, runtime falls back to JSON with a warning. When the default shared runtime store is created with `SATORI_NAVIGATION_DUAL_READ=1`, JSON remains the serving backend and the runtime emits once-per-root parity mismatch warnings without changing the served result.
-- `CALLS v0` is heuristic/name-based. Same-file unique targets can be high confidence; cross-file name-only targets start low and are upgraded when IMPORTS/EXPORTS evidence supports them, or when the imported file has a unique same-name target (class methods without top-level EXPORTS). Generic names like `push`/`get` stay suppressed without EXPORTS. Ambiguous same-name targets are skipped.
-- `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations. Package imports, unresolved paths, ambiguous exports, and multiline module syntax are skipped.
-- `call_graph` uses compatible relationship sidecars as the canonical source for symbol-owned traversal.
-- Successful incremental sync reuses changed-file symbol output, preserves unchanged registry state, and avoids re-embedding or rewriting unchanged vector chunks. It may reparse unchanged source to recompute deterministic cross-file relationship evidence against the merged registry. If changed-file indexing stops early, navigation state is cleared instead of publishing a mixed generation.
-
-## Runtime Requirements
-
-Node.js 22.13 or newer is required. Parser, symbol-extractor, and relationship-builder identities are part of durable index compatibility; indexes built by the previous parser stack return `requires_reindex` and require one full rebuild.
-
-The default runtime is connected VoyageAI plus installer-owned LanceDB. Milvus
-SDK and REST/Zilliz adapters remain supported when
-`VECTOR_STORE_PROVIDER=Milvus` is explicit (or for legacy connected installs
-that provide `MILVUS_ADDRESS` without a backend selector). Supported embedding
-providers are OpenAI, VoyageAI, Gemini, Ollama, and Potion. New Linux x64
-offline installations use the installer-bundled Potion runtime unless an
-Ollama model is selected explicitly. Changing provider, model, dimension,
-vector store, projection version, or schema requires a reindex because those
-values are part of the index fingerprint.
-
-MCP startup, `tools/list`, and installer operations are lazy with respect to provider credentials. Missing provider values become `MISSING_PROVIDER_CONFIG` only when a provider-backed tool call needs them.
-
-Installer-managed client config starts the resident launcher. Runtime provider settings come from the MCP client's environment and are exposed in native client config:
-
-- Codex writes active `env_vars` forwarding plus an optional commented `[mcp_servers.satori.env]` template in `~/.codex/config.toml`.
-- Claude Code writes `mcpServers.satori.env` in `~/.claude.json` with `${VAR:-}` pass-through values.
-- OpenCode writes `mcp.satori.environment` in `~/.config/opencode/opencode.json` with `{env:VAR}` pass-through values.
-
-Users who want literal values in a client config can replace the generated pass-through value for that client. In Codex, uncomment or add this table outside the installer-managed launcher block so reinstalls keep edits:
-
-```toml
-[mcp_servers.satori.env]
-SATORI_RUNTIME_PROFILE = "connected"
-VECTOR_STORE_PROVIDER = "LanceDB"
-EMBEDDING_PROVIDER = "VoyageAI"
-EMBEDDING_MODEL = "voyage-code-3"
-EMBEDDING_OUTPUT_DIMENSION = "1024"
-VOYAGEAI_API_KEY = "pa-..."
-VOYAGEAI_RERANKER_MODEL = "rerank-2.5"
-```
-
-Cloud-quality setup:
-
-```bash
-SATORI_RUNTIME_PROFILE=connected
-VECTOR_STORE_PROVIDER=LanceDB
-EMBEDDING_PROVIDER=VoyageAI
-EMBEDDING_MODEL=voyage-code-3
-EMBEDDING_OUTPUT_DIMENSION=1024
-VOYAGEAI_API_KEY=your-api-key
-VOYAGEAI_RERANKER_MODEL=rerank-2.5
-```
-
-Existing Milvus deployments remain supported with
-`VECTOR_STORE_PROVIDER=Milvus`, `MILVUS_ADDRESS`, and optional `MILVUS_TOKEN`.
-Switching to LanceDB requires reindexing and never deletes or imports the Milvus
-collection automatically.
-
-The full generated tool reference below is kept in the npm README for MCP clients and package consumers.
+Public paths are absolute. Search is freshness-aware; exact reads are limited to indexed searchable roots. Follow `recommendedNextAction` when returned, and reindex before retrying a request that reports `requires_reindex`.
 
 <!-- TOOLS_START -->
 
-## Tool Reference
+## Tools
 
-### `manage_index`
-
-Manage index lifecycle operations (create/reindex/sync/status/clear/repair) for a codebase path. repair rebuilds local readiness only when existing vector payload and trusted runtime fingerprint proof match. Repair responses may include optional `repairProof` evidence for collection, snapshot, marker, fingerprint, payload, staleRemoteChunks, and navigation. No related collection routes to create; an existing incompatible, incomplete, stale, malformed, or unprovable generation routes to reindex; backend failures preserve partial proof when collection began and should be diagnosed before retrying repair. Successful repair may write a fresh completion marker and rebuild navigation, but it does not re-embed or rewrite source chunks. Ignore-rule edits in repo-root .satoriignore/.gitignore reconcile automatically in the normal sync path. Use action="sync" for immediate convergence and action="reindex" for full rebuild recovery (preflight may block unnecessary ignore-only reindex churn unless allowUnnecessaryReindex=true). Successful sync responses include `syncStats` with `added`, `removed`, and `modified` counts; consume those fields instead of parsing `humanText`. create/reindex return the kickoff response immediately and do not poll to terminal state; use action="status" to observe progress. Status defaults to detail=summary; use capabilities for full symbol/language evidence, diagnostics for compatibility/runtime-owner evidence, or full for both. Mutation responses may include a durable `operation` receipt with `id`, canonical root, generation, accepted time, current phase, last durable transition, runtime fingerprint, and writer identity. Status returns the latest persisted receipt after restart. In a status envelope, top-level `action` remains `status` while `operation.action` names the observed mutation. Terminal phases are `completed`, `failed`, and `blocked`; `operation` is absent when no durable operation exists or contention was rejected before lease acquisition.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `action` | enum("create", "reindex", "sync", "status", "clear", "repair") | yes |  | Required operation to run. |
-| `path` | string | yes |  | ABSOLUTE filesystem path to the target codebase (relative paths are rejected). |
-| `force` | boolean | no |  | Only for action='create'. Force rebuild from scratch. |
-| `allowUnnecessaryReindex` | boolean | no |  | Only for action='reindex'. Override preflight block when reindex is detected as unnecessary ignore-only churn. |
-| `customExtensions` | array<string> | no |  | Only for action='create'. Additional file extensions to include. |
-| `ignorePatterns` | array<string> | no |  | Only for action='create'. Additional ignore patterns to apply. |
-| `zillizDropCollection` | string | no |  | Only for action='create'. Zilliz-only: drop this Satori-managed collection before creating the new index. |
-| `detail` | enum("summary", "capabilities", "diagnostics", "full") | no |  | Only for action='status'. Response projection: summary, capabilities, diagnostics, or full. Defaults to summary. |
-
-### `search_codebase`
-
-Unified semantic search with a runtime-first scope="runtime" default, grouped/raw output modes, and deterministic ranking/freshness behavior. Operators are parsed from a query prefix block: lang:, path:, -path:, must:, exclude: (escape with \\ to keep literals). Grouped formatVersion 2 results publish one canonical target, bounded source-only preview, quality evidence, and compact graph readiness; use the envelope-level recommendedNextAction first. disclosureLimit can expose a smaller initial page without lowering retrieval or reranker admission; when continuation is present, pass its opaque handle and exact nextOffset to continue_search to reveal more groups from the same frozen ranking. A concrete target opens through the returned canonical read_file request, which includes mode, open_symbol contractVersion 2, one identity, and one bounded context operation; a target without symbolId opens through its 1-based inclusive span. Pass a target directly to call_graph only when navigation.graph="ready". Every graph-ready result carries navigation.inbound="verify"; callerSearchTerm is an optional identifier for a separate must:<term> <term> inbound-reference verification search. Follow structured warning actions and remediation hints; use .satoriignore plus manage_index sync to remove persistent indexed noise. Use debugMode=summary|ranking|freshness|full for bounded diagnostics; debug:true remains a backward-compatible alias for full.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE filesystem path to an indexed codebase or subdirectory (relative paths are rejected). |
-| `query` | string | yes |  | Natural-language query. |
-| `scope` | enum("runtime", "mixed", "docs") | no | `"runtime"` | Search scope policy. runtime includes source/runtime code and tests while excluding docs/generated/artifacts/landing/fixtures; docs returns documentation paths only (not tests); mixed includes all. Docs scope skips reranker by policy in the current tool surface. |
-| `resultMode` | enum("grouped", "raw") | no | `"grouped"` | Output mode. grouped returns merged search groups, raw returns chunk hits. |
-| `groupBy` | enum("symbol", "file") | no | `"symbol"` | Grouping strategy in grouped mode. |
-| `rankingMode` | enum("default", "auto_changed_first") | no | `"auto_changed_first"` | Ranking policy. auto_changed_first boosts files changed in the current git working tree when available. |
-| `limit` | integer | no | `20` | Maximum groups (grouped mode) or chunks (raw mode). |
-| `disclosureLimit` | integer | no |  | Optional initial grouped-result disclosure limit. Grouped searches show at most 10 results initially when omitted; set this equal to limit to expose the full result set immediately. Retrieval depth and reranker admission continue to use limit. |
-| `debug` | boolean | no |  | Backward-compatible debug toggle. true selects full diagnostics when debugMode is omitted. |
-| `debugMode` | enum("summary", "ranking", "freshness", "full") | no |  | Bounded diagnostic projection. May be used without debug; debug=true remains an alias for full. |
-| `debugCandidateLimit` | integer | no |  | Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings. |
-
-### `continue_search`
-
-Return the next groups from a frozen search_codebase result set. Pass the response's exact nextOffset so transport retries are idempotent. Continuation performs no query embedding, vector-store retrieval, or reranking. Handles are process-local, bounded, and expire; stale or unavailable handles require a new search_codebase request.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `handle` | string | yes |  | Opaque handle returned by search_codebase for a frozen ranked result set. |
-| `expectedOffset` | integer | yes |  | Exact nextOffset from the search or continuation response. Retrying the same handle, expectedOffset, and limit replays the same page. |
-| `limit` | integer | no |  | Optional maximum number of additional groups. Defaults to the initial disclosure size. |
-
-### `call_graph`
-
-Traverse registry-resolved caller/callee relationships for indexed TS/JS/Python code. When a grouped search result has navigation.graph="ready", pass its target directly as symbolRef and use the envelope codebaseRoot as path. Relationship-backed CALLS v0 is heuristic and name-based (not a compiler-grade call graph); traversal is bounded, incomplete, advisory, and not authoritative blast-radius proof, so empty or short edge lists are not proof of no callers. Verify impact with search_codebase, read_file, tests, or direct references. In successful responses, sidecar.nodeCount and sidecar.edgeCount count only records returned in that response.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected). |
-| `symbolRef` | object | yes |  | Pass a graph-ready grouped search result target directly. |
-| `direction` | enum("callers", "callees", "both") | no | `"both"` | Traversal direction from the starting symbol. |
-| `depth` | integer | no | `1` | Traversal depth (max 3). |
-| `limit` | integer | no | `20` | Maximum number of returned edges. |
-
-### `file_outline`
-
-Return a sidecar-backed symbol outline for one file, including call_graph jump handles.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE filesystem path to the indexed codebase root (relative paths are rejected). |
-| `file` | string | yes |  | Repo-relative file path inside the codebase root (not absolute; resolved only against that root). |
-| `start_line` | integer | no |  | Optional start line filter (1-based, inclusive). |
-| `end_line` | integer | no |  | Optional end line filter (1-based, inclusive). |
-| `limitSymbols` | integer | no | `500` | Maximum number of returned symbols after line filtering. |
-| `resolveMode` | enum("outline", "exact") | no | `"outline"` | Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file. |
-| `symbolIdExact` | string | no |  | Used with resolveMode="exact": exact symbol identifier match in the target file. On symbol-owned flows, pass the symbol's symbolInstanceId. |
-| `symbolLabelExact` | string | no |  | Used with resolveMode="exact": exact symbol label match in the target file. |
-
-### `read_file`
-
-Read source only under an indexed/searchable Satori root. Ordinary explicit ranges longer than 40 lines return a compact one-line envelope with a declaration preview and the complete exact source; pass presentation='full' for raw multiline source. Unversioned open_symbol startLine/endLine requests always return exact source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `path` | string | yes |  | ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected). |
-| `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
-| `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
-| `mode` | enum("plain", "annotated") | no |  | Output mode. Required for exact-symbol context requests. Other reads default to plain. |
-| `presentation` | enum("compact", "full") | no |  | Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source. |
-| `open_symbol` | object | no |  | Strict exact-symbol context or direct-span request. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine. |
-
-### `list_codebases`
-
-List tracked codebases and their indexing state.
-
-No parameters.
-
+| Tool | Purpose |
+|---|---|
+| `manage_index` | Create, synchronize, inspect, repair, reindex, or clear a repository index. |
+| `search_codebase` | Run freshness-aware hybrid search and return symbol-owned evidence. |
+| `continue_search` | Continue a frozen result set without rerunning retrieval. |
+| `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. |
+| `file_outline` | List the symbols in one indexed file. |
+| `read_file` | Read a bounded source span or one exact indexed symbol. |
+| `list_codebases` | List known indexed repositories and their readiness state. |
 
 <!-- TOOLS_END -->
 
-## Notes
+## Runtime Boundaries
 
-- Exact `open_symbol` requires `mode` plus `contractVersion: 2`, exactly one of `symbolId`/`symbolLabel`, and exactly one of `context`/`continuation`; success is one bounded structured `symbol_context` package in both modes. Direct spans remain unversioned `startLine`/`endLine` source reads. On symbol-owned flows, `symbolId` should carry `symbolInstanceId`.
-- `MILVUS_TOKEN` is optional auth; local unauthenticated Milvus only needs `MILVUS_ADDRESS`.
-- MCP startup does not require provider credentials or a live selected backend. Provider-backed calls report `MISSING_PROVIDER_CONFIG` when setup is incomplete.
-- `MISSING_PROVIDER_CONFIG` is an active setup failure only when it appears as a tool response `code` or `reason`.
+- The server does not edit repository source.
+- `read_file` is not a general host-filesystem reader.
+- Inbound call-graph evidence is advisory and should be verified before blast-radius edits.
+- Provider, model, dimensions, projection, and vector backend are persisted compatibility identities; changing them requires a reindex.
+- Multiple incompatible live Satori runtimes are blocked from mutating the same publication.
 
-## Local Development
+## Development
 
 ```bash
-pnpm --filter @zokizuan/satori-mcp start
 pnpm --filter @zokizuan/satori-mcp build
-pnpm --filter @zokizuan/satori-mcp typecheck
 pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-mcp docs:check
 ```
 
-`build` regenerates the tool reference from live tool schemas.
+Node.js 22.13 or newer is required. Satori is MIT licensed.

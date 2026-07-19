@@ -409,6 +409,46 @@ test('read_file start_line + end_line returns exact inclusive range', async () =
     });
 });
 
+test('read_file compacts large explicit ranges and full presentation restores exact source', async () => {
+    await withTempDir(async (dir) => {
+        const filePath = path.join(dir, 'large-range.ts');
+        const lines = [
+            '    });',
+            '}',
+            "test('manage status prepares one reusable proof', async () => {",
+            ...Array.from({ length: 41 }, (_, index) => `    const value${index} = ${index};`),
+            '});',
+        ];
+        fs.writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf8');
+        const snapshot = { snapshotManager: indexedSnapshot(dir) };
+
+        const compact = await runReadFile({
+            path: filePath,
+            start_line: 1,
+            end_line: lines.length,
+        }, 1000, snapshot);
+        assert.equal(compact.content[0].text.includes('\n'), false);
+        const compactPayload = JSON.parse(compact.content[0].text);
+        assert.deepEqual(compactPayload, {
+            presentation: 'compact',
+            path: path.resolve(filePath),
+            startLine: 1,
+            endLine: 45,
+            preview: "test('manage status prepares one reusable proof', async () => {",
+            source: lines.join('\n'),
+        });
+        assert.deepEqual(compact.structuredContent, compactPayload);
+
+        const full = await runReadFile({
+            path: filePath,
+            start_line: 1,
+            end_line: lines.length,
+            presentation: 'full',
+        }, 1000, snapshot);
+        assert.equal(full.content[0].text, lines.join('\n'));
+    });
+});
+
 test('read_file clamps out-of-range inputs safely', async () => {
     await withTempDir(async (dir) => {
         const filePath = path.join(dir, 'clamp.ts');

@@ -133,8 +133,11 @@ test('read_file schema includes optional start_line and end_line parameters', ()
     assert.ok(properties.start_line);
     assert.ok(properties.end_line);
     assert.ok(properties.mode);
+    assert.ok(properties.presentation);
     assert.ok(properties.open_symbol);
     assert.equal(Object.prototype.hasOwnProperty.call(properties.mode, 'default'), false);
+    assert.deepEqual(properties.presentation.enum, ['compact', 'full']);
+    assert.equal(Object.prototype.hasOwnProperty.call(properties.presentation, 'default'), false);
 
     const required = readFileTool!.inputSchema.required as string[];
     assert.deepEqual(required, ['path']);

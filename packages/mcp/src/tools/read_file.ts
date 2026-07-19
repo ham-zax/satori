@@ -40,6 +40,7 @@ export const readFileInputSchema = z.object({
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
     mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Required for exact-symbol context requests. Other reads default to plain."),
+    presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
     open_symbol: openSymbolRequestSchema.optional().describe("Strict exact-symbol context or direct-span request. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
     if (!input.open_symbol) return;
@@ -48,6 +49,13 @@ export const readFileInputSchema = z.object({
             code: z.ZodIssueCode.custom,
             path: ["open_symbol"],
             message: "open_symbol cannot be combined with top-level line ranges.",
+        });
+    }
+    if (input.presentation !== undefined) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["presentation"],
+            message: "presentation applies only to ordinary reads and cannot be combined with open_symbol.",
         });
     }
     if (exactSymbolOpenRequestSchema.safeParse(input.open_symbol).success && input.mode === undefined) {
@@ -77,6 +85,33 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeRelativePath(value: string): string {
     return value.replace(/\\/g, "/");
+}
+
+const READ_FILE_AUTO_COMPACT_MIN_LINES = 41;
+const TOP_LEVEL_DECLARATION = /^(?:(?:export|default|declare|abstract|async|public|private|protected|static|sealed|final|open|internal|external|pub(?:\([^)]*\))?)\s+)*(?:function|class|interface|type|enum|namespace|module|const|let|var|def|struct|trait|impl|fn|func|record|object|data\s+class|test|it|describe|beforeEach|afterEach|beforeAll|afterAll)\b|^(?:test|it|describe|beforeEach|afterEach|beforeAll|afterAll)(?:\.(?:only|skip|todo))?\s*\(/;
+
+type ReadFileCompactEnvelope = {
+    presentation: "compact";
+    path: string;
+    startLine: number;
+    endLine: number;
+    preview: string;
+    source: string;
+};
+
+function compactSourceRange(lines: string[], startLine: number, endLine: number, absolutePath: string): ReadFileCompactEnvelope {
+    const declarationAnchor = lines.find(
+        (line) => line.length > 0 && !/^\s/.test(line) && TOP_LEVEL_DECLARATION.test(line),
+    );
+    const firstNonBlank = lines.find((line) => line.trim().length > 0);
+    return {
+        presentation: "compact",
+        path: absolutePath,
+        startLine,
+        endLine,
+        preview: declarationAnchor ?? firstNonBlank ?? "",
+        source: lines.join("\n"),
+    };
 }
 
 type ReadFileSearchableStatus = 'indexed' | 'sync_completed' | 'indexing';
@@ -409,7 +444,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read source only under an indexed/searchable Satori root. Ordinary reads and unversioned open_symbol startLine/endLine requests return source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.",
+        "Read source only under an indexed/searchable Satori root. Ordinary explicit ranges longer than 40 lines return a compact one-line envelope with a declaration preview and the complete exact source; pass presentation='full' for raw multiline source. Unversioned open_symbol startLine/endLine requests always return exact source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -723,7 +758,24 @@ export const readFileTool: McpTool = {
                 addContinuationHint = false;
             }
 
-            const selected = totalLines === 0 ? content : lines.slice(startLine - 1, endLine).join("\n");
+            const selectedLines = totalLines === 0 ? [] : lines.slice(startLine - 1, endLine);
+            const shouldCompact = !input.open_symbol && (
+                input.presentation === "compact"
+                || (
+                    input.presentation !== "full"
+                    && hasStart
+                    && hasEnd
+                    && selectedLines.length >= READ_FILE_AUTO_COMPACT_MIN_LINES
+                )
+            );
+            const compactEnvelope = shouldCompact
+                ? compactSourceRange(selectedLines, startLine, endLine, absolutePath)
+                : undefined;
+            const selected = totalLines === 0
+                ? content
+                : compactEnvelope
+                    ? JSON.stringify(compactEnvelope)
+                    : selectedLines.join("\n");
             const nextStartLine = addContinuationHint ? endLine + 1 : undefined;
             const hint = addContinuationHint
                 ? `\n\n(File truncated at line ${endLine}. To read more, call read_file with path="${absolutePath}" and start_line=${nextStartLine}.)`
@@ -735,7 +787,8 @@ export const readFileTool: McpTool = {
                     content: [{
                         type: "text",
                         text: contentWithHint
-                    }]
+                    }],
+                    ...(compactEnvelope ? { structuredContent: compactEnvelope } : {}),
                 };
             }
 

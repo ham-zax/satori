@@ -225,7 +225,7 @@ Return a sidecar-backed symbol outline for one file, including call_graph jump h
 
 ### `read_file`
 
-Read source only under an indexed/searchable Satori root. Ordinary reads and unversioned open_symbol startLine/endLine requests return source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.
+Read source only under an indexed/searchable Satori root. Ordinary explicit ranges longer than 40 lines return a compact one-line envelope with a declaration preview and the complete exact source; pass presentation='full' for raw multiline source. Unversioned open_symbol startLine/endLine requests always return exact source text. Exact symbolId/symbolLabel requests require mode plus open_symbol contractVersion 2 and exactly one context or continuation operation; they return one bounded structured symbol_context package in both modes. The canonical real path must remain inside a tracked indexed or sync_completed root.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -233,6 +233,7 @@ Read source only under an indexed/searchable Satori root. Ordinary reads and unv
 | `start_line` | integer | no |  | Optional start line (1-based, inclusive). |
 | `end_line` | integer | no |  | Optional end line (1-based, inclusive). |
 | `mode` | enum("plain", "annotated") | no |  | Output mode. Required for exact-symbol context requests. Other reads default to plain. |
+| `presentation` | enum("compact", "full") | no |  | Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source. |
 | `open_symbol` | object | no |  | Strict exact-symbol context or direct-span request. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine. |
 
 ### `list_codebases`

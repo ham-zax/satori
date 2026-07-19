@@ -5765,6 +5765,67 @@ test('handleSearchCode exposes freshness summary and warns when dirty files were
     });
 });
 
+test('handleSearchCode forces an exact freshness comparison for a dirty working tree', async () => {
+    await withTempRepo(async (repoPath) => {
+        const relativePath = 'src/recently-synced.ts';
+        fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+        fs.writeFileSync(
+            path.join(repoPath, relativePath),
+            'export function recentlySyncedOwner() { return true; }\n',
+        );
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function recentlySyncedOwner() { return true; }',
+            relativePath,
+            startLine: 1,
+            endLine: 1,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_recently_synced_owner',
+            symbolLabel: 'function recentlySyncedOwner()',
+        }]);
+        const thresholds: number[] = [];
+        (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
+            ensureFreshness: async (_codebasePath: string, thresholdMs: number) => {
+                thresholds.push(thresholdMs);
+                return thresholdMs === 0
+                    ? {
+                        mode: 'synced',
+                        checkedAt: '2026-01-01T00:31:00.000Z',
+                        thresholdMs,
+                        stats: { added: 0, removed: 0, modified: 0 },
+                    }
+                    : {
+                        mode: 'skipped_recent',
+                        checkedAt: '2026-01-01T00:31:00.000Z',
+                        thresholdMs,
+                        lastSyncAt: '2026-01-01T00:30:59.000Z',
+                    };
+            },
+        } as unknown as HandlerSyncManager;
+        (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+            available: true,
+            files: new Set([relativePath]),
+        });
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'recently synced owner',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.deepEqual(thresholds, [0]);
+        assert.equal(payload.freshnessDecision.mode, 'synced');
+        assert.equal(payload.results[0].target.file, relativePath);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), false);
+        assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE'), false);
+    });
+});
+
 test('handleSearchCode preserves successful results when watcher maintenance fails', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [{

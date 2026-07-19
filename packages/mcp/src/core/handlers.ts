@@ -3469,6 +3469,7 @@ export class ToolHandlers {
         };
         let preservePreparedProofAge = false;
         let releasePublicationReadLease: (() => void) | undefined;
+        let observedChangedFilesForSearch: { available: boolean; files: Set<string> } | undefined;
 
         const readinessPhaseToSearchPhase = {
             snapshot_reload: 'snapshotReload',
@@ -3552,22 +3553,31 @@ export class ToolHandlers {
                 ensureSearchFreshness: (effectiveRoot, preparedRead) => this.measureSearchPhase(
                     phaseTimings,
                     'ensureFreshness',
-                    // Status-prepared proof reuse is one-shot and already compared the
-                    // complete local authority/source observation. It does not claim a
-                    // new filesystem comparison; the existing source warning remains.
-                    () => preparedRead?.statusPrepared === true
-                        ? Promise.resolve({
-                            mode: 'skipped_recent' as const,
-                            checkedAt: new Date(this.now()).toISOString(),
-                            thresholdMs: SEARCH_FRESHNESS_THRESHOLD_MS,
-                        })
-                        : this.syncManager.ensureFreshness(
+                    () => {
+                        const changedFilesState = this.getChangedFilesForCodebase(effectiveRoot);
+                        observedChangedFilesForSearch = changedFilesState;
+                        const exactSourceComparisonRequired = changedFilesState.available
+                            && changedFilesState.files.size > 0;
+
+                        // A recent sync timestamp does not prove that Git-dirty files still
+                        // match the published generation. Compare them exactly so search does
+                        // not suppress synchronized persisted evidence behind a bounded overlay.
+                        if (preparedRead?.statusPrepared === true && !exactSourceComparisonRequired) {
+                            return Promise.resolve({
+                                mode: 'skipped_recent' as const,
+                                checkedAt: new Date(this.now()).toISOString(),
+                                thresholdMs: SEARCH_FRESHNESS_THRESHOLD_MS,
+                            });
+                        }
+
+                        return this.syncManager.ensureFreshness(
                             effectiveRoot,
-                            SEARCH_FRESHNESS_THRESHOLD_MS,
+                            exactSourceComparisonRequired ? 0 : SEARCH_FRESHNESS_THRESHOLD_MS,
                             preparedRead?.vectorReceipt
                                 ? { preparedVectorReceipt: preparedRead.vectorReceipt }
                                 : {},
-                        ),
+                        );
+                    },
                 ),
                 noteFreshnessMode: (mode) => {
                     searchDiagnostics.freshnessMode = mode;
@@ -3701,7 +3711,8 @@ export class ToolHandlers {
                 removedByExclude: 0,
             };
             const initialOperatorSummary = this.searchQuerySupport.buildOperatorSummary(parsedOperators);
-            const initialObservedChangedFilesState = this.getChangedFilesForCodebase(effectiveRoot);
+            const initialObservedChangedFilesState = observedChangedFilesForSearch
+                ?? this.getChangedFilesForCodebase(effectiveRoot);
             const initialChangedFilesState = input.rankingMode === 'auto_changed_first'
                 ? initialObservedChangedFilesState
                 : { available: initialObservedChangedFilesState.available, files: new Set<string>() };

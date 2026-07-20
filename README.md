@@ -13,7 +13,7 @@ Satori turns a repository into a freshness-aware code map. MCP-compatible agents
 Requirements: Node.js 22.13+ and Linux x64 (native Linux or WSL2).
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
+npx -y @zokizuan/satori-cli@latest install --client all
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 

@@ -9,7 +9,7 @@ The CLI installs one managed MCP runtime, writes a stable launcher under `~/.sat
 Offline on Linux x64 or Windows through WSL2:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline
+npx -y @zokizuan/satori-cli@latest install --client all
 npx -y @zokizuan/satori-cli@latest doctor
 ```
 
@@ -28,14 +28,14 @@ The offline package carries a checksum-pinned 36.0 MiB Potion model/helper closu
 
 ```text
 install [--client all|codex|claude|opencode]
-        [--runtime voyage|offline]
+        [--runtime offline|voyage] # defaults to offline Potion
         [--vector-store lancedb|milvus]
         [--ollama-model <model>]
         [--profile default|minimal|all-text]
         [--dry-run]
         [--install-guidance-hook]
 
-doctor
+doctor [--verbose] [--json]
 uninstall [--client all|codex|claude|opencode] [--dry-run]
 tools list
 tool call <toolName> --args-json '<json>'
@@ -51,6 +51,8 @@ Global flags must precede the command token:
 --format json|text
 --debug
 ```
+
+`doctor` prints a concise human summary by default. Use `doctor --verbose` for paths, individual successful checks, package sources, and local diagnostics. Use `doctor --json` or the compatible global form `--format json doctor` for the complete machine-readable result.
 
 ## Runtime Ownership
 

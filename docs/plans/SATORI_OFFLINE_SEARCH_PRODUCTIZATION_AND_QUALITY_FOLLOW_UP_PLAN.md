@@ -166,12 +166,13 @@ to another platform automatically.
 **Trigger:** satisfied by the accepted direct retrieval result, the bounded
 Linux x64 lifecycle, and the user's explicit promotion decision. The promotion
 claim remains narrow: Potion is the default dense provider for a **new Linux x64
-offline installation**. The CLI's general install default remains the connected
-Voyage runtime.
+installation**. The CLI's general install default is the offline Potion runtime
+on supported Linux x64 hosts; connected Voyage remains explicitly selectable.
 
 The implementation rules are:
 
-* `install --runtime offline` with no model override selects Potion;
+* `install` and `install --runtime offline` with no model override select Potion;
+* `install --runtime voyage` explicitly selects the connected Voyage runtime;
 * `install --runtime offline --ollama-model <model>` selects Ollama;
 * reinstalling an existing managed Ollama configuration preserves Ollama;
 * conflicting ambient provider/model/dimension values fail rather than silently

@@ -43,6 +43,8 @@ tool call <toolName> --args-file <path>
 <toolName> [schema-driven flags]
 ```
 
+Codex receives the Satori skill and a conditional AGENTS guidance block by default. `--install-guidance-hook` additionally writes one opt-in `SessionStart` reminder to `~/.codex/hooks.json`; it preserves unrelated hook entries and may require Codex's one-time hook trust review. The reminder presents Satori as an option for semantic or freshness-aware discovery rather than requiring it for every task.
+
 Global flags must precede the command token:
 
 ```text

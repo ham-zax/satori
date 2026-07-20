@@ -78,7 +78,9 @@ const CODEX_ENV_TEMPLATE_LINES = [
     "# MILVUS_TOKEN = \"your-zilliz-token\"",
     CODEX_ENV_TEMPLATE_END,
 ] as const;
-const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP: use search_codebase for semantic ownership/context discovery, then use the returned codebaseRoot and canonical target for call_graph/read_file proof. Use exact ids/constants with operators when known; verify inbound impact with rg/tests. Reindex only on requires_reindex/hints.reindex.";
+const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP is available. Consider search_codebase for unfamiliar behavior, semantic ownership, or freshness-aware discovery; for known paths and exact literals, native tools may be simpler. If used, follow recommendedNextAction for bounded proof, treat call_graph as advisory, and never create, reindex, or clear without explicit user approval.";
+const CODEX_GUIDANCE_HOOK_MATCHER = "startup|resume|clear|compact";
+const CODEX_GUIDANCE_HOOK_TIMEOUT_SECONDS = 5;
 const CODEX_GUIDANCE_HOOK_SCRIPT = [
     `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
     'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
@@ -98,17 +100,18 @@ const CODEX_GUIDANCE_HOOK_SCRIPT = [
 const CODEX_GUIDANCE_HOOK_COMMAND = `sh -lc '${CODEX_GUIDANCE_HOOK_SCRIPT}'`;
 const CODEX_AGENT_INSTRUCTIONS = `# Satori MCP
 
-This project uses Satori MCP for semantic-first code exploration, freshness-aware navigation, and index lifecycle management.
+Satori MCP is available for semantic ownership discovery, freshness-aware navigation, and index lifecycle inspection. Use it when those capabilities help; known paths, exact literals, and small local edits may be simpler with native tools.
 
-## Priority Order
+## Suggested Satori Flow
 1. \`search_codebase\` - Start with plain-English behavior or ownership queries; narrow with \`lang:\`, \`path:\`, \`must:\`, and \`exclude:\`
-2. \`file_outline\` - lock exact symbol spans before reading or editing
-3. \`call_graph\` - inspect outbound relationships and available caller/callee context when supported
-4. \`read_file\` - open canonical bounded symbol context or bounded line windows for final evidence
-5. \`manage_index\` - check status, create, sync, reindex, or clear only when explicitly needed
+2. \`continue_search\` - reveal more groups from the same frozen ranking when a continuation is returned
+3. \`read_file\` - follow the canonical bounded request returned by search for final source evidence
+4. \`call_graph\` - inspect advisory callers/callees only for graph-ready targets
+5. \`file_outline\` - request file-wide outline metadata or exact disambiguation when needed
+6. \`list_codebases\` / \`manage_index\` - inspect lifecycle state; mutate it only when the task authorizes that action
 
-## When To Use Satori
-- Use Satori primarily for semantic code exploration: finding behavioral owners, context-building, and understanding how a feature is implemented.
+## When Satori Helps
+- Use Satori when semantic exploration would add value: finding behavioral owners, building context, or understanding an unfamiliar implementation.
 - Prefer plain-English queries first when the task is about intent, policy, ownership, runtime behavior, or unfamiliar code.
 - Switch to exact identifiers, constants, warning codes, and path-scoped operators when narrowing or proving a candidate result.
 
@@ -117,28 +120,30 @@ This project uses Satori MCP for semantic-first code exploration, freshness-awar
 - Read every \`warnings[].action\`; warnings are degraded, not fatal, unless \`blocksUse=true\`.
 - Grouped \`formatVersion: 2\` results expose one canonical \`target\`. Prefer the returned \`recommendedNextAction\`. For a concrete symbol, the canonical read uses \`mode="plain"\` and \`open_symbol={contractVersion:2,symbolId,context:{preset:"implementation"}}\`; otherwise read the 1-based inclusive \`target.span\`.
 - Pass \`target\` directly to \`call_graph\` only when \`navigation.graph="ready"\`; that state always carries \`navigation.inbound="verify"\`. Use optional \`callerSearchTerm\` in a separate \`must:<term> <term>\` search to verify inbound references.
-- If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and run \`manage_index(action="reindex")\`; do not substitute \`sync\`.
+- If any tool returns \`requires_reindex\` or \`hints.reindex\`, stop and report the exact reason. Obtain explicit user approval before \`create\` or \`reindex\`; do not substitute \`sync\` for a required rebuild.
+- Never call \`manage_index(action="clear")\` without explicit user authorization.
 - Do not treat call_graph inbound results as sole authority for blast radius; verify inbound impact with rg, tests, or direct references.
 - For ultra-fast exact literal lookup, local lexical search may still be faster; use Satori when semantic ownership or freshness-aware navigation matters.
 `;
 const OPENCODE_INSTRUCTIONS = `# Satori MCP
 
-This project uses Satori MCP for plain-English semantic code discovery, deterministic proof navigation, and index lifecycle management.
+Satori MCP is available for plain-English semantic discovery, deterministic proof navigation, and index lifecycle inspection. Use it when those capabilities help; native tools remain appropriate for known paths and exact literals.
 
-## Priority Order
+## Suggested Satori Flow
 1. \`search_codebase\` - start with behavior/concept queries; use exact identifiers or constants when known
-2. \`file_outline\` - lock exact symbol spans before reading or editing
-3. \`call_graph\` - inspect callers and callees when supported
-4. \`read_file\` - open canonical bounded symbol context or fallback windows
-5. \`manage_index\` - create, sync, reindex, or inspect index status
+2. \`continue_search\` - reveal more groups from the same frozen ranking when available
+3. \`read_file\` - follow the returned canonical bounded source request
+4. \`call_graph\` - inspect advisory callers/callees only for graph-ready targets
+5. \`file_outline\` - request outline metadata or exact disambiguation when needed
+6. \`list_codebases\` / \`manage_index\` - inspect lifecycle state; mutate it only with task authority
 
 ## Rules
-- Prefer Satori for semantic code discovery before grep/glob.
+- Consider Satori when the task needs semantic ownership discovery, unfamiliar-flow exploration, or freshness-aware navigation.
 - Start with plain-English behavior questions; switch to exact ids, constants, and operators for proof.
 - Prefer the envelope \`recommendedNextAction\` and inspect every \`warnings[].action\`.
 - In grouped \`formatVersion: 2\` output, use \`recommendedNextAction\`; exact-symbol reads require \`mode\`, \`contractVersion: 2\`, one identity, and one context or continuation operation. Pass \`target\` to \`call_graph\` only when \`navigation.graph="ready"\`.
 - Treat graph-ready \`navigation.inbound="verify"\` as mandatory caller verification. Use optional \`callerSearchTerm\` with a separate \`must:<term> <term>\` search before treating inbound graph results as complete.
-- If a tool returns \`requires_reindex\`, run \`manage_index(action="reindex")\` and retry the original call.
+- If a tool returns \`requires_reindex\`, report the exact reason and obtain explicit user approval before reindexing. Never clear an index without explicit authorization.
 - Read the relevant implementation and call sites before editing behavior.
 `;
 
@@ -199,9 +204,11 @@ export interface ClientInstallResult {
     configPath: string;
     skillsPath?: string;
     instructionsPath?: string;
+    guidanceHookPath?: string;
     configChanged: boolean;
     skillsChanged: boolean;
     instructionsChanged: boolean;
+    guidanceHookChanged: boolean;
     status: "updated" | "unchanged";
     dryRun: boolean;
 }
@@ -240,7 +247,8 @@ interface ClientTarget {
 
 type CompanionTarget =
     | { kind: "skills"; path: string }
-    | { kind: "instructions"; path: string; instructions: string };
+    | { kind: "instructions"; path: string; instructions: string }
+    | { kind: "guidance-hook"; path: string };
 
 interface CompanionMutation {
     companion: CompanionTarget;
@@ -312,6 +320,10 @@ function resolveClientTargets(homeDir: string): ClientTarget[] {
                     kind: "instructions",
                     path: path.join(homeDir, ".codex", "AGENTS.md"),
                     instructions: CODEX_AGENT_INSTRUCTIONS,
+                },
+                {
+                    kind: "guidance-hook",
+                    path: path.join(homeDir, ".codex", "hooks.json"),
                 },
             ],
         },
@@ -762,21 +774,7 @@ function buildCodexEnvTemplateBlock(): string {
     return `${CODEX_ENV_TEMPLATE_LINES.join("\n")}\n`;
 }
 
-function buildCodexGuidanceHookBlock(): string {
-    return [
-        CODEX_GUIDANCE_HOOK_START,
-        "[[hooks.SessionStart]]",
-        `matcher = ${toTomlString("startup|resume|clear|compact")}`,
-        "",
-        "[[hooks.SessionStart.hooks]]",
-        `type = ${toTomlString("command")}`,
-        `command = ${toTomlString(CODEX_GUIDANCE_HOOK_COMMAND)}`,
-        CODEX_GUIDANCE_HOOK_END,
-        "",
-    ].join("\n");
-}
-
-function removeCodexGuidanceHookBlock(content: string): string {
+function removeLegacyCodexGuidanceHookBlock(content: string): string {
     if (!content.includes(CODEX_GUIDANCE_HOOK_START) || !content.includes(CODEX_GUIDANCE_HOOK_END)) {
         return content;
     }
@@ -797,17 +795,6 @@ function ensureCodexEnvTemplate(content: string): string {
     return `${normalizeTrailingNewline(content)}\n${buildCodexEnvTemplateBlock()}`;
 }
 
-function ensureCodexGuidanceHook(content: string): string {
-    const block = buildCodexGuidanceHookBlock();
-    if (content.includes(CODEX_GUIDANCE_HOOK_START) && content.includes(CODEX_GUIDANCE_HOOK_END)) {
-        return content.replace(
-            new RegExp(`${escapeRegExp(CODEX_GUIDANCE_HOOK_START)}[\\s\\S]*?${escapeRegExp(CODEX_GUIDANCE_HOOK_END)}\\n?`, "m"),
-            block
-        );
-    }
-    return `${normalizeTrailingNewline(content)}\n${block}`;
-}
-
 function codexHasUnmanagedSatoriSection(content: string): boolean {
     if (!content.includes("[mcp_servers.satori]")) {
         return false;
@@ -815,7 +802,7 @@ function codexHasUnmanagedSatoriSection(content: string): boolean {
     return !(content.includes(MANAGED_BLOCK_START) && content.includes(MANAGED_BLOCK_END));
 }
 
-function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand, installGuidanceHook: boolean): FileMutation {
+function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const current = readTextIfExists(filePath) ?? "";
     if (codexHasUnmanagedSatoriSection(current)) {
         throw new CliError(
@@ -838,10 +825,7 @@ function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCom
         next = `${normalizeTrailingNewline(current)}\n${managedBlock}`;
     }
 
-    next = ensureCodexEnvTemplate(next);
-    if (installGuidanceHook) {
-        next = ensureCodexGuidanceHook(next);
-    }
+    next = removeLegacyCodexGuidanceHookBlock(ensureCodexEnvTemplate(next));
 
     return {
         changed: next !== current,
@@ -868,7 +852,7 @@ function prepareCodexUninstall(filePath: string): FileMutation {
         );
     }
     if (!current.includes(MANAGED_BLOCK_START) || !current.includes(MANAGED_BLOCK_END)) {
-        const next = removeCodexGuidanceHookBlock(current);
+        const next = removeLegacyCodexGuidanceHookBlock(current);
         return {
             changed: next !== current,
             apply: () => {
@@ -884,7 +868,7 @@ function prepareCodexUninstall(filePath: string): FileMutation {
         .replace(new RegExp(`\\n?${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"), "\n")
         .replace(/\n{3,}/g, "\n\n")
         .replace(/^\n+/, "");
-    const next = removeCodexGuidanceHookBlock(withoutManagedBlock);
+    const next = removeLegacyCodexGuidanceHookBlock(withoutManagedBlock);
 
     if (next === current) {
         return { changed: false, apply: () => {} };
@@ -916,6 +900,116 @@ function parseJsonObject(filePath: string): Record<string, unknown> {
         throw new CliError("E_USAGE", `Expected top-level JSON object in ${filePath}.`, 2);
     }
     return parsed as Record<string, unknown>;
+}
+
+function buildCodexGuidanceHookEntry(): Record<string, unknown> {
+    return {
+        matcher: CODEX_GUIDANCE_HOOK_MATCHER,
+        hooks: [{
+            type: "command",
+            command: CODEX_GUIDANCE_HOOK_COMMAND,
+            timeout: CODEX_GUIDANCE_HOOK_TIMEOUT_SECONDS,
+        }],
+    };
+}
+
+function codexSessionStartHooks(document: Record<string, unknown>, filePath: string): {
+    hooks: Record<string, unknown>;
+    entries: unknown[];
+} {
+    const hooks = document.hooks === undefined ? {} : objectValue(document.hooks);
+    if (!hooks) {
+        throw new CliError("E_USAGE", `Expected 'hooks' to be an object in ${filePath}.`, 2);
+    }
+    const entries = hooks.SessionStart === undefined ? [] : hooks.SessionStart;
+    if (!Array.isArray(entries)) {
+        throw new CliError("E_USAGE", `Expected 'hooks.SessionStart' to be an array in ${filePath}.`, 2);
+    }
+    return { hooks, entries };
+}
+
+function isManagedCodexGuidanceHook(value: unknown): boolean {
+    const entry = objectValue(value);
+    if (!entry || entry.matcher !== CODEX_GUIDANCE_HOOK_MATCHER || !Array.isArray(entry.hooks) || entry.hooks.length !== 1) {
+        return false;
+    }
+    const hook = objectValue(entry.hooks[0]);
+    return hook?.type === "command"
+        && typeof hook.command === "string"
+        && hook.command.includes("satori-codex-guidance.");
+}
+
+function hasManagedCodexGuidanceHook(filePath: string): boolean {
+    const current = readTextIfExists(filePath);
+    if (!current?.includes("satori-codex-guidance.")) {
+        return false;
+    }
+    const document = parseJsonObject(filePath);
+    return codexSessionStartHooks(document, filePath).entries.some(isManagedCodexGuidanceHook);
+}
+
+function prepareCodexGuidanceHookInstall(filePath: string): FileMutation {
+    const currentFile = readTextIfExists(filePath);
+    const document = parseJsonObject(filePath);
+    const { hooks, entries } = codexSessionStartHooks(document, filePath);
+    const canonical = buildCodexGuidanceHookEntry();
+    const managed = entries.filter(isManagedCodexGuidanceHook);
+    if (managed.length === 1 && JSON.stringify(managed[0]) === JSON.stringify(canonical)) {
+        return { changed: false, apply: () => {} };
+    }
+    const nextDocument = {
+        ...document,
+        hooks: {
+            ...hooks,
+            SessionStart: [...entries.filter((entry) => !isManagedCodexGuidanceHook(entry)), canonical],
+        },
+    };
+    const next = `${JSON.stringify(nextDocument, null, 2)}\n`;
+    return {
+        changed: next !== currentFile,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
+        apply: () => {
+            assertFileContentUnchanged(filePath, currentFile);
+            ensureParentDir(filePath);
+            fs.writeFileSync(filePath, next, { encoding: "utf8", mode: 0o600 });
+            fs.chmodSync(filePath, 0o600);
+        },
+    };
+}
+
+function prepareCodexGuidanceHookRemoval(filePath: string): FileMutation {
+    const currentFile = readTextIfExists(filePath);
+    if (!currentFile?.includes("satori-codex-guidance.")) {
+        return { changed: false, apply: () => {} };
+    }
+    const document = parseJsonObject(filePath);
+    const { hooks, entries } = codexSessionStartHooks(document, filePath);
+    const retained = entries.filter((entry) => !isManagedCodexGuidanceHook(entry));
+    if (retained.length === entries.length) {
+        return { changed: false, apply: () => {} };
+    }
+    const nextHooks = { ...hooks };
+    if (retained.length > 0) {
+        nextHooks.SessionStart = retained;
+    } else {
+        delete nextHooks.SessionStart;
+    }
+    const nextDocument = { ...document };
+    if (Object.keys(nextHooks).length > 0) {
+        nextDocument.hooks = nextHooks;
+    } else {
+        delete nextDocument.hooks;
+    }
+    const next = `${JSON.stringify(nextDocument, null, 2)}\n`;
+    return {
+        changed: next !== currentFile,
+        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
+        apply: () => {
+            assertFileContentUnchanged(filePath, currentFile);
+            fs.writeFileSync(filePath, next, { encoding: "utf8", mode: 0o600 });
+            fs.chmodSync(filePath, 0o600);
+        },
+    };
 }
 
 function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
@@ -1241,15 +1335,25 @@ function prepareInstructionsRemoval(filePath: string): FileMutation {
 function prepareCompanionMutation(
     companion: CompanionTarget,
     command: InstallCommandInput,
-    skillAssetRoot: string
+    skillAssetRoot: string,
+    installGuidanceHook: boolean,
 ): CompanionMutation {
-    const mutation = companion.kind === "skills"
-        ? (command.kind === "install"
+    let mutation: FileMutation;
+    if (companion.kind === "skills") {
+        mutation = command.kind === "install"
             ? prepareSkillInstall(companion.path, skillAssetRoot)
-            : prepareSkillRemoval(companion.path))
-        : command.kind === "install"
-        ? prepareInstructionsInstall(companion.path, companion.instructions)
-        : prepareInstructionsRemoval(companion.path);
+            : prepareSkillRemoval(companion.path);
+    } else if (companion.kind === "instructions") {
+        mutation = command.kind === "install"
+            ? prepareInstructionsInstall(companion.path, companion.instructions)
+            : prepareInstructionsRemoval(companion.path);
+    } else {
+        mutation = command.kind === "uninstall"
+            ? prepareCodexGuidanceHookRemoval(companion.path)
+            : installGuidanceHook
+            ? prepareCodexGuidanceHookInstall(companion.path)
+            : { changed: false, apply: () => {} };
+    }
     return {
         companion,
         changed: mutation.changed,
@@ -1267,7 +1371,7 @@ function prepareConfigMutation(
     let mutation: FileMutation;
     if (target.client === "codex") {
         mutation = command.kind === "install"
-            ? prepareCodexInstall(target.configPath, runtimeCommand, command.installGuidanceHook === true)
+            ? prepareCodexInstall(target.configPath, runtimeCommand)
             : prepareCodexUninstall(target.configPath);
     } else if (target.client === "claude") {
         mutation = command.kind === "install"
@@ -1287,9 +1391,19 @@ function prepareMutation(
     runtimeCommand: ManagedRuntimeCommand,
     skillAssetRoot: string
 ): PreparedMutation {
+    const legacyGuidanceHook = target.client === "codex"
+        && (readTextIfExists(target.configPath)?.includes(CODEX_GUIDANCE_HOOK_START) ?? false);
+    const guidanceHookTarget = target.companions.find((companion) => companion.kind === "guidance-hook");
+    const installGuidanceHook = command.kind === "install"
+        && target.client === "codex"
+        && (
+            command.installGuidanceHook === true
+            || legacyGuidanceHook
+            || (guidanceHookTarget ? hasManagedCodexGuidanceHook(guidanceHookTarget.path) : false)
+        );
     const configMutation = prepareConfigMutation(target, command, runtimeCommand);
     const companionMutations = target.companions.map((companion) => (
-        prepareCompanionMutation(companion, command, skillAssetRoot)
+        prepareCompanionMutation(companion, command, skillAssetRoot, installGuidanceHook)
     ));
 
     return {
@@ -1849,9 +1963,11 @@ export function applyInstallPlan(
             configPath: mutation.target.configPath,
             skillsPath: mutation.target.companions.find((companion) => companion.kind === "skills")?.path,
             instructionsPath: mutation.target.companions.find((companion) => companion.kind === "instructions")?.path,
+            guidanceHookPath: mutation.target.companions.find((companion) => companion.kind === "guidance-hook")?.path,
             configChanged: mutation.configChanged,
             skillsChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "skills" && entry.changed),
             instructionsChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "instructions" && entry.changed),
+            guidanceHookChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "guidance-hook" && entry.changed),
             status: mutation.configChanged || mutation.companionMutations.some((entry) => entry.changed) || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),

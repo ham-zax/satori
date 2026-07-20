@@ -695,7 +695,11 @@
             <pre><code>npx -y @zokizuan/satori-cli@latest install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
-              and installs the Satori skill in <code>~/.codex/skills</code>.
+              and installs conditional workflow guidance in
+              <code>~/.codex/AGENTS.md</code> plus the Satori skill in
+              <code>~/.codex/skills</code>. Add
+              <code>--install-guidance-hook</code> only when you also want an
+              opt-in session reminder in <code>~/.codex/hooks.json</code>.
             </p>
           </div>
           <div class="panel">
@@ -785,6 +789,7 @@
             <h3>Managed Files</h3>
             <ul>
               <li>Codex config: <code>~/.codex/config.toml</code>.</li>
+              <li>Optional Codex hook: <code>~/.codex/hooks.json</code>.</li>
               <li>Codex skills: <code>~/.codex/skills</code>.</li>
               <li>Claude config: <code>~/.claude.json</code>.</li>
               <li>Claude skills: <code>~/.claude/skills</code>.</li>

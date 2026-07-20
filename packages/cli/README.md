@@ -56,6 +56,8 @@ Global flags must precede the command token:
 
 `doctor` prints a concise human summary by default. Use `doctor --verbose` for paths, individual successful checks, package sources, and local diagnostics. Use `doctor --json` or the compatible global form `--format json doctor` for the complete machine-readable result.
 
+`install` and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt, or use `--debug` to expose MCP startup details during install verification.
+
 ## Runtime Ownership
 
 The installer persists non-secret runtime identity in its managed launcher. Provider keys and Milvus credentials remain client-owned environment values. Reinstall preserves compatible managed selections and rejects conflicting explicit provider or backend configuration instead of silently overriding it.

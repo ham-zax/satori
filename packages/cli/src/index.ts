@@ -26,6 +26,7 @@ import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
 import type { DoctorResult } from "./doctor.js";
 import { emitDoctorText } from "./doctor-format.js";
+import { emitInstallText } from "./install-format.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 
 interface RunCliOptions {
@@ -367,6 +368,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
+            const wantsJson = parsed.globals.formatExplicit && parsed.globals.format === "json";
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
@@ -386,19 +388,15 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     env: effectiveEnv,
                     startupTimeoutMs,
                     callTimeoutMs,
-                    writeStderr: writers.writeStderr,
+                    writeStderr: parsed.globals.debug ? writers.writeStderr : () => {},
                     connectSession: options.connectSession,
                 });
-                emitJson(writers, { ...result, postflight });
-                if (parsed.globals.format === "text") {
-                    writers.writeStderr(`satori-cli install postflight status=${postflight.status}.\n`);
-                }
+                if (wantsJson) emitJson(writers, { ...result, postflight });
+                else emitInstallText(writers, result, postflight);
                 return postflight.status === "error" ? 1 : 0;
             }
-            emitJson(writers, result);
-            if (parsed.globals.format === "text") {
-                writers.writeStderr(`satori-cli ${parsed.command.kind} completed for ${parsed.command.client}.\n`);
-            }
+            if (wantsJson) emitJson(writers, result);
+            else emitInstallText(writers, result);
             return 0;
         }
 

@@ -60,24 +60,6 @@ const SATORI_RUNTIME_ENV_VARS = [
     "MCP_ENABLE_WATCHER",
     "MCP_WATCH_DEBOUNCE_MS",
 ] as const;
-const CODEX_ENV_TEMPLATE_LINES = [
-    CODEX_ENV_TEMPLATE_START,
-    "# Optional direct Codex env values. Uncomment/fill these if you prefer",
-    "# ~/.codex/config.toml to store Satori runtime settings directly.",
-    "# This template is outside the launcher block so reinstall keeps edits.",
-    "# [mcp_servers.satori.env]",
-    "# SATORI_RUNTIME_PROFILE = \"connected\"",
-    "# VECTOR_STORE_PROVIDER = \"LanceDB\"",
-    "# LANCEDB_PATH = \"/absolute/path/to/.satori/vector/lancedb\"",
-    "# EMBEDDING_PROVIDER = \"VoyageAI\"",
-    "# EMBEDDING_MODEL = \"voyage-code-3\"",
-    "# EMBEDDING_OUTPUT_DIMENSION = \"1024\"",
-    "# VOYAGEAI_API_KEY = \"pa-...\"",
-    "# VOYAGEAI_RERANKER_MODEL = \"rerank-2.5\"",
-    "# MILVUS_ADDRESS = \"https://your-zilliz-endpoint\"",
-    "# MILVUS_TOKEN = \"your-zilliz-token\"",
-    CODEX_ENV_TEMPLATE_END,
-] as const;
 const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP is available. Consider search_codebase for unfamiliar behavior, semantic ownership, or freshness-aware discovery; for known paths and exact literals, native tools may be simpler. If used, follow recommendedNextAction for bounded proof, treat call_graph as advisory, and never create, reindex, or clear without explicit user approval.";
 const CODEX_GUIDANCE_HOOK_MATCHER = "startup|resume|clear|compact";
 const CODEX_GUIDANCE_HOOK_TIMEOUT_SECONDS = 5;
@@ -762,16 +744,12 @@ function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
         "[mcp_servers.satori]",
         `command = ${toTomlString(runtimeCommand.command)}`,
         `args = ${buildTomlArray(runtimeCommand.args)}`,
-        "# Satori reads provider/vector settings from environment at MCP startup.",
-        "# env_vars forwards these names from Codex's parent environment when set.",
+        "# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js.",
+        "# env_vars forwards optional credentials and operational overrides.",
         `env_vars = ${buildTomlArray([...SATORI_RUNTIME_ENV_VARS])}`,
         MANAGED_BLOCK_END,
         "",
     ].join("\n");
-}
-
-function buildCodexEnvTemplateBlock(): string {
-    return `${CODEX_ENV_TEMPLATE_LINES.join("\n")}\n`;
 }
 
 function removeLegacyCodexGuidanceHookBlock(content: string): string {
@@ -784,15 +762,14 @@ function removeLegacyCodexGuidanceHookBlock(content: string): string {
         .replace(/^\n+/, "");
 }
 
-function codexHasSatoriEnvTable(content: string): boolean {
-    return /^\s*\[mcp_servers\.satori\.env\]\s*$/m.test(content);
-}
-
-function ensureCodexEnvTemplate(content: string): string {
-    if (content.includes(CODEX_ENV_TEMPLATE_START) || codexHasSatoriEnvTable(content)) {
+function removeManagedCodexEnvTemplate(content: string): string {
+    if (!content.includes(CODEX_ENV_TEMPLATE_START) || !content.includes(CODEX_ENV_TEMPLATE_END)) {
         return content;
     }
-    return `${normalizeTrailingNewline(content)}\n${buildCodexEnvTemplateBlock()}`;
+    return content
+        .replace(new RegExp(`\\n?${escapeRegExp(CODEX_ENV_TEMPLATE_START)}[\\s\\S]*?${escapeRegExp(CODEX_ENV_TEMPLATE_END)}\\n?`, "m"), "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .replace(/^\n+/, "");
 }
 
 function codexHasUnmanagedSatoriSection(content: string): boolean {
@@ -825,7 +802,7 @@ function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCom
         next = `${normalizeTrailingNewline(current)}\n${managedBlock}`;
     }
 
-    next = removeLegacyCodexGuidanceHookBlock(ensureCodexEnvTemplate(next));
+    next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(next));
 
     return {
         changed: next !== current,
@@ -852,7 +829,7 @@ function prepareCodexUninstall(filePath: string): FileMutation {
         );
     }
     if (!current.includes(MANAGED_BLOCK_START) || !current.includes(MANAGED_BLOCK_END)) {
-        const next = removeLegacyCodexGuidanceHookBlock(current);
+        const next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(current));
         return {
             changed: next !== current,
             apply: () => {
@@ -868,7 +845,7 @@ function prepareCodexUninstall(filePath: string): FileMutation {
         .replace(new RegExp(`\\n?${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"), "\n")
         .replace(/\n{3,}/g, "\n\n")
         .replace(/^\n+/, "");
-    const next = removeLegacyCodexGuidanceHookBlock(withoutManagedBlock);
+    const next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(withoutManagedBlock));
 
     if (next === current) {
         return { changed: false, apply: () => {} };

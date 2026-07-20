@@ -1,5 +1,14 @@
 packages:
   - packages/*
 
+shellEmulator: true
+ignoreWorkspaceRootCheck: true
+preferFrozenLockfile: true
+autoInstallPeers: true
+dedupePeerDependents: true
+storeDir: ~/.pnpm-store
+cacheDir: ~/.pnpm-cache
+childConcurrency: 4
+
 ignoredBuiltDependencies:
   - faiss-node

@@ -744,11 +744,14 @@
           <div class="panel">
             <h3>Codex Runtime Env</h3>
             <p>
-              The generated <code>~/.codex/config.toml</code> entry includes
-              active <code>env_vars</code> forwarding and an optional commented
-              <code>[mcp_servers.satori.env]</code> template. Put literal values
-              outside the managed launcher block if you want reinstall-safe
-              direct config.
+              The installer stores the selected runtime in
+              <code>~/.satori/bin/satori-mcp.js</code>. The generated
+              <code>~/.codex/config.toml</code> entry forwards optional
+              credentials and operational overrides; it does not duplicate a
+              second provider/model selection.
+              Install and uninstall commands show a concise summary by default;
+              use <code>--format json</code> before the command for the complete
+              machine-readable receipt.
             </p>
           </div>
           <div class="panel">

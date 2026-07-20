@@ -232,7 +232,7 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
-test("runCli install updates config and emits the bounded postflight receipt", async () => {
+test("runCli install updates config and emits a quiet human summary", async () => {
     const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-home-"));
     const io = captureIo();
 
@@ -246,8 +246,9 @@ test("runCli install updates config and emits the bounded postflight receipt", a
                 runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
             }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
-            installPostflightRunner: async ({ homeDir: verifiedHome }) => {
+            installPostflightRunner: async ({ homeDir: verifiedHome, writeStderr }) => {
                 assert.equal(verifiedHome, homeDir);
+                writeStderr("[MCP] noisy startup detail\n");
                 return {
                     status: "ok",
                     checks: [{ name: "launcher", status: "ok", message: "verified" }],
@@ -259,24 +260,58 @@ test("runCli install updates config and emits the bounded postflight receipt", a
             callTimeoutMs: 100,
         });
 
-        const { stdout } = io.read();
+        const { stdout, stderr } = io.read();
         assert.equal(exitCode, 0);
-        const parsed = JSON.parse(stdout);
-        assert.equal(parsed.action, "install");
-        assert.equal(parsed.client, "codex");
-        assert.equal(parsed.postflight.status, "ok");
+        assert.match(stdout, /^Satori installed/m);
+        assert.match(stdout, /Runtime: Connected/);
+        assert.match(stdout, /Client: Codex/);
+        assert.match(stdout, /Verification: passed \(1 check\)/);
+        assert.match(stdout, /Restart Codex to load Satori/);
+        assert.equal(stderr, "");
+        assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
 });
 
+test("runCli install preserves the structured receipt when JSON is requested", async () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-json-home-"));
+    const io = captureIo();
+
+    try {
+        const exitCode = await runCli(["--format", "json", "install", "--client", "codex"], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { ...process.env, HOME: homeDir },
+            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installPreflightRunner: async () => ({
+                runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "offline" }),
+            }),
+            installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPostflightRunner: async () => ({
+                status: "ok",
+                checks: [{ name: "launcher", status: "ok", message: "verified" }],
+            }),
+        });
+
+        assert.equal(exitCode, 0);
+        const parsed = JSON.parse(io.read().stdout);
+        assert.equal(parsed.action, "install");
+        assert.equal(parsed.client, "codex");
+        assert.equal(parsed.postflight.status, "ok");
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
 test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem work", async () => {
-    for (const argv of [
+    for (const commandArgv of [
         ["install", "--client", "all", "--dry-run"],
         ["install", "--client", "all", "--runtime", "voyage", "--dry-run"],
         ["install", "--runtime", "offline", "--ollama-model", "nomic-embed-text", "--dry-run"],
     ]) {
+        const argv = ["--format", "json", ...commandArgv];
         const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-dry-run-home-"));
         const io = captureIo();
         let installabilityCalls = 0;
@@ -300,7 +335,7 @@ test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem
 
             assert.equal(exitCode, 0);
             const result = JSON.parse(io.read().stdout);
-            if (!argv.includes("--runtime") && !argv.includes("--ollama-model")) {
+            if (!commandArgv.includes("--runtime") && !commandArgv.includes("--ollama-model")) {
                 assert.equal(result.runtime, "offline");
             }
             assert.equal(installabilityCalls, 0);
@@ -696,7 +731,7 @@ test("runCli uninstall supports dry-run without writing files", async () => {
     const io = captureIo();
 
     try {
-        const exitCode = await runCli(["uninstall", "--client", "claude", "--dry-run"], {
+        const exitCode = await runCli(["--format", "json", "uninstall", "--client", "claude", "--dry-run"], {
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir },

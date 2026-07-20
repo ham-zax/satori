@@ -296,9 +296,9 @@ test("install writes managed Codex config block and copies packaged skill", asyn
         assert.equal(content.includes("\"VOYAGEAI_API_KEY\""), true);
         assert.equal(content.includes("\"EMBEDDING_OUTPUT_DIMENSION\""), true);
         assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
-        assert.equal(content.includes("# [mcp_servers.satori.env]"), true);
-        assert.equal(content.includes("# EMBEDDING_MODEL = \"voyage-code-3\""), true);
-        assert.equal(content.indexOf("# [mcp_servers.satori.env]") > content.indexOf("# <<< satori-cli managed satori end <<<"), true);
+        assert.equal(content.includes("# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js."), true);
+        assert.equal(content.includes("# [mcp_servers.satori.env]"), false);
+        assert.equal(content.includes("voyage-code-3"), false);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("dist/index.js"), false);
         assert.equal(content.includes('command = "npx"'), false);
@@ -926,6 +926,12 @@ test("install replaces an existing managed Codex block", async () => {
                 "startup_timeout_ms = 180000",
                 "# <<< satori-cli managed satori end <<<",
                 "",
+                "# >>> satori-cli optional satori env template >>>",
+                "# [mcp_servers.satori.env]",
+                "# SATORI_RUNTIME_PROFILE = \"connected\"",
+                "# EMBEDDING_PROVIDER = \"VoyageAI\"",
+                "# <<< satori-cli optional satori env template <<<",
+                "",
             ].join("\n"),
             "utf8"
         );
@@ -943,8 +949,9 @@ test("install replaces an existing managed Codex block", async () => {
         assert.equal(content.includes("env_vars = ["), true);
         assert.equal(content.includes("\"VOYAGEAI_API_KEY\""), true);
         assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
-        assert.equal(content.includes("# [mcp_servers.satori.env]"), true);
-        assert.equal(content.indexOf("# [mcp_servers.satori.env]") > content.indexOf("# <<< satori-cli managed satori end <<<"), true);
+        assert.equal(content.includes("# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js."), true);
+        assert.equal(content.includes("# >>> satori-cli optional satori env template >>>"), false);
+        assert.equal(content.includes("VoyageAI"), false);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("old-managed-satori"), false);
         assert.equal(content.includes("startup_timeout_ms"), false);
@@ -1478,7 +1485,8 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(codexConfig.includes("\"VOYAGEAI_API_KEY\""), true);
         assert.equal(codexConfig.includes("\"EMBEDDING_OUTPUT_DIMENSION\""), true);
         assert.equal(codexConfig.includes("\"MILVUS_ADDRESS\""), true);
-        assert.equal(codexConfig.includes("# [mcp_servers.satori.env]"), true);
+        assert.equal(codexConfig.includes("# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js."), true);
+        assert.equal(codexConfig.includes("# [mcp_servers.satori.env]"), false);
         assert.equal(codexConfig.includes('command = "npx"'), false);
         assert.equal(codexConfig.includes("startup_timeout_ms"), false);
         assert.equal(codexConfig.includes("node_modules"), false);

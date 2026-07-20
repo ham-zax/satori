@@ -89,8 +89,21 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
                 }
                 if (args.action === "status") {
                     statusPolls += 1;
-                    if (statusPolls < 3) {
+                    if (statusPolls === 1) {
                         return { isError: false, content: [{ type: "text", text: "🔄 Codebase '/repo' is currently being indexed." }] };
+                    }
+                    if (statusPolls === 2) {
+                        return {
+                            isError: false,
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    status: "not_ready",
+                                    reason: "indexing",
+                                    operation: { phase: "completed" },
+                                }),
+                            }],
+                        };
                     }
                     return { isError: false, content: [{ type: "text", text: `✅ Codebase '/repo' is fully indexed and ready for search. polls=${statusPolls}` }] };
                 }
@@ -144,6 +157,38 @@ test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const toolNames = parsed.tools.map((tool: { name: string }) => tool.name);
     assert.equal(toolNames.includes("manage_index"), true);
     assert.equal(toolNames.includes("search_codebase"), true);
+});
+
+test("runCli tool commands use the installed managed launcher by default", async () => {
+    const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-managed-cli-home-"));
+    const managedLauncherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    const io = captureIo();
+    let observedCommand: string | undefined;
+    let observedArgs: string[] | undefined;
+
+    try {
+        fs.mkdirSync(path.dirname(managedLauncherPath), { recursive: true });
+        fs.writeFileSync(managedLauncherPath, "// fixture managed launcher\n");
+
+        const exitCode = await runCli(["tools", "list"], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            env: { ...process.env, HOME: homeDir },
+            connectSession: async (options) => {
+                observedCommand = options.command;
+                observedArgs = options.args;
+                return createMockSession("normal");
+            },
+            startupTimeoutMs: 10000,
+            callTimeoutMs: 10000,
+        });
+
+        assert.equal(exitCode, 0);
+        assert.equal(observedCommand, process.execPath);
+        assert.deepEqual(observedArgs, [managedLauncherPath]);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
 });
 
 test("runCli fails with deterministic protocol error when session connection fails", async () => {
@@ -673,7 +718,7 @@ test("runCli uninstall supports dry-run without writing files", async () => {
     }
 });
 
-test("runCli returns the initial manage_index create kickoff response without polling status", async () => {
+test("runCli keeps its owned session alive until manage_index create completes", async () => {
     const io = captureIo();
 
     const exitCode = await runCli([
@@ -694,12 +739,12 @@ test("runCli returns the initial manage_index create kickoff response without po
 
     const { stdout } = io.read();
     assert.equal(exitCode, 0);
-    assert.equal(stdout.includes("started indexing"), true);
-    assert.equal(stdout.includes("fully indexed"), false);
-    assert.equal(stdout.includes("polls=3"), false);
+    assert.equal(stdout.includes("started indexing"), false);
+    assert.equal(stdout.includes("fully indexed"), true);
+    assert.equal(stdout.includes("polls=3"), true);
 });
 
-test("runCli does not wait on manage_index create/reindex under low call-timeout overrides", async () => {
+test("runCli does not let a low per-call timeout destroy an active managed index", async () => {
     const io = captureIo();
 
     const exitCode = await runCli([
@@ -721,9 +766,9 @@ test("runCli does not wait on manage_index create/reindex under low call-timeout
     const { stdout, stderr } = io.read();
     assert.equal(exitCode, 0);
     assert.equal(stderr.includes("E_CALL_TIMEOUT"), false);
-    assert.equal(stdout.includes("started indexing"), true);
-    assert.equal(stdout.includes("fully indexed"), false);
-    assert.equal(stdout.includes("polls=3"), false);
+    assert.equal(stdout.includes("started indexing"), false);
+    assert.equal(stdout.includes("fully indexed"), true);
+    assert.equal(stdout.includes("polls=3"), true);
 });
 
 test("runCli emits deterministic JSON error payload for tool-call timeout instead of empty stdout", async () => {

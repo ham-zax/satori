@@ -9,7 +9,7 @@ import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } fr
 import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
-import { emitError, emitJson, parseStructuredEnvelope } from "./format.js";
+import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
 import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
 import type {
     InstallPreflightDependencies,
@@ -81,6 +81,8 @@ interface TextContentEntry {
     text: string;
 }
 
+const DEFAULT_MANAGE_INDEX_POLL_INTERVAL_MS = 250;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null;
 }
@@ -94,6 +96,61 @@ function firstText(result: unknown): string | null {
         isRecord(item) && item.type === "text" && typeof item.text === "string"
     ));
     return entry?.text ?? null;
+}
+
+function parseToolPayload(result: unknown): Record<string, unknown> | null {
+    const text = firstText(result);
+    if (!text) {
+        return null;
+    }
+    try {
+        const payload: unknown = JSON.parse(text);
+        return isRecord(payload) ? payload : null;
+    } catch {
+        return null;
+    }
+}
+
+function operationPhase(result: unknown): string | null {
+    const operation = parseToolPayload(result)?.operation;
+    return isRecord(operation) && typeof operation.phase === "string"
+        ? operation.phase
+        : null;
+}
+
+function shouldAwaitManagedIndex(toolName: string, args: Record<string, unknown>): boolean {
+    return toolName === "manage_index"
+        && (args.action === "create" || args.action === "reindex")
+        && typeof args.path === "string";
+}
+
+function isManageIndexTerminal(result: unknown): boolean {
+    const phase = operationPhase(result);
+    const state = inferManageStatusState(result);
+    if (phase === "failed" || phase === "blocked") {
+        return true;
+    }
+    if (phase === "completed") {
+        return state === "indexed";
+    }
+    return state === "indexed"
+        || state === "indexfailed"
+        || state === "requires_reindex"
+        || state === "not_indexed";
+}
+
+async function waitForManageIndex(
+    session: CliSession,
+    pathValue: string,
+    pollIntervalMs: number,
+): Promise<CallToolResult> {
+    while (true) {
+        const status = await session.callTool("manage_index", { action: "status", path: pathValue });
+        if (isManageIndexTerminal(status)) {
+            return status;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
 }
 
 function readPackageVersion(): string {
@@ -117,6 +174,14 @@ function resolveDefaultServerArgs(): string[] {
         return ["--import", "tsx", serverEntry];
     }
     return [serverEntry];
+}
+
+function resolveDefaultServerInvocation(homeDir: string): { command: string; args: string[] } {
+    const managedLauncherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    if (fs.existsSync(managedLauncherPath)) {
+        return { command: process.execPath, args: [managedLauncherPath] };
+    }
+    return { command: process.execPath, args: resolveDefaultServerArgs() };
 }
 
 function buildHelpPayload() {
@@ -197,15 +262,20 @@ async function invokeTool(
     toolName: string,
     args: Record<string, unknown>,
     session: CliSession,
-    _callTimeoutMs: number,
+    manageIndexPollIntervalMs: number,
     writers: { writeStdout: (text: string) => void; writeStderr: (text: string) => void; },
     format: "json" | "text",
     diagnostics: { path: string; nowMs: () => number } | null,
 ): Promise<number> {
     const startedAt = diagnostics?.nowMs() ?? 0;
     let result: CallToolResult;
+    let initialErrorExit: number | null;
     try {
         result = await session.callTool(toolName, args);
+        initialErrorExit = evaluateToolResultForError(result, writers);
+        if (initialErrorExit === null && shouldAwaitManagedIndex(toolName, args)) {
+            result = await waitForManageIndex(session, args.path as string, manageIndexPollIntervalMs);
+        }
     } catch (error) {
         if (diagnostics) {
             recordLocalDiagnosticEvent(diagnostics.path, buildLocalDiagnosticEvent({
@@ -226,21 +296,12 @@ async function invokeTool(
         }));
     }
 
-    const initialErrorExit = evaluateToolResultForError(result, writers);
-    if (initialErrorExit !== null) {
-        emitJson(writers, result);
-        if (format === "text") {
-            maybeEmitTextSummary(writers, result);
-        }
-        return initialErrorExit;
-    }
-
     emitJson(writers, result);
     if (format === "text") {
         maybeEmitTextSummary(writers, result);
     }
 
-    const finalErrorExit = evaluateToolResultForError(result, writers);
+    const finalErrorExit = initialErrorExit ?? evaluateToolResultForError(result, writers);
     if (finalErrorExit !== null) {
         return finalErrorExit;
     }
@@ -341,9 +402,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             return 0;
         }
 
+        const defaultServer = resolveDefaultServerInvocation(homeDir);
         const session = await (options.connectSession || connectCliMcpSession)({
-            command: options.serverCommand || process.execPath,
-            args: options.serverArgs || resolveDefaultServerArgs(),
+            command: options.serverCommand || defaultServer.command,
+            args: options.serverArgs || (options.serverCommand ? resolveDefaultServerArgs() : defaultServer.args),
             env: {
                 ...effectiveEnv,
                 ...options.serverEnv,
@@ -367,7 +429,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     stdin: options.stdin,
                     stdinTimeoutMs: callTimeoutMs,
                 });
-                return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format, diagnostics);
+                return await invokeTool(parsed.command.toolName, args, session, DEFAULT_MANAGE_INDEX_POLL_INTERVAL_MS, writers, parsed.globals.format, diagnostics);
             }
 
             const listToolsResult = await session.listTools();
@@ -378,7 +440,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     stdinTimeoutMs: callTimeoutMs,
                 })
                 : parseWrapperArgumentsFromSchema(parsed.command.toolName, schema, parsed.command.wrapperArgs);
-            return await invokeTool(parsed.command.toolName, args, session, callTimeoutMs, writers, parsed.globals.format, diagnostics);
+            return await invokeTool(parsed.command.toolName, args, session, DEFAULT_MANAGE_INDEX_POLL_INTERVAL_MS, writers, parsed.globals.format, diagnostics);
         } finally {
             await session.close();
         }

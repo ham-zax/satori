@@ -1498,9 +1498,17 @@ test("managed client inspection reuses installer parsers and reports stale wirin
             dryRun: false,
         }, installOptions(homeDir));
 
-        const healthy = inspectManagedClientConfigurations(homeDir);
+        const healthy = inspectManagedClientConfigurations(homeDir, {
+            VOYAGEAI_API_KEY: "pa-client-owned",
+            MILVUS_ADDRESS: "localhost:19530",
+        });
         assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode"]);
         assert.equal(healthy.every((proof) => proof.status === "ok"), true);
+        assert.equal(healthy.every((proof) => proof.usesManagedLauncher === true), true);
+        assert.equal(
+            healthy.find((proof) => proof.client === "opencode")?.runtimeEnvironment?.VOYAGEAI_API_KEY,
+            "pa-client-owned",
+        );
 
         const claudePath = path.join(homeDir, ".claude.json");
         const claude = JSON.parse(fs.readFileSync(claudePath, "utf8")) as {

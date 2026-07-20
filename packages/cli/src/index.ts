@@ -25,6 +25,7 @@ import { verifyManagedPackageInstallability } from "./package-installability.js"
 import { resolveServerEntryPath } from "./resolve-server-entry.js";
 import { runDoctor } from "./doctor.js";
 import type { DoctorResult } from "./doctor.js";
+import { emitDoctorText } from "./doctor-format.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 
 interface RunCliOptions {
@@ -124,7 +125,7 @@ function buildHelpPayload() {
         commands: [
             "install [--client all|codex|claude|opencode] [--runtime voyage|offline] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook] (offline defaults to Potion on Linux x64; --ollama-model selects Ollama)",
             "uninstall [--client all|codex|claude|opencode] [--dry-run]",
-            "doctor",
+            "doctor [--verbose] [--json]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
             "tool call <toolName> --args-file <path>",
@@ -294,12 +295,12 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             const result = await (options.doctorRunner || ((doctorOptions: { env: NodeJS.ProcessEnv }) => runDoctor({ env: doctorOptions.env })))({
                 env: effectiveEnv,
             });
-            emitJson(writers, result);
-            if (parsed.globals.format === "text") {
-                writers.writeStderr(`satori-cli doctor status=${result.status}.\n`);
-                for (const step of result.nextSteps) {
-                    writers.writeStderr(`next: ${step}\n`);
-                }
+            const wantsJson = parsed.command.json
+                || (parsed.globals.formatExplicit && parsed.globals.format === "json");
+            if (wantsJson) {
+                emitJson(writers, result);
+            } else {
+                emitDoctorText(writers, result, { verbose: parsed.command.verbose });
             }
             return result.status === "error" ? 1 : 0;
         }

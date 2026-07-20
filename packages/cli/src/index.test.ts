@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { CallToolResult, ListToolsResult } from "./client.js";
+import type { DoctorResult } from "./doctor.js";
 import { CliError } from "./errors.js";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
 
@@ -31,17 +33,23 @@ function captureIo() {
     };
 }
 
-function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "manage_wait" | "manage_initial_error" | "manage_initial_blocked" = "normal") {
+interface MockCliSession {
+    listTools(): Promise<ListToolsResult>;
+    callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>;
+    close(): Promise<void>;
+}
+
+function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "manage_wait" | "manage_initial_error" | "manage_initial_blocked" = "normal"): MockCliSession {
     let statusPolls = 0;
     return {
-        async listTools() {
+        async listTools(): Promise<ListToolsResult> {
             return {
                 tools: [
                     {
                         name: "manage_index",
                         description: "manage",
                         inputSchema: {
-                            type: "object",
+                            type: "object" as const,
                             properties: {
                                 action: { type: "string", enum: ["create", "reindex", "status"] },
                                 path: { type: "string" }
@@ -53,7 +61,7 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
                         name: "search_codebase",
                         description: "search",
                         inputSchema: {
-                            type: "object",
+                            type: "object" as const,
                             properties: {
                                 path: { type: "string" },
                                 query: { type: "string" },
@@ -65,7 +73,7 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
                 ]
             };
         },
-        async callTool(name: string, args: Record<string, unknown>) {
+        async callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
             if (mode === "timeout_error" && name === "search_codebase") {
                 throw new CliError("E_CALL_TIMEOUT", "Timed out after 200ms while calling tools/call for 'search_codebase'.", 3);
             }
@@ -325,7 +333,7 @@ test("non-LanceDB CLI commands start when the native module is unavailable", () 
     }
 });
 
-test("runCli doctor emits diagnostics without starting an MCP session", async () => {
+test("runCli doctor defaults to a human summary without starting an MCP session", async () => {
     const io = captureIo();
 
     const exitCode = await runCli(["doctor"], {
@@ -340,7 +348,12 @@ test("runCli doctor emits diagnostics without starting an MCP session", async ()
             packageVersionNote: "independent package versions",
             checks: [
                 { name: "node_version", status: "ok", message: "Node is supported." },
-                { name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." }
+                { name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." },
+                {
+                    name: "npm_package_access",
+                    status: "warning",
+                    message: "Could not verify npm package access: npm error E404\nnpm error log: /private/npm.log",
+                },
             ],
             nextSteps: ["Set MILVUS_ADDRESS."],
             localDiagnostics: {
@@ -356,11 +369,130 @@ test("runCli doctor emits diagnostics without starting an MCP session", async ()
         },
     });
 
-    const { stdout } = io.read();
+    const { stdout, stderr } = io.read();
     assert.equal(exitCode, 1);
-    const parsed = JSON.parse(stdout);
-    assert.equal(parsed.status, "error");
-    assert.equal(parsed.checks[1].name, "milvus_address");
+    assert.match(stdout, /^Satori Doctor/m);
+    assert.match(stdout, /1 problem · 1 warning · 1 check passed/);
+    assert.match(stdout, /Milvus address/);
+    assert.match(stdout, /configured Satori MCP package could not be verified/);
+    assert.match(stdout, /Set MILVUS_ADDRESS/);
+    assert.doesNotMatch(stdout, /localDiagnostics|Node is supported|npm error|private\/npm/);
+    assert.throws(() => JSON.parse(stdout));
+    assert.equal(stderr, "");
+});
+
+test("runCli doctor renders configured client runtimes instead of one global default", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["doctor"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        doctorRunner: () => ({
+            status: "ok",
+            packageVersions: [],
+            packageVersionNote: "independent package versions",
+            checks: [
+                { name: "client_runtime_codex", status: "ok", message: "Codex: offline · Potion / potion-code · LanceDB." },
+                { name: "client_runtime_opencode", status: "ok", message: "OpenCode: connected · VoyageAI / voyage-code-3 · Milvus." },
+                { name: "embedding_provider_env", status: "ok", message: "Configured client credentials are present." },
+            ],
+            nextSteps: [],
+            localDiagnostics: {
+                schemaVersion: "v1", storage: "local_only",
+                privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+                eventsRead: 0, malformedEventsSkipped: 0, totalDurationMs: 0,
+                toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                recovery: { attempts: 0, successes: 0 },
+            },
+        }),
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 0);
+    assert.match(stdout, /Configured runtimes:/);
+    assert.match(stdout, /Codex: offline · Potion/);
+    assert.match(stdout, /OpenCode: connected · VoyageAI/);
+    assert.doesNotMatch(stdout, /Selected runtime:/);
+    assert.match(stdout, /1 check passed/);
+    assert.equal(stderr, "");
+});
+
+test("runCli doctor preserves complete JSON output through both explicit forms", async () => {
+    for (const argv of [["doctor", "--json"], ["--format", "json", "doctor"]]) {
+        const io = captureIo();
+        const exitCode = await runCli(argv, {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            doctorRunner: () => ({
+                status: "error",
+                packageVersions: [],
+                packageVersionNote: "independent package versions",
+                checks: [{ name: "milvus_address", status: "error", message: "MILVUS_ADDRESS is required." }],
+                nextSteps: ["Set MILVUS_ADDRESS."],
+                localDiagnostics: {
+                    schemaVersion: "v1", storage: "local_only",
+                    privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+                    eventsRead: 3, malformedEventsSkipped: 0, totalDurationMs: 0,
+                    toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                    recovery: { attempts: 0, successes: 0 },
+                },
+            }),
+        });
+
+        const { stdout, stderr } = io.read();
+        assert.equal(exitCode, 1);
+        const parsed = JSON.parse(stdout);
+        assert.equal(parsed.status, "error");
+        assert.equal(parsed.checks[0].name, "milvus_address");
+        assert.equal(parsed.localDiagnostics.eventsRead, 3);
+        assert.equal(stderr, "");
+    }
+});
+
+test("runCli doctor reports stale MCP clients independently without changing JSON checks", async () => {
+    const result: DoctorResult = {
+        status: "error" as const,
+        packageVersions: [],
+        packageVersionNote: "independent package versions",
+        checks: [{
+            name: "managed_client_configuration",
+            status: "error" as const,
+            message: "codex config does not point exactly to the managed launcher. opencode config does not point exactly to the managed launcher.",
+        }],
+        nextSteps: [
+            "Rerun satori-cli install for each stale configured MCP client, then restart it.",
+            "Restart your MCP client after changing Satori environment variables.",
+        ],
+        localDiagnostics: {
+            schemaVersion: "v1", storage: "local_only",
+            privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+            eventsRead: 0, malformedEventsSkipped: 0, totalDurationMs: 0,
+            toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+            recovery: { attempts: 0, successes: 0 },
+        },
+    };
+    const humanIo = captureIo();
+    await runCli(["doctor"], {
+        writeStdout: humanIo.writeStdout,
+        writeStderr: humanIo.writeStderr,
+        doctorRunner: () => result,
+    });
+    const human = humanIo.read().stdout;
+    assert.match(human, /2 problems/);
+    assert.match(human, /Codex configuration/);
+    assert.match(human, /OpenCode configuration/);
+    assert.match(human, /install --client codex/);
+    assert.match(human, /install --client opencode/);
+    assert.doesNotMatch(human, /each stale configured MCP client/);
+
+    const jsonIo = captureIo();
+    await runCli(["doctor", "--json"], {
+        writeStdout: jsonIo.writeStdout,
+        writeStderr: jsonIo.writeStderr,
+        doctorRunner: () => result,
+    });
+    const json = JSON.parse(jsonIo.read().stdout);
+    assert.equal(json.checks.length, 1);
+    assert.equal(json.checks[0].name, "managed_client_configuration");
 });
 
 test("runCli records only privacy-safe local measurements for direct tool calls", async () => {
@@ -408,7 +540,7 @@ test("runCli records only privacy-safe local measurements for direct tool calls"
     }
 });
 
-test("runCli doctor text mode prints next steps to stderr", async () => {
+test("runCli doctor text mode hides sensitive diagnostic details", async () => {
     const io = captureIo();
 
     const exitCode = await runCli(["--format", "text", "doctor"], {
@@ -422,9 +554,13 @@ test("runCli doctor text mode prints next steps to stderr", async () => {
             ],
             packageVersionNote: "independent package versions",
             checks: [
-                { name: "milvus_token", status: "warning", message: "optional token missing" }
+                {
+                    name: "mutation_leases",
+                    status: "warning",
+                    message: "Mutation lease states: active=0, abandoned=1; abandoned=[root=/private/repo action=create operation=88bea106-5ead-44fa-a478-9a7783032076 generation=2961 pid=117361].",
+                }
             ],
-            nextSteps: ["Verify npm can access @zokizuan/satori-mcp from this machine."],
+            nextSteps: ["Retry the intended manage_index action after verifying the abandoned operation."],
             localDiagnostics: {
                 schemaVersion: "v1", storage: "local_only",
                 privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
@@ -437,9 +573,46 @@ test("runCli doctor text mode prints next steps to stderr", async () => {
 
     const { stdout, stderr } = io.read();
     assert.equal(exitCode, 0);
-    assert.equal(JSON.parse(stdout).status, "warning");
-    assert.equal(stderr.includes("satori-cli doctor status=warning"), true);
-    assert.equal(stderr.includes("next: Verify npm can access"), true);
+    assert.match(stdout, /An abandoned indexing operation was found/);
+    assert.doesNotMatch(stdout, /private\/repo|88bea106|2961|117361|Local diagnostics/);
+    assert.equal(stderr, "");
+});
+
+test("runCli doctor verbose mode includes complete support details", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["doctor", "--verbose"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        doctorRunner: () => ({
+            status: "warning",
+            packageVersions: [
+                { name: "@zokizuan/satori-cli", version: "1.0.0", source: "/private/npm/package.json" },
+            ],
+            packageVersionNote: "independent package versions",
+            checks: [{
+                name: "mutation_leases",
+                status: "warning",
+                message: "abandoned root=/private/repo operation=88bea106-5ead-44fa-a478-9a7783032076",
+            }],
+            nextSteps: [],
+            localDiagnostics: {
+                schemaVersion: "v1", storage: "local_only",
+                privacy: "No source, query text, path, symbol name, or repository identifier is stored.",
+                eventsRead: 2, malformedEventsSkipped: 0, totalDurationMs: 3921,
+                toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                recovery: { attempts: 0, successes: 0 },
+            },
+        }),
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 0);
+    assert.match(stdout, /private\/repo/);
+    assert.match(stdout, /88bea106-5ead-44fa-a478-9a7783032076/);
+    assert.match(stdout, /Package sources/);
+    assert.match(stdout, /Local diagnostics/);
+    assert.match(stdout, /"totalDurationMs": 3921/);
+    assert.equal(stderr, "");
 });
 
 test("runCli install fails preflight with explicit package guidance before writing config", async () => {

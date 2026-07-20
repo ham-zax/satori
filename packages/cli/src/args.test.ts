@@ -11,6 +11,13 @@ test("parseCliArgs consumes leading --debug as a global flag", () => {
 test("parseCliArgs defaults startup timeout to normal MCP client budget", () => {
     const parsed = parseCliArgs(["tools", "list"]);
     assert.equal(parsed.globals.startupTimeoutMs, 30000);
+    assert.equal(parsed.globals.formatExplicit, false);
+});
+
+test("parseCliArgs records an explicit global output format", () => {
+    const parsed = parseCliArgs(["--format", "json", "doctor"]);
+    assert.equal(parsed.globals.format, "json");
+    assert.equal(parsed.globals.formatExplicit, true);
 });
 
 test("parseCliArgs preserves trailing --debug as wrapper flag input", () => {
@@ -128,12 +135,23 @@ test("parseCliArgs supports install with OpenCode client", () => {
 test("parseCliArgs supports doctor command", () => {
     const parsed = parseCliArgs(["doctor"]);
     assert.equal(parsed.command.kind, "doctor");
+    if (parsed.command.kind !== "doctor") assert.fail("Expected doctor command parsing");
+    assert.equal(parsed.command.json, false);
+    assert.equal(parsed.command.verbose, false);
 });
 
-test("parseCliArgs rejects doctor arguments", () => {
+test("parseCliArgs supports explicit doctor output modes", () => {
+    const parsed = parseCliArgs(["doctor", "--verbose", "--json"]);
+    assert.equal(parsed.command.kind, "doctor");
+    if (parsed.command.kind !== "doctor") assert.fail("Expected doctor command parsing");
+    assert.equal(parsed.command.json, true);
+    assert.equal(parsed.command.verbose, true);
+});
+
+test("parseCliArgs rejects unknown doctor arguments", () => {
     assert.throws(
         () => parseCliArgs(["doctor", "--live"]),
-        /Unknown arguments for doctor/
+        /Unknown argument for doctor/
     );
 });
 

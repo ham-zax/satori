@@ -5,6 +5,7 @@ export interface GlobalOptions {
     startupTimeoutMs: number;
     callTimeoutMs: number;
     format: "json" | "text";
+    formatExplicit: boolean;
     debug: boolean;
 }
 
@@ -17,7 +18,7 @@ export type RawArgsMode =
 export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
-    | { kind: "doctor" }
+    | { kind: "doctor"; json: boolean; verbose: boolean }
     | {
         kind: "install";
         client: InstallClient;
@@ -102,6 +103,7 @@ function parseGlobalOptions(argv: string[]): { globals: GlobalOptions; rest: str
         startupTimeoutMs: 30000,
         callTimeoutMs: 600000,
         format: "json",
+        formatExplicit: false,
         debug: false,
     };
 
@@ -133,6 +135,7 @@ function parseGlobalOptions(argv: string[]): { globals: GlobalOptions; rest: str
                     throw new CliError("E_USAGE", "--format must be one of: json, text.", 2);
                 }
                 globals.format = next;
+                globals.formatExplicit = true;
                 i += 2;
                 break;
             }
@@ -306,12 +309,22 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
     }
 
     if (rest[0] === "doctor") {
-        if (rest.length !== 1) {
-            throw new CliError("E_USAGE", `Unknown arguments for doctor: ${rest.slice(1).join(" ")}`, 2);
+        let json = false;
+        let verbose = false;
+        for (const token of rest.slice(1)) {
+            if (token === "--json") {
+                json = true;
+                continue;
+            }
+            if (token === "--verbose") {
+                verbose = true;
+                continue;
+            }
+            throw new CliError("E_USAGE", `Unknown argument for doctor: ${token}`, 2);
         }
         return {
             globals,
-            command: { kind: "doctor" }
+            command: { kind: "doctor", json, verbose }
         };
     }
 

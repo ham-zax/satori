@@ -10,9 +10,10 @@ import {
     resolveCorePackageVersionViaMcp,
     runDoctor,
 } from "./doctor.js";
+import type { ManagedClientConfigProof } from "./install.js";
 import { buildLauncherScript } from "./managed-launcher-script.mjs";
 
-const successfulExecFileSync = (() => "0.0.0") as NonNullable<DoctorOptions["execFileSyncImpl"]>;
+const successfulExecFileSync: NonNullable<DoctorOptions["execFileSyncImpl"]> = () => "0.0.0";
 
 const fixedPackageVersions = (): DoctorPackageVersion[] => [
     { name: "@zokizuan/satori-cli", version: "0.4.15", source: "test" },
@@ -88,6 +89,64 @@ test("runDoctor reports missing default VoyageAI credentials with LanceDB select
         "Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.",
         "Restart your MCP client after changing Satori environment variables.",
     ]);
+});
+
+test("runDoctor validates each configured client runtime instead of a shell-default runtime", async () => {
+    const result = await runDoctor(baseDoctorOptions({
+        env: {},
+        inspectManagedClients: (): ManagedClientConfigProof[] => [
+            {
+                client: "codex",
+                configPath: "/tmp/codex.toml",
+                status: "error",
+                message: "codex config uses a direct runtime",
+                usesManagedLauncher: false,
+                runtimeEnvironment: {
+                    SATORI_RUNTIME_PROFILE: "offline",
+                    VECTOR_STORE_PROVIDER: "LanceDB",
+                    EMBEDDING_PROVIDER: "Potion",
+                    EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+                    EMBEDDING_OUTPUT_DIMENSION: "256",
+                    POTION_HELPER_PATH: "/tmp/potion-helper",
+                    POTION_MODEL_PATH: "/tmp/potion-model",
+                },
+            },
+            {
+                client: "opencode",
+                configPath: "/tmp/opencode.json",
+                status: "error",
+                message: "opencode config uses a direct runtime",
+                usesManagedLauncher: false,
+                runtimeEnvironment: {
+                    VECTOR_STORE_PROVIDER: "Milvus",
+                    EMBEDDING_PROVIDER: "VoyageAI",
+                    EMBEDDING_MODEL: "voyage-code-3",
+                    EMBEDDING_OUTPUT_DIMENSION: "1024",
+                    VOYAGEAI_API_KEY: "pa-client-owned",
+                    MILVUS_ADDRESS: "localhost:19530",
+                },
+            },
+        ],
+    }));
+
+    assert.match(
+        result.checks.find((check) => check.name === "client_runtime_codex")?.message || "",
+        /Codex: offline · Potion/,
+    );
+    assert.match(
+        result.checks.find((check) => check.name === "client_runtime_opencode")?.message || "",
+        /OpenCode: connected · VoyageAI/,
+    );
+    assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");
+    assert.equal(result.nextSteps.some((step) => step.includes("VOYAGEAI_API_KEY")), false);
+    assert.equal(result.nextSteps.some((step) => step.includes("--client codex --runtime offline")), true);
+    assert.equal(
+        result.nextSteps.some((step) => step.includes("--client opencode --runtime voyage --vector-store milvus")),
+        true,
+    );
+    assert.equal(result.checks.some((check) => (
+        check.name === "offline_execution_invariant_codex" && check.status === "ok"
+    )), true);
 });
 
 test("runDoctor includes a privacy-safe summary of local CLI diagnostics", async () => {
@@ -255,14 +314,14 @@ test("runDoctor rejects unsupported embedding providers", async () => {
     assert.equal(result.status, "error");
     const providerCheck = result.checks.find((check) => check.name === "embedding_provider");
     assert.equal(providerCheck?.status, "error");
-    assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, or Ollama/);
+    assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, Ollama, or Potion/);
     // Model/dimension/key checks are skipped so doctor does not emit contradictory "ok" or VoyageAI key guidance.
     assert.equal(result.checks.find((check) => check.name === "embedding_model"), undefined);
     assert.equal(result.checks.find((check) => check.name === "embedding_dimension"), undefined);
     assert.equal(result.checks.find((check) => check.name === "embedding_provider_env"), undefined);
     assert.equal(result.nextSteps.some((step) => step.includes("VOYAGEAI_API_KEY")), false);
     assert.equal(
-        result.nextSteps.some((step) => step.includes("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Ollama.")),
+        result.nextSteps.some((step) => step.includes("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, Ollama, or Potion.")),
         true,
     );
 });
@@ -538,7 +597,7 @@ test("runDoctor diagnoses a managed launcher whose runtime target is missing", a
     }
 });
 
-test("runDoctor diagnoses a managed launcher targeting a stale MCP package version", async () => {
+test("runDoctor validates the resident launcher independently of the transient doctor bundle", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-launcher-version-"));
     const packageRoot = path.join(tempDir, "node_modules", "@zokizuan", "satori-mcp");
     const target = path.join(packageRoot, "dist", "index.js");
@@ -562,9 +621,9 @@ test("runDoctor diagnoses a managed launcher targeting a stale MCP package versi
         }));
 
         const check = result.checks.find((entry) => entry.name === "managed_launcher");
-        assert.equal(check?.status, "error");
-        assert.match(check?.message || "", /4\.11\.15/);
-        assert.match(check?.message || "", /installed MCP version 4\.11\.17/);
+        assert.equal(check?.status, "ok");
+        assert.match(check?.message || "", /satori-mcp@4\.11\.15/);
+        assert.doesNotMatch(check?.message || "", /installed MCP version/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -278,6 +278,10 @@ export interface ManagedClientConfigProof {
     configPath: string;
     status: "ok" | "error";
     message: string;
+    /** Client-owned runtime values resolved without exposing them in doctor output. */
+    runtimeEnvironment?: Readonly<Record<string, string>>;
+    /** Whether this client actually launches through ~/.satori/bin/satori-mcp.js. */
+    usesManagedLauncher?: boolean;
 }
 
 function resolveDefaultSkillAssetRoot(): string {
@@ -1303,22 +1307,99 @@ function commandMatchesExpected(command: unknown, args: unknown, expected: Manag
         && args.every((entry, index) => entry === expected.args[index]);
 }
 
-function verifyManagedClientTarget(target: Pick<ClientTarget, "client" | "configPath">, expected: ManagedRuntimeCommand): ManagedClientConfigProof {
+function resolveConfiguredEnvironmentValue(
+    value: unknown,
+    inheritedEnv: NodeJS.ProcessEnv,
+): string | undefined {
+    if (typeof value !== "string") {
+        return undefined;
+    }
+    const reference = value.match(/^\{env:([A-Z][A-Z0-9_]*)\}$/)
+        ?? value.match(/^\$\{([A-Z][A-Z0-9_]*)(?::-)?\}$/);
+    if (reference) {
+        return inheritedEnv[reference[1]];
+    }
+    return value;
+}
+
+function filteredRuntimeEnvironment(
+    value: unknown,
+    inheritedEnv: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> {
+    const input = objectValue(value);
+    if (!input) {
+        return Object.freeze({});
+    }
+    const entries: Array<[string, string]> = [];
+    for (const name of SATORI_RUNTIME_ENV_VARS) {
+        const resolved = resolveConfiguredEnvironmentValue(input[name], inheritedEnv);
+        if (resolved !== undefined) {
+            entries.push([name, resolved]);
+        }
+    }
+    return Object.freeze(Object.fromEntries(entries));
+}
+
+function readCodexRuntimeEnvironment(
+    content: string,
+    inheritedEnv: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> {
+    let section = "";
+    const configured: Record<string, string> = {};
+    for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+        const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+        if (table) {
+            section = table[1];
+            continue;
+        }
+        if (section !== "mcp_servers.satori.env") {
+            continue;
+        }
+        const literal = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$/);
+        if (!literal || !SATORI_RUNTIME_ENV_VARS.includes(literal[1] as typeof SATORI_RUNTIME_ENV_VARS[number])) {
+            continue;
+        }
+        const raw = literal[2].startsWith('"')
+            ? JSON.parse(literal[2]) as string
+            : literal[2].slice(1, -1);
+        const resolved = resolveConfiguredEnvironmentValue(raw, inheritedEnv);
+        if (resolved !== undefined) {
+            configured[literal[1]] = resolved;
+        }
+    }
+    return Object.freeze(configured);
+}
+
+function verifyManagedClientTarget(
+    target: Pick<ClientTarget, "client" | "configPath">,
+    expected: ManagedRuntimeCommand,
+    inheritedEnv: NodeJS.ProcessEnv = process.env,
+): ManagedClientConfigProof {
     let matches = false;
+    let usesManagedLauncher = false;
+    let runtimeEnvironment: Readonly<Record<string, string>> = Object.freeze({});
     try {
         if (target.client === "codex") {
             const content = readTextIfExists(target.configPath) ?? "";
             matches = content.includes(buildCodexManagedBlock(expected));
+            usesManagedLauncher = content.includes(toTomlString(expected.args[0]));
+            runtimeEnvironment = readCodexRuntimeEnvironment(content, inheritedEnv);
         } else if (target.client === "claude") {
             const config = parseJsonObject(target.configPath);
             const entry = objectValue(objectValue(config.mcpServers)?.satori);
             matches = commandMatchesExpected(entry?.command, entry?.args, expected);
+            usesManagedLauncher = isManagedCommandParts(entry?.command, entry?.args);
+            runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
         } else {
             const content = readTextIfExists(target.configPath) ?? "";
             const config = parseJsoncObject(target.configPath, content);
             const entry = objectValue(objectValue(config.mcp)?.satori);
             matches = Array.isArray(entry?.command)
                 && commandMatchesExpected(entry.command[0], entry.command.slice(1), expected);
+            usesManagedLauncher = Array.isArray(entry?.command)
+                ? isManagedCommandParts(entry.command[0], entry.command.slice(1))
+                : isManagedCommandParts(entry?.command, entry?.args);
+            runtimeEnvironment = filteredRuntimeEnvironment(entry?.environment, inheritedEnv);
         }
     } catch {
         matches = false;
@@ -1331,6 +1412,8 @@ function verifyManagedClientTarget(target: Pick<ClientTarget, "client" | "config
         message: matches
             ? `${target.client} config points to ${expected.args[0]}.`
             : `${target.client} config does not point exactly to ${expected.command} ${expected.args[0]}.`,
+        runtimeEnvironment,
+        usesManagedLauncher,
     };
 }
 
@@ -1593,11 +1676,14 @@ function resolveConnectedVectorStoreForInstallOrThrow(
     }
 }
 
-export function inspectManagedClientConfigurations(homeDir: string): ManagedClientConfigProof[] {
+export function inspectManagedClientConfigurations(
+    homeDir: string,
+    inheritedEnv: NodeJS.ProcessEnv = process.env,
+): ManagedClientConfigProof[] {
     const expected = resolveManagedClientCommand(homeDir);
     return resolveClientTargets(homeDir)
         .filter(hasSatoriClientEntry)
-        .map((target) => verifyManagedClientTarget(target, expected));
+        .map((target) => verifyManagedClientTarget(target, expected, inheritedEnv));
 }
 
 export function verifyManagedClientConfigurations(

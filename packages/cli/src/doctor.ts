@@ -14,7 +14,10 @@ import {
     resolveManagedPackageJsonPath,
     resolveManagedPackageSpecifier,
 } from "./managed-package.js";
-import { inspectManagedClientConfigurations } from "./install.js";
+import {
+    inspectManagedClientConfigurations,
+    type ManagedClientConfigProof,
+} from "./install.js";
 import { parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
 import { evaluateStaticRuntimeConfig, selectedVectorStore } from "./runtime-config.js";
 import { readLocalDiagnosticsSummary, type LocalDiagnosticsSummary } from "./local-diagnostics.js";
@@ -51,10 +54,19 @@ export interface DoctorProcessSnapshot {
     processStartTime?: string;
 }
 
+export type DoctorExecFileSync = (
+    file: string,
+    args: string[],
+    options: {
+        encoding: "utf8";
+        stdio: ["ignore", "pipe", "pipe"];
+    },
+) => string;
+
 export interface DoctorOptions {
     env?: NodeJS.ProcessEnv;
     nodeVersion?: string;
-    execFileSyncImpl?: typeof execFileSync;
+    execFileSyncImpl?: DoctorExecFileSync;
     /** Optional override for tests; defaults to resolveInstalledPackageVersions(). */
     resolvePackageVersions?: () => DoctorPackageVersion[];
     /** Override runtime owner registry path (default: ~/.satori/runtime/owners.json). */
@@ -74,6 +86,15 @@ export interface DoctorOptions {
     resolveOllamaIdentity?: typeof resolveOllamaModelIdentity;
     /** Read-only exact-runtime LanceDB module load override. */
     loadManagedLanceDb?: (runtimeTarget: string) => Promise<void>;
+}
+
+interface DoctorRuntimeContext {
+    client: ManagedClientConfigProof["client"] | null;
+    environment: NodeJS.ProcessEnv;
+}
+
+interface EvaluatedDoctorRuntimeContext extends DoctorRuntimeContext {
+    staticChecks: ReturnType<typeof evaluateStaticRuntimeConfig>;
 }
 
 const PACKAGE_VERSION_NOTE =
@@ -102,6 +123,78 @@ function parseNodeMajor(version: string): number {
 
 function addCheck(checks: DoctorCheck[], name: string, status: CheckStatus, message: string): void {
     checks.push({ name, status, message });
+}
+
+function clientLabel(client: DoctorRuntimeContext["client"]): string {
+    if (client === "codex") return "Codex";
+    if (client === "opencode") return "OpenCode";
+    if (client === "claude") return "Claude Code";
+    return "Runtime";
+}
+
+function runtimeCheckValue(
+    staticChecks: ReturnType<typeof evaluateStaticRuntimeConfig>,
+    name: string,
+): string | null {
+    const message = staticChecks.find((check) => check.name === name)?.message;
+    if (!message) return null;
+    const separator = message.indexOf(":");
+    return (separator === -1 ? message : message.slice(separator + 1)).trim().replace(/\.$/, "");
+}
+
+function appendRuntimeConfigurationChecks(
+    checks: DoctorCheck[],
+    nextSteps: string[],
+    runtimeContexts: DoctorRuntimeContext[],
+): EvaluatedDoctorRuntimeContext[] {
+    const evaluated = runtimeContexts.map((context) => ({
+        ...context,
+        staticChecks: evaluateStaticRuntimeConfig(context.environment),
+    }));
+
+    for (const context of evaluated) {
+        if (!context.client) continue;
+        const values = [
+            runtimeCheckValue(context.staticChecks, "runtime_profile"),
+            (() => {
+                const provider = runtimeCheckValue(context.staticChecks, "embedding_provider");
+                const model = runtimeCheckValue(context.staticChecks, "embedding_model");
+                return provider && model ? `${provider} / ${model}` : provider || model;
+            })(),
+            runtimeCheckValue(context.staticChecks, "vector_store_provider"),
+        ].filter((value): value is string => Boolean(value));
+        addCheck(
+            checks,
+            `client_runtime_${context.client}`,
+            "ok",
+            `${clientLabel(context.client)}: ${values.join(" · ") || "runtime configuration is invalid"}.`,
+        );
+    }
+
+    const checkNames = [...new Set(evaluated.flatMap((context) => context.staticChecks.map((check) => check.name)))];
+    for (const name of checkNames) {
+        const contextualChecks = evaluated.flatMap((context) => {
+            const check = context.staticChecks.find((candidate) => candidate.name === name);
+            return check ? [{ context, check }] : [];
+        });
+        const status = contextualChecks.some(({ check }) => check.status === "error") ? "error" : "ok";
+        const reportedChecks = status === "error"
+            ? contextualChecks.filter(({ check }) => check.status === "error")
+            : contextualChecks;
+        const message = reportedChecks.length === 1 && reportedChecks[0].context.client === null
+            ? reportedChecks[0].check.message
+            : reportedChecks
+                .map(({ context, check }) => `${clientLabel(context.client)}: ${check.message}`)
+                .join(" ");
+        addCheck(checks, name, status, message);
+        for (const { context, check } of contextualChecks) {
+            if (check.status !== "error" || !check.nextStep) continue;
+            nextSteps.push(context.client
+                ? `${clientLabel(context.client)}: ${check.nextStep}`
+                : check.nextStep);
+        }
+    }
+    return evaluated;
 }
 
 function overallStatus(checks: DoctorCheck[]): CheckStatus {
@@ -305,6 +398,20 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         }
     }
     const runtimeEnv: NodeJS.ProcessEnv = { ...env, ...managedRuntimeEnvironment };
+    const managedClientProofs = options.inspectManagedClients
+        ? options.inspectManagedClients(homeDir)
+        : inspectManagedClientConfigurations(homeDir, env);
+    const hasClientRuntimeAuthority = managedClientProofs.some((proof) => proof.runtimeEnvironment !== undefined);
+    const runtimeContexts: DoctorRuntimeContext[] = hasClientRuntimeAuthority
+        ? managedClientProofs.map((proof) => ({
+            client: proof.client,
+            environment: {
+                ...env,
+                ...proof.runtimeEnvironment,
+                ...(proof.usesManagedLauncher ? managedRuntimeEnvironment : {}),
+            },
+        }))
+        : [{ client: null, environment: runtimeEnv }];
 
     for (const pkg of packageVersions) {
         const shortName = pkg.name.includes("/")
@@ -347,17 +454,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
     }
 
-    const staticRuntimeChecks = evaluateStaticRuntimeConfig(runtimeEnv);
-    for (const check of staticRuntimeChecks) {
-        addCheck(checks, check.name, check.status, check.message);
-        if (check.nextStep) {
-            nextSteps.push(check.nextStep);
-        }
-    }
+    const evaluatedRuntimeContexts = appendRuntimeConfigurationChecks(checks, nextSteps, runtimeContexts);
 
-    const vectorStore = selectedVectorStore(runtimeEnv);
     if (
-        vectorStore === "LanceDB"
+        evaluatedRuntimeContexts.some((context) => selectedVectorStore(context.environment) === "LanceDB")
         && managedRuntimeTarget
         && path.isAbsolute(managedRuntimeTarget)
         && isRegularFile(managedRuntimeTarget)
@@ -382,42 +482,51 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         }
     }
 
-    if (!staticRuntimeChecks.some((check) => check.status === "error")) {
-        if ((runtimeEnv.EMBEDDING_PROVIDER?.trim() || "VoyageAI") === "Ollama") {
-            const host = runtimeEnv.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
-            const model = runtimeEnv.OLLAMA_MODEL?.trim() || runtimeEnv.EMBEDDING_MODEL?.trim() || "nomic-embed-text";
+    for (const context of evaluatedRuntimeContexts) {
+        if (context.staticChecks.some((check) => check.status === "error")) {
+            continue;
+        }
+        const checkSuffix = evaluatedRuntimeContexts.length === 1 || !context.client ? "" : `_${context.client}`;
+        const provider = context.environment.EMBEDDING_PROVIDER?.trim() || "VoyageAI";
+        let ollamaIdentityFailed = false;
+        if (provider === "Ollama") {
+            const host = context.environment.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
+            const model = context.environment.OLLAMA_MODEL?.trim()
+                || context.environment.EMBEDDING_MODEL?.trim()
+                || "nomic-embed-text";
             try {
-                if ((runtimeEnv.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
+                if ((context.environment.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
                     assertNetworkPolicyAllowsEndpoint({ kind: "local-only" }, host, "OLLAMA_HOST");
                 }
                 const identity: Readonly<ResolvedOllamaModelIdentity> = await (
                     options.resolveOllamaIdentity ?? resolveOllamaModelIdentity
                 )({ model, host });
-                const recordedDigest = runtimeEnv.OLLAMA_MODEL_DIGEST?.trim().replace(/^sha256:/i, "").toLowerCase();
+                const recordedDigest = context.environment.OLLAMA_MODEL_DIGEST?.trim().replace(/^sha256:/i, "").toLowerCase();
                 if (recordedDigest && recordedDigest !== identity.artifactDigest) {
                     throw new Error("installed model digest does not match OLLAMA_MODEL_DIGEST");
                 }
                 addCheck(
                     checks,
-                    "ollama_model_identity",
+                    `ollama_model_identity${checkSuffix}`,
                     "ok",
-                    `Ollama model ${identity.resolvedModel} resolved with dimension ${identity.dimension} and the recorded artifact digest.`,
+                    `${clientLabel(context.client)} Ollama model ${identity.resolvedModel} resolved with dimension ${identity.dimension} and the recorded artifact digest.`,
                 );
             } catch (error) {
+                ollamaIdentityFailed = true;
                 const message = error instanceof Error ? error.message : String(error);
-                addCheck(checks, "ollama_model_identity", "error", `Ollama model identity probe failed: ${message}`);
-                nextSteps.push("Start Ollama and reinstall the offline profile with the intended local model.");
+                addCheck(checks, `ollama_model_identity${checkSuffix}`, "error", `${clientLabel(context.client)} Ollama model identity probe failed: ${message}`);
+                nextSteps.push(context.client
+                    ? `${clientLabel(context.client)}: Start Ollama and reinstall the offline profile with the intended local model.`
+                    : "Start Ollama and reinstall the offline profile with the intended local model.");
             }
         }
 
-        if ((runtimeEnv.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
+        if ((context.environment.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
             addCheck(
                 checks,
-                "offline_execution_invariant",
-                checks.some((check) => check.name === "ollama_model_identity" && check.status === "error")
-                    ? "error"
-                    : "ok",
-                "Offline profile selects LanceDB and Ollama; remote inference and reranking construction is prohibited.",
+                `offline_execution_invariant${checkSuffix}`,
+                ollamaIdentityFailed ? "error" : "ok",
+                `${clientLabel(context.client)} offline profile selects LanceDB and ${provider}; remote inference and reranking construction is prohibited.`,
             );
         }
     }
@@ -442,14 +551,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
             checks,
             nextSteps,
             managedLauncherPath,
-            installedMcpVersion,
         );
     }
 
     appendManagedClientChecks(
         checks,
         nextSteps,
-        (options.inspectManagedClients || inspectManagedClientConfigurations)(homeDir),
+        managedClientProofs,
     );
 
     if (nextSteps.length > 0) {
@@ -488,7 +596,23 @@ function appendManagedClientChecks(
             : `${proofs.length} configured MCP client${proofs.length === 1 ? "" : "s"} point exactly to the managed launcher.`,
     );
     if (failures.length > 0) {
-        nextSteps.push("Rerun satori-cli install for each stale configured MCP client, then restart it.");
+        for (const failure of failures) {
+            const provider = failure.runtimeEnvironment?.EMBEDDING_PROVIDER?.trim();
+            const runtime = failure.runtimeEnvironment?.SATORI_RUNTIME_PROFILE?.trim()
+                || (provider === "Potion" || provider === "Ollama"
+                    ? "offline"
+                    : provider
+                        ? "connected"
+                        : undefined);
+            const runtimeArgs = runtime === "offline"
+                ? " --runtime offline"
+                : runtime === "connected"
+                    ? ` --runtime voyage --vector-store ${selectedVectorStore(failure.runtimeEnvironment || {}) === "Milvus" ? "milvus" : "lancedb"}`
+                    : "";
+            nextSteps.push(
+                `Run satori-cli install --client ${failure.client}${runtimeArgs}, then restart ${clientLabel(failure.client)}.`,
+            );
+        }
     }
 }
 
@@ -727,13 +851,13 @@ function isRegularFile(filePath: string): boolean {
     }
 }
 
-function findMcpPackageMetadata(runtimeTarget: string): { version: string; packageJsonPath: string } | null {
+function findMcpPackageMetadata(runtimeTarget: string): { version: string } | null {
     let current = path.dirname(runtimeTarget);
     while (true) {
         const packageJsonPath = path.join(current, "package.json");
         const info = readJsonVersion(packageJsonPath);
         if (info?.name === "@zokizuan/satori-mcp") {
-            return { version: info.version, packageJsonPath };
+            return { version: info.version };
         }
         const parent = path.dirname(current);
         if (parent === current) {
@@ -747,7 +871,6 @@ function appendManagedLauncherCheck(
     checks: DoctorCheck[],
     nextSteps: string[],
     launcherPath: string,
-    installedMcpVersion: string | null,
 ): void {
     if (!fs.existsSync(launcherPath)) {
         addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher is missing at ${launcherPath}.`);
@@ -774,11 +897,6 @@ function appendManagedLauncherCheck(
     if (!metadata) {
         addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher target exists but MCP package metadata could not be found for ${target}.`);
         nextSteps.push("Inspect the managed launcher target, then rerun satori-cli install if it is not an intentional local runtime.");
-        return;
-    }
-    if (installedMcpVersion && metadata.version !== installedMcpVersion) {
-        addCheck(checks, "managed_launcher", "error", `Managed Satori launcher targets MCP ${metadata.version}, but installed MCP version ${installedMcpVersion} is expected (${metadata.packageJsonPath}).`);
-        nextSteps.push("Rerun satori-cli install and restart every MCP client to replace the stale resident launcher target.");
         return;
     }
     addCheck(checks, "managed_launcher", "ok", `Managed Satori launcher targets @zokizuan/satori-mcp@${metadata.version}: ${target}.`);

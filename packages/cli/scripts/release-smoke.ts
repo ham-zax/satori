@@ -46,31 +46,32 @@ const PNPM_ONLY_NPM_ENV_KEYS = new Set([
     "NPM_CONFIG_VERIFY_DEPS_BEFORE_RUN",
 ]);
 
+function isSatoriRuntimeEnvKey(key: string): boolean {
+    return /^(?:SATORI_|EMBEDDING_|OPENAI_|VOYAGEAI_|GEMINI_|OLLAMA_|POTION_|MILVUS_)/.test(key)
+        || key === "VECTOR_STORE_PROVIDER"
+        || key === "LANCEDB_PATH";
+}
+
 function isolatedSmokeEnv(smokeHomeDir: string): NodeJS.ProcessEnv {
     const env = Object.fromEntries(Object.entries(process.env).filter(
-        ([key]) => !PNPM_ONLY_NPM_ENV_KEYS.has(key.toUpperCase()),
+        ([key]) => !PNPM_ONLY_NPM_ENV_KEYS.has(key.toUpperCase()) && !isSatoriRuntimeEnvKey(key),
     ));
     return {
         ...env,
         HOME: smokeHomeDir,
         USERPROFILE: smokeHomeDir,
         XDG_CONFIG_HOME: path.join(smokeHomeDir, ".config"),
-        EMBEDDING_PROVIDER: "Ollama",
-        MILVUS_ADDRESS: "localhost:19530",
         npm_config_cache: path.join(smokeHomeDir, ".npm"),
         npm_config_package_lock: "false",
     };
 }
 
-function runCliSmoke(
-    commandArgs: string[],
+function npmExecArgs(
     coreTarballPath: string,
     mcpTarballPath: string,
     cliTarballPath: string,
-    smokeExecDir: string,
-    smokeHomeDir: string,
-): void {
-    execFileSync("npm", [
+): string[] {
+    return [
         "exec",
         "--yes",
         "--package",
@@ -80,12 +81,91 @@ function runCliSmoke(
         "--package",
         cliTarballPath,
         "--",
+    ];
+}
+
+function resolvePackedMcpRoot(
+    coreTarballPath: string,
+    mcpTarballPath: string,
+    cliTarballPath: string,
+    smokeExecDir: string,
+    env: NodeJS.ProcessEnv,
+): string {
+    const script = [
+        'const fs = require("node:fs")',
+        'const path = require("node:path")',
+        'const names = process.platform === "win32" ? ["satori.cmd", "satori"] : ["satori"]',
+        'const bin = (process.env.PATH || "").split(path.delimiter).flatMap((dir) => names.map((name) => path.join(dir, name))).find((candidate) => fs.existsSync(candidate))',
+        'if (!bin) throw new Error("Packed Satori MCP executable was not added to PATH")',
+        'process.stdout.write(path.dirname(path.dirname(fs.realpathSync(bin))))',
+    ].join(";");
+    const packageRoot = execFileSync("npm", [
+        ...npmExecArgs(coreTarballPath, mcpTarballPath, cliTarballPath),
+        "node",
+        "-e",
+        script,
+    ], {
+        cwd: smokeExecDir,
+        encoding: "utf8",
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (!path.isAbsolute(packageRoot)) {
+        throw new Error(`Packed Satori MCP root is not absolute: ${packageRoot || "<empty>"}.`);
+    }
+    return packageRoot;
+}
+
+function packedPotionSmokeEnv(
+    baseEnv: NodeJS.ProcessEnv,
+    packedMcpRoot: string,
+    smokeHomeDir: string,
+): NodeJS.ProcessEnv {
+    const assetsRoot = path.join(packedMcpRoot, "assets", "potion", "linux-x64");
+    const manifestPath = path.join(assetsRoot, "manifest.json");
+    const helperPath = path.join(assetsRoot, "satori-potion");
+    const modelPath = path.join(assetsRoot, "model");
+    for (const requiredPath of [manifestPath, helperPath, path.join(modelPath, "model.safetensors")]) {
+        if (!fs.existsSync(requiredPath)) {
+            throw new Error(`Packed Potion artifact is missing: ${requiredPath}.`);
+        }
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+        model?: { identity?: unknown };
+    };
+    if (typeof manifest.model?.identity !== "string" || manifest.model.identity.length === 0) {
+        throw new Error("Packed Potion manifest has no model identity.");
+    }
+    return {
+        ...baseEnv,
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        LANCEDB_PATH: path.join(smokeHomeDir, ".satori", "vector", "lancedb"),
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: manifest.model.identity,
+        EMBEDDING_OUTPUT_DIMENSION: "256",
+        POTION_HELPER_PATH: helperPath,
+        POTION_MODEL_PATH: modelPath,
+        POTION_REQUEST_TIMEOUT_MS: "5000",
+    };
+}
+
+function runCliSmoke(
+    commandArgs: string[],
+    coreTarballPath: string,
+    mcpTarballPath: string,
+    cliTarballPath: string,
+    smokeExecDir: string,
+    env: NodeJS.ProcessEnv,
+): void {
+    execFileSync("npm", [
+        ...npmExecArgs(coreTarballPath, mcpTarballPath, cliTarballPath),
         "satori-cli",
         ...commandArgs,
     ], {
         cwd: smokeExecDir,
         encoding: "utf8",
-        env: isolatedSmokeEnv(smokeHomeDir),
+        env,
         stdio: ["ignore", "pipe", "pipe"],
     });
 }
@@ -103,9 +183,18 @@ function main(): void {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const mcpTarballPath = packPackage(mcpPackageRoot, smokePackDir);
         const cliTarballPath = packPackage(packageRoot, smokePackDir);
-        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, smokeHomeDir);
-        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, smokeHomeDir);
-        console.log("[release:smoke] CLI tarball starts and runs doctor via npm exec.");
+        const baseEnv = isolatedSmokeEnv(smokeHomeDir);
+        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, baseEnv);
+        const packedMcpRoot = resolvePackedMcpRoot(
+            coreTarballPath,
+            mcpTarballPath,
+            cliTarballPath,
+            smokeExecDir,
+            baseEnv,
+        );
+        const doctorEnv = packedPotionSmokeEnv(baseEnv, packedMcpRoot, smokeHomeDir);
+        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, doctorEnv);
+        console.log("[release:smoke] CLI tarball starts and doctor accepts the packed offline Potion runtime.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

@@ -228,6 +228,7 @@ test("runCli install updates config and emits the bounded postflight receipt", a
 
 test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem work", async () => {
     for (const argv of [
+        ["install", "--client", "all", "--dry-run"],
         ["install", "--client", "all", "--runtime", "voyage", "--dry-run"],
         ["install", "--runtime", "offline", "--ollama-model", "nomic-embed-text", "--dry-run"],
     ]) {
@@ -253,6 +254,10 @@ test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem
             });
 
             assert.equal(exitCode, 0);
+            const result = JSON.parse(io.read().stdout);
+            if (!argv.includes("--runtime") && !argv.includes("--ollama-model")) {
+                assert.equal(result.runtime, "offline");
+            }
             assert.equal(installabilityCalls, 0);
             assert.equal(preflightCalls, 0);
             assert.deepEqual(fs.readdirSync(homeDir), before);

@@ -203,7 +203,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let dryRun = false;
     let installGuidanceHook = false;
     let profile: InstallProfile | undefined;
-    let runtime: InstallRuntime = "voyage";
+    let runtime: InstallRuntime = "offline";
     let vectorStore: InstallVectorStore | undefined;
     let ollamaModel: string | undefined;
 

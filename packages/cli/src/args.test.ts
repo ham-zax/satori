@@ -37,7 +37,7 @@ test("parseCliArgs does not treat post-command --debug as global", () => {
     );
 });
 
-test("parseCliArgs supports install with explicit client and dry-run", () => {
+test("parseCliArgs defaults install to offline Potion", () => {
     const parsed = parseCliArgs(["install", "--client", "codex", "--dry-run"]);
     assert.equal(parsed.command.kind, "install");
     if (parsed.command.kind !== "install") {
@@ -45,7 +45,8 @@ test("parseCliArgs supports install with explicit client and dry-run", () => {
     }
     assert.equal(parsed.command.client, "codex");
     assert.equal(parsed.command.dryRun, true);
-    assert.equal(parsed.command.runtime, "voyage");
+    assert.equal(parsed.command.runtime, "offline");
+    assert.equal(parsed.command.ollamaModel, undefined);
 });
 
 test("parseCliArgs accepts the strict offline runtime variant", () => {
@@ -77,11 +78,13 @@ test("parseCliArgs accepts an explicit connected Milvus backend", () => {
     assert.equal(parsed.command.vectorStore, "Milvus");
 });
 
-test("parseCliArgs rejects incomplete or contradictory runtime variants", () => {
-    assert.throws(
-        () => parseCliArgs(["install", "--ollama-model", "nomic-embed-text"]),
-        /only valid with --runtime offline/,
-    );
+test("parseCliArgs accepts Ollama under the default offline runtime and rejects contradictions", () => {
+    const ollama = parseCliArgs(["install", "--ollama-model", "nomic-embed-text"]);
+    assert.equal(ollama.command.kind, "install");
+    if (ollama.command.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(ollama.command.runtime, "offline");
+    assert.equal(ollama.command.ollamaModel, "nomic-embed-text");
+
     assert.throws(
         () => parseCliArgs([
             "install",

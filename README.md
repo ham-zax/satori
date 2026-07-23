@@ -13,8 +13,9 @@ Satori turns a repository into a freshness-aware code map. MCP-compatible agents
 Requirements: Node.js 22.13+ and Linux x64 (native Linux or WSL2).
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all
-npx -y @zokizuan/satori-cli@latest doctor
+npm install -g @zokizuan/satori-cli@latest
+satori install --client all
+satori doctor
 ```
 
 Restart your coding agent and tell it:
@@ -24,6 +25,18 @@ Index /absolute/path/to/repo with Satori, then find where auth refresh is handle
 ```
 
 That is the complete local path. Satori installs a stable launcher under `~/.satori/`; your agent does not download the server again on every startup.
+
+Upgrade the installed CLI, MCP runtime, and its compatible Core dependency:
+
+```bash
+satori upgrade
+```
+
+The CLI is updated first. Satori then stages and verifies the exact MCP/Core runtime before switching the stable launcher. If runtime verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run `satori upgrade` again. Restart running coding agents after a successful runtime upgrade. The command does not rewrite client configuration, indexes, skills, hooks, or repository profiles.
+
+An upgrade follows one coordinated release closure declared by the latest CLI package. It does not independently combine the newest CLI, MCP, and Core versions. This keeps every activated runtime on an exact, tested MCP/Core pairing.
+
+For a no-install invocation, replace `satori` with `npx -y @zokizuan/satori-cli@latest`.
 
 ```text
 plain-English question
@@ -126,14 +139,14 @@ The qualification details and limitations remain available in the [Potion plan](
 Connected install:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage
-npx -y @zokizuan/satori-cli@latest doctor
+satori install --client all --runtime voyage
+satori doctor
 ```
 
 Existing Milvus deployments can select `--vector-store milvus`. Existing Ollama installations can select or retain an explicit model:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime offline --ollama-model nomic-embed-text
+satori install --client all --runtime offline --ollama-model nomic-embed-text
 ```
 
 Changing the embedding provider, model, dimensions, vector backend, or persisted projection changes index compatibility and requires a reindex. Satori never silently converts or deletes the previous backend's publication.
@@ -266,7 +279,7 @@ pnpm --filter @zokizuan/satori-mcp test
 pnpm --filter @zokizuan/satori-cli test
 ```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for repository conventions, [SECURITY.md](./SECURITY.md) for private vulnerability reporting, and [THIRD_PARTY.md](./THIRD_PARTY.md) for attribution.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for repository conventions, [docs/RELEASING.md](./docs/RELEASING.md) for coordinated package releases, [SECURITY.md](./SECURITY.md) for private vulnerability reporting, and [THIRD_PARTY.md](./THIRD_PARTY.md) for attribution.
 
 ## License
 

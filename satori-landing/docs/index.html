@@ -731,6 +731,27 @@
             provider and Milvus setup without starting an MCP client.
           </p>
         </div>
+        <div class="panel">
+          <h3>Upgrade Satori</h3>
+          <pre><code>satori upgrade</code></pre>
+          <p>
+            This updates the globally installed CLI, then stages and verifies
+            that release's exact MCP and Core runtime before switching the
+            stable launcher. Restart running coding agents after a successful
+            runtime upgrade.
+          </p>
+          <p>
+            If you did not install the CLI globally, run
+            <code>npx -y @zokizuan/satori-cli@latest upgrade</code>.
+            Upgrade does not rewrite client configuration, indexes, skills,
+            hooks, or repository profiles.
+          </p>
+          <p>
+            Satori follows the exact MCP/Core versions declared by the latest
+            CLI package; it does not mix independently selected
+            <code>latest</code> package versions.
+          </p>
+        </div>
         <div class="callout">
           <p>
             Use <code>--profile default|minimal|all-text</code> when the current

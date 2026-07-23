@@ -9,18 +9,25 @@ The CLI installs one managed MCP runtime, writes a stable launcher under `~/.sat
 Offline on Linux x64 or Windows through WSL2:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all
-npx -y @zokizuan/satori-cli@latest doctor
+npm install -g @zokizuan/satori-cli@latest
+satori install --client all
+satori doctor
 ```
 
 Connected Voyage runtime:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client all --runtime voyage
-npx -y @zokizuan/satori-cli@latest doctor
+satori install --client all --runtime voyage
+satori doctor
 ```
 
 Restart the MCP client after installation.
+
+Use `satori upgrade` to update the globally installed CLI, then stage and activate that release's exact MCP and Core versions. The CLI update happens first. If MCP/Core verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run the command again. `satori update` is an alias. Client configuration, indexes, skills, hooks, and repository profiles are not rewritten.
+
+The latest CLI manifest is the release authority: it names one exact MCP/Core closure. Upgrade never mixes independently selected `latest` versions, so an MCP or Core release becomes available through `satori upgrade` only after a compatible CLI release points to it.
+
+For a no-install invocation, replace `satori` with `npx -y @zokizuan/satori-cli@latest`.
 
 The offline package carries a checksum-pinned 36.0 MiB Potion model/helper closure. A representative Satori publication indexed 10,830 chunks in 34.46 seconds on CPU, with 154.543 ms warm-search p95 after publication.
 
@@ -36,6 +43,7 @@ install [--client all|codex|claude|opencode]
         [--install-guidance-hook]
 
 doctor [--verbose] [--json]
+upgrade # alias: update
 uninstall [--client all|codex|claude|opencode] [--dry-run]
 tools list
 tool call <toolName> --args-json '<json>'
@@ -56,7 +64,7 @@ Global flags must precede the command token:
 
 `doctor` prints a concise human summary by default. Use `doctor --verbose` for paths, individual successful checks, package sources, and local diagnostics. Use `doctor --json` or the compatible global form `--format json doctor` for the complete machine-readable result.
 
-`install` and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt, or use `--debug` to expose MCP startup details during install verification.
+`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt, or use `--debug` to expose MCP startup details during install verification.
 
 ## Runtime Ownership
 

@@ -44,14 +44,15 @@ The separate operational remediation in
 completed R1-R6. In particular, exact `symbolId` now owns call-graph identity,
 Python decorator spans are canonicalized consistently, and freshness
 coordination no longer needs to be solved inside a relationship-expansion
-phase. Those repairs do not implement receiver-aware Python `CALLS`.
+phase. A later, separately authorized Phase 5B0/5B1 follow-up added only the
+bounded receiver-aware Python `CALLS` behavior recorded below.
 
 ## 2026-07-23 Targeted Relationship Follow-up Decision
 
 The symbol registry, relationship sidecars, generation binding, and
-relationship-backed `call_graph` described below are already implemented. The
-next relationship task is not to replace them with codebase-memory or to copy
-its complete runtime. It is to close one demonstrated Python coverage gap:
+relationship-backed `call_graph` described below are implemented. The bounded
+follow-up did not replace them with codebase-memory or copy its runtime. It
+closed this demonstrated Python coverage gap:
 
 ```text
 tree-sitter records member call
@@ -849,7 +850,7 @@ Acceptance:
 
 ### Phase 5B: Python Receiver-Aware `CALLS`
 
-Status: proposed bounded follow-up; not authorized by this plan update.
+Status: Phase 5B0/5B1 implemented and verified; Phase 5B2 not entered.
 
 Decision boundary:
 
@@ -898,7 +899,24 @@ Stop after this slice if it satisfies the frozen same-class and
 class-qualified witnesses. Do not add a type system merely to increase an edge
 count.
 
+Implementation result:
+
+- the relationship builder accepts exact Python `receiver.method` member facts;
+- `self` and `cls` resolve only inside the source method's nearest enclosing
+  class;
+- a simple class-qualified receiver resolves only when the class is unique in
+  the source file or a currently supported relative-import target;
+- external, chained, computed, arbitrary local, typed-local, and ambiguous
+  receivers remain unresolved;
+- direct and constructor call behavior is unchanged;
+- relationship identity is
+  `relationship-v5+python-receiver-calls`; and
+- focused delta fixtures prove that class-receiver ambiguity produces the same
+  graph through incremental recomputation and a clean rebuild.
+
 #### 5B2: Add only the typed evidence still required
+
+Status: not entered; requires separate evidence and authorization.
 
 Enter this slice only if 5B1 passes its own fixtures but a frozen, important
 receiver-bound witness such as `model.calculate_metrics` remains unresolved.
@@ -1047,10 +1065,9 @@ Acceptance:
 
 ## Documentation Updates Required With Implementation
 
-- Update `docs/SATORI_END_TO_END_FEATURE_BEHAVIOR_SPEC.md` when behavior changes land.
-- Update root `ARCHITECTURE.md` with symbol registry/navigation index diagrams.
-- Update README language support matrix after capabilities are implemented.
-- Add third-party/MIT attribution before copying any code or tables.
+- Update `docs/SATORI_FEATURES_AND_USE_CASES.md` when public behavior changes.
+- Update the root README only when its language-support or product claims change.
+- Add third-party/MIT attribution before copying any upstream code or tables.
 
 ## Open Questions
 
@@ -1060,25 +1077,20 @@ Acceptance:
 4. What confidence thresholds should downgrade a symbol group from high to medium or low?
 5. Which remaining legacy `metadata.symbolId` cleanup can be deleted immediately now that runtime navigation treats `symbolInstanceId` as the exact steady-state identity?
 
-## Recommended Next Patch
+## Completed Patch And Stopping Point
 
-Implement only Phase 5B0 and 5B1:
+Phase 5B0/5B1 froze direct-call preservation and member-call
+positive/negative fixtures, consumed existing member `CallSite` facts, resolved
+exact same-class and unique class-qualified calls, and preserved ambiguity by
+omission. No codebase-memory implementation was copied, the public tool
+contract did not change, and no retrieval architecture was added.
 
-- freeze the direct-call preservation and member-call positive/negative
-  fixtures;
-- allow the relationship builder to consume existing member `CallSite` facts;
-- resolve exact same-class `self`/`cls` and unique class-qualified calls;
-- preserve ambiguity by omission; and
-- stop and measure the frozen witnesses before considering typed receiver
-  evidence.
-
-This is the smallest patch on the demonstrated wrong boundary. It does not
-require importing codebase-memory, changing the public tool contract, or
-rebuilding the retrieval architecture.
+Stop here. Phase 5B2 requires a separately frozen important typed-receiver
+witness and separate implementation authority.
 
 ## Handoff State
 
-This document records the reviewed architecture and the bounded Phase 5B
-follow-up. No implementation, reindex, or codebase-memory import is authorized
-by this planning update. If implementation is separately authorized, begin with
-5B0/5B1 and make the 5B2 entry decision only from the frozen fixture result.
+This document records the reviewed architecture and the completed bounded
+Phase 5B0/5B1 follow-up. It performed no user reindex and imported no
+codebase-memory implementation. Phase 5B2 remains unimplemented and
+unauthorized.

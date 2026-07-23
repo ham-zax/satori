@@ -51,7 +51,7 @@ Priority meanings:
 | ID | Priority | Status | Finding |
 | --- | --- | --- | --- |
 | F8 | P2 | implemented and verified | Operator-only queries derive retrieval text only from positive `must:`, `path:`, or `lang:` values; negative-only input is rejected. |
-| F9 | — | disproven as stated | Call-graph storage is bidirectional. The reported function has no modeled outgoing targets because its calls are members, Python constructors, library calls, or built-ins. |
+| F9 | — | disproven as stated; bounded follow-up complete | Call-graph storage is bidirectional. A later Phase 5B0/5B1 follow-up models exact same-class and uniquely authorized class-qualified Python member calls; typed, dynamic, external, and ambiguous receivers remain deliberately unresolved. |
 | F10 | — | resolved with O2 | A successful coalesced freshness result can immediately drive the chained `search_codebase -> call_graph` path. |
 | F11 | P3 | verified product gap | Arbitrary semantic queries return nearest-neighbor candidates without a calibrated no-answer decision. The supplied reranker explanation is false. |
 | F12 | — | expected contract | Compact ordinary reads use a one-line transport envelope containing complete exact source; compact does not mean truncated. |
@@ -63,7 +63,7 @@ Priority meanings:
 | F18 | — | confirmed correct | A nonexistent filesystem path fails cleanly as `not_indexed`. |
 | F20 | — | consistent with F8 | `lang:` plus one strong `must:` succeeds; this does not establish a path-filter intersection defect. |
 | F21/F23 | — | duplicate of F12 | Compact ordinary reads annotate a one-line envelope but intentionally retain complete exact source. |
-| F22 | — | not a new defect | A class is a container, not an aggregate call site. Method-level Python member-call coverage remains the F9 limitation. |
+| F22 | — | not a new defect | A class is a container, not an aggregate call site. Method-level traversal now includes Phase 5B0/5B1's bounded exact Python receivers and remains conservative outside that contract. |
 | F24 | — | duplicate of K2 | File grouping has no symbol identity and therefore cannot enter `call_graph`; its canonical source span remains readable. |
 | F26 | — | expected contract | `limitSymbols` truncates a deterministic source-ordered outline; it is not an importance ranking. |
 | F27/F28 | — | confirmed correct | Python keyword filters and newline-normalized queries behaved as documented. |
@@ -139,10 +139,10 @@ call-graph and query-planning tests, focused handler witnesses, Core/MCP
 typecheck and lint, Core build, MCP runtime build, and `git diff --check`
 passed. No paid provider, user index, or full repository reindex was used.
 
-Python receiver-aware `CALLS` is deliberately excluded. Its implementation
-contract is Phase 5B of
-`docs/plans/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md` and begins only after
-this operational sequence is accepted.
+Python receiver-aware `CALLS` was excluded from R1-R6. After this operational
+sequence was accepted, a separate authorization completed only Phase 5B0/5B1
+from `docs/plans/SYMBOL_OWNED_RETRIEVAL_IMPLEMENTATION_PLAN.md`. That follow-up
+does not alter this remediation's frozen findings or verification.
 
 ## O1 — Optional call-graph label vetoes a valid identity
 
@@ -1202,6 +1202,6 @@ git diff --check
 
 R1-R6 met their individual acceptance criteria in the current working tree.
 The remaining U1 result is intentionally a classified diagnostic unknown, not
-a backend repair claim. This completion does not authorize Phase 5B
-receiver-aware call-graph work. That later phase begins with its own frozen
-graph fixtures and stop/go decision.
+a backend repair claim. A later separately authorized follow-up completed
+Phase 5B0/5B1 with frozen relationship-builder fixtures; Phase 5B2 remains
+unimplemented and unauthorized.

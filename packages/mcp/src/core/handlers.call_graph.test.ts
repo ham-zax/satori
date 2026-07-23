@@ -1907,7 +1907,7 @@ test('handleCallGraph treats an optional symbol label as advisory to the exact s
     }));
 });
 
-test('handleCallGraph does not merge legacy notes or test references into relationship-backed results', async () => {
+test('handleCallGraph returns relationship-backed test references without merging legacy state', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const login = createFunctionSymbol({
             file: 'src/runtime.ts',
@@ -1923,20 +1923,43 @@ test('handleCallGraph does not merge legacy notes or test references into relati
             endLine: 7,
             fileHash: 'hash-runtime',
         });
+        const runtimeTest = createFunctionSymbol({
+            file: 'src/runtime.test.ts',
+            name: 'testsLogin',
+            startLine: 1,
+            endLine: 3,
+            fileHash: 'hash-runtime-test',
+        });
+        fs.writeFileSync(
+            path.join(repoPath, 'src', 'runtime.test.ts'),
+            'export function testsLogin() { return login(); }\n',
+        );
         await writeTestNavigation({
             stateRoot,
             repoPath,
-            symbols: [login, normalize],
-            records: [{
-                sourceKey: login.symbolKey,
-                sourceInstanceId: login.symbolInstanceId,
-                targetKey: normalize.symbolKey,
-                targetInstanceId: normalize.symbolInstanceId,
-                type: 'CALLS',
-                file: 'src/runtime.ts',
-                span: { startLine: 2, endLine: 2 },
-                confidence: 'high',
-            }],
+            symbols: [login, normalize, runtimeTest],
+            records: [
+                {
+                    sourceKey: login.symbolKey,
+                    sourceInstanceId: login.symbolInstanceId,
+                    targetKey: normalize.symbolKey,
+                    targetInstanceId: normalize.symbolInstanceId,
+                    type: 'CALLS',
+                    file: 'src/runtime.ts',
+                    span: { startLine: 2, endLine: 2 },
+                    confidence: 'high',
+                },
+                {
+                    sourceKey: runtimeTest.symbolKey,
+                    sourceInstanceId: runtimeTest.symbolInstanceId,
+                    targetKey: login.symbolKey,
+                    targetInstanceId: login.symbolInstanceId,
+                    type: 'TESTS',
+                    file: 'src/runtime.test.ts',
+                    span: { startLine: 2, endLine: 2 },
+                    confidence: 'high',
+                },
+            ],
         });
 
         const context = {
@@ -1999,7 +2022,16 @@ test('handleCallGraph does not merge legacy notes or test references into relati
         assert.equal(payload.supported, true);
         assert.equal(payload.edges.length, 1);
         assert.deepEqual(payload.notes, []);
-        assert.equal(payload.testReferences, undefined);
+        assert.deepEqual(payload.testReferences, [{
+            file: 'src/runtime.test.ts',
+            symbolId: runtimeTest.symbolInstanceId,
+            symbolLabel: runtimeTest.label,
+            span: { startLine: 1, endLine: 3 },
+            site: { file: 'src/runtime.test.ts', startLine: 2, endLine: 2 },
+            targetSymbolId: login.symbolInstanceId,
+            kind: 'call',
+            confidence: 0.95,
+        }]);
         assert.equal(payload.notesTruncated, false);
         assert.equal(payload.totalNoteCount, 0);
         assert.equal(payload.returnedNoteCount, 0);

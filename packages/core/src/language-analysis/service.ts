@@ -50,6 +50,7 @@ function fallbackResult(
         symbols: [],
         moduleBindings: [],
         callSites: [],
+        receiverTypeBindings: [],
         chunks: buildAnalysisChunks(
             input.content,
             input.relativePath,
@@ -191,6 +192,7 @@ function emergencyFallbackResult(
         symbols: [],
         moduleBindings: [],
         callSites: [],
+        receiverTypeBindings: [],
         chunks,
     };
 }
@@ -239,6 +241,7 @@ export function createLanguageAnalysisService(
                     symbols: evidence.symbols,
                     moduleBindings: evidence.moduleBindings,
                     callSites: evidence.callSites,
+                    receiverTypeBindings: evidence.receiverTypeBindings,
                     chunks: buildAnalysisChunks(
                         normalizedInput.content,
                         normalizedInput.relativePath,

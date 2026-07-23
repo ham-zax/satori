@@ -5,7 +5,12 @@ import { Language, Parser, type Node } from 'web-tree-sitter';
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import { Utf8SourceMap } from './source-map';
-import type { CallSite, LanguageAnalysisInput, ModuleBinding } from './types';
+import type {
+    CallSite,
+    LanguageAnalysisInput,
+    ModuleBinding,
+    ReceiverTypeBinding,
+} from './types';
 
 const localRequire = createRequire(__filename);
 
@@ -668,6 +673,40 @@ function extractPythonModuleBindings(
     return bindings;
 }
 
+function extractPythonReceiverTypeBindings(
+    root: Node,
+    sourceMap: Utf8SourceMap,
+): ReceiverTypeBinding[] {
+    const bindings: ReceiverTypeBinding[] = [];
+    for (const node of root.descendantsOfType(['typed_parameter', 'typed_default_parameter'])) {
+        const nameNode = node.childForFieldName('name')
+            ?? node.namedChildren.find((child) => child.type === 'identifier');
+        const typeNode = node.childForFieldName('type');
+        const simpleTypeNode = typeNode?.type === 'identifier'
+            ? typeNode
+            : typeNode?.type === 'type'
+                && typeNode.namedChildren.length === 1
+                && typeNode.namedChildren[0]?.type === 'identifier'
+                ? typeNode.namedChildren[0]
+                : undefined;
+        if (nameNode?.type !== 'identifier' || !simpleTypeNode) {
+            continue;
+        }
+        const localName = nameNode.text.trim();
+        const typeName = simpleTypeNode.text.trim();
+        if (!localName || !typeName) {
+            continue;
+        }
+        bindings.push({
+            localName,
+            typeName,
+            kind: 'parameter_annotation',
+            span: nodeSpan(node, sourceMap),
+        });
+    }
+    return bindings;
+}
+
 export async function analyzeWithTreeSitter(
     input: LanguageAnalysisInput,
     assetRoot?: string,
@@ -676,12 +715,14 @@ export async function analyzeWithTreeSitter(
     symbols: readonly ExtractedSymbol[];
     moduleBindings: readonly ModuleBinding[];
     callSites: readonly CallSite[];
+    receiverTypeBindings: readonly ReceiverTypeBinding[];
 } | {
     complete: false;
     reason: 'syntax_error' | 'parser_unavailable' | 'analysis_failure';
     symbols: readonly [];
     moduleBindings: readonly [];
     callSites: readonly [];
+    receiverTypeBindings: readonly [];
 }> {
     let language: Language;
     try {
@@ -693,6 +734,7 @@ export async function analyzeWithTreeSitter(
             symbols: [],
             moduleBindings: [],
             callSites: [],
+            receiverTypeBindings: [],
         };
     }
     let parser!: Parser;
@@ -707,6 +749,7 @@ export async function analyzeWithTreeSitter(
             symbols: [],
             moduleBindings: [],
             callSites: [],
+            receiverTypeBindings: [],
         };
     }
     let tree: ReturnType<Parser['parse']>;
@@ -720,6 +763,7 @@ export async function analyzeWithTreeSitter(
             symbols: [],
             moduleBindings: [],
             callSites: [],
+            receiverTypeBindings: [],
         };
     }
     if (!tree) {
@@ -730,6 +774,7 @@ export async function analyzeWithTreeSitter(
             symbols: [],
             moduleBindings: [],
             callSites: [],
+            receiverTypeBindings: [],
         };
     }
     try {
@@ -741,6 +786,7 @@ export async function analyzeWithTreeSitter(
                     symbols: [],
                     moduleBindings: [],
                     callSites: [],
+                    receiverTypeBindings: [],
                 };
             }
             const sourceMap = new Utf8SourceMap(input.content);
@@ -752,6 +798,9 @@ export async function analyzeWithTreeSitter(
                     ? extractPythonModuleBindings(tree.rootNode, symbols, sourceMap)
                     : [],
                 callSites: extractCallSites(tree.rootNode, sourceMap),
+                receiverTypeBindings: input.language === 'python'
+                    ? extractPythonReceiverTypeBindings(tree.rootNode, sourceMap)
+                    : [],
             };
         } catch {
             return {
@@ -760,6 +809,7 @@ export async function analyzeWithTreeSitter(
                 symbols: [],
                 moduleBindings: [],
                 callSites: [],
+                receiverTypeBindings: [],
             };
         }
     } finally {

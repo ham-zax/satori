@@ -4,7 +4,7 @@ export { isRepositoryRelativePath } from '../paths/repository-path';
 
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v1';
 export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v2';
-export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v1';
+export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v2';
 
 export const SYMBOL_KINDS = [
     'file',

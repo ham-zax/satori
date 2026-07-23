@@ -406,6 +406,7 @@ test('writeRelationshipSidecar preserves evidence-only files when manifest files
         const analysisEvidence = {
             moduleBindings: [],
             callSites: [],
+            receiverTypeBindings: [],
         };
         await writeRelationshipSidecar({
             stateRoot,
@@ -426,6 +427,83 @@ test('writeRelationshipSidecar preserves evidence-only files when manifest files
         assert.equal(loaded.status, 'ok');
         assert.deepEqual(loaded.analysisByFile?.get('src/unrelated.ts'), analysisEvidence);
     });
+});
+
+test('readRelationshipSidecar requires canonical receiver-type contribution evidence', async () => {
+    const span = {
+        startLine: 1,
+        endLine: 1,
+        startByte: 0,
+        endByte: 19,
+        startColumn: 0,
+        endColumn: 19,
+    };
+    const cases: Array<{ name: string; mutate(shard: Record<string, unknown>): void }> = [
+        {
+            name: 'missing receiver bindings',
+            mutate: (shard) => {
+                const evidence = shard.analysisEvidence as Record<string, unknown>;
+                delete evidence.receiverTypeBindings;
+            },
+        },
+        {
+            name: 'extra receiver binding field',
+            mutate: (shard) => {
+                const evidence = shard.analysisEvidence as { receiverTypeBindings: Array<Record<string, unknown>> };
+                evidence.receiverTypeBindings[0].extra = true;
+            },
+        },
+        {
+            name: 'unsupported receiver binding kind',
+            mutate: (shard) => {
+                const evidence = shard.analysisEvidence as { receiverTypeBindings: Array<Record<string, unknown>> };
+                evidence.receiverTypeBindings[0].kind = 'local_inference';
+            },
+        },
+        {
+            name: 'retired contribution schema',
+            mutate: (shard) => {
+                shard.schemaVersion = 'relationship_file_contribution_v1';
+            },
+        },
+    ];
+
+    for (const fixture of cases) {
+        await withTempDir(async (stateRoot) => {
+            const result = await writeRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                symbolRegistryManifestHash: 'manifest-hash',
+                relationshipVersion: 'relationship-v7',
+                builtAt: '2026-07-23T00:00:00.000Z',
+                records: [],
+                analysisByFile: new Map([['src/runtime.py', {
+                    moduleBindings: [],
+                    callSites: [],
+                    receiverTypeBindings: [{
+                        localName: 'model',
+                        typeName: 'MetricsModel',
+                        kind: 'parameter_annotation',
+                        span,
+                    }],
+                }]]),
+            });
+            const manifest = await readJsonFile<{
+                files: Array<{ shardPath: string }>;
+            }>(path.join(result.rootPath, 'relationships', 'manifest.json'));
+            const shardPath = path.join(result.rootPath, manifest.files[0].shardPath);
+            const shard = await readJsonFile<Record<string, unknown>>(shardPath);
+            fixture.mutate(shard);
+            await writeJsonFile(shardPath, shard);
+
+            const loaded = await readRelationshipSidecar({
+                stateRoot,
+                normalizedRootPath: '/repo',
+                expectedSymbolRegistryManifestHash: 'manifest-hash',
+            });
+            assert.equal(loaded.status, 'incompatible', fixture.name);
+        });
+    }
 });
 
 test('writeRelationshipSidecar filters evidence to supplied manifest files', async () => {

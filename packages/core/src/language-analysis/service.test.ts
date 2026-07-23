@@ -1200,6 +1200,37 @@ test('Tree-sitter Python import-from bindings retain exact names without authori
     );
 });
 
+test('Tree-sitter Python records only simple directly annotated parameter receiver types', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        content: [
+            'def accepted(model: MetricsModel, fallback: OtherModel = None):',
+            '    pass',
+            '',
+            'def excluded(',
+            '    string_name: "MetricsModel",',
+            '    optional: Optional[MetricsModel],',
+            '    union: MetricsModel | None,',
+            '    attribute: models.MetricsModel,',
+            '):',
+            '    pass',
+        ].join('\n'),
+        language: 'python',
+        relativePath: 'src/typed_receivers.py',
+    });
+
+    assert.deepEqual(
+        result.receiverTypeBindings.map((binding) => [
+            binding.localName,
+            binding.typeName,
+            binding.kind,
+        ]),
+        [
+            ['model', 'MetricsModel', 'parameter_annotation'],
+            ['fallback', 'OtherModel', 'parameter_annotation'],
+        ],
+    );
+});
+
 for (const fixture of wasmLanguageFixtures) {
     test(`language analysis extracts ${fixture.language} symbols through Tree-sitter WASM`, async () => {
         const analyzer = createLanguageAnalysisService();

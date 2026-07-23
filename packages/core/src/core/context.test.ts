@@ -2890,6 +2890,71 @@ test('Context.indexCodebase writes a compatible symbol registry sidecar for comp
     }
 });
 
+test('Context.indexCodebase persists Python parameter receiver evidence and resolves an imported alias', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-python-receiver-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const codebasePath = path.join(tempRoot, 'repo');
+
+    try {
+        fs.mkdirSync(path.join(codebasePath, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(codebasePath, 'src', 'models.py'), [
+            'class MetricsModel:',
+            '    def calculate_metrics(self):',
+            '        return 1',
+        ].join('\n'), 'utf8');
+        fs.writeFileSync(path.join(codebasePath, 'src', 'use.py'), [
+            'from .models import MetricsModel as Model',
+            '',
+            'def inspect(model: Model):',
+            '    return model.calculate_metrics()',
+        ].join('\n'), 'utf8');
+
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase: new InMemoryVectorDatabase(),
+            symbolRegistryStateRoot: stateRoot,
+        });
+        const result = await context.indexCodebase(codebasePath);
+        assert.equal(result.status, 'completed');
+
+        const registry = await readSymbolRegistrySidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+        });
+        assert.equal(registry.status, 'ok');
+        if (registry.status !== 'ok') return;
+        const relationships = await readRelationshipSidecar({
+            stateRoot,
+            normalizedRootPath: codebasePath,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
+        });
+        assert.equal(relationships.status, 'ok');
+        if (relationships.status !== 'ok') return;
+
+        assert.deepEqual(
+            relationships.analysisByFile.get('src/use.py')?.receiverTypeBindings?.map((binding) => [
+                binding.localName,
+                binding.typeName,
+                binding.kind,
+            ]),
+            [['model', 'Model', 'parameter_annotation']],
+        );
+        const call = relationships.records.find((record) => (
+            record.type === 'CALLS' && record.file === 'src/use.py'
+        ));
+        assert.equal(
+            registry.registry.symbolsByInstanceId.get(call?.sourceInstanceId ?? '')?.qualifiedName,
+            'inspect',
+        );
+        assert.equal(
+            registry.registry.symbolsByInstanceId.get(call?.targetInstanceId ?? '')?.qualifiedName,
+            'MetricsModel.calculate_metrics',
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context navigation publication fails closed when relationship evidence cannot be completed', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-navigation-evidence-'));
     const stateRoot = path.join(tempRoot, 'state');
@@ -7471,8 +7536,15 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
 
         const analyzer = new RecordingAnalyzer();
         const vectorDatabase = new InMemoryVectorDatabase();
+        const embeddedDocuments: string[] = [];
+        const embedding = new (class extends TestEmbedding {
+            override async embedDocuments(texts: string[]): Promise<EmbeddingVector[]> {
+                embeddedDocuments.push(...texts);
+                return super.embedDocuments(texts);
+            }
+        })();
         const context = new Context({
-            embedding: new TestEmbedding(),
+            embedding,
             vectorDatabase,
             symbolRegistryStateRoot: stateRoot,
             languageAnalyzer: analyzer,
@@ -7519,9 +7591,13 @@ test('Context.reindexByChange reuses unchanged file symbols while retargeting cr
         assert.equal(initialCallRecord?.targetInstanceId, initialAuthSymbol.symbolInstanceId);
 
         analyzer.reset();
+        embeddedDocuments.length = 0;
         fs.writeFileSync(authPath, 'export function login() { return false; }\n', 'utf8');
         const result = await context.reindexByChange(codebasePath);
         assert.equal(result.modified, 1);
+        assert.equal(embeddedDocuments.length, 2);
+        assert.ok(embeddedDocuments.some((document) => /return false/.test(document)));
+        assert.ok(embeddedDocuments.every((document) => !/unrelated|caller/.test(document)));
 
         const analyzedRelativePaths = analyzer.analyzeCalls
             .sort((a, b) => a.localeCompare(b));

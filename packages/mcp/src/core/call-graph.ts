@@ -115,7 +115,7 @@ const QUERY_SUPPORTED_EXTENSIONS = new Set(getSupportedExtensionsForCapability('
 const QUERY_SUPPORTED_LANGUAGE_IDS = getSupportedLanguageIdsForCapability('callGraphQuery');
 const DEFAULT_IGNORE_PATTERNS = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**'];
 const DEFAULT_CALL_GRAPH_NOTE_LIMIT = 200;
-const DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT = 50;
+export const DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT = 50;
 const CALL_KEYWORDS = new Set([
     'if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'typeof', 'function', 'class', 'def', 'await', 'with', 'from', 'import',
 ]);

@@ -126,7 +126,7 @@ For grouped `formatVersion: 2` results, build reads from the envelope `codebaseR
 
 ### Inspect Relationships
 
-When a grouped result has `navigation.graph="ready"`, pass its `target` directly to `call_graph` with the envelope `codebaseRoot`. Relationship records use exact symbol identities, but coverage remains conservative: Python includes direct calls plus exact same-class `self`/`cls` and uniquely authorized class-qualified member calls, while typed, dynamic, external, and ambiguous receivers remain unresolved. The target therefore carries `navigation.inbound="verify"`. Treat graph output as context, then confirm inbound impact with scoped text search, tests, or direct references. If `callerSearchTerm` is present, a separate `must:<term> <term>` search is the compact verification path.
+When a grouped result has `navigation.graph="ready"`, pass its `target` directly to `call_graph` with the envelope `codebaseRoot`. Relationship records use exact symbol identities, but coverage remains conservative: Python includes direct calls, exact same-class `self`/`cls`, uniquely authorized class-qualified calls, exact relative-import aliases, and simple identifier-typed parameters. String, generic, union, optional, chained, dynamic, external, and ambiguous receivers remain unresolved. Resolved calls from admitted test/fixture paths are also exposed separately as root-target `testReferences`; they do not become traversal edges. The target therefore carries `navigation.inbound="verify"`. Treat graph output as context, then confirm inbound impact with scoped text search, tests, or direct references. If `callerSearchTerm` is present, a separate `must:<term> <term>` search is the compact verification path.
 
 ### Read The Proof
 

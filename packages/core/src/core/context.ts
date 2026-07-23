@@ -172,6 +172,7 @@ interface AnalyzedIndexedFile {
     readonly extractedSymbols: LanguageAnalysisResult['symbols'];
     readonly moduleBindings: LanguageAnalysisResult['moduleBindings'];
     readonly callSites: LanguageAnalysisResult['callSites'];
+    readonly receiverTypeBindings: LanguageAnalysisResult['receiverTypeBindings'];
 }
 
 interface AnalyzedFileSymbolFacts {
@@ -6269,6 +6270,7 @@ export class Context {
             extractedSymbols: analysis.symbols,
             moduleBindings: analysis.moduleBindings,
             callSites: analysis.callSites,
+            receiverTypeBindings: analysis.receiverTypeBindings,
         };
     }
 
@@ -6293,6 +6295,7 @@ export class Context {
             relationshipEvidence: {
                 moduleBindings: analyzed.moduleBindings,
                 callSites: analyzed.callSites,
+                receiverTypeBindings: analyzed.receiverTypeBindings,
             },
         };
     }
@@ -7900,6 +7903,7 @@ export class Context {
             analysisByFile.set(file.path, {
                 moduleBindings: analysis.moduleBindings,
                 callSites: analysis.callSites,
+                receiverTypeBindings: analysis.receiverTypeBindings,
             });
         }
         const relationshipRecords = buildRelationshipsForRegistry({ registry, analysisByFile });

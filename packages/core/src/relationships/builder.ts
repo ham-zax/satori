@@ -2,8 +2,11 @@ import type { CallSite, LanguageAnalysisResult, ModuleBinding } from '../languag
 import { isLanguageCapabilitySupportedForLanguage } from '../language';
 import { isCallableSymbolKind } from '../symbols';
 import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from '../symbols';
+import { isTestOrFixturePath } from './test-path';
 
-export type RelationshipAnalysisEvidence = Pick<LanguageAnalysisResult, 'moduleBindings' | 'callSites'>;
+export type RelationshipAnalysisEvidence =
+    Pick<LanguageAnalysisResult, 'moduleBindings' | 'callSites'>
+    & Partial<Pick<LanguageAnalysisResult, 'receiverTypeBindings'>>;
 
 export interface BuildCallRelationshipsForRegistryInput {
     registry: SymbolRegistry;
@@ -316,13 +319,31 @@ function resolvePythonMemberTarget(input: {
         if (input.source.kind !== 'method') return undefined;
         targetClass = enclosingClassForSymbol(input.source, input.classesByFile);
     } else {
-        const authorizedFiles = new Set([input.source.file]);
+        const scopedReceiverTypes = new Set(
+            (input.evidence.receiverTypeBindings ?? [])
+                .filter((binding) => (
+                    binding.localName === receiver
+                    && ownerForCall(
+                        input.registry.symbolsByFile.get(input.source.file) ?? [],
+                        { calleeName: '', span: binding.span },
+                    )?.symbolInstanceId === input.source.symbolInstanceId
+                ))
+                .map((binding) => binding.typeName),
+        );
+        if (scopedReceiverTypes.size > 1) return undefined;
+        const classReference = [...scopedReceiverTypes][0] ?? receiver;
+        const classCandidatesById = new Map<string, SymbolRecord>();
+        for (const candidate of input.classesByName.get(classReference) ?? []) {
+            if (candidate.file === input.source.file) {
+                classCandidatesById.set(candidate.symbolInstanceId, candidate);
+            }
+        }
         for (const binding of input.evidence.moduleBindings) {
             if (
                 (binding.kind !== 'import' && binding.kind !== 'reexport')
                 || !binding.moduleSpecifier
-                || binding.importedName !== receiver
-                || binding.localName !== receiver
+                || !binding.importedName
+                || binding.localName !== classReference
             ) {
                 continue;
             }
@@ -333,10 +354,14 @@ function resolvePythonMemberTarget(input: {
                 input.source.language,
                 input.availableFiles,
             );
-            if (importedFile) authorizedFiles.add(importedFile);
+            if (!importedFile) continue;
+            for (const candidate of input.classesByName.get(binding.importedName) ?? []) {
+                if (candidate.file === importedFile) {
+                    classCandidatesById.set(candidate.symbolInstanceId, candidate);
+                }
+            }
         }
-        const classCandidates = (input.classesByName.get(receiver) ?? [])
-            .filter((candidate) => authorizedFiles.has(candidate.file));
+        const classCandidates = [...classCandidatesById.values()];
         if (classCandidates.length === 1) {
             [targetClass] = classCandidates;
         }
@@ -395,6 +420,13 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
                 confidence: target.file === source.file ? 'high' : 'low',
             };
             recordsByKey.set(relationshipKey(record), record);
+            if (isTestOrFixturePath(source.file) && !isTestOrFixturePath(target.file)) {
+                const testRecord: RelationshipRecord = {
+                    ...record,
+                    type: 'TESTS',
+                };
+                recordsByKey.set(relationshipKey(testRecord), testRecord);
+            }
         }
     }
 

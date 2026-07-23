@@ -1,6 +1,8 @@
 import {
     compareContractStrings,
     getGraphNeighbors,
+    getRelationshipsForSymbol,
+    isTestOrFixturePath,
     type NavigationStore,
     type RelationshipRecord,
     type SymbolRecord,
@@ -15,6 +17,7 @@ import type {
     CallGraphSidecarManager,
     CallGraphTestReference,
 } from "./call-graph.js";
+import { DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT } from "./call-graph.js";
 import {
     buildSourceBackedPythonCalleeFallback,
     buildSourceBackedPythonCallerFallback,
@@ -75,25 +78,6 @@ function compareNullableStringsAsc(a?: string | null, b?: string | null): number
     return compareContractStrings(left, right);
 }
 
-/** True when a repo-relative path looks like a test/fixture site (not production call graph signal). */
-export function isTestOrFixtureCallerFile(file: string): boolean {
-    const normalized = file.trim().replace(/\\/g, "/");
-    if (!normalized) {
-        return false;
-    }
-    const base = normalized.split("/").pop() || normalized;
-    if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) {
-        return true;
-    }
-    if (/(^|\/)(__tests__|__mocks__|fixtures|testdata|test-data)(\/|$)/i.test(normalized)) {
-        return true;
-    }
-    if (/(^|\/)tests?(\/|$)/i.test(normalized) && !/(^|\/)packages\/[^/]+\/src\//i.test(normalized)) {
-        return true;
-    }
-    return false;
-}
-
 /**
  * Prefer a single unique suppressed inbound caller *site* file for recovery search.
  * Prefer production files when both production and test sites exist.
@@ -114,7 +98,7 @@ export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): st
             continue;
         }
         allSites.add(file);
-        if (!isTestOrFixtureCallerFile(file)) {
+        if (!isTestOrFixturePath(file)) {
             productionSites.add(file);
         }
     }
@@ -144,7 +128,7 @@ export function prioritizeInboundSuppressedNotes(notes: readonly CallGraphNote[]
             continue;
         }
         const file = typeof note.file === "string" ? note.file : "";
-        if (isTestOrFixtureCallerFile(file)) {
+        if (isTestOrFixturePath(file)) {
             testCallerNotes.push(note);
         } else {
             productionCallerNotes.push(note);
@@ -202,6 +186,73 @@ export class RelationshipBackedCallGraph {
 
     private sortEdges(edges: CallGraphEdge[]): CallGraphEdge[] {
         return [...edges].sort((a, b) => this.compareEdges(a, b));
+    }
+
+    private sortTestReferences(references: CallGraphTestReference[]): CallGraphTestReference[] {
+        return [...references].sort((a, b) => {
+            const fileCmp = compareNullableStringsAsc(a.file, b.file);
+            if (fileCmp !== 0) return fileCmp;
+            const startCmp = compareNullableNumbersAsc(a.span?.startLine, b.span?.startLine);
+            if (startCmp !== 0) return startCmp;
+            const labelCmp = compareNullableStringsAsc(a.symbolLabel, b.symbolLabel);
+            if (labelCmp !== 0) return labelCmp;
+            const symbolCmp = compareNullableStringsAsc(a.symbolId, b.symbolId);
+            if (symbolCmp !== 0) return symbolCmp;
+            const targetCmp = compareNullableStringsAsc(a.targetSymbolId, b.targetSymbolId);
+            if (targetCmp !== 0) return targetCmp;
+            const siteFileCmp = compareNullableStringsAsc(a.site?.file, b.site?.file);
+            if (siteFileCmp !== 0) return siteFileCmp;
+            return compareNullableNumbersAsc(a.site?.startLine, b.site?.startLine);
+        });
+    }
+
+    private buildTestReferences(
+        records: readonly RelationshipRecord[],
+        registry: SymbolRegistry,
+        targetSymbolId: string,
+    ): CallGraphTestReference[] {
+        const referencesByKey = new Map<string, CallGraphTestReference>();
+        for (const record of records) {
+            if (
+                record.type !== "TESTS"
+                || !record.sourceInstanceId
+                || record.targetInstanceId !== targetSymbolId
+            ) {
+                continue;
+            }
+            const source = registry.symbolsByInstanceId.get(record.sourceInstanceId);
+            if (!source) {
+                continue;
+            }
+            const startLine = record.span?.startLine ?? source.span.startLine;
+            const reference: CallGraphTestReference = {
+                file: source.file,
+                symbolId: source.symbolInstanceId,
+                symbolLabel: source.label,
+                span: {
+                    startLine: source.span.startLine,
+                    endLine: source.span.endLine,
+                },
+                site: {
+                    file: record.file,
+                    startLine,
+                    ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
+                },
+                targetSymbolId,
+                kind: "call",
+                confidence: this.mapRelationshipConfidence(record.confidence),
+            };
+            const key = [
+                reference.symbolId,
+                reference.targetSymbolId,
+                reference.kind,
+                reference.site.file,
+                reference.site.startLine,
+            ].join("\0");
+            referencesByKey.set(key, reference);
+        }
+        return this.sortTestReferences([...referencesByKey.values()])
+            .slice(0, DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT);
     }
 
     private sortNotes(notes: CallGraphNote[]): CallGraphNote[] {
@@ -318,6 +369,23 @@ export class RelationshipBackedCallGraph {
         if (neighbors.status !== "ok") {
             return null;
         }
+        const testRelationshipResult = await getRelationshipsForSymbol({
+            normalizedRootPath: input.codebaseRoot,
+            generationId: input.generationId,
+            expectedSymbolRegistryManifestHash: input.registryManifestHash,
+            navigationStore: this.host.navigationStore,
+            targetInstanceId: input.resolvedSymbol.symbolInstanceId,
+            direction: "callers",
+            types: ["TESTS"],
+        });
+        if (testRelationshipResult.status !== "ok") {
+            return null;
+        }
+        const testReferences = this.buildTestReferences(
+            testRelationshipResult.records,
+            input.registry,
+            input.resolvedSymbol.symbolInstanceId,
+        );
 
         const suppressedLowConfidenceRecords = neighbors.suppressedLowConfidenceRecords || [];
         const resolveNodeSymbol = (symbolInstanceId: string): SymbolRecord | undefined => (
@@ -512,6 +580,7 @@ export class RelationshipBackedCallGraph {
                 nodeCount: combinedNodes.length,
                 edgeCount: combinedEdges.length,
             },
+            ...(testReferences.length > 0 ? { testReferences } : {}),
             ...(hints ? { hints } : {}),
         };
     }

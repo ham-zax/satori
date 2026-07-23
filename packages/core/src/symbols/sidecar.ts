@@ -532,6 +532,17 @@ function getRelationshipAnalysisEvidencePaths(
         : Object.keys(analysisByFile);
 }
 
+function canonicalizeRelationshipAnalysisEvidence(
+    evidence: RelationshipAnalysisEvidence | undefined,
+): RelationshipAnalysisEvidence | undefined {
+    if (!evidence) return undefined;
+    return {
+        moduleBindings: [...evidence.moduleBindings],
+        callSites: [...evidence.callSites],
+        receiverTypeBindings: [...(evidence.receiverTypeBindings ?? [])],
+    };
+}
+
 type SymbolShardReuse = Readonly<{
     sourceRoot: string;
     filesByPath: ReadonlyMap<string, SymbolIndexFileEntry>;
@@ -723,7 +734,9 @@ async function writeRelationshipSidecarInternal(
 
                 const records = groupedRelationships.get(filePath) ?? [];
                 const analysisEvidence = !allowedEvidencePaths || allowedEvidencePaths.has(filePath)
-                    ? getRelationshipAnalysisEvidence(input.analysisByFile, filePath)
+                    ? canonicalizeRelationshipAnalysisEvidence(
+                        getRelationshipAnalysisEvidence(input.analysisByFile, filePath),
+                    )
                     : undefined;
                 const shard = {
                     schemaVersion: RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION,
@@ -1687,7 +1700,13 @@ function isSourceSpan(value: unknown): boolean {
 }
 
 function isRelationshipAnalysisEvidence(value: unknown): value is RelationshipAnalysisEvidence {
-    if (!isRecord(value) || !Array.isArray(value.moduleBindings) || !Array.isArray(value.callSites)) {
+    if (
+        !isRecord(value)
+        || Object.keys(value).length !== 3
+        || !Array.isArray(value.moduleBindings)
+        || !Array.isArray(value.callSites)
+        || !Array.isArray(value.receiverTypeBindings)
+    ) {
         return false;
     }
     const bindingsValid = value.moduleBindings.every((binding) => {
@@ -1702,7 +1721,15 @@ function isRelationshipAnalysisEvidence(value: unknown): value is RelationshipAn
         && isNonEmptyString(call.calleeName)
         && isSourceSpan(call.span)
     ));
-    return bindingsValid && callsValid;
+    const receiverTypesValid = value.receiverTypeBindings.every((binding) => (
+        isRecord(binding)
+        && Object.keys(binding).length === 4
+        && isNonEmptyString(binding.localName)
+        && isNonEmptyString(binding.typeName)
+        && binding.kind === 'parameter_annotation'
+        && isSourceSpan(binding.span)
+    ));
+    return bindingsValid && callsValid && receiverTypesValid;
 }
 
 export async function readRelationshipSidecar(input: ReadRelationshipSidecarInput): Promise<ReadRelationshipSidecarResult> {

@@ -220,6 +220,132 @@ test('buildCallRelationshipsForRegistry creates deterministic CALLS records from
     ]);
 });
 
+test('buildCallRelationshipsForRegistry adds TESTS only for resolved test-to-production calls', () => {
+    const runtimeFile = createSynthesizedFileSymbol({
+        relativePath: 'src/runtime.ts',
+        language: 'typescript',
+        content: 'function target() {}\nfunction productionCaller() { target(); }\n',
+        fileHash: 'hash-runtime',
+        extractorVersion: 'test-extractor-v1',
+    });
+    const testFile = createSynthesizedFileSymbol({
+        relativePath: 'tests/runtime.test.ts',
+        language: 'typescript',
+        content: 'function testCaller() { target(); }\n',
+        fileHash: 'hash-test',
+        extractorVersion: 'test-extractor-v1',
+    });
+    const unresolvedFile = createSynthesizedFileSymbol({
+        relativePath: 'tests/unresolved.test.ts',
+        language: 'typescript',
+        content: 'function unresolvedCaller() { missing(); }\n',
+        fileHash: 'hash-unresolved',
+        extractorVersion: 'test-extractor-v1',
+    });
+    const target = createSymbol({
+        file: 'src/runtime.ts',
+        kind: 'function',
+        name: 'target',
+        qualifiedName: 'target',
+        label: 'function target',
+        startLine: 1,
+        endLine: 1,
+        fileHash: 'hash-runtime',
+    });
+    const productionCaller = createSymbol({
+        file: 'src/runtime.ts',
+        kind: 'function',
+        name: 'productionCaller',
+        qualifiedName: 'productionCaller',
+        label: 'function productionCaller',
+        startLine: 2,
+        endLine: 2,
+        fileHash: 'hash-runtime',
+    });
+    const testCaller = createSymbol({
+        file: 'tests/runtime.test.ts',
+        kind: 'function',
+        name: 'testCaller',
+        qualifiedName: 'testCaller',
+        label: 'function testCaller',
+        startLine: 1,
+        endLine: 1,
+        fileHash: 'hash-test',
+    });
+    const unresolvedCaller = createSymbol({
+        file: 'tests/unresolved.test.ts',
+        kind: 'function',
+        name: 'unresolvedCaller',
+        qualifiedName: 'unresolvedCaller',
+        label: 'function unresolvedCaller',
+        startLine: 1,
+        endLine: 1,
+        fileHash: 'hash-unresolved',
+    });
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [
+                { path: 'src/runtime.ts', hash: 'hash-runtime', language: 'typescript', symbolCount: 3 },
+                { path: 'tests/runtime.test.ts', hash: 'hash-test', language: 'typescript', symbolCount: 2 },
+                { path: 'tests/unresolved.test.ts', hash: 'hash-unresolved', language: 'typescript', symbolCount: 2 },
+            ],
+        },
+        symbols: [
+            runtimeFile,
+            target,
+            productionCaller,
+            testFile,
+            testCaller,
+            unresolvedFile,
+            unresolvedCaller,
+        ],
+    });
+    const call = (calleeName: string, line: number, startByte: number) => ({
+        calleeName,
+        kind: 'direct' as const,
+        span: {
+            startLine: line,
+            endLine: line,
+            startByte,
+            endByte: startByte + calleeName.length,
+            startColumn: startByte,
+            endColumn: startByte + calleeName.length,
+        },
+    });
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile: new Map([
+            ['src/runtime.ts', {
+                moduleBindings: [],
+                callSites: [call('target', 2, 50)],
+            }],
+            ['tests/runtime.test.ts', {
+                moduleBindings: [],
+                callSites: [call('target', 1, 24)],
+            }],
+            ['tests/unresolved.test.ts', {
+                moduleBindings: [],
+                callSites: [call('missing', 1, 30)],
+            }],
+        ]),
+    });
+
+    assert.deepEqual(
+        records.map((record) => [
+            record.file,
+            record.type,
+            record.sourceInstanceId,
+            record.targetInstanceId,
+        ]),
+        [
+            ['src/runtime.ts', 'CALLS', productionCaller.symbolInstanceId, target.symbolInstanceId],
+            ['tests/runtime.test.ts', 'CALLS', testCaller.symbolInstanceId, target.symbolInstanceId],
+            ['tests/runtime.test.ts', 'TESTS', testCaller.symbolInstanceId, target.symbolInstanceId],
+        ],
+    );
+});
+
 test('buildCallRelationshipsForRegistry preserves the six direct Python run_validation calls', async () => {
     const content = [
         'def phase_one(): pass',
@@ -295,7 +421,7 @@ test('buildCallRelationshipsForRegistry resolves exact same-class Python self an
     );
 });
 
-test('buildCallRelationshipsForRegistry resolves one imported Python class receiver and rejects unsupported receivers', async () => {
+test('buildCallRelationshipsForRegistry resolves exact Python aliases and parameter types without leaking receiver authority', async () => {
     const sources = {
         'src/factory.py': [
             'class SpreadModelFactory:',
@@ -335,6 +461,37 @@ test('buildCallRelationshipsForRegistry resolves one imported Python class recei
             'class MetricsModel:',
             '    def calculate_metrics(self): pass',
             '',
+            'class OtherModel:',
+            '    def calculate_metrics(self): pass',
+            '',
+            'def inspect(model: MetricsModel):',
+            '    model.calculate_metrics()',
+            '',
+            'def inspect_other(model: OtherModel):',
+            '    model.calculate_metrics()',
+            '',
+            'def string_annotation(model: "MetricsModel"):',
+            '    model.calculate_metrics()',
+            '',
+            'def optional_annotation(model: Optional[MetricsModel]):',
+            '    model.calculate_metrics()',
+            '',
+            'def union_annotation(model: MetricsModel | None):',
+            '    model.calculate_metrics()',
+            '',
+            'def chained_receiver(model: MetricsModel):',
+            '    model.client.calculate_metrics()',
+            '',
+            'def unknown_receiver(object):',
+            '    object.calculate_metrics()',
+        ].join('\n'),
+        'src/ambiguous_typed.py': [
+            'class MetricsModel:',
+            '    def calculate_metrics(self): pass',
+            '',
+            'class MetricsModel:',
+            '    def calculate_metrics(self): pass',
+            '',
             'def inspect(model: MetricsModel):',
             '    model.calculate_metrics()',
         ].join('\n'),
@@ -349,7 +506,12 @@ test('buildCallRelationshipsForRegistry resolves one imported Python class recei
             symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
             symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
         ]),
-        [['build', 'SpreadModelFactory.create_model']],
+        [
+            ['aliased_build', 'SpreadModelFactory.create_model'],
+            ['build', 'SpreadModelFactory.create_model'],
+            ['inspect', 'MetricsModel.calculate_metrics'],
+            ['inspect_other', 'OtherModel.calculate_metrics'],
+        ],
     );
 });
 
@@ -1299,4 +1461,159 @@ test('buildRelationshipDelta revisits an unresolved relative import when its tar
     );
     assert.deepEqual(delta.affectedFiles, [callerPath, targetPath]);
     assert.ok(delta.records.some((record) => record.type === 'IMPORTS' && record.targetPath === targetPath));
+});
+
+test('buildRelationshipDelta keeps TESTS records equivalent across add, delete, rename, and retarget', async () => {
+    const productionSource = [
+        'def target(): pass',
+        'def replacement(): pass',
+    ].join('\n');
+    const testSource = [
+        'def test_runtime():',
+        '    target()',
+    ].join('\n');
+    const retargetedTestSource = [
+        'def test_runtime():',
+        '    replacement()',
+    ].join('\n');
+    const scenarios = [
+        {
+            name: 'add',
+            previous: { 'src/runtime.py': productionSource },
+            next: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime.py': testSource,
+            },
+            changedFiles: new Set(['tests/test_runtime.py']),
+            expectedTests: 1,
+        },
+        {
+            name: 'delete',
+            previous: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime.py': testSource,
+            },
+            next: { 'src/runtime.py': productionSource },
+            changedFiles: new Set(['tests/test_runtime.py']),
+            expectedTests: 0,
+        },
+        {
+            name: 'rename',
+            previous: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime.py': testSource,
+            },
+            next: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime_renamed.py': testSource,
+            },
+            changedFiles: new Set(['tests/test_runtime.py', 'tests/test_runtime_renamed.py']),
+            expectedTests: 1,
+        },
+        {
+            name: 'retarget',
+            previous: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime.py': testSource,
+            },
+            next: {
+                'src/runtime.py': productionSource,
+                'tests/test_runtime.py': retargetedTestSource,
+            },
+            changedFiles: new Set(['tests/test_runtime.py']),
+            expectedTests: 1,
+        },
+    ] as const;
+
+    for (const scenario of scenarios) {
+        const previous = await buildAnalyzedPythonRegistry(scenario.previous);
+        const next = await buildAnalyzedPythonRegistry(scenario.next);
+        const existingRecords = buildRelationshipsForRegistry(previous);
+        const fullRecords = buildRelationshipsForRegistry(next);
+        const delta = buildRelationshipDelta({
+            previousRegistry: previous.registry,
+            registry: next.registry,
+            existingRecords,
+            analysisByFile: next.analysisByFile,
+            changedFiles: scenario.changedFiles,
+        });
+
+        assert.deepEqual(delta.records, fullRecords, scenario.name);
+        assert.equal(
+            delta.records.filter((record) => record.type === 'TESTS').length,
+            scenario.expectedTests,
+            scenario.name,
+        );
+    }
+});
+
+test('buildRelationshipDelta keeps typed receiver evidence equivalent across annotation and imported-class changes', async () => {
+    const localClasses = [
+        'class MetricsModel:',
+        '    def calculate_metrics(self): pass',
+        '',
+        'class OtherModel:',
+        '    def calculate_metrics(self): pass',
+    ].join('\n');
+    const untyped = `${localClasses}\n\ndef inspect(model):\n    model.calculate_metrics()\n`;
+    const typedMetrics = `${localClasses}\n\ndef inspect(model: MetricsModel):\n    model.calculate_metrics()\n`;
+    const typedOther = `${localClasses}\n\ndef inspect(model: OtherModel):\n    model.calculate_metrics()\n`;
+    const annotationScenarios = [
+        { name: 'add annotation', previous: untyped, next: typedMetrics, expectedTarget: 'MetricsModel.calculate_metrics' },
+        { name: 'remove annotation', previous: typedMetrics, next: untyped, expectedTarget: undefined },
+        { name: 'change annotation', previous: typedMetrics, next: typedOther, expectedTarget: 'OtherModel.calculate_metrics' },
+    ] as const;
+
+    for (const scenario of annotationScenarios) {
+        const previous = await buildAnalyzedPythonRegistry({ 'src/runtime.py': scenario.previous });
+        const next = await buildAnalyzedPythonRegistry({ 'src/runtime.py': scenario.next });
+        const delta = buildRelationshipDelta({
+            previousRegistry: previous.registry,
+            registry: next.registry,
+            existingRecords: buildRelationshipsForRegistry(previous),
+            analysisByFile: next.analysisByFile,
+            changedFiles: new Set(['src/runtime.py']),
+        });
+        const fullRecords = buildRelationshipsForRegistry(next);
+
+        assert.deepEqual(delta.records, fullRecords, scenario.name);
+        const callTarget = delta.records.find((record) => record.type === 'CALLS')?.targetInstanceId;
+        assert.equal(
+            callTarget ? next.registry.symbolsByInstanceId.get(callTarget)?.qualifiedName : undefined,
+            scenario.expectedTarget,
+            scenario.name,
+        );
+    }
+
+    const callerSource = [
+        'from .factory import Factory as Model',
+        '',
+        'def inspect(model: Model):',
+        '    model.calculate_metrics()',
+    ].join('\n');
+    const previous = await buildAnalyzedPythonRegistry({
+        'src/factory.py': [
+            'class Factory:',
+            '    def calculate_metrics(self): pass',
+        ].join('\n'),
+        'src/caller.py': callerSource,
+    });
+    const next = await buildAnalyzedPythonRegistry({
+        'src/factory.py': [
+            'class RenamedFactory:',
+            '    def calculate_metrics(self): pass',
+        ].join('\n'),
+        'src/caller.py': callerSource,
+    });
+    const delta = buildRelationshipDelta({
+        previousRegistry: previous.registry,
+        registry: next.registry,
+        existingRecords: buildRelationshipsForRegistry(previous),
+        analysisByFile: next.analysisByFile,
+        changedFiles: new Set(['src/factory.py']),
+    });
+
+    assert.deepEqual(delta.records, buildRelationshipsForRegistry(next));
+    assert.ok(delta.affectedFiles.includes('src/caller.py'));
+    assert.equal(delta.records.some((record) => record.type === 'CALLS'), false);
 });

@@ -56,6 +56,13 @@ export interface CallSite {
     readonly span: SourceSpan;
 }
 
+export interface ReceiverTypeBinding {
+    readonly localName: string;
+    readonly typeName: string;
+    readonly kind: 'parameter_annotation';
+    readonly span: SourceSpan;
+}
+
 export interface LanguageAnalysisInput {
     readonly content: string;
     readonly language: string;
@@ -67,6 +74,7 @@ interface LanguageAnalysisEvidence {
     readonly symbols: readonly ExtractedSymbol[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
+    readonly receiverTypeBindings: readonly ReceiverTypeBinding[];
     readonly chunks: readonly CodeChunk[];
 }
 

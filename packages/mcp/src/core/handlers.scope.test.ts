@@ -3877,6 +3877,102 @@ test('handleSearchCode ambiguous structural ownership falls back to existing sem
     });
 });
 
+test('handleSearchCode keeps source and generated implementations as distinct exact owners', async () => {
+    await withTempStateRoot(async () => {
+        await withTempRepo(async (repoPath) => {
+            const sourcePath = 'src/build-artifact.ts';
+            const generatedPath = 'generated/build-artifact.ts';
+            const sourceContent = 'export function buildArtifact() { return "source"; }';
+            const generatedContent = 'export function buildArtifact() { return "generated"; }';
+            fs.mkdirSync(path.join(repoPath, 'src'), { recursive: true });
+            fs.mkdirSync(path.join(repoPath, 'generated'), { recursive: true });
+            fs.writeFileSync(path.join(repoPath, sourcePath), sourceContent, 'utf8');
+            fs.writeFileSync(path.join(repoPath, generatedPath), generatedContent, 'utf8');
+
+            const symbols = await writeSearchSymbolRegistryForFiles({
+                repoPath,
+                files: [{
+                    relativePath: sourcePath,
+                    content: sourceContent,
+                    chunks: [{
+                        content: sourceContent,
+                        startLine: 1,
+                        endLine: 1,
+                        symbolLabel: 'function buildArtifact()',
+                    }],
+                }, {
+                    relativePath: generatedPath,
+                    content: generatedContent,
+                    chunks: [{
+                        content: generatedContent,
+                        startLine: 1,
+                        endLine: 1,
+                        symbolLabel: 'function buildArtifact()',
+                    }],
+                }],
+            });
+            const sourceOwner = symbols.find((symbol) => symbol.file === sourcePath && symbol.name === 'buildArtifact');
+            const generatedOwner = symbols.find((symbol) => symbol.file === generatedPath && symbol.name === 'buildArtifact');
+            assert.ok(sourceOwner);
+            assert.ok(generatedOwner);
+            assert.notEqual(sourceOwner.symbolInstanceId, generatedOwner.symbolInstanceId);
+
+            const handlers = createHandlers(repoPath, [{
+                content: sourceContent,
+                relativePath: sourcePath,
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.9,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: sourceOwner.symbolInstanceId,
+                symbolLabel: sourceOwner.label,
+                ownerSymbolKey: sourceOwner.symbolKey,
+                ownerSymbolInstanceId: sourceOwner.symbolInstanceId,
+                symbolKind: sourceOwner.kind,
+            }, {
+                content: generatedContent,
+                relativePath: generatedPath,
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                score: 0.9,
+                indexedAt: '2026-01-01T00:30:00.000Z',
+                symbolId: generatedOwner.symbolInstanceId,
+                symbolLabel: generatedOwner.label,
+                ownerSymbolKey: generatedOwner.symbolKey,
+                ownerSymbolInstanceId: generatedOwner.symbolInstanceId,
+                symbolKind: generatedOwner.kind,
+            }]);
+
+            const response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'who owns buildArtifact implementation',
+                scope: 'mixed',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debugMode: 'full',
+            });
+
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok');
+            assert.equal(payload.hints?.debugSearch?.exactRegistry?.status, 'ambiguous');
+            assert.deepEqual(
+                payload.results.map((result: { target: { file: string } }) => result.target.file),
+                [sourcePath, generatedPath],
+            );
+            assert.deepEqual(
+                payload.results.map((result: { target: { symbolId?: string } }) => result.target.symbolId),
+                [sourceOwner.symbolInstanceId, generatedOwner.symbolInstanceId],
+            );
+            assert.equal(payload.results[0].debug?.pathCategory, 'neutral');
+            assert.equal(payload.results[1].debug?.pathCategory, 'generated');
+            assert.equal(payload.results[0].score > payload.results[1].score, true);
+        });
+    });
+});
+
 test('sortGroupedSearchResults preserves exactMatchPinned provenance when exact pinning changes the grouped winner', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, []);

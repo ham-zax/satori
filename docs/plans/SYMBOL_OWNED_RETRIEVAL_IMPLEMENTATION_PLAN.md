@@ -981,6 +981,16 @@ Acceptance:
 
 ### Phase 6: Language Expansion
 
+Status: superseded for remaining symbol-definition parity by
+`docs/plans/MULTI_LANGUAGE_SYMBOL_DEFINITION_PARITY_PLAN.md`.
+
+The order and tasks below are retained as historical planning context. Basic
+symbol extraction, ownership, outline, and exact-open support have since shipped
+for Go, Java, Rust, C#, C++, and Scala. Do not execute this section as written.
+The replacement plan records the current extractor truth, pinned upstream
+definition authorities, the C/C++ parser boundary, and the remaining
+per-language parity work. It does not reopen Phase 5B call-graph work.
+
 Order:
 
 1. Go

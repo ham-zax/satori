@@ -1,5 +1,14 @@
 # Phase L1: Language Capability Matrix + Symbol Extractor Harness
 
+**Status:** historical implementation plan; its matrix and first structural
+symbol-extractor batches are implemented. Remaining definition-coverage work is
+superseded by
+`docs/plans/MULTI_LANGUAGE_SYMBOL_DEFINITION_PARITY_PLAN.md`.
+
+The baseline and handoff descriptions below are retained to explain the
+original implementation contract. They are not current repository status and
+must not be used as an executable next-action plan.
+
 ## Capability
 
 Satori should be able to add broader language support without turning every routed extension into a graph-navigation claim. Phase L1 creates an implementation-facing capability matrix and a symbol extractor harness so new languages can earn symbol-owned search, `file_outline`, and `read_file(open_symbol)` support independently from `IMPORTS`, `EXPORTS`, `CALLS`, and type-aware traversal.

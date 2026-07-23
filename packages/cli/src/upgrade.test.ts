@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    CliUpgradeDelegationStartError,
     combineUpgradeResult,
     formatUpgradeText,
     installGlobalCliAndDelegate,
@@ -86,6 +87,34 @@ test("installGlobalCliAndDelegate never starts the delegated runtime upgrade aft
         },
     );
     assert.equal(delegated, false);
+});
+
+test("installGlobalCliAndDelegate preserves completed CLI identity when delegation cannot start", () => {
+    assert.throws(
+        () => installGlobalCliAndDelegate({
+            target: TARGET,
+            currentCliVersion: "1.3.0",
+            invokedScriptPath: "/global/bin/satori",
+            delegatedArgs: ["--format", "json", "upgrade"],
+            env: {
+                SATORI_UPGRADE_FROM_CLI_VERSION: "1.2.0",
+            },
+        }, {
+            execFileSyncImpl: (() => "") as never,
+            spawnSyncImpl: (() => ({
+                status: null,
+                signal: null,
+                error: new Error("EAGAIN"),
+            })) as never,
+        }),
+        (error: unknown) => {
+            assert.ok(error instanceof CliUpgradeDelegationStartError);
+            assert.equal(error.fromCliVersion, "1.2.0");
+            assert.equal(error.toCliVersion, "1.4.0");
+            assert.match(error.message, /CLI updated to 1\.4\.0.*could not start.*EAGAIN/s);
+            return true;
+        },
+    );
 });
 
 test("formatUpgradeText reports the CLI, MCP, and Core closure concisely", () => {

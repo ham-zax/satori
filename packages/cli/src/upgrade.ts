@@ -30,6 +30,18 @@ export interface GlobalCliUpgradeDependencies {
     spawnSyncImpl?: SpawnSyncLike;
 }
 
+export class CliUpgradeDelegationStartError extends CliError {
+    public readonly fromCliVersion: string;
+    public readonly toCliVersion: string;
+
+    constructor(fromCliVersion: string, toCliVersion: string, message: string) {
+        super("E_UPGRADE", message, 1);
+        this.name = "CliUpgradeDelegationStartError";
+        this.fromCliVersion = fromCliVersion;
+        this.toCliVersion = toCliVersion;
+    }
+}
+
 function commandOutput(error: unknown): string {
     if (!(error instanceof Error)) {
         return String(error);
@@ -82,10 +94,10 @@ export function installGlobalCliAndDelegate(
         },
     );
     if (delegated.error) {
-        throw new CliError(
-            "E_UPGRADE",
+        throw new CliUpgradeDelegationStartError(
+            input.env.SATORI_UPGRADE_FROM_CLI_VERSION ?? input.currentCliVersion,
+            input.target.cliVersion,
             `Global CLI updated to ${input.target.cliVersion}, but the upgraded command could not start: ${delegated.error.message}`,
-            1,
         );
     }
     if (delegated.signal) {

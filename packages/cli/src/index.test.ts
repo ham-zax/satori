@@ -9,6 +9,7 @@ import type { CallToolResult, ListToolsResult } from "./client.js";
 import type { DoctorResult } from "./doctor.js";
 import { CliError } from "./errors.js";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
+import { CliUpgradeDelegationStartError } from "./upgrade.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI_PACKAGE_VERSION = (
@@ -404,6 +405,44 @@ test("runCli reports a completed CLI update separately when runtime activation f
     assert.equal(receipt.toCliVersion, CLI_PACKAGE_VERSION);
     assert.equal(receipt.error.token, "E_INSTALL_PREFLIGHT");
     assert.match(output.stderr, /CLI .* is installed.*managed launcher remains unchanged/s);
+});
+
+test("runCli reports the installed CLI version when delegated upgrade cannot start", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["--format", "json", "upgrade"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+        env: { HOME: "/home/test" },
+        upgradeTargetResolver: () => ({
+            cliPackageSpecifier: "@zokizuan/satori-cli@1.4.0",
+            cliVersion: "1.4.0",
+            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+            mcpVersion: "6.3.0",
+            coreVersion: "3.2.0",
+        }),
+        globalCliUpgradeRunner: () => {
+            throw new CliUpgradeDelegationStartError(
+                CLI_PACKAGE_VERSION,
+                "1.4.0",
+                "Global CLI updated to 1.4.0, but the upgraded command could not start: EAGAIN",
+            );
+        },
+    });
+
+    assert.equal(exitCode, 1);
+    const output = io.read();
+    const receipt = JSON.parse(output.stdout);
+    assert.equal(receipt.action, "upgrade");
+    assert.equal(receipt.status, "error");
+    assert.equal(receipt.cliUpgrade, "completed");
+    assert.equal(receipt.runtimeUpgrade, "failed");
+    assert.equal(receipt.launcherChanged, false);
+    assert.equal(receipt.fromCliVersion, CLI_PACKAGE_VERSION);
+    assert.equal(receipt.toCliVersion, "1.4.0");
+    assert.equal(receipt.error.token, "E_UPGRADE");
+    assert.match(receipt.error.message, /CLI updated to 1\.4\.0.*could not start.*EAGAIN/s);
+    assert.match(output.stderr, /E_UPGRADE Global CLI updated to 1\.4\.0.*could not start.*EAGAIN/s);
 });
 
 test("runCli update alias preserves the structured upgrade receipt", async () => {

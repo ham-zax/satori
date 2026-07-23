@@ -34,6 +34,7 @@ import { emitDoctorText } from "./doctor-format.js";
 import { emitInstallText } from "./install-format.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 import {
+    CliUpgradeDelegationStartError,
     combineUpgradeResult,
     formatUpgradeText,
     installGlobalCliAndDelegate,
@@ -539,10 +540,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     } catch (error) {
         const cliError = asCliError(error);
         const currentCliVersion = readPackageVersion();
-        const delegatedCliUpgradeCompleted = parsedCommandKind === "upgrade"
+        const delegationStartError = error instanceof CliUpgradeDelegationStartError
+            ? error
+            : null;
+        const delegatedRuntimeUpgrade = parsedCommandKind === "upgrade"
             && effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
             && typeof effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION === "string";
-        const reportedMessage = delegatedCliUpgradeCompleted
+        const cliUpgradeCompleted = delegationStartError !== null || delegatedRuntimeUpgrade;
+        const reportedMessage = delegatedRuntimeUpgrade
             ? `CLI ${currentCliVersion} is installed, but the managed MCP/Core runtime was not changed. `
                 + `The managed launcher remains unchanged. ${cliError.message}`
             : cliError.message;
@@ -570,13 +575,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             emitJson(writers, {
                 action: "upgrade",
                 status: "error",
-                cliUpgrade: delegatedCliUpgradeCompleted ? "completed" : "unchanged",
+                cliUpgrade: cliUpgradeCompleted ? "completed" : "unchanged",
                 runtimeUpgrade: "failed",
                 launcherChanged: false,
-                fromCliVersion: delegatedCliUpgradeCompleted
-                    ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION
-                    : currentCliVersion,
-                toCliVersion: currentCliVersion,
+                fromCliVersion: delegationStartError?.fromCliVersion
+                    ?? (delegatedRuntimeUpgrade
+                        ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION
+                        : currentCliVersion),
+                toCliVersion: delegationStartError?.toCliVersion ?? currentCliVersion,
                 error: {
                     token: cliError.token,
                     message: cliError.message,

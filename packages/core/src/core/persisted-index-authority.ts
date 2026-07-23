@@ -78,6 +78,12 @@ export type IndexCompatibility =
     | { status: 'requires_reindex'; differingFields: IndexFingerprintField[] }
     | { status: 'malformed'; reason: string };
 
+export type RepairIndexCompatibility =
+    | { status: 'compatible'; differingFields: [] }
+    | { status: 'relationship_only_upgrade'; differingFields: ['relationshipVersion'] }
+    | { status: 'requires_reindex'; differingFields: IndexFingerprintField[] }
+    | { status: 'malformed'; reason: string };
+
 export type CanonicalNavigationBinding =
     | { status: 'not_bound' }
     | {
@@ -288,6 +294,24 @@ export function compareIndexCompatibility(
     return differingFields.length === 0
         ? { status: 'compatible', differingFields: [] }
         : { status: 'requires_reindex', differingFields };
+}
+
+export function classifyRepairIndexCompatibility(
+    indexed: unknown,
+    runtime: IndexFingerprint,
+): RepairIndexCompatibility {
+    const compatibility = compareIndexCompatibility(indexed, runtime);
+    if (
+        compatibility.status === 'requires_reindex'
+        && compatibility.differingFields.length === 1
+        && compatibility.differingFields[0] === 'relationshipVersion'
+    ) {
+        return {
+            status: 'relationship_only_upgrade',
+            differingFields: ['relationshipVersion'],
+        };
+    }
+    return compatibility;
 }
 
 export function indexFingerprintsEqual(left: unknown, right: IndexFingerprint): boolean {

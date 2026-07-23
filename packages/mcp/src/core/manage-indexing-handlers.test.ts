@@ -128,6 +128,18 @@ type RepairResult = {
     totalChunks?: number;
     trackedRelativePaths?: string[];
     collectionName?: string;
+    activatedGeneration?: {
+        collectionName: string;
+        markerRunId: string;
+        sourceCheckpointDocumentDigest: string;
+        relationshipVersion: string;
+        navigation: {
+            generationId: string;
+            sealHash: string;
+            symbolRegistryManifestHash: string;
+            relationshipManifestHash: string;
+        };
+    };
     proof?: Record<string, { status: string; [key: string]: unknown }>;
 };
 
@@ -135,7 +147,34 @@ type RepairOptionsLike = {
     onProofUpdate?: (proof: Record<string, { status: string; [key: string]: unknown }>) => void;
     assertMutationCurrent?: () => void;
     publishMutation?: (publish: () => void) => void;
+    publicationAuthority?: {
+        ownerId: string;
+        generation: number;
+        operationId: string;
+    };
 };
+
+function provenRepairGeneration(
+    collectionName = "repair-collection",
+    indexedFiles = 1,
+    totalChunks = 2,
+) {
+    return {
+        collectionName,
+        marker: {
+            runId: "repair-marker",
+            indexedFiles,
+            totalChunks,
+        },
+        exactPayloadCount: totalChunks,
+        navigation: {
+            generationId: "repair-navigation",
+            navigationSealHash: "a".repeat(64),
+            symbolRegistryManifestHash: "symmanifest_00000000000000000000000000000000",
+            relationshipManifestHash: "b".repeat(64),
+        },
+    };
+}
 
 function createRepairReceiptHarness(
     repoPath: string,
@@ -144,6 +183,11 @@ function createRepairReceiptHarness(
         failAcceptedSave?: boolean;
         repairIndex?: (repairOptions?: RepairOptionsLike) => Promise<RepairResult>;
         touchWatchedCodebase?: () => Promise<void>;
+        proveIndexedGeneration?: () => Promise<ReturnType<typeof provenRepairGeneration> | null>;
+        inspectSourceFreshnessCheckpoint?: () => Promise<{
+            status: "valid" | "missing" | "corrupt";
+            documentDigest?: string;
+        }>;
     } = {},
 ) {
     const events: string[] = [];
@@ -178,6 +222,13 @@ function createRepairReceiptHarness(
                         proof: REPAIR_PROOF,
                     };
             },
+            proveIndexedGeneration: options.proveIndexedGeneration
+                ?? (async () => provenRepairGeneration()),
+            inspectSourceFreshnessCheckpoint: options.inspectSourceFreshnessCheckpoint
+                ?? (async () => ({
+                    status: "valid" as const,
+                    documentDigest: "c".repeat(64),
+                })),
         },
         snapshotManager: {
             startOperation: (lease: RootMutationLease) => {
@@ -2077,8 +2128,12 @@ test("handleRepairIndex saves the manifest paths verified by repair", async () =
                         totalChunks: 2,
                         warnings: [],
                         trackedRelativePaths: ["src/repaired.ts"],
+                        collectionName: "snapshot-selected-collection",
                     };
                 },
+                proveIndexedGeneration: async () => provenRepairGeneration(
+                    "snapshot-selected-collection",
+                ),
             },
             snapshotManager: {
                 setCodebaseIndexed: () => undefined,
@@ -2169,6 +2224,7 @@ test("handleRepairIndex recovers abandoned indexing before the indexing gate", a
                     totalChunks: 2,
                     warnings: [],
                     trackedRelativePaths: ["src/repaired.ts"],
+                    collectionName: "snapshot-selected-collection",
                     proof: {
                         collection: { status: "matched" },
                         snapshot: { status: "matched" },
@@ -2179,6 +2235,9 @@ test("handleRepairIndex recovers abandoned indexing before the indexing gate", a
                         navigation: { status: "not_checked" },
                     },
                 }),
+                proveIndexedGeneration: async () => provenRepairGeneration(
+                    "snapshot-selected-collection",
+                ),
             },
             snapshotManager: {
                 setCodebaseIndexed: () => undefined,
@@ -2230,7 +2289,7 @@ test("handleRepairIndex recovers abandoned indexing before the indexing gate", a
     });
 });
 
-test("handleRepairIndex does not publish success after lease loss during call-graph rebuild", async () => {
+test("handleRepairIndex does not publish success after lease loss during exact generation proof", async () => {
     await withTempRepo(async (repoPath) => {
         const coordinator = new MutationLeaseCoordinator({
             stateDir: path.join(path.dirname(repoPath), "lease-state"),
@@ -2247,7 +2306,14 @@ test("handleRepairIndex does not publish success after lease loss during call-gr
                     totalChunks: 2,
                     warnings: [],
                     trackedRelativePaths: ["src/repaired.ts"],
+                    collectionName: "snapshot-selected-collection",
                 }),
+                proveIndexedGeneration: async () => {
+                    const lease = coordinator.getActiveLease(repoPath);
+                    assert.ok(lease);
+                    coordinator.release(lease);
+                    return provenRepairGeneration("snapshot-selected-collection");
+                },
             },
             snapshotManager: {
                 setCodebaseIndexed: () => { indexedCalls += 1; },
@@ -2275,11 +2341,8 @@ test("handleRepairIndex does not publish success after lease loss during call-gr
             buildCreateHint: (codebasePath: string) => ({ tool: "manage_index", args: { action: "create", path: codebasePath } }),
             getContextTrackedRelativePaths: () => [],
             setIndexingStats: () => undefined,
-            rebuildCallGraphForIndex: async (_codebasePath: string, assertMutationCurrent?: () => void) => {
-                const lease = coordinator.getActiveLease(repoPath);
-                assert.ok(lease);
-                coordinator.release(lease);
-                assertMutationCurrent?.();
+            rebuildCallGraphForIndex: async () => {
+                throw new Error("legacy call graph rebuild must not run");
             },
             touchWatchedCodebase: async () => undefined,
             saveSnapshotIfSupported: () => { saveCalls += 1; },
@@ -2305,6 +2368,12 @@ test("handleRepairIndex durably accepts before repair and commits completed rece
             repairIndex: async (repairOptions) => {
                 assert.equal(typeof repairOptions?.assertMutationCurrent, "function");
                 assert.equal(typeof repairOptions?.publishMutation, "function");
+                assert.equal(repairOptions?.publicationAuthority?.ownerId, "repair-receipt-owner");
+                assert.equal(repairOptions?.publicationAuthority?.generation, 1);
+                assert.equal(
+                    repairOptions?.publicationAuthority?.operationId,
+                    harness.coordinator?.getActiveLease(repoPath)?.operationId,
+                );
                 repairOptions?.publishMutation?.(() => {
                     repairPublicationRan = true;
                 });
@@ -2339,6 +2408,52 @@ test("handleRepairIndex durably accepts before repair and commits completed rece
         assert.ok(harness.events.indexOf("save:proving") < harness.events.indexOf("repair"));
         assert.ok(harness.events.indexOf("set:indexed") < harness.events.indexOf("save:completed"));
         assert.equal(harness.coordinator?.getActiveLease(repoPath), undefined);
+    });
+});
+
+test("handleRepairIndex accepts a relationship-only repair only after exact generation and checkpoint proof", async () => {
+    await withTempRepo(async (repoPath) => {
+        const proven = provenRepairGeneration();
+        const harness = createRepairReceiptHarness(repoPath, {
+            repairIndex: async () => ({
+                status: "ok",
+                message: "relationship navigation repaired",
+                indexedFiles: 1,
+                totalChunks: 2,
+                warnings: [],
+                trackedRelativePaths: ["src/repaired.ts"],
+                collectionName: proven.collectionName,
+                proof: REPAIR_PROOF,
+                activatedGeneration: {
+                    collectionName: proven.collectionName,
+                    markerRunId: proven.marker.runId,
+                    sourceCheckpointDocumentDigest: "c".repeat(64),
+                    relationshipVersion: RUNTIME_FINGERPRINT.relationshipVersion!,
+                    navigation: {
+                        generationId: proven.navigation.generationId,
+                        sealHash: proven.navigation.navigationSealHash,
+                        symbolRegistryManifestHash:
+                            proven.navigation.symbolRegistryManifestHash,
+                        relationshipManifestHash:
+                            proven.navigation.relationshipManifestHash,
+                    },
+                },
+            }),
+            proveIndexedGeneration: async () => proven,
+        });
+
+        const response = await harness.handler.handleRepairIndex({ path: repoPath });
+        const payload = JSON.parse(response.content[0].text) as {
+            status: string;
+            repairProof?: typeof REPAIR_PROOF;
+        };
+
+        assert.equal(payload.status, "ok");
+        assert.equal(
+            payload.repairProof?.navigation.basis,
+            "activated_generation_proven",
+        );
+        assert.equal(harness.events.includes("rebuild:call-graph"), false);
     });
 });
 
@@ -2469,7 +2584,7 @@ test("handleRepairIndex treats watcher touch as best effort after navigation pro
         assert.equal(payload.status, "ok");
         assert.equal(payload.operation?.phase, "completed");
         assert.equal(payload.repairProof?.navigation.status, "matched");
-        assert.equal(payload.repairProof?.navigation.basis, "navigation_and_call_graph_rebuilt");
+        assert.equal(payload.repairProof?.navigation.basis, "activated_generation_proven");
     });
 });
 

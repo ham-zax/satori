@@ -123,12 +123,14 @@ import {
     verifyStableFileObservation,
 } from '../sync/root-bound-fs';
 import type {
+    RepairActivatedGeneration,
     RepairIndexResult,
     RepairProof,
     RepairSnapshotEvidence,
 } from './repair-proof';
 import {
     buildCanonicalIndexPolicyDocument,
+    classifyRepairIndexCompatibility,
     indexFingerprintsEqual,
     inspectCompletionMarker,
     inspectIndexPolicyDocument,
@@ -555,6 +557,22 @@ type IndexPolicyBinding = {
     publication?: CanonicalPublicationBinding;
 };
 
+type EffectiveNavigationAuthority =
+    | {
+        status: 'not_bound';
+        relationshipOnlyUpgrade: false;
+        useBoundGeneration: boolean;
+    }
+    | {
+        status: 'sealed';
+        generationId: string;
+        sealHash: string;
+        expectedSymbolRegistryManifestHash?: string;
+        expectedRelationshipManifestHash: string;
+        relationshipOnlyUpgrade: boolean;
+        useBoundGeneration: boolean;
+    };
+
 function policyNavigationBindingFromMarker(
     navigation: IndexCompletionMarkerDocument['navigation'],
 ): CanonicalPolicyNavigationBinding {
@@ -754,6 +772,7 @@ type RepairIndexOptions = {
     assertMutationCurrent?: () => void;
     publishMutation?: (publish: () => void) => void;
     onProofUpdate?: (proof: RepairProof) => void;
+    publicationAuthority?: DurableAuthorityMutationOwner;
 };
 
 type RepairCompletionMarkerResolution =
@@ -1407,10 +1426,16 @@ export class Context {
         if (!preparedIdentity) return null;
         this.refreshRuntimePolicyAuthority(canonicalRoot);
         if (!this.isPreparedVectorReceiptBoundToCurrentAuthority(canonicalRoot, receipt)) return null;
+        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
+        const binding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        const authority = policy && binding
+            ? this.resolveEffectiveNavigationAuthority(receipt.marker, policy, binding)
+            : null;
         if (
-            receipt.marker.navigation.status !== 'sealed'
-            || receipt.navigation.generationId !== receipt.marker.navigation.generationId
-            || receipt.navigation.navigationSealHash !== receipt.marker.navigation.sealHash
+            !authority
+            || authority.status !== 'sealed'
+            || receipt.navigation.generationId !== authority.generationId
+            || receipt.navigation.navigationSealHash !== authority.sealHash
         ) return null;
         const currentIdentity = await this.resolveGenerationProofIdentity(canonicalRoot);
         if (currentIdentity !== preparedIdentity) return null;
@@ -1690,7 +1715,7 @@ export class Context {
             schemaVersion: this.getIsHybrid() === true ? 'hybrid_v3' : 'dense_v3',
             parserVersion: LANGUAGE_PARSER_VERSION,
             extractorVersion: SYMBOL_EXTRACTOR_VERSION,
-            relationshipVersion: RELATIONSHIP_BUILDER_VERSION,
+            relationshipVersion: this.getRelationshipVersion(),
             embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
             lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
         };
@@ -1724,21 +1749,185 @@ export class Context {
         policy: ResolvedIndexPolicy,
         binding: IndexPolicyBinding & { policyHash: string },
     ): boolean {
-        const publicationMatches = !binding.publication || (
-            binding.publication.sourceCheckpoint.collectionName === binding.collectionName
-            && binding.publication.sourceCheckpoint.markerRunId === marker.runId
-            && binding.publication.sourceCheckpoint.indexPolicyHash === marker.indexPolicyHash
-            && marker.navigation.status === 'sealed'
-            && binding.publication.graph.manifestHash === marker.navigation.relationshipManifestHash
+        return this.resolveEffectiveNavigationAuthority(marker, policy, binding) !== null;
+    }
+
+    private resolveEffectiveNavigationAuthority(
+        marker: IndexCompletionMarkerDocument,
+        policy: ResolvedIndexPolicy,
+        binding: IndexPolicyBinding & { policyHash: string },
+    ): EffectiveNavigationAuthority | null {
+        if (
+            marker.indexPolicyHash !== policy.policyHash
+            || binding.policyHash !== marker.indexPolicyHash
+        ) return null;
+
+        const compatibility = classifyRepairIndexCompatibility(
+            marker.fingerprint,
+            this.buildIndexCompletionFingerprint(),
         );
-        return publicationMatches
-            && indexFingerprintsEqual(marker.fingerprint, this.buildIndexCompletionFingerprint())
-            && marker.indexPolicyHash === policy.policyHash
-            && binding.policyHash === marker.indexPolicyHash
-            && policyNavigationBindingsEqual(
+        if (
+            compatibility.status !== 'compatible'
+            && compatibility.status !== 'relationship_only_upgrade'
+        ) return null;
+
+        const publication = binding.publication;
+        if (publication && (
+            publication.sourceCheckpoint.collectionName !== binding.collectionName
+            || publication.sourceCheckpoint.markerRunId !== marker.runId
+            || publication.sourceCheckpoint.indexPolicyHash !== marker.indexPolicyHash
+        )) return null;
+
+        if (compatibility.status === 'compatible') {
+            if (!policyNavigationBindingsEqual(
                 binding.navigation,
                 policyNavigationBindingFromMarker(marker.navigation),
+            )) return null;
+            if (marker.navigation.status === 'not_bound') {
+                return publication
+                    ? null
+                    : {
+                        status: 'not_bound',
+                        relationshipOnlyUpgrade: false,
+                        useBoundGeneration: false,
+                    };
+            }
+            if (
+                publication
+                && publication.graph.manifestHash !== marker.navigation.relationshipManifestHash
+            ) return null;
+            return {
+                status: 'sealed',
+                generationId: marker.navigation.generationId,
+                sealHash: marker.navigation.sealHash,
+                expectedSymbolRegistryManifestHash: marker.navigation.symbolRegistryManifestHash,
+                expectedRelationshipManifestHash: marker.navigation.relationshipManifestHash,
+                relationshipOnlyUpgrade: false,
+                useBoundGeneration: publication !== undefined,
+            };
+        }
+
+        if (
+            !publication
+            || marker.indexStatus !== 'completed'
+            || marker.navigation.status !== 'sealed'
+            || binding.navigation.status !== 'sealed'
+        ) return null;
+        return {
+            status: 'sealed',
+            generationId: binding.navigation.generationId,
+            sealHash: binding.navigation.sealHash,
+            expectedRelationshipManifestHash: publication.graph.manifestHash,
+            relationshipOnlyUpgrade: true,
+            useBoundGeneration: true,
+        };
+    }
+
+    private effectiveNavigationAuthoritiesEqual(
+        left: EffectiveNavigationAuthority,
+        right: EffectiveNavigationAuthority,
+    ): boolean {
+        return JSON.stringify(left) === JSON.stringify(right);
+    }
+
+    private async proveEffectiveNavigationAuthority(
+        canonicalRoot: string,
+        authority: EffectiveNavigationAuthority,
+        validateArtifacts = false,
+    ): Promise<NavigationGenerationProof> {
+        if (authority.status === 'not_bound') return { status: 'not_bound' };
+        let generation: CurrentNavigationGeneration | null;
+        try {
+            generation = await (authority.useBoundGeneration
+                ? resolveNavigationGeneration(
+                    this.symbolRegistryStateRoot,
+                    canonicalRoot,
+                    authority.generationId,
+                )
+                : resolveCurrentNavigationGeneration(
+                    this.symbolRegistryStateRoot,
+                    canonicalRoot,
+                ));
+        } catch (error) {
+            return {
+                status: error instanceof RetiredNavigationPointerError
+                    ? 'requires_reindex'
+                    : error instanceof UnsupportedNavigationPointerError
+                        ? 'unsupported'
+                        : 'corrupt',
+            };
+        }
+        if (!generation) return { status: 'missing' };
+        if (
+            generation.generationId !== authority.generationId
+            || generation.navigationSealHash !== authority.sealHash
+            || (
+                authority.expectedSymbolRegistryManifestHash !== undefined
+                && generation.symbolRegistryManifestHash
+                    !== authority.expectedSymbolRegistryManifestHash
+            )
+            || generation.relationshipManifestHash
+                !== authority.expectedRelationshipManifestHash
+        ) return { status: 'incompatible' };
+
+        if (validateArtifacts || authority.relationshipOnlyUpgrade) {
+            const registryRead = await readSymbolRegistrySidecar({
+                normalizedRootPath: canonicalRoot,
+                stateRoot: this.symbolRegistryStateRoot,
+                ...(authority.useBoundGeneration
+                    ? { generationId: authority.generationId }
+                    : {}),
+            });
+            if (registryRead.status !== 'ok') {
+                return { status: registryRead.status };
+            }
+            const relationshipRead = await readRelationshipSidecar({
+                normalizedRootPath: canonicalRoot,
+                expectedSymbolRegistryManifestHash: generation.symbolRegistryManifestHash,
+                stateRoot: this.symbolRegistryStateRoot,
+                ...(authority.useBoundGeneration
+                    ? { generationId: authority.generationId }
+                    : {}),
+            });
+            if (relationshipRead.status !== 'ok') {
+                return { status: relationshipRead.status };
+            }
+            if (
+                authority.relationshipOnlyUpgrade
+                && (
+                    registryRead.registry.manifest.relationshipVersion
+                        !== this.getRelationshipVersion()
+                    || relationshipRead.manifest.relationshipVersion
+                        !== this.getRelationshipVersion()
+                )
+            ) return { status: 'incompatible' };
+            const sealProof = await verifyNavigationGenerationSealArtifacts({
+                stateRoot: this.symbolRegistryStateRoot,
+                normalizedRootPath: canonicalRoot,
+                ...(authority.useBoundGeneration
+                    ? { generationId: authority.generationId }
+                    : {}),
+                registry: registryRead.registry,
+                relationshipManifest: relationshipRead.manifest,
+            });
+            if (sealProof.status !== 'ok') return { status: sealProof.status };
+        }
+        try {
+            const observation = this.resolveNavigationObservation(
+                canonicalRoot,
+                generation.generationId,
+                !authority.useBoundGeneration,
             );
+            return observation.status === 'valid'
+                ? {
+                    status: 'valid',
+                    generation: { ...generation },
+                    observationToken: observation.token,
+                }
+                : { status: observation.status };
+        } catch {
+            return { status: 'corrupt' };
+        }
     }
 
     private cloneIndexCompletionMarker(marker: IndexCompletionMarkerDocument): IndexCompletionMarkerDocument {
@@ -1815,7 +2004,6 @@ export class Context {
             alternateFamilyName,
         } = this.buildCollectionFamilies(codebasePath);
         const familyCollectionNames = await this.listRelatedCollectionNames(codebasePath);
-        const runtimeFingerprint = this.buildIndexCompletionFingerprint();
         const activePolicyHash = publishedPolicy.policyHash;
 
         const candidates: Array<{
@@ -1829,48 +2017,33 @@ export class Context {
             if (!marker) {
                 continue;
             }
-            if (!indexFingerprintsEqual(marker.fingerprint, runtimeFingerprint)) {
-                continue;
-            }
             if (marker.indexPolicyHash !== activePolicyHash) {
                 continue;
             }
-            const markerNavigation = marker.navigation.status === 'sealed'
-                ? marker.navigation
-                : null;
             if (
                 policyBinding.policyHash !== marker.indexPolicyHash
                 || policyBinding.collectionName !== collectionName
-                || !policyNavigationBindingsEqual(
-                    policyBinding.navigation,
-                    policyNavigationBindingFromMarker(marker.navigation),
-                )
             ) {
                 continue;
             }
+            const navigationAuthority = this.resolveEffectiveNavigationAuthority(
+                marker,
+                publishedPolicy,
+                policyBinding,
+            );
+            if (!navigationAuthority) continue;
             if (!(await this.collectionHasIndexedPayload(collectionName, marker))) {
                 continue;
             }
-            if (markerNavigation) {
-                const currentNavigation = await (policyBinding.publication
-                    ? resolveNavigationGeneration(
-                        this.symbolRegistryStateRoot,
-                        this.canonicalizeCodebasePath(codebasePath),
-                        markerNavigation.generationId,
-                    )
-                    : resolveCurrentNavigationGeneration(
-                        this.symbolRegistryStateRoot,
-                        this.canonicalizeCodebasePath(codebasePath),
-                    )).catch(() => null);
-                if (
-                    !currentNavigation
-                    || currentNavigation.generationId !== markerNavigation.generationId
-                    || currentNavigation.symbolRegistryManifestHash !== markerNavigation.symbolRegistryManifestHash
-                    || currentNavigation.relationshipManifestHash !== markerNavigation.relationshipManifestHash
-                    || currentNavigation.navigationSealHash !== markerNavigation.sealHash
-                ) {
-                    continue;
-                }
+            if (
+                navigationAuthority.status === 'sealed'
+                && (await this.proveEffectiveNavigationAuthority(
+                    canonicalRoot,
+                    navigationAuthority,
+                    navigationAuthority.relationshipOnlyUpgrade,
+                )).status !== 'valid'
+            ) {
+                continue;
             }
 
             const familyPriority = this.isRelatedCollectionName(collectionName, activeFamilyName)
@@ -2078,6 +2251,12 @@ export class Context {
         )) {
             return null;
         }
+        const initialNavigationAuthority = this.resolveEffectiveNavigationAuthority(
+            initialMarker,
+            publishedPolicy,
+            policyBinding,
+        );
+        if (!initialNavigationAuthority) return null;
         if (policyBinding.publication) {
             const checkpoint = await new FileSynchronizer(
                 canonicalRoot,
@@ -2101,10 +2280,7 @@ export class Context {
         if (priorReceipt && !this.indexCompletionMarkersEqual(initialMarker, priorReceipt.marker)) {
             return null;
         }
-        const initialNavigation = initialMarker.navigation.status === 'sealed'
-            ? initialMarker.navigation
-            : null;
-        if (requireNavigation && !initialNavigation) return null;
+        if (requireNavigation && initialNavigationAuthority.status !== 'sealed') return null;
 
         const exactPayloadCount = await this.countIndexedPayloadExactly(
             policyBinding.collectionName,
@@ -2119,63 +2295,21 @@ export class Context {
         }
         if (exactPayloadCount !== initialMarker.totalChunks) return null;
 
-        const navigation = requireNavigation && initialNavigation
-            ? await (policyBinding.publication
-                ? resolveNavigationGeneration(
-                    this.symbolRegistryStateRoot,
-                    canonicalRoot,
-                    initialNavigation.generationId,
-                )
-                : resolveCurrentNavigationGeneration(
-                    this.symbolRegistryStateRoot,
-                    canonicalRoot,
-                )).catch(() => null)
-            : null;
-        if (
-            requireNavigation
-            && initialNavigation
-            && (
-                !navigation
-                || navigation.generationId !== initialNavigation.generationId
-                || navigation.symbolRegistryManifestHash !== initialNavigation.symbolRegistryManifestHash
-                || navigation.relationshipManifestHash !== initialNavigation.relationshipManifestHash
-                || navigation.navigationSealHash !== initialNavigation.sealHash
-            )
-        ) {
-            return null;
-        }
-        if (requireNavigation && navigation) {
-            const registryRead = await readSymbolRegistrySidecar({
-                normalizedRootPath: canonicalRoot,
-                stateRoot: this.symbolRegistryStateRoot,
-                ...(policyBinding.publication ? { generationId: initialNavigation!.generationId } : {}),
-            });
-            if (
-                registryRead.status !== 'ok'
-                || registryRead.manifestHash !== navigation.symbolRegistryManifestHash
-            ) return null;
-            const relationshipRead = await readRelationshipSidecar({
-                normalizedRootPath: canonicalRoot,
-                expectedSymbolRegistryManifestHash: navigation.symbolRegistryManifestHash,
-                stateRoot: this.symbolRegistryStateRoot,
-                ...(policyBinding.publication ? { generationId: initialNavigation!.generationId } : {}),
-            });
-            if (relationshipRead.status !== 'ok') return null;
-            const sealProof = await verifyNavigationGenerationSealArtifacts({
-                stateRoot: this.symbolRegistryStateRoot,
-                normalizedRootPath: canonicalRoot,
-                ...(policyBinding.publication ? { generationId: initialNavigation!.generationId } : {}),
-                registry: registryRead.registry,
-                relationshipManifest: relationshipRead.manifest,
-            });
-            if (sealProof.status !== 'ok') return null;
-        }
-        const navigationToken = navigation
-            ? this.resolveNavigationObservationToken(
+        const validateNavigation = requireNavigation
+            || initialNavigationAuthority.relationshipOnlyUpgrade;
+        const navigationProof = validateNavigation
+            ? await this.proveEffectiveNavigationAuthority(
                 canonicalRoot,
-                navigation.generationId,
-                policyBinding.publication === undefined,
+                initialNavigationAuthority,
+                requireNavigation,
             )
+            : { status: 'not_bound' as const };
+        if (validateNavigation && navigationProof.status !== 'valid') return null;
+        const navigation = navigationProof.status === 'valid'
+            ? navigationProof.generation
+            : null;
+        const navigationToken = navigationProof.status === 'valid'
+            ? navigationProof.observationToken
             : null;
         if (navigation && !navigationToken) return null;
         if (
@@ -2195,11 +2329,18 @@ export class Context {
             ? this.resolveNavigationObservationToken(
                 canonicalRoot,
                 navigation.generationId,
-                policyBinding.publication === undefined,
+                !initialNavigationAuthority.useBoundGeneration,
             )
-            : null;
+            : navigationToken;
         const finalPolicy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
         const finalBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
+        const finalNavigationAuthority = finalMarker && finalPolicy && finalBinding
+            ? this.resolveEffectiveNavigationAuthority(
+                finalMarker,
+                finalPolicy,
+                finalBinding,
+            )
+            : null;
         if (
             !finalMarker
             || !this.indexCompletionMarkersEqual(finalMarker, initialMarker)
@@ -2211,14 +2352,15 @@ export class Context {
             || finalPolicy.policyHash !== initialMarker.indexPolicyHash
             || finalBinding.policyHash !== initialMarker.indexPolicyHash
             || finalBinding.collectionName !== policyBinding.collectionName
-            || !policyNavigationBindingsEqual(
-                finalBinding.navigation,
-                policyNavigationBindingFromMarker(initialMarker.navigation),
+            || !finalNavigationAuthority
+            || !this.effectiveNavigationAuthoritiesEqual(
+                finalNavigationAuthority,
+                initialNavigationAuthority,
             )
             || !publicationBindingsEqual(finalBinding.publication, policyBinding.publication)
             || (requireNavigation && (
-                finalMarker.navigation.status !== 'sealed'
-                || navigation?.navigationSealHash !== finalMarker.navigation.sealHash
+                finalNavigationAuthority.status !== 'sealed'
+                || navigation?.navigationSealHash !== finalNavigationAuthority.sealHash
             ))
             || this.policyDocumentDigestsByCodebase.get(canonicalRoot) !== policyDocumentDigest
         ) {
@@ -2309,6 +2451,20 @@ export class Context {
         exactPayloadCount: number;
     }): Promise<ProvenGenerationReceipt | null> {
         const policyDocumentDigest = this.policyDocumentDigestsByCodebase.get(input.canonicalRoot);
+        const policyBinding = this.publishedPolicyBindingsByCodebase.get(input.canonicalRoot);
+        const navigationAuthority = policyBinding
+            ? this.resolveEffectiveNavigationAuthority(
+                input.marker,
+                input.policy,
+                policyBinding,
+            )
+            : null;
+        if (
+            !navigationAuthority
+            || navigationAuthority.status !== 'sealed'
+            || navigationAuthority.generationId !== input.navigation.generationId
+            || navigationAuthority.sealHash !== input.navigation.navigationSealHash
+        ) return null;
         const navigationToken = this.resolveNavigationObservationToken(
             input.canonicalRoot,
             input.navigation.generationId,
@@ -2655,82 +2811,21 @@ export class Context {
         marker: IndexCompletionMarkerDocument,
         validateArtifacts = false,
     ): Promise<NavigationGenerationProof> {
-        if (marker.navigation.status === 'not_bound') {
-            return { status: 'not_bound' };
-        }
-        const markerNavigation = marker.navigation;
         this.refreshRuntimePolicyAuthority(canonicalRoot);
+        const policy = this.publishedResolvedPoliciesByCodebase.get(canonicalRoot);
         const policyBinding = this.publishedPolicyBindingsByCodebase.get(canonicalRoot);
-        const useBoundGeneration = policyBinding?.publication !== undefined
-            && policyBinding.collectionName.length > 0
-            && policyBinding.navigation.status === 'sealed'
-            && policyBinding.navigation.generationId === markerNavigation.generationId;
-        let generation: CurrentNavigationGeneration | null;
-        try {
-            generation = await (useBoundGeneration
-                ? resolveNavigationGeneration(
-                    this.symbolRegistryStateRoot,
-                    canonicalRoot,
-                    markerNavigation.generationId,
-                )
-                : resolveCurrentNavigationGeneration(this.symbolRegistryStateRoot, canonicalRoot));
-        } catch (error) {
-            return {
-                status: error instanceof RetiredNavigationPointerError
-                    ? 'requires_reindex'
-                    : error instanceof UnsupportedNavigationPointerError
-                        ? 'unsupported'
-                        : 'corrupt',
-            };
-        }
-        if (!generation) return { status: 'missing' };
-        if (
-            generation.generationId !== markerNavigation.generationId
-            || generation.symbolRegistryManifestHash !== markerNavigation.symbolRegistryManifestHash
-            || generation.relationshipManifestHash !== markerNavigation.relationshipManifestHash
-            || generation.navigationSealHash !== markerNavigation.sealHash
-        ) {
-            return { status: 'incompatible' };
-        }
-        if (validateArtifacts) {
-            const registryRead = await readSymbolRegistrySidecar({
-                normalizedRootPath: canonicalRoot,
-                stateRoot: this.symbolRegistryStateRoot,
-                ...(useBoundGeneration ? { generationId: markerNavigation.generationId } : {}),
-            });
-            if (registryRead.status !== 'ok') {
-                return { status: registryRead.status };
-            }
-            const relationshipRead = await readRelationshipSidecar({
-                normalizedRootPath: canonicalRoot,
-                expectedSymbolRegistryManifestHash: generation.symbolRegistryManifestHash,
-                stateRoot: this.symbolRegistryStateRoot,
-                ...(useBoundGeneration ? { generationId: markerNavigation.generationId } : {}),
-            });
-            if (relationshipRead.status !== 'ok') {
-                return { status: relationshipRead.status };
-            }
-            const sealProof = await verifyNavigationGenerationSealArtifacts({
-                stateRoot: this.symbolRegistryStateRoot,
-                normalizedRootPath: canonicalRoot,
-                ...(useBoundGeneration ? { generationId: markerNavigation.generationId } : {}),
-                registry: registryRead.registry,
-                relationshipManifest: relationshipRead.manifest,
-            });
-            if (sealProof.status !== 'ok') return { status: sealProof.status };
-        }
-        try {
-            const observation = this.resolveNavigationObservation(
-                canonicalRoot,
-                generation.generationId,
-                !useBoundGeneration,
-            );
-            return observation.status === 'valid'
-                ? { status: 'valid', generation: { ...generation }, observationToken: observation.token }
-                : { status: observation.status };
-        } catch {
-            return { status: 'corrupt' };
-        }
+        if (!policy || !policyBinding) return { status: 'incompatible' };
+        const authority = this.resolveEffectiveNavigationAuthority(
+            marker,
+            policy,
+            policyBinding,
+        );
+        if (!authority) return { status: 'incompatible' };
+        return this.proveEffectiveNavigationAuthority(
+            canonicalRoot,
+            authority,
+            validateArtifacts,
+        );
     }
 
     public async revalidateProvenVectorGeneration(
@@ -6698,8 +6793,12 @@ export class Context {
             status: 'missing' as const,
             basis: 'snapshot_fingerprint_missing',
         };
-        const snapshotFingerprintMatches = snapshotEvidence.status === 'verified'
-            && indexFingerprintsEqual(snapshotEvidence.fingerprint, currentFingerprint);
+        const snapshotCompatibility = snapshotEvidence.status === 'verified'
+            ? classifyRepairIndexCompatibility(snapshotEvidence.fingerprint, currentFingerprint)
+            : null;
+        const snapshotFingerprintMatches = snapshotCompatibility?.status === 'compatible';
+        const snapshotRelationshipOnlyUpgrade =
+            snapshotCompatibility?.status === 'relationship_only_upgrade';
         const proof: RepairProof = {
             collection: { status: 'not_checked' },
             snapshot: snapshotEvidence.status === 'missing'
@@ -6708,6 +6807,8 @@ export class Context {
                     ? { status: 'unproven', basis: snapshotEvidence.basis }
                     : snapshotFingerprintMatches
                         ? { status: 'matched', basis: snapshotEvidence.basis }
+                        : snapshotRelationshipOnlyUpgrade
+                            ? { status: 'matched', basis: 'snapshot_relationship_only_upgrade' }
                         : { status: 'failed', basis: 'snapshot_fingerprint_mismatch' },
             marker: { status: 'not_checked' },
             fingerprint: { status: 'not_checked' },
@@ -6755,8 +6856,16 @@ export class Context {
         }
 
         // 1. Resolve collection
+        try {
+            this.refreshRuntimePolicyAuthority(canonicalPath);
+        } catch {
+            // The sealed-policy step below reports unsupported or malformed
+            // authority after collection-family evidence has been recorded.
+        }
         const familyCollectionNames = await this.listRelatedCollectionNames(canonicalPath);
         const activeCollectionName = this.getWriteCollectionName(canonicalPath);
+        const sealedCollectionName =
+            this.publishedPolicyBindingsByCodebase.get(canonicalPath)?.collectionName;
         const preferredCollectionName = options.preferredCollectionName?.trim();
         let selectedCollection: string | null = null;
         let collectionSelectionBasis = 'selected_active_collection';
@@ -6779,6 +6888,12 @@ export class Context {
             }
             selectedCollection = preferredCollectionName;
             collectionSelectionBasis = 'selected_snapshot_collection';
+        } else if (
+            sealedCollectionName
+            && familyCollectionNames.includes(sealedCollectionName)
+        ) {
+            selectedCollection = sealedCollectionName;
+            collectionSelectionBasis = 'selected_sealed_policy_collection';
         } else if (familyCollectionNames.includes(activeCollectionName)) {
             selectedCollection = activeCollectionName;
         } else {
@@ -6824,6 +6939,8 @@ export class Context {
         publishProof();
 
         // 2. Check completion marker if present in the selected collection
+        let trustedMarker: IndexCompletionMarkerDocument | null = null;
+        let relationshipOnlyUpgrade = false;
         const markerResolution = await this.resolveRepairCompletionMarkerForCollection(canonicalPath, selectedCollection);
         if (markerResolution.status === 'malformed') {
             proof.marker = { status: 'failed', basis: 'malformed_completion_marker' };
@@ -6838,7 +6955,14 @@ export class Context {
         }
         if (markerResolution.status === 'matched') {
             const marker = markerResolution.marker;
-            if (!indexFingerprintsEqual(marker.fingerprint, currentFingerprint)) {
+            const compatibility = classifyRepairIndexCompatibility(
+                marker.fingerprint,
+                currentFingerprint,
+            );
+            if (
+                compatibility.status !== 'compatible'
+                && compatibility.status !== 'relationship_only_upgrade'
+            ) {
                 proof.marker = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
                 proof.fingerprint = { status: 'failed', basis: 'completion_marker_fingerprint_mismatch' };
                 return withProof({
@@ -6847,8 +6971,13 @@ export class Context {
                     message: 'The existing index is incompatible with the current runtime fingerprint.',
                 });
             }
-            proof.marker = { status: 'matched', basis: 'completion_marker_fingerprint' };
-            proof.fingerprint = { status: 'matched', basis: 'completion_marker_fingerprint' };
+            trustedMarker = marker;
+            relationshipOnlyUpgrade = compatibility.status === 'relationship_only_upgrade';
+            const basis = relationshipOnlyUpgrade
+                ? 'completion_marker_relationship_only_upgrade'
+                : 'completion_marker_fingerprint';
+            proof.marker = { status: 'matched', basis };
+            proof.fingerprint = { status: 'matched', basis };
         } else {
             proof.marker = { status: 'missing', basis: 'completion_marker_missing' };
             if (snapshotFingerprintMatches) {
@@ -6895,10 +7024,125 @@ export class Context {
                 message: `Repair cannot publish collection '${selectedCollection}' because its sealed index policy is missing or runtime-incompatible.`,
             });
         }
+        const repairBinding = this.publishedPolicyBindingsByCodebase.get(canonicalPath);
+        let relationshipRepairSource: {
+            marker: IndexCompletionMarkerDocument;
+            binding: IndexPolicyBinding & { policyHash: string };
+            preparedChanges: Awaited<ReturnType<FileSynchronizer['prepareChanges']>>;
+            checkpointDocumentDigest: string;
+        } | null = null;
+        if (relationshipOnlyUpgrade) {
+            const publication = repairBinding?.publication;
+            if (
+                !trustedMarker
+                || !repairBinding
+                || !publication
+                || repairBinding.collectionName !== selectedCollection
+                || repairBinding.navigation.status !== 'sealed'
+                || trustedMarker.navigation.status !== 'sealed'
+                || publication.sourceCheckpoint.collectionName !== selectedCollection
+                || publication.sourceCheckpoint.markerRunId !== trustedMarker.runId
+                || publication.sourceCheckpoint.indexPolicyHash !== trustedMarker.indexPolicyHash
+                || repairPolicy.policyHash !== trustedMarker.indexPolicyHash
+                || !options.publicationAuthority
+            ) {
+                proof.navigation = {
+                    status: 'failed',
+                    basis: 'relationship_upgrade_v4_authority_missing',
+                };
+                return withProof({
+                    status: 'requires_reindex',
+                    reason: 'requires_reindex',
+                    message: 'Relationship-only repair requires the exact marker-owned v4 publication and mutation authority.',
+                    trackedRelativePaths: [],
+                });
+            }
+            const synchronizer = new FileSynchronizer(
+                canonicalPath,
+                repairPolicy.effectiveIgnorePatterns,
+                repairPolicy.supportedExtensions,
+                {
+                    checkpointIdentity: selectedCollection,
+                    checkpointAuthority: {
+                        collectionName: selectedCollection,
+                        markerRunId: trustedMarker.runId,
+                        indexPolicyHash: trustedMarker.indexPolicyHash,
+                    },
+                },
+            );
+            try {
+                await synchronizer.initialize(undefined, undefined, {
+                    requireExistingCheckpoint: true,
+                });
+                const checkpoint = await synchronizer.inspectOwnedSnapshot();
+                if (
+                    checkpoint.status !== 'valid'
+                    || checkpoint.merkleRoot !== publication.sourceCheckpoint.merkleRoot
+                    || checkpoint.documentDigest !== publication.sourceCheckpoint.documentDigest
+                ) {
+                    proof.snapshot = {
+                        status: 'failed',
+                        basis: 'v4_source_checkpoint_mismatch',
+                    };
+                    return withProof({
+                        status: 'requires_reindex',
+                        reason: 'requires_reindex',
+                        message: 'Relationship-only repair cannot prove the marker-owned source checkpoint.',
+                    });
+                }
+                const preparedChanges = await synchronizer.prepareChanges({ forceFullHash: true });
+                const {
+                    added,
+                    removed,
+                    modified,
+                    partialScan,
+                    unscannedDirPrefixes,
+                } = preparedChanges.changes;
+                if (
+                    added.length > 0
+                    || removed.length > 0
+                    || modified.length > 0
+                    || partialScan
+                    || unscannedDirPrefixes.length > 0
+                ) {
+                    proof.snapshot = {
+                        status: 'failed',
+                        basis: 'source_observation_changed',
+                    };
+                    return withProof({
+                        status: 'requires_reindex',
+                        reason: 'requires_reindex',
+                        message: 'Relationship-only repair requires a complete zero-change source observation.',
+                    });
+                }
+                relationshipRepairSource = {
+                    marker: trustedMarker,
+                    binding: repairBinding,
+                    preparedChanges,
+                    checkpointDocumentDigest: checkpoint.documentDigest,
+                };
+                proof.snapshot = {
+                    status: 'matched',
+                    basis: 'v4_checkpoint_full_hash_zero_change',
+                    expectedCount: preparedChanges.fileHashes.size,
+                    observedCount: preparedChanges.fileHashes.size,
+                };
+            } catch (error) {
+                proof.snapshot = {
+                    status: 'failed',
+                    basis: 'v4_source_checkpoint_unavailable',
+                };
+                return withProof({
+                    status: 'requires_reindex',
+                    reason: 'requires_reindex',
+                    message: `Relationship-only repair cannot reopen its marker-owned source checkpoint: ${error instanceof Error ? error.message : String(error)}`,
+                });
+            }
+        }
         const codeFiles = await this.getCodeFiles(canonicalPath, repairPolicy);
         const trackedRelativePaths = this.normalizeRelativePathsForCodebase(canonicalPath, codeFiles);
 
-        if (codeFiles.length === 0) {
+        if (codeFiles.length === 0 && !relationshipOnlyUpgrade) {
             if (await this.collectionHasAnyIndexedPayload(selectedCollection)) {
                 proof.payload = {
                     status: 'failed',
@@ -6973,6 +7217,27 @@ export class Context {
             symbolManifestFiles,
             analysisByFile,
         } = await this.getExpectedChunksAndSymbols(codeFiles, canonicalPath, repairPolicy);
+        if (
+            relationshipRepairSource
+            && (
+                relationshipRepairSource.marker.indexedFiles !== codeFiles.length
+                || relationshipRepairSource.marker.totalChunks !== expectedChunks.length
+                || relationshipRepairSource.preparedChanges.fileHashes.size !== codeFiles.length
+            )
+        ) {
+            proof.payload = {
+                status: 'failed',
+                basis: 'marker_source_count_mismatch',
+                expectedCount: expectedChunks.length,
+                observedCount: relationshipRepairSource.marker.totalChunks,
+            };
+            return withProof({
+                status: 'requires_reindex',
+                reason: 'requires_reindex',
+                message: 'Relationship-only repair found incompatible marker, source, or payload counts.',
+                trackedRelativePaths,
+            });
+        }
 
         // 5. Query vector backend for expected chunk IDs.
         const existingIds = new Set<string>();
@@ -7126,6 +7391,193 @@ export class Context {
             basis: 'navigation_rebuild_in_progress',
         };
         publishProof();
+
+        if (relationshipRepairSource) {
+            const {
+                marker,
+                binding,
+                preparedChanges,
+                checkpointDocumentDigest,
+            } = relationshipRepairSource;
+            const toActivatedGeneration = (
+                receipt: ProvenGenerationReceipt,
+            ): RepairActivatedGeneration => ({
+                collectionName: receipt.collectionName,
+                markerRunId: receipt.marker.runId,
+                sourceCheckpointDocumentDigest: checkpointDocumentDigest,
+                relationshipVersion: this.getRelationshipVersion(),
+                navigation: {
+                    generationId: receipt.navigation.generationId,
+                    sealHash: receipt.navigation.navigationSealHash,
+                    symbolRegistryManifestHash: receipt.navigation.symbolRegistryManifestHash,
+                    relationshipManifestHash: receipt.navigation.relationshipManifestHash,
+                },
+            });
+            const alreadyActivated = await this.proveIndexedGeneration(canonicalPath);
+            if (
+                alreadyActivated
+                && alreadyActivated.collectionName === selectedCollection
+                && this.indexCompletionMarkersEqual(alreadyActivated.marker, marker)
+                && alreadyActivated.exactPayloadCount === expectedChunks.length
+            ) {
+                proof.navigation = {
+                    status: 'matched',
+                    basis: 'relationship_navigation_already_activated',
+                };
+                return withProof({
+                    status: 'ok',
+                    message: 'Relationship-only navigation repair was already activated and remains exactly proven.',
+                    indexedFiles: codeFiles.length,
+                    totalChunks: expectedChunks.length,
+                    warnings: [],
+                    trackedRelativePaths,
+                    collectionName: selectedCollection,
+                    activatedGeneration: toActivatedGeneration(alreadyActivated),
+                });
+            }
+
+            const previousNavigationGenerationId = binding.navigation.status === 'sealed'
+                ? binding.navigation.generationId
+                : null;
+            if (!previousNavigationGenerationId) {
+                throw new Error('Relationship-only repair lost its sealed source navigation binding.');
+            }
+            await this.waitForPublicationRetention(canonicalPath);
+            options.assertMutationCurrent?.();
+            let navigationCandidate: StagedNavigationSidecarGeneration | undefined;
+            let activated = false;
+            try {
+                navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(
+                    canonicalPath,
+                    symbolRecords,
+                    symbolManifestFiles,
+                    options.assertMutationCurrent,
+                    analysisByFile,
+                    undefined,
+                    true,
+                    repairPolicy,
+                );
+                if (!navigationCandidate) {
+                    throw new Error('Relationship-only repair did not stage a navigation generation.');
+                }
+                await this.verifyPreparedSyncPublication(
+                    canonicalPath,
+                    selectedCollection,
+                    preparedChanges.fileHashes,
+                    expectedChunks.length,
+                    navigationCandidate,
+                    remotePayloadRows.length,
+                );
+                const authority = options.publicationAuthority;
+                if (!authority) {
+                    throw new Error('Relationship-only repair lost its publication authority.');
+                }
+                const activationId = crypto.randomUUID();
+                const publication: CanonicalPublicationBinding = {
+                    activationId,
+                    sourceCheckpoint: structuredClone(binding.publication!.sourceCheckpoint),
+                    graph: {
+                        kind: 'relationship_manifest_v2',
+                        manifestHash: navigationCandidate.relationshipManifestHash,
+                    },
+                    receipt: {
+                        ownerId: authority.ownerId,
+                        generation: authority.generation,
+                        operationId: authority.operationId,
+                    },
+                };
+                await preparedChanges.assertSourceObservationCurrent();
+                options.assertMutationCurrent?.();
+                try {
+                    this.publishResolvedIndexPolicy(
+                        repairPolicy,
+                        {
+                            collectionName: selectedCollection,
+                            navigation: {
+                                status: 'sealed',
+                                generationId: navigationCandidate.generationId,
+                                sealHash: navigationCandidate.navigationSealHash,
+                            },
+                            publication,
+                        },
+                        options.publishMutation,
+                    );
+                    activated = true;
+                } catch (error) {
+                    if (
+                        error instanceof IndexPolicyPublicationError
+                        && error.receipt.operation === 'publish'
+                        && error.receipt.collectionName === selectedCollection
+                        && error.receipt.publication?.activationId === activationId
+                    ) {
+                        activated = true;
+                        this.refreshRuntimePolicyAuthority(canonicalPath);
+                    } else {
+                        throw error;
+                    }
+                }
+
+                const navigation: CurrentNavigationGeneration = {
+                    generationId: navigationCandidate.generationId,
+                    generationRoot: navigationCandidate.rootPath,
+                    symbolRegistryManifestHash: navigationCandidate.manifestHash,
+                    relationshipManifestHash: navigationCandidate.relationshipManifestHash,
+                    navigationSealHash: navigationCandidate.navigationSealHash,
+                };
+                await this.recordActivatedGenerationProof({
+                    canonicalRoot: canonicalPath,
+                    marker,
+                    policy: repairPolicy,
+                    exactPayloadCount: expectedChunks.length,
+                    navigation,
+                });
+                const proven = await this.proveIndexedGeneration(canonicalPath);
+                if (
+                    !proven
+                    || proven.collectionName !== selectedCollection
+                    || !this.indexCompletionMarkersEqual(proven.marker, marker)
+                    || proven.exactPayloadCount !== expectedChunks.length
+                    || proven.navigation.generationId !== navigationCandidate.generationId
+                    || proven.navigation.navigationSealHash !== navigationCandidate.navigationSealHash
+                    || proven.navigation.symbolRegistryManifestHash !== navigationCandidate.manifestHash
+                    || proven.navigation.relationshipManifestHash
+                        !== navigationCandidate.relationshipManifestHash
+                ) {
+                    throw new Error('Relationship-only repair activation could not be proven exactly.');
+                }
+                const activeDataObservation = this.vectorDatabase.getCollectionDataObservation
+                    ? await this.vectorDatabase.getCollectionDataObservation(selectedCollection)
+                    : undefined;
+                this.schedulePublicationRetention({
+                    canonicalRoot: canonicalPath,
+                    activationId: publication.activationId,
+                    activeCollectionName: selectedCollection,
+                    previousCollectionName: selectedCollection,
+                    activeNavigationGenerationId: navigationCandidate.generationId,
+                    previousNavigationGenerationId,
+                    ...(activeDataObservation ? { activeDataObservation } : {}),
+                });
+                proof.navigation = {
+                    status: 'matched',
+                    basis: 'relationship_navigation_activated_and_proven',
+                };
+                return withProof({
+                    status: 'ok',
+                    message: 'Relationship-only navigation repair activated a new proven generation without vector or checkpoint writes.',
+                    indexedFiles: codeFiles.length,
+                    totalChunks: expectedChunks.length,
+                    warnings: [],
+                    trackedRelativePaths,
+                    collectionName: selectedCollection,
+                    activatedGeneration: toActivatedGeneration(proven),
+                });
+            } catch (error) {
+                if (!activated && navigationCandidate) {
+                    await discardNavigationSidecarGeneration(navigationCandidate).catch(() => undefined);
+                }
+                throw error;
+            }
+        }
 
         // 6. Rebuild symbol registry/relationship sidecars
         const navigationCandidate = await this.writeSymbolRegistryForCompletedIndex(

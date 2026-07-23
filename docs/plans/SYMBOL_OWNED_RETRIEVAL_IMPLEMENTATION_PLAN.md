@@ -1,14 +1,27 @@
 # Symbol-Owned Retrieval Implementation Plan
 
+**Status:** the symbol-owned retrieval architecture is implemented. This plan
+was reconciled against clean revision
+`f8d799b0704d8c26bfedf2b42f90ebfc3f7cbb70` on 2026-07-23. R0
+relationship-only publication repair is implemented with terminal decision
+`relationship_only_upgrade_pass`. Two bounded implementation batches remain:
+relationship-backed test references and exact Python import-alias/parameter
+receiver evidence. One ambiguity fixture and one direct qualification record
+remain as evidence-only batches.
+
 ## Capability
 
-Satori will shift from chunk-first semantic retrieval to symbol-owned repository intelligence. After this ships, agents will discover implementation concepts as stable symbols first, then navigate to supporting chunks, callers, tests, and file spans through the existing MCP tools.
+Satori has shifted from chunk-first semantic retrieval to symbol-owned
+repository intelligence. Agents discover implementation concepts as stable
+symbols first, then navigate to supporting chunks, callers, tests, and file
+spans through the existing MCP tools.
 
 The public MCP tool surface stays fixed:
 
 - `list_codebases`
 - `manage_index`
 - `search_codebase`
+- `continue_search`
 - `file_outline`
 - `call_graph`
 - `read_file`
@@ -85,6 +98,96 @@ stdlib node injection, 15-tool MCP surface, daemon, installer, Cypher layer,
 semantic index, UI, or other language resolvers as part of this task. Those
 would duplicate Satori authorities and change the product rather than repair
 the demonstrated gap.
+
+## 2026-07-23 Repository Reconciliation
+
+The original phase descriptions mixed completed architecture, stale test
+TODOs, and still-real relationship gaps. Current repository evidence gives the
+following execution truth:
+
+| Area | Current repository truth | Decision |
+| --- | --- | --- |
+| Language routing, symbols, owners, grouped search, outline, exact open, relationship sidecars, and relationship-backed graph traversal | Implemented in Core/MCP with focused fixtures | Complete; do not reopen |
+| Same-line and Python decorator byte ownership | Covered by language-analysis, owner-resolution, relationship, and MCP graph tests | Phase 3 complete |
+| Overloads and test-helper collisions | Distinct-instance and ranking fixtures exist | Reuse evidence |
+| Generated/source duplicate ownership | No focused acceptance fixture was found | Evidence-only batch; no implementation unless the fixture disproves current identity behavior |
+| Legacy graph test references | Legacy v3 exposed them, but the relationship-backed steady state deliberately does not merge them | Real compatibility gap because TS/JS/Python still declare `testReferenceCapability: "production_ready"` |
+| Python import aliases | Tree-sitter already persists `ModuleBinding { importedName, localName }`, but the relationship builder rejects aliases by requiring both names to equal the receiver | Real bounded resolver gap |
+| Python typed parameters | `model: MetricsModel` remains a frozen unresolved witness; no receiver-type fact exists in `RelationshipAnalysisEvidence` | Real bounded evidence gap |
+| Constructor assignments, annotated assignments, repository-local return types, and optional/union normalization | No important repository witness is frozen in this plan | Deferred; not executable work |
+| Phase 7 comparison against codebase-memory | The external runtime is not needed to decide Satori's contract, and the repository already has direct search and compact-contract fixtures plus the frozen 30-task owner-retrieval evidence | Replace with a bounded evidence consolidation, not a new benchmark framework |
+
+### Publication compatibility result
+
+`RELATIONSHIP_BUILDER_VERSION` currently participates in
+`CanonicalCompletionFingerprint`. R0 now keeps ordinary admission exact while
+classifying the sole `relationshipVersion` delta only inside repair. The repair
+requires the marker-owned v4 publication, complete forced-hash zero-change
+source proof, exact payload membership, and mutation-lease publication
+authority before it stages navigation.
+
+The implemented narrow path is:
+
+```text
+trusted old completion marker
+  + exact match for every vector/lexical/source-projection field
+  + relationshipVersion as the only differing fingerprint field
+  + sealed v4 policy and exact current source/checkpoint/chunk/payload proof
+    -> stage fresh symbol/relationship navigation
+    -> atomically activate a new v4 policy/navigation/graph receipt over the
+       unchanged completion marker, source checkpoint, and collection
+```
+
+The canonical v4 policy rename is the activation decision. The completion
+marker, source checkpoint, vector/lexical collection, root navigation pointer,
+and SQLite cache remain unchanged. Normal search admission remains fail-closed
+until that new policy binds and proves the current relationship generation.
+Every other mismatch retains the established `requires_reindex` result, and
+legacy v3 publications remain ineligible.
+
+### Remaining execution order
+
+| Batch | Kind | Outcome |
+| --- | --- | --- |
+| R0 | Complete: `relationship_only_upgrade_pass` | Proven relationship-only navigation repair with zero vector-payload writes or embedding calls |
+| R1 | Implementation | Persist deterministic `TESTS` records and restore relationship-backed `call_graph.testReferences` |
+| R2 | Implementation | Resolve exact Python import aliases and simple parameter-annotation receiver types |
+| R3 | Evidence only | Prove generated/source duplicates remain distinct and source-owned implementation evidence is not collapsed |
+| R4 | Evidence only | Consolidate the direct symbol-owned retrieval contract and existing owner-retrieval evidence |
+
+R0 is required before R1 or R2 may change persisted relationship meaning. R1
+and R2 are independent semantic batches after R0. R3 and R4 must not create
+implementation work unless their frozen witness disproves an existing
+authorized acceptance rule.
+
+### Reusable reconciliation evidence
+
+The following focused baseline is green at the reconciled revision and remains
+reusable until its named code, fixtures, parser assets, schemas, or
+configuration change:
+
+- Core persisted-authority, relationship-builder, symbol-sidecar, and
+  language-analysis tests: 125 passed, 0 failed.
+- MCP relationship-backed graph, public graph handler, compact-contract, and
+  deterministic search-evaluation tests: 38 passed, 0 failed.
+
+The exact commands are:
+
+```bash
+pnpm --filter @zokizuan/satori-core exec node --import tsx \
+  --import ./src/test-state-root.ts --test --test-concurrency=1 \
+  src/core/persisted-index-authority.test.ts \
+  src/relationships/builder.test.ts \
+  src/symbols/sidecar.test.ts \
+  src/language-analysis/service.test.ts
+
+pnpm --filter @zokizuan/satori-mcp exec node --import tsx \
+  --import ./src/test-state-root.ts --test --test-concurrency=1 \
+  src/core/relationship-backed-call-graph.test.ts \
+  src/core/handlers.call_graph.test.ts \
+  src/core/search-compact-contract.test.ts \
+  src/core/search.eval.test.ts
+```
 
 ## Core Constraints
 
@@ -481,7 +584,7 @@ Relationship manifest:
 
 ```ts
 interface RelationshipManifest {
-  schemaVersion: 'relationship_v1';
+  schemaVersion: 'relationship_v2';
   symbolRegistryManifestHash: string;
   relationshipVersion: string;
   builtAt: string;
@@ -494,7 +597,8 @@ Initial scope:
 
 - Preserve current TS/JS/Python call graph behavior.
 - Add import/export edges where extractors already provide enough data.
-- Add test references using filename and static reference heuristics.
+- Add test references only from resolved call evidence plus a deterministic
+  test/fixture path classification; do not link by filename/name similarity.
 - Make `call_graph` a filtered relationship view, not a separate graph product.
 
 Relationship trust boundary:
@@ -557,7 +661,9 @@ Ambiguity rule:
 
 - Do not collapse distinct symbols just because labels match.
 - Return multiple candidate symbols when ownership is distinct or overloaded.
-- Emit ambiguity hints for same-name symbols, overloads, generated/source duplicates, or test helper collisions.
+- Use the existing exact-lookup `ambiguous` status when one exact target cannot
+  be selected. Grouped output exposes distinct concrete targets; no additional
+  public ambiguity field is required.
 
 Deterministic confidence bands:
 
@@ -625,7 +731,14 @@ JavaScript: SEARCH, AST_SPLIT, SYMBOLS, OWNER, CALL_GRAPH, TEST_LINKS
 Python:     SEARCH, AST_SPLIT, SYMBOLS, OWNER, CALL_GRAPH, TEST_LINKS
 ```
 
-`IMPORTS` is intentionally not claimed until relationship extraction stores import/export edges.
+`TEST_LINKS` is the intended public capability, but its steady-state
+relationship-backed implementation is currently missing. R1 closes that gap;
+until then the `production_ready` capability declaration overstates runtime
+behavior.
+
+`IMPORTS` remains unclaimed at the public capability layer even though the
+relationship sidecar now stores bounded relative `IMPORTS`/`EXPORTS` evidence.
+Promoting that capability is not required by the remaining batches.
 
 ### Phase language targets
 
@@ -645,6 +758,8 @@ Call graph for these languages should be added only after outline and owner reso
 
 ### Phase 0: Attribution and Architecture Guardrails
 
+Status: complete.
+
 Files:
 
 - `LICENSE` or `THIRD_PARTY.md` if added
@@ -663,6 +778,11 @@ Acceptance:
 - Public MCP tool list unchanged.
 
 ### Phase 1: Capability-Driven Language Router
+
+Status: complete. Current routing and filename authorities live under
+`packages/core/src/language/*`, `packages/core/src/languages/*`, and
+`packages/core/src/config/defaults.ts`; the older singular file names below are
+historical.
 
 Files:
 
@@ -685,6 +805,8 @@ Acceptance:
 - Special filenames `Dockerfile`, `Makefile`, `CMakeLists.txt`, `justfile`, `Justfile` are tested.
 
 ### Phase 2: Symbol Registry Contracts and Sidecar Writer
+
+Status: complete.
 
 Files:
 
@@ -710,7 +832,10 @@ Acceptance:
 
 ### Phase 2.5: Symbol-Backed `file_outline`
 
-Status: implemented for registry-backed outline/exact resolution with legacy call-graph-sidecar fallback.
+Status: complete for registry-backed outline and exact resolution.
+Relationship-backed navigation is the steady state. Legacy call-graph
+sidecars are oracle/compatibility scaffolding only and must not become a
+runtime fallback again.
 
 Files:
 
@@ -731,11 +856,12 @@ Acceptance:
 - Existing TS/JS/Python outline tests still pass.
 - Exact mode resolves current `symbolInstanceId` values and returns `not_found` for stale ids absent from the compatible registry.
 - Same-label symbols in one file produce `ambiguous`, not guessed output.
-- Missing/incompatible registry falls through to existing call-graph-sidecar `requires_reindex` or unsupported envelopes.
+- Missing/incompatible registry returns deterministic `requires_reindex` or
+  unsupported envelopes without reviving legacy graph identity.
 
 ### Phase 3: Tightest Owner Resolution
 
-Status: partially implemented.
+Status: complete.
 
 Implemented:
 
@@ -745,10 +871,10 @@ Implemented:
 - Retrieval documents preserve owner metadata through `Context.semanticSearch`.
 - Grouped search prefers owner metadata when present while preserving raw mode and file grouping.
 - Grouped search repairs legacy chunks without owner metadata from a compatible symbol registry using file/span containment.
-
-Remaining:
-
-- Exact same-line/decorator byte fixtures once extractors expose byte spans for those cases.
+- Same-line symbol identity and ownership are covered in Core context,
+  language-analysis, relationship, and MCP graph fixtures.
+- Python decorator-inclusive spans are covered by the completed O3
+  remediation and canonical source-repair fixtures.
 
 Files:
 
@@ -775,7 +901,7 @@ Acceptance:
 
 ### Phase 4: Symbol-Centric Ranking
 
-Status: partially implemented.
+Status: implementation complete; one evidence-only ambiguity fixture remains.
 
 Implemented:
 
@@ -785,11 +911,18 @@ Implemented:
 - Symbol scoring uses best representative score plus a capped logarithmic support boost.
 - Reranker remains evidence-only; call graph hints now validate against registry-backed `symbolInstanceId` navigation state.
 - Same-label declaration groups with distinct owner identities remain separate.
+- Relationship records are the steady-state source of graph hints and
+  traversal.
+- Overload instances remain separate in grouped and compact-contract tests.
+- Implementation queries demote test helpers while explicit test intent can
+  select them.
 
-Remaining:
+Remaining evidence:
 
-- Relationship edge records as the source of graph hints/call graph traversal.
-- Broader ambiguity fixtures for overloads, generated/source duplicates, and test-helper collisions.
+- Add one generated/source duplicate fixture only. It must first prove the two
+  indexable sources retain distinct `symbolInstanceId` values and distinct
+  groups. It must not add a new ambiguity-hint schema or ranking policy merely
+  because the old plan used the phrase "ambiguity hints."
 
 Files:
 
@@ -810,10 +943,40 @@ Acceptance:
 - Raw chunk count uses saturated support and cannot let large files dominate by size alone.
 - Implementation queries prefer implementation owners over tests/docs.
 - Test queries can still surface test owners.
-- Same-name symbols, overloads, generated/source duplicates, and test-helper collisions remain separate candidates with ambiguity hints.
+- Same-name symbols, overloads, generated/source duplicates, and test-helper
+  collisions remain separate candidates. Exact lookup reports ambiguity
+  rather than guessing; grouped output retains concrete target identities.
 - Ranking is stable across repeated runs.
 
+#### R3: Generated/source duplicate evidence
+
+This is an evidence-only batch. Use one task-owned lexical fixture containing
+one ordinary implementation and one separately indexable generated-path
+implementation with the same declaration label.
+
+Assert only:
+
+- their `symbolInstanceId` values and grouped candidates remain distinct;
+- exact name-only lookup is ambiguous rather than guessed;
+- an implementation-intent query does not collapse the generated instance into
+  the source instance; and
+- the existing generated-noise policy remains the only ranking distinction.
+
+Reuse the existing overload and test-helper fixtures. Do not add a new public
+ambiguity field, change scores, or generalize ranking unless this exact fixture
+fails because current grouping merges the two identities.
+
+Terminal decision:
+
+- `ambiguity_contract_pass`; or
+- `ambiguity_identity_gap` with the exact grouping owner that collapsed the
+  instances.
+
 ### Phase 5: Relationship Engine v1
+
+Status: relationship storage and traversal are complete for `CALLS`,
+`IMPORTS`, and `EXPORTS`. Relationship-backed test references remain
+unimplemented.
 
 Files:
 
@@ -831,7 +994,7 @@ Tasks:
 - Make MCP load and filter relationship sidecars; do not compute relationships at query time.
 - Ensure `callGraphHint` is built from relationship capability, not language name alone.
 
-Current partial implementation:
+Current implementation:
 
 - Core writes and reads relationship manifests under the navigation sidecar root.
 - Relationship manifests are validated against the loaded symbol registry manifest hash.
@@ -840,6 +1003,8 @@ Current partial implementation:
 - Relationship `CALLS v0` extraction intentionally excludes class container spans, skips ambiguous same-name targets, and downgrades unique cross-file name-only matches to `low` confidence until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 - Registry-backed `search_codebase` and `file_outline` now keep graph hints supported only through a compatible relationship sidecar, and supported `symbolRef.symbolId` carries the registry `symbolInstanceId`. Missing or incompatible relationship state emits deterministic warnings or reindex guidance instead of reviving legacy graph handles.
 - `call_graph` now serves traversal directly from relationship records when compatible navigation sidecars exist. Missing or incompatible registry/relationship state returns deterministic `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `not_found`, or `requires_reindex` behavior rather than falling back to legacy v3 runtime traversal.
+- `TESTS` is accepted by the persisted relationship vocabulary but is not yet
+  emitted or projected by the relationship-backed traversal path.
 
 Acceptance:
 
@@ -848,9 +1013,240 @@ Acceptance:
 - Relationship engine can represent import/test refs without exposing new MCP tools.
 - Relationship sidecar absence degrades only graph hints/call graph when registry remains compatible.
 
+#### R0: Relationship-only navigation repair
+
+Authorized outcome:
+
+> Rebuild and reactivate relationship/navigation state after only
+> `relationshipVersion` changes, while proving and reusing the unchanged
+> vector/lexical payload.
+
+Primary owners:
+
+- `packages/core/src/core/persisted-index-authority.ts`
+- `packages/core/src/core/context.ts`
+- their focused tests
+- `packages/mcp/src/core/manage-indexing-handlers.ts` and its focused repair
+  tests
+
+Contract:
+
+1. Keep complete runtime search admission exact except for the fully proven v4
+   component binding defined below. Do not broadly weaken
+   `indexFingerprintsEqual()`.
+2. Add a repair-only compatibility classifier. It may return
+   `relationship_only_upgrade` only when the complete parsed old and new
+   fingerprints differ solely in `relationshipVersion`.
+3. Require an existing canonical v4 publication binding, canonical root,
+   current source observation equal to its owned source checkpoint, expected
+   chunk IDs, exact payload membership, collection identity, and
+   completion-marker ownership proofs before staging anything. A legacy v3
+   binding has no source-checkpoint/receipt authority and remains
+   `requires_reindex`; R0 must not upgrade it by inference. Supplied snapshot
+   evidence may corroborate the same collection and relationship-only
+   fingerprint delta, but it cannot replace the marker or v4 receipt.
+   Reopen `FileSynchronizer` against the marker-owned checkpoint with
+   `requireExistingCheckpoint`, perform one forced full-hash `prepareChanges`,
+   require zero added/removed/modified files and a complete scan, and call its
+   source-observation assertion immediately before activation. Do not stage or
+   commit that prepared checkpoint.
+4. Rebuild symbol and relationship navigation from current source under the
+   new relationship identity. `repairIndex()` currently calls
+   `writeSymbolRegistryForCompletedIndex(..., deferPublication=false)`; the R0
+   path must stage and seal the candidate instead. Follow the existing atomic
+   delta pattern: the v4 policy binds the explicit staged generation, so R0
+   must not advance root-global `current.json` or import a root-global SQLite
+   cache.
+5. Do not overwrite the completion marker in the active collection. That
+   marker and its marker-owned source checkpoint remain the immutable
+   vector/lexical/source-projection proof. Overwriting it before the policy
+   switch would invalidate the old tuple and create an ABA/crash window.
+6. Extend exact generation proof with one explicit component-upgrade case:
+   when the marker differs from the runtime fingerprint only in
+   `relationshipVersion`, the canonical v4 policy may bind a different sealed
+   navigation generation only when:
+   - its source-checkpoint binding still matches the unchanged marker;
+   - its graph manifest hash matches the bound generation;
+   - the bound relationship manifest carries the current relationship
+     identity; and
+   - every other marker, policy, collection, source, payload, registry, seal,
+     and observation proof is exact.
+   No ordinary exact-admission branch may accept this difference without that
+   complete v4 component binding.
+7. The single canonical policy-file rename is the activation decision. Its new
+   publication binding reuses the old source-checkpoint fields, records the new
+   graph manifest and mutation receipt, and binds the staged generation.
+   `RepairIndexOptions` must receive the current publication authority from the
+   MCP mutation lease; production repair must not invent a constant generation
+   or operation identity.
+   Existing readers retain the old receipt's explicit generation. Restart
+   before activation resolves the old policy generation; restart after
+   activation resolves the new policy generation. Schedule ordinary retention
+   only after activation, keeping both generations until read leases permit
+   cleanup. Root-global pointer/cache state remains non-authoritative and may
+   stay on the prior generation.
+8. The MCP repair branch currently calls the legacy
+   `rebuildCallGraphForIndex()` after Core repair. R0 must not rebuild that
+   unrelated v3 artifact. It must instead require
+   `proveIndexedGeneration()` to match the returned collection, counts,
+   unchanged marker/checkpoint identity, current relationship identity, and
+   newly bound navigation generation before it records repair completion in
+   the snapshot. Extend the internal `RepairIndexResult` with the activated
+   navigation binding or proven generation receipt needed for this comparison;
+   do not rediscover authority from an unbound `current.json` pointer.
+9. Perform no vector-payload writes or deletions, lexical maintenance,
+   embedding calls, completion-marker writes, source-checkpoint writes,
+   current-pointer writes, SQLite-cache imports, collection copy, or collection
+   rename. Staged navigation-generation writes and the canonical v4
+   policy/receipt control write are required.
+10. A failure before policy activation leaves the previous marker, collection,
+    source checkpoint, navigation generation, and v4 policy binding as the
+    complete searchable tuple. An unactivated staged generation cannot grant
+    authority and remains recoverable or discardable under the existing
+    generation lifecycle.
+11. Parser, extractor, projection, provider, model, dimension, artifact,
+    normalization, vector-store, schema, lexical, policy, source, checkpoint,
+    or payload mismatch remains `requires_reindex`.
+
+The existing v4 policy is the component activation authority in R0. This is a
+bounded extension of the current explicit-generation reader contract, not a
+second marker format or a general component-upgrade framework.
+
+Known assumptions that R0 must update consistently are
+`markerMatchesSealedAuthority()`, `resolveActiveIndexedCollection()`,
+`proveGenerationAuthorityExactly()`, `proveNavigationGeneration()`,
+`acceptPreparedSourceGenerationReceipt()`, and activation-proof recording.
+Introduce at most one private effective-navigation-binding helper so those
+paths select either the marker's exact navigation or the one proven
+relationship-only policy override. Do not scatter independent compatibility
+predicates across readers.
+
+Focused proof:
+
+- a marker differing only in `relationshipVersion` completes repair with zero
+  vector-payload writes, zero marker/checkpoint writes, and zero embedding
+  calls;
+- the activated v4 receipt reuses the exact marker, source checkpoint,
+  collection, and payload counts while binding a new complete navigation
+  generation and graph manifest;
+- an injected candidate/activation failure preserves the old durable tuple;
+- restart after candidate staging but before policy activation proves the old
+  explicit generation, while restart after activation proves the new explicit
+  generation;
+- a completed repair is accepted by MCP only after the exact new generation is
+  proven, and the repair path does not call the legacy graph builder;
+- every non-relationship mismatch remains rejected; and
+- one instrumented shared-adapter fixture rejects any vector mutation call,
+  while the unchanged LanceDB/Milvus query/count contracts remain covered by
+  their existing focused adapter tests. R0 adds no backend capability.
+
+Terminal decision:
+
+- `relationship_only_upgrade_pass`; or
+- `publication_compatibility_blocked` with the exact proof or activation owner
+  that still forces vector replacement.
+
+R0 execution record (2026-07-23):
+
+- Decision: `relationship_only_upgrade_pass`.
+- `classifyRepairIndexCompatibility()` admits only an otherwise exact
+  `relationshipVersion` delta; normal exact comparison remains unchanged.
+- The repair reopens the marker-owned checkpoint with
+  `requireExistingCheckpoint`, performs a forced full-hash zero-change scan,
+  proves expected IDs and exact payload membership, stages a sealed navigation
+  generation, and activates it through the existing v4 policy receipt.
+- The activated receipt reuses the exact collection, immutable completion
+  marker, source-checkpoint digest, and payload counts. It records the MCP
+  mutation lease and the new graph manifest.
+- The focused success fixture rejects every embedding call and observes zero
+  vector mutations. It also proves byte-identical marker/checkpoint/current
+  pointer/SQLite state, committed-receipt acknowledgement recovery, and
+  restart admission of the newly bound generation.
+- The focused failure fixture injects failure before policy activation and
+  proves the previous policy/pointer/vector tuple remains restart-readable.
+- A legacy v3 fixture remains `requires_reindex`.
+- MCP no longer invokes the legacy `rebuildCallGraphForIndex()` after repair.
+  It records completion only after exact generation and source-checkpoint
+  proof.
+
+Focused evidence:
+
+```text
+Core R0 compatibility/success/failure/v3 fixtures: 4 passed, 0 failed
+Core repair-focused regression set:               19 passed, 0 failed
+Core generation/receipt/retention set:             5 passed, 0 failed
+MCP repair lifecycle/proof set:                   11 passed, 0 failed
+Core and MCP direct TypeScript checks:             passed
+Focused ESLint and git diff --check:               passed
+```
+
+#### R1: Relationship-backed test references
+
+Authorized outcome:
+
+> Restore the existing public root-target `call_graph.testReferences` contract
+> demonstrated by the legacy oracle, using the canonical relationship sidecar
+> without merging or querying legacy v3 graph state.
+
+Repository alignment:
+
+- `RelationshipType` and sidecar validation already accept `TESTS`.
+- `CallGraphTestReference` and the public response schema already exist.
+- TS/JS/Python advertise `testReferenceCapability: "production_ready"`.
+- The current relationship builder emits only `CALLS`, `IMPORTS`, and
+  `EXPORTS`.
+- The current relationship-backed handler explicitly returns no legacy test
+  references. That anti-fallback rule remains correct.
+
+Primary owners:
+
+- `packages/core/src/relationships/builder.ts`
+- one Core-owned relationship test-path helper, reused by MCP
+- `packages/mcp/src/core/relationship-backed-call-graph.ts`
+- focused relationship builder/delta and MCP call-graph tests
+
+Implementation contract:
+
+1. Move the existing deterministic test/fixture path predicate to one
+   Core-owned relationship helper and have the MCP note-prioritization path
+   reuse it. Do not maintain two classifiers.
+2. For each already resolved `CALLS` record whose source owner is in an
+   admitted test/fixture path and whose target is a non-test repository
+   symbol, emit one additive `TESTS` record with the same source/target exact
+   identities, site span, file, and confidence.
+3. Keep the original `CALLS` record. `TESTS` is attached evidence, not a
+   replacement graph edge.
+4. Do not synthesize a `TESTS` record from filename/name similarity or from an
+   unresolved/suppressed call.
+5. Relationship-backed `call_graph` performs one bounded inbound `TESTS`
+   lookup for the requested root symbol and maps those records to the existing
+   `testReferences` shape. `TESTS` records never enter CALLS traversal,
+   `nodes`, `edges`, or edge counts.
+6. Sort and deduplicate with the existing relationship and public
+   test-reference comparators. Preserve the existing response limit.
+7. Bump the relationship identity after R0 passes.
+
+Focused proof:
+
+- a resolved test call produces both `CALLS` and `TESTS`;
+- a production caller produces `CALLS` only;
+- an unresolved, ambiguous, external, or merely same-name test site produces
+  no `TESTS`;
+- relationship-backed `call_graph` returns the same root test-reference shape
+  that the legacy oracle established, without loading legacy state;
+- adding, deleting, renaming, or retargeting the test call produces the same
+  canonical records through delta publication and a clean rebuild; and
+- missing/corrupt relationship state retains current fail-closed behavior.
+
+Terminal decision:
+
+- `test_reference_relationship_pass`; or
+- `test_reference_correctness_fail`.
+
 ### Phase 5B: Python Receiver-Aware `CALLS`
 
-Status: Phase 5B0/5B1 implemented and verified; Phase 5B2 not entered.
+Status: Phase 5B0/5B1 implemented and verified; the narrowed R2 portion of
+Phase 5B2 is implementation-ready after R0.
 
 Decision boundary:
 
@@ -868,8 +1264,7 @@ Before changing extraction or resolution, freeze fixtures for:
   `_build_state_snapshot`;
 - `_handle_state_transition` resolving `_get_threshold_for_state`;
 - a unique class-qualified call such as `SpreadModelFactory.create_model`;
-- an annotated or constructor-bound local receiver calling one repository
-  method;
+- a parameter-annotated local receiver calling one repository method;
 - an unresolved external receiver such as `pd.merge` producing no invented
   repository edge; and
 - two classes with the same method name remaining unresolved when receiver
@@ -916,26 +1311,127 @@ Implementation result:
 
 #### 5B2: Add only the typed evidence still required
 
-Status: not entered; requires separate evidence and authorization.
+Status: R2 is implementation-ready for import aliases and simple parameter
+annotations only. Broader local/return-type inference remains deferred.
 
-Enter this slice only if 5B1 passes its own fixtures but a frozen, important
-receiver-bound witness such as `model.calculate_metrics` remains unresolved.
+Frozen witnesses:
 
-Port the minimum applicable behavior from the pinned codebase-memory Python
-resolver into Satori's existing TypeScript/tree-sitter pipeline:
+```python
+from .factory import SpreadModelFactory as Factory
 
-- import aliases and imported class bindings;
-- parameter annotations;
+def build():
+    Factory.create_model()
+```
+
+```python
+class MetricsModel:
+    def calculate_metrics(self): ...
+
+def inspect(model: MetricsModel):
+    model.calculate_metrics()
+```
+
+The first witness is already fully represented by the persisted
+`ModuleBinding`: `importedName="SpreadModelFactory"` and
+`localName="Factory"`. The builder currently rejects it only because it
+requires the imported and local names to equal the receiver.
+
+The pinned Python grammar represents the second witness as a
+`typed_parameter` with a simple identifier under its `type` field. Current
+`RelationshipAnalysisEvidence` persists only `moduleBindings` and `callSites`,
+so the parameter type is lost before relationship construction.
+
+##### R2 contract
+
+Add one internal per-file fact to the existing language-analysis result and
+relationship contribution:
+
+```ts
+interface ReceiverTypeBinding {
+    localName: string;
+    typeName: string;
+    kind: 'parameter_annotation';
+    span: SourceSpan;
+}
+```
+
+The exact property name may follow existing naming conventions, but its
+meaning and allowed value are frozen above. It is not a public schema.
+
+Primary owners:
+
+- `packages/core/src/language-analysis/types.ts`
+- `packages/core/src/language-analysis/tree-sitter-adapter.ts`
+- `packages/core/src/relationships/builder.ts`
+- `packages/core/src/symbols/sidecar.ts` and contribution schema constant
+- Context's existing analysis-evidence projections
+- their focused language-analysis, builder/delta, sidecar, and Context tests
+
+Implementation:
+
+1. Only in the Python Tree-sitter strategy, extract a directly named
+   `typed_parameter` or `typed_default_parameter` whose type is one simple
+   identifier.
+2. Record the parameter binding in the same Tree-sitter pass that already
+   produces symbols, module bindings, and call sites. No regex, second parse,
+   subprocess, or query-time source scan is allowed.
+3. Extend `LanguageAnalysisResult`, `RelationshipAnalysisEvidence`, the
+   per-file relationship contribution writer/validator, and Context's
+   analysis-evidence plumbing. Do not introduce another sidecar.
+   Bump `RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION` because the persisted
+   evidence shape changes; old contributions must be rebuilt, never
+   reinterpreted as having an empty binding set.
+4. For a member call, consider only receiver bindings whose span belongs to
+   the already resolved source callable. Resolve only when all applicable
+   bindings name one class after local/import-alias resolution.
+5. Resolve a type or class receiver through the current source file or one
+   supported relative import. For an alias, match `localName` to the written
+   type/receiver and `importedName` to the target class.
+6. Require one exact target class and one exact method inside that class.
+   Conflicts, external modules, chained receivers, forward-string
+   annotations, generics, unions, optionals, attributes, subscripts, and
+   computed expressions remain unresolved.
+7. Preserve direct, constructor, `self`, `cls`, and unaliased class-qualified
+   behavior.
+8. Bump the relationship identity after R0 passes.
+
+Focused proof:
+
+- the existing alias witness resolves `Factory.create_model`;
+- the existing `MetricsModel` parameter witness resolves
+  `model.calculate_metrics`;
+- identical parameter names in separate functions cannot leak type authority
+  across callable spans;
+- two conflicting or ambiguous class candidates remain unresolved;
+- `pd.merge`, `object.method`, string annotations, `Optional[T]`, `T | None`,
+  and chained receivers remain unresolved;
+- persisted evidence rejects missing, extra, malformed, or unsupported
+  receiver-binding fields;
+- parameter addition/removal/type change and imported-class rename converge
+  between delta publication and a clean rebuild; and
+- unchanged chunks are not embedded during ordinary source deltas.
+
+Terminal decision:
+
+- `typed_receiver_parameter_pass`; or
+- `typed_receiver_correctness_fail`.
+
+##### Explicitly deferred 5B2 candidates
+
+Do not add these without a new named repository witness and a separately
+frozen syntactic/data-flow contract:
+
 - constructor assignment types;
 - simple annotated assignments;
-- repository-local return types; and
-- the narrow optional/union normalization needed by a frozen fixture.
+- repository-local return types;
+- optional/union normalization; or
+- arbitrary assignment/reassignment inference.
 
-These facts must be deterministic per-file derived state. Reuse Satori's
-existing parse, symbol registry, relationship sidecars, publication generation,
-and delta-contribution lifecycle. Do not introduce the upstream C runtime,
-SQLite graph, subprocess, second source parse, synthetic built-in/stdlib nodes,
-or query-time type inference.
+The pinned upstream implementation remains a behavioral reference only. Reuse
+Satori's existing parse, symbol registry, relationship sidecars, publication
+generation, and delta-contribution lifecycle. Do not introduce the upstream C
+runtime, SQLite graph, subprocess, second source parse, synthetic built-in or
+stdlib nodes, or query-time type inference.
 
 If implementation substantially copies upstream code, mappings, or tests,
 update `THIRD_PARTY.md` from its current reference-only statement to record the
@@ -953,8 +1449,9 @@ identities are:
 #### 5B3: Publication and compatibility
 
 - Bump `relationshipVersion` when persisted relationship meaning changes.
-- Invalidate and rebuild relationship/navigation state without invalidating
-  compatible lexical or embedding state.
+- Complete R0 before the next bump so a relationship-only compatibility change
+  can rebuild navigation and rebind the proven unchanged vector/lexical
+  payload without embedding.
 - Never mix relationship shards produced under different resolver identities.
 - Preserve delta publication: changed resolution facts may recompute a
   deterministic conservative set of reference owners, but must not silently
@@ -971,7 +1468,9 @@ Acceptance:
   cross-class fabrication.
 - External and ambiguous calls remain unresolved rather than creating false
   repository edges.
-- Unchanged chunks are not re-embedded.
+- R0 performs zero vector-payload writes and zero embedding calls for a proven
+  relationship-only upgrade; ordinary R1/R2 source deltas embed only actually
+  changed chunks.
 - Shared relationship state contains no Potion-, LanceDB-, Voyage-, or
   Milvus-specific assumptions.
 - The public MCP tool surface and `call_graph` response contract remain fixed.
@@ -981,15 +1480,16 @@ Acceptance:
 
 ### Phase 6: Language Expansion
 
-Status: superseded for remaining symbol-definition parity by
+Status: complete through
 `docs/plans/MULTI_LANGUAGE_SYMBOL_DEFINITION_PARITY_PLAN.md`.
 
 The order and tasks below are retained as historical planning context. Basic
 symbol extraction, ownership, outline, and exact-open support have since shipped
 for Go, Java, Rust, C#, C++, and Scala. Do not execute this section as written.
-The replacement plan records the current extractor truth, pinned upstream
-definition authorities, the C/C++ parser boundary, and the remaining
-per-language parity work. It does not reopen Phase 5B call-graph work.
+The replacement plan records terminal D0-D6 decisions, current extractor
+truth, pinned upstream definition authorities, and the C/C++ parser boundary.
+No executable symbol-definition work remains there. Kotlin and Swift were not
+promoted by that completed program and are not implicitly authorized here.
 
 Order:
 
@@ -1017,32 +1517,60 @@ Acceptance per language:
 - `read_file(open_symbol)` can open exact symbols.
 - `call_graph` either works or returns structured unsupported state with fallback.
 
-### Phase 7: Eval Harness and Regression Matrix
+### Phase 7 / R4: Direct Qualification Record
 
-Files:
+Status: most contract coverage and owner-retrieval evidence already exists;
+one consolidation record remains. This is not authority for a new benchmark
+framework.
 
-- existing tests
-- possible new `tests/integration/symbol-owned-retrieval.*`
-- docs/eval notes if added
+Reusable evidence:
 
-Tasks:
+- `packages/mcp/src/core/search.eval.test.ts` covers deterministic search scope
+  and ordering.
+- grouped ownership, exact registry, compact response, outline, exact-open, and
+  call-graph tests cover the public symbol-owned workflow.
+- the frozen 30-task Potion/Voyage comparison used complete Satori hybrid
+  retrieval and recorded required-owner top-five reach on 23/30 and 25/30
+  tasks respectively. It is retrieval evidence, not a codebase-memory
+  comparison or proof of provider parity.
 
-- Build 8-12 representative tasks across web/backend/AI/systems/mobile.
-- Compare Satori before/after against codebase-memory on:
-  - first useful result
-  - whether result is a symbol
-  - whether next action is executable
-  - token size of response
-  - false positives from tests/docs
-- Keep results reproducible with local fixture repos where possible.
+R4 tasks:
+
+1. Inventory the smallest existing tests that prove:
+   - an implementation query returns a concrete symbol-owned target;
+   - the target's canonical `read_file(open_symbol)` action is executable;
+   - overload/same-name instances do not collapse;
+   - implementation intent demotes tests/generated evidence;
+   - file-owned fallback remains readable; and
+   - repeated fixed input produces fixed ordering.
+2. Add at most one focused MCP fixture only if one of those observable links
+   has no existing proof.
+3. Record serialized grouped and raw response byte counts for the same fixed
+   fixture as descriptive context only. Do not invent a pass threshold without
+   a previously frozen baseline.
+4. Do not invoke codebase-memory, an answering agent, a judge, a paid provider,
+   or a live repository benchmark. Those layers cannot change this plan's
+   remaining implementation decisions.
 
 Acceptance:
 
-- Satori returns a symbol-owned group for target implementation queries.
-- Satori response token footprint does not grow materially for common searches.
-- Satori no longer requires fallback to grep/codebase-memory for common TS/JS/Python/Python-large-file navigation.
+- every observable workflow link above has direct, named evidence;
+- no public tool or response schema was added for the qualification;
+- the 30-task owner-retrieval result is cited without converting it into a
+  symbol-ranking or token-efficiency claim; and
+- response-size observations are labeled descriptive.
+
+Terminal decision:
+
+- `symbol_owned_program_complete`; or
+- `qualification_contract_gap` naming the one unproven observable link. This
+  decision does not authorize unrelated retrieval tuning.
 
 ## Test Plan
+
+This is the program-level consolidation inventory. Completed bullets are
+reusable evidence, not tests to recreate for R0-R4. Each remaining batch runs
+only its focused proof above plus existing checks invalidated by its diff.
 
 ### Unit Tests
 
@@ -1063,7 +1591,12 @@ Acceptance:
 - `read_file(open_symbol)` resolves exact symbol from grouped search hint.
 - `call_graph` remains compatible for TS/JS/Python.
 - Legacy index without `ownerSymbolKey` degrades or repairs deterministically.
-- Generated/source duplicates and test-helper name collisions produce deterministic ambiguity hints.
+- Generated/source duplicates and test-helper name collisions retain distinct
+  identities; exact lookup fails ambiguous rather than guessing.
+- Relationship-backed TESTS records populate the existing root
+  `testReferences` field without entering CALLS traversal.
+- A relationship-only version repair proves and reuses the exact vector
+  payload without vector writes.
 
 ### Regression Tests
 
@@ -1071,7 +1604,9 @@ Acceptance:
 - `scope=runtime` still excludes docs.
 - Test files remain demoted unless query asks for tests.
 - `requires_reindex` still blocks stale sidecar/index states.
-- Generated/ignored/secret files remain excluded.
+- Hard-denied build outputs, ignored files, and secret-bearing files remain
+  excluded. A separately indexable `generated/` fixture remains eligible but
+  is deterministically classified and demoted by the existing search policy.
 
 ## Documentation Updates Required With Implementation
 
@@ -1079,28 +1614,76 @@ Acceptance:
 - Update the root README only when its language-support or product claims change.
 - Add third-party/MIT attribution before copying any upstream code or tables.
 
-## Open Questions
+## Resolved Decisions
 
-1. What is the first non-TS/JS/Python language target: Go for backend coverage or Rust/C++ for systems coverage?
-2. What exact root fingerprint strategy should handle moved repos, symlinks, and CI path differences?
-3. Should relationship extraction v1 add test-reference edges next, or first strengthen receiver-aware and alias-aware relationship resolution now that MCP `call_graph` already traverses relationship records?
-4. What confidence thresholds should downgrade a symbol group from high to medium or low?
-5. Which remaining legacy `metadata.symbolId` cleanup can be deleted immediately now that runtime navigation treats `symbolInstanceId` as the exact steady-state identity?
+1. Multi-language symbol-definition parity is complete under its own D0-D6
+   plan. This plan does not choose another language target.
+2. Canonical-root, generation, receipt, and source-observation identity are
+   established publication authorities. No root-fingerprint redesign is
+   required by the remaining batches.
+3. Relationship-backed test references precede additional receiver inference
+   because the public capability already claims them while steady-state
+   traversal omits them.
+4. Import aliases and one simple parameter-annotation fact are the only
+   receiver additions with frozen witnesses. Broader type inference is
+   deferred.
+5. Existing confidence thresholds and ranking policy remain unchanged.
+6. Legacy `metadata.symbolId` cleanup is not required for any remaining
+   observable outcome and is excluded.
 
-## Completed Patch And Stopping Point
+## Execution Batches
 
-Phase 5B0/5B1 froze direct-call preservation and member-call
-positive/negative fixtures, consumed existing member `CallSite` facts, resolved
-exact same-class and unique class-qualified calls, and preserved ambiguity by
-omission. No codebase-memory implementation was copied, the public tool
-contract did not change, and no retrieval architecture was added.
+Execute in this order:
 
-Stop here. Phase 5B2 requires a separately frozen important typed-receiver
-witness and separate implementation authority.
+```text
+R0 relationship-only navigation repair (complete)
+  -> R1 relationship-backed TESTS
+  -> R2 Python import-alias and parameter receiver evidence
+  -> R3 generated/source duplicate evidence
+  -> R4 direct qualification record
+```
+
+Verification ownership:
+
+- R0 owns persisted-index compatibility, repair, publication activation, and
+  backend-neutral no-vector-write evidence.
+- R1 owns relationship construction, test-path classification, relationship
+  query projection, delta equivalence, and the existing MCP
+  `testReferences` contract.
+- R2 owns Tree-sitter evidence extraction, persisted evidence validation,
+  Python member resolution, and delta equivalence.
+- R3 and R4 are evidence-only and add no implementation unless their exact
+  frozen oracle fails.
+
+Run narrow owning tests after each batch. At the final consolidation point run
+the affected Core and MCP relationship/navigation tests, Core/MCP typecheck,
+focused lint for changed TypeScript files, affected builds, and
+`git diff --check`. Do not run paid-provider, installer, release, ranking,
+answering-agent, or broad retrieval qualification.
+
+## Terminal Decisions
+
+Each batch records exactly one:
+
+| Batch | Pass | Fail/block |
+| --- | --- | --- |
+| R0 | `relationship_only_upgrade_pass` | `publication_compatibility_blocked` |
+| R1 | `test_reference_relationship_pass` | `test_reference_correctness_fail` |
+| R2 | `typed_receiver_parameter_pass` | `typed_receiver_correctness_fail` |
+| R3 | `ambiguity_contract_pass` | `ambiguity_identity_gap` |
+| R4 | `symbol_owned_program_complete` | `qualification_contract_gap` |
+
+An implementation batch passes only when its new behavior, directly
+invalidated existing contracts, compatibility identity, and directly affected
+documentation are complete. An evidence-only failure identifies its concrete
+owner but does not authorize an unrelated redesign.
 
 ## Handoff State
 
-This document records the reviewed architecture and the completed bounded
-Phase 5B0/5B1 follow-up. It performed no user reindex and imported no
-codebase-memory implementation. Phase 5B2 remains unimplemented and
-unauthorized.
+The repository is aligned with the completed architecture through Phase 5B1
+and the completed multi-language definition program. R0 now provides the
+proven v4 relationship-only upgrade path without importing codebase-memory or
+adding a second graph or parser authority. The next implementation batch is
+R1. Its semantic relationship-version bump must use the completed R0 path; a
+passing R0 does not weaken ordinary fingerprint admission or authorize vector
+reuse for any other compatibility delta.

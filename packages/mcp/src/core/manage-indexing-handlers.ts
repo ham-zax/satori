@@ -1224,6 +1224,11 @@ export class ManageIndexingHandlers {
                         }
                         this.host.mutationLeaseCoordinator.publishWhileCurrent(mutationLease!, publish);
                     },
+                    publicationAuthority: {
+                        ownerId: mutationLease.ownerId,
+                        generation: mutationLease.generation,
+                        operationId: mutationLease.operationId,
+                    },
                 } : {}),
             });
             if (mutationLease) {
@@ -1240,16 +1245,51 @@ export class ManageIndexingHandlers {
                     ...result.proof,
                     navigation: {
                         status: "unproven",
-                        basis: "call_graph_rebuild_in_progress",
+                        basis: "generation_proof_in_progress",
                     },
                 };
-                await this.host.rebuildCallGraphForIndex(absolutePath, assertMutationCurrent);
+                const proven = await this.host.context.proveIndexedGeneration(absolutePath);
+                if (
+                    !proven
+                    || proven.collectionName !== result.collectionName
+                    || proven.marker.indexedFiles !== result.indexedFiles
+                    || proven.exactPayloadCount !== result.totalChunks
+                ) {
+                    throw new Error(`Repair completion for '${absolutePath}' did not match an exact proven generation.`);
+                }
+                if (result.activatedGeneration) {
+                    const activated = result.activatedGeneration;
+                    if (
+                        activated.collectionName !== proven.collectionName
+                        || activated.markerRunId !== proven.marker.runId
+                        || activated.relationshipVersion !== this.host.runtimeFingerprint.relationshipVersion
+                        || activated.navigation.generationId !== proven.navigation.generationId
+                        || activated.navigation.sealHash !== proven.navigation.navigationSealHash
+                        || activated.navigation.symbolRegistryManifestHash
+                            !== proven.navigation.symbolRegistryManifestHash
+                        || activated.navigation.relationshipManifestHash
+                            !== proven.navigation.relationshipManifestHash
+                    ) {
+                        throw new Error(`Relationship-only repair for '${absolutePath}' did not prove its activated navigation generation.`);
+                    }
+                    const checkpoint = await this.host.context.inspectSourceFreshnessCheckpoint(
+                        absolutePath,
+                        proven.collectionName,
+                        proven,
+                    );
+                    if (
+                        checkpoint.status !== "valid"
+                        || checkpoint.documentDigest !== activated.sourceCheckpointDocumentDigest
+                    ) {
+                        throw new Error(`Relationship-only repair for '${absolutePath}' did not preserve its source checkpoint identity.`);
+                    }
+                }
                 assertMutationCurrent?.();
                 lastRepairProof = {
                     ...result.proof,
                     navigation: {
                         status: "matched",
-                        basis: "navigation_and_call_graph_rebuilt",
+                        basis: "activated_generation_proven",
                     },
                 };
                 try {
@@ -1339,7 +1379,7 @@ export class ManageIndexingHandlers {
         } catch (error: unknown) {
             console.error("Error in handleRepairIndex:", error);
             if (
-                lastRepairProof?.navigation.basis === "call_graph_rebuild_in_progress"
+                lastRepairProof?.navigation.basis === "generation_proof_in_progress"
             ) {
                 lastRepairProof = {
                     ...lastRepairProof,

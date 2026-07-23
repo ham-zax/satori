@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {
     buildCanonicalIndexPolicyDocument,
+    classifyRepairIndexCompatibility,
     compareIndexCompatibility,
     EMBEDDING_NORMALIZATION_POLICY_VERSION,
     inspectCompletionMarker,
@@ -175,6 +176,36 @@ test('fingerprint parsing and compatibility use one deterministic field contract
     const future = { ...current, localModelDigest: 'sha256:future' };
     assert.equal(parseIndexFingerprint(future), null);
     assert.deepEqual(compareIndexCompatibility(future, current), {
+        status: 'malformed',
+        reason: 'persisted index fingerprint is malformed',
+    });
+});
+
+test('repair compatibility admits only a relationship-version-only upgrade', () => {
+    const current = fingerprint();
+    assert.deepEqual(classifyRepairIndexCompatibility(current, current), {
+        status: 'compatible',
+        differingFields: [],
+    });
+    assert.deepEqual(classifyRepairIndexCompatibility({
+        ...current,
+        relationshipVersion: 'relationship-v0',
+    }, current), {
+        status: 'relationship_only_upgrade',
+        differingFields: ['relationshipVersion'],
+    });
+    assert.deepEqual(classifyRepairIndexCompatibility({
+        ...current,
+        relationshipVersion: 'relationship-v0',
+        extractorVersion: 'extractor-v0',
+    }, current), {
+        status: 'requires_reindex',
+        differingFields: ['extractorVersion', 'relationshipVersion'],
+    });
+    assert.deepEqual(classifyRepairIndexCompatibility({
+        ...current,
+        relationshipVersion: '',
+    }, current), {
         status: 'malformed',
         reason: 'persisted index fingerprint is malformed',
     });

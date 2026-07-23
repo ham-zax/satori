@@ -32,6 +32,19 @@ export interface RepairSnapshotEvidence {
     fingerprint?: IndexCompletionFingerprint;
 }
 
+export interface RepairActivatedGeneration {
+    collectionName: string;
+    markerRunId: string;
+    sourceCheckpointDocumentDigest: string;
+    relationshipVersion: string;
+    navigation: {
+        generationId: string;
+        sealHash: string;
+        symbolRegistryManifestHash: string;
+        relationshipManifestHash: string;
+    };
+}
+
 export interface RepairIndexResult {
     status: 'ok' | 'blocked' | 'requires_reindex';
     reason?: 'needs_create' | 'requires_reindex';
@@ -43,4 +56,5 @@ export interface RepairIndexResult {
     totalChunks?: number;
     trackedRelativePaths?: string[];
     collectionName?: string;
+    activatedGeneration?: RepairActivatedGeneration;
 }

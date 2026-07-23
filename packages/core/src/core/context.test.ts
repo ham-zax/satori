@@ -226,6 +226,11 @@ type ContextWithNavigationPublisher = {
     ): Promise<void>;
 };
 
+type ContextWithRelationshipVersionOverride = {
+    getRelationshipVersion(): string;
+    waitForPublicationRetention(canonicalRoot: string): Promise<void>;
+};
+
 type ContextWithProcessChunkBatch = {
     processChunkBatch(
         chunks: Array<{
@@ -9071,6 +9076,277 @@ test('Context.repairIndex valid marker + missing symbol registry rebuilds naviga
         assert.equal(fs.existsSync(sqlitePath), true);
         const chunkIdsAfter = Array.from(docsMap.keys()).filter(id => id !== INDEX_COMPLETION_MARKER_DOC_ID);
         assert.deepEqual(chunkIdsAfter.sort(), chunkIdsBefore.sort());
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex atomically upgrades only relationship navigation under a proven v4 publication', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-relationship-only-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+    let rejectEmbedding = false;
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const embedding = new (class extends TestEmbedding {
+            override async embedQuery(text: string) {
+                if (rejectEmbedding) throw new Error('relationship repair must not embed');
+                return super.embedQuery(text);
+            }
+            override async embedDocuments(texts: string[]) {
+                if (rejectEmbedding) throw new Error('relationship repair must not embed');
+                return super.embedDocuments(texts);
+            }
+        })();
+        const context = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        fs.writeFileSync(sourcePath, 'export function auth() { return false; }\n', 'utf8');
+        await context.reindexByChange(codebasePath, undefined, {
+            publicationAuthority: {
+                ownerId: 'initial-owner',
+                generation: 4,
+                operationId: 'initial-operation',
+            },
+        });
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const internals = context as unknown as ContextWithRelationshipVersionOverride;
+        await internals.waitForPublicationRetention(canonicalRoot);
+
+        const before = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(before);
+        const markerBefore = structuredClone(before.marker);
+        const checkpointPath = FileSynchronizer.getSnapshotPathForGeneration(
+            codebasePath,
+            before.collectionName,
+        );
+        const checkpointBefore = fs.readFileSync(checkpointPath, 'utf8');
+        const navigationRoot = resolveNavigationSidecarRoot(stateRoot, codebasePath);
+        const pointerPath = path.join(navigationRoot, 'current.json');
+        const pointerBefore = fs.readFileSync(pointerPath, 'utf8');
+        const sqlitePath = resolveNavigationSqlitePath(stateRoot, codebasePath);
+        const sqliteBefore = fs.readFileSync(sqlitePath);
+        const nextRelationshipVersion = `${RELATIONSHIP_BUILDER_VERSION}+repair-test`;
+        const upgraded = new Context({
+            embedding,
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        (upgraded as unknown as ContextWithRelationshipVersionOverride).getRelationshipVersion =
+            () => nextRelationshipVersion;
+        vectorDatabase.mutationCalls.length = 0;
+        rejectEmbedding = true;
+
+        const result = await upgraded.repairIndex(codebasePath, {
+            publicationAuthority: {
+                ownerId: 'repair-owner',
+                generation: 5,
+                operationId: 'repair-operation',
+            },
+            publishMutation: (publish) => {
+                publish();
+                throw new Error('injected committed receipt acknowledgement failure');
+            },
+        });
+        const after = await upgraded.proveIndexedGeneration(codebasePath);
+
+        assert.equal(result.status, 'ok', result.message);
+        assert.equal(result.activatedGeneration?.relationshipVersion, nextRelationshipVersion);
+        assert.ok(after);
+        assert.equal(after.collectionName, before.collectionName);
+        assert.deepEqual(after.marker, markerBefore);
+        assert.notEqual(after.navigation.generationId, before.navigation.generationId);
+        assert.equal(
+            result.activatedGeneration?.navigation.generationId,
+            after.navigation.generationId,
+        );
+        assert.deepEqual(vectorDatabase.mutationCalls, []);
+        assert.equal(fs.readFileSync(checkpointPath, 'utf8'), checkpointBefore);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), pointerBefore);
+        assert.deepEqual(fs.readFileSync(sqlitePath), sqliteBefore);
+
+        const policyFile = fs.readdirSync(policyRoot).find((file) => file.endsWith('.json'));
+        assert.ok(policyFile);
+        const policy = JSON.parse(
+            fs.readFileSync(path.join(policyRoot, policyFile), 'utf8'),
+        ) as CanonicalIndexPolicyDocument;
+        assert.equal(policy.schemaVersion, 'satori_index_policy_v4');
+        assert.equal(policy.collectionName, before.collectionName);
+        assert.equal(policy.publication.sourceCheckpoint.markerRunId, markerBefore.runId);
+        assert.equal(
+            policy.publication.sourceCheckpoint.documentDigest,
+            result.activatedGeneration?.sourceCheckpointDocumentDigest,
+        );
+        assert.equal(policy.publication.graph.manifestHash, after.navigation.relationshipManifestHash);
+        assert.deepEqual(policy.publication.receipt, {
+            ownerId: 'repair-owner',
+            generation: 5,
+            operationId: 'repair-operation',
+        });
+
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        (restarted as unknown as ContextWithRelationshipVersionOverride).getRelationshipVersion =
+            () => nextRelationshipVersion;
+        const restartedProof = await restarted.proveIndexedGeneration(codebasePath);
+        assert.equal(restartedProof?.navigation.generationId, after.navigation.generationId);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex preserves the previous v4 tuple when relationship activation fails', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-relationship-failure-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new ForkingInMemoryLanceVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.recreateSynchronizerForCodebase(codebasePath);
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        fs.writeFileSync(sourcePath, 'export function auth() { return false; }\n', 'utf8');
+        await context.reindexByChange(codebasePath, undefined, {
+            publicationAuthority: {
+                ownerId: 'initial-owner',
+                generation: 8,
+                operationId: 'initial-operation',
+            },
+        });
+        const canonicalRoot = fs.realpathSync(codebasePath);
+        const internals = context as unknown as ContextWithRelationshipVersionOverride;
+        await internals.waitForPublicationRetention(canonicalRoot);
+        const before = await context.proveIndexedGeneration(codebasePath);
+        assert.ok(before);
+        const policyFile = fs.readdirSync(policyRoot).find((file) => file.endsWith('.json'));
+        assert.ok(policyFile);
+        const policyPath = path.join(policyRoot, policyFile);
+        const policyBefore = fs.readFileSync(policyPath, 'utf8');
+        const pointerPath = path.join(
+            resolveNavigationSidecarRoot(stateRoot, codebasePath),
+            'current.json',
+        );
+        const pointerBefore = fs.readFileSync(pointerPath, 'utf8');
+        const upgraded = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        (upgraded as unknown as ContextWithRelationshipVersionOverride).getRelationshipVersion =
+            () => `${RELATIONSHIP_BUILDER_VERSION}+repair-failure-test`;
+        vectorDatabase.mutationCalls.length = 0;
+
+        const repairAttempt = upgraded.repairIndex(codebasePath, {
+                publicationAuthority: {
+                    ownerId: 'repair-owner',
+                    generation: 9,
+                    operationId: 'repair-operation',
+                },
+                publishMutation: () => {
+                    throw new Error('injected activation failure');
+                },
+            });
+        const failure = await repairAttempt.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+        );
+        assert.ok(
+            'error' in failure && /injected activation failure/.test(String(failure.error)),
+            'result' in failure ? failure.result.message : String(failure.error),
+        );
+
+        assert.equal(fs.readFileSync(policyPath, 'utf8'), policyBefore);
+        assert.equal(fs.readFileSync(pointerPath, 'utf8'), pointerBefore);
+        assert.deepEqual(vectorDatabase.mutationCalls, []);
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        const previousProof = await restarted.proveIndexedGeneration(codebasePath);
+        assert.equal(previousProof?.navigation.generationId, before.navigation.generationId);
+        assert.deepEqual(previousProof?.marker, before.marker);
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('Context.repairIndex does not infer relationship-only authority from a legacy v3 publication', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-repair-relationship-v3-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'src', 'auth.ts');
+    try {
+        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+        fs.writeFileSync(sourcePath, 'export function auth() { return true; }\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const original = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await original.recreateSynchronizerForCodebase(codebasePath);
+        await original.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(original, codebasePath);
+        const policyFile = fs.readdirSync(policyRoot).find((file) => file.endsWith('.json'));
+        assert.ok(policyFile);
+        const policy = JSON.parse(
+            fs.readFileSync(path.join(policyRoot, policyFile), 'utf8'),
+        ) as CanonicalIndexPolicyDocument;
+        assert.equal(policy.schemaVersion, 'satori_index_policy_v3');
+
+        const upgraded = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        (upgraded as unknown as ContextWithRelationshipVersionOverride).getRelationshipVersion =
+            () => `${RELATIONSHIP_BUILDER_VERSION}+repair-v3-test`;
+        vectorDatabase.mutationCalls.length = 0;
+
+        const result = await upgraded.repairIndex(codebasePath, {
+            publicationAuthority: {
+                ownerId: 'repair-owner',
+                generation: 2,
+                operationId: 'repair-operation',
+            },
+        });
+
+        assert.equal(result.status, 'requires_reindex');
+        assert.equal(
+            result.proof.navigation.basis,
+            'relationship_upgrade_v4_authority_missing',
+        );
+        assert.deepEqual(vectorDatabase.mutationCalls, []);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

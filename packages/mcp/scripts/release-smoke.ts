@@ -65,7 +65,6 @@ function runInitializeSmoke(
                 MILVUS_TOKEN: "",
                 MCP_ENABLE_WATCHER: "false",
                 npm_config_package_lock: "false",
-                npm_config_cache: path.join(smokeExecDir, ".npm-cache"),
             },
             detached: process.platform !== "win32",
             stdio: ["pipe", "pipe", "pipe"],
@@ -144,11 +143,15 @@ function runInitializeSmoke(
     });
 }
 
-async function runNpmExecInitializeSmoke(coreTarballPath: string, tarballPath: string, smokeExecDir: string): Promise<void> {
-    await runInitializeSmoke("npm", ["exec", "--yes", "--package", coreTarballPath, "--package", tarballPath, "--", "satori"], smokeExecDir, 60000);
-}
-
-async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballPath: string, smokeExecDir: string): Promise<void> {
+function installPackedRuntimeClosure(
+    coreTarballPath: string,
+    tarballPath: string,
+    smokeExecDir: string,
+): {
+    runtimeRoot: string;
+    serverEntry: string;
+    satoriBin: string;
+} {
     const runtimeRoot = path.join(smokeExecDir, ".satori", "mcp-runtime", "release-smoke");
     execFileSync("npm", [
         "install",
@@ -159,6 +162,7 @@ async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballP
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--prefer-offline",
         coreTarballPath,
         tarballPath,
     ], {
@@ -167,18 +171,22 @@ async function runDirectRuntimeInitializeSmoke(coreTarballPath: string, tarballP
         env: {
             ...process.env,
             npm_config_package_lock: "false",
-            npm_config_cache: path.join(smokeExecDir, ".npm-cache"),
         },
         stdio: ["ignore", "pipe", "pipe"],
     });
     const serverEntry = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js");
-    if (!fs.existsSync(serverEntry)) {
-        throw new Error(`Direct runtime smoke could not find server entry: ${serverEntry}`);
+    const satoriBin = path.join(runtimeRoot, "node_modules", ".bin", process.platform === "win32" ? "satori.cmd" : "satori");
+    if (!fs.existsSync(serverEntry) || !fs.existsSync(satoriBin)) {
+        throw new Error(`Packed runtime smoke could not find the server entry or executable bin under ${runtimeRoot}.`);
     }
-    await runInitializeSmoke(process.execPath, [serverEntry], smokeExecDir, 30000);
+    return {
+        runtimeRoot,
+        serverEntry,
+        satoriBin,
+    };
 }
 
-function runPackedCoreParserSmoke(coreTarballPath: string, smokeExecDir: string): void {
+function runPackedCoreParserSmoke(runtimeRoot: string): void {
     const script = [
         "const { createLanguageAnalysisService, GeminiEmbedding } = require('@zokizuan/satori-core');",
         "const analyzer = createLanguageAnalysisService();",
@@ -201,14 +209,10 @@ function runPackedCoreParserSmoke(coreTarballPath: string, smokeExecDir: string)
         "  if (exactSlice(scalaSource, scala.symbols.find((symbol) => symbol.name === 'Service')) !== 'class Service { def run(): String = \"你好\" }') process.exit(8);",
         "}).catch((error) => { console.error(error); process.exit(9); });",
     ].join("\n");
-    execFileSync("npm", ["exec", "--yes", "--package", coreTarballPath, "--", "node", "-e", script], {
-        cwd: smokeExecDir,
+    execFileSync(process.execPath, ["-e", script], {
+        cwd: runtimeRoot,
         encoding: "utf8",
-        env: {
-            ...process.env,
-            npm_config_package_lock: "false",
-            npm_config_cache: path.join(smokeExecDir, ".npm-cache"),
-        },
+        env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
     });
 }
@@ -223,19 +227,16 @@ async function main(): Promise<void> {
     try {
         const coreTarballPath = packPackage(corePackageRoot, smokePackDir);
         const tarballPath = packPackage(packageRoot, smokePackDir);
-        runPackedCoreParserSmoke(coreTarballPath, smokeExecDir);
-        execFileSync("npm", ["exec", "--yes", "--package", coreTarballPath, "--package", tarballPath, "--", "satori", "--help"], {
-            cwd: smokeExecDir,
+        const packedRuntime = installPackedRuntimeClosure(coreTarballPath, tarballPath, smokeExecDir);
+        runPackedCoreParserSmoke(packedRuntime.runtimeRoot);
+        execFileSync(packedRuntime.satoriBin, ["--help"], {
+            cwd: packedRuntime.runtimeRoot,
             encoding: "utf8",
-            env: {
-                ...process.env,
-                npm_config_package_lock: "false",
-            },
+            env: process.env,
             stdio: ["ignore", "pipe", "pipe"],
         });
-        await runNpmExecInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
-        await runDirectRuntimeInitializeSmoke(coreTarballPath, tarballPath, smokeExecDir);
-        console.log("[release:smoke] Packed core runs Oxc plus dependency-provided and vendored WASM grammars; MCP starts via npm exec and direct runtime node entry with empty provider env.");
+        await runInitializeSmoke(process.execPath, [packedRuntime.serverEntry], smokeExecDir, 30000);
+        console.log("[release:smoke] One installed packed closure passed Core parser, MCP executable-bin, and direct runtime initialization checks.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

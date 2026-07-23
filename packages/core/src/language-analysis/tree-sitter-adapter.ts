@@ -343,12 +343,25 @@ function extractPythonModuleBindings(
     for (const node of root.descendantsOfType('import_from_statement')) {
         const moduleName = node.childForFieldName('module_name')?.text.trim();
         if (moduleName) {
-            bindings.push({
-                kind: 'import',
-                moduleSpecifier: moduleName,
-                typeOnly: false,
-                span: nodeSpan(node, sourceMap),
-            });
+            for (const imported of node.childrenForFieldName('name')) {
+                const importedNameNode = imported.type === 'aliased_import'
+                    ? imported.childForFieldName('name')
+                    : imported;
+                const aliasNode = imported.type === 'aliased_import'
+                    ? imported.childForFieldName('alias')
+                    : undefined;
+                const importedName = importedNameNode?.text.trim();
+                const localName = aliasNode?.text.trim() || importedName;
+                if (!importedName || !localName) continue;
+                bindings.push({
+                    kind: 'import',
+                    moduleSpecifier: moduleName,
+                    importedName,
+                    localName,
+                    typeOnly: false,
+                    span: nodeSpan(node, sourceMap),
+                });
+            }
         }
     }
     for (const node of root.descendantsOfType('import_statement')) {

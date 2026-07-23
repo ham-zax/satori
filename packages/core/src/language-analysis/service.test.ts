@@ -658,9 +658,36 @@ test('Tree-sitter Python module-binding spans remain exact after Unicode', async
     });
     const binding = result.moduleBindings.find((candidate) => candidate.kind === 'import');
     assert.ok(binding);
+    assert.equal(binding.importedName, 'helper');
+    assert.equal(binding.localName, 'helper');
     assert.equal(
         Buffer.from(source).subarray(binding.span.startByte, binding.span.endByte).toString('utf8'),
         'from naïve import helper',
+    );
+});
+
+test('Tree-sitter Python import-from bindings retain exact names without authorizing aliases as the original name', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        content: [
+            'from .factory import SpreadModelFactory',
+            'from .other import OtherFactory as Factory',
+        ].join('\n'),
+        language: 'python',
+        relativePath: 'src/imports.py',
+    });
+
+    assert.deepEqual(
+        result.moduleBindings
+            .filter((binding) => binding.kind === 'import')
+            .map((binding) => [
+                binding.moduleSpecifier,
+                binding.importedName,
+                binding.localName,
+            ]),
+        [
+            ['.factory', 'SpreadModelFactory', 'SpreadModelFactory'],
+            ['.other', 'OtherFactory', 'Factory'],
+        ],
     );
 });
 

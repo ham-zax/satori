@@ -158,6 +158,60 @@ function ownerForCall(fileSymbols: readonly SymbolRecord[], call: CallSite): Sym
     return candidates[0];
 }
 
+function symbolContains(container: SymbolRecord, nested: SymbolRecord): boolean {
+    if (
+        container.span.startByte !== undefined
+        && container.span.endByte !== undefined
+        && nested.span.startByte !== undefined
+        && nested.span.endByte !== undefined
+    ) {
+        return container.span.startByte <= nested.span.startByte
+            && container.span.endByte >= nested.span.endByte;
+    }
+    return container.span.startLine <= nested.span.startLine
+        && container.span.endLine >= nested.span.endLine;
+}
+
+function compareContainingClasses(left: SymbolRecord, right: SymbolRecord): number {
+    if (
+        left.span.startByte !== undefined
+        && left.span.endByte !== undefined
+        && right.span.startByte !== undefined
+        && right.span.endByte !== undefined
+    ) {
+        const byteSize = (left.span.endByte - left.span.startByte)
+            - (right.span.endByte - right.span.startByte);
+        if (byteSize !== 0) return byteSize;
+    }
+    const lineSize = (left.span.endLine - left.span.startLine)
+        - (right.span.endLine - right.span.startLine);
+    if (lineSize !== 0) return lineSize;
+    return compareStrings(left.symbolInstanceId, right.symbolInstanceId);
+}
+
+function enclosingClassForSymbol(
+    symbol: SymbolRecord,
+    classesByFile: ReadonlyMap<string, readonly SymbolRecord[]>,
+): SymbolRecord | undefined {
+    return classesByFile.get(symbol.file)
+        ?.filter((candidate) => symbolContains(candidate, symbol))
+        .sort(compareContainingClasses)[0];
+}
+
+function buildClassIndex(symbols: readonly SymbolRecord[]): {
+    byFile: Map<string, SymbolRecord[]>;
+    byName: Map<string, SymbolRecord[]>;
+} {
+    const byFile = new Map<string, SymbolRecord[]>();
+    const byName = new Map<string, SymbolRecord[]>();
+    for (const symbol of symbols) {
+        if (symbol.kind !== 'class') continue;
+        byFile.set(symbol.file, [...(byFile.get(symbol.file) ?? []), symbol]);
+        byName.set(symbol.name, [...(byName.get(symbol.name) ?? []), symbol]);
+    }
+    return { byFile, byName };
+}
+
 function resolveRelativeModulePath(
     sourceFile: string,
     specifier: string,
@@ -231,9 +285,78 @@ function relationshipSpan(binding: ModuleBinding | CallSite): RelationshipRecord
     return { ...binding.span };
 }
 
+function resolvePythonMemberTarget(input: {
+    call: CallSite;
+    source: SymbolRecord;
+    candidates: readonly SymbolRecord[];
+    evidence: RelationshipAnalysisEvidence;
+    registry: SymbolRegistry;
+    classesByFile: ReadonlyMap<string, readonly SymbolRecord[]>;
+    classesByName: ReadonlyMap<string, readonly SymbolRecord[]>;
+    availableFiles: ReadonlySet<string>;
+}): SymbolRecord | undefined {
+    if (
+        input.call.kind !== 'member'
+        || input.source.language !== 'python'
+        || !input.call.receiverText
+    ) {
+        return undefined;
+    }
+
+    const receiver = input.call.receiverText.trim();
+    if (
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(receiver)
+        || input.call.qualifiedCallee?.trim() !== `${receiver}.${input.call.calleeName}`
+    ) {
+        return undefined;
+    }
+
+    let targetClass: SymbolRecord | undefined;
+    if (receiver === 'self' || receiver === 'cls') {
+        if (input.source.kind !== 'method') return undefined;
+        targetClass = enclosingClassForSymbol(input.source, input.classesByFile);
+    } else {
+        const authorizedFiles = new Set([input.source.file]);
+        for (const binding of input.evidence.moduleBindings) {
+            if (
+                (binding.kind !== 'import' && binding.kind !== 'reexport')
+                || !binding.moduleSpecifier
+                || binding.importedName !== receiver
+                || binding.localName !== receiver
+            ) {
+                continue;
+            }
+            const importedFile = resolveRelativeModulePath(
+                input.source.file,
+                binding.moduleSpecifier,
+                input.registry,
+                input.source.language,
+                input.availableFiles,
+            );
+            if (importedFile) authorizedFiles.add(importedFile);
+        }
+        const classCandidates = (input.classesByName.get(receiver) ?? [])
+            .filter((candidate) => authorizedFiles.has(candidate.file));
+        if (classCandidates.length === 1) {
+            [targetClass] = classCandidates;
+        }
+    }
+    if (!targetClass) return undefined;
+
+    const matchingMembers = input.candidates.filter((candidate) => (
+        candidate.kind === 'method'
+        && candidate.symbolInstanceId !== input.source.symbolInstanceId
+        && enclosingClassForSymbol(candidate, input.classesByFile)?.symbolInstanceId
+            === targetClass.symbolInstanceId
+    ));
+    return matchingMembers.length === 1 ? matchingMembers[0] : undefined;
+}
+
 export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsForRegistryInput): RelationshipRecord[] {
     const targetIndex = buildTargetIndex(input.registry.symbols);
     const symbolsByFile = input.registry.symbolsByFile;
+    const classes = buildClassIndex(input.registry.symbols);
+    const availableFiles = new Set(input.registry.manifest.files.map((file) => file.path));
     const recordsByKey = new Map<string, RelationshipRecord>();
 
     for (const file of input.registry.manifest.files) {
@@ -241,14 +364,25 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
         const evidence = getEvidence(input.analysisByFile, file.path);
         if (!evidence) continue;
         for (const call of evidence.callSites) {
-            if (call.kind !== 'direct' && call.kind !== 'constructor') continue;
             const source = ownerForCall(symbolsByFile.get(file.path) ?? [], call);
             if (!source) continue;
-            const candidates = targetIndex.get(call.calleeName)?.filter((candidate) => (
-                isEligibleCallTarget(call, candidate)
-            ));
+            const candidates = targetIndex.get(call.calleeName);
             if (!candidates || candidates.length === 0) continue;
-            const target = resolveUnambiguousTarget(source, candidates);
+            const target = call.kind === 'member'
+                ? resolvePythonMemberTarget({
+                    call,
+                    source,
+                    candidates,
+                    evidence,
+                    registry: input.registry,
+                    classesByFile: classes.byFile,
+                    classesByName: classes.byName,
+                    availableFiles,
+                })
+                : resolveUnambiguousTarget(
+                    source,
+                    candidates.filter((candidate) => isEligibleCallTarget(call, candidate)),
+                );
             if (!target) continue;
             const record: RelationshipRecord = {
                 sourceKey: source.symbolKey,

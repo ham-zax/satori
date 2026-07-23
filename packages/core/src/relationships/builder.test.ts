@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRegistry,
+    buildSymbolRecordsForFile,
     createSymbolInstanceId,
     createSymbolKey,
     createSynthesizedFileSymbol,
@@ -25,6 +26,49 @@ async function analyzeFiles(
             relativePath,
         }),
     ] as const)));
+}
+
+async function buildAnalyzedPythonRegistry(
+    sources: Map<string, string> | Record<string, string>,
+) {
+    const entries = (sources instanceof Map ? [...sources.entries()] : Object.entries(sources))
+        .sort(([left], [right]) => left.localeCompare(right));
+    const analysisByFile = await analyzeFiles(new Map(entries));
+    const symbols: SymbolRecord[] = [];
+    const files: SymbolRegistryManifest['files'] = [];
+
+    for (const [relativePath, content] of entries) {
+        const analysis = analysisByFile.get(relativePath);
+        assert.ok(analysis);
+        const fileHash = `hash-${relativePath}`;
+        const fileSymbols = buildSymbolRecordsForFile({
+            relativePath,
+            language: 'python',
+            content,
+            fileHash,
+            extractorVersion: 'test-extractor-v1',
+            chunks: [],
+            extractedSymbols: analysis.symbols,
+        });
+        symbols.push(...fileSymbols);
+        files.push({
+            path: relativePath,
+            hash: fileHash,
+            language: 'python',
+            symbolCount: fileSymbols.length,
+        });
+    }
+
+    return {
+        analysisByFile,
+        registry: buildSymbolRegistry({
+            manifest: {
+                ...manifest(),
+                files,
+            },
+            symbols,
+        }),
+    };
 }
 
 function createSymbol(input: {
@@ -174,6 +218,139 @@ test('buildCallRelationshipsForRegistry creates deterministic CALLS records from
             confidence: 'low',
         },
     ]);
+});
+
+test('buildCallRelationshipsForRegistry preserves the six direct Python run_validation calls', async () => {
+    const content = [
+        'def phase_one(): pass',
+        'def phase_two(): pass',
+        'def phase_three(): pass',
+        'def phase_four(): pass',
+        'def phase_five(): pass',
+        'def phase_six(): pass',
+        '',
+        'def run_validation():',
+        '    phase_one()',
+        '    phase_two()',
+        '    phase_three()',
+        '    phase_four()',
+        '    phase_five()',
+        '    phase_six()',
+    ].join('\n');
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/validation.py': content,
+    });
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const runValidation = registry.symbols.find((symbol) => symbol.qualifiedName === 'run_validation');
+
+    assert.ok(runValidation);
+    assert.deepEqual(
+        records
+            .filter((record) => record.sourceInstanceId === runValidation.symbolInstanceId)
+            .map((record) => symbolsById.get(record.targetInstanceId || '')?.qualifiedName),
+        ['phase_one', 'phase_two', 'phase_three', 'phase_four', 'phase_five', 'phase_six'],
+    );
+});
+
+test('buildCallRelationshipsForRegistry resolves exact same-class Python self and cls calls', async () => {
+    const content = [
+        'class CircuitBreaker:',
+        '    def check_drawdown(self):',
+        '        self._determine_new_state()',
+        '        self._handle_state_transition()',
+        '        self._build_state_snapshot()',
+        '',
+        '    def _handle_state_transition(self):',
+        '        return self._get_threshold_for_state()',
+        '',
+        '    def _determine_new_state(self): pass',
+        '    def _build_state_snapshot(self): pass',
+        '    def _get_threshold_for_state(self): pass',
+        '',
+        '    @classmethod',
+        '    def restore(cls):',
+        '        return cls._build_state_snapshot()',
+    ].join('\n');
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/circuit_breaker.py': content,
+    });
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    assert.deepEqual(
+        records.map((record) => [
+            symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ]),
+        [
+            ['CircuitBreaker.check_drawdown', 'CircuitBreaker._determine_new_state'],
+            ['CircuitBreaker.check_drawdown', 'CircuitBreaker._handle_state_transition'],
+            ['CircuitBreaker.check_drawdown', 'CircuitBreaker._build_state_snapshot'],
+            ['CircuitBreaker._handle_state_transition', 'CircuitBreaker._get_threshold_for_state'],
+            ['CircuitBreaker.restore', 'CircuitBreaker._build_state_snapshot'],
+        ],
+    );
+});
+
+test('buildCallRelationshipsForRegistry resolves one imported Python class receiver and rejects unsupported receivers', async () => {
+    const sources = {
+        'src/factory.py': [
+            'class SpreadModelFactory:',
+            '    @classmethod',
+            '    def create_model(cls):',
+            '        return None',
+        ].join('\n'),
+        'src/consumer.py': [
+            'from .factory import SpreadModelFactory',
+            'import pandas as pd',
+            '',
+            'def build(model):',
+            '    SpreadModelFactory.create_model()',
+            '    model.calculate_metrics()',
+            '    pd.merge()',
+        ].join('\n'),
+        'src/not_authorized.py': [
+            'from .factory import another_name',
+            '',
+            'def invalid_build():',
+            '    SpreadModelFactory.create_model()',
+        ].join('\n'),
+        'src/aliased.py': [
+            'from .factory import SpreadModelFactory as Factory',
+            '',
+            'def aliased_build():',
+            '    Factory.create_model()',
+        ].join('\n'),
+        'src/ambiguous.py': [
+            'class Alpha:',
+            '    def calculate_metrics(self): pass',
+            '',
+            'class Beta:',
+            '    def calculate_metrics(self): pass',
+        ].join('\n'),
+        'src/typed_receiver.py': [
+            'class MetricsModel:',
+            '    def calculate_metrics(self): pass',
+            '',
+            'def inspect(model: MetricsModel):',
+            '    model.calculate_metrics()',
+        ].join('\n'),
+    };
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry(sources);
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    assert.deepEqual(
+        records.map((record) => [
+            symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ]),
+        [['build', 'SpreadModelFactory.create_model']],
+    );
 });
 
 test('buildCallRelationshipsForRegistry assigns same-line calls by byte containment', async () => {
@@ -996,6 +1173,61 @@ test('buildRelationshipDelta matches a full rebuild when a call target becomes a
         changedFiles: new Set([targetBPath]),
     });
     assert.deepEqual(resolvedDelta.records, uniqueRecords);
+    assert.deepEqual(resolvedDelta.affectedFiles, [callerPath, targetBPath]);
+});
+
+test('buildRelationshipDelta matches a full rebuild when a Python class receiver becomes ambiguous and resolves again', async () => {
+    const callerPath = 'src/caller.py';
+    const targetAPath = 'src/factory_a.py';
+    const targetBPath = 'src/factory_b.py';
+    const sources = {
+        [callerPath]: [
+            'from .factory_a import SpreadModelFactory',
+            'from .factory_b import SpreadModelFactory',
+            '',
+            'def build():',
+            '    return SpreadModelFactory.create_model()',
+        ].join('\n'),
+        [targetAPath]: [
+            'class SpreadModelFactory:',
+            '    @classmethod',
+            '    def create_model(cls): pass',
+        ].join('\n'),
+        [targetBPath]: [
+            'class SpreadModelFactory:',
+            '    @classmethod',
+            '    def create_model(cls): pass',
+        ].join('\n'),
+    };
+    const beforeSources = {
+        [callerPath]: sources[callerPath],
+        [targetAPath]: sources[targetAPath],
+    };
+    const before = await buildAnalyzedPythonRegistry(beforeSources);
+    const after = await buildAnalyzedPythonRegistry(sources);
+    const beforeRecords = buildRelationshipsForRegistry(before);
+
+    const ambiguousDelta = buildRelationshipDelta({
+        previousRegistry: before.registry,
+        registry: after.registry,
+        existingRecords: beforeRecords,
+        analysisByFile: after.analysisByFile,
+        changedFiles: new Set([targetBPath]),
+    });
+    assert.deepEqual(
+        ambiguousDelta.records,
+        buildRelationshipsForRegistry(after),
+    );
+    assert.deepEqual(ambiguousDelta.affectedFiles, [callerPath, targetBPath]);
+
+    const resolvedDelta = buildRelationshipDelta({
+        previousRegistry: after.registry,
+        registry: before.registry,
+        existingRecords: ambiguousDelta.records,
+        analysisByFile: before.analysisByFile,
+        changedFiles: new Set([targetBPath]),
+    });
+    assert.deepEqual(resolvedDelta.records, beforeRecords);
     assert.deepEqual(resolvedDelta.affectedFiles, [callerPath, targetBPath]);
 });
 

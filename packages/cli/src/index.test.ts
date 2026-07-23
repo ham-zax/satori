@@ -144,18 +144,29 @@ function fakeInstallRuntimeCommand(homeDir: string) {
     };
 }
 
-test("runCli help presents satori as primary and preserves the legacy alias", async () => {
+test("runCli defaults to human help and preserves structured help on request", async () => {
     const io = captureIo();
-    const exitCode = await runCli(["help"], {
+    const exitCode = await runCli([], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
         diagnosticsPath: null,
     });
 
     assert.equal(exitCode, 0);
-    const help = JSON.parse(io.read().stdout);
+    assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started:\n {2}satori install --client all/m);
+    assert.doesNotMatch(io.read().stdout, /satori-cli|legacy/i);
+    assert.equal(io.read().stderr, "");
+
+    const jsonIo = captureIo();
+    const jsonExitCode = await runCli(["--format", "json", "--help"], {
+        writeStdout: jsonIo.writeStdout,
+        writeStderr: jsonIo.writeStderr,
+        diagnosticsPath: null,
+    });
+    assert.equal(jsonExitCode, 0);
+    const help = JSON.parse(jsonIo.read().stdout);
     assert.equal(help.usage, "satori <command>");
-    assert.equal(help.legacyAlias, "satori-cli");
+    assert.equal("legacyAlias" in help, false);
 });
 
 test("runCli tools list succeeds and emits JSON to stdout", async () => {
@@ -326,7 +337,14 @@ test("runCli upgrade updates the global CLI before delegating runtime activation
     assert.equal(exitCode, 0);
     assert.equal(delegated, true);
     assert.equal(runtimeUpgradeCalls, 0);
-    assert.deepEqual(io.read(), { stdout: "", stderr: "" });
+    assert.deepEqual(io.read(), {
+        stdout: "",
+        stderr: [
+            "Checking latest Satori release...",
+            `Updating CLI ${CLI_PACKAGE_VERSION} → 99.0.0...`,
+            "",
+        ].join("\n"),
+    });
 });
 
 test("runCli upgrade reports the complete CLI, MCP, and Core result", async () => {
@@ -347,17 +365,22 @@ test("runCli upgrade reports the complete CLI, MCP, and Core result", async () =
             mcpVersion: "6.2.0",
             coreVersion: "3.1.0",
         }),
-        managedRuntimeUpgradeRunner: async () => ({
-            action: "upgrade",
-            status: "upgraded",
-            fromMcpVersion: "6.1.0",
-            toMcpVersion: "6.2.0",
-            fromCoreVersion: "3.0.0",
-            toCoreVersion: "3.1.0",
-            packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
-            configuredClients: ["codex"],
-            restartRequired: true,
-        }),
+        managedRuntimeUpgradeRunner: async (_target, options) => {
+            options.onUpgradeProgress?.("installing");
+            options.onUpgradeProgress?.("verifying");
+            options.onUpgradeProgress?.("activating");
+            return {
+                action: "upgrade",
+                status: "upgraded",
+                fromMcpVersion: "6.1.0",
+                toMcpVersion: "6.2.0",
+                fromCoreVersion: "3.0.0",
+                toCoreVersion: "3.1.0",
+                packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+                configuredClients: ["codex"],
+                restartRequired: true,
+            };
+        },
     });
 
     assert.equal(exitCode, 0);
@@ -367,7 +390,13 @@ test("runCli upgrade reports the complete CLI, MCP, and Core result", async () =
     assert.match(output.stdout, /MCP runtime: 6\.1\.0 → 6\.2\.0/);
     assert.match(output.stdout, /Core: 3\.0\.0 → 3\.1\.0/);
     assert.match(output.stdout, /Restart Codex/);
-    assert.equal(output.stderr, "");
+    assert.equal(output.stderr, [
+        "Checking latest Satori release...",
+        "Installing MCP 6.2.0 and Core 3.1.0...",
+        "Verifying candidate runtime...",
+        "Activating verified runtime...",
+        "",
+    ].join("\n"));
 });
 
 test("runCli reports a completed CLI update separately when runtime activation fails", async () => {
@@ -404,6 +433,7 @@ test("runCli reports a completed CLI update separately when runtime activation f
     assert.equal(receipt.fromCliVersion, "1.2.0");
     assert.equal(receipt.toCliVersion, CLI_PACKAGE_VERSION);
     assert.equal(receipt.error.token, "E_INSTALL_PREFLIGHT");
+    assert.doesNotMatch(output.stderr, /Checking latest|Installing MCP|Verifying candidate|Activating verified/);
     assert.match(output.stderr, /CLI .* is installed.*managed launcher remains unchanged/s);
 });
 
@@ -749,7 +779,7 @@ test("runCli doctor reports stale MCP clients independently without changing JSO
             message: "codex config does not point exactly to the managed launcher. opencode config does not point exactly to the managed launcher.",
         }],
         nextSteps: [
-            "Rerun satori-cli install for each stale configured MCP client, then restart it.",
+            "Rerun satori install for each stale configured MCP client, then restart it.",
             "Restart your MCP client after changing Satori environment variables.",
         ],
         localDiagnostics: {

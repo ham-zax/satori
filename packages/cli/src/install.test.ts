@@ -710,6 +710,7 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
         const originalConfig = readFile(codexConfigPath);
         const originalLauncher = readFile(launcherPath(homeDir));
         let candidateProbes = 0;
+        const progressPhases: string[] = [];
 
         const result = await executeManagedRuntimeUpgrade({
             cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
@@ -742,6 +743,9 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
                     assert.equal(expectedVersion, "6.2.0");
                 },
             },
+            onUpgradeProgress: (phase) => {
+                progressPhases.push(phase);
+            },
         });
 
         assert.equal(result.status, "upgraded");
@@ -751,6 +755,7 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
         assert.equal(result.toCoreVersion, "3.1.0");
         assert.deepEqual(result.configuredClients, ["codex"]);
         assert.equal(candidateProbes, 1);
+        assert.deepEqual(progressPhases, ["installing", "verifying", "activating"]);
         assert.equal(readFile(codexConfigPath), originalConfig);
         assert.notEqual(readFile(launcherPath(homeDir)), originalLauncher);
         assert.match(readFile(launcherPath(homeDir)), /new-runtime\.mjs/);
@@ -1460,7 +1465,7 @@ test("managed MCP package exposes a single satori bin for npx package execution"
     });
 });
 
-test("CLI package exposes installed satori and legacy satori-cli commands", () => {
+test("CLI package exposes the primary and compatibility commands", () => {
     const cliPackage = JSON.parse(
         fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
     ) as { bin?: Record<string, string> };

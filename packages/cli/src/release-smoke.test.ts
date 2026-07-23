@@ -12,13 +12,16 @@ test("release smoke isolates machine configuration and removes pnpm-only npm var
         EMBEDDING_PROVIDER: "Ollama",
         MILVUS_ADDRESS: "ambient.example:19530",
         npm_config_shell_emulator: "true",
+        npm_config_cache: "/home/source/.npm",
+        npm_config_cache_dir: "/home/source/.pnpm-cache",
         npm_config_registry: "https://registry.npmjs.org/",
     });
 
     assert.equal(isolated.HOME, smokeHome);
     assert.equal(isolated.USERPROFILE, smokeHome);
     assert.equal(isolated.XDG_CONFIG_HOME, path.join(smokeHome, ".config"));
-    assert.equal(isolated.npm_config_cache, path.join(smokeHome, ".npm"));
+    assert.equal(isolated.npm_config_cache, "/home/source/.npm");
+    assert.equal(isolated.npm_config_cache_dir, undefined);
     assert.equal(isolated.npm_config_package_lock, "false");
     assert.equal(isolated.npm_config_shell_emulator, undefined);
     assert.equal(isolated.npm_config_registry, "https://registry.npmjs.org/");

@@ -11,12 +11,15 @@ Satori turns a repository into a freshness-aware code map. MCP-compatible agents
 ## Install
 
 Requirements: Node.js 22.13+ and Linux x64 (native Linux or WSL2).
+The npm package installs the `satori` command.
 
 ```bash
 npm install -g @zokizuan/satori-cli@latest
 satori install --client all
 satori doctor
 ```
+
+Run `satori` without arguments at any time for human-readable help.
 
 Restart your coding agent and tell it:
 
@@ -30,6 +33,15 @@ Upgrade the installed CLI, MCP runtime, and its compatible Core dependency:
 
 ```bash
 satori upgrade
+```
+
+Satori reports each potentially slow phase as it works:
+
+```text
+Checking latest Satori release...
+Installing MCP <version> and Core <version>...
+Verifying candidate runtime...
+Activating verified runtime...
 ```
 
 The CLI is updated first. Satori then stages and verifies the exact MCP/Core runtime before switching the stable launcher. If runtime verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run `satori upgrade` again. Restart running coding agents after a successful runtime upgrade. The command does not rewrite client configuration, indexes, skills, hooks, or repository profiles.

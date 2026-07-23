@@ -14,6 +14,9 @@ satori install --client all
 satori doctor
 ```
 
+The package installs the `satori` command. Run `satori` without arguments for
+human-readable help.
+
 Connected Voyage runtime:
 
 ```bash
@@ -24,6 +27,15 @@ satori doctor
 Restart the MCP client after installation.
 
 Use `satori upgrade` to update the globally installed CLI, then stage and activate that release's exact MCP and Core versions. The CLI update happens first. If MCP/Core verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run the command again. `satori update` is an alias. Client configuration, indexes, skills, hooks, and repository profiles are not rewritten.
+
+The command reports progress before each potentially slow phase:
+
+```text
+Checking latest Satori release...
+Installing MCP <version> and Core <version>...
+Verifying candidate runtime...
+Activating verified runtime...
+```
 
 The latest CLI manifest is the release authority: it names one exact MCP/Core closure. Upgrade never mixes independently selected `latest` versions, so an MCP or Core release becomes available through `satori upgrade` only after a compatible CLI release points to it.
 
@@ -64,7 +76,7 @@ Global flags must precede the command token:
 
 `doctor` prints a concise human summary by default. Use `doctor --verbose` for paths, individual successful checks, package sources, and local diagnostics. Use `doctor --json` or the compatible global form `--format json doctor` for the complete machine-readable result.
 
-`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt, or use `--debug` to expose MCP startup details during install verification.
+`install`, `upgrade`, and `uninstall` also print concise human summaries by default. Put `--format json` before the command for a structured receipt without interactive progress text, or use `--debug` to expose MCP startup details during install verification.
 
 ## Runtime Ownership
 

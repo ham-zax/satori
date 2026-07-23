@@ -117,7 +117,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 name: "embedding_model",
                 status: "error",
                 message: `Potion requires the pinned model identity ${POTION_MODEL_ID}; received ${model}.`,
-                nextStep: "Re-run satori-cli install --runtime offline.",
+                nextStep: "Re-run satori install --runtime offline.",
             }
             : {
                 name: "embedding_model",
@@ -265,7 +265,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 name: "offline_model_digest",
                 status: "error",
                 message: "Offline runtime requires installer-recorded OLLAMA_MODEL_DIGEST.",
-                nextStep: "Re-run satori-cli install --runtime offline with the selected local model.",
+                nextStep: "Re-run satori install --runtime offline with the selected local model.",
             });
         } else {
             checks.push({
@@ -291,7 +291,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 name: "potion_artifacts",
                 status: "error",
                 message: "Potion requires absolute POTION_HELPER_PATH and POTION_MODEL_PATH values.",
-                nextStep: "Re-run satori-cli install --runtime offline.",
+                nextStep: "Re-run satori install --runtime offline.",
             });
     }
 

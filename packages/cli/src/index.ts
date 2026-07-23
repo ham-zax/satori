@@ -14,6 +14,7 @@ import {
     executeInstallCommand,
     executeManagedRuntimeUpgrade,
     type ManagedRuntimeCommand,
+    type ManagedRuntimeUpgradePhase,
     type ManagedRuntimeUpgradeResult,
 } from "./install.js";
 import type {
@@ -78,6 +79,7 @@ interface RunCliOptions {
             env: NodeJS.ProcessEnv;
             preflightDependencies?: InstallPreflightDependencies;
             preflightRunner?: RunCliOptions["installPreflightRunner"];
+            onUpgradeProgress?: (phase: ManagedRuntimeUpgradePhase) => void;
         },
     ) => Promise<ManagedRuntimeUpgradeResult>;
     globalCliUpgradeRunner?: (input: GlobalCliUpgradeInput) => number | Promise<number>;
@@ -218,7 +220,6 @@ function resolveDefaultServerInvocation(homeDir: string): { command: string; arg
 function buildHelpPayload() {
     return {
         usage: "satori <command>",
-        legacyAlias: "satori-cli",
         commands: [
             "install [--client all|codex|claude|opencode] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook] (default: offline Potion on Linux x64; --ollama-model selects Ollama)",
             "upgrade (alias: update)",
@@ -236,6 +237,36 @@ function buildHelpPayload() {
             "--debug"
         ]
     };
+}
+
+function formatHelpText(): string {
+    return [
+        "Satori",
+        "",
+        "Give your coding agent a searchable map of your repository.",
+        "",
+        "Usage:",
+        "  satori <command>",
+        "",
+        "Get started:",
+        "  satori install --client all",
+        "  satori doctor",
+        "",
+        "Commands:",
+        "  install       Install Satori for Codex, Claude Code, OpenCode, or all clients",
+        "  upgrade       Update the CLI and its compatible MCP/Core runtime",
+        "  doctor        Check installation, runtime, and client configuration",
+        "  uninstall     Remove Satori-managed client configuration",
+        "  tools list    List the available MCP tools",
+        "  tool call     Call an MCP tool from the terminal",
+        "",
+        "Options:",
+        "  --format json     Print structured output",
+        "  --debug           Show MCP startup details",
+        "",
+        "Run `satori --format json --help` for complete command syntax.",
+        "",
+    ].join("\n");
 }
 
 function resolveToolSchema(toolsResult: unknown, toolName: string): unknown {
@@ -368,21 +399,24 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         const callTimeoutMs = options.callTimeoutMs ?? parsed.globals.callTimeoutMs;
 
         if (parsed.command.kind === "help") {
-            emitJson(writers, buildHelpPayload());
-            if (parsed.globals.format === "text") {
-                writers.writeStderr("satori help requested. Legacy alias: satori-cli.\n");
+            if (parsed.globals.formatExplicit && parsed.globals.format === "json") {
+                emitJson(writers, buildHelpPayload());
+            } else {
+                writers.writeStdout(formatHelpText());
             }
             return 0;
         }
 
         if (parsed.command.kind === "version") {
-            emitJson(writers, {
+            const result = {
                 name: "@zokizuan/satori-cli",
-                cli: "satori-cli",
+                cli: "satori",
                 version: readPackageVersion(),
-            });
-            if (parsed.globals.format === "text") {
-                writers.writeStderr("satori version shown. Legacy alias: satori-cli.\n");
+            };
+            if (parsed.globals.formatExplicit && parsed.globals.format === "json") {
+                emitJson(writers, result);
+            } else {
+                writers.writeStdout(`Satori ${result.version}\n`);
             }
             return 0;
         }
@@ -402,6 +436,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
 
         if (parsed.command.kind === "upgrade") {
+            const showProgress = !(parsed.globals.formatExplicit && parsed.globals.format === "json");
+            if (showProgress) {
+                writers.writeStderr("Checking latest Satori release...\n");
+            }
             const target = await (options.upgradeTargetResolver || resolveSatoriUpgradeTarget)();
             const currentCliVersion = readPackageVersion();
             const cliComparison = compareStableVersions(currentCliVersion, target.cliVersion);
@@ -425,6 +463,9 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     ...(parsed.globals.debug ? ["--debug"] : []),
                     "upgrade",
                 ];
+                if (showProgress) {
+                    writers.writeStderr(`Updating CLI ${currentCliVersion} → ${target.cliVersion}...\n`);
+                }
                 return await (options.globalCliUpgradeRunner || installGlobalCliAndDelegate)({
                     target,
                     currentCliVersion,
@@ -442,6 +483,16 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 env: effectiveEnv,
                 preflightDependencies: options.installPreflightDependencies,
                 preflightRunner: options.installPreflightRunner,
+                onUpgradeProgress: showProgress
+                    ? (phase: ManagedRuntimeUpgradePhase) => {
+                        const messages: Record<ManagedRuntimeUpgradePhase, string> = {
+                            installing: `Installing MCP ${target.mcpVersion} and Core ${target.coreVersion}...`,
+                            verifying: "Verifying candidate runtime...",
+                            activating: "Activating verified runtime...",
+                        };
+                        writers.writeStderr(`${messages[phase]}\n`);
+                    }
+                    : undefined,
             });
             const delegatedFromCli = effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
                 ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION

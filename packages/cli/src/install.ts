@@ -147,6 +147,8 @@ export interface ManagedRuntimeCommand {
     args: string[];
 }
 
+export type ManagedRuntimeUpgradePhase = "installing" | "verifying" | "activating";
+
 type InstallCommandBase = {
         kind: "install";
         client: InstallClient;
@@ -184,6 +186,7 @@ export interface InstallCommandOptions {
     potionAssetsRoot?: string;
     platform?: NodeJS.Platform;
     architecture?: string;
+    onUpgradeProgress?: (phase: ManagedRuntimeUpgradePhase) => void;
     preflightRunner?: (
         input: InstallPreflightInput,
         dependencies?: InstallPreflightDependencies,
@@ -2263,12 +2266,14 @@ export async function executeManagedRuntimeUpgrade(
 
     let candidate: ManagedRuntimeCandidate | undefined;
     try {
+        options.onUpgradeProgress?.("installing");
         candidate = installManagedRuntimeCandidate(
             homeDir,
             target.mcpPackageSpecifier,
             options.execFileSyncImpl ?? execFileSync,
             target.coreVersion,
         );
+        options.onUpgradeProgress?.("verifying");
         const potionAssetsRoot = options.potionAssetsRoot
             ?? resolvePotionAssetsRoot(candidate.packageRoot);
         const preflightDependencies: InstallPreflightDependencies = {
@@ -2295,6 +2300,7 @@ export async function executeManagedRuntimeUpgrade(
         });
 
         assertFileContentUnchanged(launcherPath, launcherContent);
+        options.onUpgradeProgress?.("activating");
         const launcherMutation = prepareLauncherInstall(
             homeDir,
             candidate.command,

@@ -75,7 +75,6 @@ export function isolatedSmokeEnv(
         HOME: smokeHomeDir,
         USERPROFILE: smokeHomeDir,
         XDG_CONFIG_HOME: path.join(smokeHomeDir, ".config"),
-        npm_config_cache: path.join(smokeHomeDir, ".npm"),
         npm_config_package_lock: "false",
     };
 }
@@ -138,6 +137,7 @@ function installAndVerifyPackedReleaseClosure(
         "--no-package-lock",
         "--no-audit",
         "--no-fund",
+        "--prefer-offline",
         "--",
         tarballs.core,
         tarballs.mcp,
@@ -242,12 +242,9 @@ function runCliSmoke(
  * environments, which can hide dependency or binary collisions.
  */
 function assertPackedCliHelp(output: string): void {
-    const help = JSON.parse(output) as {
-        usage?: unknown;
-        legacyAlias?: unknown;
-    };
-    if (help.usage !== "satori <command>" || help.legacyAlias !== "satori-cli") {
-        throw new Error("Packed CLI did not expose primary and legacy command help.");
+    const help = JSON.parse(output) as { usage?: unknown };
+    if (help.usage !== "satori <command>") {
+        throw new Error("Packed CLI did not expose structured command help.");
     }
 }
 
@@ -313,7 +310,7 @@ function main(): void {
             smokeExecDir,
             baseEnv,
         );
-        assertPackedCliHelp(runCliSmoke(["--help"], packed.cliEntry, smokeExecDir, baseEnv));
+        assertPackedCliHelp(runCliSmoke(["--format", "json", "--help"], packed.cliEntry, smokeExecDir, baseEnv));
         const doctorEnv = packedPotionSmokeEnv(baseEnv, packed.packedMcpRoot, smokeHomeDir);
         runCliSmoke(["doctor"], packed.cliEntry, smokeExecDir, doctorEnv);
         console.log("[release:smoke] Packed CLI→MCP→Core closure and offline Potion runtime passed.");

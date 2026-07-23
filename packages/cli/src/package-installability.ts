@@ -96,7 +96,7 @@ function assertPublishedVersion(
         }
         throw new CliError(
             "E_USAGE",
-            `Cannot install ${ownerPackageName}@${ownerPackageVersion} because required dependency ${packageName}@${version} is not published on npm. Publish ${packageName}@${version} first, then rerun satori-cli install.`,
+            `Cannot install ${ownerPackageName}@${ownerPackageVersion} because required dependency ${packageName}@${version} is not published on npm. Publish ${packageName}@${version} first, then rerun satori install.`,
             2
         );
     }
@@ -152,7 +152,7 @@ export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {
         for (const commandName of ["satori", "satori-cli"]) {
             const output = execImpl(
                 "npm",
-                ["exec", "--yes", "--package", tarballPath, "--", commandName, "--help"],
+                ["exec", "--yes", "--package", tarballPath, "--", commandName, "--format", "json", "--help"],
                 {
                     cwd: smokeExecDir,
                     encoding: "utf8",
@@ -163,11 +163,8 @@ export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {
                     stdio: ["ignore", "pipe", "pipe"],
                 },
             );
-            const help = JSON.parse(output) as {
-                usage?: unknown;
-                legacyAlias?: unknown;
-            };
-            if (help.usage !== "satori <command>" || help.legacyAlias !== "satori-cli") {
+            const help = JSON.parse(output) as { usage?: unknown };
+            if (help.usage !== "satori <command>") {
                 throw new Error(`${commandName} did not expose Satori CLI help.`);
             }
         }
@@ -176,7 +173,7 @@ export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {
         const pkg = readPackageJson(packageJsonPath);
         throw new CliError(
             "E_USAGE",
-            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not expose CLI help through both 'satori' and 'satori-cli'. ${output}`,
+            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not expose CLI help through the primary and compatibility commands. ${output}`,
             2
         );
     } finally {

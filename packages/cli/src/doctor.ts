@@ -394,7 +394,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
                 "error",
                 error instanceof Error ? error.message : String(error),
             );
-            nextSteps.push("Rerun satori-cli install to replace the malformed managed launcher.");
+            nextSteps.push("Rerun satori install to replace the malformed managed launcher.");
         }
     }
     const runtimeEnv: NodeJS.ProcessEnv = { ...env, ...managedRuntimeEnvironment };
@@ -583,7 +583,7 @@ function appendManagedClientChecks(
 ): void {
     if (proofs.length === 0) {
         addCheck(checks, "managed_client_configuration", "warning", "No supported MCP client has a Satori configuration entry.");
-        nextSteps.push("Run satori-cli install for the intended MCP client.");
+        nextSteps.push("Run satori install for the intended MCP client.");
         return;
     }
     const failures = proofs.filter((proof) => proof.status === "error");
@@ -610,7 +610,7 @@ function appendManagedClientChecks(
                     ? ` --runtime voyage --vector-store ${selectedVectorStore(failure.runtimeEnvironment || {}) === "Milvus" ? "milvus" : "lancedb"}`
                     : "";
             nextSteps.push(
-                `Run satori-cli install --client ${failure.client}${runtimeArgs}, then restart ${clientLabel(failure.client)}.`,
+                `Run satori install --client ${failure.client}${runtimeArgs}, then restart ${clientLabel(failure.client)}.`,
             );
         }
     }
@@ -874,7 +874,7 @@ function appendManagedLauncherCheck(
 ): void {
     if (!fs.existsSync(launcherPath)) {
         addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher is missing at ${launcherPath}.`);
-        nextSteps.push("Run satori-cli install for the intended MCP client to create the stable managed launcher.");
+        nextSteps.push("Run satori install for the intended MCP client to create the stable managed launcher.");
         return;
     }
     let target: string | null = null;
@@ -885,18 +885,18 @@ function appendManagedLauncherCheck(
     }
     if (!target) {
         addCheck(checks, "managed_launcher", "error", `Managed Satori launcher at ${launcherPath} is unreadable or not recognized.`);
-        nextSteps.push("Rerun satori-cli install to replace the managed launcher with the current generated form.");
+        nextSteps.push("Rerun satori install to replace the managed launcher with the current generated form.");
         return;
     }
     if (!path.isAbsolute(target) || !isRegularFile(target)) {
         addCheck(checks, "managed_launcher", "error", `Managed Satori launcher target does not exist: ${target}.`);
-        nextSteps.push("Rerun satori-cli install to install the resident MCP runtime and refresh its launcher target.");
+        nextSteps.push("Rerun satori install to install the resident MCP runtime and refresh its launcher target.");
         return;
     }
     const metadata = findMcpPackageMetadata(target);
     if (!metadata) {
         addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher target exists but MCP package metadata could not be found for ${target}.`);
-        nextSteps.push("Inspect the managed launcher target, then rerun satori-cli install if it is not an intentional local runtime.");
+        nextSteps.push("Inspect the managed launcher target, then rerun satori install if it is not an intentional local runtime.");
         return;
     }
     addCheck(checks, "managed_launcher", "ok", `Managed Satori launcher targets @zokizuan/satori-mcp@${metadata.version}: ${target}.`);

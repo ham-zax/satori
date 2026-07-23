@@ -91,7 +91,7 @@ export function formatInstallText(
     const restart = restartInstruction(result);
     if (restart) lines.push("", restart);
     if (postflight?.status !== undefined && postflight.status !== "ok") {
-        lines.push("Run `satori-cli doctor --verbose` for diagnostic details.");
+        lines.push("Run `satori doctor --verbose` for diagnostic details.");
     }
     return `${lines.join("\n")}\n`;
 }

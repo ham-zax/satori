@@ -5343,6 +5343,70 @@ test('Context accepts only coordinator-issued source receipts across compatible 
     }
 });
 
+test('Context compares explicit source paths only against the proven active checkpoint', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-source-compare-'));
+    const stateRoot = path.join(tempRoot, 'state');
+    const policyRoot = path.join(tempRoot, 'policies');
+    const codebasePath = path.join(tempRoot, 'repo');
+    const sourcePath = path.join(codebasePath, 'runtime.ts');
+    try {
+        fs.mkdirSync(codebasePath, { recursive: true });
+        fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+        const vectorDatabase = new InMemoryVectorDatabase();
+        const context = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await context.indexCodebase(codebasePath);
+        await publishCurrentAuthorityCheckpoint(context, codebasePath);
+        const receipt = await context.proveVectorGeneration(codebasePath);
+        assert.ok(receipt);
+
+        assert.deepEqual(
+            await context.compareSourcePathsToFreshnessCheckpoint(
+                codebasePath,
+                ['runtime.ts'],
+                receipt,
+            ),
+            { status: 'matches' },
+        );
+
+        fs.writeFileSync(sourcePath, 'export const value = 2;\n', 'utf8');
+        assert.deepEqual(
+            await context.compareSourcePathsToFreshnessCheckpoint(
+                codebasePath,
+                ['runtime.ts'],
+            ),
+            { status: 'differs' },
+        );
+
+        fs.writeFileSync(sourcePath, 'export const value = 1;\n', 'utf8');
+        const restarted = new Context({
+            embedding: new TestEmbedding(),
+            vectorDatabase,
+            symbolRegistryStateRoot: stateRoot,
+            indexPolicyStateRoot: policyRoot,
+        });
+        await restarted.recreateSynchronizerForCodebase(
+            codebasePath,
+            undefined,
+            undefined,
+            { requireAuthorityCheckpoint: true },
+        );
+        assert.deepEqual(
+            await restarted.compareSourcePathsToFreshnessCheckpoint(
+                codebasePath,
+                ['runtime.ts'],
+            ),
+            { status: 'matches' },
+        );
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
 test('Context retains exact source-checkpoint validation without propagating receipts on unsupported backends', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-context-source-receipt-fallback-'));
     const stateRoot = path.join(tempRoot, 'state');

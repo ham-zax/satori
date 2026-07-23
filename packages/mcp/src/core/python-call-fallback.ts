@@ -194,21 +194,116 @@ function findPythonDefinitionIndexNearSpan(lines: string[], symbol: SymbolRecord
     return findPythonDefinitionIndexByName(lines, symbol.name, windowStart, windowEnd);
 }
 
+function isPythonDecoratorBlock(
+    lines: string[],
+    startIndex: number,
+    definitionIndex: number,
+    indent: number,
+): boolean {
+    let delimiterDepth = 0;
+    let quote: "'" | "\"" | null = null;
+    let tripleQuoted = false;
+    let escaped = false;
+    let expectsDecorator = true;
+
+    for (let index = startIndex; index < definitionIndex; index += 1) {
+        const line = lines[index] || "";
+        const trimmed = line.trim();
+        if (expectsDecorator) {
+            if (
+                trimmed.length === 0
+                || !trimmed.startsWith("@")
+                || countPythonIndent(line) !== indent
+            ) {
+                return false;
+            }
+            expectsDecorator = false;
+        } else if (trimmed.length === 0 && delimiterDepth === 0 && !tripleQuoted) {
+            return false;
+        }
+
+        for (let offset = 0; offset < line.length; offset += 1) {
+            const char = line[offset];
+            const nextTwo = line.slice(offset, offset + 3);
+
+            if (quote) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (char === "\\") {
+                    escaped = true;
+                    continue;
+                }
+                if (tripleQuoted && nextTwo === quote.repeat(3)) {
+                    quote = null;
+                    tripleQuoted = false;
+                    offset += 2;
+                    continue;
+                }
+                if (!tripleQuoted && char === quote) {
+                    quote = null;
+                }
+                continue;
+            }
+
+            if (char === "#") {
+                break;
+            }
+            if (nextTwo === "'''" || nextTwo === "\"\"\"") {
+                quote = char as "'" | "\"";
+                tripleQuoted = true;
+                offset += 2;
+                continue;
+            }
+            if (char === "'" || char === "\"") {
+                quote = char;
+                continue;
+            }
+            if (char === "(" || char === "[" || char === "{") {
+                delimiterDepth += 1;
+                continue;
+            }
+            if (char === ")" || char === "]" || char === "}") {
+                delimiterDepth -= 1;
+                if (delimiterDepth < 0) {
+                    return false;
+                }
+            }
+        }
+
+        const explicitContinuation = line.trimEnd().endsWith("\\");
+        if (!quote && delimiterDepth === 0 && !explicitContinuation) {
+            expectsDecorator = true;
+        } else if (quote && !tripleQuoted) {
+            return false;
+        }
+        escaped = false;
+    }
+
+    return expectsDecorator && delimiterDepth === 0 && quote === null;
+}
+
 function findPythonDecoratedDefinitionStart(lines: string[], definitionIndex: number): number {
     const indent = countPythonIndent(lines[definitionIndex] || "");
-    let startIndex = definitionIndex;
+    const candidates: number[] = [];
     for (let index = definitionIndex - 1; index >= 0; index -= 1) {
         const line = lines[index] || "";
         const trimmed = line.trim();
-        if (trimmed.length === 0) {
+        if (trimmed.length === 0 && candidates.length === 0) {
             break;
         }
-        if (!trimmed.startsWith("@") || countPythonIndent(line) !== indent) {
-            break;
+        if (trimmed.startsWith("@") && countPythonIndent(line) === indent) {
+            candidates.push(index);
         }
-        startIndex = index;
     }
-    return startIndex;
+
+    for (const candidate of candidates.reverse()) {
+        if (isPythonDecoratorBlock(lines, candidate, definitionIndex, indent)) {
+            return candidate;
+        }
+    }
+    return definitionIndex;
 }
 
 function findPythonSourceBackedBlockEnd(lines: string[], definitionIndex: number, indent: number): number | undefined {

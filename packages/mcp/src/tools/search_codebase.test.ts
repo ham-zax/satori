@@ -63,6 +63,27 @@ test('search_codebase rejects relative path without CWD resolve', async () => {
     assert.doesNotMatch(response.content[0].text, /handler must not run/);
 });
 
+test('search_codebase rejects operator-only queries without a positive retrieval term', async () => {
+    const capabilities = new CapabilityResolver(buildConfig());
+    const ctx = {
+        capabilities,
+        toolHandlers: {
+            handleSearchCode: async () => {
+                throw new Error('handler must not run for an empty derived query');
+            },
+        },
+    } as unknown as ToolContext;
+
+    const response = await searchCodebaseTool.execute({
+        path: '/repo',
+        query: 'exclude:legacy -path:tests',
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /requires semantic text or a positive must:.*path:.*lang:/i);
+    assert.doesNotMatch(response.content[0]?.text || '', /handler must not run/);
+});
+
 test('search_codebase normalizes public debug selectors to the internal debugMode contract', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const calls: Array<Record<string, unknown>> = [];

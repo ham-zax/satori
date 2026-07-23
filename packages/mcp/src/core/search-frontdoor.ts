@@ -134,6 +134,7 @@ function buildReadinessWarnings(
 
 function freshnessDecisionPreservesAuthority(decision: FreshnessDecision): boolean {
     return decision.mode === 'skipped_recent'
+        || decision.mode === 'skipped_source_unchanged'
         || decision.mode === 'skipped_source_checkpoint_unavailable';
 }
 

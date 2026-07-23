@@ -70,3 +70,90 @@ test("Python source repair instrumentation preserves output and records outline 
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test("Python source repair preserves stacked multiline decorators without absorbing a sibling", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-python-decorator-"));
+    const relativeFile = "src/example.py";
+    const sourceFile = path.join(root, relativeFile);
+    const source = [
+        "def previous():",
+        "    return False",
+        "",
+        "@outer(",
+        "    value=\"closing ) stays in the string\",",
+        "    options={\"opening\": \"(\"},",
+        ")",
+        "@inner",
+        "def target():",
+        "    return True",
+        "",
+        "def next_symbol():",
+        "    return False",
+        "",
+    ].join("\n");
+    const symbol: SymbolRecord = {
+        symbolKey: "python:function:target",
+        symbolInstanceId: "syminst_python_target",
+        language: "python",
+        kind: "function",
+        name: "target",
+        qualifiedName: "target",
+        label: "function target()",
+        file: relativeFile,
+        span: { startLine: 9, endLine: 9 },
+        parentQualifiedNamePath: [],
+        fileHash: "indexed_hash",
+        extractorVersion: "test",
+    };
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, source, "utf8");
+
+    try {
+        const repaired = repairSourceBackedPythonSpan({ codebaseRoot: root, symbol });
+        assert.equal(repaired.validated, true);
+        assert.equal(repaired.repaired, true);
+        assert.deepEqual(repaired.symbol.span, { startLine: 4, endLine: 10 });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("Python source repair does not absorb an unrelated decorator or comment", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-python-decorator-boundary-"));
+    const relativeFile = "src/example.py";
+    const sourceFile = path.join(root, relativeFile);
+    const source = [
+        "@decorator",
+        "def previous():",
+        "    return False",
+        "",
+        "# target remains undecorated",
+        "def target():",
+        "    return True",
+        "",
+    ].join("\n");
+    const symbol: SymbolRecord = {
+        symbolKey: "python:function:target",
+        symbolInstanceId: "syminst_python_target",
+        language: "python",
+        kind: "function",
+        name: "target",
+        qualifiedName: "target",
+        label: "function target()",
+        file: relativeFile,
+        span: { startLine: 6, endLine: 6 },
+        parentQualifiedNamePath: [],
+        fileHash: "indexed_hash",
+        extractorVersion: "test",
+    };
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, source, "utf8");
+
+    try {
+        const repaired = repairSourceBackedPythonSpan({ codebaseRoot: root, symbol });
+        assert.equal(repaired.validated, true);
+        assert.deepEqual(repaired.symbol.span, { startLine: 6, endLine: 7 });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

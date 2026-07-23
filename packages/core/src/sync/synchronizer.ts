@@ -25,6 +25,16 @@ interface FileStatSignature {
     ctimeMs: number;
 }
 
+interface ExactPathObservation {
+    kind: 'absent' | 'not_indexable' | 'indexed';
+    dev?: number;
+    ino?: number;
+    size?: number;
+    mtimeMs?: number;
+    ctimeMs?: number;
+    hash?: string;
+}
+
 interface SnapshotV2 {
     snapshotVersion: number;
     fileHashes: [string, string][];
@@ -187,6 +197,11 @@ export type SourceFreshnessCheckpointEvidence =
         readonly status: 'missing' | 'corrupt';
         readonly message: string;
     };
+
+export type SourceFreshnessPathComparison =
+    | { readonly status: 'matches' }
+    | { readonly status: 'differs' }
+    | { readonly status: 'unavailable' };
 
 const SNAPSHOT_VERSION = 2;
 const GENERATION_SNAPSHOT_VERSION = 3;
@@ -397,6 +412,7 @@ export class FileSynchronizer {
         hash: string;
         signature: FileStatSignature;
         indexable: boolean;
+        identity: { dev: number; ino: number };
     }> {
         const handle = await openRegularFileInsideRoot(filePath, this.rootDir);
         try {
@@ -427,6 +443,10 @@ export class FileSynchronizer {
                         ctimeMs: Number(before.ctimeMs),
                     },
                     indexable: false,
+                    identity: {
+                        dev: Number(before.dev),
+                        ino: Number(before.ino),
+                    },
                 };
             }
             const hasher = crypto.createHash('sha256');
@@ -461,6 +481,10 @@ export class FileSynchronizer {
                     ctimeMs: Number(after.ctimeMs),
                 },
                 indexable,
+                identity: {
+                    dev: Number(after.dev),
+                    ino: Number(after.ino),
+                },
             };
         } finally {
             await handle.close().catch(() => undefined);
@@ -1257,6 +1281,105 @@ export class FileSynchronizer {
         if (!this.checkpointIdentity || !this.snapshotDocumentDigest) return null;
         const stat = this.getSnapshotObservationToken();
         return stat ? JSON.stringify({ stat, documentDigest: this.snapshotDocumentDigest }) : null;
+    }
+
+    /**
+     * Compare explicit repository-relative paths with the source hashes sealed
+     * by this synchronizer's active checkpoint. This is deliberately read-only:
+     * callers use it to avoid publishing the same Git-dirty bytes twice.
+     */
+    public async comparePathsToOwnedCheckpoint(
+        candidatePaths: readonly string[],
+    ): Promise<SourceFreshnessPathComparison> {
+        const checkpointObservationBefore = this.getOwnedSnapshotObservationToken();
+        const checkpointVersionBefore = this.checkpointVersion;
+        if (!checkpointObservationBefore || candidatePaths.length === 0) {
+            return { status: 'unavailable' };
+        }
+
+        const normalizedPaths = Array.from(new Set(candidatePaths.map((candidatePath) => {
+            const normalized = this.normalizeRelPath(candidatePath);
+            return normalized === candidatePath.replace(/\\/g, '/') ? normalized : '';
+        }))).filter((candidatePath) => candidatePath.length > 0).sort(compareContractStrings);
+        if (normalizedPaths.length !== new Set(candidatePaths.map((value) => value.replace(/\\/g, '/'))).size) {
+            return { status: 'unavailable' };
+        }
+
+        const expectedHashes = new Map(
+            normalizedPaths.map((relativePath) => [relativePath, this.fileHashes.get(relativePath)]),
+        );
+        const firstObservations = new Map<string, ExactPathObservation>();
+
+        try {
+            for (const relativePath of normalizedPaths) {
+                firstObservations.set(relativePath, await this.observeExactPath(relativePath));
+            }
+            for (const relativePath of normalizedPaths) {
+                const first = firstObservations.get(relativePath);
+                const second = await this.observeExactPath(relativePath);
+                if (!first || JSON.stringify(first) !== JSON.stringify(second)) {
+                    return { status: 'unavailable' };
+                }
+            }
+        } catch {
+            return { status: 'unavailable' };
+        }
+
+        if (
+            checkpointVersionBefore !== this.checkpointVersion
+            || checkpointObservationBefore !== this.getOwnedSnapshotObservationToken()
+        ) {
+            return { status: 'unavailable' };
+        }
+
+        for (const relativePath of normalizedPaths) {
+            const expectedHash = expectedHashes.get(relativePath);
+            const current = firstObservations.get(relativePath);
+            const currentHash = current?.kind === 'indexed' ? current.hash : undefined;
+            if (expectedHash !== currentHash) {
+                return { status: 'differs' };
+            }
+        }
+        return { status: 'matches' };
+    }
+
+    private async observeExactPath(relativePath: string): Promise<ExactPathObservation> {
+        const absolutePath = path.join(this.rootDir, relativePath);
+        let pathStat: fsSync.Stats;
+        try {
+            pathStat = await fsp.lstat(absolutePath);
+        } catch (error: unknown) {
+            if (errorCode(error) === 'ENOENT') {
+                return { kind: 'absent' };
+            }
+            throw error;
+        }
+
+        if (
+            pathStat.isSymbolicLink()
+            || !pathStat.isFile()
+            || this.shouldIgnore(relativePath, false)
+        ) {
+            return {
+                kind: 'not_indexable',
+                dev: Number(pathStat.dev),
+                ino: Number(pathStat.ino),
+                size: Number(pathStat.size),
+                mtimeMs: Number(pathStat.mtimeMs),
+                ctimeMs: Number(pathStat.ctimeMs),
+            };
+        }
+
+        const observation = await this.hashFileBytes(absolutePath);
+        return {
+            kind: observation.indexable ? 'indexed' : 'not_indexable',
+            dev: observation.identity.dev,
+            ino: observation.identity.ino,
+            size: observation.signature.size,
+            mtimeMs: observation.signature.mtimeMs,
+            ctimeMs: observation.signature.ctimeMs,
+            ...(observation.indexable ? { hash: observation.hash } : {}),
+        };
     }
 
     public ownsCheckpointIdentity(checkpointIdentity: string): boolean {

@@ -44,6 +44,47 @@ test('buildSearchQueryPlan classifies explicit routes without changing legacy re
     }
 });
 
+test('parseSearchOperators derives clean retrieval text for operator-only requests', () => {
+    const cases = [
+        {
+            query: 'must:spread path:src/python/core -path:scripts',
+            semanticQuery: 'spread',
+        },
+        {
+            query: 'must:Kelly must:fractional path:src/python',
+            semanticQuery: 'Kelly fractional',
+        },
+        {
+            query: 'must:"position sizing" path:src/python',
+            semanticQuery: 'position sizing',
+        },
+        {
+            query: 'path:src/python/core -path:tests',
+            semanticQuery: 'src/python/core',
+        },
+        {
+            query: 'lang:python -path:tests',
+            semanticQuery: 'python',
+        },
+        {
+            query: 'must:spread path:src/python spread calculation',
+            semanticQuery: 'spread calculation',
+        },
+        {
+            query: '\\path:literal',
+            semanticQuery: 'path:literal',
+        },
+        {
+            query: 'exclude:legacy -path:tests',
+            semanticQuery: '',
+        },
+    ];
+
+    for (const row of cases) {
+        assert.equal(parseSearchOperators(row.query).semanticQuery, row.semanticQuery, row.query);
+    }
+});
+
 test('buildSearchQueryPlan keeps the accepted baseline while exposing semantic-cue replay', () => {
     const cases = [
         { query: 'src/search/ranking.ts', route: 'exact_path', retrievalMode: 'lexical' },

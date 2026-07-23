@@ -264,6 +264,13 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
             message: "disclosureLimit cannot exceed limit.",
         });
     }
+    if (parseSearchOperators(value.query).semanticQuery.trim().length === 0) {
+        refinementContext.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["query"],
+            message: "Operator-only search requires semantic text or a positive must:, path:, or lang: value.",
+        });
+    }
 });
 
 export const searchCodebaseTool: McpTool = {

@@ -842,7 +842,6 @@ export class NavigationHandlers {
             const exactRegistrySymbols = findExactRegistrySymbols({
                 symbols: registryState.symbols,
                 symbolIdExact: symbolRef.symbolId,
-                symbolLabelExact: symbolRef.symbolLabel,
             });
             if (exactRegistrySymbols.length === 0) {
                 const payload = this.host.withProofDebugHint({

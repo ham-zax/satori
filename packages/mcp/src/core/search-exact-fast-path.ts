@@ -544,7 +544,12 @@ export async function runExactRegistryFastPath(
         partialIndexSearchWarnings: input.partialIndexSearchWarnings,
         dirtyFilesNotFreshened: input.dirtyFilesNotFreshened,
         changedFilesBoostSkippedForLargeChangeSet: input.changedFilesBoostSkippedForLargeChangeSet,
-        buildNoiseMitigationHint: (files) => host.searchQuerySupport.buildNoiseMitigationHint(input.effectiveRoot, files, input.scope),
+        buildNoiseMitigationHint: (files) => host.searchQuerySupport.buildNoiseMitigationHint(
+            input.effectiveRoot,
+            files,
+            input.scope,
+            input.parsedOperators,
+        ),
         buildGeneratedArtifactsVerificationHint: (results) => host.buildGeneratedArtifactsVerificationHint(input.effectiveRoot, results),
     });
 

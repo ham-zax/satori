@@ -1388,6 +1388,19 @@ export class SnapshotManager {
         return receipt ? structuredClone(receipt) : undefined;
     }
 
+    /**
+     * Read the latest operation directly from the durable shared snapshot.
+     * Cross-process waiters use this instead of trusting their startup cache.
+     */
+    public observeDurableLatestOperation(codebasePath: string): IndexOperationReceipt | undefined {
+        const receipt = this.readOperationMapFromDisk().get(codebasePath);
+        return receipt ? structuredClone(receipt) : undefined;
+    }
+
+    public operationMatchesRuntimeFingerprint(receipt: IndexOperationReceipt): boolean {
+        return fingerprintsEqual(receipt.runtimeFingerprint, this.runtimeFingerprint);
+    }
+
     public setLatestOperation(codebasePath: string, receipt: IndexOperationReceipt): void {
         if (!this.isValidOperationReceipt(receipt, codebasePath)) {
             throw new Error(`Invalid operation receipt for '${codebasePath}'.`);

@@ -1820,7 +1820,7 @@ test('handleCallGraph does not accept symbolKey as a steady-state exact input', 
     }));
 });
 
-test('handleCallGraph returns the relationship-backed root node with no edges when traversal is empty', async () => {
+test('handleCallGraph treats an optional symbol label as advisory to the exact symbol ID', async () => {
     await withTempStateRoot(async (stateRoot) => withTempRepo(async (repoPath) => {
         const login = createFunctionSymbol({
             file: 'src/runtime.ts',
@@ -1879,29 +1879,31 @@ test('handleCallGraph returns the relationship-backed root node with no edges wh
 
         const handlers = new ToolHandlers(context, snapshotManager, {} as unknown as HandlerSyncManager, RUNTIME_FINGERPRINT, CAPABILITIES, undefined, callGraphManager);
 
-        const response = await handlers.handleCallGraph({
-            path: repoPath,
-            symbolRef: {
-                file: 'src/runtime.ts',
-                symbolId: login.symbolInstanceId,
-                symbolLabel: login.label,
-            },
-            direction: 'callees',
-            depth: 2,
-            limit: 20
-        });
+        for (const symbolLabel of [undefined, login.label, 'login', 'stale display label']) {
+            const response = await handlers.handleCallGraph({
+                path: repoPath,
+                symbolRef: {
+                    file: 'src/runtime.ts',
+                    symbolId: login.symbolInstanceId,
+                    ...(symbolLabel ? { symbolLabel } : {}),
+                },
+                direction: 'callees',
+                depth: 2,
+                limit: 20
+            });
 
-        const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.equal(payload.status, 'ok');
-        assert.equal(payload.supported, true);
-        assert.deepEqual(payload.nodes.map((node: { symbolId: string }) => node.symbolId), [
-            login.symbolInstanceId,
-        ]);
-        assert.equal(payload.edges.length, 0);
-        assert.equal(typeof payload.sidecar?.builtAt, 'string');
-        assert.equal(payload.sidecar?.nodeCount, 1);
-        assert.equal(payload.sidecar?.edgeCount, 0);
-        assert.deepEqual(payload.notes, []);
+            const payload = JSON.parse(response.content[0]?.text || '{}');
+            assert.equal(payload.status, 'ok', symbolLabel);
+            assert.equal(payload.supported, true, symbolLabel);
+            assert.deepEqual(payload.nodes.map((node: { symbolId: string }) => node.symbolId), [
+                login.symbolInstanceId,
+            ]);
+            assert.equal(payload.edges.length, 0);
+            assert.equal(typeof payload.sidecar?.builtAt, 'string');
+            assert.equal(payload.sidecar?.nodeCount, 1);
+            assert.equal(payload.sidecar?.edgeCount, 0);
+            assert.deepEqual(payload.notes, []);
+        }
     }));
 });
 

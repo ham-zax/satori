@@ -1121,9 +1121,10 @@ export class SearchQuerySupport {
     public buildNoiseMitigationHint(
         codebaseRoot: string,
         filesInOrder: string[],
-        scope: SearchScope
+        scope: SearchScope,
+        parsedOperators: Pick<ParsedSearchOperators, "path">,
     ): SearchNoiseMitigationHint | undefined {
-        if (scope === 'docs') {
+        if (scope === 'docs' || scope === 'runtime' || parsedOperators.path.length > 0) {
             return undefined;
         }
         if (!Array.isArray(filesInOrder) || filesInOrder.length === 0) {

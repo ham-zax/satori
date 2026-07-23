@@ -91,20 +91,19 @@ function unquoteOperatorValue(value: string): string {
 }
 
 function deriveOperatorOnlySemanticQuery(operators: ParsedSearchOperators): string | null {
-    if (operators.must.length !== 1) {
-        return null;
+    const mustTerms = operators.must.map((value) => value.trim()).filter(Boolean);
+    if (mustTerms.length > 0) {
+        return mustTerms.join(" ");
     }
 
-    const mustValue = operators.must[0].trim();
-    if (/\s/.test(mustValue)) {
-        return null;
+    const pathTerms = operators.path.map((value) => value.trim()).filter(Boolean);
+    if (pathTerms.length > 0) {
+        return pathTerms.join(" ");
     }
 
-    const symbolInstanceIdLike = /^syminst_[a-f0-9]{32}$/i.test(mustValue);
-    const identifierLike = /^[A-Za-z_$][A-Za-z0-9_$]*(?:(?:[.#:/-]|::)[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(mustValue);
-    const strongIdentifierSignal = /[A-Z_]/.test(mustValue) || /(?:\.|::|#|\/)/.test(mustValue);
-    if (symbolInstanceIdLike || (identifierLike && strongIdentifierSignal)) {
-        return mustValue;
+    const languageTerms = operators.lang.map((value) => value.trim()).filter(Boolean);
+    if (languageTerms.length > 0) {
+        return languageTerms.join(" ");
     }
 
     return null;
@@ -198,7 +197,7 @@ export function parseSearchOperators(query: string): ParsedSearchOperators {
     const semanticParts = [semanticFromPrefix, semanticSuffix].filter((part) => part.length > 0);
     operators.semanticQuery = semanticParts.length > 0
         ? semanticParts.join("\n")
-        : (deriveOperatorOnlySemanticQuery(operators) || trimmedQuery);
+        : (deriveOperatorOnlySemanticQuery(operators) || "");
     return operators;
 }
 

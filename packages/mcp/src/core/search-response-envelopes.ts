@@ -8,6 +8,7 @@ import type {
     SearchGroupResult,
     SearchDisclosureSummary,
     SearchRankingDebugHint,
+    SearchPassFailureDebugHint,
     SearchGroupedDebugV2,
     SearchGroupedResultV2,
     SearchResponseEnvelope,
@@ -32,7 +33,7 @@ type SearchResponseCommonInput = {
     freshnessSummary: SearchFreshnessSummary;
     warnings: string[];
     debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
-    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint;
+    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint | SearchPassFailureDebugHint;
     proofDebugHint?: CompletionProbeDebugHint;
     noiseMitigationHint?: unknown;
     generatedArtifactsHint?: unknown;

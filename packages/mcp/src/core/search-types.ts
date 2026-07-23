@@ -12,6 +12,7 @@ import { SearchGroupBy, SearchNoiseCategory, SearchRankingMode, SearchResultMode
 import { FingerprintSource, IndexFingerprint } from "../config.js";
 import type { SearchRouteContract } from "./search-lexical-scoring.js";
 import type { RerankBudgetReason } from "./search-rerank-policy.js";
+import type { SemanticPassFailureDiagnostic } from "./backend-diagnostics.js";
 
 export type StalenessBucket = "fresh" | "aging" | "stale" | "unknown";
 
@@ -399,6 +400,7 @@ export interface SearchDebugHint {
         rrfK: number;
     };
     providerWork: SearchProviderWorkDebugHint;
+    semanticPassFailures?: SemanticPassFailureDiagnostic[];
     candidateSurvival?: SearchCandidateSurvivalDebug;
     semanticExpansion?: {
         attempted: boolean;
@@ -575,6 +577,7 @@ export type SearchRankingDebugHint = Pick<SearchDebugHint,
     | "retrieval"
     | "mcpFusion"
     | "providerWork"
+    | "semanticPassFailures"
     | "semanticExpansion"
     | "rankingProvenance"
     | "trackedLexical"
@@ -590,11 +593,12 @@ export type SearchRankingDebugHint = Pick<SearchDebugHint,
 >;
 
 export type SearchFreshnessDebugHint = Pick<SearchDebugHint, "phaseTimingsMs" | "readiness" | "changedCode">;
+export type SearchPassFailureDebugHint = Pick<SearchDebugHint, "semanticPassFailures">;
 
 export interface SearchResponseHints extends Record<string, unknown> {
     version?: 1;
     noiseMitigation?: SearchNoiseMitigationHint;
-    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint;
+    debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint | SearchPassFailureDebugHint;
     debugSummary?: {
         retrieval: string;
         freshness: FreshnessDecision["mode"] | "skipped_requires_reindex" | "skipped_indexing" | "unknown";

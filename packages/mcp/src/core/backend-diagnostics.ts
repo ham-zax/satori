@@ -1,3 +1,5 @@
+import type { EmbeddingProviderErrorCode } from "@zokizuan/satori-core";
+
 export type VectorBackendDiagnosticCode =
     | "ZILLIZ_CLUSTER_STOPPED"
     | "VECTOR_BACKEND_AUTH_FAILED"
@@ -15,6 +17,77 @@ export interface VectorBackendDiagnostic {
             retryable: boolean;
             nextSteps: string[];
         };
+    };
+}
+
+export type SemanticPassFailureDiagnostic = {
+    passId: "primary" | "expanded";
+    errorName:
+        | "Error"
+        | "TypeError"
+        | "RangeError"
+        | "ReferenceError"
+        | "SyntaxError"
+        | "AggregateError"
+        | "EmbeddingProviderError"
+        | "NonErrorThrow";
+    code:
+        | VectorBackendDiagnosticCode
+        | EmbeddingProviderErrorCode
+        | "UNCLASSIFIED_SEARCH_PASS_FAILURE";
+    classifier: "embedding_provider" | "vector_backend" | "unclassified";
+    retryable?: boolean;
+};
+
+const ALLOWED_SEARCH_PASS_ERROR_NAMES = new Set<SemanticPassFailureDiagnostic["errorName"]>([
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "AggregateError",
+    "EmbeddingProviderError",
+]);
+
+function classifySearchPassErrorName(error: unknown): SemanticPassFailureDiagnostic["errorName"] {
+    if (!(error instanceof Error)) {
+        return "NonErrorThrow";
+    }
+    return ALLOWED_SEARCH_PASS_ERROR_NAMES.has(error.name as SemanticPassFailureDiagnostic["errorName"])
+        ? error.name as SemanticPassFailureDiagnostic["errorName"]
+        : "Error";
+}
+
+export function buildSemanticPassFailureDiagnostic(input: {
+    passId: SemanticPassFailureDiagnostic["passId"];
+    error: unknown;
+    embeddingDiagnostic: { code: EmbeddingProviderErrorCode; retryable: boolean } | null;
+    vectorDiagnostic: VectorBackendDiagnostic | null;
+}): SemanticPassFailureDiagnostic {
+    const errorName = classifySearchPassErrorName(input.error);
+    if (input.embeddingDiagnostic) {
+        return {
+            passId: input.passId,
+            errorName,
+            code: input.embeddingDiagnostic.code,
+            classifier: "embedding_provider",
+            retryable: input.embeddingDiagnostic.retryable,
+        };
+    }
+    if (input.vectorDiagnostic) {
+        return {
+            passId: input.passId,
+            errorName,
+            code: input.vectorDiagnostic.code,
+            classifier: "vector_backend",
+            retryable: input.vectorDiagnostic.hints.backend.retryable,
+        };
+    }
+    return {
+        passId: input.passId,
+        errorName,
+        code: "UNCLASSIFIED_SEARCH_PASS_FAILURE",
+        classifier: "unclassified",
     };
 }
 

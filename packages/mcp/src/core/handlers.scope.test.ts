@@ -1381,6 +1381,25 @@ test('search continuation preserves the full grouped order without new retrieval
                 changeSourceObservationDuringNextProjection: () => {
                     changeSourceDuringProjection = true;
                 },
+                useUnchangedDirtyFreshness: () => {
+                    (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
+                        available: true,
+                        files: new Set(['src/alpha.ts']),
+                    });
+                    internals.syncManager.ensureFreshness = async (
+                        _codebasePath: string,
+                        thresholdMs: number,
+                        options?: { exactSourceComparisonPaths?: readonly string[] },
+                    ) => {
+                        assert.equal(thresholdMs, 0);
+                        assert.deepEqual(options?.exactSourceComparisonPaths, ['src/alpha.ts']);
+                        return {
+                            mode: 'skipped_source_unchanged',
+                            checkedAt: new Date(nowMs).toISOString(),
+                            thresholdMs,
+                        };
+                    };
+                },
                 expireResultSet: () => {
                     nowMs += 15 * 60_000;
                 },
@@ -1429,7 +1448,21 @@ test('search continuation preserves the full grouped order without new retrieval
         assert.match(initialPayload.continuation.handle, /^[a-f0-9]{48}$/);
         assert.ok(Buffer.byteLength(initialResponse.content[0]?.text || '', 'utf8') <= SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES);
 
-        const retrievalCallsAfterInitialSearch = paged.getRetrievalCalls();
+        paged.useUnchangedDirtyFreshness();
+        const sameObservationSearch = await paged.handlers.handleSearchCode({
+            path: repoPath,
+            query: 'find the owner implementations again',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'file',
+            rankingMode: 'default',
+            limit: 20,
+        });
+        assert.equal(
+            JSON.parse(sameObservationSearch.content[0]?.text || '{}').freshnessDecision.mode,
+            'skipped_source_unchanged',
+        );
+        const retrievalCallsBeforeContinuation = paged.getRetrievalCalls();
         const pageTwoResponse = await startupHandlers.handleContinueSearch({
             handle: initialPayload.continuation.handle,
             expectedOffset: initialPayload.continuation.nextOffset,
@@ -1465,7 +1498,7 @@ test('search continuation preserves the full grouped order without new retrieval
         });
         assert.equal(pageThreeRetry.content[0]?.text, pageThreeResponse.content[0]?.text);
 
-        assert.equal(paged.getRetrievalCalls(), retrievalCallsAfterInitialSearch);
+        assert.equal(paged.getRetrievalCalls(), retrievalCallsBeforeContinuation);
         assert.equal(pageTwoPayload.results.length, 5);
         assert.equal(pageThreePayload.results.length, 5);
         assert.equal(pageThreePayload.continuation, undefined);
@@ -2296,7 +2329,7 @@ test('handleSearchCode grouped symbol mode keeps Rust read identity while graph 
     }));
 });
 
-test('handleSearchCode compact target works end to end with call_graph without a legacy sidecar', async () => {
+test('successful coalesced freshness supports chained search_codebase to call_graph', async () => {
     await withTempStateRoot(async () => withTempRepo(async (repoPath) => {
         const fileContent = [
             'function normalizeToken(token: string) {',
@@ -2364,6 +2397,19 @@ test('handleSearchCode compact target works end to end with call_graph without a
             ownerSymbolInstanceId: validateSymbol!.symbolInstanceId,
             symbolKind: validateSymbol!.kind,
         }], undefined, { sidecarReady: false });
+        let freshnessCalls = 0;
+        Object.assign(handlers as object, {
+            syncManager: {
+                ensureFreshness: async () => {
+                    freshnessCalls += 1;
+                    return {
+                        mode: 'coalesced',
+                        checkedAt: '2026-01-01T00:00:00.000Z',
+                        thresholdMs: 180_000,
+                    };
+                },
+            },
+        });
 
         const searchResponse = await handlers.handleSearchCode({
             path: repoPath,
@@ -2400,6 +2446,7 @@ test('handleSearchCode compact target works end to end with call_graph without a
         assert.equal(graphPayload.edges.length, 1);
         assert.equal(graphPayload.edges[0].srcSymbolId, validateSymbol!.symbolInstanceId);
         assert.equal(graphPayload.edges[0].dstSymbolId, normalizeSymbol!.symbolInstanceId);
+        assert.equal(freshnessCalls, 1);
     }));
 });
 
@@ -5224,6 +5271,38 @@ test('handleSearchCode parses operators from query prefix and applies determinis
     });
 });
 
+test('handleSearchCode keeps operator syntax out of an operator-only retrieval query', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'export function spread() { return true; }',
+            relativePath: 'src/python/core/spread.ts',
+            startLine: 1,
+            endLine: 3,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_spread',
+            symbolLabel: 'function spread()',
+        }]);
+
+        const response = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'must:spread path:src/python/core -path:scripts',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+            debugMode: 'full',
+        });
+
+        const payload = JSON.parse(response.content[0]?.text || '{}');
+        assert.equal(payload.status, 'ok');
+        assert.equal(payload.results[0]?.target?.file, 'src/python/core/spread.ts');
+        assert.equal(payload.hints?.debugSearch?.queryIntent?.semanticQuery, 'spread');
+        assert.equal(payload.hints?.debugSearch?.mustRetry?.satisfied, true);
+    });
+});
+
 test('handleSearchCode emits FILTER_MUST_UNSATISFIED after bounded retries', async () => {
     await withTempRepo(async (repoPath) => {
         const denseResults = Array.from({ length: 140 }, (_, idx) => ({
@@ -5784,23 +5863,15 @@ test('handleSearchCode forces an exact freshness comparison for a dirty working 
             symbolId: 'sym_recently_synced_owner',
             symbolLabel: 'function recentlySyncedOwner()',
         }]);
-        const thresholds: number[] = [];
+        const freshnessCalls: Array<{ thresholdMs: number; options: unknown }> = [];
         (handlers as unknown as ToolHandlersTestOverrides).syncManager = {
-            ensureFreshness: async (_codebasePath: string, thresholdMs: number) => {
-                thresholds.push(thresholdMs);
-                return thresholdMs === 0
-                    ? {
-                        mode: 'synced',
-                        checkedAt: '2026-01-01T00:31:00.000Z',
-                        thresholdMs,
-                        stats: { added: 0, removed: 0, modified: 0 },
-                    }
-                    : {
-                        mode: 'skipped_recent',
-                        checkedAt: '2026-01-01T00:31:00.000Z',
-                        thresholdMs,
-                        lastSyncAt: '2026-01-01T00:30:59.000Z',
-                    };
+            ensureFreshness: async (_codebasePath: string, thresholdMs: number, options: unknown) => {
+                freshnessCalls.push({ thresholdMs, options });
+                return {
+                    mode: 'skipped_source_unchanged',
+                    checkedAt: '2026-01-01T00:31:00.000Z',
+                    thresholdMs,
+                };
             },
         } as unknown as HandlerSyncManager;
         (handlers as unknown as ToolHandlersTestOverrides).getChangedFilesForCodebase = () => ({
@@ -5818,8 +5889,14 @@ test('handleSearchCode forces an exact freshness comparison for a dirty working 
         });
 
         const payload = JSON.parse(response.content[0]?.text || '{}');
-        assert.deepEqual(thresholds, [0]);
-        assert.equal(payload.freshnessDecision.mode, 'synced');
+        assert.equal(freshnessCalls.length, 1);
+        assert.equal(freshnessCalls[0]?.thresholdMs, 0);
+        assert.deepEqual(
+            (freshnessCalls[0]?.options as { exactSourceComparisonPaths?: string[] })
+                .exactSourceComparisonPaths,
+            [relativePath],
+        );
+        assert.equal(payload.freshnessDecision.mode, 'skipped_source_unchanged');
         assert.equal(payload.results[0].target.file, relativePath);
         assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_WORKTREE_NOT_SYNCED'), false);
         assert.equal(warningCodes(payload).includes('SEARCH_DIRTY_FILE_EVIDENCE_UNAVAILABLE'), false);
@@ -8547,6 +8624,46 @@ test('handleSearchCode emits deterministic noiseMitigation hint when top grouped
     });
 });
 
+test('handleSearchCode suppresses noise guidance already explained by scope or positive path intent', async () => {
+    await withTempRepo(async (repoPath) => {
+        const handlers = createHandlers(repoPath, [{
+            content: 'describe("auth", () => {})',
+            relativePath: 'tests/auth.test.ts',
+            startLine: 1,
+            endLine: 3,
+            language: 'typescript',
+            score: 0.99,
+            indexedAt: '2026-01-01T00:30:00.000Z',
+            symbolId: 'sym_test_auth',
+            symbolLabel: 'function testAuth()',
+        }]);
+
+        const explicitPath = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'path:tests auth',
+            scope: 'mixed',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+        const explicitPathPayload = JSON.parse(explicitPath.content[0]?.text || '{}');
+        assert.equal(explicitPathPayload.status, 'ok');
+        assert.equal(explicitPathPayload.hints?.noiseMitigation, undefined);
+
+        const activeRuntime = await handlers.handleSearchCode({
+            path: repoPath,
+            query: 'auth',
+            scope: 'runtime',
+            resultMode: 'grouped',
+            groupBy: 'symbol',
+            limit: 5,
+        });
+        const activeRuntimePayload = JSON.parse(activeRuntime.content[0]?.text || '{}');
+        assert.equal(activeRuntimePayload.status, 'ok');
+        assert.equal(activeRuntimePayload.hints?.noiseMitigation, undefined);
+    });
+});
+
 test('handleSearchCode does not emit noiseMitigation hint for docs scope docs results', async () => {
     await withTempRepo(async (repoPath) => {
         const handlers = createHandlers(repoPath, [
@@ -9628,15 +9745,34 @@ test('handleSearchCode runs evidence-triggered expansion after the primary pass 
             reason: 'primary_candidate_pool_small',
             primaryScopedCandidateCount: 1,
         });
+        assert.deepEqual(payload.hints?.debugSearch?.semanticPassFailures, [{
+            passId: 'expanded',
+            errorName: 'Error',
+            code: 'UNCLASSIFIED_SEARCH_PASS_FAILURE',
+            classifier: 'unclassified',
+        }]);
     });
 });
 
-test('handleSearchCode returns error when all semantic passes fail', async () => {
+test('handleSearchCode redacts unclassified all-pass failures from output, diagnostics, and logs', { concurrency: false }, async () => {
     await withTempRepo(async (repoPath) => {
+        const secret = 'provider-token=secret-value';
+        const capturedLogs: string[] = [];
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+        const capture = (...values: unknown[]) => {
+            capturedLogs.push(values.map((value) => String(value)).join(' '));
+        };
+        console.log = capture;
+        console.warn = capture;
+        console.error = capture;
         const context = {
             getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
             semanticSearch: async () => {
-                throw new Error('backend unavailable');
+                const error = new Error(`backend unavailable ${secret}`);
+                error.name = `SecretBackendError:${secret}`;
+                throw error;
             }
         } as unknown as HandlerContext;
 
@@ -9657,14 +9793,22 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
 
         const handlers = new ToolHandlers(context, snapshotManager, syncManager, RUNTIME_FINGERPRINT, CAPABILITIES_NO_RERANK, () => Date.parse('2026-01-01T01:00:00.000Z'));
 
-        const response = await handlers.handleSearchCode({
-            path: repoPath,
-            query: 'validate session',
-            scope: 'runtime',
-            resultMode: 'grouped',
-            groupBy: 'symbol',
-            limit: 5
-        });
+        let response!: Awaited<ReturnType<ToolHandlers['handleSearchCode']>>;
+        try {
+            response = await handlers.handleSearchCode({
+                path: repoPath,
+                query: 'validate session',
+                scope: 'runtime',
+                resultMode: 'grouped',
+                groupBy: 'symbol',
+                limit: 5,
+                debugMode: 'full',
+            });
+        } finally {
+            console.log = originalLog;
+            console.warn = originalWarn;
+            console.error = originalError;
+        }
 
         assert.equal(response.isError, true);
         const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -9673,6 +9817,25 @@ test('handleSearchCode returns error when all semantic passes fail', async () =>
         assert.equal(payload.resultMode, 'grouped');
         assert.deepEqual(payload.results, []);
         assert.match(payload.message, /all semantic search passes failed/i);
+        const expectedFailures = [
+            {
+                passId: 'primary',
+                errorName: 'Error',
+                code: 'UNCLASSIFIED_SEARCH_PASS_FAILURE',
+                classifier: 'unclassified',
+            },
+            {
+                passId: 'expanded',
+                errorName: 'Error',
+                code: 'UNCLASSIFIED_SEARCH_PASS_FAILURE',
+                classifier: 'unclassified',
+            },
+        ];
+        assert.deepEqual(payload.hints?.debugSearch?.semanticPassFailures, expectedFailures);
+        assert.deepEqual(response.meta?.searchDiagnostics?.semanticPassFailures, expectedFailures);
+        assert.doesNotMatch(response.content[0]?.text || '', /secret-value/);
+        assert.doesNotMatch(JSON.stringify(response.meta), /secret-value/);
+        assert.doesNotMatch(capturedLogs.join('\n'), /secret-value/);
     });
 });
 
@@ -9746,6 +9909,13 @@ test('handleSearchCode preserves a redacted terminal embedding cause without sta
         });
         assert.equal(response.meta?.searchDiagnostics?.searchPassCount, 1);
         assert.equal(response.meta?.searchDiagnostics?.semanticExpansionReason, 'primary_terminal_provider_failure');
+        assert.deepEqual(response.meta?.searchDiagnostics?.semanticPassFailures, [{
+            passId: 'primary',
+            errorName: 'EmbeddingProviderError',
+            code: 'EMBEDDING_PROVIDER_AUTH_FAILED',
+            classifier: 'embedding_provider',
+            retryable: false,
+        }]);
     });
 });
 
@@ -9792,6 +9962,22 @@ test('handleSearchCode returns structured backend diagnostics when all semantic 
         assert.equal(payload.freshnessDecision, null);
         assert.deepEqual(payload.results, []);
         assert.match(payload.hints.backend.nextSteps.join(' '), /Resume the Zilliz Cloud cluster/);
+        assert.deepEqual(response.meta?.searchDiagnostics?.semanticPassFailures, [
+            {
+                passId: 'primary',
+                errorName: 'Error',
+                code: 'ZILLIZ_CLUSTER_STOPPED',
+                classifier: 'vector_backend',
+                retryable: true,
+            },
+            {
+                passId: 'expanded',
+                errorName: 'Error',
+                code: 'ZILLIZ_CLUSTER_STOPPED',
+                classifier: 'vector_backend',
+                retryable: true,
+            },
+        ]);
     });
 });
 
@@ -9900,7 +10086,8 @@ test('handleSearchCode supports deterministic test-only fault injection for expa
                 scope: 'runtime',
                 resultMode: 'grouped',
                 groupBy: 'symbol',
-                limit: 5
+                limit: 5,
+                debugMode: 'full',
             });
 
             const payload = JSON.parse(response.content[0]?.text || '{}');
@@ -10037,7 +10224,8 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
                 scope: 'runtime',
                 resultMode: 'grouped',
                 groupBy: 'symbol',
-                limit: 5
+                limit: 5,
+                debugMode: 'full',
             });
 
             assert.equal(response.isError, true);
@@ -10047,6 +10235,20 @@ test('handleSearchCode returns deterministic all-pass error when test fault inje
             assert.equal(payload.resultMode, 'grouped');
             assert.deepEqual(payload.results, []);
             assert.match(payload.message, /all semantic search passes failed/i);
+            assert.deepEqual(payload.hints?.debugSearch?.semanticPassFailures, [
+                {
+                    passId: 'primary',
+                    errorName: 'Error',
+                    code: 'UNCLASSIFIED_SEARCH_PASS_FAILURE',
+                    classifier: 'unclassified',
+                },
+                {
+                    passId: 'expanded',
+                    errorName: 'Error',
+                    code: 'UNCLASSIFIED_SEARCH_PASS_FAILURE',
+                    classifier: 'unclassified',
+                },
+            ]);
         });
     });
 });

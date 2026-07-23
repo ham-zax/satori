@@ -753,6 +753,39 @@ test('latest operation receipt persists without requiring a codebase lifecycle e
     });
 });
 
+test('durable operation observation bypasses a stale process cache and validates runtime identity', () => {
+    withTempHome((homeDir) => {
+        const codebase = path.join(homeDir, 'repo-operation-observation');
+        fs.mkdirSync(codebase, { recursive: true });
+
+        const writer = new SnapshotManager(FINGERPRINT_A);
+        writer.setLatestOperation(codebase, operationReceipt(codebase, 1, 'writing'));
+        assert.equal(writer.saveCodebaseSnapshot(), true);
+
+        const staleReader = new SnapshotManager(FINGERPRINT_A);
+        staleReader.loadCodebaseSnapshot();
+        assert.equal(staleReader.getLatestOperation(codebase)?.phase, 'writing');
+
+        writer.setLatestOperation(codebase, operationReceipt(codebase, 1, 'completed'));
+        assert.equal(writer.saveCodebaseSnapshot(), true);
+
+        assert.equal(staleReader.getLatestOperation(codebase)?.phase, 'writing');
+        const completed = staleReader.observeDurableLatestOperation(codebase);
+        assert.equal(completed?.phase, 'completed');
+        assert.equal(
+            staleReader.operationMatchesRuntimeFingerprint(completed!),
+            true,
+        );
+        assert.equal(
+            staleReader.operationMatchesRuntimeFingerprint({
+                ...completed!,
+                runtimeFingerprint: FINGERPRINT_B,
+            }),
+            false,
+        );
+    });
+});
+
 test('operation transitions reject phase regression and terminal rewrites', () => {
     withTempHome((homeDir) => {
         const codebase = path.join(homeDir, 'repo-operation-transitions');

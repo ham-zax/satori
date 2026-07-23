@@ -3426,6 +3426,22 @@ export class ToolHandlers {
             };
         }
 
+        const parsedOperators = this.searchQuerySupport.parseSearchOperators(input.query);
+        if (parsedOperators.semanticQuery.trim().length === 0) {
+            const payload = this.buildInvalidSearchRequestPayload({
+                path: input.path,
+                query: input.query,
+                scope: input.scope,
+                groupBy: input.groupBy,
+                resultMode: input.resultMode,
+                limit: input.limit,
+            }, 'Operator-only search requires semantic text or a positive must:, path:, or lang: value.');
+            return {
+                content: [{ type: "text", text: this.stringifyToolJson(payload) }],
+                isError: true,
+            };
+        }
+
         const searchDiagnostics: SearchDiagnostics = {
             queryLength: input.query.length,
             limitRequested: input.limit,
@@ -3573,9 +3589,18 @@ export class ToolHandlers {
                         return this.syncManager.ensureFreshness(
                             effectiveRoot,
                             exactSourceComparisonRequired ? 0 : SEARCH_FRESHNESS_THRESHOLD_MS,
-                            preparedRead?.vectorReceipt
-                                ? { preparedVectorReceipt: preparedRead.vectorReceipt }
-                                : {},
+                            {
+                                ...(preparedRead?.vectorReceipt
+                                    ? { preparedVectorReceipt: preparedRead.vectorReceipt }
+                                    : {}),
+                                ...(exactSourceComparisonRequired
+                                    ? {
+                                        exactSourceComparisonPaths: Array.from(
+                                            changedFilesState.files,
+                                        ).sort(),
+                                    }
+                                    : {}),
+                            },
                         );
                     },
                 ),
@@ -3664,7 +3689,8 @@ export class ToolHandlers {
                 }
             }
             const sourceFreshnessWasEstablished = freshnessDecision.mode === 'synced'
-                || freshnessDecision.mode === 'reconciled_ignore_change';
+                || freshnessDecision.mode === 'reconciled_ignore_change'
+                || freshnessDecision.mode === 'skipped_source_unchanged';
             const checkpointWarningAlreadyPresent = frontDoorWarnings.includes(
                 WARNING_CODES.SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE,
             );
@@ -3685,7 +3711,6 @@ export class ToolHandlers {
             console.log(`${rootTag} Indexing status: Completed`);
             console.log(`${rootTag} 🧠 Using embedding provider: ${encoderEngine.getProvider()} for search`);
 
-            const parsedOperators = this.searchQuerySupport.parseSearchOperators(input.query);
             const semanticQuery = parsedOperators.semanticQuery;
             const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery, parsedOperators);
             searchDiagnostics.routeKind = queryPlan.route.kind;
@@ -3735,6 +3760,7 @@ export class ToolHandlers {
             const initialDirtyFilesNotFreshened = initialObservedChangedFilesState.available
                 && initialObservedChangedFilesCount > 0
                 && freshnessDecision.mode !== 'synced'
+                && freshnessDecision.mode !== 'skipped_source_unchanged'
                 && freshnessDecision.mode !== 'reconciled_ignore_change';
             const initialRankingProvenance = {
                 semanticPassesUsed: [] as string[],
@@ -3973,6 +3999,14 @@ export class ToolHandlers {
                     resultMode: input.resultMode,
                     limit: input.limit
                 }, "Search backend failed: all semantic search passes failed. Retry and verify embedding/vector backends are reachable.", "not_ready", "search_backend_failed");
+                if (debugMode === 'full') {
+                    payload.hints = {
+                        ...(payload.hints || {}),
+                        debugSearch: {
+                            semanticPassFailures: execution.semanticPassFailures.map((failure) => ({ ...failure })),
+                        },
+                    };
+                }
                 return {
                     content: [{ type: "text", text: this.stringifyToolJson(payload) }],
                     isError: true,
@@ -4289,6 +4323,7 @@ export class ToolHandlers {
                     entry.canonicalRoot,
                     results.map((result) => result.target.file),
                     entry.baseEnvelope.scope,
+                    this.searchQuerySupport.parseSearchOperators(entry.baseEnvelope.query),
                 );
                 const generatedArtifactsHint = this.buildGeneratedArtifactsVerificationHint(
                     entry.canonicalRoot,

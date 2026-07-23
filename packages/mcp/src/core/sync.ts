@@ -34,11 +34,14 @@ interface SyncManagerOptions {
         assertMutationCurrent: () => void,
     ) => Promise<void> | void;
     mutationLeaseCoordinator?: MutationLeaseCoordinator;
+    crossProcessJoinTimeoutMs?: number;
+    crossProcessJoinPollMs?: number;
 }
 
 export type FreshnessDecisionMode =
     | 'synced'
     | 'skipped_recent'
+    | 'skipped_source_unchanged'
     | 'coalesced'
     | 'skipped_indexing'
     | 'skipped_requires_reindex'
@@ -122,10 +125,14 @@ export type PreparedReadWatcherDiagnostics = {
 };
 
 interface SyncExecutionOutcome {
-    mode: Exclude<FreshnessDecisionMode, 'coalesced' | 'skipped_recent' | 'skipped_source_checkpoint_unavailable'>;
+    mode: Exclude<
+        FreshnessDecisionMode,
+        'skipped_recent' | 'skipped_source_unchanged' | 'skipped_source_checkpoint_unavailable'
+    >;
     stats?: SyncStats;
     activeMutation?: RootMutationLease;
     operation?: IndexOperationReceipt;
+    errorMessage?: string;
 }
 
 interface SyncStats {
@@ -149,7 +156,13 @@ interface EnsureFreshnessOptions {
     skipIgnoreControlCheck?: boolean;
     mutationLease?: RootMutationLease;
     preparedVectorReceipt?: ProvenVectorGenerationReceipt;
+    exactSourceComparisonPaths?: readonly string[];
 }
+
+type CrossProcessSyncJoinRequest = Pick<
+    EnsureFreshnessOptions,
+    'exactSourceComparisonPaths'
+>;
 
 interface IgnoreReloadResult {
     previousMatcher?: ReturnType<typeof ignore>;
@@ -159,6 +172,8 @@ interface IgnoreReloadResult {
 
 // v1 policy: only root-level control files trigger index-policy reconciliation.
 const IGNORE_RULE_CONTROL_FILES = new Set(['.satoriignore', '.gitignore', 'satori.toml']);
+const DEFAULT_CROSS_PROCESS_JOIN_TIMEOUT_MS = 15_000;
+const DEFAULT_CROSS_PROCESS_JOIN_POLL_MS = 25;
 
 function errorMessage(error: unknown, fallback = "unknown_error"): string {
     if (error instanceof Error && error.message) {
@@ -219,6 +234,8 @@ export class SyncManager {
     private readonly now: () => number;
     private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
     private readonly mutationLeaseCoordinator?: MutationLeaseCoordinator;
+    private readonly crossProcessJoinTimeoutMs: number;
+    private readonly crossProcessJoinPollMs: number;
 
     constructor(context: Context, snapshotManager: SnapshotManager, options: SyncManagerOptions = {}) {
         this.context = context;
@@ -228,6 +245,14 @@ export class SyncManager {
         this.now = options.now || (() => Date.now());
         this.onSyncCompleted = options.onSyncCompleted;
         this.mutationLeaseCoordinator = options.mutationLeaseCoordinator;
+        this.crossProcessJoinTimeoutMs = Math.max(
+            1,
+            options.crossProcessJoinTimeoutMs ?? DEFAULT_CROSS_PROCESS_JOIN_TIMEOUT_MS,
+        );
+        this.crossProcessJoinPollMs = Math.max(
+            1,
+            options.crossProcessJoinPollMs ?? DEFAULT_CROSS_PROCESS_JOIN_POLL_MS,
+        );
     }
 
     private bumpFreshnessEpoch(codebasePath: string): void {
@@ -558,6 +583,26 @@ export class SyncManager {
             }
         }
 
+        const exactSourceComparisonPaths = options.exactSourceComparisonPaths;
+        if (exactSourceComparisonPaths && exactSourceComparisonPaths.length > 0) {
+            const compareSourcePaths = this.context.compareSourcePathsToFreshnessCheckpoint;
+            if (typeof compareSourcePaths === 'function') {
+                const comparison = await compareSourcePaths.call(
+                    this.context,
+                    codebasePath,
+                    exactSourceComparisonPaths,
+                    options.preparedVectorReceipt,
+                );
+                if (comparison.status === 'matches') {
+                    return {
+                        mode: 'skipped_source_unchanged',
+                        checkedAt,
+                        thresholdMs,
+                    };
+                }
+            }
+        }
+
         // 2. Throttling: Skip if recently synced
         const lastSync = this.lastSyncTimes.get(codebasePath) || 0;
         const timeSince = checkedAtMs - lastSync;
@@ -582,6 +627,9 @@ export class SyncManager {
                     codebasePath,
                     options.mutationLease,
                     currentIgnoreControlSignature,
+                    {
+                        exactSourceComparisonPaths: options.exactSourceComparisonPaths,
+                    },
                 );
             } catch (e) {
                 // Log and rethrow to allow callers to handle/see failure
@@ -622,6 +670,7 @@ export class SyncManager {
             } : undefined,
             activeMutation: outcome.activeMutation,
             operation: outcome.operation,
+            errorMessage: outcome.errorMessage,
         };
     }
 
@@ -854,6 +903,7 @@ export class SyncManager {
         codebasePath: string,
         existingLease?: RootMutationLease,
         currentIgnoreControlSignature?: string,
+        joinRequest: CrossProcessSyncJoinRequest = {},
     ): Promise<SyncExecutionOutcome> {
         if (this.snapshotManager.getCodebaseStatus(codebasePath) === 'indexing') {
             console.log(`[SYNC] ⏭️  Skipping sync for '${codebasePath}' because indexing is active.`);
@@ -874,6 +924,13 @@ export class SyncManager {
             } else {
                 const acquired = this.mutationLeaseCoordinator.acquire(codebasePath, 'sync');
                 if (!acquired.acquired) {
+                    if (acquired.activeLease.action === 'sync') {
+                        return this.joinCrossProcessSync(
+                            codebasePath,
+                            acquired.activeLease,
+                            joinRequest,
+                        );
+                    }
                     return { mode: 'skipped_mutation_in_progress', activeMutation: acquired.activeLease };
                 }
                 lease = acquired.lease;
@@ -1078,6 +1135,198 @@ export class SyncManager {
                 this.mutationLeaseCoordinator?.release(lease);
             }
         }
+    }
+
+    private async joinCrossProcessSync(
+        codebasePath: string,
+        activeLease: RootMutationLease,
+        request: CrossProcessSyncJoinRequest,
+    ): Promise<SyncExecutionOutcome> {
+        const observeOperation = this.snapshotManager.observeDurableLatestOperation;
+        const matchesRuntime = this.snapshotManager.operationMatchesRuntimeFingerprint;
+        if (
+            !this.mutationLeaseCoordinator
+            || typeof observeOperation !== 'function'
+            || typeof matchesRuntime !== 'function'
+        ) {
+            return {
+                mode: 'skipped_mutation_in_progress',
+                activeMutation: activeLease,
+            };
+        }
+
+        const deadline = Date.now() + this.crossProcessJoinTimeoutMs;
+        let lastOperation: IndexOperationReceipt | undefined;
+        while (Date.now() <= deadline) {
+            const operation = observeOperation.call(this.snapshotManager, codebasePath);
+            if (
+                operation
+                && operation.id === activeLease.operationId
+                && operation.generation === activeLease.generation
+                && operation.action === 'sync'
+                && operation.canonicalRoot === activeLease.canonicalRoot
+            ) {
+                lastOperation = operation;
+                if (!matchesRuntime.call(this.snapshotManager, operation)) {
+                    return {
+                        mode: 'coalesced',
+                        activeMutation: activeLease,
+                        operation,
+                        errorMessage: 'The in-flight sync uses an incompatible runtime fingerprint.',
+                    };
+                }
+                if (operation.phase === 'failed' || operation.phase === 'blocked') {
+                    return {
+                        mode: 'coalesced',
+                        activeMutation: activeLease,
+                        operation,
+                        errorMessage: `The joined sync ended in terminal phase '${operation.phase}'.`,
+                    };
+                }
+                if (operation.phase === 'completed') {
+                    let checkpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+                    if (!checkpoint || checkpoint.status !== 'valid') {
+                        return {
+                            mode: 'coalesced',
+                            activeMutation: activeLease,
+                            operation,
+                            errorMessage: 'The joined sync completed without a proven active source checkpoint.',
+                        };
+                    }
+
+                    const registeredObservation =
+                        this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath);
+                    if (
+                        registeredObservation !== checkpoint.observationToken
+                        && typeof this.context.recreateSynchronizerForCodebase === 'function'
+                    ) {
+                        try {
+                            await this.context.recreateSynchronizerForCodebase(
+                                codebasePath,
+                                undefined,
+                                undefined,
+                                { requireAuthorityCheckpoint: true },
+                            );
+                        } catch {
+                            return {
+                                mode: 'coalesced',
+                                activeMutation: activeLease,
+                                operation,
+                                errorMessage: 'The joined sync completed, but this runtime could not bind its source checkpoint to the active publication.',
+                            };
+                        }
+                        checkpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+                        if (!checkpoint || checkpoint.status !== 'valid') {
+                            return {
+                                mode: 'coalesced',
+                                activeMutation: activeLease,
+                                operation,
+                                errorMessage: 'The joined sync source checkpoint changed while this runtime was binding it.',
+                            };
+                        }
+                        if (
+                            this.context.getRegisteredSourceFreshnessCheckpointObservation?.(codebasePath)
+                            !== checkpoint.observationToken
+                        ) {
+                            return {
+                                mode: 'coalesced',
+                                activeMutation: activeLease,
+                                operation,
+                                errorMessage: 'The joined sync source checkpoint did not bind to the active publication.',
+                            };
+                        }
+                    }
+
+                    const paths = request.exactSourceComparisonPaths;
+                    if (paths && paths.length > 0) {
+                        const compareSourcePaths = this.context.compareSourcePathsToFreshnessCheckpoint;
+                        if (typeof compareSourcePaths !== 'function') {
+                            return {
+                                mode: 'coalesced',
+                                activeMutation: activeLease,
+                                operation,
+                                errorMessage: 'The joined sync cannot prove the requested source observation.',
+                            };
+                        }
+                        const comparison = await compareSourcePaths.call(
+                            this.context,
+                            codebasePath,
+                            paths,
+                        );
+                        if (comparison.status !== 'matches') {
+                            return {
+                                mode: 'coalesced',
+                                activeMutation: activeLease,
+                                operation,
+                                errorMessage: `The joined sync did not prove the requested source observation (${comparison.status}).`,
+                            };
+                        }
+                    }
+
+                    const finalOperation = observeOperation.call(this.snapshotManager, codebasePath);
+                    if (
+                        !finalOperation
+                        || finalOperation.id !== operation.id
+                        || finalOperation.generation !== operation.generation
+                        || finalOperation.phase !== 'completed'
+                    ) {
+                        return {
+                            mode: 'coalesced',
+                            activeMutation: activeLease,
+                            ...(finalOperation ? { operation: finalOperation } : { operation }),
+                            errorMessage: 'The durable sync authority changed before the joined result could be accepted.',
+                        };
+                    }
+
+                    this.sourceCheckpointStatuses.set(codebasePath, 'valid');
+                    this.sourceCheckpointObservations.set(codebasePath, checkpoint.observationToken);
+                    this.lastSyncTimes.set(codebasePath, this.now());
+                    return {
+                        mode: 'coalesced',
+                        activeMutation: activeLease,
+                        operation,
+                    };
+                }
+            } else if (operation && operation.generation >= activeLease.generation) {
+                return {
+                    mode: 'coalesced',
+                    activeMutation: activeLease,
+                    operation,
+                    errorMessage: 'The durable sync operation no longer matches the active mutation lease.',
+                };
+            }
+
+            const currentLease = this.mutationLeaseCoordinator.getActiveLease(codebasePath);
+            if (
+                !currentLease
+                || currentLease.operationId !== activeLease.operationId
+                || currentLease.generation !== activeLease.generation
+            ) {
+                const terminal = observeOperation.call(this.snapshotManager, codebasePath);
+                if (
+                    terminal?.id === activeLease.operationId
+                    && terminal.generation === activeLease.generation
+                    && terminal.phase === 'completed'
+                ) {
+                    lastOperation = terminal;
+                    continue;
+                }
+                return {
+                    mode: 'coalesced',
+                    activeMutation: activeLease,
+                    ...(terminal ? { operation: terminal } : lastOperation ? { operation: lastOperation } : {}),
+                    errorMessage: 'The in-flight sync lost its durable owner before proving completion.',
+                };
+            }
+            await new Promise((resolve) => setTimeout(resolve, this.crossProcessJoinPollMs));
+        }
+
+        return {
+            mode: 'coalesced',
+            activeMutation: activeLease,
+            ...(lastOperation ? { operation: lastOperation } : {}),
+            errorMessage: 'Timed out waiting for the in-flight sync to prove completion.',
+        };
     }
 
     public async handleSyncIndex(): Promise<void> {

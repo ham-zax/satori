@@ -48,7 +48,11 @@ import type {
     SearchResultLike,
 } from "./search-lexical-scoring.js";
 import type { ParsedSearchOperators } from "./search-query-planning.js";
-import type { VectorBackendDiagnostic } from "./backend-diagnostics.js";
+import {
+    buildSemanticPassFailureDiagnostic,
+    type SemanticPassFailureDiagnostic,
+    type VectorBackendDiagnostic,
+} from "./backend-diagnostics.js";
 import type { EmbeddingProviderDiagnostic } from "./embedding-provider-diagnostics.js";
 import type { FreshnessDecision } from "./sync.js";
 import {
@@ -104,6 +108,7 @@ export type SearchDiagnostics = SearchProviderWorkDiagnostics & {
     searchPassCount: number;
     searchPassSuccessCount: number;
     searchPassFailureCount: number;
+    semanticPassFailures?: SemanticPassFailureDiagnostic[];
     rerankerAttempted: boolean;
     rerankerUsed: boolean;
 };
@@ -312,6 +317,7 @@ export type SearchExecutionOutcome =
         semanticExpansion: SearchExpansionDecision & { attempted: boolean };
         providerWork: SearchProviderWorkDiagnostics;
         candidateSurvival?: SearchCandidateSurvivalDebug;
+        semanticPassFailures: SemanticPassFailureDiagnostic[];
     }
     | {
         kind: "vector_backend_unavailable";
@@ -323,6 +329,7 @@ export type SearchExecutionOutcome =
     }
     | {
         kind: "all_semantic_passes_failed";
+        semanticPassFailures: SemanticPassFailureDiagnostic[];
     };
 
 export type SearchExecutionHost = {
@@ -603,6 +610,7 @@ export async function runSearchExecution(
     const dirtyFilesNotFreshened = observedChangedFilesState.available
         && observedChangedFilesCount > 0
         && input.freshnessMode !== "synced"
+        && input.freshnessMode !== "skipped_source_unchanged"
         && input.freshnessMode !== "reconciled_ignore_change";
     const canSupplementLivePathEvidence = observedChangedFilesState.available
         && observedChangedFilesCount > 0
@@ -611,6 +619,7 @@ export async function runSearchExecution(
     let boostedCandidates = 0;
     let attemptsUsed = 0;
     const searchWarningsSet = new Set<string>();
+    const semanticPassFailures: SemanticPassFailureDiagnostic[] = [];
     const suppressedDirtyPaths = new Set<string>();
     const representedDirtyPaths = new Set<string>();
     const passesUsed = new Set<string>();
@@ -756,17 +765,24 @@ export async function runSearchExecution(
                 continue;
             }
 
-            if (passResult.status === "rejected") {
-                embeddingProviderDiagnostic ??= host.classifyEmbeddingProviderError(passResult.reason);
-                if (embeddingProviderDiagnostic === null && vectorBackendDiagnostic === null) {
-                    vectorBackendDiagnostic = host.classifyVectorBackendError(passResult.reason);
-                }
-            }
+            const passEmbeddingDiagnostic = host.classifyEmbeddingProviderError(passResult.reason);
+            const passVectorDiagnostic = passEmbeddingDiagnostic
+                ? null
+                : host.classifyVectorBackendError(passResult.reason);
+            embeddingProviderDiagnostic ??= passEmbeddingDiagnostic;
+            vectorBackendDiagnostic ??= passVectorDiagnostic;
+            semanticPassFailures.push(buildSemanticPassFailureDiagnostic({
+                passId: passDescriptor.id,
+                error: passResult.reason,
+                embeddingDiagnostic: passEmbeddingDiagnostic,
+                vectorDiagnostic: passVectorDiagnostic,
+            }));
             searchWarningsSet.add(buildSearchPassWarningHelper(passDescriptor.id));
         }
 
         searchDiagnostics.searchPassSuccessCount += successfulPasses.length;
         searchDiagnostics.searchPassFailureCount += passDescriptors.length - successfulPasses.length;
+        searchDiagnostics.semanticPassFailures = semanticPassFailures.map((failure) => ({ ...failure }));
 
         if (successfulPasses.length === 0) {
             if (embeddingProviderDiagnostic) {
@@ -781,7 +797,10 @@ export async function runSearchExecution(
                     diagnostic: vectorBackendDiagnostic,
                 };
             }
-            return { kind: "all_semantic_passes_failed" };
+            return {
+                kind: "all_semantic_passes_failed",
+                semanticPassFailures,
+            };
         }
 
         const byChunkKey = new Map<string, SearchCandidate>();
@@ -1333,6 +1352,7 @@ export async function runSearchExecution(
             semanticExpansionAttempted: searchDiagnostics.semanticExpansionAttempted,
             semanticExpansionReason: searchDiagnostics.semanticExpansionReason,
         },
+        semanticPassFailures,
         ...(candidateSurvival ? { candidateSurvival } : {}),
     };
 }

@@ -208,6 +208,7 @@ export async function finalizeSearchResults(
         semanticExpansion,
         providerWork,
         candidateSurvival,
+        semanticPassFailures,
     } = input.execution;
     let freshnessSummary = input.freshnessSummary;
 
@@ -255,6 +256,9 @@ export async function finalizeSearchResults(
                 candidatesWithLexicalEvidence: providerWork.candidatesWithLexicalEvidence,
                 candidatesWithCurrentSourceEvidence: providerWork.candidatesWithCurrentSourceEvidence,
             },
+            ...(semanticPassFailures.length > 0 ? {
+                semanticPassFailures: semanticPassFailures.map((failure) => ({ ...failure })),
+            } : {}),
             semanticExpansion,
             rankingProvenance,
             ...(trackedLexicalDebug ? { trackedLexical: trackedLexicalDebug } : {}),
@@ -424,6 +428,7 @@ export async function finalizeSearchResults(
             input.effectiveRoot,
             rawResults.map((result) => result.file),
             input.scope,
+            input.parsedOperators,
         );
         const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
             input.effectiveRoot,
@@ -595,6 +600,7 @@ export async function finalizeSearchResults(
                 input.effectiveRoot,
                 results.map((result) => result.target.file),
                 input.scope,
+                input.parsedOperators,
             );
             const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
                 input.effectiveRoot,

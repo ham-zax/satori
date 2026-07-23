@@ -113,6 +113,7 @@ import ignore from 'ignore';
 import {
     FileSynchronizer,
     type SourceFreshnessCheckpointEvidence,
+    type SourceFreshnessPathComparison,
 } from '../sync/synchronizer';
 import {
     assertDescriptorBoundIndexingSupported,
@@ -1419,6 +1420,59 @@ export class Context {
     getRegisteredSourceFreshnessCheckpointObservation(codebasePath: string): string | null {
         const synchronizer = this.synchronizers.get(this.resolveCollectionName(codebasePath));
         return synchronizer?.getOwnedSnapshotObservationToken() ?? null;
+    }
+
+    /**
+     * Compare explicit dirty paths with the source checkpoint owned by the
+     * proven active publication. No synchronizer or publication state is
+     * advanced by this read-only check.
+     */
+    async compareSourcePathsToFreshnessCheckpoint(
+        codebasePath: string,
+        relativePaths: readonly string[],
+        requestBoundReceipt?: ProvenVectorGenerationReceipt,
+    ): Promise<SourceFreshnessPathComparison> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const checkpoint = await this.inspectSourceFreshnessCheckpoint(
+            canonicalRoot,
+            undefined,
+            requestBoundReceipt,
+        );
+        if (checkpoint.status !== 'valid' || !checkpoint.generationReceipt) {
+            return { status: 'unavailable' };
+        }
+
+        const receipt = checkpoint.generationReceipt;
+        const synchronizer = this.synchronizers.get(this.resolveCollectionName(canonicalRoot));
+        if (
+            !synchronizer
+            || !synchronizer.ownsCheckpointIdentity(receipt.collectionName)
+            || !synchronizer.ownsCheckpointAuthority({
+                collectionName: receipt.collectionName,
+                markerRunId: receipt.marker.runId,
+                indexPolicyHash: receipt.marker.indexPolicyHash,
+            })
+            || synchronizer.getOwnedSnapshotObservationToken() !== checkpoint.observationToken
+        ) {
+            return { status: 'unavailable' };
+        }
+
+        const comparison = await synchronizer.comparePathsToOwnedCheckpoint(relativePaths);
+        if (comparison.status !== 'matches') {
+            return comparison;
+        }
+
+        const stillCurrent = await this.acceptPreparedSourceGenerationReceipt(
+            canonicalRoot,
+            receipt,
+        );
+        if (
+            !stillCurrent
+            || synchronizer.getOwnedSnapshotObservationToken() !== checkpoint.observationToken
+        ) {
+            return { status: 'unavailable' };
+        }
+        return comparison;
     }
 
     /**

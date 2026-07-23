@@ -128,6 +128,12 @@ function createSnapshot(statusByPath: Map<string, CodebaseStatus>) {
         getLatestOperation(): IndexOperationReceipt | undefined {
             return latestOperation ? structuredClone(latestOperation) : undefined;
         },
+        observeDurableLatestOperation(): IndexOperationReceipt | undefined {
+            return latestOperation ? structuredClone(latestOperation) : undefined;
+        },
+        operationMatchesRuntimeFingerprint(receipt: IndexOperationReceipt): boolean {
+            return JSON.stringify(receipt.runtimeFingerprint) === JSON.stringify(runtimeFingerprint);
+        },
         getReceiptHistory(): IndexOperationReceipt[] {
             return structuredClone(receiptHistory);
         },
@@ -163,6 +169,150 @@ function createContext() {
             calls += 1;
             return { added: 0, removed: 0, modified: 0 };
         }
+    };
+}
+
+function createCrossProcessSyncHarness(options: {
+    ownerFailure?: Error;
+    runtimeCompatible?: boolean;
+    joinTimeoutMs?: number;
+} = {}) {
+    const codebasePath = createTempDir();
+    const stateDir = createTempDir();
+    const statusByPath = new Map<string, CodebaseStatus>([[codebasePath, 'indexed']]);
+    const snapshot = createSnapshot(statusByPath);
+    let releaseOwner!: () => void;
+    const ownerGate = new Promise<void>((resolve) => {
+        releaseOwner = resolve;
+    });
+    let signalOwnerStarted!: () => void;
+    const ownerStarted = new Promise<void>((resolve) => {
+        signalOwnerStarted = resolve;
+    });
+    let sourceCurrent = false;
+    let reindexCalls = 0;
+    let waiterBoundToCurrentCheckpoint = false;
+    let waiterRebindCalls = 0;
+    const inspectSourceFreshnessCheckpoint = async () => ({
+        status: 'valid' as const,
+        observationToken: sourceCurrent ? 'checkpoint-current' : 'checkpoint-previous',
+        merkleRoot: 'a'.repeat(64),
+        documentDigest: 'b'.repeat(64),
+    });
+    const ownerContext = {
+        inspectSourceFreshnessCheckpoint,
+        async compareSourcePathsToFreshnessCheckpoint() {
+            return { status: sourceCurrent ? 'matches' as const : 'differs' as const };
+        },
+        async reindexByChange() {
+            reindexCalls += 1;
+            signalOwnerStarted();
+            await ownerGate;
+            if (options.ownerFailure) {
+                throw options.ownerFailure;
+            }
+            sourceCurrent = true;
+            return {
+                added: 0,
+                removed: 0,
+                modified: 1,
+                changedFiles: ['src/owner.ts'],
+                collectionName: 'generation-current',
+            };
+        },
+    };
+    const waiterContext = {
+        inspectSourceFreshnessCheckpoint,
+        getRegisteredSourceFreshnessCheckpointObservation() {
+            return waiterBoundToCurrentCheckpoint
+                ? 'checkpoint-current'
+                : 'checkpoint-previous';
+        },
+        async recreateSynchronizerForCodebase() {
+            waiterRebindCalls += 1;
+            waiterBoundToCurrentCheckpoint = true;
+        },
+        async compareSourcePathsToFreshnessCheckpoint() {
+            return {
+                status: waiterBoundToCurrentCheckpoint && sourceCurrent
+                    ? 'matches' as const
+                    : 'unavailable' as const,
+            };
+        },
+        async reindexByChange() {
+            throw new Error('cross-process waiter must not start a second writer');
+        },
+    };
+    const ownerCoordinator = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'cross-process-owner',
+    });
+    const waiterCoordinator = new MutationLeaseCoordinator({
+        stateDir,
+        ownerId: 'cross-process-waiter',
+    });
+    let signalWaiterObserved!: () => void;
+    const waiterObserved = new Promise<void>((resolve) => {
+        signalWaiterObserved = resolve;
+    });
+    let waiterObservationSignaled = false;
+    const ownerManager = new SyncManager(
+        ownerContext as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        {
+            watchEnabled: false,
+            mutationLeaseCoordinator: ownerCoordinator,
+        },
+    );
+    const waiterSnapshot = {
+        ...snapshot,
+        observeDurableLatestOperation() {
+            if (!waiterObservationSignaled) {
+                waiterObservationSignaled = true;
+                signalWaiterObserved();
+            }
+            return snapshot.observeDurableLatestOperation();
+        },
+        operationMatchesRuntimeFingerprint: options.runtimeCompatible === false
+            ? () => false
+            : snapshot.operationMatchesRuntimeFingerprint,
+    };
+    const waiterManager = new SyncManager(
+        waiterContext as unknown as SyncContext,
+        waiterSnapshot as unknown as SyncSnapshotManager,
+        {
+            watchEnabled: false,
+            mutationLeaseCoordinator: waiterCoordinator,
+            crossProcessJoinTimeoutMs: options.joinTimeoutMs ?? 1_000,
+            crossProcessJoinPollMs: 5,
+        },
+    );
+    const freshnessOptions = {
+        skipIgnoreControlCheck: true,
+        exactSourceComparisonPaths: ['src/owner.ts'],
+    } as const;
+
+    return {
+        codebasePath,
+        stateDir,
+        snapshot,
+        ownerCoordinator,
+        ownerManager,
+        waiterManager,
+        ownerStarted,
+        waiterObserved,
+        releaseOwner,
+        freshnessOptions,
+        get reindexCalls() {
+            return reindexCalls;
+        },
+        get waiterRebindCalls() {
+            return waiterRebindCalls;
+        },
+        cleanup() {
+            fs.rmSync(codebasePath, { recursive: true, force: true });
+            fs.rmSync(stateDir, { recursive: true, force: true });
+        },
     };
 }
 
@@ -369,6 +519,155 @@ test('coalesced sync callers receive the same durable completed receipt', async 
 
     fs.rmSync(codebasePath, { recursive: true, force: true });
     fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+test('independent sync runtimes join one durable owner and prove the requested source observation', async () => {
+    const harness = createCrossProcessSyncHarness();
+    try {
+        const owner = harness.ownerManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.ownerStarted;
+        const waiter = harness.waiterManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.waiterObserved;
+        harness.releaseOwner();
+
+        const [ownerDecision, waiterDecision] = await Promise.all([owner, waiter]);
+        assert.equal(ownerDecision.mode, 'synced');
+        assert.equal(waiterDecision.mode, 'coalesced');
+        assert.equal(waiterDecision.errorMessage, undefined);
+        assert.equal(waiterDecision.operation?.phase, 'completed');
+        assert.equal(waiterDecision.operation?.id, ownerDecision.operation?.id);
+        assert.equal(harness.reindexCalls, 1);
+        assert.equal(harness.waiterRebindCalls, 1);
+        assert.deepEqual(
+            harness.snapshot.getReceiptHistory().map((receipt) => receipt.phase),
+            ['accepted', 'writing', 'completed'],
+        );
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('cross-process sync join fails closed when the durable owner fails', async () => {
+    const harness = createCrossProcessSyncHarness({ ownerFailure: new Error('owner failed') });
+    try {
+        const owner = harness.ownerManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.ownerStarted;
+        const waiter = harness.waiterManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.waiterObserved;
+        harness.releaseOwner();
+
+        await assert.rejects(owner, (error: unknown) => {
+            assert.ok(error instanceof SyncOperationError);
+            assert.equal(error.operation?.phase, 'failed');
+            return true;
+        });
+        const waiterDecision = await waiter;
+        assert.equal(waiterDecision.mode, 'coalesced');
+        assert.equal(waiterDecision.operation?.phase, 'failed');
+        assert.match(waiterDecision.errorMessage ?? '', /terminal phase 'failed'/);
+        assert.equal(harness.reindexCalls, 1);
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('cross-process sync join rejects incompatible runtime identity', async () => {
+    const harness = createCrossProcessSyncHarness({ runtimeCompatible: false });
+    try {
+        const owner = harness.ownerManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.ownerStarted;
+        const waiterDecision = await harness.waiterManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+
+        assert.equal(waiterDecision.mode, 'coalesced');
+        assert.match(waiterDecision.errorMessage ?? '', /incompatible runtime fingerprint/);
+        assert.equal(waiterDecision.operation?.phase, 'writing');
+        harness.releaseOwner();
+        assert.equal((await owner).mode, 'synced');
+        assert.equal(harness.reindexCalls, 1);
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('cross-process sync join is bounded and never starts a second writer', async () => {
+    const harness = createCrossProcessSyncHarness({ joinTimeoutMs: 20 });
+    try {
+        const owner = harness.ownerManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.ownerStarted;
+        const waiterDecision = await harness.waiterManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+
+        assert.equal(waiterDecision.mode, 'coalesced');
+        assert.match(waiterDecision.errorMessage ?? '', /Timed out/);
+        assert.equal(waiterDecision.operation?.phase, 'writing');
+        assert.equal(harness.reindexCalls, 1);
+        harness.releaseOwner();
+        assert.equal((await owner).mode, 'synced');
+    } finally {
+        harness.cleanup();
+    }
+});
+
+test('cross-process sync join rejects owner loss before durable completion', async () => {
+    const harness = createCrossProcessSyncHarness();
+    try {
+        const owner = harness.ownerManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.ownerStarted;
+        const activeLease = harness.ownerCoordinator.getActiveLease(harness.codebasePath);
+        assert.ok(activeLease);
+        const waiter = harness.waiterManager.ensureFreshness(
+            harness.codebasePath,
+            0,
+            harness.freshnessOptions,
+        );
+        await harness.waiterObserved;
+        assert.equal(harness.ownerCoordinator.release(activeLease), true);
+
+        const waiterDecision = await waiter;
+        assert.equal(waiterDecision.mode, 'coalesced');
+        assert.match(waiterDecision.errorMessage ?? '', /lost its durable owner/);
+        assert.equal(waiterDecision.operation?.phase, 'writing');
+        harness.releaseOwner();
+        await assert.rejects(owner, /no longer current/);
+        assert.equal(harness.reindexCalls, 1);
+    } finally {
+        harness.cleanup();
+    }
 });
 
 test('sync failure persists and throws the exact failed receipt before lease release', async () => {
@@ -704,6 +1003,89 @@ test('ensureFreshness forwards a request-bound vector receipt to checkpoint insp
 
     assert.equal(decision.mode, 'skipped_source_checkpoint_unavailable');
     assert.equal(receivedReceipt, preparedVectorReceipt);
+    fs.rmSync(codebasePath, { recursive: true, force: true });
+});
+
+test('ensureFreshness skips publication only when exact dirty paths match the active checkpoint', async () => {
+    const codebasePath = createTempDir();
+    const preparedVectorReceipt = { collectionName: 'generation-bound' } as never;
+    let comparisonStatus: 'matches' | 'differs' | 'unavailable' = 'matches';
+    let syncCalls = 0;
+    const comparisons: Array<{ paths: readonly string[]; receipt: unknown }> = [];
+    const context = {
+        async inspectSourceFreshnessCheckpoint() {
+            return {
+                status: 'valid' as const,
+                observationToken: 'checkpoint-v1',
+                merkleRoot: 'a'.repeat(64),
+                documentDigest: 'b'.repeat(64),
+            };
+        },
+        async compareSourcePathsToFreshnessCheckpoint(
+            _path: string,
+            paths: readonly string[],
+            receipt?: unknown,
+        ) {
+            comparisons.push({ paths: [...paths], receipt });
+            return { status: comparisonStatus };
+        },
+        async reindexByChange() {
+            syncCalls += 1;
+            return {
+                added: 0,
+                removed: 0,
+                modified: 1,
+                changedFiles: ['src/owner.ts'],
+                collectionName: 'generation-next',
+            };
+        },
+        getActiveIgnorePatterns() {
+            return [];
+        },
+        hasSynchronizerForCodebase() {
+            return true;
+        },
+        getTrackedRelativePaths() {
+            return ['src/owner.ts'];
+        },
+    };
+    const snapshot = {
+        getCodebaseStatus: () => 'indexed',
+        getCodebaseInfo: () => ({ indexStatus: 'completed' }),
+        getCodebaseIgnoreControlSignature: () => 'current',
+        setCodebaseIndexManifest() {},
+        setCodebaseSyncCompleted() {},
+        saveCodebaseSnapshot() {},
+    };
+    const manager = new SyncManager(
+        context as unknown as SyncContext,
+        snapshot as unknown as SyncSnapshotManager,
+        { watchEnabled: false },
+    );
+    const options = {
+        skipIgnoreControlCheck: true,
+        preparedVectorReceipt,
+        exactSourceComparisonPaths: ['src/owner.ts'],
+    };
+
+    const unchanged = await manager.ensureFreshness(codebasePath, 0, options);
+    assert.equal(unchanged.mode, 'skipped_source_unchanged');
+    assert.equal(syncCalls, 0);
+    assert.deepEqual(comparisons, [{
+        paths: ['src/owner.ts'],
+        receipt: preparedVectorReceipt,
+    }]);
+
+    comparisonStatus = 'differs';
+    const changed = await manager.ensureFreshness(codebasePath, 0, options);
+    assert.equal(changed.mode, 'synced');
+    assert.equal(syncCalls, 1);
+
+    comparisonStatus = 'unavailable';
+    const unavailable = await manager.ensureFreshness(codebasePath, 0, options);
+    assert.equal(unavailable.mode, 'synced');
+    assert.equal(syncCalls, 2);
+
     fs.rmSync(codebasePath, { recursive: true, force: true });
 });
 

@@ -1,13 +1,28 @@
 # Symbol-Owned Retrieval Implementation Plan
 
-**Status:** the symbol-owned retrieval architecture is implemented. This plan
+**Status:** complete. The symbol-owned retrieval architecture and all R0-R4
+execution batches are implemented or evidence-closed. This plan
 was reconciled against clean revision
 `f8d799b0704d8c26bfedf2b42f90ebfc3f7cbb70` on 2026-07-23. R0
 relationship-only publication repair is implemented with terminal decision
-`relationship_only_upgrade_pass`. Two bounded implementation batches remain:
-relationship-backed test references and exact Python import-alias/parameter
-receiver evidence. One ambiguity fixture and one direct qualification record
-remain as evidence-only batches.
+`relationship_only_upgrade_pass`. R1 relationship-backed test references are
+implemented with terminal decision `test_reference_relationship_pass`. R2
+exact Python import-alias/parameter receiver evidence is implemented with
+terminal decision `typed_receiver_parameter_pass`. R3 closed with
+`ambiguity_contract_pass`, and the direct R4 consolidation closed with
+`symbol_owned_program_complete`. No executable work remains in this plan.
+
+## Archival Authority Boundary
+
+This document is a completed implementation and evidence record.
+
+Sections that retain terms such as “target,” “tasks,” “acceptance,” “initial
+scope,” or imperative verbs describe the contract under which completed work
+was implemented. They do not authorize new execution.
+
+Only an explicit newly authorized plan may reopen or extend this architecture.
+Where historical targets conflict with a completed execution record, current
+repository truth and the terminal execution record control.
 
 ## Capability
 
@@ -110,10 +125,10 @@ following execution truth:
 | Language routing, symbols, owners, grouped search, outline, exact open, relationship sidecars, and relationship-backed graph traversal | Implemented in Core/MCP with focused fixtures | Complete; do not reopen |
 | Same-line and Python decorator byte ownership | Covered by language-analysis, owner-resolution, relationship, and MCP graph tests | Phase 3 complete |
 | Overloads and test-helper collisions | Distinct-instance and ranking fixtures exist | Reuse evidence |
-| Generated/source duplicate ownership | No focused acceptance fixture was found | Evidence-only batch; no implementation unless the fixture disproves current identity behavior |
-| Legacy graph test references | Legacy v3 exposed them, but the relationship-backed steady state deliberately does not merge them | Real compatibility gap because TS/JS/Python still declare `testReferenceCapability: "production_ready"` |
-| Python import aliases | Tree-sitter already persists `ModuleBinding { importedName, localName }`, but the relationship builder rejects aliases by requiring both names to equal the receiver | Real bounded resolver gap |
-| Python typed parameters | `model: MetricsModel` remains a frozen unresolved witness; no receiver-type fact exists in `RelationshipAnalysisEvidence` | Real bounded evidence gap |
+| Generated/source duplicate ownership | R3 provides a focused source/generated identity and grouping fixture; distinct instances and groups are proven | Complete: `ambiguity_contract_pass` |
+| Relationship-backed test references | R1 derives additive `TESTS` records only from resolved test-to-production calls and projects them separately from traversal | Complete; legacy v3 graph state remains unused |
+| Python import aliases | R2 resolves a written local alias through the existing relative `ModuleBinding` to one exact repository class | Complete for the frozen alias witness |
+| Python typed parameters | R2 persists simple identifier annotations as callable-scoped receiver facts and resolves one exact repository class/method | Complete for the frozen parameter witness; broader inference remains deferred |
 | Constructor assignments, annotated assignments, repository-local return types, and optional/union normalization | No important repository witness is frozen in this plan | Deferred; not executable work |
 | Phase 7 comparison against codebase-memory | The external runtime is not needed to decide Satori's contract, and the repository already has direct search and compact-contract fixtures plus the frozen 30-task owner-retrieval evidence | Replace with a bounded evidence consolidation, not a new benchmark framework |
 
@@ -145,20 +160,20 @@ until that new policy binds and proves the current relationship generation.
 Every other mismatch retains the established `requires_reindex` result, and
 legacy v3 publications remain ineligible.
 
-### Remaining execution order
+### Completed execution record
 
 | Batch | Kind | Outcome |
 | --- | --- | --- |
 | R0 | Complete: `relationship_only_upgrade_pass` | Proven relationship-only navigation repair with zero vector-payload writes or embedding calls |
-| R1 | Implementation | Persist deterministic `TESTS` records and restore relationship-backed `call_graph.testReferences` |
-| R2 | Implementation | Resolve exact Python import aliases and simple parameter-annotation receiver types |
-| R3 | Evidence only | Prove generated/source duplicates remain distinct and source-owned implementation evidence is not collapsed |
-| R4 | Evidence only | Consolidate the direct symbol-owned retrieval contract and existing owner-retrieval evidence |
+| R1 | Complete: `test_reference_relationship_pass` | Deterministic `TESTS` records restore relationship-backed `call_graph.testReferences` without entering graph traversal |
+| R2 | Complete: `typed_receiver_parameter_pass` | Resolve exact Python import aliases and simple parameter-annotation receiver types |
+| R3 | Complete: `ambiguity_contract_pass` | Generated/source duplicates retain exact identities and separate groups; existing path policy is the sole ordering distinction |
+| R4 | Complete: `symbol_owned_program_complete` | Direct symbol-owned workflow evidence and descriptive response sizes are consolidated without a new benchmark layer |
 
-R0 is required before R1 or R2 may change persisted relationship meaning. R1
-and R2 are independent semantic batches after R0. R3 and R4 must not create
-implementation work unless their frozen witness disproves an existing
-authorized acceptance rule.
+R0 was required before R1 or R2 changed persisted relationship meaning. R1
+and R2 were independent semantic batches after R0. R3 and R4 remained
+evidence-only because their frozen witnesses did not disprove an existing
+acceptance rule.
 
 ### Reusable reconciliation evidence
 
@@ -721,7 +736,16 @@ Evidence rule:
 | Relationship sidecar missing | search works with no supported graph hint | outline works | symbol open works | unsupported with fallback |
 | Relationship sidecar incompatible | search works but graph hint downgraded unless relationship incompatibility implies full navigation mismatch | outline works if registry compatible | symbol open works if registry compatible | `requires_reindex` |
 
-## Language Capability Roadmap
+## Historical Language Capability Roadmap
+
+This section records the original target state. It is not a statement of
+current public capabilities or executable work.
+
+Current language capability truth is owned by
+`packages/core/src/languages/capabilities.ts` and the completed
+`MULTI_LANGUAGE_SYMBOL_DEFINITION_PARITY_PLAN.md`. Kotlin and Swift were not
+promoted. `IMPORTS` and `CALL_GRAPH` must not be inferred from the historical
+target table below.
 
 ### Baseline: current full support
 
@@ -731,14 +755,14 @@ JavaScript: SEARCH, AST_SPLIT, SYMBOLS, OWNER, CALL_GRAPH, TEST_LINKS
 Python:     SEARCH, AST_SPLIT, SYMBOLS, OWNER, CALL_GRAPH, TEST_LINKS
 ```
 
-`TEST_LINKS` is the intended public capability, but its steady-state
-relationship-backed implementation is currently missing. R1 closes that gap;
-until then the `production_ready` capability declaration overstates runtime
-behavior.
+`TEST_LINKS` is implemented through additive relationship-backed `TESTS`
+records derived only from resolved calls in admitted test/fixture paths. Those
+records populate the existing root-target `call_graph.testReferences` field
+without entering graph traversal.
 
-`IMPORTS` remains unclaimed at the public capability layer even though the
+`IMPORTS` remained unclaimed at the public capability layer even though the
 relationship sidecar now stores bounded relative `IMPORTS`/`EXPORTS` evidence.
-Promoting that capability is not required by the remaining batches.
+The completed R0-R4 program did not promote that capability.
 
 ### Phase language targets
 
@@ -901,7 +925,7 @@ Acceptance:
 
 ### Phase 4: Symbol-Centric Ranking
 
-Status: implementation complete; one evidence-only ambiguity fixture remains.
+Status: complete, including the evidence-only R3 ambiguity fixture.
 
 Implemented:
 
@@ -917,7 +941,7 @@ Implemented:
 - Implementation queries demote test helpers while explicit test intent can
   select them.
 
-Remaining evidence:
+Completed evidence:
 
 - Add one generated/source duplicate fixture only. It must first prove the two
   indexable sources retain distinct `symbolInstanceId` values and distinct
@@ -972,11 +996,30 @@ Terminal decision:
 - `ambiguity_identity_gap` with the exact grouping owner that collapsed the
   instances.
 
+R3 execution record (2026-07-23):
+
+- Decision: `ambiguity_contract_pass`.
+- The focused MCP fixture
+  `handleSearchCode keeps source and generated implementations as distinct
+  exact owners` uses `src/build-artifact.ts` and
+  `generated/build-artifact.ts` with the same `buildArtifact` declaration.
+- The registry produces different `symbolInstanceId` values. Exact
+  name-only registry routing reports `ambiguous`, semantic fallback retains
+  both concrete target identities, and grouping does not merge the paths.
+- Equal backend scores leave the ordinary source result ahead solely through
+  the existing path classification (`neutral` versus `generated`) and its
+  existing multiplier. No ranking, score, schema, or production implementation
+  changed.
+- Existing overload evidence remains in
+  `search-compact-contract.test.ts`; exact duplicate-label ambiguity remains in
+  `handlers.file_outline.test.ts`; test-helper ordering remains in
+  `handlers.scope.test.ts`.
+
 ### Phase 5: Relationship Engine v1
 
 Status: relationship storage and traversal are complete for `CALLS`,
-`IMPORTS`, and `EXPORTS`. Relationship-backed test references remain
-unimplemented.
+`IMPORTS`, and `EXPORTS`. R1 adds relationship-backed `TESTS` evidence for the
+existing root-target test-reference contract.
 
 Files:
 
@@ -1003,8 +1046,10 @@ Current implementation:
 - Relationship `CALLS v0` extraction intentionally excludes class container spans, skips ambiguous same-name targets, and downgrades unique cross-file name-only matches to `low` confidence until import/receiver-aware resolution exists. `IMPORTS`/`EXPORTS v0` records only resolvable relative module edges and unambiguous local export declarations; package imports, unresolved paths, ambiguous local exports, and multiline module syntax are skipped.
 - Registry-backed `search_codebase` and `file_outline` now keep graph hints supported only through a compatible relationship sidecar, and supported `symbolRef.symbolId` carries the registry `symbolInstanceId`. Missing or incompatible relationship state emits deterministic warnings or reindex guidance instead of reviving legacy graph handles.
 - `call_graph` now serves traversal directly from relationship records when compatible navigation sidecars exist. Missing or incompatible registry/relationship state returns deterministic `not_ready`, `missing_symbol_registry`, `missing_relationship_sidecar`, `incompatible_symbol_registry`, `incompatible_relationship_sidecar`, `not_found`, or `requires_reindex` behavior rather than falling back to legacy v3 runtime traversal.
-- `TESTS` is accepted by the persisted relationship vocabulary but is not yet
-  emitted or projected by the relationship-backed traversal path.
+- `TESTS` is emitted only beside an already resolved `CALLS` record from an
+  admitted test/fixture source to a non-test repository target. It is projected
+  separately from traversal into the existing root-target `testReferences`
+  response field.
 
 Acceptance:
 
@@ -1182,6 +1227,9 @@ Focused ESLint and git diff --check:               passed
 
 #### R1: Relationship-backed test references
 
+Status: complete with terminal decision
+`test_reference_relationship_pass`.
+
 Authorized outcome:
 
 > Restore the existing public root-target `call_graph.testReferences` contract
@@ -1243,10 +1291,35 @@ Terminal decision:
 - `test_reference_relationship_pass`; or
 - `test_reference_correctness_fail`.
 
+Execution result:
+
+- one Core-owned `isTestOrFixturePath()` predicate now owns both relationship
+  publication and MCP test/fixture note classification;
+- each resolved test-to-production call retains its original `CALLS` record
+  and gains one same-identity `TESTS` record;
+- production, unresolved, ambiguous, external, and test-to-test calls do not
+  gain test-reference authority;
+- relationship-backed `call_graph` performs one generation-bound inbound
+  `TESTS` query for the requested root and preserves the existing 50-reference
+  limit and response shape;
+- `TESTS` records do not enter traversal nodes, edges, or edge counts;
+- add, delete, rename, and retarget delta cases equal clean rebuild output; and
+- the development relationship identity advanced to
+  `relationship-v6+test-references`.
+
+Focused evidence:
+
+```text
+Core relationship builder and delta fixtures: 21 passed, 0 failed
+MCP relationship-backed and public graph fixtures: 29 passed, 0 failed
+Core and MCP direct TypeScript checks: passed
+Focused ESLint: passed
+```
+
 ### Phase 5B: Python Receiver-Aware `CALLS`
 
-Status: Phase 5B0/5B1 implemented and verified; the narrowed R2 portion of
-Phase 5B2 is implementation-ready after R0.
+Status: Phase 5B0/5B1 and the narrowed R2 portion of Phase 5B2 are implemented
+and verified.
 
 Decision boundary:
 
@@ -1301,8 +1374,8 @@ Implementation result:
   class;
 - a simple class-qualified receiver resolves only when the class is unique in
   the source file or a currently supported relative-import target;
-- external, chained, computed, arbitrary local, typed-local, and ambiguous
-  receivers remain unresolved;
+- at the 5B1 boundary, external, chained, computed, arbitrary local,
+  typed-local, and ambiguous receivers remained unresolved;
 - direct and constructor call behavior is unchanged;
 - relationship identity is
   `relationship-v5+python-receiver-calls`; and
@@ -1311,8 +1384,9 @@ Implementation result:
 
 #### 5B2: Add only the typed evidence still required
 
-Status: R2 is implementation-ready for import aliases and simple parameter
-annotations only. Broader local/return-type inference remains deferred.
+Status: complete with terminal decision `typed_receiver_parameter_pass`.
+Import aliases and simple parameter annotations are implemented; broader
+local/return-type inference remains deferred.
 
 Frozen witnesses:
 
@@ -1331,15 +1405,15 @@ def inspect(model: MetricsModel):
     model.calculate_metrics()
 ```
 
-The first witness is already fully represented by the persisted
+Before R2, the first witness was already fully represented by the persisted
 `ModuleBinding`: `importedName="SpreadModelFactory"` and
-`localName="Factory"`. The builder currently rejects it only because it
-requires the imported and local names to equal the receiver.
+`localName="Factory"`, but the builder rejected it by requiring the imported
+and local names to equal the receiver.
 
 The pinned Python grammar represents the second witness as a
-`typed_parameter` with a simple identifier under its `type` field. Current
-`RelationshipAnalysisEvidence` persists only `moduleBindings` and `callSites`,
-so the parameter type is lost before relationship construction.
+`typed_parameter` with a simple identifier under its `type` field. Before R2,
+`RelationshipAnalysisEvidence` persisted only `moduleBindings` and
+`callSites`, so the parameter type was lost before relationship construction.
 
 ##### R2 contract
 
@@ -1415,6 +1489,37 @@ Terminal decision:
 
 - `typed_receiver_parameter_pass`; or
 - `typed_receiver_correctness_fail`.
+
+Execution result:
+
+- Python Tree-sitter analysis emits `ReceiverTypeBinding` only for directly
+  named `typed_parameter`/`typed_default_parameter` nodes whose type is one
+  simple identifier;
+- the fact is persisted in the existing per-file relationship contribution
+  under `relationship_file_contribution_v2`; missing, extra, malformed, retired,
+  or unsupported binding shapes are rejected rather than treated as empty;
+- exact relative-import aliases now map the written local class name to the
+  imported repository class before method resolution;
+- parameter receiver facts are scoped to the nearest resolved callable, so the
+  same local parameter name in another function cannot lend type authority;
+- one exact class and one exact method are required; string, generic, union,
+  optional, attribute, chained, external, unknown, and ambiguous receivers
+  remain unresolved;
+- annotation add/remove/type changes and imported-class changes converge
+  between relationship delta and clean rebuild output;
+- Context persists and reads the new evidence, and an ordinary changed-file
+  delta embeds only that file's changed chunks; and
+- the final relationship identity is
+  `relationship-v7+test-references+python-typed-receivers`.
+
+Focused evidence:
+
+```text
+Language-analysis, relationship builder/delta, and sidecar fixtures: 121 passed, 0 failed
+Context persisted-receiver and unchanged-embedding fixtures:          2 passed, 0 failed
+R0 relationship-only compatibility fixtures under the final identity: 4 passed, 0 failed
+Core direct TypeScript and focused ESLint:                             passed
+```
 
 ##### Explicitly deferred 5B2 candidates
 
@@ -1519,9 +1624,8 @@ Acceptance per language:
 
 ### Phase 7 / R4: Direct Qualification Record
 
-Status: most contract coverage and owner-retrieval evidence already exists;
-one consolidation record remains. This is not authority for a new benchmark
-framework.
+Status: complete through the bounded R4 consolidation record. This is not
+authority for a new benchmark framework.
 
 Reusable evidence:
 
@@ -1534,7 +1638,7 @@ Reusable evidence:
   tasks respectively. It is retrieval evidence, not a codebase-memory
   comparison or proof of provider parity.
 
-R4 tasks:
+R4 executed tasks:
 
 1. Inventory the smallest existing tests that prove:
    - an implementation query returns a concrete symbol-owned target;
@@ -1566,11 +1670,45 @@ Terminal decision:
 - `qualification_contract_gap` naming the one unproven observable link. This
   decision does not authorize unrelated retrieval tuning.
 
+R4 execution record (2026-07-23):
+
+- Decision: `symbol_owned_program_complete`.
+- The smallest direct workflow inventory is:
+  - concrete implementation owner:
+    `handleSearchCode ranks canonical owners above tool wrappers for
+    implementation queries`;
+  - executable exact and span reads:
+    `documented grouped navigation mappings validate and execute through
+    registered tools`;
+  - same-name/overload preservation:
+    `grouped v2 keeps concrete symbol instances distinct and removes internal
+    grouping identities`;
+  - implementation-versus-test policy:
+    `handleSearchCode demotes tests below implementation owners unless test
+    intent is explicit`;
+  - generated/source identity and ordering: the R3 fixture above;
+  - file-owned fallback readability: the span-read branch of the documented
+    navigation-mapping test; and
+  - repeated deterministic ordering:
+    `search eval matrix invariants hold for runtime/docs scope and
+    deterministic ordering`.
+- Those seven focused checks passed together. No additional workflow fixture
+  was needed beyond the R3 witness.
+- For one fixed one-result `result()` fixture, UTF-8 JSON serialization was
+  1,234 bytes in grouped mode and 1,034 bytes in raw mode. These are
+  descriptive observations only, not a quality or token-efficiency threshold.
+- The existing 30-task Potion/Voyage result remains only owner-retrieval
+  evidence (required owner in the top five on 23/30 and 25/30 tasks). It is not
+  reinterpreted as symbol-ranking or provider-parity evidence.
+
 ## Test Plan
 
-This is the program-level consolidation inventory. Completed bullets are
-reusable evidence, not tests to recreate for R0-R4. Each remaining batch runs
-only its focused proof above plus existing checks invalidated by its diff.
+This is the program-level consolidation inventory. The completed bullets and
+recorded command results are reusable historical evidence.
+
+No test in this section is an instruction to reopen R0-R4. Future changes may
+reuse this evidence only while the named code, fixtures, schemas, parser
+assets, configuration, and relevant dependencies remain unchanged.
 
 ### Unit Tests
 
@@ -1608,22 +1746,25 @@ only its focused proof above plus existing checks invalidated by its diff.
   excluded. A separately indexable `generated/` fixture remains eligible but
   is deterministically classified and demoted by the existing search policy.
 
-## Documentation Updates Required With Implementation
+## Documentation Policy Applied During Implementation
 
-- Update `docs/SATORI_FEATURES_AND_USE_CASES.md` when public behavior changes.
-- Update the root README only when its language-support or product claims change.
-- Add third-party/MIT attribution before copying any upstream code or tables.
+- Public behavior changes made by R0-R4 required corresponding updates to
+  `docs/SATORI_FEATURES_AND_USE_CASES.md`.
+- The root README changes only when public language-support or product claims
+  change.
+- Any future copied upstream material requires a separately authorized
+  `THIRD_PARTY.md` update.
 
 ## Resolved Decisions
 
 1. Multi-language symbol-definition parity is complete under its own D0-D6
    plan. This plan does not choose another language target.
 2. Canonical-root, generation, receipt, and source-observation identity are
-   established publication authorities. No root-fingerprint redesign is
-   required by the remaining batches.
-3. Relationship-backed test references precede additional receiver inference
-   because the public capability already claims them while steady-state
-   traversal omits them.
+   established publication authorities. The completed batches required no
+   root-fingerprint redesign.
+3. Relationship-backed test references preceded additional receiver inference
+   because the public capability already claimed them while steady-state
+   traversal omitted them.
 4. Import aliases and one simple parameter-annotation fact are the only
    receiver additions with frozen witnesses. Broader type inference is
    deferred.
@@ -1631,19 +1772,28 @@ only its focused proof above plus existing checks invalidated by its diff.
 6. Legacy `metadata.symbolId` cleanup is not required for any remaining
    observable outcome and is excluded.
 
-## Execution Batches
-
-Execute in this order:
+## Completed Execution Sequence
 
 ```text
-R0 relationship-only navigation repair (complete)
-  -> R1 relationship-backed TESTS
-  -> R2 Python import-alias and parameter receiver evidence
-  -> R3 generated/source duplicate evidence
-  -> R4 direct qualification record
+R0 relationship-only navigation repair
+    -> complete: relationship_only_upgrade_pass
+
+R1 relationship-backed TESTS
+    -> complete: test_reference_relationship_pass
+
+R2 Python import-alias and parameter receiver evidence
+    -> complete: typed_receiver_parameter_pass
+
+R3 generated/source duplicate evidence
+    -> complete: ambiguity_contract_pass
+
+R4 direct qualification record
+    -> complete: symbol_owned_program_complete
 ```
 
-Verification ownership:
+Verification followed the ownership boundaries below. These commands and
+boundaries are retained as reusable evidence, not as authorization to rerun or
+extend the completed batches.
 
 - R0 owns persisted-index compatibility, repair, publication activation, and
   backend-neutral no-vector-write evidence.
@@ -1654,12 +1804,6 @@ Verification ownership:
   Python member resolution, and delta equivalence.
 - R3 and R4 are evidence-only and add no implementation unless their exact
   frozen oracle fails.
-
-Run narrow owning tests after each batch. At the final consolidation point run
-the affected Core and MCP relationship/navigation tests, Core/MCP typecheck,
-focused lint for changed TypeScript files, affected builds, and
-`git diff --check`. Do not run paid-provider, installer, release, ranking,
-answering-agent, or broad retrieval qualification.
 
 ## Terminal Decisions
 
@@ -1678,12 +1822,31 @@ invalidated existing contracts, compatibility identity, and directly affected
 documentation are complete. An evidence-only failure identifies its concrete
 owner but does not authorize an unrelated redesign.
 
+## Final Consolidation Record
+
+The final affected build and verification surface passed on 2026-07-23:
+
+- Core language-analysis, relationship-builder, relationship-sidecar,
+  relationship-only repair, and two-file index-path checks passed under the
+  final `relationship-v7+test-references+python-typed-receivers` identity.
+- MCP relationship-backed and public call-graph checks passed 29/29.
+- The focused R3/R4 workflow consolidation passed 7/7.
+- Core and MCP builds and direct package typechecks passed.
+- Focused ESLint over every changed TypeScript file passed.
+- `git diff --check` passed.
+
+No paid provider, live repository benchmark, release suite, installer
+qualification, or broad retrieval evaluation was run.
+
 ## Handoff State
 
-The repository is aligned with the completed architecture through Phase 5B1
-and the completed multi-language definition program. R0 now provides the
-proven v4 relationship-only upgrade path without importing codebase-memory or
-adding a second graph or parser authority. The next implementation batch is
-R1. Its semantic relationship-version bump must use the completed R0 path; a
-passing R0 does not weaken ordinary fingerprint admission or authorize vector
-reuse for any other compatibility delta.
+The repository is aligned with the completed symbol-owned retrieval
+architecture, the completed multi-language definition program, and all R0-R4
+batches in this plan. R0 provides the proven v4 relationship-only upgrade path
+without importing codebase-memory or adding a second graph or parser
+authority. R1 restores persisted test-reference evidence, R2 adds only the
+frozen exact Python receiver cases, and R3/R4 close the remaining direct
+evidence contracts. Ordinary fingerprint admission remains exact, and vector
+reuse is not authorized for any compatibility delta beyond the proven R0
+relationship-only case. No further implementation is authorized or required
+by this plan.

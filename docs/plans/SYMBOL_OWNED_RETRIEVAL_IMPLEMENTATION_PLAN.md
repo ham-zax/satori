@@ -39,6 +39,52 @@ search_codebase
 
 Satori should not become codebase-memory. Satori keeps semantic retrieval, freshness gates, installer-first setup, MCP contracts, and deterministic sidecars. The borrowed pattern is symbol ownership and relationship-aware evidence.
 
+The separate operational remediation in
+`docs/remediation/2026-07-23-operational-search-and-navigation-findings.md`
+completed R1-R6. In particular, exact `symbolId` now owns call-graph identity,
+Python decorator spans are canonicalized consistently, and freshness
+coordination no longer needs to be solved inside a relationship-expansion
+phase. Those repairs do not implement receiver-aware Python `CALLS`.
+
+## 2026-07-23 Targeted Relationship Follow-up Decision
+
+The symbol registry, relationship sidecars, generation binding, and
+relationship-backed `call_graph` described below are already implemented. The
+next relationship task is not to replace them with codebase-memory or to copy
+its complete runtime. It is to close one demonstrated Python coverage gap:
+
+```text
+tree-sitter records member call
+  -> CallSite(kind="member", receiverText, qualifiedCallee)
+  -> buildCallRelationshipsForRegistry drops it
+  -> graph-ready symbol can expose zero outgoing edges
+```
+
+The current Satori graph is not empty. On the post-reindex
+`tradingview_ratio` publication, `run_validation` returned six outgoing edges.
+The zero-edge witnesses (`CircuitBreaker.check_drawdown`,
+`calculate_spread_from_frames`, and `test_combination_generation`) primarily
+contain member calls such as `self.method(...)`, `model.method(...)`, or
+`dashboard.method(...)`, which the current relationship builder intentionally
+skips.
+
+Use codebase-memory as a pinned behavioral reference for Python receiver/type
+resolution, not as Satori's storage or runtime dependency:
+
+- upstream: https://github.com/DeusData/codebase-memory-mcp
+- reviewed revision: `dc7178c8dc91bd14098add339c5d37087d88c9bf`
+- license: MIT, `LICENSE` SHA-256
+  `1f58f9911dc5e3bcb96de28bb28e7b6bb7eb323952d29569c5d7214a152146bb`
+- relevant upstream owners: `internal/cbm/extract_calls.c`,
+  `internal/cbm/lsp/py_lsp.c`, `src/pipeline/pass_lsp_cross.c`,
+  `src/pipeline/pass_calls.c`, and `src/pipeline/lsp_resolve.h`
+
+Do not port codebase-memory's SQLite graph, graph-buffer pipeline, built-in or
+stdlib node injection, 15-tool MCP surface, daemon, installer, Cypher layer,
+semantic index, UI, or other language resolvers as part of this task. Those
+would duplicate Satori authorities and change the product rather than repair
+the demonstrated gap.
+
 ## Core Constraints
 
 1. No public MCP tool expansion.
@@ -801,6 +847,120 @@ Acceptance:
 - Relationship engine can represent import/test refs without exposing new MCP tools.
 - Relationship sidecar absence degrades only graph hints/call graph when registry remains compatible.
 
+### Phase 5B: Python Receiver-Aware `CALLS`
+
+Status: proposed bounded follow-up; not authorized by this plan update.
+
+Decision boundary:
+
+> Recover demonstrated repository-local Python member-call edges without
+> importing a second graph store, parser runtime, or MCP product.
+
+#### 5B0: Freeze the relationship oracle
+
+Before changing extraction or resolution, freeze fixtures for:
+
+- the existing direct-call graph, including the six outgoing edges currently
+  returned for `run_validation`;
+- `CircuitBreaker.check_drawdown` resolving its same-class `self` calls to
+  `_determine_new_state`, `_handle_state_transition`, and
+  `_build_state_snapshot`;
+- `_handle_state_transition` resolving `_get_threshold_for_state`;
+- a unique class-qualified call such as `SpreadModelFactory.create_model`;
+- an annotated or constructor-bound local receiver calling one repository
+  method;
+- an unresolved external receiver such as `pd.merge` producing no invented
+  repository edge; and
+- two classes with the same method name remaining unresolved when receiver
+  evidence cannot distinguish them.
+
+Use codebase-memory results over the same frozen source revision as comparator
+evidence only. Satori's source, symbol registry, and deterministic expected
+edges remain the acceptance authority; matching the other project's total edge
+count is not a goal.
+
+#### 5B1: Resolve existing member-call facts
+
+Use the `CallSite` facts Satori already extracts before adding new analysis:
+
+1. Accept `kind="member"` at the relationship-builder boundary.
+2. Resolve `self.<name>` and `cls.<name>` only inside the source method's
+   enclosing class.
+3. Resolve `<ClassName>.<name>` only when both the class and member identify one
+   repository symbol under the existing import/module authority.
+4. Preserve direct-call and constructor behavior unchanged.
+5. Fail closed on ambiguous, external, dynamic, or unsupported receivers.
+6. Emit the existing `RelationshipRecord`; do not add another graph schema or
+   query-time resolver.
+7. Preserve deterministic ordering and per-file contribution ownership.
+
+Stop after this slice if it satisfies the frozen same-class and
+class-qualified witnesses. Do not add a type system merely to increase an edge
+count.
+
+#### 5B2: Add only the typed evidence still required
+
+Enter this slice only if 5B1 passes its own fixtures but a frozen, important
+receiver-bound witness such as `model.calculate_metrics` remains unresolved.
+
+Port the minimum applicable behavior from the pinned codebase-memory Python
+resolver into Satori's existing TypeScript/tree-sitter pipeline:
+
+- import aliases and imported class bindings;
+- parameter annotations;
+- constructor assignment types;
+- simple annotated assignments;
+- repository-local return types; and
+- the narrow optional/union normalization needed by a frozen fixture.
+
+These facts must be deterministic per-file derived state. Reuse Satori's
+existing parse, symbol registry, relationship sidecars, publication generation,
+and delta-contribution lifecycle. Do not introduce the upstream C runtime,
+SQLite graph, subprocess, second source parse, synthetic built-in/stdlib nodes,
+or query-time type inference.
+
+If implementation substantially copies upstream code, mappings, or tests,
+update `THIRD_PARTY.md` from its current reference-only statement to record the
+exact imported scope, revision, and source hashes. Relevant reviewed source
+identities are:
+
+| Upstream source | SHA-256 |
+| --- | --- |
+| `internal/cbm/extract_calls.c` | `94b9ae1443ac1ef7d8fb06af7fcef60aa5d450575ad4bad320a9557e6bf0128d` |
+| `internal/cbm/lsp/py_lsp.c` | `a2ed9a43117444e6603b01bccce1f556a608b4f958a32ac14559ab1b9852e84c` |
+| `src/pipeline/pass_calls.c` | `e81e1a26adff762b82aa6b3d455dd40c3e966b3c97682e46dc0bfc71329ebd14` |
+| `src/pipeline/pass_lsp_cross.c` | `a31cefdb4d0298d855f3498a6378a085b5c1dc9a598fe593c4ab429f25fc9b5a` |
+| `src/pipeline/lsp_resolve.h` | `6eac160edb34a8bb3ca6e06a1a43f1d530aed516ccc48e7b5a7b5bcc63b6d13c` |
+
+#### 5B3: Publication and compatibility
+
+- Bump `relationshipVersion` when persisted relationship meaning changes.
+- Invalidate and rebuild relationship/navigation state without invalidating
+  compatible lexical or embedding state.
+- Never mix relationship shards produced under different resolver identities.
+- Preserve delta publication: changed resolution facts may recompute a
+  deterministic conservative set of reference owners, but must not silently
+  rebuild every unrelated file for an ordinary body edit.
+- Preserve old-or-new generation activation, restart recovery, and missing or
+  corrupt sidecar behavior.
+
+Acceptance:
+
+- Delta publication and a clean full rebuild produce the same canonical graph
+  for the bounded mutation fixtures.
+- Existing direct and constructor edges do not regress.
+- Frozen same-class and class-qualified edges resolve without name-only
+  cross-class fabrication.
+- External and ambiguous calls remain unresolved rather than creating false
+  repository edges.
+- Unchanged chunks are not re-embedded.
+- Shared relationship state contains no Potion-, LanceDB-, Voyage-, or
+  Milvus-specific assumptions.
+- The public MCP tool surface and `call_graph` response contract remain fixed.
+- The completed O1 repair makes `symbolId` authoritative over optional
+  `symbolLabel`; this phase must preserve that contract rather than changing
+  stored labels to hide identity drift.
+
 ### Phase 6: Language Expansion
 
 Order:
@@ -900,21 +1060,25 @@ Acceptance:
 4. What confidence thresholds should downgrade a symbol group from high to medium or low?
 5. Which remaining legacy `metadata.symbolId` cleanup can be deleted immediately now that runtime navigation treats `symbolInstanceId` as the exact steady-state identity?
 
-## Recommended First Patch
+## Recommended Next Patch
 
-Implement the lowest-risk slice of Phase 1 plus contracts only:
+Implement only Phase 5B0 and 5B1:
 
-- Expand language router and extension coverage.
-- Add capability flags.
-- Add symbol registry TypeScript interfaces and manifest schema without writing sidecars yet.
-- Add tests proving route/capability honesty.
-- Add docs describing capability semantics and stable/exact symbol identity.
-- Do not change index-profile defaults or broaden the default indexed corpus yet.
-- Do not change search ranking yet.
-- Do not change `file_outline`, `call_graph`, or `search_codebase` behavior yet.
+- freeze the direct-call preservation and member-call positive/negative
+  fixtures;
+- allow the relationship builder to consume existing member `CallSite` facts;
+- resolve exact same-class `self`/`cls` and unique class-qualified calls;
+- preserve ambiguity by omission; and
+- stop and measure the frozen witnesses before considering typed receiver
+  evidence.
 
-This creates the stable internal vocabulary needed for the larger migration without risking MCP response regressions.
+This is the smallest patch on the demonstrated wrong boundary. It does not
+require importing codebase-memory, changing the public tool contract, or
+rebuilding the retrieval architecture.
 
 ## Handoff State
 
-Ready for architecture review, then direct implementation in small phases. The first coding lane should be `tdd-workflow` plus `verification-loop` because this changes indexing contracts and search behavior.
+This document records the reviewed architecture and the bounded Phase 5B
+follow-up. No implementation, reindex, or codebase-memory import is authorized
+by this planning update. If implementation is separately authorized, begin with
+5B0/5B1 and make the 5B2 entry decision only from the frozen fixture result.

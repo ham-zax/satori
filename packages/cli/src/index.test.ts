@@ -11,6 +11,9 @@ import { CliError } from "./errors.js";
 import { isExecutedDirectlyForPaths, runCli } from "./index.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CLI_PACKAGE_VERSION = (
+    JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8")) as { version: string }
+).version;
 const SOURCE_SERVER_ENTRY = path.resolve(PACKAGE_ROOT, "..", "mcp", "src", "index.ts");
 const RUN_LIVE_SERVER_SMOKE = process.env.SATORI_RUN_LIVE_SERVER_SMOKE === "1";
 const BLOCK_LANCEDB_NATIVE_FIXTURE = path.resolve(
@@ -139,6 +142,20 @@ function fakeInstallRuntimeCommand(homeDir: string) {
         args: [path.join(homeDir, ".satori", "mcp-runtime", "fake", "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js")],
     };
 }
+
+test("runCli help presents satori as primary and preserves the legacy alias", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["help"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+    });
+
+    assert.equal(exitCode, 0);
+    const help = JSON.parse(io.read().stdout);
+    assert.equal(help.usage, "satori <command>");
+    assert.equal(help.legacyAlias, "satori-cli");
+});
 
 test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const io = captureIo();
@@ -273,6 +290,155 @@ test("runCli install updates config and emits a quiet human summary", async () =
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
+});
+
+test("runCli upgrade updates the global CLI before delegating runtime activation", async () => {
+    const io = captureIo();
+    let runtimeUpgradeCalls = 0;
+    let delegated = false;
+    const exitCode = await runCli(["upgrade"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+        env: { HOME: "/home/test" },
+        invokedScriptPath: "/global/bin/satori",
+        upgradeTargetResolver: () => ({
+            cliPackageSpecifier: "@zokizuan/satori-cli@99.0.0",
+            cliVersion: "99.0.0",
+            mcpPackageSpecifier: "@zokizuan/satori-mcp@99.0.0",
+            mcpVersion: "99.0.0",
+            coreVersion: "99.0.0",
+        }),
+        globalCliUpgradeRunner: (input) => {
+            delegated = true;
+            assert.equal(input.currentCliVersion, CLI_PACKAGE_VERSION);
+            assert.equal(input.invokedScriptPath, "/global/bin/satori");
+            assert.deepEqual(input.delegatedArgs, ["upgrade"]);
+            return 0;
+        },
+        managedRuntimeUpgradeRunner: async () => {
+            runtimeUpgradeCalls += 1;
+            throw new Error("old CLI must not activate a newer runtime");
+        },
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(delegated, true);
+    assert.equal(runtimeUpgradeCalls, 0);
+    assert.deepEqual(io.read(), { stdout: "", stderr: "" });
+});
+
+test("runCli upgrade reports the complete CLI, MCP, and Core result", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["upgrade"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+        env: {
+            HOME: "/home/test",
+            SATORI_UPGRADE_DELEGATED_TARGET: CLI_PACKAGE_VERSION,
+            SATORI_UPGRADE_FROM_CLI_VERSION: "1.2.0",
+        },
+        upgradeTargetResolver: () => ({
+            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliVersion: CLI_PACKAGE_VERSION,
+            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpVersion: "6.2.0",
+            coreVersion: "3.1.0",
+        }),
+        managedRuntimeUpgradeRunner: async () => ({
+            action: "upgrade",
+            status: "upgraded",
+            fromMcpVersion: "6.1.0",
+            toMcpVersion: "6.2.0",
+            fromCoreVersion: "3.0.0",
+            toCoreVersion: "3.1.0",
+            packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            configuredClients: ["codex"],
+            restartRequired: true,
+        }),
+    });
+
+    assert.equal(exitCode, 0);
+    const output = io.read();
+    assert.match(output.stdout, /^Satori upgraded/m);
+    assert.match(output.stdout, new RegExp(`CLI: 1\\.2\\.0 → ${CLI_PACKAGE_VERSION.replace(/\./g, "\\.")}`));
+    assert.match(output.stdout, /MCP runtime: 6\.1\.0 → 6\.2\.0/);
+    assert.match(output.stdout, /Core: 3\.0\.0 → 3\.1\.0/);
+    assert.match(output.stdout, /Restart Codex/);
+    assert.equal(output.stderr, "");
+});
+
+test("runCli reports a completed CLI update separately when runtime activation fails", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["--format", "json", "upgrade"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+        env: {
+            HOME: "/home/test",
+            SATORI_UPGRADE_DELEGATED_TARGET: CLI_PACKAGE_VERSION,
+            SATORI_UPGRADE_FROM_CLI_VERSION: "1.2.0",
+        },
+        upgradeTargetResolver: () => ({
+            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliVersion: CLI_PACKAGE_VERSION,
+            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpVersion: "6.2.0",
+            coreVersion: "3.1.0",
+        }),
+        managedRuntimeUpgradeRunner: async () => {
+            throw new CliError("E_INSTALL_PREFLIGHT", "candidate runtime rejected", 1);
+        },
+    });
+
+    assert.equal(exitCode, 1);
+    const output = io.read();
+    const receipt = JSON.parse(output.stdout);
+    assert.equal(receipt.action, "upgrade");
+    assert.equal(receipt.status, "error");
+    assert.equal(receipt.cliUpgrade, "completed");
+    assert.equal(receipt.runtimeUpgrade, "failed");
+    assert.equal(receipt.launcherChanged, false);
+    assert.equal(receipt.fromCliVersion, "1.2.0");
+    assert.equal(receipt.toCliVersion, CLI_PACKAGE_VERSION);
+    assert.equal(receipt.error.token, "E_INSTALL_PREFLIGHT");
+    assert.match(output.stderr, /CLI .* is installed.*managed launcher remains unchanged/s);
+});
+
+test("runCli update alias preserves the structured upgrade receipt", async () => {
+    const io = captureIo();
+    const exitCode = await runCli(["--format", "json", "update"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        diagnosticsPath: null,
+        env: { HOME: "/home/test" },
+        upgradeTargetResolver: () => ({
+            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliVersion: CLI_PACKAGE_VERSION,
+            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpVersion: "6.2.0",
+            coreVersion: "3.1.0",
+        }),
+        managedRuntimeUpgradeRunner: async () => ({
+            action: "upgrade",
+            status: "up_to_date",
+            fromMcpVersion: "6.2.0",
+            toMcpVersion: "6.2.0",
+            fromCoreVersion: "3.1.0",
+            toCoreVersion: "3.1.0",
+            packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            configuredClients: [],
+            restartRequired: false,
+        }),
+    });
+
+    assert.equal(exitCode, 0);
+    const result = JSON.parse(io.read().stdout);
+    assert.equal(result.action, "upgrade");
+    assert.equal(result.status, "up_to_date");
+    assert.equal(result.fromCliVersion, CLI_PACKAGE_VERSION);
+    assert.equal(result.toCliVersion, CLI_PACKAGE_VERSION);
 });
 
 test("runCli install preserves the structured receipt when JSON is requested", async () => {

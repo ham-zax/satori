@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
 import {
     executeInstallCommand as executeInstallCommandProduction,
+    executeManagedRuntimeUpgrade,
     inspectManagedClientConfigurations,
     type InstallCommandInput,
     type InstallCommandOptions,
 } from "./install.js";
+import {
+    buildLauncherScript,
+    parseManagedLauncherDescriptor,
+} from "./managed-launcher-script.mjs";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const POSTFLIGHT_MCP_RUNTIME_FIXTURE = path.resolve(
@@ -23,6 +28,9 @@ const POSTFLIGHT_MCP_RUNTIME_FIXTURE = path.resolve(
 const PACKAGE_JSON = JSON.parse(
     fs.readFileSync(path.resolve(PACKAGE_ROOT, "..", "mcp", "package.json"), "utf8")
 ) as { name: string; version: string; bin?: Record<string, string> };
+const CORE_PACKAGE_JSON = JSON.parse(
+    fs.readFileSync(path.resolve(PACKAGE_ROOT, "..", "core", "package.json"), "utf8")
+) as { name: string; version: string };
 const EXPECTED_PACKAGE_SPECIFIER = `${PACKAGE_JSON.name}@${PACKAGE_JSON.version}`;
 
 function executeInstallCommand(
@@ -218,6 +226,8 @@ function installRuntimePackageStub(
     relativeEntry: string,
     expectedSpecifier = EXPECTED_PACKAGE_SPECIFIER,
     installedVersion = expectedSpecifier.slice(expectedSpecifier.lastIndexOf("@") + 1),
+    installedCoreVersion = CORE_PACKAGE_JSON.version,
+    writeCorePackage = true,
 ) {
     return (command: string, args: string[]) => {
         assert.equal(command, "npm");
@@ -239,6 +249,17 @@ function installRuntimePackageStub(
             },
         }, null, 2), "utf8");
         fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf8");
+        if (writeCorePackage) {
+            const corePackageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core");
+            fs.mkdirSync(corePackageRoot, { recursive: true });
+            fs.writeFileSync(path.join(corePackageRoot, "package.json"), JSON.stringify({
+                name: "@zokizuan/satori-core",
+                version: installedCoreVersion,
+                exports: {
+                    "./package.json": "./package.json",
+                },
+            }, null, 2), "utf8");
+        }
         return "";
     };
 }
@@ -265,6 +286,56 @@ function brokenRuntimePackageStub(
         );
         return result;
     };
+}
+
+const UPGRADE_TARGET = {
+    cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+    cliVersion: "1.3.0",
+    mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+    mcpVersion: "6.2.0",
+    coreVersion: "3.1.0",
+} as const;
+
+async function installUpgradeSourceRuntime(
+    homeDir: string,
+    managedEnvironment: Readonly<Record<string, string>>,
+    options: {
+        mcpVersion?: string;
+        coreVersion?: string;
+    } = {},
+): Promise<void> {
+    const mcpVersion = options.mcpVersion ?? "6.1.0";
+    const coreVersion = options.coreVersion ?? "3.0.0";
+    const packageSpecifier = `@zokizuan/satori-mcp@${mcpVersion}`;
+    await executeInstallCommand({
+        kind: "install",
+        client: "codex",
+        runtime: "voyage",
+        dryRun: false,
+    }, {
+        homeDir,
+        packageSpecifier,
+        execFileSyncImpl: installRuntimePackageStub(
+            "dist/source-runtime.mjs",
+            packageSpecifier,
+            mcpVersion,
+            coreVersion,
+        ) as never,
+        preflightRunner: async () => ({
+            runtimeEnvironment: managedEnvironment,
+        }),
+    });
+}
+
+function writeCorePackage(packageRoot: string, version: string): void {
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+        name: "@zokizuan/satori-core",
+        version,
+        exports: {
+            "./package.json": "./package.json",
+        },
+    }, null, 2), "utf8");
 }
 
 test("install writes managed Codex config block and copies packaged skill", async () => {
@@ -616,6 +687,551 @@ test("successful runtime upgrade switches the launcher only after candidate pref
     });
 });
 
+test("managed runtime upgrade replaces MCP and Core without rewriting client configuration", async () => {
+    await withTempHome(async (homeDir) => {
+        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
+        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: oldSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/old-runtime.mjs",
+                oldSpecifier,
+                "6.1.0",
+                "3.0.0",
+            ) as never,
+        });
+        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
+        const originalConfig = readFile(codexConfigPath);
+        const originalLauncher = readFile(launcherPath(homeDir));
+        let candidateProbes = 0;
+
+        const result = await executeManagedRuntimeUpgrade({
+            cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+            cliVersion: "1.3.0",
+            mcpPackageSpecifier: newSpecifier,
+            mcpVersion: "6.2.0",
+            coreVersion: "3.1.0",
+        }, {
+            homeDir,
+            env: { VECTOR_STORE_PROVIDER: "LanceDB" },
+            packageSpecifier: newSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/new-runtime.mjs",
+                newSpecifier,
+                "6.2.0",
+                "3.1.0",
+            ) as never,
+            preflightRunner: async (input) => {
+                assert.equal(input.runtime, "voyage");
+                return {
+                    runtimeEnvironment: Object.freeze({
+                        SATORI_RUNTIME_PROFILE: "connected",
+                        VECTOR_STORE_PROVIDER: "LanceDB",
+                    }),
+                };
+            },
+            preflightDependencies: {
+                probeCandidateRuntime: async ({ expectedVersion }) => {
+                    candidateProbes += 1;
+                    assert.equal(expectedVersion, "6.2.0");
+                },
+            },
+        });
+
+        assert.equal(result.status, "upgraded");
+        assert.equal(result.fromMcpVersion, "6.1.0");
+        assert.equal(result.toMcpVersion, "6.2.0");
+        assert.equal(result.fromCoreVersion, "3.0.0");
+        assert.equal(result.toCoreVersion, "3.1.0");
+        assert.deepEqual(result.configuredClients, ["codex"]);
+        assert.equal(candidateProbes, 1);
+        assert.equal(readFile(codexConfigPath), originalConfig);
+        assert.notEqual(readFile(launcherPath(homeDir)), originalLauncher);
+        assert.match(readFile(launcherPath(homeDir)), /new-runtime\.mjs/);
+    });
+});
+
+test("failed managed runtime upgrade preserves the previous launcher and removes its candidate", async () => {
+    await withTempHome(async (homeDir) => {
+        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
+        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: oldSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/old-runtime.mjs",
+                oldSpecifier,
+                "6.1.0",
+                "3.0.0",
+            ) as never,
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        const candidateRoot = path.join(
+            homeDir,
+            ".satori",
+            "mcp-runtime",
+            "@zokizuan-satori-mcp@6.2.0",
+        );
+
+        await assert.rejects(
+            executeManagedRuntimeUpgrade({
+                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliVersion: "1.3.0",
+                mcpPackageSpecifier: newSpecifier,
+                mcpVersion: "6.2.0",
+                coreVersion: "3.1.0",
+            }, {
+                homeDir,
+                env: { VECTOR_STORE_PROVIDER: "LanceDB" },
+                execFileSyncImpl: installRuntimePackageStub(
+                    "dist/new-runtime.mjs",
+                    newSpecifier,
+                    "6.2.0",
+                    "3.1.0",
+                ) as never,
+                preflightRunner: async () => {
+                    throw new Error("candidate rejected");
+                },
+                preflightDependencies: {
+                    probeCandidateRuntime: async () => {},
+                },
+            }),
+            /candidate rejected/,
+        );
+
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+        assert.equal(fs.existsSync(candidateRoot), false);
+    });
+});
+
+test("managed runtime upgrade refuses to overwrite a launcher changed during preflight", async () => {
+    await withTempHome(async (homeDir) => {
+        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
+        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: oldSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/old-runtime.mjs",
+                oldSpecifier,
+                "6.1.0",
+                "3.0.0",
+            ) as never,
+        });
+        const concurrentLauncher = "# concurrent launcher replacement\n";
+
+        await assert.rejects(
+            executeManagedRuntimeUpgrade({
+                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliVersion: "1.3.0",
+                mcpPackageSpecifier: newSpecifier,
+                mcpVersion: "6.2.0",
+                coreVersion: "3.1.0",
+            }, {
+                homeDir,
+                env: { VECTOR_STORE_PROVIDER: "LanceDB" },
+                execFileSyncImpl: installRuntimePackageStub(
+                    "dist/new-runtime.mjs",
+                    newSpecifier,
+                    "6.2.0",
+                    "3.1.0",
+                ) as never,
+                preflightRunner: async () => {
+                    fs.writeFileSync(launcherPath(homeDir), concurrentLauncher, "utf8");
+                    return {
+                        runtimeEnvironment: Object.freeze({
+                            SATORI_RUNTIME_PROFILE: "connected",
+                            VECTOR_STORE_PROVIDER: "LanceDB",
+                        }),
+                    };
+                },
+                preflightDependencies: {
+                    probeCandidateRuntime: async () => {},
+                },
+            }),
+            /changed after the installation plan was created/,
+        );
+
+        assert.equal(readFile(launcherPath(homeDir)), concurrentLauncher);
+    });
+});
+
+test("managed runtime upgrade is a no-op when both MCP and Core are current", async () => {
+    await withTempHome(async (homeDir) => {
+        const currentSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            packageSpecifier: currentSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/current-runtime.mjs",
+                currentSpecifier,
+                "6.2.0",
+                "3.1.0",
+            ) as never,
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+
+        const result = await executeManagedRuntimeUpgrade({
+            cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+            cliVersion: "1.3.0",
+            mcpPackageSpecifier: currentSpecifier,
+            mcpVersion: "6.2.0",
+            coreVersion: "3.1.0",
+        }, {
+            homeDir,
+            execFileSyncImpl: (() => {
+                throw new Error("up-to-date runtime must not install");
+            }) as never,
+            preflightRunner: async () => {
+                throw new Error("up-to-date runtime must not preflight");
+            },
+        });
+
+        assert.equal(result.status, "up_to_date");
+        assert.equal(result.restartRequired, false);
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+    });
+});
+
+test("managed runtime upgrade preserves each supported runtime selection and rejects unknown profiles", async () => {
+    const cases = [
+        {
+            name: "offline Potion",
+            managedEnvironment: {
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: "/managed/potion-lance",
+                EMBEDDING_PROVIDER: "Potion",
+            },
+            inheritedEnvironment: {},
+            expected: {
+                runtime: "offline",
+                vectorStore: "LanceDB",
+                ollamaModel: undefined,
+                lancedbPath: "/managed/potion-lance",
+            },
+        },
+        {
+            name: "offline Ollama",
+            managedEnvironment: {
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: "/managed/ollama-lance",
+                EMBEDDING_PROVIDER: "Ollama",
+                OLLAMA_MODEL: "nomic-embed-text",
+                OLLAMA_HOST: "http://127.0.0.1:11434",
+            },
+            inheritedEnvironment: {},
+            expected: {
+                runtime: "offline",
+                vectorStore: "LanceDB",
+                ollamaModel: "nomic-embed-text",
+                lancedbPath: "/managed/ollama-lance",
+            },
+        },
+        {
+            name: "connected Milvus",
+            managedEnvironment: {
+                SATORI_RUNTIME_PROFILE: "connected",
+                VECTOR_STORE_PROVIDER: "Milvus",
+                EMBEDDING_PROVIDER: "VoyageAI",
+            },
+            inheritedEnvironment: {
+                MILVUS_ADDRESS: "https://milvus.example.test",
+            },
+            expected: {
+                runtime: "voyage",
+                vectorStore: "Milvus",
+                ollamaModel: undefined,
+                lancedbPath: undefined,
+            },
+        },
+        {
+            name: "legacy connected launcher without a profile",
+            managedEnvironment: {
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                LANCEDB_PATH: "/managed/legacy-lance",
+                EMBEDDING_PROVIDER: "VoyageAI",
+            },
+            inheritedEnvironment: {},
+            expected: {
+                runtime: "voyage",
+                vectorStore: "LanceDB",
+                ollamaModel: undefined,
+                lancedbPath: "/managed/legacy-lance",
+            },
+        },
+    ] as const;
+
+    for (const fixture of cases) {
+        await withTempHome(async (homeDir) => {
+            await installUpgradeSourceRuntime(homeDir, fixture.managedEnvironment);
+            let observedSelection: {
+                runtime: string;
+                vectorStore?: string;
+                ollamaModel?: string;
+                lancedbPath?: string;
+            } | undefined;
+
+            await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                env: fixture.inheritedEnvironment,
+                platform: "linux",
+                architecture: "x64",
+                execFileSyncImpl: installRuntimePackageStub(
+                    "dist/target-runtime.mjs",
+                    UPGRADE_TARGET.mcpPackageSpecifier,
+                    UPGRADE_TARGET.mcpVersion,
+                    UPGRADE_TARGET.coreVersion,
+                ) as never,
+                preflightRunner: async (input) => {
+                    observedSelection = {
+                        runtime: input.runtime,
+                        vectorStore: input.vectorStore,
+                        ollamaModel: input.ollamaModel,
+                        lancedbPath: input.env.LANCEDB_PATH,
+                    };
+                    return {
+                        runtimeEnvironment: Object.freeze({
+                            SATORI_RUNTIME_PROFILE: input.runtime === "offline" ? "offline" : "connected",
+                            VECTOR_STORE_PROVIDER: input.vectorStore ?? "LanceDB",
+                        }),
+                    };
+                },
+                preflightDependencies: {
+                    probeCandidateRuntime: async () => {},
+                },
+            });
+
+            assert.deepEqual(observedSelection, fixture.expected, fixture.name);
+        });
+    }
+
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "experimental",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        await assert.rejects(
+            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                execFileSyncImpl: (() => {
+                    throw new Error("unknown profile must fail before installation");
+                }) as never,
+            }),
+            /unsupported SATORI_RUNTIME_PROFILE=experimental/,
+        );
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+    });
+});
+
+test("managed runtime upgrade rejects Core resolved outside the owned runtime", async () => {
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+        });
+        const descriptor = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir)));
+        const runtimeEntry = descriptor.args[0];
+        const runtimeRoot = path.resolve(
+            runtimeEntry,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+        );
+        fs.rmSync(
+            path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core"),
+            { recursive: true, force: true },
+        );
+        writeCorePackage(
+            path.join(homeDir, "node_modules", "@zokizuan", "satori-core"),
+            "3.0.0",
+        );
+
+        await assert.rejects(
+            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                execFileSyncImpl: (() => {
+                    throw new Error("invalid current closure must fail before installation");
+                }) as never,
+            }),
+            /runtime package identity is incomplete/,
+        );
+    });
+
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        writeCorePackage(
+            path.join(homeDir, "node_modules", "@zokizuan", "satori-core"),
+            UPGRADE_TARGET.coreVersion,
+        );
+        let preflightCalls = 0;
+
+        await assert.rejects(
+            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                execFileSyncImpl: installRuntimePackageStub(
+                    "dist/target-runtime.mjs",
+                    UPGRADE_TARGET.mcpPackageSpecifier,
+                    UPGRADE_TARGET.mcpVersion,
+                    UPGRADE_TARGET.coreVersion,
+                    false,
+                ) as never,
+                preflightRunner: async () => {
+                    preflightCalls += 1;
+                    throw new Error("out-of-root Core must fail before preflight");
+                },
+            }),
+            /missing a usable entry/,
+        );
+
+        assert.equal(preflightCalls, 0);
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+    });
+});
+
+test("managed runtime upgrade repairs an older Core but refuses to downgrade a newer Core", async () => {
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+        }, {
+            mcpVersion: UPGRADE_TARGET.mcpVersion,
+            coreVersion: "3.0.0",
+        });
+
+        const result = await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+            homeDir,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/repaired-runtime.mjs",
+                UPGRADE_TARGET.mcpPackageSpecifier,
+                UPGRADE_TARGET.mcpVersion,
+                UPGRADE_TARGET.coreVersion,
+            ) as never,
+            preflightRunner: async () => ({
+                runtimeEnvironment: Object.freeze({
+                    SATORI_RUNTIME_PROFILE: "connected",
+                    VECTOR_STORE_PROVIDER: "LanceDB",
+                }),
+            }),
+            preflightDependencies: {
+                probeCandidateRuntime: async () => {},
+            },
+        });
+
+        assert.equal(result.status, "upgraded");
+        assert.equal(result.fromMcpVersion, UPGRADE_TARGET.mcpVersion);
+        assert.equal(result.fromCoreVersion, "3.0.0");
+        assert.match(readFile(launcherPath(homeDir)), /repaired-runtime\.mjs/);
+    });
+
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+        }, {
+            mcpVersion: UPGRADE_TARGET.mcpVersion,
+            coreVersion: "3.2.0",
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+
+        await assert.rejects(
+            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                execFileSyncImpl: (() => {
+                    throw new Error("Core downgrade must fail before installation");
+                }) as never,
+            }),
+            /Installed Core 3\.2\.0 is newer.*refusing to downgrade/,
+        );
+        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
+    });
+});
+
+test("managed runtime upgrade rejects launcher command shapes it does not own", async () => {
+    const invalidDescriptors = [
+        {
+            command: process.platform === "win32" ? "C:\\Windows\\System32\\cmd.exe" : "/bin/sh",
+            extraArgs: [] as string[],
+        },
+        {
+            command: process.execPath,
+            extraArgs: ["--unexpected"],
+        },
+    ];
+
+    for (const invalid of invalidDescriptors) {
+        await withTempHome(async (homeDir) => {
+            await installUpgradeSourceRuntime(homeDir, {
+                SATORI_RUNTIME_PROFILE: "connected",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+            });
+            const descriptor = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir)));
+            const invalidLauncher = buildLauncherScript({
+                command: invalid.command,
+                args: [...descriptor.args, ...invalid.extraArgs],
+                managedEnv: descriptor.managedEnv,
+            });
+            fs.writeFileSync(launcherPath(homeDir), invalidLauncher, "utf8");
+
+            await assert.rejects(
+                executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                    homeDir,
+                    execFileSyncImpl: (() => {
+                        throw new Error("invalid launcher must fail before installation");
+                    }) as never,
+                }),
+                /unsupported command shape/,
+            );
+            assert.equal(readFile(launcherPath(homeDir)), invalidLauncher);
+        });
+    }
+});
+
+test("managed runtime upgrade requires an existing managed installation", async () => {
+    await withTempHome(async (homeDir) => {
+        await assert.rejects(
+            executeManagedRuntimeUpgrade({
+                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliVersion: "1.3.0",
+                mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+                mcpVersion: "6.2.0",
+                coreVersion: "3.1.0",
+            }, { homeDir }),
+            /Run `satori install --client all` first/,
+        );
+        assert.deepEqual(fs.readdirSync(homeDir), []);
+    });
+});
+
 test("managed launcher forwards termination signals and reaps its runtime child", {
     skip: process.platform === "win32" ? "POSIX signal forwarding is not observable on Windows" : false,
 }, async () => {
@@ -841,6 +1457,16 @@ test("install result includes packageSpecifier used for managed runtime", async 
 test("managed MCP package exposes a single satori bin for npx package execution", async () => {
     assert.deepEqual(PACKAGE_JSON.bin, {
         satori: "dist/index.js",
+    });
+});
+
+test("CLI package exposes installed satori and legacy satori-cli commands", () => {
+    const cliPackage = JSON.parse(
+        fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
+    ) as { bin?: Record<string, string> };
+    assert.deepEqual(cliPackage.bin, {
+        satori: "dist/index.js",
+        "satori-cli": "dist/index.js",
     });
 });
 

@@ -19,6 +19,7 @@ export type ParsedCommand =
     | { kind: "help" }
     | { kind: "version" }
     | { kind: "doctor"; json: boolean; verbose: boolean }
+    | { kind: "upgrade" }
     | {
         kind: "install";
         client: InstallClient;
@@ -59,7 +60,17 @@ export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
 
-const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "doctor", "install", "uninstall"]);
+const RESERVED_SUBCOMMANDS = new Set([
+    "tools",
+    "tool",
+    "help",
+    "version",
+    "doctor",
+    "install",
+    "uninstall",
+    "upgrade",
+    "update",
+]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
 interface WrapperJsonSchema {
@@ -339,6 +350,16 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         return {
             globals,
             command: parseInstallCommand("uninstall", rest.slice(1))
+        };
+    }
+
+    if (rest[0] === "upgrade" || rest[0] === "update") {
+        if (rest.length !== 1) {
+            throw new CliError("E_USAGE", `Unknown arguments for ${rest[0]}: ${rest.slice(1).join(" ")}`, 2);
+        }
+        return {
+            globals,
+            command: { kind: "upgrade" },
         };
     }
 

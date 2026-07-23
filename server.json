@@ -3,7 +3,7 @@
   "id": "satori",
   "name": "Satori MCP",
   "packageName": "@zokizuan/satori-mcp",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "description": "Repo-aware MCP tools for AI coding agents: intent search, symbol navigation, advisory call graphs, exact reads, and freshness-aware recovery.",
   "install": {
     "command": "npx",

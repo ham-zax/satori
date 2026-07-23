@@ -10,7 +10,12 @@ import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope } from "./format.js";
-import { executeInstallCommand, type ManagedRuntimeCommand } from "./install.js";
+import {
+    executeInstallCommand,
+    executeManagedRuntimeUpgrade,
+    type ManagedRuntimeCommand,
+    type ManagedRuntimeUpgradeResult,
+} from "./install.js";
 import type {
     InstallPreflightDependencies,
     InstallPreflightInput,
@@ -28,6 +33,18 @@ import type { DoctorResult } from "./doctor.js";
 import { emitDoctorText } from "./doctor-format.js";
 import { emitInstallText } from "./install-format.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
+import {
+    combineUpgradeResult,
+    formatUpgradeText,
+    installGlobalCliAndDelegate,
+    type GlobalCliUpgradeInput,
+} from "./upgrade.js";
+import {
+    compareStableVersions,
+    parseStableVersion,
+    resolveSatoriUpgradeTarget,
+    type SatoriUpgradeTarget,
+} from "./upgrade-target.js";
 
 interface RunCliOptions {
     writeStdout?: (text: string) => void;
@@ -52,6 +69,18 @@ interface RunCliOptions {
     /** Test/embed override; null disables best-effort local recording. */
     diagnosticsPath?: string | null;
     installPostflightRunner?: (options: InstallPostflightOptions) => Promise<InstallPostflightResult>;
+    upgradeTargetResolver?: () => SatoriUpgradeTarget | Promise<SatoriUpgradeTarget>;
+    managedRuntimeUpgradeRunner?: (
+        target: SatoriUpgradeTarget,
+        options: {
+            homeDir: string;
+            env: NodeJS.ProcessEnv;
+            preflightDependencies?: InstallPreflightDependencies;
+            preflightRunner?: RunCliOptions["installPreflightRunner"];
+        },
+    ) => Promise<ManagedRuntimeUpgradeResult>;
+    globalCliUpgradeRunner?: (input: GlobalCliUpgradeInput) => number | Promise<number>;
+    invokedScriptPath?: string;
     connectSession?: (options: {
         command: string;
         args: string[];
@@ -187,9 +216,11 @@ function resolveDefaultServerInvocation(homeDir: string): { command: string; arg
 
 function buildHelpPayload() {
     return {
-        usage: "satori-cli <command>",
+        usage: "satori <command>",
+        legacyAlias: "satori-cli",
         commands: [
             "install [--client all|codex|claude|opencode] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook] (default: offline Potion on Linux x64; --ollama-model selects Ollama)",
+            "upgrade (alias: update)",
             "uninstall [--client all|codex|claude|opencode] [--dry-run]",
             "doctor [--verbose] [--json]",
             "tools list",
@@ -324,11 +355,13 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         ? { path: diagnosticsPath, nowMs: options.nowMs || (() => performance.now()) }
         : null;
     let parsedFormat: "json" | "text" = "json";
+    let parsedFormatExplicit = false;
     let parsedCommandKind: ParsedCommand["kind"] | null = null;
 
     try {
         const parsed = parseCliArgs(argv);
         parsedFormat = parsed.globals.format;
+        parsedFormatExplicit = parsed.globals.formatExplicit;
         parsedCommandKind = parsed.command.kind;
         const startupTimeoutMs = options.startupTimeoutMs ?? parsed.globals.startupTimeoutMs;
         const callTimeoutMs = options.callTimeoutMs ?? parsed.globals.callTimeoutMs;
@@ -336,7 +369,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         if (parsed.command.kind === "help") {
             emitJson(writers, buildHelpPayload());
             if (parsed.globals.format === "text") {
-                writers.writeStderr("satori-cli help requested.\n");
+                writers.writeStderr("satori help requested. Legacy alias: satori-cli.\n");
             }
             return 0;
         }
@@ -348,7 +381,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 version: readPackageVersion(),
             });
             if (parsed.globals.format === "text") {
-                writers.writeStderr("satori-cli version shown.\n");
+                writers.writeStderr("satori version shown. Legacy alias: satori-cli.\n");
             }
             return 0;
         }
@@ -365,6 +398,67 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 emitDoctorText(writers, result, { verbose: parsed.command.verbose });
             }
             return result.status === "error" ? 1 : 0;
+        }
+
+        if (parsed.command.kind === "upgrade") {
+            const target = await (options.upgradeTargetResolver || resolveSatoriUpgradeTarget)();
+            const currentCliVersion = readPackageVersion();
+            const cliComparison = compareStableVersions(currentCliVersion, target.cliVersion);
+            if (cliComparison > 0) {
+                throw new CliError(
+                    "E_USAGE",
+                    `Installed CLI ${currentCliVersion} is newer than npm latest ${target.cliVersion}; refusing to downgrade it.`,
+                    2,
+                );
+            }
+            if (cliComparison < 0) {
+                if (effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === target.cliVersion) {
+                    throw new CliError(
+                        "E_USAGE",
+                        `Global CLI update reported success, but the delegated command still runs CLI ${currentCliVersion}; expected ${target.cliVersion}.`,
+                        2,
+                    );
+                }
+                const delegatedArgs = [
+                    ...(parsed.globals.formatExplicit ? ["--format", parsed.globals.format] : []),
+                    ...(parsed.globals.debug ? ["--debug"] : []),
+                    "upgrade",
+                ];
+                return await (options.globalCliUpgradeRunner || installGlobalCliAndDelegate)({
+                    target,
+                    currentCliVersion,
+                    invokedScriptPath: options.invokedScriptPath ?? process.argv[1],
+                    delegatedArgs,
+                    env: effectiveEnv,
+                });
+            }
+
+            const runtimeResult = await (
+                options.managedRuntimeUpgradeRunner
+                || ((upgradeTarget, upgradeOptions) => executeManagedRuntimeUpgrade(upgradeTarget, upgradeOptions))
+            )(target, {
+                homeDir,
+                env: effectiveEnv,
+                preflightDependencies: options.installPreflightDependencies,
+                preflightRunner: options.installPreflightRunner,
+            });
+            const delegatedFromCli = effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
+                ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION
+                : undefined;
+            if (delegatedFromCli !== undefined) {
+                parseStableVersion(delegatedFromCli, "Previous CLI version");
+            }
+            const result = combineUpgradeResult(
+                runtimeResult,
+                delegatedFromCli ?? currentCliVersion,
+                currentCliVersion,
+            );
+            if (parsed.globals.formatExplicit && parsed.globals.format === "json") {
+                emitJson(writers, result);
+            } else {
+                writers.writeStdout(formatUpgradeText(result));
+            }
+            return 0;
         }
 
         if (parsed.command.kind === "install" || parsed.command.kind === "uninstall") {
@@ -444,6 +538,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         }
     } catch (error) {
         const cliError = asCliError(error);
+        const currentCliVersion = readPackageVersion();
+        const delegatedCliUpgradeCompleted = parsedCommandKind === "upgrade"
+            && effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
+            && typeof effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION === "string";
+        const reportedMessage = delegatedCliUpgradeCompleted
+            ? `CLI ${currentCliVersion} is installed, but the managed MCP/Core runtime was not changed. `
+                + `The managed launcher remains unchanged. ${cliError.message}`
+            : cliError.message;
         if (
             parsedFormat === "json"
             && (parsedCommandKind === "tool-call" || parsedCommandKind === "wrapper")
@@ -460,7 +562,28 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 }
             });
         }
-        emitError(writers, cliError.token, cliError.message);
+        if (
+            parsedCommandKind === "upgrade"
+            && parsedFormatExplicit
+            && parsedFormat === "json"
+        ) {
+            emitJson(writers, {
+                action: "upgrade",
+                status: "error",
+                cliUpgrade: delegatedCliUpgradeCompleted ? "completed" : "unchanged",
+                runtimeUpgrade: "failed",
+                launcherChanged: false,
+                fromCliVersion: delegatedCliUpgradeCompleted
+                    ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION
+                    : currentCliVersion,
+                toCliVersion: currentCliVersion,
+                error: {
+                    token: cliError.token,
+                    message: cliError.message,
+                },
+            });
+        }
+        emitError(writers, cliError.token, reportedMessage);
         return cliError.exitCode;
     }
 }

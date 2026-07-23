@@ -21,7 +21,16 @@ import {
     type LanceDbModule,
 } from "./install-preflight.js";
 import { resolveManagedPackageSpecifier } from "./managed-package.js";
-import { buildLauncherScript, parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
+import {
+    buildLauncherScript,
+    parseManagedLauncherDescriptor,
+    parseManagedLauncherEnvironment,
+} from "./managed-launcher-script.mjs";
+import {
+    compareStableVersions,
+    parseStableVersion,
+    type SatoriUpgradeTarget,
+} from "./upgrade-target.js";
 
 const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
@@ -131,7 +140,7 @@ Satori MCP is available for plain-English semantic discovery, deterministic proo
 
 type ExecFileSyncLike = typeof execFileSync;
 
-type ClientName = Exclude<InstallClient, "all">;
+export type ClientName = Exclude<InstallClient, "all">;
 
 export interface ManagedRuntimeCommand {
     command: string;
@@ -210,6 +219,18 @@ export interface InstallCommandResult {
     results: ClientInstallResult[];
 }
 
+export interface ManagedRuntimeUpgradeResult {
+    action: "upgrade";
+    status: "upgraded" | "up_to_date";
+    fromMcpVersion: string;
+    toMcpVersion: string;
+    fromCoreVersion: string;
+    toCoreVersion: string;
+    packageSpecifier: string;
+    configuredClients: ClientName[];
+    restartRequired: boolean;
+}
+
 export interface InstallPlan {
     readonly command: InstallCommandInput;
     readonly homeDir: string;
@@ -255,6 +276,16 @@ interface ManagedRuntimeCandidate {
     readonly runtimeRoot: string;
     readonly packageRoot: string;
     readonly newlyInstalled: boolean;
+}
+
+interface ResolvedRuntimeDependency {
+    readonly version: string;
+    readonly packageJsonPath: string;
+}
+
+interface ContainingPackageIdentity {
+    readonly version: string;
+    readonly packageRoot: string;
 }
 
 interface FileMutation {
@@ -613,10 +644,16 @@ function npmOutput(error: unknown): string {
 function installManagedRuntimeCandidate(
     homeDir: string,
     packageSpecifier: string,
-    execImpl: ExecFileSyncLike
+    execImpl: ExecFileSyncLike,
+    expectedCoreVersion?: string,
 ): ManagedRuntimeCandidate {
     const stableRuntimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
-    const existing = resolveInstalledRuntimeCommand(stableRuntimeRoot, packageSpecifier, true);
+    const existing = resolveInstalledRuntimeCommand(
+        stableRuntimeRoot,
+        packageSpecifier,
+        true,
+        expectedCoreVersion,
+    );
     if (existing) {
         return {
             ...existing,
@@ -656,7 +693,12 @@ function installManagedRuntimeCandidate(
         );
     }
 
-    const installed = resolveInstalledRuntimeCommand(runtimeRoot, packageSpecifier, false);
+    const installed = resolveInstalledRuntimeCommand(
+        runtimeRoot,
+        packageSpecifier,
+        false,
+        expectedCoreVersion,
+    );
     if (!installed) {
         const packageRoot = resolveRuntimePackageRootFromRoot(runtimeRoot, packageSpecifier);
         fs.rmSync(runtimeRoot, { recursive: true, force: true });
@@ -674,6 +716,7 @@ function installManagedRuntimeCandidate(
 }
 
 const EXACT_PACKAGE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const CORE_PACKAGE_NAME = "@zokizuan/satori-core";
 
 function requestedExactPackageVersion(packageSpecifier: string): string | null {
     const packageName = packageNameFromSpecifier(packageSpecifier);
@@ -685,10 +728,53 @@ function requestedExactPackageVersion(packageSpecifier: string): string | null {
     return EXACT_PACKAGE_VERSION_PATTERN.test(version) ? version : null;
 }
 
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+    try {
+        const realRoot = fs.realpathSync(rootPath);
+        const realCandidate = fs.realpathSync(candidatePath);
+        const relative = path.relative(realRoot, realCandidate);
+        return relative.length > 0
+            && relative !== ".."
+            && !relative.startsWith(`..${path.sep}`)
+            && !path.isAbsolute(relative);
+    } catch {
+        return false;
+    }
+}
+
+function readRuntimeDependency(
+    runtimeEntry: string,
+    packageName: string,
+    runtimeRoot: string,
+): ResolvedRuntimeDependency | null {
+    try {
+        const requireFromRuntime = createRequire(runtimeEntry);
+        const packageJsonPath = requireFromRuntime.resolve(`${packageName}/package.json`);
+        if (!isPathWithin(runtimeRoot, packageJsonPath)) {
+            return null;
+        }
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+            name?: unknown;
+            version?: unknown;
+        };
+        return packageJson.name === packageName
+            && typeof packageJson.version === "string"
+            && EXACT_PACKAGE_VERSION_PATTERN.test(packageJson.version)
+            ? {
+                version: packageJson.version,
+                packageJsonPath: fs.realpathSync(packageJsonPath),
+            }
+            : null;
+    } catch {
+        return null;
+    }
+}
+
 function resolveInstalledRuntimeCommand(
     runtimeRoot: string,
     packageSpecifier: string,
     forReuse: boolean,
+    expectedCoreVersion?: string,
 ): Pick<ManagedRuntimeCandidate, "command" | "identity" | "packageRoot"> | null {
     const packageRoot = resolveRuntimePackageRootFromRoot(runtimeRoot, packageSpecifier);
     const packageJsonPath = path.join(packageRoot, "package.json");
@@ -701,7 +787,8 @@ function resolveInstalledRuntimeCommand(
     const expectedName = packageNameFromSpecifier(packageSpecifier);
     const expectedVersion = requestedExactPackageVersion(packageSpecifier);
     if (
-        packageJson.name !== expectedName
+        !isPathWithin(runtimeRoot, packageJsonPath)
+        || packageJson.name !== expectedName
         || typeof packageJson.version !== "string"
         || !EXACT_PACKAGE_VERSION_PATTERN.test(packageJson.version)
         || (expectedVersion !== null && packageJson.version !== expectedVersion)
@@ -714,7 +801,13 @@ function resolveInstalledRuntimeCommand(
         command: process.execPath,
         args: [resolveRuntimeEntryPath(packageRoot, packageJson)],
     };
-    if (!fs.existsSync(command.args[0])) {
+    if (!fs.existsSync(command.args[0]) || !isPathWithin(packageRoot, command.args[0])) {
+        return null;
+    }
+    if (
+        expectedCoreVersion !== undefined
+        && readRuntimeDependency(command.args[0], CORE_PACKAGE_NAME, runtimeRoot)?.version !== expectedCoreVersion
+    ) {
         return null;
     }
     return {
@@ -1948,6 +2041,288 @@ export function applyInstallPlan(
             status: mutation.configChanged || mutation.companionMutations.some((entry) => entry.changed) || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),
+    };
+}
+
+function readContainingPackageIdentity(
+    runtimeEntry: string,
+    packageName: string,
+): ContainingPackageIdentity | null {
+    let current = path.dirname(runtimeEntry);
+    while (true) {
+        const packageJsonPath = path.join(current, "package.json");
+        try {
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+                name?: unknown;
+                version?: unknown;
+            };
+            if (
+                packageJson.name === packageName
+                && typeof packageJson.version === "string"
+                && EXACT_PACKAGE_VERSION_PATTERN.test(packageJson.version)
+            ) {
+                return {
+                    version: packageJson.version,
+                    packageRoot: current,
+                };
+            }
+        } catch {
+            // Continue walking toward the filesystem root.
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return null;
+        }
+        current = parent;
+    }
+}
+
+function resolveContainingManagedRuntimeRoot(homeDir: string, packageRoot: string): string | null {
+    const storageRoot = path.join(homeDir, ".satori", MANAGED_RUNTIME_DIR);
+    if (!isPathWithin(storageRoot, packageRoot)) {
+        return null;
+    }
+    const relativePackageRoot = path.relative(fs.realpathSync(storageRoot), fs.realpathSync(packageRoot));
+    const generationName = relativePackageRoot.split(path.sep)[0];
+    if (!generationName) {
+        return null;
+    }
+    const runtimeRoot = path.join(storageRoot, generationName);
+    return isPathWithin(runtimeRoot, packageRoot) ? runtimeRoot : null;
+}
+
+function upgradeRuntimeSelection(
+    homeDir: string,
+    managedEnvironment: Readonly<Record<string, string>>,
+    env: NodeJS.ProcessEnv,
+): {
+    runtime: InstallRuntime;
+    vectorStore: InstallVectorStore;
+    ollamaModel?: string;
+    effectiveEnv: NodeJS.ProcessEnv;
+} {
+    const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedEnvironment, env);
+    const profile = managedEnvironment.SATORI_RUNTIME_PROFILE;
+    if (profile === "offline") {
+        const command: Extract<InstallCommandInput, { kind: "install"; runtime: "offline" }> = {
+            kind: "install",
+            client: "all",
+            dryRun: false,
+            runtime: "offline",
+        };
+        const ollamaModel = resolveOfflineOllamaModel(command, managedEnvironment, env);
+        return {
+            runtime: "offline",
+            vectorStore: "LanceDB",
+            ...(ollamaModel ? { ollamaModel } : {}),
+            effectiveEnv,
+        };
+    }
+    if (profile !== undefined && profile !== "connected") {
+        throw new CliError(
+            "E_USAGE",
+            `Managed launcher has unsupported SATORI_RUNTIME_PROFILE=${profile}. Rerun \`satori install\` with an explicit runtime.`,
+            2,
+        );
+    }
+    const command: Extract<InstallCommandInput, { kind: "install"; runtime: "voyage" }> = {
+        kind: "install",
+        client: "all",
+        dryRun: false,
+        runtime: "voyage",
+    };
+    return {
+        runtime: "voyage",
+        vectorStore: resolveConnectedVectorStoreForInstallOrThrow(
+            command,
+            homeDir,
+            env,
+            managedEnvironment,
+        ),
+        effectiveEnv,
+    };
+}
+
+export async function executeManagedRuntimeUpgrade(
+    target: SatoriUpgradeTarget,
+    options: InstallCommandOptions = {},
+): Promise<ManagedRuntimeUpgradeResult> {
+    const homeDir = options.homeDir ?? os.homedir();
+    const env = options.env ?? process.env;
+    const launcherPath = resolveLauncherPath(homeDir);
+    const launcherContent = readTextIfExists(launcherPath);
+    if (launcherContent === null) {
+        throw new CliError(
+            "E_USAGE",
+            "Satori has no managed runtime to upgrade. Run `satori install --client all` first.",
+            2,
+        );
+    }
+
+    let descriptor: {
+        command: string;
+        args: readonly string[];
+        managedEnv: Readonly<Record<string, string>>;
+    };
+    try {
+        descriptor = parseManagedLauncherDescriptor(launcherContent);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CliError(
+            "E_USAGE",
+            `Managed Satori launcher is invalid: ${message} Rerun \`satori install\` to repair it.`,
+            2,
+        );
+    }
+    const expectedNodeBasename = path.basename(process.execPath).toLowerCase();
+    if (
+        !path.isAbsolute(descriptor.command)
+        || !fs.existsSync(descriptor.command)
+        || path.basename(descriptor.command).toLowerCase() !== expectedNodeBasename
+        || descriptor.args.length !== 1
+    ) {
+        throw new CliError(
+            "E_USAGE",
+            "Managed Satori launcher has an unsupported command shape. Rerun `satori install` to repair it.",
+            2,
+        );
+    }
+    const runtimeEntry = descriptor.args[0];
+    if (!runtimeEntry || !path.isAbsolute(runtimeEntry) || !fs.existsSync(runtimeEntry)) {
+        throw new CliError(
+            "E_USAGE",
+            "Managed Satori launcher does not target an existing runtime. Rerun `satori install` to repair it.",
+            2,
+        );
+    }
+
+    const mcpIdentity = readContainingPackageIdentity(runtimeEntry, "@zokizuan/satori-mcp");
+    const currentRuntimeRoot = mcpIdentity
+        ? resolveContainingManagedRuntimeRoot(homeDir, mcpIdentity.packageRoot)
+        : null;
+    const coreIdentity = currentRuntimeRoot
+        ? readRuntimeDependency(runtimeEntry, CORE_PACKAGE_NAME, currentRuntimeRoot)
+        : null;
+    if (
+        !mcpIdentity
+        || !currentRuntimeRoot
+        || !isPathWithin(mcpIdentity.packageRoot, runtimeEntry)
+        || !coreIdentity
+    ) {
+        throw new CliError(
+            "E_USAGE",
+            "Managed Satori runtime package identity is incomplete. Rerun `satori install` to repair it.",
+            2,
+        );
+    }
+    const fromMcpVersion = mcpIdentity.version;
+    const fromCoreVersion = coreIdentity.version;
+    parseStableVersion(fromMcpVersion, "Installed MCP version");
+    parseStableVersion(fromCoreVersion, "Installed Core version");
+
+    const configuredClients = inspectManagedClientConfigurations(homeDir, env)
+        .filter((proof) => proof.usesManagedLauncher)
+        .map((proof) => proof.client);
+    const mcpComparison = compareStableVersions(fromMcpVersion, target.mcpVersion);
+    if (mcpComparison > 0) {
+        throw new CliError(
+            "E_USAGE",
+            `Installed MCP ${fromMcpVersion} is newer than npm latest ${target.mcpVersion}; refusing to downgrade it.`,
+            2,
+        );
+    }
+    const coreComparison = compareStableVersions(fromCoreVersion, target.coreVersion);
+    if (coreComparison > 0) {
+        throw new CliError(
+            "E_USAGE",
+            `Installed Core ${fromCoreVersion} is newer than npm latest ${target.coreVersion}; refusing to downgrade it.`,
+            2,
+        );
+    }
+    if (mcpComparison === 0 && fromCoreVersion === target.coreVersion) {
+        return {
+            action: "upgrade",
+            status: "up_to_date",
+            fromMcpVersion,
+            toMcpVersion: target.mcpVersion,
+            fromCoreVersion,
+            toCoreVersion: target.coreVersion,
+            packageSpecifier: target.mcpPackageSpecifier,
+            configuredClients,
+            restartRequired: false,
+        };
+    }
+
+    const selection = upgradeRuntimeSelection(homeDir, descriptor.managedEnv, env);
+    if (selection.runtime === "offline" && !selection.ollamaModel) {
+        assertSupportedPotionPlatform({
+            platform: options.platform,
+            architecture: options.architecture,
+        });
+    }
+
+    let candidate: ManagedRuntimeCandidate | undefined;
+    try {
+        candidate = installManagedRuntimeCandidate(
+            homeDir,
+            target.mcpPackageSpecifier,
+            options.execFileSyncImpl ?? execFileSync,
+            target.coreVersion,
+        );
+        const potionAssetsRoot = options.potionAssetsRoot
+            ?? resolvePotionAssetsRoot(candidate.packageRoot);
+        const preflightDependencies: InstallPreflightDependencies = {
+            ...options.preflightDependencies,
+            probeLanceDb: options.preflightDependencies?.probeLanceDb
+                ?? exactRuntimeLanceDbProbe(candidate.command),
+        };
+        const preflight = await (options.preflightRunner ?? runInstallPreflight)({
+            runtime: selection.runtime,
+            homeDir,
+            env: selection.effectiveEnv,
+            vectorStore: selection.vectorStore,
+            ollamaModel: selection.ollamaModel,
+            potionAssetsRoot,
+            platform: options.platform,
+            architecture: options.architecture,
+        }, preflightDependencies);
+        await (preflightDependencies.probeCandidateRuntime ?? probeManagedRuntimeCandidate)({
+            runtimeCommand: candidate.command,
+            runtimeEnvironment: preflight.runtimeEnvironment,
+            inheritedEnvironment: selection.effectiveEnv,
+            homeDir,
+            expectedVersion: target.mcpVersion,
+        });
+
+        assertFileContentUnchanged(launcherPath, launcherContent);
+        const launcherMutation = prepareLauncherInstall(
+            homeDir,
+            candidate.command,
+            preflight.runtimeEnvironment,
+        );
+        launcherMutation.assertUnchanged?.();
+        launcherMutation.apply();
+    } catch (error) {
+        if (candidate?.newlyInstalled) {
+            fs.rmSync(candidate.runtimeRoot, { recursive: true, force: true });
+        }
+        if (error instanceof CliError) {
+            throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CliError("E_INSTALL_PREFLIGHT", `Satori runtime upgrade failed: ${message}`, 1);
+    }
+
+    return {
+        action: "upgrade",
+        status: "upgraded",
+        fromMcpVersion,
+        toMcpVersion: target.mcpVersion,
+        fromCoreVersion,
+        toCoreVersion: target.coreVersion,
+        packageSpecifier: target.mcpPackageSpecifier,
+        configuredClients,
+        restartRequired: true,
     };
 }
 

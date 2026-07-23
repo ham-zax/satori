@@ -5,7 +5,21 @@
 
 export const DEFAULT_LAUNCHER_SHUTDOWN_GRACE_MS = 5_000;
 const EOF_SHUTDOWN_GRACE_MS = 1_500;
+const COMMAND_PREFIX = "const command = ";
+const ARGS_PREFIX = "const baseArgs = ";
 const MANAGED_ENV_PREFIX = "const managedEnv = ";
+
+function parseJsonAssignment(content, prefix, malformedMessage) {
+  const line = content.split(/\r?\n/).find((candidate) => candidate.startsWith(prefix));
+  if (line === undefined || !line.endsWith(";")) {
+    throw new Error(malformedMessage);
+  }
+  try {
+    return JSON.parse(line.slice(prefix.length, -1));
+  } catch {
+    throw new Error(malformedMessage);
+  }
+}
 
 /**
  * Read the non-secret runtime selection persisted by buildLauncherScript().
@@ -20,15 +34,11 @@ export function parseManagedLauncherEnvironment(content) {
   if (line === undefined) {
     return Object.freeze({});
   }
-  if (!line.endsWith(";")) {
-    throw new Error("Managed launcher runtime environment is malformed.");
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(line.slice(MANAGED_ENV_PREFIX.length, -1));
-  } catch {
-    throw new Error("Managed launcher runtime environment is malformed.");
-  }
+  const parsed = parseJsonAssignment(
+    content,
+    MANAGED_ENV_PREFIX,
+    "Managed launcher runtime environment is malformed.",
+  );
   if (
     typeof parsed !== "object"
     || parsed === null
@@ -38,6 +48,26 @@ export function parseManagedLauncherEnvironment(content) {
     throw new Error("Managed launcher runtime environment must contain only string values.");
   }
   return Object.freeze({ ...parsed });
+}
+
+/**
+ * Read the exact runtime command and managed environment from an
+ * installer-generated launcher.
+ *
+ * @param {string} content
+ * @returns {{ command: string, args: readonly string[], managedEnv: Readonly<Record<string, string>> }}
+ */
+export function parseManagedLauncherDescriptor(content) {
+  const command = parseJsonAssignment(content, COMMAND_PREFIX, "Managed launcher command is malformed.");
+  const args = parseJsonAssignment(content, ARGS_PREFIX, "Managed launcher arguments are malformed.");
+  if (typeof command !== "string" || !Array.isArray(args) || args.some((value) => typeof value !== "string")) {
+    throw new Error("Managed launcher command is malformed.");
+  }
+  return Object.freeze({
+    command,
+    args: Object.freeze([...args]),
+    managedEnv: parseManagedLauncherEnvironment(content),
+  });
 }
 
 /**

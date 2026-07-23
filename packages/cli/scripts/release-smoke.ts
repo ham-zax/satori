@@ -2,7 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+
+const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+interface PackageManifest {
+    name?: unknown;
+    version?: unknown;
+    dependencies?: Record<string, unknown>;
+    bin?: Record<string, unknown>;
+    main?: unknown;
+}
 
 function npmOutput(error: unknown): string {
     if (!(error instanceof Error)) {
@@ -52,8 +63,11 @@ function isSatoriRuntimeEnvKey(key: string): boolean {
         || key === "LANCEDB_PATH";
 }
 
-function isolatedSmokeEnv(smokeHomeDir: string): NodeJS.ProcessEnv {
-    const env = Object.fromEntries(Object.entries(process.env).filter(
+export function isolatedSmokeEnv(
+    smokeHomeDir: string,
+    sourceEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+    const env = Object.fromEntries(Object.entries(sourceEnv).filter(
         ([key]) => !PNPM_ONLY_NPM_ENV_KEYS.has(key.toUpperCase()) && !isSatoriRuntimeEnvKey(key),
     ));
     return {
@@ -66,54 +80,175 @@ function isolatedSmokeEnv(smokeHomeDir: string): NodeJS.ProcessEnv {
     };
 }
 
-function npmExecArgs(
-    coreTarballPath: string,
-    mcpTarballPath: string,
-    cliTarballPath: string,
-): string[] {
-    return [
-        "exec",
-        "--yes",
-        "--package",
-        coreTarballPath,
-        "--package",
-        mcpTarballPath,
-        "--package",
-        cliTarballPath,
-        "--",
-    ];
+function readManifest(packageJsonPath: string): PackageManifest {
+    return JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
 }
 
-function resolvePackedMcpRoot(
-    coreTarballPath: string,
-    mcpTarballPath: string,
-    cliTarballPath: string,
+function requireStableVersion(value: unknown, label: string): string {
+    if (typeof value !== "string" || !STABLE_VERSION_PATTERN.test(value)) {
+        throw new Error(`${label} must be an exact stable version; received ${JSON.stringify(value)}.`);
+    }
+    return value;
+}
+
+function requireDependency(
+    manifest: PackageManifest,
+    dependencyName: string,
+    expectedVersion: string,
+    ownerLabel: string,
+): void {
+    const actualVersion = manifest.dependencies?.[dependencyName];
+    if (actualVersion !== expectedVersion) {
+        throw new Error(
+            `${ownerLabel} must depend on ${dependencyName}@${expectedVersion}; received ${JSON.stringify(actualVersion)}.`,
+        );
+    }
+}
+
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+    const relative = path.relative(fs.realpathSync(rootPath), fs.realpathSync(candidatePath));
+    return relative.length > 0
+        && relative !== ".."
+        && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative);
+}
+
+function installAndVerifyPackedReleaseClosure(
+    sourceRoots: {
+        cli: string;
+        mcp: string;
+        core: string;
+    },
+    tarballs: {
+        cli: string;
+        mcp: string;
+        core: string;
+    },
+    installRoot: string,
+    env: NodeJS.ProcessEnv,
+): {
+    cliEntry: string;
+    packedMcpRoot: string;
+} {
+    execFileSync("npm", [
+        "install",
+        "--prefix",
+        installRoot,
+        "--ignore-scripts",
+        "--no-package-lock",
+        "--no-audit",
+        "--no-fund",
+        "--",
+        tarballs.core,
+        tarballs.mcp,
+        tarballs.cli,
+    ], {
+        cwd: installRoot,
+        encoding: "utf8",
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const sourceCli = readManifest(path.join(sourceRoots.cli, "package.json"));
+    const sourceMcp = readManifest(path.join(sourceRoots.mcp, "package.json"));
+    const sourceCore = readManifest(path.join(sourceRoots.core, "package.json"));
+    const cliVersion = requireStableVersion(sourceCli.version, "Source CLI version");
+    const mcpVersion = requireStableVersion(sourceMcp.version, "Source MCP version");
+    const coreVersion = requireStableVersion(sourceCore.version, "Source Core version");
+    if (
+        sourceCli.dependencies?.["@zokizuan/satori-mcp"] !== "workspace:*"
+        || sourceCli.dependencies?.["@zokizuan/satori-core"] !== "workspace:*"
+        || sourceMcp.dependencies?.["@zokizuan/satori-core"] !== "workspace:*"
+    ) {
+        throw new Error("Source Satori package closure must use the existing workspace:* authority.");
+    }
+
+    const nodeModulesRoot = path.join(installRoot, "node_modules");
+    const cliRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-cli");
+    const mcpRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-mcp");
+    const coreRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-core");
+    const packedCli = readManifest(path.join(cliRoot, "package.json"));
+    const packedMcp = readManifest(path.join(mcpRoot, "package.json"));
+    const packedCore = readManifest(path.join(coreRoot, "package.json"));
+
+    if (
+        packedCli.name !== "@zokizuan/satori-cli"
+        || requireStableVersion(packedCli.version, "Packed CLI version") !== cliVersion
+        || packedMcp.name !== "@zokizuan/satori-mcp"
+        || requireStableVersion(packedMcp.version, "Packed MCP version") !== mcpVersion
+        || packedCore.name !== "@zokizuan/satori-core"
+        || requireStableVersion(packedCore.version, "Packed Core version") !== coreVersion
+    ) {
+        throw new Error("Packed Satori package identities do not match their source manifests.");
+    }
+    requireDependency(packedCli, "@zokizuan/satori-mcp", mcpVersion, "Packed CLI");
+    requireDependency(packedCli, "@zokizuan/satori-core", coreVersion, "Packed CLI");
+    requireDependency(packedMcp, "@zokizuan/satori-core", coreVersion, "Packed MCP");
+
+    const cliEntryRelative = packedCli.bin?.satori;
+    if (
+        typeof cliEntryRelative !== "string"
+        || packedCli.bin?.["satori-cli"] !== cliEntryRelative
+    ) {
+        throw new Error("Packed CLI must expose matching 'satori' and 'satori-cli' binaries.");
+    }
+    const cliEntry = path.resolve(cliRoot, cliEntryRelative);
+    const mcpEntry = path.resolve(
+        mcpRoot,
+        typeof packedMcp.main === "string" ? packedMcp.main : "dist/index.js",
+    );
+    if (!fs.existsSync(cliEntry) || !fs.existsSync(mcpEntry)) {
+        throw new Error("Packed Satori CLI or MCP entry is missing.");
+    }
+
+    const resolvedCorePackageJson = createRequire(mcpEntry)
+        .resolve("@zokizuan/satori-core/package.json");
+    if (!isPathWithin(installRoot, resolvedCorePackageJson)) {
+        throw new Error("Packed MCP resolved Core outside the installed release closure.");
+    }
+    const resolvedCore = readManifest(resolvedCorePackageJson);
+    if (
+        resolvedCore.name !== "@zokizuan/satori-core"
+        || resolvedCore.version !== coreVersion
+    ) {
+        throw new Error("Packed MCP did not resolve the expected packed Core version.");
+    }
+
+    return {
+        cliEntry,
+        packedMcpRoot: mcpRoot,
+    };
+}
+
+function runCliSmoke(
+    commandArgs: string[],
+    cliEntry: string,
     smokeExecDir: string,
     env: NodeJS.ProcessEnv,
 ): string {
-    const script = [
-        'const fs = require("node:fs")',
-        'const path = require("node:path")',
-        'const names = process.platform === "win32" ? ["satori.cmd", "satori"] : ["satori"]',
-        'const bin = (process.env.PATH || "").split(path.delimiter).flatMap((dir) => names.map((name) => path.join(dir, name))).find((candidate) => fs.existsSync(candidate))',
-        'if (!bin) throw new Error("Packed Satori MCP executable was not added to PATH")',
-        'process.stdout.write(path.dirname(path.dirname(fs.realpathSync(bin))))',
-    ].join(";");
-    const packageRoot = execFileSync("npm", [
-        ...npmExecArgs(coreTarballPath, mcpTarballPath, cliTarballPath),
-        "node",
-        "-e",
-        script,
+    return execFileSync(process.execPath, [
+        cliEntry,
+        ...commandArgs,
     ], {
         cwd: smokeExecDir,
         encoding: "utf8",
         env,
         stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-    if (!path.isAbsolute(packageRoot)) {
-        throw new Error(`Packed Satori MCP root is not absolute: ${packageRoot || "<empty>"}.`);
+    });
+}
+
+/*
+ * The packed closure is installed once above. Avoid separate npm exec
+ * environments, which can hide dependency or binary collisions.
+ */
+function assertPackedCliHelp(output: string): void {
+    const help = JSON.parse(output) as {
+        usage?: unknown;
+        legacyAlias?: unknown;
+    };
+    if (help.usage !== "satori <command>" || help.legacyAlias !== "satori-cli") {
+        throw new Error("Packed CLI did not expose primary and legacy command help.");
     }
-    return packageRoot;
 }
 
 function packedPotionSmokeEnv(
@@ -150,26 +285,6 @@ function packedPotionSmokeEnv(
     };
 }
 
-function runCliSmoke(
-    commandArgs: string[],
-    coreTarballPath: string,
-    mcpTarballPath: string,
-    cliTarballPath: string,
-    smokeExecDir: string,
-    env: NodeJS.ProcessEnv,
-): void {
-    execFileSync("npm", [
-        ...npmExecArgs(coreTarballPath, mcpTarballPath, cliTarballPath),
-        "satori-cli",
-        ...commandArgs,
-    ], {
-        cwd: smokeExecDir,
-        encoding: "utf8",
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-    });
-}
-
 function main(): void {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
@@ -184,17 +299,24 @@ function main(): void {
         const mcpTarballPath = packPackage(mcpPackageRoot, smokePackDir);
         const cliTarballPath = packPackage(packageRoot, smokePackDir);
         const baseEnv = isolatedSmokeEnv(smokeHomeDir);
-        runCliSmoke(["--help"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, baseEnv);
-        const packedMcpRoot = resolvePackedMcpRoot(
-            coreTarballPath,
-            mcpTarballPath,
-            cliTarballPath,
+        const packed = installAndVerifyPackedReleaseClosure(
+            {
+                cli: packageRoot,
+                mcp: mcpPackageRoot,
+                core: corePackageRoot,
+            },
+            {
+                cli: cliTarballPath,
+                mcp: mcpTarballPath,
+                core: coreTarballPath,
+            },
             smokeExecDir,
             baseEnv,
         );
-        const doctorEnv = packedPotionSmokeEnv(baseEnv, packedMcpRoot, smokeHomeDir);
-        runCliSmoke(["doctor"], coreTarballPath, mcpTarballPath, cliTarballPath, smokeExecDir, doctorEnv);
-        console.log("[release:smoke] CLI tarball starts and doctor accepts the packed offline Potion runtime.");
+        assertPackedCliHelp(runCliSmoke(["--help"], packed.cliEntry, smokeExecDir, baseEnv));
+        const doctorEnv = packedPotionSmokeEnv(baseEnv, packed.packedMcpRoot, smokeHomeDir);
+        runCliSmoke(["doctor"], packed.cliEntry, smokeExecDir, doctorEnv);
+        console.log("[release:smoke] Packed CLI→MCP→Core closure and offline Potion runtime passed.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";
@@ -207,4 +329,6 @@ function main(): void {
     }
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    main();
+}

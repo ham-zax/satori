@@ -149,21 +149,34 @@ export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {
 
     const tarballPath = path.join(smokePackDir, tarballName);
     try {
-        execImpl("npm", ["exec", "--yes", "--package", tarballPath, "--", "satori", "--help"], {
-            cwd: smokeExecDir,
-            encoding: "utf8",
-            env: {
-                ...process.env,
-                npm_config_package_lock: "false",
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
+        for (const commandName of ["satori", "satori-cli"]) {
+            const output = execImpl(
+                "npm",
+                ["exec", "--yes", "--package", tarballPath, "--", commandName, "--help"],
+                {
+                    cwd: smokeExecDir,
+                    encoding: "utf8",
+                    env: {
+                        ...process.env,
+                        npm_config_package_lock: "false",
+                    },
+                    stdio: ["ignore", "pipe", "pipe"],
+                },
+            );
+            const help = JSON.parse(output) as {
+                usage?: unknown;
+                legacyAlias?: unknown;
+            };
+            if (help.usage !== "satori <command>" || help.legacyAlias !== "satori-cli") {
+                throw new Error(`${commandName} did not expose Satori CLI help.`);
+            }
+        }
     } catch (error) {
         const output = npmOutput(error);
         const pkg = readPackageJson(packageJsonPath);
         throw new CliError(
             "E_USAGE",
-            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not start via 'npm exec --yes --package <tarball> -- satori --help'. ${output}`,
+            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not expose CLI help through both 'satori' and 'satori-cli'. ${output}`,
             2
         );
     } finally {

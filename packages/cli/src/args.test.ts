@@ -49,6 +49,15 @@ test("parseCliArgs defaults install to offline Potion", () => {
     assert.equal(parsed.command.ollamaModel, undefined);
 });
 
+test("parseCliArgs treats upgrade and update as the same command", () => {
+    assert.deepEqual(parseCliArgs(["upgrade"]).command, { kind: "upgrade" });
+    assert.deepEqual(parseCliArgs(["update"]).command, { kind: "upgrade" });
+    assert.throws(
+        () => parseCliArgs(["upgrade", "--client", "codex"]),
+        /Unknown arguments for upgrade/,
+    );
+});
+
 test("parseCliArgs accepts the strict offline runtime variant", () => {
     const parsed = parseCliArgs([
         "install",

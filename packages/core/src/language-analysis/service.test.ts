@@ -201,6 +201,108 @@ test('language analysis preserves same-line duplicate TypeScript declarations by
     assert.notEqual(duplicates[0].span.startByte, duplicates[1].span.startByte);
 });
 
+test('Oxc emits declaration-only TypeScript signatures as distinct exact symbols', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'declare function parse(value: string): string;',
+            'function parse(value: number): number;',
+            'function parse(value: string | number) { return String(value); }',
+            'interface Reader {',
+            '    read(value: string): string;',
+            '    read(value: Uint8Array): string;',
+            '}',
+            'abstract class Base {',
+            '    abstract load(value: string): number;',
+            '    concrete() { return 1; }',
+            '}',
+        ].join('\n'),
+        language: 'typescript',
+        relativePath: 'src/declarations.ts',
+    });
+
+    const parseSymbols = result.symbols.filter((symbol) => symbol.name === 'parse');
+    assert.equal(parseSymbols.length, 3);
+    assert.ok(parseSymbols.every((symbol) => (
+        symbol.kind === 'function'
+        && symbol.qualifiedName === 'parse'
+        && symbol.parentQualifiedNamePath?.length === 0
+    )));
+    assert.equal(new Set(parseSymbols.map((symbol) => symbol.span.startByte)).size, 3);
+
+    const readSymbols = result.symbols.filter((symbol) => symbol.name === 'read');
+    assert.equal(readSymbols.length, 2);
+    assert.ok(readSymbols.every((symbol) => (
+        symbol.kind === 'method'
+        && symbol.qualifiedName === 'Reader.read'
+        && symbol.parentQualifiedNamePath?.join('.') === 'Reader'
+    )));
+    assert.equal(new Set(readSymbols.map((symbol) => symbol.span.startByte)).size, 2);
+
+    const load = result.symbols.find((symbol) => symbol.name === 'load');
+    assert.equal(load?.kind, 'method');
+    assert.equal(load?.qualifiedName, 'Base.load');
+    assert.deepEqual(load?.parentQualifiedNamePath, ['Base']);
+    assert.deepEqual(result.callSites.map((call) => call.calleeName), ['String']);
+});
+
+test('Oxc emits identifier namespaces and reparents only their lexical descendants', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'export function outside() {}',
+            'namespace Billing {',
+            '    export class Invoice {}',
+            '    export interface Reader {}',
+            '    export function run() {}',
+            '    export const value = 1;',
+            '    export function parse(value: string): string;',
+            '    export function parse(value: string) { return value; }',
+            '    namespace Inner { export function nested() {} }',
+            '}',
+            'namespace Billing { export function reopened() {} }',
+            'declare module "ambient" { export function external(): void; }',
+        ].join('\n'),
+        language: 'typescript',
+        relativePath: 'src/namespaces.ts',
+    });
+
+    const billing = result.symbols.filter((symbol) => (
+        symbol.kind === 'namespace' && symbol.qualifiedName === 'Billing'
+    ));
+    assert.equal(billing.length, 2);
+    assert.equal(new Set(billing.map((symbol) => symbol.span.startByte)).size, 2);
+
+    for (const name of ['Invoice', 'Reader', 'run', 'value', 'parse', 'reopened']) {
+        const matches = result.symbols.filter((symbol) => symbol.name === name);
+        assert.ok(matches.length >= 1, name);
+        assert.ok(matches.every((symbol) => (
+            symbol.qualifiedName === `Billing.${name}`
+            && symbol.parentQualifiedNamePath?.join('.') === 'Billing'
+        )), name);
+    }
+
+    const inner = result.symbols.find((symbol) => symbol.name === 'Inner');
+    assert.equal(inner?.kind, 'namespace');
+    assert.equal(inner?.qualifiedName, 'Billing.Inner');
+    assert.deepEqual(inner?.parentQualifiedNamePath, ['Billing']);
+
+    const nested = result.symbols.find((symbol) => symbol.name === 'nested');
+    assert.equal(nested?.qualifiedName, 'Billing.Inner.nested');
+    assert.deepEqual(nested?.parentQualifiedNamePath, ['Billing', 'Inner']);
+
+    const outside = result.symbols.find((symbol) => symbol.name === 'outside');
+    assert.equal(outside?.qualifiedName, 'outside');
+    assert.deepEqual(outside?.parentQualifiedNamePath, []);
+
+    assert.ok(!result.symbols.some((symbol) => (
+        symbol.kind === 'namespace' && symbol.name === 'ambient'
+    )));
+    const external = result.symbols.find((symbol) => symbol.name === 'external');
+    assert.equal(external?.qualifiedName, 'external');
+    assert.deepEqual(external?.parentQualifiedNamePath, []);
+});
+
 test('Oxc UTF-16 offsets become exact UTF-8 symbol byte spans', async () => {
     const analyzer = createLanguageAnalysisService();
     const source = 'const greeting = "é";\nexport function run() { return "你好"; }\n';
@@ -290,6 +392,45 @@ test('Rust modules, trait methods, and generic impl methods retain structural ow
     )));
 });
 
+test('Rust emits module aliases, unions, and macros while excluding callable-local definitions', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'mod storage {',
+            '    pub type ItemId = u64;',
+            '    pub union Payload { number: u32 }',
+            '    macro_rules! build { () => {} }',
+            '    pub fn load() {}',
+            '}',
+            'type RootId = String;',
+            'union RootPayload { number: u32 }',
+            'macro_rules! root_macro { () => {} }',
+            'fn outer() {',
+            '    type Local = u8;',
+            '    struct LocalStruct;',
+            '    macro_rules! local_macro { () => {} }',
+            '}',
+        ].join('\n'),
+        language: 'rust',
+        relativePath: 'src/definitions.rs',
+    });
+
+    assert.deepEqual(
+        result.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['module', 'storage'],
+            ['type', 'storage.ItemId'],
+            ['type', 'storage.Payload'],
+            ['macro', 'storage.build'],
+            ['function', 'storage.load'],
+            ['type', 'RootId'],
+            ['type', 'RootPayload'],
+            ['macro', 'root_macro'],
+            ['function', 'outer'],
+        ],
+    );
+});
+
 test('Go types, interfaces, and receiver methods retain structural ownership', async () => {
     const analyzer = createLanguageAnalysisService();
     const result = await analyzer.analyze({
@@ -310,6 +451,186 @@ test('Go types, interfaces, and receiver methods retain structural ownership', a
     )));
 });
 
+test('Go excludes callable-local named types while preserving top-level definitions', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'package sample',
+            'type Public struct {}',
+            'func outer() { type Local struct {} }',
+        ].join('\n'),
+        language: 'go',
+        relativePath: 'sample.go',
+    });
+
+    assert.deepEqual(
+        result.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['struct', 'Public'],
+            ['function', 'outer'],
+        ],
+    );
+});
+
+test('C# block and file-scoped namespaces reparent only their governed declarations', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const block = await analyzer.analyze({
+        content: [
+            'namespace Billing {',
+            '    public class Invoice { public void Run() {} }',
+            '}',
+            'namespace Billing { public class Reopened {} }',
+            'public class Outside {}',
+        ].join('\n'),
+        language: 'csharp',
+        relativePath: 'src/Billing.cs',
+    });
+    assert.deepEqual(
+        block.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['namespace', 'Billing'],
+            ['class', 'Billing.Invoice'],
+            ['method', 'Billing.Invoice.Run'],
+            ['namespace', 'Billing'],
+            ['class', 'Billing.Reopened'],
+            ['class', 'Outside'],
+        ],
+    );
+
+    const fileScoped = await analyzer.analyze({
+        content: [
+            'namespace Billing.Inner;',
+            'public class Worker { public void Work() {} }',
+        ].join('\n'),
+        language: 'csharp',
+        relativePath: 'src/Worker.cs',
+    });
+    assert.deepEqual(
+        fileScoped.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['namespace', 'Billing.Inner'],
+            ['class', 'Billing.Inner.Worker'],
+            ['method', 'Billing.Inner.Worker.Work'],
+        ],
+    );
+});
+
+test('Java audit preserves repository definitions while excluding callable-local classes', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'class Public {',
+            '    void run() { class Local { void hidden() {} } }',
+            '}',
+            'interface Reader { void read(); }',
+            'enum Mode { A }',
+        ].join('\n'),
+        language: 'java',
+        relativePath: 'src/Sample.java',
+    });
+
+    assert.deepEqual(
+        result.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['class', 'Public'],
+            ['method', 'Public.run'],
+            ['interface', 'Reader'],
+            ['method', 'Reader.read'],
+            ['enum', 'Mode'],
+        ],
+    );
+});
+
+test('Scala packages, enums, and types retain bounded lexical ownership', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const block = await analyzer.analyze({
+        content: [
+            'package billing { class Invoice {} }',
+            'class Outside {}',
+        ].join('\n'),
+        language: 'scala',
+        relativePath: 'src/Block.scala',
+    });
+    assert.deepEqual(
+        block.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['namespace', 'billing'],
+            ['class', 'billing.Invoice'],
+            ['class', 'Outside'],
+        ],
+    );
+
+    const chained = await analyzer.analyze({
+        content: [
+            'package billing',
+            'package internal',
+            'class Worker {}',
+        ].join('\n'),
+        language: 'scala',
+        relativePath: 'src/Chained.scala',
+    });
+    assert.deepEqual(
+        chained.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['namespace', 'billing'],
+            ['namespace', 'billing.internal'],
+            ['class', 'billing.internal.Worker'],
+        ],
+    );
+
+    const flat = await analyzer.analyze({
+        content: [
+            'package billing.core',
+            'enum Mode { case Fast, Safe }',
+            'type ItemId = String',
+            'class Service { def run(): Unit = {} }',
+            'def outer(): Unit = { type Local = Int; def hidden(): Unit = {} }',
+        ].join('\n'),
+        language: 'scala',
+        relativePath: 'src/Flat.scala',
+    });
+    assert.deepEqual(
+        flat.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['namespace', 'billing.core'],
+            ['enum', 'billing.core.Mode'],
+            ['type', 'billing.core.ItemId'],
+            ['class', 'billing.core.Service'],
+            ['method', 'billing.core.Service.run'],
+            ['function', 'billing.core.outer'],
+        ],
+    );
+});
+
+test('Scala emits only direct named package bindings', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'package billing.core',
+            'val top = 1',
+            'var mutable = 2',
+            'given ordering: Ordering[Int] = Ordering.Int',
+            'val (left, right) = (1, 2)',
+            'given Ordering[String] = Ordering.String',
+            'class Service { val field = 1; def run(): Unit = { val local = 2 } }',
+            'def outer(): Unit = { val localTop = 3 }',
+        ].join('\n'),
+        language: 'scala',
+        relativePath: 'src/Bindings.scala',
+    });
+
+    assert.deepEqual(
+        result.symbols
+            .filter((symbol) => symbol.kind === 'constant' || symbol.kind === 'variable')
+            .map((symbol) => [symbol.kind, symbol.qualifiedName]),
+        [
+            ['constant', 'billing.core.top'],
+            ['variable', 'billing.core.mutable'],
+            ['variable', 'billing.core.ordering'],
+        ],
+    );
+});
+
 test('Python decorated definitions include their decorators in the symbol span', async () => {
     const analyzer = createLanguageAnalysisService();
     const source = '@registered\ndef run():\n    return 1\n';
@@ -322,6 +643,69 @@ test('Python decorated definitions include their decorators in the symbol span',
     const run = result.symbols.find((symbol) => symbol.name === 'run');
     assert.equal(run?.span.startLine, 1);
     assert.equal(run?.span.startByte, 0);
+});
+
+test('Python emits only direct simple module assignments as navigation variables', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const source = [
+        'cache = {}',
+        'MAX_RETRIES = 3',
+        'DEFAULT_TIMEOUT: float = 5.0',
+        'T = TypeVar("T")',
+        'a, b = (1, 2)',
+        'obj.value = 3',
+        'class Service:',
+        '    class_value = 1',
+        '    def run(self):',
+        '        local = 2',
+        '        return local',
+        '@registered',
+        'def decorated():',
+        '    return True',
+    ].join('\n');
+    const result = await analyzer.analyze({
+        content: source,
+        language: 'python',
+        relativePath: 'src/settings.py',
+    });
+
+    const variables = result.symbols.filter((symbol) => symbol.kind === 'variable');
+    assert.deepEqual(variables.map((symbol) => symbol.name), [
+        'cache',
+        'MAX_RETRIES',
+        'DEFAULT_TIMEOUT',
+        'T',
+    ]);
+    assert.ok(variables.every((symbol) => (
+        symbol.qualifiedName === symbol.name
+        && symbol.parentQualifiedNamePath?.length === 0
+    )));
+    assert.deepEqual(
+        variables.map((symbol) => Buffer.from(source)
+            .subarray(symbol.span.startByte, symbol.span.endByte)
+            .toString('utf8')),
+        [
+            'cache = {}',
+            'MAX_RETRIES = 3',
+            'DEFAULT_TIMEOUT: float = 5.0',
+            'T = TypeVar("T")',
+        ],
+    );
+    for (const variable of variables) {
+        assert.ok(result.chunks.some((chunk) => chunk.metadata.symbolLabel === `variable ${variable.name}`));
+    }
+
+    for (const excluded of ['a', 'b', 'value', 'class_value', 'local']) {
+        assert.ok(!variables.some((symbol) => symbol.name === excluded), excluded);
+    }
+    assert.ok(!result.moduleBindings.some((binding) => (
+        binding.kind === 'export'
+        && variables.some((symbol) => symbol.name === binding.exportedName)
+    )));
+
+    const decorated = result.symbols.find((symbol) => symbol.name === 'decorated');
+    assert.equal(decorated?.span.startLine, 12);
+    assert.equal(decorated?.span.startByte, Buffer.byteLength(source.split('\n').slice(0, 11).join('\n') + '\n'));
 });
 
 test('Python nested functions inside methods remain local functions and plain imports are retained', async () => {
@@ -397,6 +781,131 @@ test('C++ qualified out-of-class definitions retain method ownership', async () 
     assert.ok(result.symbols.some((symbol) => (
         symbol.kind === 'method' && symbol.qualifiedName === 'Service.run'
     )));
+});
+
+test('C++ emits bounded declarations, typedefs, and unions without callable-local noise', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const source = [
+        'int declared(int value);',
+        'int first(), second();',
+        'typedef struct { int value; } Item;',
+        'typedef struct Named { int value; } Alias;',
+        'union Payload { int number; char text[8]; };',
+        'class Worker { void run(); };',
+        'void Worker::run() {}',
+        'void outer() {',
+        '    void localPrototype();',
+        '    typedef int LocalId;',
+        '    struct LocalType {};',
+        '    auto local = []() {};',
+        '}',
+    ].join('\n');
+    const result = await analyzer.analyze({
+        content: source,
+        language: 'cpp',
+        relativePath: 'src/parity.cpp',
+    });
+
+    const expected = new Map([
+        ['declared', 'function'],
+        ['first', 'function'],
+        ['second', 'function'],
+        ['Item', 'type'],
+        ['Named', 'struct'],
+        ['Alias', 'type'],
+        ['Payload', 'type'],
+        ['Worker', 'class'],
+        ['outer', 'function'],
+    ]);
+    for (const [name, kind] of expected) {
+        assert.ok(result.symbols.some((symbol) => symbol.name === name && symbol.kind === kind), name);
+    }
+    const workerRuns = result.symbols.filter((symbol) => (
+        symbol.kind === 'method' && symbol.qualifiedName === 'Worker.run'
+    ));
+    assert.equal(workerRuns.length, 2);
+    assert.equal(new Set(workerRuns.map((symbol) => symbol.span.startByte)).size, 2);
+
+    const sourceSlice = (name: string): string => {
+        const symbol = result.symbols.find((candidate) => candidate.name === name);
+        assert.ok(symbol?.span.startByte !== undefined && symbol.span.endByte !== undefined, name);
+        return Buffer.from(source)
+            .subarray(symbol.span.startByte, symbol.span.endByte)
+            .toString('utf8');
+    };
+    assert.equal(sourceSlice('declared'), 'int declared(int value);');
+    assert.equal(sourceSlice('first'), 'first()');
+    assert.equal(sourceSlice('second'), 'second()');
+    assert.equal(sourceSlice('Item'), 'typedef struct { int value; } Item;');
+
+    for (const excluded of ['localPrototype', 'LocalId', 'LocalType', 'local']) {
+        assert.ok(!result.symbols.some((symbol) => symbol.name === excluded), excluded);
+    }
+});
+
+test('C++ namespaces reparent lexical descendants without reclassifying free functions', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const result = await analyzer.analyze({
+        content: [
+            'void outside() {}',
+            'namespace A {',
+            '    class Item { void run(); };',
+            '    void free_fn() {}',
+            '    namespace B { struct Nested {}; }',
+            '    void Item::run() {}',
+            '}',
+            'namespace A::B::C { class Deep {}; void deep_fn() {} }',
+            'namespace A { class Item2 {}; }',
+        ].join('\n'),
+        language: 'cpp',
+        relativePath: 'src/namespaces.cpp',
+    });
+
+    const namespaceA = result.symbols.filter((symbol) => (
+        symbol.kind === 'namespace' && symbol.qualifiedName === 'A'
+    ));
+    assert.equal(namespaceA.length, 2);
+    assert.equal(new Set(namespaceA.map((symbol) => symbol.span.startByte)).size, 2);
+
+    const namespaceB = result.symbols.find((symbol) => (
+        symbol.kind === 'namespace' && symbol.name === 'B'
+    ));
+    assert.equal(namespaceB?.qualifiedName, 'A.B');
+    assert.deepEqual(namespaceB?.parentQualifiedNamePath, ['A']);
+
+    const namespaceC = result.symbols.find((symbol) => (
+        symbol.kind === 'namespace' && symbol.name === 'C'
+    ));
+    assert.equal(namespaceC?.qualifiedName, 'A.B.C');
+    assert.deepEqual(namespaceC?.parentQualifiedNamePath, ['A', 'B']);
+
+    const expectedQualifiedNames = new Map([
+        ['Item', 'A.Item'],
+        ['free_fn', 'A.free_fn'],
+        ['Nested', 'A.B.Nested'],
+        ['Deep', 'A.B.C.Deep'],
+        ['deep_fn', 'A.B.C.deep_fn'],
+        ['Item2', 'A.Item2'],
+    ]);
+    for (const [name, qualifiedName] of expectedQualifiedNames) {
+        assert.ok(result.symbols.some((symbol) => (
+            symbol.name === name && symbol.qualifiedName === qualifiedName
+        )), name);
+    }
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'function' && symbol.qualifiedName === 'A.free_fn'
+    )));
+    assert.ok(result.symbols.some((symbol) => (
+        symbol.kind === 'function' && symbol.qualifiedName === 'A.B.C.deep_fn'
+    )));
+
+    const itemRuns = result.symbols.filter((symbol) => symbol.qualifiedName === 'A.Item.run');
+    assert.equal(itemRuns.length, 2);
+    assert.ok(itemRuns.every((symbol) => symbol.kind === 'method'));
+
+    const outside = result.symbols.find((symbol) => symbol.name === 'outside');
+    assert.equal(outside?.qualifiedName, 'outside');
+    assert.deepEqual(outside?.parentQualifiedNamePath, []);
 });
 
 test('language analysis parses large TypeScript files without native binding failures', async () => {

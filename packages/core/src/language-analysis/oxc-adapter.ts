@@ -58,11 +58,17 @@ function symbolKind(
 ): ExtractedSymbolKind | undefined {
     switch (node.type) {
         case 'FunctionDeclaration': return 'function';
+        case 'TSDeclareFunction': return 'function';
         case 'ClassDeclaration': return 'class';
         case 'TSInterfaceDeclaration': return 'interface';
         case 'TSTypeAliasDeclaration': return 'type';
         case 'TSEnumDeclaration': return 'enum';
+        case 'TSModuleDeclaration':
+            return nodeName(node) ? 'namespace' : undefined;
         case 'MethodDefinition': return node.kind === 'constructor' ? 'constructor' : 'method';
+        case 'TSMethodSignature':
+        case 'TSAbstractMethodDefinition':
+            return 'method';
         case 'PropertyDefinition': return isFunctionValue(node.value) ? 'method' : 'variable';
         case 'VariableDeclarator':
             if (parent?.type !== 'VariableDeclaration' || insideCallable) return undefined;
@@ -72,7 +78,12 @@ function symbolKind(
 }
 
 function symbolName(node: AstNode): string | undefined {
-    if (node.type === 'MethodDefinition' || node.type === 'PropertyDefinition') {
+    if (
+        node.type === 'MethodDefinition'
+        || node.type === 'PropertyDefinition'
+        || node.type === 'TSMethodSignature'
+        || node.type === 'TSAbstractMethodDefinition'
+    ) {
         const key = node.key;
         if (isAstNode(key) && typeof key.name === 'string') return key.name;
         if (isAstNode(key) && typeof key.value === 'string') return key.value;
@@ -161,7 +172,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
     ): void => {
         const kind = symbolKind(node, parent, insideCallable);
         const name = kind ? symbolName(node) : undefined;
-        const nextParents = name && (kind === 'class' || kind === 'interface')
+        const nextParents = name && (kind === 'class' || kind === 'interface' || kind === 'namespace')
             ? [...parents, name]
             : parents;
         if (kind && name) {
@@ -190,6 +201,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
             || node.type === 'FunctionExpression'
             || node.type === 'ArrowFunctionExpression'
             || node.type === 'MethodDefinition'
+            || node.type === 'TSAbstractMethodDefinition'
             || (node.type === 'PropertyDefinition' && isFunctionValue(node.value))
         );
         for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable);

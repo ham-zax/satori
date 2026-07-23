@@ -185,6 +185,8 @@ function parseSymbolLabel(label: string): ParsedSymbolLabel | null {
         [/^enum\s+(.+)$/, 'enum'],
         [/^trait\s+(.+)$/, 'trait'],
         [/^module\s+(.+)$/, 'module'],
+        [/^namespace\s+(.+)$/, 'namespace'],
+        [/^macro\s+(.+)$/, 'macro'],
     ];
 
     for (const [pattern, kind] of prefixRules) {
@@ -283,6 +285,8 @@ function toRegistrySymbolKind(kind: ExtractedSymbolKind): SymbolKind | null {
         enum: 'enum',
         trait: 'trait',
         module: 'module',
+        namespace: 'namespace',
+        macro: 'macro',
         constant: 'property',
         variable: 'property',
     };

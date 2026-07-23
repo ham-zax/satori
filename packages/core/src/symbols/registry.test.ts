@@ -134,6 +134,78 @@ test('symbol registry treats logical-key multiplicity as candidates, not corrupt
     assert.deepEqual(registry.warnings, []);
 });
 
+test('extracted namespace occurrences retain one stable key and distinct exact instances', () => {
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/namespaces.ts',
+        language: 'typescript',
+        content: [
+            'namespace Billing { export class Invoice {} }',
+            'namespace Billing { export function run() {} }',
+        ].join('\n'),
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v2',
+        chunks: [],
+        extractedSymbols: [
+            {
+                kind: 'namespace',
+                name: 'Billing',
+                label: 'namespace Billing',
+                qualifiedName: 'Billing',
+                parentQualifiedNamePath: [],
+                span: { startLine: 1, endLine: 1, startByte: 0, endByte: 47 },
+            },
+            {
+                kind: 'class',
+                name: 'Invoice',
+                label: 'class Invoice',
+                qualifiedName: 'Billing.Invoice',
+                parentQualifiedNamePath: ['Billing'],
+                span: { startLine: 1, endLine: 1, startByte: 27, endByte: 43 },
+            },
+            {
+                kind: 'namespace',
+                name: 'Billing',
+                label: 'namespace Billing',
+                qualifiedName: 'Billing',
+                parentQualifiedNamePath: [],
+                span: { startLine: 2, endLine: 2, startByte: 48, endByte: 96 },
+            },
+        ],
+    });
+
+    const namespaces = records.filter((record) => record.kind === 'namespace');
+    assert.equal(namespaces.length, 2);
+    assert.equal(new Set(namespaces.map((record) => record.symbolKey)).size, 1);
+    assert.equal(new Set(namespaces.map((record) => record.symbolInstanceId)).size, 2);
+
+    const invoice = records.find((record) => record.name === 'Invoice');
+    assert.equal(invoice?.qualifiedName, 'Billing.Invoice');
+    assert.deepEqual(invoice?.parentQualifiedNamePath, ['Billing']);
+});
+
+test('extracted Rust macro retains its persisted macro kind and module ownership', () => {
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/lib.rs',
+        language: 'rust',
+        content: 'mod storage { macro_rules! build { () => {} } }',
+        fileHash: 'file-hash',
+        extractorVersion: 'extractor-v15',
+        chunks: [],
+        extractedSymbols: [{
+            kind: 'macro',
+            name: 'build',
+            label: 'macro build',
+            qualifiedName: 'storage.build',
+            parentQualifiedNamePath: ['storage'],
+            span: { startLine: 1, endLine: 1, startByte: 14, endByte: 47 },
+        }],
+    });
+
+    const macro = records.find((record) => record.kind === 'macro');
+    assert.equal(macro?.qualifiedName, 'storage.build');
+    assert.deepEqual(macro?.parentQualifiedNamePath, ['storage']);
+});
+
 test('symbol registry manifest hash is stable across file order and ignores display path timing churn', () => {
     const first = manifest([
         { path: 'src/b.ts', hash: 'hash-b', language: 'typescript', symbolCount: 1 },
@@ -150,6 +222,10 @@ test('symbol registry manifest hash is stable across file order and ignores disp
     assert.notEqual(
         computeSymbolRegistryManifestHash(first),
         computeSymbolRegistryManifestHash({ ...first, indexPolicyHash: 'different-policy' })
+    );
+    assert.notEqual(
+        computeSymbolRegistryManifestHash(first),
+        computeSymbolRegistryManifestHash({ ...first, extractorVersion: 'extractor-v2' })
     );
 });
 

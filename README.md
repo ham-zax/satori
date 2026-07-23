@@ -218,6 +218,21 @@ Candidate identity and provenance are kept separate from primary publication aut
 
 Search and bounded reads work across the indexed text and language catalog. Rich symbol navigation depends on parser evidence. TypeScript, JavaScript, and Python currently have the strongest call-graph support; other supported languages may provide symbols without authoritative graph traversal. Inspect `manage_index status` instead of assuming every indexed language is graph-ready.
 
+Structural definition coverage is intentionally language-specific:
+
+| Analyzer | Proven definition coverage |
+|---|---|
+| TypeScript / JavaScript | Classes, functions, methods, interfaces, types, enums, module variables, plus TypeScript namespaces and declaration-only signatures |
+| Python | Classes, functions, methods, and direct module bindings |
+| Go | Functions, methods, structs, interfaces, and named types |
+| Rust | Modules, traits, structs, enums, functions, methods, type aliases, unions, and macros |
+| Java | Classes, interfaces, enums, constructors, and methods |
+| C# | Namespaces, classes, interfaces, structs, enums, constructors, and methods |
+| C++ | Namespaces, classes, structs, enums, unions, typedefs/types, and callable declarations or definitions |
+| Scala | Packages, classes, traits, objects, enums, types, functions, methods, and named package-level vals, vars, or givens |
+
+`.c` and `.h` files currently use the C++ parser for a proven common-C subset; Satori does not claim a native C parser. Definition coverage improves outline, exact-open, and ownership navigation. It does not by itself imply call-graph or type-resolution support.
+
 ## Privacy and Limits
 
 - Offline Potion embedding, LanceDB storage, search, and runtime telemetry make no network requests after installation.

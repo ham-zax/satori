@@ -136,6 +136,10 @@ test('fingerprint parsing and compatibility use one deterministic field contract
         status: 'requires_reindex',
         differingFields: ['parserVersion'],
     });
+    assert.deepEqual(compareIndexCompatibility({ ...current, extractorVersion: 'extractor-v2' }, current), {
+        status: 'requires_reindex',
+        differingFields: ['extractorVersion'],
+    });
     assert.equal(parseIndexFingerprint({ ...legacy, embeddingProjectionVersion: 'partial' }), null);
     assert.deepEqual(compareIndexCompatibility({ ...current, embeddingDimension: 0 }, current), {
         status: 'malformed',

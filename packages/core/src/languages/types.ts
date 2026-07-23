@@ -52,6 +52,8 @@ export type ExtractedSymbolKind =
     | 'enum'
     | 'trait'
     | 'module'
+    | 'namespace'
+    | 'macro'
     | 'constant'
     | 'variable';
 

@@ -1,7 +1,6 @@
 # Multi-Language Symbol Definition Parity Plan
 
-**Status:** proposed; `D0-D1A` contract freeze is implementation-ready;
-extractor changes remain blocked pending its decision
+**Status:** complete; D0-D6 recorded terminal decisions and the final program decision is `definition_parity_pass`
 **Recorded:** 2026-07-23
 **Repository baseline:** `4c134922f4dacb43ffda3f56f007f8055a1bc20f`
 **Primary decision:** improve deterministic definition coverage for Satori's
@@ -143,7 +142,9 @@ The Oxc adapter currently recognizes:
 - class methods and constructors;
 - callable class fields;
 - module-level callable variables; and
-- module-level scalar variables.
+- module-level scalar variables;
+- TypeScript declaration-only functions and method signatures; and
+- TypeScript identifier namespaces with lexical descendant ownership.
 
 It deliberately suppresses variables declared inside callables.
 
@@ -153,13 +154,16 @@ The Tree-sitter adapter currently recognizes:
 
 | Language | Current definitions |
 | --- | --- |
-| Python | classes, functions, class methods |
+| Python | classes, functions, class methods, direct module bindings |
 | Go | functions, methods, named types; structs and interfaces receive refined kinds |
-| Rust | functions, impl methods, function signatures, structs, enums, traits, modules |
+| Rust | functions, impl methods, function signatures, structs, enums, traits, modules, aliases, unions, macros |
 | Java | classes, interfaces, enums, methods, constructors |
-| C# | classes, interfaces, structs, enums, methods, constructors |
-| C++ | classes, structs, enums, function definitions, qualified methods |
-| Scala | classes, traits, objects, functions, class methods |
+| C# | namespaces, classes, interfaces, structs, enums, methods, constructors |
+| C++ | namespaces, classes, structs, enums, unions, types/typedefs, callable declarations and definitions |
+| Scala | packages, classes, traits, objects, enums, types, functions, class methods, named package bindings |
+
+`.c` and `.h` remain routed through the C++ parser as a proven common-C subset;
+the repository does not contain native C parser authority.
 
 ### 4.3 Current identity
 
@@ -173,7 +177,7 @@ LANGUAGE_PARSER_VERSION =
   + scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3
 
 SYMBOL_EXTRACTOR_VERSION =
-  language-analysis-v5 + LANGUAGE_PARSER_VERSION
+  language-analysis-v15 + LANGUAGE_PARSER_VERSION
 
 RELATIONSHIP_BUILDER_VERSION =
   relationship-v5+python-receiver-calls
@@ -205,15 +209,15 @@ struct
 enum
 trait
 module
+namespace
+macro
 constant
 variable
 ```
 
-The persisted `SymbolKind` contract already additionally supports:
+The persisted `SymbolKind` contract additionally supports:
 
 ```text
-namespace
-macro
 property
 component
 hook
@@ -221,9 +225,9 @@ config
 test
 ```
 
-This plan permits adding internal `namespace` and `macro` extracted kinds
-because compatible persisted kinds already exist. It does not add a new
-persisted `union` kind; C, C++, and Rust unions map to `type`.
+The program added internal `namespace` and `macro` extracted kinds by mapping
+them to the compatible persisted kinds that already existed. It did not add a
+persisted `union` kind; C++, common-C, and Rust unions map to `type`.
 
 Constants and module variables continue to map to the established `property`
 registry kind unless a separately authorized public ontology change is proven
@@ -1277,7 +1281,7 @@ for every language when the same owner and mutation path are unchanged.
 
 ### MCP proof
 
-For every behavior-changing language batch, verify:
+The program must verify:
 
 - `file_outline` contains the new definitions in deterministic order;
 - `read_file(open_symbol)` opens the exact intended span;
@@ -1289,6 +1293,14 @@ For every behavior-changing language batch, verify:
 The same batch updates every directly invalidated behavior document after these
 checks pass. D6 is a final consolidated audit, not permission to leave
 intermediate documentation stale.
+
+Each batch reruns only the proof invalidated by its changed owner. Green
+registry, publication-compatibility, relationship-binding, and language-neutral
+MCP evidence remains reusable while its implementation, schema, fixture,
+manifest binding, and configuration inputs are unchanged. Shared extractor
+changes receive one affected Core package checkpoint, and unchanged MCP
+handlers receive one final targeted public-boundary checkpoint rather than a
+duplicate matrix per language.
 
 ### Focused commands
 
@@ -1304,15 +1316,18 @@ git diff --check
 ```
 
 The package-wide test commands may be replaced by narrower documented test-file
-commands during iteration. Run the affected package suite before declaring a
-batch complete when shared extractor, registry, or identity code changed.
+commands during iteration. Run one affected package consolidation checkpoint
+after related batches sharing an extractor, registry, or identity owner; do not
+repeat it after documentation-only changes.
 
 Do not run release smoke, installer qualification, L4, or retrieval benchmarks
 for a definition-only batch.
 
 ## 12. Mechanical Acceptance Gates
 
-A behavior-changing language batch passes only when:
+A behavior-changing language batch passes only when its changed boundaries
+satisfy the applicable gates below. Unchanged gates may use valid reusable
+evidence under Section 11; they are not recreated for every language:
 
 1. Every construct has a frozen extracted kind, persisted kind, parent rule,
    and span rule.
@@ -1418,9 +1433,9 @@ Passing a batch authorizes documentation of that batch only. It does not
 authorize call-graph, import/export, typed-receiver, or additional-language
 work.
 
-## 14. First Authorization Candidate
+## 14. Initial Authorization Entry (completed)
 
-Authorize only `D0-D1A` first:
+The original bounded entry was `D0-D1A`:
 
 ```text
 freeze current TypeScript signature and overload output
@@ -1437,8 +1452,9 @@ behavior. It must not change extractor output, expected production behavior,
 TypeScript namespace ownership, Python bindings, C/C++, Rust, Java, C#, Scala,
 call relationships, parser dependencies, or user publications.
 
-After `contract_freeze_pass`, D1A may be considered for separate authorization.
-D1A does not authorize D0-D1B, D1B, D0-D1C, or D1C.
+That entry did not authorize later batches by itself. The subsequent explicit
+program authorization and the terminal decisions in Section 16 now record the
+completed execution state.
 
 ## 15. Final Program Completion
 
@@ -1454,3 +1470,223 @@ This plan is complete when:
 - public language documentation matches the proven capability tiers; and
 - the repository contains no speculative parser framework introduced solely
   for this program.
+
+## 16. Execution Record
+
+**Execution start:** `c239d8442aa810b2f27e6210ceb397649f412d09`
+on `master`, with a clean worktree and no user changes.
+
+Evidence may be reused only under the rules in Section 10 and Section 11.
+
+| Batch | Decision | Evidence |
+| --- | --- | --- |
+| `D0-D1A` | `contract_freeze_pass` | Oxc `0.139.0` emits `TSDeclareFunction`, `TSMethodSignature`, and `TSAbstractMethodDefinition` with deterministic identifier keys and UTF-16 spans. Existing registry coverage proves one stable key can retain distinct exact instances. Focused compatibility coverage proves an extractor-version change returns `requires_reindex` and changes the symbol-registry manifest hash, which invalidates relationship artifacts bound to the prior hash. |
+| D1A | `definition_parity_pass` | Oxc emits declaration-only functions, interface methods, and abstract methods with frozen names, parents, spans, and distinct overload occurrences. The JavaScript audit recorded supporting `definition_parity_noop`: existing generator, class/method, module callable, and scalar-variable output remained unchanged while prototype/object members remained excluded. Analyzer/registry/compatibility checks passed 72/72; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v5` to `language-analysis-v6`; parser and relationship identities were unchanged. |
+| `D0-D1B` | `contract_freeze_pass` | Oxc `0.139.0` represents identifier namespaces as `TSModuleDeclaration` nodes, nested identifier namespaces as nested declarations, and ambient string modules with a non-identifier `Literal` ID. The persisted registry already accepts `namespace`; the extracted-kind union, registry mapping/label parser, and Oxc parent construction are the only consumers requiring synchronization. Existing D0 compatibility evidence remains valid because its implementation and manifest inputs are unchanged. |
+| D1B | `definition_parity_pass` | Identifier namespaces are emitted as `namespace`; reopened occurrences retain one stable key and distinct exact instances; only the frozen lexical descendants are reparented; ambient string modules remain excluded as containers; and the outside-definition preservation witness is unchanged. Analyzer/registry/compatibility checks passed 74/74, followed by the complete affected Core suite, Core typecheck, and focused lint. Development extractor identity advanced from `language-analysis-v6` to `language-analysis-v7`; parser and relationship identities were unchanged. |
+| `D0-D1C` | `contract_freeze_pass` | The pinned Python grammar represents simple and annotated bindings as `assignment` with an identifier `left`; destructuring uses `pattern_list`, attribute assignment uses `attribute`, and class/local assignments are not directly owned by `module`. Existing `variable` -> `property` consumers require no kind change. The current Python module-binding builder derives relationship input from top-level symbols, so D1C must exclude the new navigation-only variables from that builder to preserve import/export semantics. Existing D0 compatibility evidence remains reusable. |
+| D1C | `definition_parity_pass` | Exactly `cache`, `MAX_RETRIES`, `DEFAULT_TIMEOUT`, and `T` are emitted as direct module variables in deterministic source order. Destructured, class, callable-local, and attribute assignments remain excluded; assignment chunks carry the new owner labels; decorated-definition spans remain unchanged; and new variables are absent from relationship/module-binding evidence. Focused analyzer/registry/compatibility checks passed 75/75; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v7` to `language-analysis-v8`; parser and relationship identities were unchanged. |
+| `D0-D2A` | `contract_freeze_pass` | The pinned C++ grammar represents bodyless functions as direct `function_declarator` fields of `declaration` or `field_declaration`, typedefs as `type_definition`, and named unions as `union_specifier`. Callable names terminate in `identifier`, class-member `field_identifier`, or a bounded `qualified_identifier`. A baseline probe also proved that current extraction incorrectly emits a function-local named struct; D2A allowlists removal of that local symbol. Existing D0 compatibility evidence remains reusable. |
+| D2A | `definition_parity_pass` | C/C++ declarations, independent multi-declarators, typedef aliases, named unions, and class method declarations match the frozen kind/name/parent/span contract. Declaration and definition occurrences of `Worker.run` remain distinct. Callable-local prototype, typedef, named type, variable, and lambda noise is absent, including removal of the previously leaked `LocalType`. The focused analyzer suite passed 51/51; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v8` to `language-analysis-v9`; parser and relationship identities were unchanged. |
+| `D0-D2B` | `contract_freeze_pass` | The C++ grammar represents ordinary namespaces with `namespace_identifier` and C++17 compact namespaces with one `nested_namespace_specifier`. Compact `A::B::C` therefore freezes one source-backed namespace occurrence `C` under parent segments `A`, `B`; no synthetic source-less `A` or `B` symbols are invented. Existing free functions inside namespaces must remain `function`, while explicit qualified members combine lexical namespace and declared class scope. Existing D0 compatibility evidence remains reusable. |
+| D2B | `definition_parity_pass` | C++ ordinary, nested, compact, and reopened namespaces match the frozen source-backed container contract. Namespace free functions remain functions, explicit qualified members combine lexical namespace and class ownership, and the outside-definition preservation witness is unchanged. The focused analyzer suite passed 52/52; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v9` to `language-analysis-v10`; parser and relationship identities were unchanged. |
+| `D0-D3` | `contract_freeze_pass` | The pinned Rust grammar represents aliases as `type_item`, unions as `union_item`, and macro definitions as `macro_definition`, each with a deterministic `name` field. A baseline probe also proved that current Rust and Go extraction emits callable-local named types (`LocalStruct` and `Local`), contrary to the program's local-exclusion contract. D3 therefore includes the bounded correction at the shared Tree-sitter owner while preserving existing module/type/function output. Existing compatibility evidence remains reusable. |
+| D3 | `definition_parity_pass` | Rust module/root aliases, unions, and macro definitions now match the frozen kind, parent, and qualified-name contract. Callable-, trait-, and impl-local named definitions remain excluded, including removal of the previously leaked `LocalStruct`. The Go audit required one bounded correction: top-level type/function output remains unchanged while the callable-local `Local` type is no longer emitted. Focused analyzer/registry/compatibility checks passed 79/79; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v10` to `language-analysis-v11`; parser and relationship identities were unchanged. |
+| `D0-D4A` | `contract_freeze_pass` | The pinned C# grammar represents block namespaces as `namespace_declaration` and file-scoped namespaces as `file_scoped_namespace_declaration`; each exposes an identifier or qualified-name `name` field. File-scoped namespace ownership applies to following compilation-unit declarations rather than AST children, so D4A must carry that one frozen lexical authority across later siblings without creating source-less prefix symbols. Existing `namespace` consumers and compatibility evidence are reusable. |
+| D4A | `definition_parity_pass` | C# block, qualified, reopened, and file-scoped namespaces now match the frozen source-backed container contract. Block ownership remains bounded to the namespace body, file-scoped ownership applies to later compilation-unit declarations, and the top-level preservation witness remains unchanged. Focused analyzer/registry/compatibility checks passed 80/80; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v11` to `language-analysis-v12`; parser and relationship identities were unchanged. |
+| `D0-D4B` | `contract_freeze_pass` | The Java audit confirmed existing class, interface, enum, method, and constructor coverage, but also proved that a callable-local class and its members can leak into repository navigation. D4B therefore records a bounded correction under the program-wide local-exclusion contract while adding none of the deferred record, annotation, field, or enum-constant categories. Existing compatibility evidence remains reusable. |
+| D4B | `definition_parity_pass` | Java retains its existing class, interface, enum, method, and constructor definitions while callable-local classes and their nested declarations are excluded. No records, annotations, fields, enum constants, package symbols, or reference captures were added. Focused analyzer/registry/compatibility checks passed 81/81; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v12` to `language-analysis-v13`; parser and relationship identities were unchanged. |
+| `D0-D5A` | `contract_freeze_pass` | The pinned Scala grammar represents packages as `package_clause` with a `package_identifier` name and an optional `template_body`, enums as `enum_definition`, and aliases as `type_definition`. A bodyless package governs later compilation-unit siblings, while a package with a body governs only that body. Qualified packages are one source occurrence whose final segment is emitted under the preceding segments. Existing namespace/enum/type consumers and compatibility evidence remain reusable. |
+| D5A | `definition_parity_pass` | Scala block, flat, qualified, and chained package ownership now follows the frozen source-backed container contract; enums and named type aliases are emitted under the active package; callable-local type/function definitions remain excluded; and the outside-package preservation witness is unchanged. Focused analyzer/registry/compatibility checks passed 82/82; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v13` to `language-analysis-v14`; parser and relationship identities were unchanged. |
+| `D0-D5B` | `contract_freeze_pass` | The pinned Scala grammar represents immutable bindings as `val_definition`, mutable bindings as `var_definition`, and givens as `given_definition`. Direct binding names are identifier `pattern` fields for val/var and an optional identifier `name` field for givens. D5B admits only bindings under source/package module authority and freezes an exact noise oracle excluding class fields, callable locals, destructuring, and anonymous givens. Existing property-kind consumers and compatibility evidence remain reusable. |
+| D5B | `definition_parity_pass` | Scala admits exactly the frozen named package-level val, var, and given bindings as property-backed navigation definitions. Class-owned, callable-local, destructured, and anonymous bindings remain excluded, while existing structural definitions retain their identities. Focused analyzer/registry/compatibility checks passed 83/83; Core typecheck, focused lint, and diff check passed. Development extractor identity advanced from `language-analysis-v14` to the consolidated release identity `language-analysis-v15`; parser and relationship identities were unchanged. |
+| D6 | `definition_parity_pass` | The final focused analyzer/registry/compatibility set passed 84/84, including persisted macro mapping. The complete Core suite, Core build/typecheck, focused lint, MCP file-outline/read-file and grouped-owner boundary checks, MCP typecheck/runtime build, and diff check passed. The known tracked-lexical continuation fixture still produced its recorded pre-existing `not_ready` result when included in a broader MCP selection; its dependency boundary was not changed and it is not claimed green. Public documentation now records proven per-language definition coverage, the common-C/C++ parser boundary, and the separation between definition navigation and graph/type-resolution capability. Capability tiers and public schemas were unchanged; no copied runtime code required a `THIRD_PARTY.md` change. |
+
+### Frozen D1A contract
+
+- `TSDeclareFunction` -> `function`, using its identifier, complete declaration
+  span, and current lexical parent.
+- `TSMethodSignature` and `TSAbstractMethodDefinition` -> `method`, using their
+  identifier/string key, complete declaration span, and nearest current
+  class/interface parent.
+- Overload signatures and the implementation share a stable key only when the
+  current path, language, persisted kind, qualified name, and parent are equal;
+  each source occurrence retains a distinct exact instance through its span.
+- Existing JavaScript output is audit-only and must remain unchanged.
+- Existing call-site extraction is not changed.
+- No new extracted or persisted kind is required by D1A.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+Focused D0 evidence:
+
+```text
+packages/core/src/core/persisted-index-authority.test.ts
+packages/core/src/symbols/registry.test.ts
+24 passed, 0 failed
+```
+
+### Frozen D1B contract
+
+- Identifier `TSModuleDeclaration` -> `namespace`, complete declaration span,
+  and current lexical namespace parent.
+- Ambient string modules and qualified-name IDs not represented as a simple
+  identifier remain excluded.
+- A reopened namespace produces distinct exact occurrences under the same
+  path-sensitive stable key.
+- The fixture allowlists only these identity-input changes:
+  - `Invoice`, `Reader`, `run`, `value`, and overload `parse` occurrences:
+    `[]` / unqualified name -> `["Billing"]` / `Billing.<name>`;
+  - `Inner`: newly emitted under `["Billing"]` as `Billing.Inner`;
+  - `nested`: `[]` / `nested` -> `["Billing", "Inner"]` /
+    `Billing.Inner.nested`; and
+  - `reopened`: `[]` / `reopened` -> `["Billing"]` /
+    `Billing.reopened`.
+- A top-level `outside` function is the preservation witness and must retain
+  its existing identity inputs.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not. Prior relationship artifacts remain invalid
+  through the already-proven symbol-registry manifest binding.
+
+### Frozen D1C contract
+
+- Admit only an `assignment` whose `left` field is one `identifier` and whose
+  enclosing `expression_statement` is directly owned by the Python `module`.
+- Emit the assignment node's complete span as `variable` with no parent path.
+- The exact admitted fixture bindings are `cache`, `MAX_RETRIES`,
+  `DEFAULT_TIMEOUT`, and `T`, in source order.
+- The exact excluded bindings are destructured `a` and `b`, class-owned
+  `class_value`, callable-local `local`, and attribute-owned `value`.
+- Every admitted binding owns its controlled assignment chunk; decorated class
+  and function symbols retain their existing spans and identities.
+- New Python variables do not enter `ModuleBinding` output, so import/export
+  and call relationship inputs remain unchanged.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D2A contract
+
+- A direct callable declarator under a repository/class/namespace declaration
+  becomes `function` or `method`; declarators inside a callable remain
+  excluded.
+- A single callable declarator uses its complete containing declaration span.
+  Multiple callable declarators in one declaration use their individual
+  declarator spans so no sibling is swallowed.
+- Only direct identifier, field-identifier, or qualified-identifier callable
+  terminals are admitted; pointer variables and lambdas remain excluded.
+- `type_definition` aliases and named `union_specifier` nodes become `type`.
+  Existing named struct/class/enum definitions remain unchanged.
+- The exact positive fixture names are `declared`, `first`, `second`, `Item`,
+  `Named`, `Alias`, `Payload`, `Worker`, both `Worker.run` occurrences, and
+  `outer`.
+- The exact exclusions are `localPrototype`, `LocalId`, `LocalType`, and
+  `local`. Removal of the currently emitted `LocalType` is an authorized
+  defect-correction identity delta.
+- `.c` and `.h` remain routed through the C++ analyzer; this is a common-C
+  subset proof, not native C parser authority.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D2B contract
+
+- `namespace_identifier` emits one `namespace` under the current lexical path.
+- `namespace A::B::C` emits the source-backed namespace `C` with parent path
+  `["A", "B"]`; it does not invent separate source symbols for `A` or `B`.
+- Reopened namespace declarations in one file share a stable key and retain
+  distinct exact instances. Reopened declarations in different files retain
+  the established path-sensitive distinct stable keys.
+- Namespace free functions remain `function`, not `method`.
+- Explicit `Item::run` inside namespace `A` is owned by
+  `["A", "Item"]` as `A.Item.run`.
+- The fixture allowlists descendant reparenting for `Item`, `free_fn`, `B`,
+  `Nested`, `C`, `Deep`, `deep_fn`, `Item2`, and `Item.run`. Top-level
+  `outside` remains the preservation witness.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D3 contract
+
+- Rust `type_item` and `union_item` become `type`; `macro_definition` becomes
+  `macro`.
+- Rust definitions are admitted only under the source/module lexical
+  authority. New aliases, unions, macros, and existing named types inside a
+  callable, trait, or impl remain excluded.
+- The exact positive Rust fixture names are `storage`, `ItemId`, `Payload`,
+  `build`, `load`, `RootId`, `RootPayload`, `root_macro`, and `outer`.
+- The exact Rust exclusions are callable-local `Local`, `LocalStruct`, and
+  `local_macro`.
+- Go preserves top-level `Public` and `outer`; the currently leaked
+  callable-local `Local` type is removed as a bounded parity correction.
+- Existing Rust impl/trait method ownership, macro calls, Go receiver
+  ownership, call-site extraction, and module-binding output remain unchanged.
+- `macro` is synchronized through the extracted-kind union and the existing
+  persisted `macro` vocabulary; no public schema change is required.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D4A contract
+
+- C# `namespace_declaration` and `file_scoped_namespace_declaration` emit the
+  final source-backed segment as `namespace`; preceding qualified segments
+  become its parent path without synthetic symbols.
+- A block namespace reparents only declarations in its body. A file-scoped
+  namespace reparents subsequent declarations in the same compilation unit.
+- Reopened block namespaces retain one file-relative stable key and distinct
+  exact instances.
+- The block fixture allowlists `Invoice` and `Invoice.Run` moving under
+  `Billing`; top-level `Outside` remains the preservation witness.
+- The file-scoped fixture emits `Billing.Inner` and reparents `Worker` and
+  `Worker.Work` under `Billing.Inner`.
+- Existing class, interface, struct, enum, method, and constructor kinds and
+  call-site extraction remain unchanged.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D4B contract
+
+- Preserve existing top-level/member output for `Public`, `Public.run`,
+  `Reader`, `Reader.read`, and `Mode`.
+- Exclude callable-local `Local` and every declaration nested under that
+  excluded local owner.
+- Do not add Java records, annotation declarations, fields, enum constants, or
+  reference captures.
+- Existing call-site extraction and package handling remain unchanged.
+- Extractor identity changes only because the audit demonstrated and corrected
+  local-definition leakage; parser and relationship identities do not.
+
+### Frozen D5A contract
+
+- Scala `package_clause` emits its final source-backed segment as `namespace`;
+  preceding qualified segments become its parent path without synthetic
+  symbols.
+- A package with a `template_body` reparents only definitions in that body. A
+  bodyless package reparents subsequent compilation-unit definitions; chained
+  bodyless packages accumulate deterministic lexical ownership.
+- `enum_definition` becomes `enum`; `type_definition` becomes `type`.
+- The block fixture allowlists `Invoice` moving under `billing`; top-level
+  `Outside` remains the preservation witness.
+- The flat `billing.core` fixture emits `billing.core` and reparents `Mode`,
+  `ItemId`, `Service`, `Service.run`, and `outer` under it.
+- Callable-local named type and function definitions remain excluded. Enum
+  cases and class parameters remain deferred.
+- Existing class, trait, object, and function kinds and call-site extraction
+  remain unchanged.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.
+
+### Frozen D5B contract
+
+- A directly module/package-owned `val_definition` with one identifier pattern
+  becomes `constant`; `var_definition` becomes `variable`.
+- A directly module/package-owned named `given_definition` becomes `variable`;
+  anonymous givens remain excluded.
+- The exact admitted fixture bindings are `top`, `mutable`, and `ordering`, in
+  source order under `billing.core`.
+- The exact exclusions are destructured `left`/`right`, class-owned `field`,
+  callable-local `local` and `localTop`, and the anonymous given.
+- Existing class, method, function, package, enum, and type symbols retain
+  their identities and spans.
+- New Scala property definitions do not alter call-site or module-binding
+  extraction.
+- Extractor identity changes; parser, relationship, embedding, and lexical
+  projection identities do not.

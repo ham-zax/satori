@@ -36,6 +36,9 @@ const SYMBOL_NODES: Readonly<Record<string, Readonly<Record<string, ExtractedSym
         enum_item: 'enum',
         trait_item: 'trait',
         mod_item: 'module',
+        type_item: 'type',
+        union_item: 'type',
+        macro_definition: 'macro',
     },
     java: {
         class_declaration: 'class',
@@ -45,6 +48,8 @@ const SYMBOL_NODES: Readonly<Record<string, Readonly<Record<string, ExtractedSym
         constructor_declaration: 'constructor',
     },
     csharp: {
+        namespace_declaration: 'namespace',
+        file_scoped_namespace_declaration: 'namespace',
         class_declaration: 'class',
         interface_declaration: 'interface',
         struct_declaration: 'struct',
@@ -56,9 +61,18 @@ const SYMBOL_NODES: Readonly<Record<string, Readonly<Record<string, ExtractedSym
         class_specifier: 'class',
         struct_specifier: 'struct',
         enum_specifier: 'enum',
+        union_specifier: 'type',
+        type_definition: 'type',
+        namespace_definition: 'namespace',
         function_definition: 'function',
     },
     scala: {
+        package_clause: 'namespace',
+        enum_definition: 'enum',
+        type_definition: 'type',
+        val_definition: 'constant',
+        var_definition: 'variable',
+        given_definition: 'variable',
         class_definition: 'class',
         trait_definition: 'trait',
         object_definition: 'module',
@@ -112,12 +126,151 @@ async function loadLanguage(language: string, assetRoot?: string): Promise<Langu
 function nameForNode(node: Node): string | undefined {
     const named = node.childForFieldName('name');
     if (named?.text.trim()) return named.text.trim();
+    if (node.type === 'type_definition') {
+        const declarator = node.childForFieldName('declarator');
+        if (declarator?.type === 'type_identifier' && declarator.text.trim()) {
+            return declarator.text.trim();
+        }
+    }
     if (node.type === 'function_definition') {
         const declarator = node.childForFieldName('declarator');
         const identifier = declarator?.descendantsOfType(['identifier', 'field_identifier'])[0];
         if (identifier?.text.trim()) return identifier.text.trim();
     }
     return undefined;
+}
+
+type CppCallableDeclaration = Readonly<{
+    kind: 'function' | 'method';
+    name: string;
+    explicitParents?: readonly string[];
+    spanNode: Node;
+}>;
+
+type CppNamespaceIdentity = Readonly<{
+    name: string;
+    parentSegments: readonly string[];
+}>;
+
+type CSharpNamespaceIdentity = Readonly<{
+    name: string;
+    parentSegments: readonly string[];
+    fileScoped: boolean;
+}>;
+
+type ScalaPackageIdentity = Readonly<{
+    name: string;
+    parentSegments: readonly string[];
+    bodyless: boolean;
+}>;
+
+function cppNamespaceIdentity(node: Node): CppNamespaceIdentity | undefined {
+    if (node.type !== 'namespace_definition') return undefined;
+    const declaredName = node.childForFieldName('name');
+    if (!declaredName) return undefined;
+    if (declaredName.type === 'namespace_identifier') {
+        const name = declaredName.text.trim();
+        return name ? { name, parentSegments: [] } : undefined;
+    }
+    if (declaredName.type !== 'nested_namespace_specifier') return undefined;
+    const segments = declaredName.text
+        .split('::')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+    const name = segments.pop();
+    return name ? { name, parentSegments: segments } : undefined;
+}
+
+function csharpNamespaceIdentity(node: Node): CSharpNamespaceIdentity | undefined {
+    if (
+        node.type !== 'namespace_declaration'
+        && node.type !== 'file_scoped_namespace_declaration'
+    ) {
+        return undefined;
+    }
+    const declaredName = node.childForFieldName('name')?.text.trim();
+    if (!declaredName) return undefined;
+    const segments = declaredName
+        .split('.')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+    const name = segments.pop();
+    return name
+        ? {
+            name,
+            parentSegments: segments,
+            fileScoped: node.type === 'file_scoped_namespace_declaration',
+        }
+        : undefined;
+}
+
+function scalaPackageIdentity(node: Node): ScalaPackageIdentity | undefined {
+    if (node.type !== 'package_clause') return undefined;
+    const declaredName = node.childForFieldName('name')?.text.trim();
+    if (!declaredName) return undefined;
+    const segments = declaredName
+        .split('.')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+    const name = segments.pop();
+    return name
+        ? {
+            name,
+            parentSegments: segments,
+            bodyless: !node.childForFieldName('body'),
+        }
+        : undefined;
+}
+
+function scalaBindingName(node: Node): string | undefined {
+    if (node.type === 'given_definition') {
+        return node.childForFieldName('name')?.text.trim() || undefined;
+    }
+    if (node.type !== 'val_definition' && node.type !== 'var_definition') {
+        return undefined;
+    }
+    const pattern = node.childForFieldName('pattern');
+    return pattern?.type === 'identifier' ? pattern.text.trim() || undefined : undefined;
+}
+
+function cppCallableTerminal(node: Node): { name: string; parents?: string[] } | undefined {
+    const terminal = node.childForFieldName('declarator');
+    if (!terminal) return undefined;
+    if (terminal.type === 'identifier' || terminal.type === 'field_identifier') {
+        const name = terminal.text.trim();
+        return name ? { name } : undefined;
+    }
+    if (terminal.type !== 'qualified_identifier') return undefined;
+    const parts = terminal.text
+        .split('::')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    const name = parts.pop();
+    return name ? { name, ...(parts.length > 0 ? { parents: parts } : {}) } : undefined;
+}
+
+function cppCallableDeclaration(
+    node: Node,
+    semanticContainer: 'module' | 'class' | 'callable',
+): CppCallableDeclaration | undefined {
+    if (node.type !== 'function_declarator' || semanticContainer === 'callable') {
+        return undefined;
+    }
+    const declaration = node.parent;
+    if (!declaration || (declaration.type !== 'declaration' && declaration.type !== 'field_declaration')) {
+        return undefined;
+    }
+    const callable = cppCallableTerminal(node);
+    if (!callable) return undefined;
+    const callableSiblings = declaration
+        .childrenForFieldName('declarator')
+        .filter((candidate) => candidate.type === 'function_declarator');
+    return {
+        kind: declaration.type === 'field_declaration' || callable.parents ? 'method' : 'function',
+        name: callable.name,
+        ...(callable.parents ? { explicitParents: callable.parents } : {}),
+        spanNode: callableSiblings.length === 1 ? declaration : node,
+    };
 }
 
 function cppQualifiedCallable(node: Node): { name: string; parents: string[] } | undefined {
@@ -165,6 +318,18 @@ function rustImplOwner(node: Node): string | undefined {
         || undefined;
 }
 
+function pythonModuleBindingName(node: Node): string | undefined {
+    if (
+        node.type !== 'assignment'
+        || node.parent?.type !== 'expression_statement'
+        || node.parent.parent?.type !== 'module'
+    ) {
+        return undefined;
+    }
+    const left = node.childForFieldName('left');
+    return left?.type === 'identifier' ? left.text.trim() || undefined : undefined;
+}
+
 function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap): ExtractedSymbol[] {
     const declarations = SYMBOL_NODES[language] ?? {};
     const symbols: ExtractedSymbol[] = [];
@@ -177,6 +342,26 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
     ): void => {
         let kind: ExtractedSymbolKind | undefined = declarations[node.type];
         if (language === 'go') kind = goSymbolKind(node, kind);
+        if (language === 'go' && node.type === 'type_spec' && semanticContainer === 'callable') {
+            kind = undefined;
+        }
+        if (language === 'java' && semanticContainer === 'callable') {
+            kind = undefined;
+        }
+        if (language === 'scala' && semanticContainer === 'callable') {
+            kind = undefined;
+        }
+        if (
+            language === 'scala'
+            && (
+                node.type === 'val_definition'
+                || node.type === 'var_definition'
+                || node.type === 'given_definition'
+            )
+            && semanticContainer !== 'module'
+        ) {
+            kind = undefined;
+        }
         if (language === 'python' && node.type === 'function_definition' && semanticContainer === 'class') {
             kind = 'method';
         }
@@ -186,14 +371,90 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         if (language === 'rust' && node.type === 'function_item' && insideRustImpl) {
             kind = 'method';
         }
+        if (
+            language === 'rust'
+            && (
+                semanticContainer === 'callable'
+                || (
+                    (semanticContainer === 'class' || insideRustImpl)
+                    && (
+                        node.type === 'struct_item'
+                        || node.type === 'enum_item'
+                        || node.type === 'trait_item'
+                        || node.type === 'mod_item'
+                        || node.type === 'type_item'
+                        || node.type === 'union_item'
+                        || node.type === 'macro_definition'
+                    )
+                )
+            )
+            && node.type !== 'function_item'
+            && node.type !== 'function_signature_item'
+        ) {
+            kind = undefined;
+        }
+        const pythonModuleBinding = language === 'python'
+            ? pythonModuleBindingName(node)
+            : undefined;
+        if (pythonModuleBinding) {
+            kind = 'variable';
+        }
+        const cppDeclaration = language === 'cpp'
+            ? cppCallableDeclaration(node, semanticContainer)
+            : undefined;
+        if (cppDeclaration) {
+            kind = cppDeclaration.kind;
+        }
+        if (
+            language === 'cpp'
+            && semanticContainer === 'callable'
+            && (
+                node.type === 'class_specifier'
+                || node.type === 'struct_specifier'
+                || node.type === 'enum_specifier'
+                || node.type === 'union_specifier'
+                || node.type === 'type_definition'
+            )
+        ) {
+            kind = undefined;
+        }
+        const cppNamespace = language === 'cpp' ? cppNamespaceIdentity(node) : undefined;
+        const csharpNamespace = language === 'csharp' ? csharpNamespaceIdentity(node) : undefined;
+        const scalaPackage = language === 'scala' ? scalaPackageIdentity(node) : undefined;
+        const scalaBinding = language === 'scala' ? scalaBindingName(node) : undefined;
         const cppQualified = language === 'cpp' ? cppQualifiedCallable(node) : undefined;
-        if (language === 'cpp' && node.type === 'function_definition' && (parents.length > 0 || cppQualified)) {
+        if (
+            language === 'cpp'
+            && node.type === 'function_definition'
+            && (semanticContainer === 'class' || cppQualified)
+        ) {
             kind = 'method';
         }
-        const name = kind ? cppQualified?.name ?? nameForNode(node) : undefined;
+        const name = kind
+            ? pythonModuleBinding
+                ?? cppNamespace?.name
+                ?? csharpNamespace?.name
+                ?? scalaPackage?.name
+                ?? scalaBinding
+                ?? cppDeclaration?.name
+                ?? cppQualified?.name
+                ?? nameForNode(node)
+            : undefined;
         const implOwner = language === 'rust' ? rustImplOwner(node) : undefined;
         const receiverOwner = language === 'go' ? goReceiverOwner(node) : undefined;
-        const symbolParents = cppQualified?.parents ?? (receiverOwner ? [...parents, receiverOwner] : parents);
+        const symbolParents = cppNamespace
+            ? [...parents, ...cppNamespace.parentSegments]
+            : csharpNamespace
+                ? [...parents, ...csharpNamespace.parentSegments]
+            : scalaPackage
+                ? [...parents, ...scalaPackage.parentSegments]
+            : cppDeclaration?.explicitParents
+                ? [...parents, ...cppDeclaration.explicitParents]
+                : cppQualified?.parents
+                    ? [...parents, ...cppQualified.parents]
+                    : receiverOwner
+                        ? [...parents, receiverOwner]
+                        : parents;
         const nextParents = implOwner
             ? [...parents, implOwner]
             : name && (
@@ -203,8 +464,9 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 || kind === 'struct'
                 || kind === 'enum'
                 || kind === 'module'
+                || kind === 'namespace'
             )
-                ? [...parents, name]
+                ? [...symbolParents, name]
                 : language === 'python' && name && node.type === 'function_definition'
                     ? [...parents, name]
                 : parents;
@@ -228,22 +490,46 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 qualifiedName: [...symbolParents, name].join('.'),
                 parentQualifiedNamePath: symbolParents,
                 span: nodeSpan(
-                    language === 'python'
-                    && parentNode?.type === 'decorated_definition'
-                        ? parentNode
-                        : node,
+                    cppDeclaration?.spanNode
+                    ?? (
+                        language === 'python'
+                        && parentNode?.type === 'decorated_definition'
+                            ? parentNode
+                            : node
+                    ),
                     sourceMap,
                 ),
             });
         }
+        let siblingParents = nextParents;
         for (const child of node.namedChildren) {
             visit(
                 child,
-                nextParents,
+                siblingParents,
                 insideRustImpl || (language === 'rust' && node.type === 'impl_item'),
                 node,
                 nextSemanticContainer,
             );
+            const fileScopedNamespace = language === 'csharp'
+                ? csharpNamespaceIdentity(child)
+                : undefined;
+            if (fileScopedNamespace?.fileScoped) {
+                siblingParents = [
+                    ...siblingParents,
+                    ...fileScopedNamespace.parentSegments,
+                    fileScopedNamespace.name,
+                ];
+            }
+            const bodylessPackage = language === 'scala'
+                ? scalaPackageIdentity(child)
+                : undefined;
+            if (bodylessPackage?.bodyless) {
+                siblingParents = [
+                    ...siblingParents,
+                    ...bodylessPackage.parentSegments,
+                    bodylessPackage.name,
+                ];
+            }
         }
     };
     visit(root, []);
@@ -325,7 +611,10 @@ function extractPythonModuleBindings(
     sourceMap: Utf8SourceMap,
 ): ModuleBinding[] {
     const bindings: ModuleBinding[] = symbols
-        .filter((symbol) => symbol.parentQualifiedNamePath?.length === 0)
+        .filter((symbol) => (
+            symbol.kind !== 'variable'
+            && symbol.parentQualifiedNamePath?.length === 0
+        ))
         .map((symbol) => ({
             kind: 'export' as const,
             exportedName: symbol.name,

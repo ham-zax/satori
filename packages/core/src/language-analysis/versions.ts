@@ -4,5 +4,5 @@ export const LANGUAGE_PARSER_VERSION = [
     'vscode-grammars-0.3.1',
     'scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3',
 ].join('+');
-export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v5+${LANGUAGE_PARSER_VERSION}`;
+export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v15+${LANGUAGE_PARSER_VERSION}`;
 export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v5+python-receiver-calls';

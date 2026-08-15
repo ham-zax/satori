@@ -648,6 +648,7 @@ export class ProviderRuntime {
                 toolContext.toolHandlers.releaseSearchContinuationOwnership();
                 await toolContext.syncManager.stopAndDrainLifecycle();
                 await toolContext.context.getVectorStore().close?.();
+                await toolContext.context.dispose?.();
             })),
             Promise.all([...this.activeEmbeddings].map((embedding) => embedding.close())),
             Promise.all([...this.activeRerankers].map((reranker) => reranker.close?.())),

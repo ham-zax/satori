@@ -12,17 +12,22 @@
 #   - verified_at must be an ancestor of the audited head and, for fixed,
 #     at or after the fix point (commit order)
 #   - IDs must not duplicate tracked draft IDs or each other
+#
+# Current-lineage status fields are anchored to the final integrated
+# security-hardening commit. The original finding-specific evidence commits are
+# preserved in each resolution so the audit trail remains explicit after branch
+# history reconciliation.
 
 findings:
   - id: M1
     status: accepted
-    verified_at: "b7da4e6190340d172d6e30df521959fec5f0b73d"
-    fixed_in: "b7da4e6190340d172d6e30df521959fec5f0b73d"
-    fix_verified_at: "b7da4e6190340d172d6e30df521959fec5f0b73d"
-    resolution: "same-UID processes are inside the documented trust boundary; protocol v2 states this honestly (challengeNonce is a freshness challenge, ownershipToken is lifecycle-only)"
+    verified_at: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    fixed_in: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    fix_verified_at: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    resolution: "same-UID processes are inside the documented trust boundary; protocol v2 states this honestly (challengeNonce is a freshness challenge, ownershipToken is lifecycle-only); original finding-specific disposition evidence: b7da4e6190340d172d6e30df521959fec5f0b73d; current-lineage status anchored to final security-hardening integration: 67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
   - id: M2
     status: fixed
-    verified_at: "17831852e97b91c4c70b2c393c5a6c6202095ee0"
-    fixed_in: "17831852e97b91c4c70b2c393c5a6c6202095ee0"
-    fix_verified_at: "17831852e97b91c4c70b2c393c5a6c6202095ee0"
-    resolution: "arbitrary root registration and root-wide read authorization remediated by Tasks 4-7; M2 replay against the rebuilt shipped surface (commit cc98366, dist/index.js sha256 56553b127ac28ec9d2d951ed2e7e942795e1ecb6bfc761812208751c14185823) denied all 14 attacks with zero secret bytes and passed all 4 positive controls; evidence: docs/evidence/security-hardening-20260805/M2-REPLAY.md"
+    verified_at: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    fixed_in: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    fix_verified_at: "67ea40e075825a0322f7cc58ba02c0b6c8eedb15"
+    resolution: "arbitrary root registration and root-wide read authorization remediated by Tasks 4-7; original finding-specific fix/verification evidence: 17831852e97b91c4c70b2c393c5a6c6202095ee0; M2 replay against the rebuilt shipped surface (commit cc98366, dist/index.js sha256 56553b127ac28ec9d2d951ed2e7e942795e1ecb6bfc761812208751c14185823) denied all 14 attacks with zero secret bytes and passed all 4 positive controls; evidence: docs/evidence/security-hardening-20260805/M2-REPLAY.md; current-lineage status anchored to final security-hardening integration: 67ea40e075825a0322f7cc58ba02c0b6c8eedb15"

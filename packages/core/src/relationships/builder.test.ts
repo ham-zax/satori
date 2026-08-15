@@ -2313,3 +2313,298 @@ test('buildRelationshipDelta full-rebuild oracle keeps records, claims, proof st
         assert.deepEqual(claimsFor(deltaAnalysis2, file), claimsFor(deltaAnalysis, file));
     }
 });
+
+test('Characterization: Python resolution preserves exact CALLS, claims, and flow proof steps', async () => {
+    const sources = new Map([
+        ['pkg/__init__.py', ''],
+        ['pkg/db.py', 'class Database:\n    def query(self, q: str) -> str:\n        return q\n'],
+        ['pkg/service.py', 'from pkg.db import Database\n\ndef run():\n    db = Database()\n    return db.query("SELECT 1")\n'],
+    ]);
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry(sources);
+    const records = buildRelationshipsForRegistry({ registry, analysisByFile });
+    
+    // Check CALLS records
+    const calls = records.filter((r) => r.type === 'CALLS');
+    assert.ok(calls.length >= 2, 'Must have at least constructor call and query call');
+    
+    // Check attached claims
+    const serviceEvidence = analysisByFile.get('pkg/service.py');
+    assert.ok(serviceEvidence?.resolutionClaims);
+    assert.ok(serviceEvidence.resolutionClaims.length >= 2);
+    
+    const queryClaim = serviceEvidence.resolutionClaims.find((c) => c.targetSymbol?.includes('query'));
+    assert.ok(queryClaim, 'Query method call must be resolved in claims');
+    assert.equal(queryClaim.decision, 'resolved');
+    assert.equal(queryClaim.resolutionAuthority, 'origin_flow');
+});
+
+test('Characterization: JS/TS syntactic resolution produces direct CALLS and derived TESTS edges', async () => {
+    const sources = new Map([
+        ['src/math.ts', 'export function add(a: number, b: number): number { return a + b; }\n'],
+        ['src/app.ts', 'import { add } from "./math";\nexport function main() { return add(1, 2); }\n'],
+        ['tests/app.test.ts', 'import { add } from "../src/math";\nexport function testAdd() { return add(2, 3); }\n'],
+    ]);
+    const analysisByFile = await analyzeFiles(sources);
+    const symbols: SymbolRecord[] = [];
+    const files: SymbolRegistryManifest['files'] = [];
+
+    for (const [relativePath, content] of sources.entries()) {
+        const analysis = analysisByFile.get(relativePath);
+        assert.ok(analysis);
+        const fileSymbols = buildSymbolRecordsForFile({
+            relativePath,
+            language: 'typescript',
+            content,
+            fileHash: `hash-${relativePath}`,
+            extractorVersion: 'test-extractor-v1',
+            chunks: [],
+            extractedSymbols: analysis.symbols,
+        });
+        symbols.push(...fileSymbols);
+        files.push({
+            path: relativePath,
+            language: 'typescript',
+            hash: `hash-${relativePath}`,
+            symbolCount: fileSymbols.length,
+            definitionStatus: 'definitions_present',
+        });
+    }
+
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files,
+        },
+        symbols,
+    });
+
+
+    const records = buildRelationshipsForRegistry({ registry, analysisByFile });
+    
+    // Production call from src/app.ts -> src/math.ts
+    const appCalls = records.filter((r) => r.file === 'src/app.ts' && r.type === 'CALLS');
+    assert.equal(appCalls.length, 1);
+    
+    // Test call from tests/app.test.ts -> src/math.ts has both CALLS and derived TESTS
+    const testCalls = records.filter((r) => r.file === 'tests/app.test.ts' && r.type === 'CALLS');
+    const testTests = records.filter((r) => r.file === 'tests/app.test.ts' && r.type === 'TESTS');
+    assert.equal(testCalls.length, 1);
+    assert.equal(testTests.length, 1);
+    assert.equal(testCalls[0].targetInstanceId, testTests[0].targetInstanceId);
+    assert.equal(testCalls[0].confidence, 'low');
+    assert.equal(testTests[0].confidence, 'low');
+});
+
+test('resolveUniqueLocalSymbol resolves top-level local export when nested member shares same name', async () => {
+    const source = `function value() {
+    return 1;
+}
+
+class Thing {
+    value() {
+        return 2;
+    }
+}
+
+export { value as aliasValue };
+`;
+    const analysisByFile = await analyzeFiles(new Map([['src/mod.ts', source]]));
+    const analyzer = createLanguageAnalysisService();
+    const analysis = await analyzer.analyze({
+        content: source,
+        language: 'typescript',
+        relativePath: 'src/mod.ts',
+    });
+
+    const fileSymbols = buildSymbolRecordsForFile({
+        relativePath: 'src/mod.ts',
+        language: 'typescript',
+        content: source,
+        fileHash: 'hash-mod',
+        extractorVersion: 'test-extractor-v1',
+        chunks: [],
+        extractedSymbols: analysis.symbols,
+    });
+
+    const registry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [{
+                path: 'src/mod.ts',
+                language: 'typescript',
+                hash: 'hash-mod',
+                symbolCount: fileSymbols.length,
+                definitionStatus: 'definitions_present',
+            }],
+        },
+        symbols: fileSymbols,
+    });
+
+    const records = buildRelationshipsForRegistry({ registry, analysisByFile });
+    const exportRecords = records.filter((r) => r.type === 'EXPORTS');
+    assert.equal(exportRecords.length, 1);
+    const target = registry.symbols.find(
+        (symbol) => symbol.symbolInstanceId === exportRecords[0].targetInstanceId,
+    );
+    assert.ok(target);
+    assert.equal(target.name, 'value');
+    assert.equal(target.kind, 'function');
+    assert.deepEqual(target.parentQualifiedNamePath, []);
+});
+
+test('buildRelationshipDelta incrementally rebuilds CBM language relationships when fresh semantic evidence is provided', () => {
+    const symbols1: SymbolRecord[] = [
+        {
+            symbolKey: 'main.go#main',
+            symbolInstanceId: 'inst-main',
+            name: 'main',
+            label: 'main',
+            qualifiedName: 'main',
+            kind: 'function',
+            file: 'main.go',
+            language: 'go',
+            span: { startByte: 0, endByte: 100, startLine: 1, endLine: 10, startColumn: 0, endColumn: 1 },
+            parentQualifiedNamePath: [],
+            fileHash: 'fh-main-1',
+            extractorVersion: 'v1',
+        },
+        {
+            symbolKey: 'service.go#Run',
+            symbolInstanceId: 'inst-service-1',
+            name: 'Run',
+            label: 'Run',
+            qualifiedName: 'Run',
+            kind: 'function',
+            file: 'service.go',
+            language: 'go',
+            span: { startByte: 0, endByte: 80, startLine: 1, endLine: 8, startColumn: 0, endColumn: 1 },
+            parentQualifiedNamePath: [],
+            fileHash: 'fh-srv-1',
+            extractorVersion: 'v1',
+        },
+    ];
+
+    const prevRegistry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [
+                { path: 'main.go', language: 'go', hash: 'fh-main-1', symbolCount: 1, definitionStatus: 'definitions_present' },
+                { path: 'service.go', language: 'go', hash: 'fh-srv-1', symbolCount: 1, definitionStatus: 'definitions_present' },
+            ],
+        },
+        symbols: symbols1,
+    });
+
+    const initialEvidence: import('../semantic').SemanticProjectEvidence = {
+        language: 'go',
+        occurrencesByFile: new Map([
+            [
+                'main.go',
+                [
+                    {
+                        sourceFile: 'main.go',
+                        callSpan: { startByte: 20, endByte: 35, startLine: 3, endLine: 3, startColumn: 2, endColumn: 17 },
+                        targetProvenance: {
+                            file: 'service.go',
+                            span: { startByte: 0, endByte: 80, startLine: 1, endLine: 8, startColumn: 0, endColumn: 1 },
+                            name: 'Run',
+                            kind: 'function',
+                        },
+                        proof: { strategy: 'direct_call' },
+                        decision: 'resolved',
+                        confidence: 1.0,
+                    },
+                ],
+            ],
+        ]),
+    };
+
+    const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+    analysisByFile.set('main.go', { moduleBindings: [], callSites: [] });
+    analysisByFile.set('service.go', { moduleBindings: [], callSites: [] });
+
+    const existingRecords = buildRelationshipsForRegistry({
+        registry: prevRegistry,
+        analysisByFile,
+        mode: { kind: 'qualification', enabledUnpromotedCallLanguages: new Set(['go']) },
+        semanticEvidenceByLanguage: new Map([['go', initialEvidence]]),
+    });
+
+    assert.equal(existingRecords.length, 1);
+    assert.equal(existingRecords[0].targetInstanceId, 'inst-service-1');
+
+    // Next state: service.go is updated with a new symbol instance ID and byte span (90..170)
+    const symbols2: SymbolRecord[] = [
+        symbols1[0],
+        {
+            symbolKey: 'service.go#Run',
+            symbolInstanceId: 'inst-service-2',
+            name: 'Run',
+            label: 'Run',
+            qualifiedName: 'Run',
+            kind: 'function',
+            file: 'service.go',
+            language: 'go',
+            span: { startByte: 90, endByte: 170, startLine: 10, endLine: 18, startColumn: 0, endColumn: 1 },
+            parentQualifiedNamePath: [],
+            fileHash: 'fh-srv-2',
+            extractorVersion: 'v1',
+        },
+    ];
+
+    const nextRegistry = buildSymbolRegistry({
+        manifest: {
+            ...manifest(),
+            files: [
+                { path: 'main.go', language: 'go', hash: 'fh-main-1', symbolCount: 1, definitionStatus: 'definitions_present' },
+                { path: 'service.go', language: 'go', hash: 'fh-srv-2', symbolCount: 1, definitionStatus: 'definitions_present' },
+            ],
+        },
+        symbols: symbols2,
+    });
+
+    const freshEvidence: import('../semantic').SemanticProjectEvidence = {
+        language: 'go',
+        occurrencesByFile: new Map([
+            [
+                'main.go',
+                [
+                    {
+                        sourceFile: 'main.go',
+                        callSpan: { startByte: 20, endByte: 35, startLine: 3, endLine: 3, startColumn: 2, endColumn: 17 },
+                        targetProvenance: {
+                            file: 'service.go',
+                            span: { startByte: 90, endByte: 170, startLine: 10, endLine: 18, startColumn: 0, endColumn: 1 },
+                            name: 'Run',
+                            kind: 'function',
+                        },
+                        proof: { strategy: 'direct_call' },
+                        decision: 'resolved',
+                        confidence: 1.0,
+                    },
+                ],
+            ],
+        ]),
+    };
+
+    const delta = buildRelationshipDelta({
+        previousRegistry: prevRegistry,
+        registry: nextRegistry,
+        existingRecords,
+        analysisByFile,
+        changedFiles: new Set(['service.go']),
+        mode: { kind: 'qualification', enabledUnpromotedCallLanguages: new Set(['go']) },
+        semanticEvidenceByLanguage: new Map([['go', freshEvidence]]),
+    });
+
+    // Verify that the relationship was rebuilt and retargeted to the new instance ID
+    assert.equal(delta.records.length, 1);
+    assert.equal(delta.records[0].targetInstanceId, 'inst-service-2');
+    assert.ok(delta.affectedFiles.includes('main.go'));
+    assert.ok(delta.affectedFiles.includes('service.go'));
+});
+
+
+
+
+

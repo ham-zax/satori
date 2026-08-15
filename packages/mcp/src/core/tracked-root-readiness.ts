@@ -102,6 +102,7 @@ export type TrackedRootReadinessState =
         codebasePath: string;
         operation?: TrackedRootIndexingOperation;
         searchableGenerationAvailable: boolean;
+        searchableRead?: Extract<TrackedRootReadinessState, { state: "ready" }>;
     }
     | { state: "index_failed"; codebasePath: string; info: TrackedCodebaseInfo }
     | { state: "not_indexed" }
@@ -446,12 +447,21 @@ export class TrackedRootReadiness {
 
         if (!searchableRoot && indexingRoot) {
             const operation = this.host.getIndexingOperation?.(indexingRoot.path);
+            const searchableGenerationAvailable =
+                this.host.hasSearchableGeneration?.(indexingRoot.path) ?? false;
+            let searchableRead: Extract<TrackedRootReadinessState, { state: "ready" }> | undefined;
+            if (searchableGenerationAvailable && operation?.action === "sync") {
+                const evaluated = await this.evaluateRootReadiness(indexingRoot, accessMode, onPhase, options);
+                if (evaluated.state === "ready") {
+                    searchableRead = evaluated;
+                }
+            }
             return {
                 state: "indexing",
                 codebasePath: indexingRoot.path,
                 ...(operation ? { operation } : {}),
-                searchableGenerationAvailable:
-                    this.host.hasSearchableGeneration?.(indexingRoot.path) ?? false,
+                searchableGenerationAvailable,
+                ...(searchableRead ? { searchableRead } : {}),
             };
         }
 
@@ -461,7 +471,16 @@ export class TrackedRootReadiness {
             };
         }
 
-        const effectiveRoot = searchableRoot.path;
+        return this.evaluateRootReadiness(searchableRoot, accessMode, onPhase, options);
+    }
+
+    private async evaluateRootReadiness(
+        targetRoot: TrackedRootEntry,
+        accessMode: "semantic" | "navigation",
+        onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+        options: { observePreparedRead?: (root: string) => string | null } = {},
+    ): Promise<TrackedRootReadinessState> {
+        const effectiveRoot = targetRoot.path;
         const preparedObservationBefore = options.observePreparedRead?.(effectiveRoot);
         let navigationAuthorityMode: Extract<
             TrackedRootReadinessState,
@@ -558,7 +577,7 @@ export class TrackedRootReadiness {
         const preparedObservationAfter = options.observePreparedRead?.(effectiveRoot);
         return {
             state: "ready",
-            root: searchableRoot,
+            root: targetRoot,
             navigationAuthorityMode,
             ...(navigationAuthorityMode === "source_backed_fingerprint_compatibility"
                 && completionProof.marker?.navigation.status === "sealed"

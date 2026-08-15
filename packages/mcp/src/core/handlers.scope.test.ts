@@ -1426,7 +1426,7 @@ test('manage status prepares one reusable proof and genuine authority drift stil
                 freshnessComparisonMode: 'full',
                 exactPathCount: 0,
                 checkpointBindings: 0,
-                preRetrievalFullComparisons: 1,
+                preRetrievalFullComparisons: 0,
                 finalFullComparisons: 1,
             },
         });

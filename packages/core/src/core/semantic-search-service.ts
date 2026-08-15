@@ -476,7 +476,10 @@ export class SemanticSearchService<Receipt extends SearchGenerationReceipt> {
             && (isSparseOnly || isHybrid);
         const lexicalFallbackTerms = candidateTraceOptions.lexicalFallbackTerms;
         const lexicalFallbackQuery = lexicalFallbackTerms?.join(' ') ?? resolvedRequest.query;
-        const initialMutationObservation = isHybrid || captureLexicalFallback
+        const monitorMutableGeneration =
+            !requestBoundReceipt
+            && (isHybrid || captureLexicalFallback);
+        const initialMutationObservation = monitorMutableGeneration
             ? this.observeMutationGeneration(codebasePath)
             : null;
         if (initialMutationObservation?.mutationActive) {
@@ -501,6 +504,22 @@ export class SemanticSearchService<Receipt extends SearchGenerationReceipt> {
             : await this.authority.proveVectorGeneration(codebasePath);
         console.log(`[Context] 🔍 Using collection: ${revalidatedReceipt?.collectionName ?? null}`);
 
+        if (process.env.SATORI_TASK7_DEBUG === '1') {
+            console.error(
+                '[TASK7-DEBUG][semantic-search-receipt] '
+                + JSON.stringify({
+                    root: codebasePath,
+                    requestBoundReceipt,
+                    retrievalMode: resolvedRequest.retrievalMode,
+                    collectionName: revalidatedReceipt?.collectionName ?? null,
+                    authorityMode: requestBoundReceipt
+                        ? 'pinned_publication'
+                        : 'mutable_current_publication',
+                    mutationObserverEnabled: monitorMutableGeneration,
+                }),
+            );
+        }
+
         if (!revalidatedReceipt) {
             console.log(
                 `[Context] ⚠️  No proven collection exists for '${codebasePath}'. Please index the codebase first.`,
@@ -523,6 +542,9 @@ export class SemanticSearchService<Receipt extends SearchGenerationReceipt> {
         const assertCandidateReadAuthorityUnchanged = async (
             errorMessage: string,
         ): Promise<void> => {
+            if (requestBoundReceipt) {
+                return;
+            }
             const finalMutationObservation = initialMutationObservation
                 ? this.observeMutationGeneration(codebasePath)
                 : null;

@@ -68,6 +68,9 @@ export function resolutionAuthorityForProof(input: {
         || step.kind === 'same_file_definition'
         || step.kind === 'constructor_origin'
         || step.kind === 'parameter_annotation'
+        || step.kind === 'package_binding'
+        || step.kind === 'receiver_type_binding'
+        || step.kind === 'exact_target_definition'
     ))) {
         return 'direct_binding';
     }
@@ -82,6 +85,9 @@ export type ResolutionProofStepKind =
     | 'same_file_definition'
     | 'constructor_origin'
     | 'parameter_annotation'
+    | 'package_binding'
+    | 'receiver_type_binding'
+    | 'exact_target_definition'
     | 'allocation_origin'
     | 'field_origin'
     | 'callback_origin'
@@ -90,6 +96,7 @@ export type ResolutionProofStepKind =
     | 'candidate_set'
     | 'ambiguity'
     | 'unresolved_dependency';
+
 
 export interface ResolutionProofStep {
     readonly kind: ResolutionProofStepKind;

@@ -636,16 +636,6 @@ test('integration: ignore negation patterns keep explicitly unignored files inde
       customIgnorePatterns: ['generated/**', '!generated/keep.ts'],
     });
     const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
-    context.publishResolvedIndexPolicy(policy, {
-      collectionName: context.resolveCollectionName(codebasePath),
-      navigation: stats.navigationCandidate
-        ? {
-            status: 'sealed',
-            generationId: stats.navigationCandidate.generationId,
-            sealHash: stats.navigationCandidate.navigationSealHash,
-          }
-        : { status: 'not_bound' },
-    });
     assert.equal(stats.indexedFiles, 2);
 
     const keptResults = await context.semanticSearch({
@@ -678,16 +668,6 @@ test('integration: reindex_by_change ignores excluded files but tracks unignored
       customIgnorePatterns: ['generated/**', '!generated/keep.ts'],
     });
     const stats = await context.indexCodebase(codebasePath, undefined, false, { indexPolicy: policy });
-    context.publishResolvedIndexPolicy(policy, {
-      collectionName: context.resolveCollectionName(codebasePath),
-      navigation: stats.navigationCandidate
-        ? {
-            status: 'sealed',
-            generationId: stats.navigationCandidate.generationId,
-            sealHash: stats.navigationCandidate.navigationSealHash,
-          }
-        : { status: 'not_bound' },
-    });
     await publishCurrentAuthorityCheckpoint(context, codebasePath);
 
     fs.writeFileSync(path.join(codebasePath, 'generated/drop.ts'), 'export const dropped = false;', 'utf8');

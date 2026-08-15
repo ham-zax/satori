@@ -83,6 +83,7 @@ function buildInput(overrides: Partial<SearchExecutionInput> = {}): SearchExecut
         exactRegistryFallbackForTrackedLexical: false,
         freshnessMode: 'synced',
         observedChangedFilesState: { available: false, files: new Set() },
+        dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({
             resultLimit: 10,
             hasMustOperators: parsed.must.length > 0,

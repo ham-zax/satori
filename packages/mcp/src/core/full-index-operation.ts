@@ -5,6 +5,9 @@ import {
     SynchronizerCheckpointPublicationError,
     isStagedGenerationCollectionName,
 } from "@zokizuan/satori-core";
+import {
+    defaultSemanticLanguageRegistry,
+} from "@zokizuan/satori-core/semantic";
 import type {
     CanonicalPublicationBinding,
     CustomIndexPolicyUpdate,
@@ -103,6 +106,7 @@ function assertCheckpointMatchesIndexedSources(
     indexedFiles: number,
     indexedFileHashes: ReadonlyMap<string, string>,
     checkpoint: PreparedFileChangeSet,
+    isAuxiliaryPath?: (filePath: string) => boolean,
 ): void {
     if (indexedFileHashes.size !== indexedFiles) {
         throw new Error(
@@ -115,13 +119,17 @@ function assertCheckpointMatchesIndexedSources(
     if (checkpoint.changes.partialScan) {
         throw new Error("Full index source checkpoint was incomplete; refusing to publish source freshness.");
     }
-    if (indexedFileHashes.size !== checkpoint.fileHashes.size) {
+    const searchableCheckpointFileHashes = isAuxiliaryPath
+        ? new Map([...checkpoint.fileHashes.entries()].filter(([f]) => !isAuxiliaryPath(f)))
+        : checkpoint.fileHashes;
+
+    if (indexedFileHashes.size !== searchableCheckpointFileHashes.size) {
         throw new Error(
-            `Full index source changed while indexing (indexed ${indexedFileHashes.size} files, observed ${checkpoint.fileHashes.size}); retry reindex.`,
+            `Full index source changed while indexing (indexed ${indexedFileHashes.size} files, observed ${searchableCheckpointFileHashes.size} searchable files, ${checkpoint.fileHashes.size} total observed); retry reindex.`,
         );
     }
     for (const [relativePath, indexedHash] of indexedFileHashes) {
-        if (checkpoint.fileHashes.get(relativePath) !== indexedHash) {
+        if (searchableCheckpointFileHashes.get(relativePath) !== indexedHash) {
             throw new Error(`Full index source changed while indexing at '${relativePath}'; retry reindex.`);
         }
     }
@@ -545,7 +553,12 @@ export class FullIndexOperation {
                     absolutePath,
                     candidatePolicy.policyHash,
                 );
-                assertCheckpointMatchesIndexedSources(stats.indexedFiles, stats.indexedFileHashes, fullIndexCheckpoint);
+                assertCheckpointMatchesIndexedSources(
+                    stats.indexedFiles,
+                    stats.indexedFileHashes,
+                    fullIndexCheckpoint,
+                    (f) => defaultSemanticLanguageRegistry.isAuxiliaryPath(f),
+                );
                 stagedCheckpoint = await fullIndexCheckpoint.stageCheckpoint(candidateAuthority, assertMutationCurrent);
                 const checkpointEvidence = await synchronizer.inspectOwnedSnapshot();
                 if (checkpointEvidence.status !== "valid") {

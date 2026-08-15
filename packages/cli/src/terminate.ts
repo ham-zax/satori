@@ -213,7 +213,7 @@ function collectSharedRuntimeHosts(
         if (
             !isRecord(value)
             || value.formatVersion !== 1
-            || value.protocolVersion !== 1
+            || (value.protocolVersion !== 1 && value.protocolVersion !== 2)
             || !Number.isSafeInteger(value.hostPid)
             || Number(value.hostPid) <= 0
             || typeof value.bootId !== "string"

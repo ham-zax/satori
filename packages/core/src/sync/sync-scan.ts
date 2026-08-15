@@ -6,8 +6,8 @@ import ignore from 'ignore';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { canonicalizeRepositoryRelativePath } from '../paths/repository-path';
 import {
-    isIndexableFileByPolicy,
-    isIndexableFileObservationByPolicy,
+    isObservableFileByPolicy,
+    isObservableFileObservationByPolicy,
 } from '../config/index-policy';
 import {
     openDirectoryInsideRoot,
@@ -138,7 +138,7 @@ async function isSupportedFile(
     absolutePath: string,
     size: number,
 ): Promise<boolean> {
-    return isIndexableFileByPolicy(
+    return isObservableFileByPolicy(
         relativePath,
         absolutePath,
         size,
@@ -168,7 +168,7 @@ async function hashFileBytes(
         if (!relativePath) {
             throw new Error(`Opened descriptor path is outside the synchronizer root: ${filePath}`);
         }
-        const indexable = await isIndexableFileObservationByPolicy(
+        const indexable = await isObservableFileObservationByPolicy(
             relativePath,
             before.size,
             [...context.supportedExtensions],

@@ -586,9 +586,10 @@ test('cached exact search downgrades navigation after direct symbol shard deleti
         }));
         assert.equal(warmSemantic.status, 'ok', JSON.stringify(warmSemantic));
         assert.equal(vectorDatabase.payloadCountQueryCount, semanticPayloadCountQueries);
-        // One warm-receipt check precedes search and one authority check seals the split hybrid read.
-        assert.equal(vectorDatabase.controlReadCount - semanticControlReads, 2);
-        assert.equal(vectorDatabase.hasCollectionCount - semanticCollectionProbes, 2);
+        // One warm-receipt check precedes search; the pinned snapshot read is not
+        // re-sealed against the mutable current publication.
+        assert.equal(vectorDatabase.controlReadCount - semanticControlReads, 1);
+        assert.equal(vectorDatabase.hasCollectionCount - semanticCollectionProbes, 1);
 
         const generationRoot = path.join(
             resolveNavigationSidecarRoot(stateRoot, repoPath),

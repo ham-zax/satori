@@ -286,7 +286,36 @@ export async function runSearchFrontDoor(
     trackCodebasePath(absolutePath);
 
     let trackedRootState = await host.prepareInitialTrackedRootRead(absolutePath);
+    let activeSyncServingPrevious = false;
+    let servedCollection: string | undefined;
+    let servedRunId: string | undefined;
+    let servedGenerationId: string | undefined;
+    let pendingSyncOperation: { action: string; generation: number } | undefined;
+
     if (
+        trackedRootState.state === "indexing"
+        && trackedRootState.operation?.action === "sync"
+        && trackedRootState.searchableGenerationAvailable
+        && trackedRootState.searchableRead
+        && trackedRootState.searchableRead.vectorReceipt !== undefined
+    ) {
+        // Stale-while-sync: serve the proven readable generation immediately without blocking
+        activeSyncServingPrevious = true;
+        const readable = trackedRootState.searchableRead;
+        servedCollection = readable.vectorReceipt?.collectionName;
+        servedRunId = readable.vectorReceipt?.marker?.runId ?? readable.generationReceipt?.marker?.runId;
+        servedGenerationId = readable.sourceBackedNavigationBinding?.generationId
+            ?? (readable.generationReceipt?.navigation && typeof readable.generationReceipt.navigation === 'object' && 'generationId' in readable.generationReceipt.navigation
+                ? (readable.generationReceipt.navigation as { generationId?: string }).generationId
+                : undefined);
+        if (trackedRootState.operation) {
+            pendingSyncOperation = {
+                action: trackedRootState.operation.action,
+                generation: trackedRootState.operation.generation,
+            };
+        }
+        trackedRootState = trackedRootState.searchableRead;
+    } else if (
         trackedRootState.state === "indexing"
         && trackedRootState.operation?.action === "sync"
         && trackedRootState.searchableGenerationAvailable
@@ -328,19 +357,30 @@ export async function runSearchFrontDoor(
     for (let freshnessAttempt = 0; freshnessAttempt < 2; freshnessAttempt += 1) {
         const freshnessRoot = effectiveRoot;
         const observationBeforeFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
-        const freshnessDecision = await host.ensureSearchFreshness(
-            freshnessRoot,
-            trackedRootState.state === 'ready' ? trackedRootState : undefined,
-        );
+        const freshnessDecision: FreshnessDecision = activeSyncServingPrevious
+            ? {
+                mode: "served_previous_generation",
+                checkedAt: new Date().toISOString(),
+                thresholdMs: 0,
+                ...(servedCollection ? { servedCollection } : {}),
+                ...(servedRunId ? { servedRunId } : {}),
+                ...(servedGenerationId ? { servedGenerationId } : {}),
+                ...(pendingSyncOperation ? { pendingOperation: pendingSyncOperation } : {}),
+            }
+            : await host.ensureSearchFreshness(
+                freshnessRoot,
+                trackedRootState.state === 'ready' ? trackedRootState : undefined,
+            );
         host.noteFreshnessMode(freshnessDecision.mode);
 
         const observationAfterFreshness = host.getPreparedReadObservation?.(freshnessRoot) ?? null;
-        const canReuseInitialReadiness = freshnessAttempt === 0
+        const canReuseInitialReadiness = (freshnessAttempt === 0
             && trackedRootState.state === "ready"
             && freshnessDecisionPreservesAuthority(freshnessDecision)
             && observationBeforeFreshness !== null
             && trackedRootState.preparedObservation === observationBeforeFreshness
-            && observationBeforeFreshness === observationAfterFreshness;
+            && observationBeforeFreshness === observationAfterFreshness)
+            || (activeSyncServingPrevious && trackedRootState.state === "ready");
         const postFreshnessRootState = canReuseInitialReadiness
             ? trackedRootState
             : await host.preparePostFreshnessTrackedRootRead(

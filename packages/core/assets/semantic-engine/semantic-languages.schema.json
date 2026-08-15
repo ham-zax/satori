@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SemanticLanguagesConfig",
+  "type": "object",
+  "required": [
+    "languages"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "language",
+          "canonicalLanguage",
+          "extensions",
+          "strategy",
+          "semanticRevision",
+          "grammar",
+          "auxiliaryFiles",
+          "providerId",
+          "providerVersion",
+          "environmentConfigId"
+        ],
+        "properties": {
+          "language": {
+            "type": "string",
+            "minLength": 1
+          },
+          "canonicalLanguage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\.[a-zA-Z0-9_-]+$"
+            },
+            "minItems": 1
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "cbm_semantic"
+            ]
+          },
+          "semanticRevision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "grammar": {
+            "type": "string",
+            "minLength": 1
+          },
+          "auxiliaryFiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "pattern",
+                "role"
+              ],
+              "properties": {
+                "pattern": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "providerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "providerVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environmentConfigId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

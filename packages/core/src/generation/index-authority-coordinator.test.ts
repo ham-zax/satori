@@ -356,3 +356,42 @@ test('authority owner coordinates policy publication without constructing Contex
     assert.deepEqual(events.slice(0, 2), ['persist-document', 'activate-runtime']);
     assert.equal(authority.getPublishedResolvedPolicy(canonicalRoot)?.policyHash, publishedPolicy.policyHash);
 });
+
+test('active publication read lease blocks the publication retention gate until released', async () => {
+    const proofCoordinator = createGenerationProofCoordinator();
+    const authority = new IndexAuthorityCoordinator(proofCoordinator);
+    const root = '/repo/mvcc-test';
+
+    // 1. Initial state has no active readers
+    assert.equal(authority.hasActivePublicationReaders(root), false);
+
+    // 2. Acquire actual read lease A
+    const releaseReadLeaseA = await authority.acquirePublicationReadLease(root);
+    assert.equal(authority.hasActivePublicationReaders(root), true);
+
+    // 3. Start acquirePublicationRetentionLease in background
+    let retentionCompleted = false;
+    let releaseRetention: (() => void) | null = null;
+    const retentionPromise = authority.acquirePublicationRetentionLease(root, 'activation-n1').then((rel) => {
+        retentionCompleted = true;
+        releaseRetention = rel;
+    });
+
+    // 4. Yield event loop ticks and prove retention has NOT completed while Reader A holds lease
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(retentionCompleted, false, 'Retention must NOT proceed while reader A holds read lease');
+    assert.equal(authority.hasActivePublicationReaders(root), true);
+
+    // 5. Release Reader A lease
+    releaseReadLeaseA();
+
+    // 6. Retention proceeds to completion
+    await retentionPromise;
+    assert.equal(retentionCompleted, true, 'Retention must proceed once reader A releases lease');
+    assert.equal(authority.hasActivePublicationReaders(root), false);
+
+    // 7. Clean up retention lease
+    if (typeof releaseRetention === 'function') {
+        (releaseRetention as () => void)();
+    }
+});

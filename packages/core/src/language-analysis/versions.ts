@@ -5,4 +5,4 @@ export const LANGUAGE_PARSER_VERSION = [
     'scala-0.24.0-sha256-b7ec2bb29c19827abcefd18ed5cb5a43596009f96a5d53c5b9d1f9676d7521c3',
 ].join('+');
 export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v15+${LANGUAGE_PARSER_VERSION}`;
-export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v10+python-cross-module-constructors+python-native-resolution-v1';
+export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v11+go-cbm-v1+python-cross-module-constructors+python-native-resolution-v1';

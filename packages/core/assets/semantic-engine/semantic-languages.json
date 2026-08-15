@@ -1,0 +1,32 @@
+{
+  "$schema": "./semantic-languages.schema.json",
+  "languages": [
+    {
+      "language": "go",
+      "canonicalLanguage": "go",
+      "extensions": [
+        ".go"
+      ],
+      "strategy": "cbm_semantic",
+      "semanticRevision": "go-v1",
+      "grammar": "tree-sitter-go",
+      "auxiliaryFiles": [
+        {
+          "pattern": "**/go.mod",
+          "role": "manifest"
+        },
+        {
+          "pattern": "**/go.sum",
+          "role": "lockfile"
+        },
+        {
+          "pattern": "**/go.work",
+          "role": "workspace"
+        }
+      ],
+      "providerId": "satori-cbm-semantic-go",
+      "providerVersion": "cbm-d150ebe4+satori-go-semantic-v1",
+      "environmentConfigId": "cbm-go-semantic-v1"
+    }
+  ]
+}

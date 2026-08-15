@@ -22,6 +22,8 @@
     "lint:fix": "pnpm -r run lint:fix",
     "typecheck": "node scripts/typecheck-all.mjs",
     "versions:check": "node scripts/check-version-freshness.mjs",
+    "semantic:build": "node scripts/build-semantic-engine.mjs",
+    "semantic:verify": "node scripts/verify-semantic-engine-reproducibility.mjs",
     "release:check": "node scripts/qualify-release-candidate.mjs",
     "release:check:packed": "node scripts/check-release-graph.mjs",
     "release:bump": "node scripts/bump-release-graph.mjs",

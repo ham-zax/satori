@@ -1,6 +1,6 @@
 {
   "name": "@zokizuan/satori-core",
-  "version": "3.7.0",
+  "version": "3.8.0",
   "description": "Core indexing and retrieval engine for Satori's codebase map.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./semantic": {
+      "types": "./dist/semantic/index.d.ts",
+      "require": "./dist/semantic/index.js",
+      "default": "./dist/semantic/index.js"
     },
     "./lancedb": {
       "types": "./dist/lancedb.d.ts",
@@ -26,7 +31,7 @@
     "typecheck": "tsc --build",
     "test": "pnpm run test:raw",
     "test:raw": "node --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 src/**/*.test.ts",
-    "test:integration": "pnpm run build && HOME=/tmp node --test --test-concurrency=1 --test-isolation=none ../../tests/integration/*.test.mjs"
+    "test:integration": "pnpm run build && HOME=/tmp node --test --test-concurrency=1 ../../tests/integration/*.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.52.0",
@@ -50,6 +55,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "assets/tree-sitter/**",
+    "assets/semantic-engine/**",
     "README.md"
   ],
   "repository": {

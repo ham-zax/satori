@@ -1465,6 +1465,10 @@ export class FileSynchronizer {
         return removed;
     }
 
+    normalizeAndCompressPrefixes(prefixes: Iterable<string>): string[] {
+        return normalizeAndCompressPrefixes(this.rootDir, prefixes instanceof Set ? prefixes : new Set(prefixes));
+    }
+
     private static deleteSnapshotPathSync(snapshotPath: string): void {
         try {
             fsSync.unlinkSync(snapshotPath);

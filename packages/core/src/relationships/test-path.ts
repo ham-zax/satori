@@ -12,6 +12,13 @@ export function isTestOrFixturePath(file: string): boolean {
     if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) {
         return true;
     }
+    if (/_test\.go$/i.test(base)) {
+        return true;
+    }
+    if (/^(test_.+|.+_test)\.py$/i.test(base)) {
+        return true;
+    }
+
     if (/(^|\/)(__tests__|__mocks__|fixtures|testdata|test-data)(\/|$)/i.test(normalized)) {
         return true;
     }

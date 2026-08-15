@@ -84,6 +84,7 @@ function buildInput(): SearchExecutionInput {
         exactRegistryFallbackForTrackedLexical: false,
         freshnessMode: "synced",
         observedChangedFilesState: { available: false, files: new Set() },
+        dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({ resultLimit: 3, hasMustOperators: false }),
     };
 }

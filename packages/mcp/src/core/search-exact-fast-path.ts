@@ -75,7 +75,7 @@ type NavigationState = {
     warning?: string;
 };
 
-type SearchExactFastPathInput = {
+export type SearchExactFastPathInput = {
     absolutePath: string;
     effectiveRoot: string;
     requestedSubdirectory: RequestedSearchSubdirectory | null;
@@ -257,9 +257,11 @@ export async function runExactRegistryFastPath(
         };
     }
 
+    const publicationOnlyStaleRead = input.freshnessDecision.mode === "served_previous_generation";
     let exactRegistrySymbol = exactRegistryMatch.symbol;
     const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
-    const exactTargetWasDirty = input.dirtyFilesNotFreshened
+    const exactTargetWasDirty = !publicationOnlyStaleRead
+        && input.dirtyFilesNotFreshened
         && input.observedChangedFilesState.files.has(normalizedExactPath);
     let currentSourceEvidence;
     if (exactTargetWasDirty) {
@@ -355,7 +357,8 @@ export async function runExactRegistryFastPath(
             const symbol = registryState.registry.symbolsByInstanceId.get(node.symbolId);
             return symbol && filterSymbol(symbol) ? [symbol] : [];
         });
-        const relationshipTouchesDirtySource = input.dirtyFilesNotFreshened
+        const relationshipTouchesDirtySource = !publicationOnlyStaleRead
+            && input.dirtyFilesNotFreshened
             && peerSymbols.some((symbol) => input.observedChangedFilesState.files.has(
                 symbol.file.replace(/\\/g, "/").replace(/^\/+/, ""),
             ));
@@ -377,9 +380,11 @@ export async function runExactRegistryFastPath(
     }
 
     const exactMatches = await Promise.all(resultSymbols.map(async (symbol) => {
-        const sourceEvidence = symbol.symbolInstanceId === exactRegistrySymbol.symbolInstanceId
-            ? (currentSourceEvidence ??= await readCurrentSourceEvidence(input.effectiveRoot, symbol.file))
-            : await readCurrentSourceEvidence(input.effectiveRoot, symbol.file);
+        const sourceEvidence = publicationOnlyStaleRead
+            ? undefined
+            : (symbol.symbolInstanceId === exactRegistrySymbol.symbolInstanceId
+                ? (currentSourceEvidence ??= await readCurrentSourceEvidence(input.effectiveRoot, symbol.file))
+                : await readCurrentSourceEvidence(input.effectiveRoot, symbol.file));
         const sourceContent = sourceEvidence
             ? sliceHashMatchedCurrentSourceSymbolContent(
                 sourceEvidence,

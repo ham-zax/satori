@@ -121,6 +121,7 @@ function buildInput(
         exactRegistryFallbackForTrackedLexical: false,
         freshnessMode: "synced",
         observedChangedFilesState: { available: false, files: new Set() },
+        dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({
             resultLimit: limit,
             hasMustOperators: parsedOperators.must.length > 0,

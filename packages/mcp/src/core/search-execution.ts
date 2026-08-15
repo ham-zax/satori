@@ -508,6 +508,7 @@ export type SearchExecutionInput = {
     exactRegistryFallbackForTrackedLexical: boolean;
     freshnessMode: FreshnessDecision["mode"];
     observedChangedFilesState: ChangedFilesState;
+    dirtyFilesNotFreshened: boolean;
     retrievalPolicy: ResolvedSearchPolicy;
     entrypointOwnerEvidence?: EntrypointOwnerEvidenceResolution;
     requestedSubdirectory?: RequestedSearchSubdirectory | null;
@@ -578,8 +579,8 @@ async function rerankSearchCandidates(
         mustTokenCount: input.parsedOperators.must.length,
     });
     const skippedByExactPin = rerankBoundary.kind === "skip";
-
-    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin) {
+    const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";
+    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin && !publicationOnlyStaleRead) {
         try {
             const rerankInputCandidates = rerankBoundary.kind === "rerank"
                 ? scored.slice(rerankBoundary.startIndex)
@@ -998,13 +999,10 @@ export async function runSearchExecution(
         changedFilesBoostApplied: false,
         changedFilesBoostSkippedForLargeChangeSet,
     };
-    const dirtyFilesNotFreshened = observedChangedFilesState.available
-        && observedChangedFilesCount > 0
-        && input.freshnessMode !== "synced"
-        && input.freshnessMode !== "skipped_source_unchanged"
-        && input.freshnessMode !== "reconciled_ignore_change";
-    const canSupplementLivePathEvidence = observedChangedFilesState.available
-        && observedChangedFilesCount > 0
+    const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";
+    const allowLiveWorkingTreeEvidence = !publicationOnlyStaleRead;
+    const dirtyFilesNotFreshened = allowLiveWorkingTreeEvidence && input.dirtyFilesNotFreshened;
+    const canSupplementLivePathEvidence = allowLiveWorkingTreeEvidence
         && input.parsedOperators.path.length > 0;
 
     let boostedCandidates = 0;
@@ -1326,17 +1324,19 @@ export async function runSearchExecution(
             }
         }
 
-        const trackedLexical = await host.measureSearchPhase(
-            "trackedLexical",
-            async () => host.searchQuerySupport.buildTrackedLexicalSearchResults({
-                effectiveRoot: input.effectiveRoot,
-                parsedOperators: input.parsedOperators,
-                queryPlan: input.queryPlan,
-                scope: input.scope,
-                limit: candidateLimit,
-                exactRegistryFallback: input.exactRegistryFallbackForTrackedLexical,
-            }),
-        );
+        const trackedLexical = !publicationOnlyStaleRead
+            ? await host.measureSearchPhase(
+                "trackedLexical",
+                async () => host.searchQuerySupport.buildTrackedLexicalSearchResults({
+                    effectiveRoot: input.effectiveRoot,
+                    parsedOperators: input.parsedOperators,
+                    queryPlan: input.queryPlan,
+                    scope: input.scope,
+                    limit: candidateLimit,
+                    exactRegistryFallback: input.exactRegistryFallbackForTrackedLexical,
+                }),
+            )
+            : { results: [], debug: undefined };
         trackedLexicalDebug = trackedLexical.debug;
         if (trackedLexical.results.length > 0) {
             if (candidateSurvival) {

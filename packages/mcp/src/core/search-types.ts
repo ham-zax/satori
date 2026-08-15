@@ -399,7 +399,7 @@ export interface SearchReadinessDebugHint {
     observationUnavailableReason?: PreparedReadObservationUnavailableReason;
     watcher?: PreparedReadWatcherDiagnostics;
     requestProof?: {
-        freshnessComparisonMode: "full" | "exact_paths";
+        freshnessComparisonMode: "full" | "exact_paths" | "stale_while_sync";
         exactPathCount: number;
         checkpointBindings: number;
         preRetrievalFullComparisons: number;
@@ -830,6 +830,17 @@ interface SearchBaseResponseEnvelope {
     limit: number;
     freshnessDecision?: FreshnessDecision | { mode: "skipped_requires_reindex" | "skipped_indexing" } | null;
     freshnessSummary?: SearchFreshnessSummary;
+    freshness?: {
+        state: "sync_in_progress";
+        servedCollection?: string;
+        servedRunId?: string;
+        servedGenerationId?: string;
+        servedGeneration?: number;
+        pendingOperation?: {
+            action: string;
+            generation: number;
+        };
+    };
     warnings?: SearchWarningDetail[];
     recommendedNextAction?: SearchRecommendedNextAction;
     message?: string;

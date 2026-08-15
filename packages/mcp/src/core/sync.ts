@@ -55,7 +55,8 @@ export type FreshnessDecisionMode =
     | 'skipped_mutation_in_progress'
     | 'skipped_missing_path'
     | 'reconciled_ignore_change'
-    | 'ignore_reload_failed';
+    | 'ignore_reload_failed'
+    | 'served_previous_generation';
 
 export interface FreshnessDecision {
     mode: FreshnessDecisionMode;
@@ -77,6 +78,47 @@ export interface FreshnessDecision {
     activeMutation?: RootMutationLease;
     operation?: IndexOperationReceipt;
     checkpointStatus?: 'missing' | 'corrupt';
+    servedCollection?: string;
+    servedRunId?: string;
+    servedGenerationId?: string;
+    servedGeneration?: number;
+    pendingOperation?: {
+        action: string;
+        generation: number;
+    };
+}
+
+export type FreshnessTriggerReason =
+    | 'watcher_pending'
+    | 'exact_compare_differs'
+    | 'exact_compare_unavailable'
+    | 'full_compare_differs'
+    | 'full_compare_unavailable'
+    | 'ignore_control_changed'
+    | 'checkpoint_changed'
+    | 'threshold_expired'
+    | 'manual_zero_threshold';
+
+export interface FreshnessTriggerInput {
+    watcherPending?: boolean;
+    exactComparison?: { status: string; changedPaths?: readonly string[] };
+    fullComparison?: { status: string };
+    ignoreControlChanged?: boolean;
+    checkpointChanged?: boolean;
+    thresholdMs?: number;
+    timeSinceLastSyncMs?: number;
+}
+
+export function determineFreshnessTriggerReason(input: FreshnessTriggerInput): FreshnessTriggerReason {
+    if (input.ignoreControlChanged) return 'ignore_control_changed';
+    if (input.checkpointChanged) return 'checkpoint_changed';
+    if (input.exactComparison?.status === 'differs') return 'exact_compare_differs';
+    if (input.fullComparison?.status === 'differs') return 'full_compare_differs';
+    if (input.watcherPending) return 'watcher_pending';
+    if (input.exactComparison?.status === 'unavailable') return 'exact_compare_unavailable';
+    if (input.fullComparison?.status === 'unavailable') return 'full_compare_unavailable';
+    if (input.thresholdMs === 0) return 'manual_zero_threshold';
+    return 'threshold_expired';
 }
 
 export type WatcherLifecycleState = 'starting' | 'ready' | 'failed' | 'stopped';
@@ -1028,6 +1070,7 @@ export class SyncManager {
             }
         }
 
+        let exactComparisonResult: { status: string; changedPaths?: readonly string[] } | undefined;
         const exactSourceComparisonPaths = options.exactSourceComparisonPaths;
         if (!watcherObservationPending && exactSourceComparisonPaths && exactSourceComparisonPaths.length > 0) {
             const compareSourcePaths = this.context.compareSourcePathsToFreshnessCheckpoint;
@@ -1039,6 +1082,7 @@ export class SyncManager {
                     exactSourceComparisonPaths,
                     options.preparedVectorReceipt,
                 );
+                exactComparisonResult = comparison;
                 options.onPhaseTiming?.(
                     'exact_path_comparison',
                     Math.max(0, Date.now() - exactComparisonStartedAt),
@@ -1053,6 +1097,7 @@ export class SyncManager {
             }
         }
 
+        let fullComparisonResult: { status: string } | undefined;
         if (options.fullSourceComparison === true) {
             const compareAllSource = this.context.compareAllSourceToFreshnessCheckpoint;
             if (typeof compareAllSource === 'function') {
@@ -1062,6 +1107,7 @@ export class SyncManager {
                     codebasePath,
                     options.preparedVectorReceipt,
                 );
+                fullComparisonResult = comparison;
                 options.onPhaseTiming?.(
                     'exact_path_comparison',
                     Math.max(0, Date.now() - fullComparisonStartedAt),
@@ -1091,7 +1137,15 @@ export class SyncManager {
         }
 
         // 3. Execution Gate
-        // console.log(`[SYNC] 🔄 Triggering Sync for '${codebasePath}' (Threshold: ${thresholdMs}ms)`);
+        const triggerReason = determineFreshnessTriggerReason({
+            watcherPending: watcherObservationPending,
+            exactComparison: exactComparisonResult,
+            fullComparison: fullComparisonResult,
+            ignoreControlChanged: false,
+            thresholdMs,
+            timeSinceLastSyncMs: timeSince,
+        });
+        console.log(`[SYNC] 🔄 Triggering Sync for '${codebasePath}'. Trigger: ${triggerReason} (Threshold: ${thresholdMs}ms)`);
 
         this.bumpFreshnessEpoch(codebasePath);
         const syncPromise = (async () => {

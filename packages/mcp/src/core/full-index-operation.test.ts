@@ -924,6 +924,78 @@ test("background full-index detects source drift before commit and fails closed"
     });
 });
 
+test("background full-index handles auxiliary module files (go.mod) in checkpoint while vector-indexing searchable sources only", async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, "main.go"), "package main\n");
+        fs.writeFileSync(path.join(repoPath, "go.mod"), "module example.com/test\n\ngo 1.22\n");
+        fs.rmSync(path.join(repoPath, "index.ts"), { force: true });
+
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "aux-test-leases"),
+            ownerId: "aux-test-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "create");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        const harness = createFullIndexHarness(new Set(), {
+            mutationLeaseCoordinator: coordinator,
+            captureOperationPhases: true,
+            indexCodebase: async () => {
+                // Vector indexing processes main.go only, leaving go.mod to auxiliary semantics
+                return completedIndexResult({ "main.go": "package main\n" });
+            },
+        });
+
+        await harness.operation.run({
+            codebasePath: repoPath,
+            forceReindex: false,
+            mutationLease: acquired.lease,
+            policyUpdate: { customExtensions: [".go"] },
+        });
+
+        assert.equal(harness.indexedSnapshots, 1);
+        assert.equal(harness.failedSnapshots.length, 0);
+        assert.equal(harness.latestOperation?.phase, "completed");
+    });
+});
+
+test("background full-index fails closed when indexed searchable source hash differs from checkpoint", async () => {
+    await withTempRepo(async (repoPath) => {
+        fs.writeFileSync(path.join(repoPath, "main.go"), "package main\n");
+        fs.writeFileSync(path.join(repoPath, "go.mod"), "module example.com/test\n\ngo 1.22\n");
+        fs.rmSync(path.join(repoPath, "index.ts"), { force: true });
+
+        const coordinator = new MutationLeaseCoordinator({
+            stateDir: path.join(path.dirname(repoPath), "aux-diff-leases"),
+            ownerId: "aux-diff-owner",
+        });
+        const acquired = coordinator.acquire(repoPath, "create");
+        assert.equal(acquired.acquired, true);
+        if (!acquired.acquired) return;
+
+        const harness = createFullIndexHarness(new Set(), {
+            mutationLeaseCoordinator: coordinator,
+            captureOperationPhases: true,
+            indexCodebase: async () => {
+                // Vector index returned a different hash for main.go
+                return completedIndexResult({ "main.go": "package main // modified\n" });
+            },
+        });
+
+        await harness.operation.run({
+            codebasePath: repoPath,
+            forceReindex: false,
+            mutationLease: acquired.lease,
+            policyUpdate: { customExtensions: [".go"] },
+        });
+
+        assert.equal(harness.indexedSnapshots, 0);
+        assert.equal(harness.failedSnapshots.length, 1);
+        assert.match(harness.failedSnapshots[0].errorMessage, /Full index source changed/);
+    });
+});
+
 test("background indexing treats candidate watcher setup as best effort before indexing", async () => {
     await withTempRepo(async (repoPath) => {
         const harness = createFullIndexHarness(new Set(), {

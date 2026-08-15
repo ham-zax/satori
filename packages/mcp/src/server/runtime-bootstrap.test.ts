@@ -334,7 +334,7 @@ test('LateOn config selects explicit D16 or D32 profiles with bounded operationa
             SATORI_LATEON_RERANKER_STAGE_DEADLINE_MS: '2200',
             SATORI_LATEON_MAX_ACTIVE_RERANKS: '1',
             SATORI_LATEON_MAX_QUEUED_RERANKS: '0',
-            SATORI_LATEON_INTRA_OP_THREADS: '8',
+            SATORI_LATEON_INTRA_OP_THREADS: '1',
         });
 
         delete process.env.SATORI_LATEON_PROFILE;
@@ -349,6 +349,7 @@ test('LateOn config selects explicit D16 or D32 profiles with bounded operationa
         assert.equal(current.lateOnRerankerStageDeadlineMs, 2200);
         assert.equal(current.lateOnMaximumActiveReranks, 1);
         assert.equal(current.lateOnMaximumQueuedReranks, 0);
+        assert.equal(current.lateOnIntraOpThreads, 1);
 
         process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v4_d32_v1';
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v4_d32_owner_default_v1';

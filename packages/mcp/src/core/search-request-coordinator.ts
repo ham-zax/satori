@@ -387,6 +387,10 @@ type RequestSourceBarrier =
     | Readonly<{
         mode: 'full_comparison';
         authorityObservation: string;
+    }>
+    | Readonly<{
+        mode: 'publication_consistent_stale_read';
+        collectionName: string;
     }>;
 
 type CompletedFreshnessRequestProof = Readonly<{
@@ -851,7 +855,7 @@ export class SearchRequestCoordinator {
 
     public async attempt(
         args: ToolArgs,
-        sourceDriftRetryCount: 0 | 1,
+        sourceDriftRetryCount: 0 | 1 = 0,
     ): Promise<SearchToolTextResponse> {
         const scope = (typeof args.scope === 'string' ? args.scope : 'runtime') as SearchScope;
         const resultMode = (typeof args.resultMode === 'string' ? args.resultMode : 'grouped') as SearchResultMode;
@@ -1336,7 +1340,19 @@ export class SearchRequestCoordinator {
                     freshnessDecision = freshnessDecisionFromFrontDoor;
                 const finalSourceObservation = this.preparedRead.getPreparedReadCacheObservation(effectiveRoot);
                 let requestSourceBarrier: RequestSourceBarrier | undefined;
-                if (
+                if (freshnessDecision.mode === 'served_previous_generation') {
+                    requestSourceBarrier = {
+                        mode: 'publication_consistent_stale_read',
+                        collectionName: vectorReceipt?.collectionName ?? '',
+                    };
+                    readinessDebug.requestProof = {
+                        freshnessComparisonMode: 'stale_while_sync',
+                        exactPathCount: 0,
+                        checkpointBindings: 1,
+                        preRetrievalFullComparisons: 0,
+                        finalFullComparisons: 0,
+                    };
+                } else if (
                     finalSourceObservation.observation !== null
                     && finalSourceObservation.sourceObservation !== null
                     && finalSourceObservation.unavailableReason === undefined
@@ -1412,7 +1428,7 @@ export class SearchRequestCoordinator {
                                 freshnessComparisonMode: 'full',
                                 exactPathCount: 0,
                                 checkpointBindings: 0,
-                                preRetrievalFullComparisons: 1,
+                                preRetrievalFullComparisons: 0,
                                 finalFullComparisons: 0,
                             };
                         }
@@ -1443,6 +1459,9 @@ export class SearchRequestCoordinator {
                     };
                 }
                 sourceBarrierChanged = async (): Promise<boolean> => {
+                    if (requestSourceBarrier.mode === 'publication_consistent_stale_read') {
+                        return false;
+                    }
                     if (requestSourceBarrier.mode === 'watcher') {
                         const currentBarrier = this.preparedRead.getPreparedReadCacheObservation(effectiveRoot);
                         return currentBarrier.observation !== requestSourceBarrier.observation
@@ -1488,7 +1507,8 @@ export class SearchRequestCoordinator {
                 }
                 const sourceFreshnessWasEstablished = freshnessDecision.mode === 'synced'
                     || freshnessDecision.mode === 'reconciled_ignore_change'
-                    || freshnessDecision.mode === 'skipped_source_unchanged';
+                    || freshnessDecision.mode === 'skipped_source_unchanged'
+                    || freshnessDecision.mode === 'served_previous_generation';
                 const checkpointWarningAlreadyPresent = frontDoorWarnings.includes(
                     WARNING_CODES.SOURCE_FRESHNESS_CHECKPOINT_UNAVAILABLE,
                 );
@@ -1742,7 +1762,8 @@ export class SearchRequestCoordinator {
                         : boundEnvelope;
                 };
                 if (
-                    preparedObservation
+                    freshnessDecision.mode !== "served_previous_generation"
+                    && preparedObservation
                     && this.preparedRead.getPreparedAuthorityObservation(effectiveRoot) !== preparedObservation
                 ) {
                     this.preparedRead.evictPreparedRead(effectiveRoot);
@@ -1922,7 +1943,8 @@ export class SearchRequestCoordinator {
                 }
 
                 if (
-                    preparedObservation
+                    freshnessDecision.mode !== "served_previous_generation"
+                    && preparedObservation
                     && this.preparedRead.getPreparedAuthorityObservation(effectiveRoot) !== preparedObservation
                 ) {
                     this.preparedRead.evictPreparedRead(effectiveRoot);
@@ -2052,6 +2074,7 @@ export class SearchRequestCoordinator {
                     retrievalPolicy,
                     entrypointOwnerEvidence,
                     requestedSubdirectory,
+                    dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
                 }, {
                     searchQuerySupport: this.searchQuerySupport,
                     semanticSearch: (request) => {
@@ -2074,6 +2097,12 @@ export class SearchRequestCoordinator {
                                     }
                                     : {},
                             );
+                        }
+                        if (freshnessDecision.mode === "served_previous_generation") {
+                            if (!vectorReceipt) {
+                                throw new Error("Stale-while-sync requires a proven vector generation receipt.");
+                            }
+                            return this.environment.semanticSearchInProvenGeneration!(vectorReceipt, request);
                         }
                         return vectorReceipt
                             ? this.environment.semanticSearchInProvenGeneration!(vectorReceipt, request)

@@ -133,15 +133,20 @@ export function parseArgs(argv) {
 }
 
 function runBuild(repoRoot, execFileSyncImpl) {
-  execFileSyncImpl('pnpm', ['--filter', '@zokizuan/satori-core', 'build'], {
+  const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  execFileSyncImpl(pnpmCmd, ['semantic:verify'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  execFileSyncImpl('pnpm', ['--filter', '@zokizuan/satori-mcp', 'build:runtime'], {
+  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-core', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  execFileSyncImpl('pnpm', ['--filter', '@zokizuan/satori-cli', 'build'], {
+  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-mcp', 'build:runtime'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
+  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-cli', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
@@ -186,17 +191,22 @@ function createLocalInstallCommand(options, managedEnv) {
 async function loadActivationOwner(repoRoot) {
   const installModulePath = path.join(repoRoot, 'packages', 'cli', 'dist', 'install.js');
   const preflightModulePath = path.join(repoRoot, 'packages', 'cli', 'dist', 'install-preflight.js');
+  const terminateModulePath = path.join(repoRoot, 'packages', 'cli', 'dist', 'terminate.js');
   if (!fs.existsSync(installModulePath) || !fs.existsSync(preflightModulePath)) {
     throw new Error('Local CLI build output is missing. Run without --no-build first.');
   }
-  const [installModule, preflightModule] = await Promise.all([
+  const [installModule, preflightModule, terminateModule] = await Promise.all([
     import(pathToFileURL(installModulePath).href),
     import(pathToFileURL(preflightModulePath).href),
+    fs.existsSync(terminateModulePath)
+      ? import(pathToFileURL(terminateModulePath).href)
+      : Promise.resolve({}),
   ]);
   return {
     executeInstallCommand: installModule.executeInstallCommand,
     runInstallPreflight: preflightModule.runInstallPreflight,
     probeManagedRuntimeCandidate: preflightModule.probeManagedRuntimeCandidate,
+    terminateSatoriServers: terminateModule.terminateSatoriServers,
   };
 }
 
@@ -238,6 +248,19 @@ export async function installLocalMcpRuntime(options = {}) {
   }, managedEnv);
   const activationOwner = options.activationOwner || await loadActivationOwner(repoRoot);
   assertActivationOwner(activationOwner);
+
+  if (typeof activationOwner.terminateSatoriServers === 'function') {
+    const termResult = await activationOwner.terminateSatoriServers({
+      homeDir,
+      env: inheritedEnvironment,
+    });
+    if (termResult?.status === 'partial') {
+      throw new Error('Cannot safely activate local runtime: Satori server state is only partially verified.');
+    }
+    if (termResult?.terminated?.length) {
+      logger.log(`Terminated ${termResult.terminated.length} active background Satori server(s) before activation.`);
+    }
+  }
   const runtimeCommand = { command: nodePath, args: [runtimeEntry] };
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'packages', 'mcp', 'package.json'), 'utf8'));
   const expectedVersion = packageJson.version;

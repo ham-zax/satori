@@ -412,6 +412,7 @@ export class ToolResponseBuilders {
             case "skipped_source_unchanged":
             case "reconciled_ignore_change":
             case "skipped_mutation_in_progress":
+            case "served_previous_generation":
                 return null;
 
             case "skipped_source_checkpoint_unavailable":

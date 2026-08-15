@@ -375,6 +375,7 @@ export class SharedRuntimeHost {
         if (this.shutdownStarted) return;
         this.shutdownStarted = true;
         await this.localSyncManager.stopAndDrainLifecycle();
+        await this.localContext.dispose?.();
         await this.providerRuntime.shutdown();
         this.searchContinuationPool.clear();
         this.runtimeOwnerRegistry.unregisterCurrentOwner();

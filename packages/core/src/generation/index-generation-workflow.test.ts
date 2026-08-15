@@ -65,3 +65,67 @@ test('IndexGenerationWorkflow removes the final queue entry after concurrent ser
     assert.deepEqual(order, ['first', 'second']);
     assert.equal(internals.reindexByChangeQueues.size, 0);
 });
+
+import * as crypto from 'node:crypto';
+
+test('stageSymbolRegistryForCompletedIndex fails closed when source drifts even if analysisByFile is supplied', async () => {
+    const canonicalRoot = '/mock/repo';
+    const filePath = 'src/foo.ts';
+    const initialContent = 'export function foo() {}\n';
+    const initialHash = crypto.createHash('sha256').update(initialContent, 'utf8').digest('hex');
+    const driftedContent = 'export function foo() { return 42; }\n';
+
+    const mockPorts: Partial<IndexGenerationWorkflowPorts> = {
+        canonicalizeCodebasePath: (p) => p,
+        buildRootFingerprint: () => 'root-fp',
+        buildIndexPolicyHash: () => 'policy-hash',
+        getLanguageRouterVersion: () => 'router-v1',
+        getSymbolExtractorVersion: () => 'extractor-v1',
+        getRelationshipVersion: () => 'rel-v1',
+        readIndexableFileInsideRoot: async () => driftedContent,
+        languageAnalyzer: {
+            analyze: async () => ({
+                symbols: [],
+                moduleBindings: [],
+                callSites: [],
+                receiverTypeBindings: [],
+                pythonFlowFacts: [],
+                moduleDocstring: undefined,
+            }),
+            supportedExtensions: ['.ts'],
+            canAnalyze: () => true,
+        } as unknown as IndexGenerationWorkflowPorts['languageAnalyzer'],
+        symbolRegistryStateRoot: '/mock/state',
+        publishNavigationCandidate: async () => {},
+    };
+
+
+    const workflow = new IndexGenerationWorkflow(mockPorts as IndexGenerationWorkflowPorts);
+
+    const suppliedAnalysisByFile = new Map([
+        [filePath, {
+            moduleBindings: [],
+            callSites: [],
+            receiverTypeBindings: [],
+            pythonFlowFacts: [],
+        }],
+    ]);
+
+    await assert.rejects(
+        () => workflow.stageSymbolRegistryForCompletedIndex(
+            canonicalRoot,
+            [],
+            [{
+                path: filePath,
+                language: 'typescript',
+                hash: initialHash,
+                symbolCount: 0,
+                definitionStatus: 'definitions_present',
+            }],
+            undefined,
+            suppliedAnalysisByFile,
+        ),
+        /Source changed before navigation publication for 'src\/foo\.ts'\./,
+    );
+});
+

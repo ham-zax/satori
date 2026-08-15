@@ -26,7 +26,7 @@ import {
     roundSearchScore,
 } from "./search-response-helpers.js";
 
-type SearchResponseCommonInput = {
+export type SearchResponseCommonInput = {
     codebaseRoot: string;
     absolutePath: string;
     query: string;
@@ -216,6 +216,16 @@ export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
         groupBy: input.groupBy,
         limit: input.limit,
         resultMode: "grouped",
+        ...(input.freshnessDecision?.mode === "served_previous_generation" ? {
+            freshness: {
+                state: "sync_in_progress" as const,
+                ...(input.freshnessDecision.servedCollection ? { servedCollection: input.freshnessDecision.servedCollection } : {}),
+                ...(input.freshnessDecision.servedRunId ? { servedRunId: input.freshnessDecision.servedRunId } : {}),
+                ...(input.freshnessDecision.servedGenerationId ? { servedGenerationId: input.freshnessDecision.servedGenerationId } : {}),
+                ...(input.freshnessDecision.servedGeneration ? { servedGeneration: input.freshnessDecision.servedGeneration } : {}),
+                ...(input.freshnessDecision.pendingOperation ? { pendingOperation: input.freshnessDecision.pendingOperation } : {}),
+            },
+        } : {}),
         ...(exposeFreshnessEvidence ? {
             freshnessDecision: input.freshnessDecision,
             freshnessSummary: input.freshnessSummary,
@@ -245,6 +255,16 @@ export function buildRawSearchEnvelope(input: SearchResponseCommonInput & {
         groupBy: input.groupBy,
         limit: input.limit,
         resultMode: "raw",
+        ...(input.freshnessDecision?.mode === "served_previous_generation" ? {
+            freshness: {
+                state: "sync_in_progress" as const,
+                ...(input.freshnessDecision.servedCollection ? { servedCollection: input.freshnessDecision.servedCollection } : {}),
+                ...(input.freshnessDecision.servedRunId ? { servedRunId: input.freshnessDecision.servedRunId } : {}),
+                ...(input.freshnessDecision.servedGenerationId ? { servedGenerationId: input.freshnessDecision.servedGenerationId } : {}),
+                ...(input.freshnessDecision.servedGeneration ? { servedGeneration: input.freshnessDecision.servedGeneration } : {}),
+                ...(input.freshnessDecision.pendingOperation ? { pendingOperation: input.freshnessDecision.pendingOperation } : {}),
+            },
+        } : {}),
         ...(exposeFreshnessEvidence ? {
             freshnessDecision: input.freshnessDecision,
             freshnessSummary: input.freshnessSummary,

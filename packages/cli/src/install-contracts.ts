@@ -92,7 +92,6 @@ Satori is a repository code-intelligence layer for coding agents. Use it for unf
 ## Boundaries
 - Read \`warnings[].action\` and follow structured remediation.
 - Treat \`call_graph\` as navigation evidence, not complete blast-radius proof; verify important inbound impact.
-- If Satori reports \`requires_reindex\`, report the reason. Ask before \`create\`, \`reindex\`, or \`clear\`.
 `;
 
 export type ExecFileSyncLike = typeof execFileSync;

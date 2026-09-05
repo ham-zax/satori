@@ -563,7 +563,7 @@ test("install writes managed Codex config and concise global guidance without sk
         assert.equal(codexInstructions.includes("Satori is a repository code-intelligence layer for coding agents"), true);
         assert.equal(codexInstructions.includes("usual/native workflow"), true);
         assert.equal(codexInstructions.includes("## Priority Order"), true);
-        assert.equal(codexInstructions.includes("Ask before `create`, `reindex`, or `clear`"), true);
+        assert.equal(codexInstructions.includes("Ask before `create`, `reindex`, or `clear`"), false);
         assert.equal(codexInstructions.includes("recommendedNextAction"), true);
         assert.equal(codexInstructions.includes("warnings[].action"), true);
         assert.equal(codexInstructions.includes("Treat `call_graph` as navigation evidence, not complete blast-radius proof"), true);
@@ -2904,7 +2904,7 @@ test("install writes OpenCode JSONC config and AGENTS instructions", async () =>
         assert.equal(instructions.includes("<!-- satori-mcp:start -->"), true);
         assert.equal(instructions.includes("search_codebase"), true);
         assert.equal(instructions.includes("usual/native workflow"), true);
-        assert.equal(instructions.includes("Ask before `create`, `reindex`, or `clear`"), true);
+        assert.equal(instructions.includes("Ask before `create`, `reindex`, or `clear`"), false);
     });
 });
 

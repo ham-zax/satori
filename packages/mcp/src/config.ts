@@ -765,6 +765,10 @@ Environment Variables:
   Filesystem Observation:
   MCP_ENABLE_WATCHER      Observe source changes for freshness-aware reads (default: true)
 
+  Workspace Scope:
+  SATORI_SESSION_ROOTS_JSON JSON array of 1-16 absolute workspace roots (default: [process.cwd()])
+  SATORI_ALLOW_BROAD_ROOTS  Set to 'true' to authorize a broad workspace root (filesystem root, home directory, or state root). Broad roots stay rejected by default; indexing a home directory can be slow and expensive.
+
 Examples:
   # Install resident MCP config without package-manager startup on every client launch
   npx -y @zokizuan/satori-cli@latest install --client all

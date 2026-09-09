@@ -41,6 +41,7 @@ type AttachRequest = Readonly<{
     mcpVersion: string;
     challengeNonce: string;
     workspaceRoots: readonly string[];
+    allowBroadRoots: boolean;
 }>;
 
 function isAbsolutePathArray(value: unknown): value is readonly string[] {
@@ -86,7 +87,10 @@ function parseAttachRequest(line: string): AttachRequest | null {
         // Protocol v2 carries the launcher's immutable workspace roots; shape
         // is validated here (absolute strings, 1-16), and the session policy
         // is constructed after identity checks so broad or unauthorized roots
-        // reject the attach with a stable message.
+        // reject the attach with a stable message, unless the launcher's
+        // per-session SATORI_ALLOW_BROAD_ROOTS=true opt-in is present. The
+        // flag is optional so older launchers stay compatible (absent=false,
+        // fail closed); a non-boolean value never opts in.
         if (
             value.protocolVersion === SHARED_RUNTIME_PROTOCOL_VERSION
             && !isAbsolutePathArray(value.workspaceRoots)
@@ -103,6 +107,7 @@ function parseAttachRequest(line: string): AttachRequest | null {
             workspaceRoots: value.protocolVersion === SHARED_RUNTIME_PROTOCOL_VERSION
                 ? value.workspaceRoots
                 : [],
+            allowBroadRoots: value.allowBroadRoots === true,
         } as AttachRequest);
     } catch {
         return null;
@@ -302,6 +307,7 @@ export class SharedRuntimeSocketHost {
                     roots: request.workspaceRoots,
                     homeDirectory: os.homedir(),
                     stateRoot: this.identity.stateRoot,
+                    allowBroadRoots: request.allowBroadRoots,
                 });
             } catch (error) {
                 const reason = error instanceof WorkspaceAuthorizationError

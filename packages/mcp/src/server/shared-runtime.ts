@@ -46,6 +46,9 @@ export type ServerRunMode = "mcp" | "cli" | "postflight" | "host";
  * otherwise [process.cwd()]. Returns the same roots for direct stdio sessions
  * and for the shared-runtime launcher, so both paths construct identical
  * session workspace policies.
+ *
+ * Broad roots (filesystem root, home directory, state root) are rejected
+ * unless SATORI_ALLOW_BROAD_ROOTS=true explicitly opts in.
  */
 export const SESSION_WORKSPACE_ROOTS_MAX = 16;
 
@@ -84,11 +87,16 @@ export function resolveSessionWorkspaceRoots(env: NodeJS.ProcessEnv): readonly s
     return parsed;
 }
 
+export function resolveAllowBroadRoots(env: NodeJS.ProcessEnv): boolean {
+    return env.SATORI_ALLOW_BROAD_ROOTS?.toLowerCase() === "true";
+}
+
 export function createSessionWorkspacePolicyFromEnv(env: NodeJS.ProcessEnv): SessionWorkspacePolicy {
     return createSessionWorkspacePolicy({
         roots: resolveSessionWorkspaceRoots(env),
         homeDirectory: os.homedir(),
         stateRoot: env.SATORI_STATE_ROOT ?? path.join(env.HOME ?? os.homedir(), ".satori"),
+        allowBroadRoots: resolveAllowBroadRoots(env),
     });
 }
 

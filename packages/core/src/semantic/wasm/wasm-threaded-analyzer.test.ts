@@ -1,6 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ThreadedWasmSemanticProjectAnalyzer } from './wasm-threaded-analyzer';
+import { DEFAULT_MAX_SEMANTIC_SOURCE_BYTES } from './wasm-analyzer';
+
+test('threaded analysis preserves skipped source and auxiliary files while analyzing admitted sources', async () => {
+    const analyzer = new ThreadedWasmSemanticProjectAnalyzer();
+    const oversizedSource = ' '.repeat(DEFAULT_MAX_SEMANTIC_SOURCE_BYTES + 1);
+    try {
+        const result = await analyzer.analyze({
+            language: 'go',
+            auxiliaryFiles: [
+                { role: 'go.mod', path: 'go.mod', source: oversizedSource, sourceHash: 'large-aux' },
+            ],
+            sourceFiles: [
+                { path: 'large.go', source: oversizedSource, sourceHash: 'large-source' },
+                {
+                    path: 'main.go',
+                    source: 'package main\nfunc Helper() {}\nfunc Caller() { Helper() }\n',
+                    sourceHash: 'small-source',
+                },
+            ],
+        });
+        assert.deepEqual(result.skippedFiles, [
+            { path: 'go.mod', reason: 'source_too_large', bytes: DEFAULT_MAX_SEMANTIC_SOURCE_BYTES + 1 },
+            { path: 'large.go', reason: 'source_too_large', bytes: DEFAULT_MAX_SEMANTIC_SOURCE_BYTES + 1 },
+        ]);
+        assert.equal(result.occurrencesByFile.has('large.go'), false);
+        assert.ok((result.occurrencesByFile.get('main.go')?.length ?? 0) > 0);
+    } finally {
+        await analyzer.dispose();
+    }
+});
 
 test('ThreadedWasmSemanticProjectAnalyzer executes analysis without blocking main event loop', async () => {
     const analyzer = new ThreadedWasmSemanticProjectAnalyzer();

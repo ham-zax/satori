@@ -83,6 +83,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
                     pending.resolve({
                         language: response.evidence.language,
                         occurrencesByFile,
+                        ...(response.evidence.skippedFiles ? { skippedFiles: response.evidence.skippedFiles } : {}),
                     });
                 } else {
                     pending.reject(new Error(response.error));

@@ -82,11 +82,13 @@ runtimes. File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
 
 Semantic relationship analysis runs one WASM session per language over that
 language's whole file set. Sources over 1 MiB are skipped for relationship
-analysis (with a warning and a `skippedFiles` report) instead of being
+analysis (with a warning and `skippedFiles` in the analyzer result) instead of being
 duplicated into WASM linear memory, where multi-megabyte generated files
 observe roughly 40x transient blowup and abort the session. Skipped files
 remain chunked, embedded, and searchable; only their call-graph edges are
-missing. Broad workspace roots (filesystem root, home directory, state root)
+missing. The structured skip report is not yet exposed by `manage_index status`.
+The per-file limit does not bound the combined size of a language session.
+Broad workspace roots (filesystem root, home directory, state root)
 stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
 
 ## Measured Performance

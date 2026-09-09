@@ -25,12 +25,12 @@
         "ownerSymbol": "runExactRegistryFastPath",
         "ownerSpan": {
           "startLine": 188,
-          "endLine": 611
+          "endLine": 612
         },
         "requiredRelations": [
           {
             "relation": "caller",
-            "symbol": "attempt",
+            "symbol": "executeSearchAttempt",
             "file": "packages/mcp/src/core/search-request-coordinator.ts"
           },
           {
@@ -70,7 +70,7 @@
         "requiredRelations": [
           {
             "relation": "caller",
-            "symbol": "attempt",
+            "symbol": "executeSearchAttempt",
             "file": "packages/mcp/src/core/search-request-coordinator.ts"
           },
           {

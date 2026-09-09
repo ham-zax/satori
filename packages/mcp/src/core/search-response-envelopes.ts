@@ -1,3 +1,4 @@
+import type { SearchActionIntent } from "./search-response-helpers.js";
 import type { SearchGroupBy, SearchScope } from "./search-constants.js";
 import type { FreshnessDecision } from "./sync.js";
 import type {
@@ -30,6 +31,7 @@ export type SearchResponseCommonInput = {
     codebaseRoot: string;
     absolutePath: string;
     query: string;
+    actionIntent?: SearchActionIntent;
     scope: SearchScope;
     groupBy: SearchGroupBy;
     limit: number;
@@ -199,7 +201,7 @@ export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
     resultCounts?: SearchGroupedResponseEnvelope["resultCounts"];
     disclosure?: SearchDisclosureSummary;
 }): SearchResponseEnvelope {
-    const recommendedNextAction = buildTopRecommendedSearchAction(input.codebaseRoot, input.results);
+    const recommendedNextAction = buildTopRecommendedSearchAction(input.codebaseRoot, input.results, input.actionIntent);
     const results = input.results.map(projectGroupedResultV2);
     const exposeFreshnessEvidence = input.debugMode === "freshness"
         || input.debugMode === "full";

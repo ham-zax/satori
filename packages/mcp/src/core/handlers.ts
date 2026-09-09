@@ -1986,6 +1986,10 @@ export class ToolHandlers {
         return this.manageIndexingHandlers.handleReindexCodebase(args);
     }
 
+    public async startAutomaticCreate(codebasePath: string) {
+        return this.manageIndexingHandlers.startAutomaticCreate(codebasePath);
+    }
+
     public async startAutomaticReindex(codebasePath: string) {
         return this.manageIndexingHandlers.startAutomaticReindex(codebasePath);
     }

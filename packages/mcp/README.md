@@ -62,7 +62,23 @@ read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 
 Public paths are absolute. Search is freshness-aware; exact reads are limited to indexed searchable roots. Follow `recommendedNextAction` when returned.
 
+For a concrete symbol result, the recommended read uses bounded implementation
+context for implementation searches, call context for reference searches, and
+definition context for exact lookups. Large symbols still recommend the matched
+source span first. Continuation pages preserve the same recommendation policy.
+
 On managed offline runtimes, a tracked rebuild-safe incompatibility automatically starts or joins one background reindex and returns deterministic `not_ready` / `indexing` state for retry. Explicit reindex remains the operator recovery override for connected/remote runtimes, unsafe states, or a failed automatic attempt. `clear` remains explicit.
+
+To opt into first-time workspace indexing on managed offline runtimes, set
+`SATORI_AUTO_INDEX_WORKSPACE=true` in the MCP server environment. After the
+client finishes its MCP handshake, Satori indexes the authorized session roots
+(`SATORI_SESSION_ROOTS_JSON`, or the launcher's working directory) one at a time.
+Existing publications are preserved. Indexing uses the repository's existing
+index policy and the normal background operation limits; inspect progress with
+`manage_index status`. Each root is attempted once per runtime. A failed attempt
+requires explicit recovery through `manage_index create`; reconnecting does not
+start a retry loop. The option defaults to off and has no effect on connected
+runtimes. File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
 
 ## Measured Performance
 
@@ -173,4 +189,3 @@ Copyright (c) 2026 Hamza (@ham-zax)
 Satori is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](./LICENSE).
 
 Alternative commercial licensing terms are available separately from the copyright holder.
-

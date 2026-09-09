@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { exactSymbolOpenRequestSchema } from './symbol-context-public-contract.js';
 import {
     OVERSIZED_SYMBOL_LINE_THRESHOLD,
     SEARCH_CALLER_TERM_MAX_BYTES,
@@ -145,6 +146,37 @@ test("non-oversized concrete result recommends role-neutral exact symbol context
         },
     });
     assert.equal(action.reason, "Open bounded symbol context for the highest-ranked concrete result.");
+});
+
+test('search intent selects an actionable context preset without changing the result target', () => {
+    const result = baseGroup({
+        target: { file: 'src/owner.ts', span: { startLine: 1, endLine: 30 }, symbolId: 'owner' },
+    });
+    for (const referenceSeeking of [false, true]) {
+        const action = buildSearchGroupRecommendedAction('/repo', result, 0, {
+            semanticQuery: 'where is the request handled', referenceSeeking, implementationSeeking: true,
+        });
+        assert.ok(action);
+        assert.equal(action.tool, 'read_file');
+        assert.equal(action.args.path, '/repo/src/owner.ts');
+        const open = exactSymbolOpenRequestSchema.parse(action.args.open_symbol);
+        assert.equal(open.symbolId, 'owner');
+        assert.equal(open.context?.preset, referenceSeeking ? 'call_context' : 'implementation');
+        assert.equal(open.context?.query, 'where is the request handled');
+    }
+});
+
+test('long search text cannot create an invalid symbol-context recommendation', () => {
+    const result = baseGroup({
+        target: { file: 'src/owner.ts', span: { startLine: 1, endLine: 30 }, symbolId: 'owner' },
+    });
+    const action = buildSearchGroupRecommendedAction('/repo', result, 0, {
+        semanticQuery: 'x'.repeat(513), referenceSeeking: false, implementationSeeking: true,
+    });
+    assert.ok(action);
+    const open = exactSymbolOpenRequestSchema.parse(action.args.open_symbol);
+    assert.equal(open.context?.preset, 'implementation');
+    assert.equal(open.context?.query, undefined);
 });
 
 test("recommended actions reject executable targets outside the codebase root", () => {

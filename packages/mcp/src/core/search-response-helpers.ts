@@ -1,4 +1,5 @@
 import * as path from "path";
+import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import { compareContractStrings } from "@zokizuan/satori-core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 import type {
@@ -15,6 +16,8 @@ import type {
     SearchWarningDetail,
 } from "./search-types.js";
 import { WARNING_CODES } from "./warnings.js";
+
+export type SearchActionIntent = Pick<SearchQueryPlan, "semanticQuery" | "referenceSeeking" | "implementationSeeking">;
 
 const SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE_WARNING = "SEARCH_PARTIAL_INDEX_NAVIGATION_UNAVAILABLE";
 
@@ -443,6 +446,7 @@ export function buildSearchGroupRecommendedAction(
     codebaseRoot: string,
     result: SearchGroupResult,
     resultIndex?: number,
+    intent?: SearchActionIntent,
 ): SearchRecommendedNextAction | undefined {
     if (!isValidSearchSpan(result.target.span)) {
         return undefined;
@@ -472,6 +476,9 @@ export function buildSearchGroupRecommendedAction(
     }
 
     if (typeof result.target.symbolId === "string" && result.target.symbolId.length > 0) {
+        const preset = intent?.referenceSeeking ? "call_context"
+            : intent?.implementationSeeking ? "implementation" : "definition";
+        const query = intent?.semanticQuery.trim();
         return {
             ...(resultIndex !== undefined ? { resultIndex } : {}),
             tool: "read_file",
@@ -481,10 +488,17 @@ export function buildSearchGroupRecommendedAction(
                 open_symbol: {
                     contractVersion: 2,
                     symbolId: result.target.symbolId,
-                    context: { preset: "definition" },
+                    context: {
+                        preset,
+                        ...(preset !== "definition" && query && query.length <= 512 ? { query } : {}),
+                    },
                 },
             },
-            reason: "Open bounded symbol context for the highest-ranked concrete result.",
+            reason: preset === "call_context"
+                ? "Open symbol source and bounded call context for this reference search."
+                : preset === "implementation"
+                    ? "Open bounded implementation context focused on this search."
+                    : "Open bounded symbol context for the highest-ranked concrete result.",
         };
     }
 
@@ -503,6 +517,7 @@ export function buildSearchGroupRecommendedAction(
 export function buildTopRecommendedSearchAction(
     codebaseRoot: string,
     results: SearchGroupResult[],
+    intent?: SearchActionIntent,
 ): SearchRecommendedNextAction | undefined {
     const firstActionableIndex = results.findIndex(
         (result) => buildSearchGroupRecommendedAction(codebaseRoot, result) !== undefined,
@@ -510,7 +525,7 @@ export function buildTopRecommendedSearchAction(
     if (firstActionableIndex < 0) {
         return undefined;
     }
-    return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex);
+    return buildSearchGroupRecommendedAction(codebaseRoot, results[firstActionableIndex], firstActionableIndex, intent);
 }
 
 export function buildTopRecommendedRawSearchAction(

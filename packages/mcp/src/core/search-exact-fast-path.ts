@@ -550,6 +550,7 @@ export async function runExactRegistryFastPath(
                 : undefined;
 
     const finalized = buildExactRegistryHitEnvelope({
+        actionIntent: input.queryPlan,
         codebaseRoot: input.effectiveRoot,
         absolutePath: input.absolutePath,
         query: input.query,

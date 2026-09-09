@@ -25,6 +25,7 @@ type IndexMaintenanceCoordinatorOptions = Readonly<{
     getActiveMutation(codebasePath: string): RootMutationActivity | undefined;
     getOperation(codebasePath: string): RootMutationOperation | undefined;
     startReindex(codebasePath: string): Promise<AutomaticReindexLaunch>;
+    startCreate?(codebasePath: string): Promise<AutomaticReindexLaunch>;
 }>;
 
 /**
@@ -36,9 +37,26 @@ type IndexMaintenanceCoordinatorOptions = Readonly<{
 export class IndexMaintenanceCoordinator {
     private readonly admission = new Map<string, Promise<AutomaticReindexScheduleResult>>();
     private readonly automaticCompletions = new Map<string, Promise<void>>();
+    private readonly workspaceRequests = new Map<string, Promise<void>>();
+    private workspaceQueue: Promise<void> = Promise.resolve();
     private readonly failedEpochs = new Map<string, string>();
 
     constructor(private readonly options: IndexMaintenanceCoordinatorOptions) {}
+
+    /** One attempt per explicit root and runtime epoch; only one automatic create runs at a time. */
+    requestWorkspaceIndexing(codebasePath: string): Promise<void> {
+        if (!this.options.enabled || !this.options.startCreate) return Promise.resolve();
+        const existing = this.workspaceRequests.get(codebasePath);
+        if (existing) return existing;
+        const attempt = this.workspaceQueue.then(async () => {
+            if (this.options.getActiveMutation(codebasePath)) return;
+            const launch = await this.options.startCreate!(codebasePath);
+            if (launch.completion) await launch.completion;
+        });
+        this.workspaceRequests.set(codebasePath, attempt);
+        this.workspaceQueue = attempt.catch(() => undefined);
+        return attempt;
+    }
 
     async requestAutomaticReindex(
         codebasePath: string,

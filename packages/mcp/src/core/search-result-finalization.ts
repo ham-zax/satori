@@ -704,6 +704,7 @@ export async function finalizeSearchResults(
             );
             const mustConstraintHint = buildMustConstraintHint();
             const envelope = buildGroupedSearchEnvelopeHelper({
+                actionIntent: input.queryPlan,
                 codebaseRoot: input.effectiveRoot,
                 absolutePath: input.absolutePath,
                 query: input.query,
@@ -770,7 +771,7 @@ export async function finalizeSearchResults(
         ? {
             orderedResults: eligibleResults.map(projectGroupedResultV2),
             recommendedActions: eligibleResults.map((result) => (
-                buildSearchGroupRecommendedAction(input.effectiveRoot, result) ?? null
+                buildSearchGroupRecommendedAction(input.effectiveRoot, result, undefined, input.queryPlan) ?? null
             )),
             initialReturnedCount: disclosureProjection.results.length,
         }

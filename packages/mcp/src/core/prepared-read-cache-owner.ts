@@ -17,16 +17,16 @@ export type CachedPreparedReadResult =
     | { status: "miss"; reason: SearchReadinessInvalidationReason };
 
 type NavigationManifestState = Awaited<ReturnType<JsonNavigationStore["getManifest"]>>;
-type NavigationManifestOk = Extract<NavigationManifestState, { status: "ok" }>;
 type NavigationSymbolsByFileState = Awaited<ReturnType<JsonNavigationStore["getSymbolsByFile"]>>;
-type NavigationSymbolsByFileOk = Extract<NavigationSymbolsByFileState, { status: "ok" }>;
 type NavigationCompatibilityState = Awaited<ReturnType<JsonNavigationStore["getCompatibilityState"]>>;
 
+// Share cold I/O as well as completed reads. Failed reads are evicted; completion
+// only touches its captured entry, so an old Publication cannot replace a newer one.
 type PreparedNavigationCacheEntry = {
     publicationId: string;
-    manifest?: NavigationManifestOk;
-    symbolsByFile: Map<string, NavigationSymbolsByFileOk>;
-    compatibilityByManifestHash: Map<string, NavigationCompatibilityState>;
+    manifest?: Promise<NavigationManifestState>;
+    symbolsByFile: Map<string, Promise<NavigationSymbolsByFileState>>;
+    compatibilityByManifestHash: Map<string, Promise<NavigationCompatibilityState>>;
 };
 
 export interface Clock {
@@ -113,8 +113,8 @@ export class PreparedReadCacheOwner {
             ? existing
             : {
                 publicationId,
-                symbolsByFile: new Map<string, NavigationSymbolsByFileOk>(),
-                compatibilityByManifestHash: new Map<string, NavigationCompatibilityState>(),
+                symbolsByFile: new Map<string, Promise<NavigationSymbolsByFileState>>(),
+                compatibilityByManifestHash: new Map<string, Promise<NavigationCompatibilityState>>(),
             };
         update(entry);
         setBoundedCacheEntry(
@@ -145,14 +145,16 @@ export class PreparedReadCacheOwner {
                 reason: "Publication navigation is unavailable for the prepared read",
             };
         }
-        const result = await this.dependencies.navigationStore.getManifest({
+        const result = this.dependencies.navigationStore.getManifest({
             normalizedRootPath: root,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
         });
-        if (result.status === "ok" && publicationId) {
+        if (publicationId) {
             this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
                 entry.manifest = result;
+                const evict = () => { if (entry.manifest === result) delete entry.manifest; };
+                void result.then((value) => { if (value.status !== "ok") evict(); }, evict);
             });
         }
         return result;
@@ -177,13 +179,13 @@ export class PreparedReadCacheOwner {
                 reason: "Publication navigation is unavailable for the prepared read",
             };
         }
-        const result = await this.dependencies.navigationStore.getSymbolsByFile({
+        const result = this.dependencies.navigationStore.getSymbolsByFile({
             normalizedRootPath: root,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
             file,
         });
-        if (result.status === "ok" && publicationId) {
+        if (publicationId) {
             this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
                 setBoundedCacheEntry(
                     entry.symbolsByFile,
@@ -191,6 +193,10 @@ export class PreparedReadCacheOwner {
                     result,
                     PREPARED_NAVIGATION_CACHE_MAX_FILES_PER_ROOT,
                 );
+                const evict = () => {
+                    if (entry.symbolsByFile.get(file) === result) entry.symbolsByFile.delete(file);
+                };
+                void result.then((value) => { if (value.status !== "ok") evict(); }, evict);
             });
         }
         return result;
@@ -227,17 +233,13 @@ export class PreparedReadCacheOwner {
                 },
             };
         }
-        const result = await this.dependencies.navigationStore.getCompatibilityState({
+        const result = this.dependencies.navigationStore.getCompatibilityState({
             normalizedRootPath: root,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
             expectedSymbolRegistryManifestHash,
         });
-        if (
-            result.registry?.status === "ok"
-            && result.relationships.status === "ok"
-            && publicationId
-        ) {
+        if (publicationId) {
             this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
                 setBoundedCacheEntry(
                     entry.compatibilityByManifestHash,
@@ -245,6 +247,14 @@ export class PreparedReadCacheOwner {
                     result,
                     PREPARED_NAVIGATION_CACHE_MAX_COMPATIBILITY_RESULTS_PER_ROOT,
                 );
+                const evict = () => {
+                    if (entry.compatibilityByManifestHash.get(expectedSymbolRegistryManifestHash) === result) {
+                        entry.compatibilityByManifestHash.delete(expectedSymbolRegistryManifestHash);
+                    }
+                };
+                void result.then((value) => {
+                    if (value.registry.status !== "ok" || value.relationships.status !== "ok") evict();
+                }, evict);
             });
         }
         return result;

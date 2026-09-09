@@ -1,3 +1,4 @@
+import type { SearchActionIntent } from "./search-response-helpers.js";
 import type { SymbolRecord } from "@zokizuan/satori-core";
 import {
     repairSourceBackedPythonSpan,
@@ -44,6 +45,7 @@ export type BuildExactRegistryHitEnvelopeInput = {
     codebaseRoot: string;
     absolutePath: string;
     query: string;
+    actionIntent?: SearchActionIntent;
     scope: SearchResponseEnvelope["scope"];
     groupBy: SearchResponseEnvelope["groupBy"];
     limit: number;
@@ -185,6 +187,7 @@ export function buildExactRegistryHitEnvelope(
                 })),
             );
             const envelope = buildGroupedSearchEnvelope({
+                actionIntent: input.actionIntent,
                 codebaseRoot: input.codebaseRoot,
                 absolutePath: input.absolutePath,
                 query: input.query,
@@ -240,7 +243,7 @@ export function buildExactRegistryHitEnvelope(
         ? {
             orderedResults: eligibleResults.map(projectGroupedResultV2),
             recommendedActions: eligibleResults.map((result) => (
-                buildSearchGroupRecommendedAction(input.codebaseRoot, result) ?? null
+                buildSearchGroupRecommendedAction(input.codebaseRoot, result, undefined, input.actionIntent) ?? null
             )),
             initialReturnedCount: projection.results.length,
         }

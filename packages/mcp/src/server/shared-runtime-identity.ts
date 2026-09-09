@@ -40,6 +40,7 @@ export type SharedRuntimeIdentity = Readonly<{
     vectorStoreProvider: string;
     lanceDbPath: string;
     watcherEnabled: string;
+    autoIndexWorkspace: string;
     readFileMaxLines: string;
     readFileMaxBytes: string;
     customExtensions: string;
@@ -183,6 +184,7 @@ export function buildSharedRuntimeIdentity(
         lanceDbPath: env.LANCEDB_PATH
             ? canonicalizePath(env.LANCEDB_PATH)
             : "",
+        autoIndexWorkspace: env.SATORI_AUTO_INDEX_WORKSPACE?.toLowerCase() === "true" ? "true" : "false",
         watcherEnabled: env.MCP_ENABLE_WATCHER ?? "",
         readFileMaxLines: env.READ_FILE_MAX_LINES ?? "",
         readFileMaxBytes: env.READ_FILE_MAX_BYTES ?? "",

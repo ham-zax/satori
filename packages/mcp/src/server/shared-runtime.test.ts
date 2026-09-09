@@ -58,6 +58,37 @@ async function connectClient(host: SharedRuntimeHost, name: string, stateRoot: s
     return { client, session };
 }
 
+test('opted-in workspace indexing starts after handshake without blocking tools/list', async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-auto-index-session-'));
+    const runtimeConfig: ContextMcpConfig = {
+        ...config(), stateRoot, executionProfile: 'offline', autoIndexWorkspace: true,
+    };
+    const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, 1024), 'cli');
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => { finish = resolve; });
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+    const roots: string[] = [];
+    host.getProviderRuntime().requestWorkspaceIndexing = async (root) => {
+        roots.push(root);
+        started();
+        await completion;
+    };
+    t.after(async () => {
+        finish();
+        await host.shutdown();
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+    });
+    assert.deepEqual(roots, []);
+    const { client, session } = await connectClient(host, 'auto-index', stateRoot);
+    t.after(async () => { await client.close(); await session.shutdown(); });
+    await startedPromise;
+    assert.deepEqual(roots, [path.join(stateRoot, 'workspace')]);
+    assert.equal((await client.listTools()).tools.length, 7);
+    assert.equal(host.getActivity().operations, 1);
+    finish();
+});
+
 test("one runtime host serves independent MCP sessions over separate transports", async (t) => {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-runtime-"));
     const previousStateRoot = process.env.SATORI_STATE_ROOT;

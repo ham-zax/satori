@@ -165,6 +165,8 @@ export interface ContextMcpConfig {
     readFileMaxBytes?: number;
     // Filesystem observation behavior
     watchSyncEnabled?: boolean;
+    // Opt-in initial indexing of authorized session roots, offline runtimes only.
+    autoIndexWorkspace?: boolean;
 }
 
 export function resolveRerankerProvider(config: ContextMcpConfig): RerankerProvider {
@@ -667,6 +669,7 @@ export function createMcpConfig(): ContextMcpConfig {
         readFileMaxBytes,
         // filesystem observation behavior
         watchSyncEnabled,
+        autoIndexWorkspace: envManager.get('SATORI_AUTO_INDEX_WORKSPACE')?.toLowerCase() === 'true',
     };
 
     return config;

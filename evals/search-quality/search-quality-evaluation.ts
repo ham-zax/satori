@@ -8,12 +8,20 @@ import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRecordsForFile,
     buildSymbolRegistry,
-    writeRelationshipSidecar,
-    writeSymbolRegistrySidecar,
+    type PublicationRef,
+    type Reranker,
     type SymbolRecord,
     type SymbolRegistryManifest,
 } from '../../packages/core/src/index.js';
-import { ToolHandlers } from '../../packages/mcp/src/core/handlers.js';
+import { JsonNavigationStore } from '../../packages/core/dist/navigation/store.js';
+import { writeRelationshipSidecar, writeSymbolRegistrySidecar } from '../../packages/core/src/symbols/sidecar-writes.js';
+import { SearchRequestCoordinator } from '../../packages/mcp/src/core/search-request-coordinator.js';
+import { SearchQuerySupport } from '../../packages/mcp/src/core/search-query-support.js';
+import { ToolResponseBuilders } from '../../packages/mcp/src/core/tool-response-builders.js';
+import { RelationshipBackedCallGraph } from '../../packages/mcp/src/core/relationship-backed-call-graph.js';
+import { PreparedReadCacheOwner } from '../../packages/mcp/src/core/prepared-read-cache-owner.js';
+import type { TrackedRootReadiness, TrackedRootReadinessState } from '../../packages/mcp/src/core/tracked-root-readiness.js';
+import { normalizeSearchPath, hasPathSegment, isGeneratedPath, isTestPath, isFixturePath, isDocPath, classifyPathCategory, shouldIncludeCategoryInScope } from '../../packages/mcp/src/core/search-ranking-policy.js';
 import { CapabilityResolver } from '../../packages/mcp/src/core/capabilities.js';
 import type { IndexFingerprint } from '../../packages/mcp/src/config.js';
 
@@ -217,26 +225,10 @@ export type SearchQualityEvaluationArtifact = {
     };
 };
 
-type EvaluationContext = ConstructorParameters<typeof ToolHandlers>[0];
-type EvaluationSnapshotManager = ConstructorParameters<typeof ToolHandlers>[1];
-type EvaluationSyncManager = ConstructorParameters<typeof ToolHandlers>[2];
-type EvaluationCallGraphManager = NonNullable<ConstructorParameters<typeof ToolHandlers>[6]>;
-type EvaluationReranker = NonNullable<ConstructorParameters<typeof ToolHandlers>[7]>;
-
-type HandlerOverrides = {
-    validateCompletionProof: () => Promise<{
-        outcome: 'valid';
-        navigationStatus: 'valid';
-        generationReceipt: {
-            navigation: { navigationSealHash: string };
-        };
-    }>;
-};
-
 type EvaluationEnvironment = {
     repoPath: string;
     manifest: FixtureManifest;
-    handlers: ToolHandlers;
+    coordinator: SearchRequestCoordinator;
     setWorkload: (workload: FixtureWorkload) => void;
     resetMetrics: () => void;
     readMetrics: () => ProviderMetrics;
@@ -290,6 +282,7 @@ function getLanguage(relativePath: string): string {
 
 async function buildNavigationSidecars(input: {
     repoPath: string;
+    navigationRoot: string;
     manifest: FixtureManifest;
 }): Promise<{
     symbolByCandidateId: Map<string, SymbolRecord>;
@@ -346,6 +339,7 @@ async function buildNavigationSidecars(input: {
             hash: fileHash,
             language,
             symbolCount: records.length,
+            definitionStatus: records.length > 0 ? 'definitions_present' : 'definition_free',
         });
         for (const candidate of fileCandidates) {
             const record = records.find((item) => (
@@ -370,6 +364,7 @@ async function buildNavigationSidecars(input: {
         files: manifestFiles.sort((left, right) => left.path.localeCompare(right.path)),
     };
     const writeResult = await writeSymbolRegistrySidecar({
+        navigationRoot: input.navigationRoot,
         registry: buildSymbolRegistry({ manifest: sidecarManifest, symbols }),
     });
     const checkpointWriter = symbolByCandidateId.get('checkpoint.writeSourceCheckpoint');
@@ -377,6 +372,7 @@ async function buildNavigationSidecars(input: {
     assert.ok(checkpointWriter, 'checkpoint writer symbol missing from evaluation fixture');
     assert.ok(checkpointCaller, 'checkpoint caller symbol missing from evaluation fixture');
     await writeRelationshipSidecar({
+        navigationRoot: input.navigationRoot,
         normalizedRootPath: input.repoPath,
         symbolRegistryManifestHash: writeResult.manifestHash,
         relationshipVersion: sidecarManifest.relationshipVersion,
@@ -443,228 +439,273 @@ async function createEvaluationEnvironment(workspaceRoot: string): Promise<Evalu
     verifyFixtureFiles(fixtureRoot, manifest);
 
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-quality-'));
-    const repoPath = path.join(tempRoot, 'repo');
-    const stateRoot = path.join(tempRoot, 'state');
-    fs.mkdirSync(repoPath, { recursive: true });
-    fs.mkdirSync(stateRoot, { recursive: true });
-    for (const file of manifest.files) {
-        const source = path.join(fixtureRoot, file.path);
-        const target = path.join(repoPath, file.path);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(source, target);
-    }
-
-    const previousStateRoot = process.env.SATORI_STATE_ROOT;
-    process.env.SATORI_STATE_ROOT = stateRoot;
-    const { symbolByCandidateId } = await buildNavigationSidecars({ repoPath, manifest });
-    const candidateById = new Map(manifest.candidates.map((candidate) => [candidate.id, candidate]));
-    const candidateIdBySymbolInstanceId = new Map<string, string>();
-    for (const [candidateId, record] of symbolByCandidateId) {
-        candidateIdBySymbolInstanceId.set(record.symbolInstanceId, candidateId);
-    }
-
-    let activeWorkload = manifest.workloads[0];
-    let metrics = createEmptyProviderMetrics();
-    const toSearchResult = (
-        candidateId: string,
-        rank: number,
-        backendScoreKind: SearchFixtureResult['backendScoreKind'],
-    ): SearchFixtureResult => {
-        const candidate = candidateById.get(candidateId);
-        assert.ok(candidate, `unknown provider candidate: ${candidateId}`);
-        const record = symbolByCandidateId.get(candidateId);
-        const ownerRecord = candidate.ownerCandidateId
-            ? symbolByCandidateId.get(candidate.ownerCandidateId)
-            : record;
-        if (candidate.ownerCandidateId) {
-            assert.ok(ownerRecord, `unknown owner candidate: ${candidate.ownerCandidateId}`);
+    try {
+        const repoPath = path.join(tempRoot, 'repo');
+        const stateRoot = path.join(tempRoot, 'state');
+        fs.mkdirSync(repoPath, { recursive: true });
+        fs.mkdirSync(stateRoot, { recursive: true });
+        for (const file of manifest.files) {
+            const source = path.join(fixtureRoot, file.path);
+            const target = path.join(repoPath, file.path);
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.copyFileSync(source, target);
         }
-        return {
-            content: readCandidateContent(repoPath, candidate),
-            relativePath: candidate.file,
-            startLine: candidate.startLine,
-            endLine: candidate.endLine,
-            language: getLanguage(candidate.file),
-            score: Math.max(0.01, 1 - (rank * 0.01)),
-            backendScore: Math.max(0.01, 1 - (rank * 0.01)),
-            backendScoreKind,
-            indexedAt: FIXED_INDEXED_AT,
-            ...(record ? {
-                symbolId: record.symbolInstanceId,
-                symbolLabel: record.label,
-                symbolKey: record.symbolKey,
-                symbolInstanceId: record.symbolInstanceId,
-                symbolKind: record.kind,
-                ownerSymbolKey: ownerRecord?.symbolKey ?? record.symbolKey,
-                ownerSymbolInstanceId: ownerRecord?.symbolInstanceId ?? record.symbolInstanceId,
-            } : {}),
-        };
-    };
 
-    const runSemanticSearch = (request: { query?: string; retrievalMode?: string; topK?: number }): SearchFixtureResult[] => {
-        const query = request.query ?? '';
-        const isExpanded = query.includes('\nimplementation runtime source entrypoint');
-        const isSparseOnly = request.retrievalMode === 'lexical';
-        metrics.semanticSearchCalls += 1;
-        if (!isSparseOnly) {
-            metrics.embeddingCallsByCurrentContract += 1;
-            metrics.denseQueriesByCurrentContract += 1;
+        const navigationRoot = path.join(stateRoot, 'search-quality-v1', 'navigation');
+        const { symbolByCandidateId } = await buildNavigationSidecars({ repoPath, navigationRoot, manifest });
+        const candidateById = new Map(manifest.candidates.map((candidate) => [candidate.id, candidate]));
+        const candidateIdBySymbolInstanceId = new Map<string, string>();
+        for (const [candidateId, record] of symbolByCandidateId) {
+            candidateIdBySymbolInstanceId.set(record.symbolInstanceId, candidateId);
         }
-        if (request.retrievalMode !== 'dense') {
-            metrics.sparseQueriesByCurrentContract += 1;
-        }
-        if (isExpanded) {
-            metrics.expandedPassCalls += 1;
-        } else {
-            metrics.primaryPassCalls += 1;
-        }
-        const rowIds = isSparseOnly
-            ? (activeWorkload.providerRows.sparse ?? activeWorkload.providerRows.primary)
-            : isExpanded
-                ? (activeWorkload.providerRows.expanded ?? activeWorkload.providerRows.primary)
-                : activeWorkload.providerRows.primary;
-        const backendScoreKind = isSparseOnly ? 'lexical_rank' : 'rrf_fusion';
-        return rowIds
-            .slice(0, request.topK ?? rowIds.length)
-            .map((candidateId, rank) => toSearchResult(candidateId, rank, backendScoreKind));
-    };
 
-    const context = {
-        getEmbeddingEngine: () => ({ getProvider: () => 'VoyageAI' }),
-        getTrackedRelativePaths: () => manifest.files.map((file) => file.path),
-        semanticSearch: async (request: { query?: string; retrievalMode?: string; topK?: number }) => runSemanticSearch(request),
-        semanticSearchInProvenGeneration: async (
-            _receipt: unknown,
-            request: { query?: string; retrievalMode?: string; topK?: number },
-        ) => runSemanticSearch(request),
-    } as unknown as EvaluationContext;
-
-    const snapshotManager = {
-        getAllCodebases: () => [],
-        getIndexedCodebases: () => [repoPath],
-        getIndexingCodebases: () => [],
-        getCodebaseCallGraphSidecar: () => ({ version: 'v3' }),
-        ensureFingerprintCompatibilityOnAccess: () => ({ allowed: true, changed: false }),
-    } as unknown as EvaluationSnapshotManager;
-
-    const syncManager = {
-        ensureFreshness: async () => ({
-            mode: 'skipped_recent',
-            changed: false,
-            checkedAt: FIXED_NOW,
-            thresholdMs: 180_000,
-        }),
-    } as unknown as EvaluationSyncManager;
-
-    const capabilities = new CapabilityResolver({
-        name: 'search-quality-evaluation',
-        version: '1.0.0',
-        executionProfile: 'connected',
-        networkPolicy: { kind: 'remote-allowed' },
-        encoderProvider: 'VoyageAI',
-        encoderModel: 'voyage-4-large',
-        voyageKey: 'hermetic-test-key',
-        vectorStoreProvider: 'Milvus',
-        rerankerProvider: 'voyage',
-        rankerModel: 'rerank-2.5',
-    });
-
-    const sidecarNodes = [...symbolByCandidateId.values()].map((record) => ({
-        symbolId: record.symbolInstanceId,
-        symbolLabel: record.label,
-        file: record.relativePath,
-        language: record.language,
-        span: {
-            startLine: record.span.startLine,
-            endLine: record.span.endLine,
-        },
-    }));
-    const callGraphManager = {
-        loadSidecar: () => ({
-            formatVersion: 'v3',
-            codebasePath: repoPath,
-            builtAt: FIXED_INDEXED_AT,
-            fingerprint: RUNTIME_FINGERPRINT,
-            nodes: sidecarNodes,
-            edges: [],
-            notes: [],
-        }),
-    } as unknown as EvaluationCallGraphManager;
-
-    const reranker = {
-        rerank: async (_query: string, documents: string[]) => {
-            metrics.rerankCalls += 1;
-            metrics.rerankerCandidates += documents.length;
-            metrics.rerankerInputBytes += documents.reduce(
-                (total, document) => total + Buffer.byteLength(document, 'utf8'),
-                0,
-            );
-            const configuredOrder = activeWorkload.providerRows.rerank;
-            const candidateIds = documents.map((document) => (
-                identifyCandidateFromRerankDocument(document, manifest.candidates)
-            ));
-            metrics.rerankedCandidateIds.push(...candidateIds.filter(
-                (candidateId): candidateId is string => candidateId !== null,
-            ));
-            const rankByCandidateId = new Map(
-                (configuredOrder ?? candidateIds.filter((value): value is string => value !== null))
-                    .map((candidateId, index) => [candidateId, index]),
-            );
-            return candidateIds
-                .map((candidateId, index) => ({
-                    index,
-                    relevanceScore: candidateId === null
-                        ? 0
-                        : 1 - ((rankByCandidateId.get(candidateId) ?? candidateIds.length) * 0.01),
-                    configuredRank: candidateId === null
-                        ? Number.MAX_SAFE_INTEGER
-                        : (rankByCandidateId.get(candidateId) ?? Number.MAX_SAFE_INTEGER),
-                }))
-                .sort((left, right) => left.configuredRank - right.configuredRank || left.index - right.index)
-                .map(({ index, relevanceScore }) => ({ index, relevanceScore }));
-        },
-    } as unknown as EvaluationReranker;
-
-    const handlers = new ToolHandlers(
-        context,
-        snapshotManager,
-        syncManager,
-        RUNTIME_FINGERPRINT,
-        capabilities,
-        () => Date.parse(FIXED_NOW),
-        callGraphManager,
-        reranker,
-    );
-    (handlers as unknown as HandlerOverrides).validateCompletionProof = async () => ({
-        outcome: 'valid',
-        navigationStatus: 'valid',
-        generationReceipt: {
-            navigation: { navigationSealHash: 'a'.repeat(64) },
-        },
-    });
-
-    return {
-        repoPath,
-        manifest,
-        handlers,
-        setWorkload: (workload) => {
-            activeWorkload = workload;
-        },
-        resetMetrics: () => {
-            metrics = createEmptyProviderMetrics();
-        },
-        readMetrics: () => cloneProviderMetrics(metrics),
-        candidateById,
-        candidateIdBySymbolInstanceId,
-        dispose: () => {
-            if (previousStateRoot === undefined) {
-                delete process.env.SATORI_STATE_ROOT;
-            } else {
-                process.env.SATORI_STATE_ROOT = previousStateRoot;
+        let activeWorkload = manifest.workloads[0];
+        let metrics = createEmptyProviderMetrics();
+        const toSearchResult = (
+            candidateId: string,
+            rank: number,
+            backendScoreKind: SearchFixtureResult['backendScoreKind'],
+        ): SearchFixtureResult => {
+            const candidate = candidateById.get(candidateId);
+            assert.ok(candidate, `unknown provider candidate: ${candidateId}`);
+            const record = symbolByCandidateId.get(candidateId);
+            const ownerRecord = candidate.ownerCandidateId
+                ? symbolByCandidateId.get(candidate.ownerCandidateId)
+                : record;
+            if (candidate.ownerCandidateId) {
+                assert.ok(ownerRecord, `unknown owner candidate: ${candidate.ownerCandidateId}`);
             }
-            fs.rmSync(tempRoot, { recursive: true, force: true });
-        },
-    };
+            return {
+                content: readCandidateContent(repoPath, candidate),
+                relativePath: candidate.file,
+                startLine: candidate.startLine,
+                endLine: candidate.endLine,
+                language: getLanguage(candidate.file),
+                score: Math.max(0.01, 1 - (rank * 0.01)),
+                backendScore: Math.max(0.01, 1 - (rank * 0.01)),
+                backendScoreKind,
+                indexedAt: FIXED_INDEXED_AT,
+                ...(record ? {
+                    symbolId: record.symbolInstanceId,
+                    symbolLabel: record.label,
+                    symbolKey: record.symbolKey,
+                    symbolInstanceId: record.symbolInstanceId,
+                    symbolKind: record.kind,
+                    ownerSymbolKey: ownerRecord?.symbolKey ?? record.symbolKey,
+                    ownerSymbolInstanceId: ownerRecord?.symbolInstanceId ?? record.symbolInstanceId,
+                } : {}),
+            };
+        };
+
+        const runSemanticSearch = (request: { query?: string; retrievalMode?: string; topK?: number }): SearchFixtureResult[] => {
+            const query = request.query ?? '';
+            const isExpanded = query.includes('\nimplementation runtime source entrypoint');
+            const isSparseOnly = request.retrievalMode === 'lexical';
+            metrics.semanticSearchCalls += 1;
+            if (!isSparseOnly) {
+                metrics.embeddingCallsByCurrentContract += 1;
+                metrics.denseQueriesByCurrentContract += 1;
+            }
+            if (request.retrievalMode !== 'dense') {
+                metrics.sparseQueriesByCurrentContract += 1;
+            }
+            if (isExpanded) {
+                metrics.expandedPassCalls += 1;
+            } else {
+                metrics.primaryPassCalls += 1;
+            }
+            const rowIds = isSparseOnly
+                ? (activeWorkload.providerRows.sparse ?? activeWorkload.providerRows.primary)
+                : isExpanded
+                    ? (activeWorkload.providerRows.expanded ?? activeWorkload.providerRows.primary)
+                    : activeWorkload.providerRows.primary;
+            const backendScoreKind = isSparseOnly ? 'lexical_rank' : 'rrf_fusion';
+            return rowIds
+                .slice(0, request.topK ?? rowIds.length)
+                .map((candidateId, rank) => toSearchResult(candidateId, rank, backendScoreKind));
+        };
+
+        const capabilities = new CapabilityResolver({
+            name: 'search-quality-evaluation',
+            stateRoot,
+            version: '1.0.0',
+            executionProfile: 'connected',
+            networkPolicy: { kind: 'remote-allowed' },
+            encoderProvider: 'VoyageAI',
+            encoderModel: 'voyage-4-large',
+            voyageKey: 'hermetic-test-key',
+            vectorStoreProvider: 'Milvus',
+            rerankerProvider: 'voyage',
+            rankerModel: 'rerank-2.5',
+        });
+
+        const reranker = {
+            rerank: async (_query: string, documents: string[]) => {
+                metrics.rerankCalls += 1;
+                metrics.rerankerCandidates += documents.length;
+                metrics.rerankerInputBytes += documents.reduce(
+                    (total, document) => total + Buffer.byteLength(document, 'utf8'),
+                    0,
+                );
+                const configuredOrder = activeWorkload.providerRows.rerank;
+                const candidateIds = documents.map((document) => (
+                    identifyCandidateFromRerankDocument(document, manifest.candidates)
+                ));
+                metrics.rerankedCandidateIds.push(...candidateIds.filter(
+                    (candidateId): candidateId is string => candidateId !== null,
+                ));
+                const rankByCandidateId = new Map(
+                    (configuredOrder ?? candidateIds.filter((value): value is string => value !== null))
+                        .map((candidateId, index) => [candidateId, index]),
+                );
+                return candidateIds
+                    .map((candidateId, index) => ({
+                        index,
+                        relevanceScore: candidateId === null
+                            ? 0
+                            : 1 - ((rankByCandidateId.get(candidateId) ?? candidateIds.length) * 0.01),
+                        configuredRank: candidateId === null
+                            ? Number.MAX_SAFE_INTEGER
+                            : (rankByCandidateId.get(candidateId) ?? Number.MAX_SAFE_INTEGER),
+                    }))
+                    .sort((left, right) => left.configuredRank - right.configuredRank || left.index - right.index)
+                    .map(({ index, relevanceScore }) => ({ index, relevanceScore }));
+            },
+            getIdentity: () => ({ provider: 'fixture', model: 'fixture', profile: 'fixture' }),
+        } satisfies Reranker;
+
+        // Providers are frozen fixture inputs. Readiness binds every retrieval and
+        // navigation operation to the same immutable publication; it does not model indexing.
+        const publication: PublicationRef = {
+            id: 'search-quality-v1',
+            publication: {
+                version: 1, id: 'search-quality-v1', canonicalRoot: repoPath,
+                createdAt: FIXED_INDEXED_AT, status: 'complete',
+                policy: {
+                    profile: 'default', customExtensions: [], customIgnorePatterns: [],
+                    fileBasedIgnorePatterns: [], supportedExtensions: ['.ts', '.json', '.md'],
+                    effectiveIgnorePatterns: [], policyHash: 'search-quality-v1-policy',
+                    controlSignature: 'search-quality-v1-control',
+                },
+                format: {
+                    indexFormatVersion: 'hybrid_v3', embeddingIdentity: 'fixture',
+                    relationshipVersion: 'search-quality-v1-relationships',
+                },
+                vector: { collectionName: 'fixture', indexedFiles: manifest.files.length, totalChunks: manifest.candidates.length },
+                navigation: { relativeRoot: 'navigation' },
+            },
+        };
+        const ready: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
+            state: 'ready', root: { path: repoPath, info: { status: 'indexed' } },
+            publication, navigationStatus: 'valid', navigationAuthorityMode: 'canonical_v4',
+        };
+        const navigationStore = new JsonNavigationStore();
+        const prepared = new PreparedReadCacheOwner({
+            getCurrentPublication: () => publication,
+            getPublicationNavigationAddress: () => ({ publicationId: publication.id, navigationRoot }),
+            navigationStore, clock: { now: () => Date.parse(FIXED_NOW) },
+            isPathWithinCodebase: (target, root) => target === root || target.startsWith(root + path.sep),
+        });
+        const registryState = await prepared.loadPreparedNavigationManifest(ready);
+        assert.equal(registryState.status, 'ok', JSON.stringify(registryState));
+        const graph = new RelationshipBackedCallGraph({ navigationStore });
+        const support = new SearchQuerySupport({
+            normalizeSearchPath, hasPathSegment, isGeneratedPath, isTestPath, isFixturePath, isDocPath,
+            classifyPathCategory, shouldIncludeCategoryInScope,
+            getContextActiveIgnorePatterns: () => [],
+            getContextTrackedRelativePaths: () => manifest.files.map((file) => file.path),
+            capabilities, runtimeFingerprint: RUNTIME_FINGERPRINT, reranker,
+            gitignoreForceReloadEveryN: 1,
+        });
+        const unsupported = (): never => { throw new Error('Unexpected fixture readiness failure'); };
+        const manageHint = (action: string) => ({ tool: 'manage_index', args: { action, path: repoPath } });
+        const builders = new ToolResponseBuilders({
+            buildManageIndexRecommendedAction: (action, root, reason) => ({ tool: 'manage_index', args: { action, path: root }, reason }),
+            buildCreateHint: () => manageHint('create'), buildReindexHint: () => manageHint('reindex'),
+            buildSyncHint: () => manageHint('sync'), buildStatusHint: () => manageHint('status'),
+            buildStaleLocalHint: unsupported, buildStaleLocalMessage: unsupported,
+            buildIndexingMetadata: unsupported, buildCompatibilityDiagnostics: unsupported,
+        });
+        const coordinator = new SearchRequestCoordinator({
+            readiness: {
+                touchWatchedCodebaseBestEffort: async () => {},
+                assessReadFreshness: async () => ({ mode: 'skipped_recent', changed: false, checkedAt: FIXED_NOW, thresholdMs: 180_000 }),
+                prepareTrackedRootReadWithObservation: async () => ready,
+                loadRegistryValidatedRelationshipNavigation: async ({ registryManifestHash }) => {
+                    if (!registryManifestHash) return { relationshipReady: false };
+                    const compatibility = await prepared.loadPreparedNavigationCompatibility(ready, registryManifestHash);
+                    return { relationshipReady: compatibility.relationships.status === 'ok', relationshipBuiltAt: FIXED_INDEXED_AT };
+                },
+                getWatcherObservation: () => ({ coverage: 'ready', pending: false, observedEventEpoch: 0, comparedThroughEventEpoch: 0, latestEpochByReason: { source_changed: 0, directory_changed: 0, ignore_rules_changed: 0 } }),
+                getChangedFilesForCodebase: () => ({ available: true, files: new Set<string>() }),
+                getTrackedRootReadiness: () => ({ buildIndexFailedSearchPayload: unsupported, buildMissingLocalCollectionSearchPayload: unsupported }) as unknown as TrackedRootReadiness,
+                isPartialIndexNavigationUnavailable: () => false,
+                getIndexingOperationForReadiness: () => undefined,
+                probeLocalSearchCollectionState: async () => ({ state: 'ready' }),
+            },
+            hints: {
+                stringifyToolJson: (value) => JSON.stringify(value), getToolResponseBuilders: () => builders,
+                getSearchNavigationHelpers: () => ({
+                    now: () => Date.parse(FIXED_NOW), sanitizeIndexedRelativeFilePath: (file) => file,
+                    isCallGraphLanguageSupported: () => true, getOutlineStatusForLanguage: () => 'ok',
+                }),
+                buildGeneratedArtifactsVerificationHint: () => undefined,
+                buildChangedCodeDebug: async () => undefined, withProofDebugHint: (payload) => payload,
+                buildSyncHint: () => manageHint('sync'), buildStaleLocalMessage: unsupported,
+                buildRelationshipBackedCallGraph: (input) => graph.build(input),
+                buildManageIndexRecommendedAction: (action, root, reason) => ({ tool: 'manage_index', args: { action, path: root }, reason }),
+                buildCreateHint: () => manageHint('create'), sanitizeIndexedRelativeFilePath: (file) => file,
+            },
+            preparedRead: {
+                loadPreparedNavigationManifest: prepared.loadPreparedNavigationManifest.bind(prepared),
+                getPreparedAuthorityObservation: () => publication.id,
+                getPublicationNavigationAddress: () => ({ publicationId: publication.id, navigationRoot }),
+                seedPreparedRead: () => {}, evictPreparedRead: () => {},
+                loadPreparedNavigationCompatibility: prepared.loadPreparedNavigationCompatibility.bind(prepared),
+                getCachedPreparedRead: async () => ({ status: 'miss', reason: 'cache_miss' }),
+                acquirePublicationLease: () => ({ ...publication, release: () => {} }),
+                isPublicationLeaseAdmitted: async () => true, isPublicationAdmitted: async () => true,
+                getPublicationNavigationStatus: async () => 'valid',
+            },
+            freshness: {
+                inspectSourceFreshnessCheckpoint: unsupported,
+                compareAllSourceToFreshnessCheckpoint: unsupported,
+                compareSourceObservationToFreshnessCheckpoint: unsupported,
+                compareSourcePathsToFreshnessCheckpoint: unsupported,
+            },
+            environment: {
+                now: () => Date.parse(FIXED_NOW), getCapabilities: () => capabilities,
+                getReadFileMaxBytes: () => 100_000, parseIndexedAtMs: (value) => value ? Date.parse(value) : undefined,
+                getEmbeddingProviderName: () => 'fixture', semanticSearch: unsupported,
+                semanticSearchInPublication: async (lease, request) => {
+                    assert.equal(lease.id, publication.id);
+                    return runSemanticSearch(request);
+                },
+            },
+        }, support, reranker);
+
+        return {
+            repoPath,
+            manifest,
+            coordinator,
+            setWorkload: (workload) => {
+                activeWorkload = workload;
+            },
+            resetMetrics: () => {
+                metrics = createEmptyProviderMetrics();
+            },
+            readMetrics: () => cloneProviderMetrics(metrics),
+            candidateById,
+            candidateIdBySymbolInstanceId,
+            dispose: () => {
+                coordinator.releaseContinuationOwnership();
+                fs.rmSync(tempRoot, { recursive: true, force: true });
+            },
+        };
+    } catch (error) {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+        throw error;
+    }
 }
 
 function identifyPayloadResult(
@@ -826,7 +867,7 @@ export async function runSearchQualityEvaluation(
                 environment.setWorkload(workload);
                 environment.resetMetrics();
                 const response = await withSearchLogsSuppressed(
-                    () => environment.handlers.handleSearchCode({
+                    () => environment.coordinator.attempt({
                         path: environment.repoPath,
                         query: workload.query,
                         scope: workload.scope,
@@ -838,6 +879,7 @@ export async function runSearchQualityEvaluation(
                 );
                 const responseText = response.content[0]?.text ?? '{}';
                 const payload = JSON.parse(responseText) as SearchPayload;
+                assert.equal(payload.status, 'ok', `${workload.id}: ${responseText}`);
                 const resultIds = (payload.results ?? [])
                     .map((result) => identifyPayloadResult(
                         result,

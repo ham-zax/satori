@@ -491,7 +491,20 @@ export class ManageIndexingHandlers {
         }
     }
 
-    public async startAutomaticReindex(codebasePath: string): Promise<Readonly<{
+    public async startAutomaticCreate(codebasePath: string) {
+        // Opening an already indexed workspace must not replace its operation
+        // receipt or trigger a rebuild. Compatibility repair has its own owner.
+        if (this.host.context.getCurrentPublication(codebasePath)) {
+            return Object.freeze({ accepted: false, operationId: "", completion: null });
+        }
+        return this.startAutomaticIndex(codebasePath, false);
+    }
+
+    public startAutomaticReindex(codebasePath: string) {
+        return this.startAutomaticIndex(codebasePath, true);
+    }
+
+    private async startAutomaticIndex(codebasePath: string, force: boolean): Promise<Readonly<{
         accepted: boolean;
         operationId: string;
         completion: Promise<void> | null;
@@ -501,7 +514,7 @@ export class ManageIndexingHandlers {
         const response = await this.handleIndexCodebaseInternal(
             {
                 path: codebasePath,
-                force: true,
+                force,
                 ...(currentPolicy
                     ? {
                         customExtensions: [...currentPolicy.customExtensions],
@@ -520,6 +533,9 @@ export class ManageIndexingHandlers {
             accepted = payload.status === "ok";
         } catch {
             accepted = false;
+        }
+        if (!force && !accepted) {
+            throw new Error(response.content[0]?.text ?? "Automatic workspace indexing was not accepted.");
         }
         return Object.freeze({
             accepted,

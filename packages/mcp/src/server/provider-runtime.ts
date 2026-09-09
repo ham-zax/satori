@@ -294,6 +294,11 @@ export class ProviderRuntime {
             runtimeEpoch: summarizeIndexFingerprint(this.runtimeFingerprint),
             getActiveMutation: (codebasePath) => this.mutationRuntime.getActiveMutation(codebasePath),
             getOperation: (codebasePath) => this.mutationRuntime.getOperation(codebasePath),
+            startCreate: async (codebasePath) => {
+                const toolContext = await this.requireToolContext("embedding_vector");
+                if (!("toolHandlers" in toolContext)) throw new Error(toolContext.message);
+                return toolContext.toolHandlers.startAutomaticCreate(codebasePath);
+            },
             startReindex: async (codebasePath) => {
                 const toolContext = await this.requireToolContext("embedding_vector");
                 if (!("toolHandlers" in toolContext)) {
@@ -302,6 +307,13 @@ export class ProviderRuntime {
                 return toolContext.toolHandlers.startAutomaticReindex(codebasePath);
             },
         });
+    }
+
+    public requestWorkspaceIndexing(codebasePath: string): Promise<void> {
+        if (!this.config.autoIndexWorkspace || this.config.executionProfile !== "offline") return Promise.resolve();
+        const completion = this.indexMaintenanceCoordinator.requestWorkspaceIndexing(codebasePath);
+        this.ownDetachedMutationCompletion(completion);
+        return completion;
     }
 
     public requestAutomaticReindex(

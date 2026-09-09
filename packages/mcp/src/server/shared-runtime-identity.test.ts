@@ -50,6 +50,14 @@ test("shared runtime identity is exact, non-secret, and bounded to eligible Linu
 
     const identity = buildSharedRuntimeIdentity(runtimeEntry, env);
     assert.notEqual(
+        buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_AUTO_INDEX_WORKSPACE: 'true' }).hash,
+        identity.hash,
+    );
+    assert.equal(
+        buildSharedRuntimeIdentity(runtimeEntry, { ...env, SATORI_AUTO_INDEX_WORKSPACE: 'false' }).hash,
+        identity.hash,
+    );
+    assert.notEqual(
         buildSharedRuntimeIdentity(runtimeEntry, {
             ...env,
             CUSTOM_IGNORE_PATTERNS: "generated/**",

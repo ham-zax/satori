@@ -271,6 +271,19 @@ export class SharedRuntimeHost {
         return new McpSession(this, workspacePolicy);
     }
 
+    async indexWorkspaceRoots(policy: SessionWorkspacePolicy): Promise<void> {
+        if (!this.config.autoIndexWorkspace || this.config.executionProfile !== "offline") return;
+        for (const root of policy.roots) {
+            if (this.shutdownStarted) return;
+            const authorized = policy.authorizeRoot(root);
+            try {
+                await this.providerRuntime.requestWorkspaceIndexing(authorized.canonicalPath);
+            } catch (error) {
+                console.warn(`[AUTO-INDEX] '${authorized.canonicalPath}': ${errorMessage(error)}`);
+            }
+        }
+    }
+
     createSearchContinuationCoordinator(): SearchContinuationCoordinator {
         return new SearchContinuationCoordinator(this.searchContinuationPool);
     }
@@ -448,6 +461,18 @@ export class McpSession {
             workspacePolicy,
         );
         this.setupTools();
+        this.server.oninitialized = () => {
+            if (this.closed || !host.config.autoIndexWorkspace || host.config.executionProfile !== "offline") return;
+            this.activeToolCalls += 1;
+            this.host.beginOperation();
+            void this.host.indexWorkspaceRoots(this.workspacePolicy).catch((error) => {
+                console.warn(`[AUTO-INDEX] ${errorMessage(error)}`);
+            }).finally(() => {
+                this.activeToolCalls -= 1;
+                this.host.endOperation();
+                this.releaseResourcesIfIdle();
+            });
+        };
     }
 
     private setupTools(): void {

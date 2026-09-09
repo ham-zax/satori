@@ -360,3 +360,36 @@ test('Rust qualification uses Cargo ownership, admits exact direct calls, and fa
     }], cargo);
     assert.equal([...cfgEvidence.occurrencesByFile.values()].flat().length, 0);
 });
+
+test('Rust admits bare calls through use imports as exact direct calls', async () => {
+    const cargo = [{
+        path: 'Cargo.toml',
+        role: 'manifest',
+        source: '[package]\nname = "demo"\nversion = "0.1.0"\n',
+    }];
+    const libSource = 'mod eval;\nmod features;\n';
+    const evalSource = 'pub fn production_pips() -> f32 { 1.0 }';
+    const featuresSource = 'use crate::eval::production_pips;\npub fn f() -> f32 { production_pips() }';
+    const sources = [
+        { path: 'src/lib.rs', source: libSource },
+        { path: 'src/eval.rs', source: evalSource },
+        { path: 'src/features.rs', source: featuresSource },
+    ];
+    const symbols = [
+        symbol({
+            file: 'src/eval.rs', source: evalSource, language: 'rust', name: 'production_pips',
+            marker: 'pub fn production_pips', kind: 'function', qualifiedName: 'production_pips',
+        }),
+        symbol({
+            file: 'src/features.rs', source: featuresSource, language: 'rust', name: 'f',
+            marker: 'pub fn f', kind: 'function', qualifiedName: 'f',
+        }),
+    ];
+    const { evidence, records } = await qualify('rust', sources, symbols, cargo);
+    const resolved = (evidence.occurrencesByFile.get('src/features.rs') ?? [])
+        .find((occurrence) => occurrence.decision === 'resolved');
+    assert.ok(resolved, 'use-imported bare call resolves to the defining file');
+    assert.equal(resolved?.targetProvenance?.file, 'src/eval.rs');
+    assert.equal(resolved?.proof.strategy, 'direct_call');
+    assert.equal(calls(records).length, 1);
+});

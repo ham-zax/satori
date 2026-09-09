@@ -411,7 +411,11 @@ static uint8_t map_strategy_for_language(const char *language, const char *strat
         }
     }
     if (strcmp(language, "rust") == 0) {
-        if (strcmp(strategy, "lsp_direct") == 0) {
+        if (strcmp(strategy, "lsp_direct") == 0 ||
+            /* Unique crate-scoped short-name match: the bare-identifier
+             * form of a use-imported free function. The native resolver
+             * already proved uniqueness before emitting this strategy. */
+            strcmp(strategy, "lsp_short_name_unique") == 0) {
             return SATORI_STRATEGY_DIRECT_CALL;
         }
         if (strstr(strategy, "method") || strstr(strategy, "trait") ||

@@ -9,6 +9,7 @@ import type {
     SemanticProjectInput,
     SemanticReceiverBindingKind,
     SemanticResolvedOccurrence,
+    SemanticSkippedFile,
     SemanticStrategy,
     SemanticTargetKind,
     SemanticTargetProvenance,
@@ -37,17 +38,36 @@ function loadEngineManifestLanguages(): Set<string> {
     throw new Error(`Semantic engine manifest missing. Searched: ${candidatePaths.join(', ')}`);
 }
 
+/**
+ * Default per-file UTF-8 byte budget for one WASM analysis session.
+ * Measured transient blowup is ~40x per source byte inside the session;
+ * generated parser tables above this size reliably exhaust the heap and
+ * abort the whole language batch, so they are skipped and reported.
+ */
+export const DEFAULT_MAX_SEMANTIC_SOURCE_BYTES = 1_048_576;
+
 export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
     private readonly compiledNativeLanguages: Set<string>;
+    private readonly maxSourceBytes: number;
 
     constructor(
         private readonly engineProvider: () => Promise<WasmSemanticEngine> = () => WasmSemanticEngine.create(),
         private readonly languageRegistry: SemanticLanguageRegistry = defaultSemanticLanguageRegistry,
         compiledNativeLanguages?: readonly string[],
+        /**
+         * Per-file UTF-8 byte budget for one analysis session. Sources over
+         * budget are skipped (and reported) instead of being duplicated into
+         * WASM linear memory, where multi-megabyte generated files observe
+         * ~40x transient blowup and abort the session. Defaults to 1 MiB:
+         * every in-repo engine-language source below it is kept, including
+         * the largest hand-written tables observed.
+         */
+        maxSourceBytes: number = DEFAULT_MAX_SEMANTIC_SOURCE_BYTES,
     ) {
         this.compiledNativeLanguages = new Set(
             compiledNativeLanguages ? compiledNativeLanguages.map((l) => l.toLowerCase()) : loadEngineManifestLanguages(),
         );
+        this.maxSourceBytes = maxSourceBytes;
     }
 
     supportsLanguage(language: string): boolean {
@@ -69,12 +89,25 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
 
         try {
             const sourceMapByFile = new Map<string, Utf8SourceMap>();
+            const skippedFiles: SemanticSkippedFile[] = [];
+            const skipOverBudget = (kind: string, filePath: string, source: string): boolean => {
+                const bytes = Buffer.byteLength(source, 'utf8');
+                if (bytes <= this.maxSourceBytes) return false;
+                skippedFiles.push({ path: filePath, reason: 'source_too_large', bytes });
+                console.warn(
+                    `[satori-semantic] Skipping ${kind} '${filePath}' for ${input.language} analysis: `
+                    + `${bytes} bytes exceeds the ${this.maxSourceBytes} byte per-file budget`,
+                );
+                return true;
+            };
 
             for (const aux of input.auxiliaryFiles) {
+                if (skipOverBudget('auxiliary file', aux.path, aux.source)) continue;
                 session.addAuxiliary(aux.role, aux.path, aux.source);
             }
 
             for (const src of input.sourceFiles) {
+                if (skipOverBudget('source file', src.path, src.source)) continue;
                 session.addSource(src.path, src.source);
                 sourceMapByFile.set(src.path, new Utf8SourceMap(src.source));
             }
@@ -155,6 +188,7 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
             return {
                 language: input.language,
                 occurrencesByFile,
+                ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
             };
         } finally {
             session.destroy();

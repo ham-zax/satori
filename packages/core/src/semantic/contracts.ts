@@ -75,7 +75,18 @@ export interface SemanticResolvedOccurrence {
     readonly confidence: number;
 }
 
+export interface SemanticSkippedFile {
+    readonly path: string;
+    readonly reason: 'source_too_large';
+    readonly bytes: number;
+}
+
 export interface SemanticProjectEvidence {
     readonly language: string;
     readonly occurrencesByFile: ReadonlyMap<string, readonly SemanticResolvedOccurrence[]>;
+    /**
+     * Files withheld from analysis (e.g. over the per-file byte budget).
+     * Absent or empty when nothing was skipped.
+     */
+    readonly skippedFiles?: readonly SemanticSkippedFile[];
 }

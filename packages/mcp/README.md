@@ -80,6 +80,15 @@ requires explicit recovery through `manage_index create`; reconnecting does not
 start a retry loop. The option defaults to off and has no effect on connected
 runtimes. File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
 
+Semantic relationship analysis runs one WASM session per language over that
+language's whole file set. Sources over 1 MiB are skipped for relationship
+analysis (with a warning and a `skippedFiles` report) instead of being
+duplicated into WASM linear memory, where multi-megabyte generated files
+observe roughly 40x transient blowup and abort the session. Skipped files
+remain chunked, embedded, and searchable; only their call-graph edges are
+missing. Broad workspace roots (filesystem root, home directory, state root)
+stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
+
 ## Measured Performance
 
 A checksum-sealed Potion/LanceDB run on Satori published 488 files and 10,830 chunks in 34.46 seconds on CPU. The later representative delta run measured 154.543 ms warm-search p95, 185.662 ms zero-change synchronization p95, and 789–865 ms p95 for one-file add/edit/delete operations.

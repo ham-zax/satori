@@ -59,13 +59,13 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
 
-      - name: Enforce MCP version bump for package-relevant changes
+      - name: Enforce release version bumps for package-relevant changes
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.13.0'
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
-        run: bash scripts/check-mcp-version-bump.sh
+        run: bash scripts/check-release-version-bumps.sh
 
       - name: Configure Windows line endings
         if: matrix.os == 'windows-latest'

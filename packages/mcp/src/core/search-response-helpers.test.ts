@@ -139,6 +139,7 @@ test("non-oversized concrete result recommends role-neutral exact symbol context
     assert.deepEqual(action.args, {
         path: "/repo/src/tool-handlers.ts",
         mode: "plain",
+        codebaseRoot: "/repo",
         open_symbol: {
             contractVersion: 2,
             symbolId: "sym_tool_handlers",

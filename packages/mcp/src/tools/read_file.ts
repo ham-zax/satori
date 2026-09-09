@@ -51,12 +51,22 @@ export const readFileInputSchema = z.object({
     path: absoluteFilesystemPathSchema(
         "ABSOLUTE path to the file under an indexed/searchable codebase root (relative paths are rejected).",
     ),
+    codebaseRoot: absoluteFilesystemPathSchema(
+        "Originating indexed root for an exact-symbol request. Preserve this root from the recommendation or symbol-context response when continuing a read.",
+    ).optional(),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
     mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Required for exact-symbol context requests. Other reads default to plain."),
     presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
     open_symbol: openSymbolRequestSchema.optional().describe("Strict exact-symbol context or direct-span request returning bounded symbol source with continuation-aware excerpts. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
+    if (input.codebaseRoot && !hasExactSymbolMarker(input.open_symbol)) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["codebaseRoot"],
+            message: "codebaseRoot applies only to exact-symbol requests.",
+        });
+    }
     if (!input.open_symbol) return;
     if (input.start_line !== undefined || input.end_line !== undefined) {
         ctx.addIssue({
@@ -490,8 +500,8 @@ function resolveCodebaseRootForFile(absolutePath: string, ctx: ToolContext): str
     return candidates[0].path;
 }
 
-async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext): Promise<void> {
-    const codebaseRoot = resolveCodebaseRootForFile(absolutePath, ctx);
+async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext, boundRoot?: string): Promise<void> {
+    const codebaseRoot = boundRoot ?? resolveCodebaseRootForFile(absolutePath, ctx);
     if (!codebaseRoot) {
         return;
     }
@@ -511,7 +521,7 @@ async function touchResolvedCodebaseRoot(absolutePath: string, ctx: ToolContext)
     }
 }
 
-function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): ReadFileIndexingBlock | undefined {
+function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, boundRoot?: string): ReadFileIndexingBlock | undefined {
     const canonicalTarget = canonicalizeFilesystemPath(absolutePath);
     const candidates: Array<{
         codebaseRoot: string;
@@ -524,6 +534,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext): Re
         const rootResult = requireAbsoluteFilesystemPath(activity.canonicalRoot, "codebase.path");
         if (!rootResult.ok) continue;
         const codebaseRoot = canonicalizeFilesystemPath(rootResult.absolutePath);
+        if (boundRoot && codebaseRoot !== boundRoot) continue;
         try {
             ctx.workspacePolicy.authorizeRoot(codebaseRoot);
         } catch {
@@ -580,10 +591,21 @@ export const readFileTool: McpTool = {
             const resolvedPath = path.resolve(input.path);
             const absolutePath = canonicalizeFilesystemPath(resolvedPath);
             const wantsStructuredError = mode === "annotated" || Boolean(input.open_symbol);
+            const boundRoot = input.codebaseRoot ? canonicalizeFilesystemPath(input.codebaseRoot) : undefined;
+            if (boundRoot) {
+                ctx.workspacePolicy.authorizeRoot(boundRoot);
+                if (!isPathInsideRoot(absolutePath, boundRoot)) {
+                    return symbolContextErrorResponse({
+                        code: "ROOT_BINDING_INVALID",
+                        reason: "root_binding_invalid",
+                        message: "The requested file is outside its originating codebase root.",
+                    });
+                }
+            }
 
             // Fail closed: deny content access outside searchable roots before any content read.
             // Indexing roots are handled next with not_ready (still no content).
-            const indexingBlock = resolveIndexingBlockForFile(absolutePath, ctx);
+            const indexingBlock = resolveIndexingBlockForFile(absolutePath, ctx, boundRoot);
             if (indexingBlock) {
                 if (exactRequest) {
                     return symbolContextErrorResponse({
@@ -623,7 +645,10 @@ export const readFileTool: McpTool = {
                 };
             }
 
-            const allowedRoot = resolveContentAllowedRoot(absolutePath, ctx);
+            const allowedRoot = boundRoot
+                ? collectCodebaseCandidatesForFile(absolutePath, ctx, READ_FILE_CONTENT_ALLOW_STATUSES)
+                    .find((candidate) => candidate.path === boundRoot)?.path
+                : resolveContentAllowedRoot(absolutePath, ctx);
             if (!allowedRoot) {
                 if (exactRequest) {
                     return symbolContextErrorResponse({
@@ -663,7 +688,7 @@ export const readFileTool: McpTool = {
                     });
                 }
 
-                await touchResolvedCodebaseRoot(absolutePath, executionContext.context);
+                await touchResolvedCodebaseRoot(absolutePath, executionContext.context, allowedRoot);
                 const result = await executionContext.context.toolHandlers.composeSymbolContext(
                     composeSymbolContextRequest({
                         root: allowedRoot,
@@ -673,10 +698,10 @@ export const readFileTool: McpTool = {
                     }),
                 );
                 if (result.status === "ok") {
-                    const payload = composePublicSymbolContextEnvelope({
+                    const payload = { codebaseRoot: allowedRoot, ...composePublicSymbolContextEnvelope({
                         effectiveRequest: operation.effectiveRequest,
                         context: result.context,
-                    });
+                    }) };
                     const serialized = JSON.stringify(payload);
                     const hardLimit = operation.effectiveRequest.budgets.totalResponseBytes;
                     if (Buffer.byteLength(serialized, "utf8") > hardLimit) {
@@ -1025,6 +1050,14 @@ export const readFileTool: McpTool = {
             };
             }
         } catch (error) {
+            if (error instanceof WorkspaceAuthorizationError) {
+                return readFileAuthorizationDenial({
+                    reason: error.code.toLowerCase(),
+                    code: error.code,
+                    path: input.path,
+                    message: error.message,
+                });
+            }
             if (exactRequest) {
                 return symbolContextErrorResponse({
                     code: "NAVIGATION_UNAVAILABLE",

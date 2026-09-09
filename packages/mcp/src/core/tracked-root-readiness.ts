@@ -161,7 +161,7 @@ export class TrackedRootReadiness {
         }
     }
 
-    private resolveTrackedRoot(
+    public resolveTrackedRoot(
         absolutePath: string,
         statuses: CodebaseStatus[],
     ): TrackedRootEntry | null {

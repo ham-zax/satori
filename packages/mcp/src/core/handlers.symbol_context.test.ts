@@ -99,7 +99,7 @@ test("symbol-context handler adapter binds prepared navigation and relationship 
             }),
         },
         prepareNavigationRead: async (absolutePath) => {
-            assert.equal(absolutePath, "/repo/src/example.ts");
+            assert.equal(absolutePath, "/repo");
             return preparedRead;
         },
         loadPreparedNavigationSymbolsByFile: async (read, relativeFile) => {

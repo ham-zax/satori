@@ -393,7 +393,6 @@ export class ToolHandlers {
             ),
             navigationStore: this.navigationStore,
             clock: { now: () => this.now() },
-            isPathWithinCodebase: (targetPath, root) => this.isPathWithinCodebase(targetPath, root),
         });
         const searchQuerySupportHost: ConstructorParameters<typeof SearchQuerySupport>[0] = {
             normalizeSearchPath: this.normalizeSearchPath.bind(this),
@@ -906,8 +905,11 @@ export class ToolHandlers {
         operations: SearchReadinessDebugHint["operations"],
         requireNavigation = false,
     ): Promise<CachedPreparedReadResult> {
+        // Cache residency must not choose the root or change cold-read semantics.
+        const root = this.trackedRootReadiness.resolveTrackedRoot(absolutePath, ['indexed']);
+        if (!root) return { status: 'miss', reason: 'cache_miss' };
         return this.preparedReadCacheOwner.getCachedPreparedRead(
-            absolutePath,
+            root.path,
             operations,
             requireNavigation,
         );
@@ -1097,9 +1099,8 @@ export class ToolHandlers {
         symbolLabel?: string;
     }): Promise<PrepareSymbolContextSnapshotResult> {
         const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
-            prepareReadiness: () => this.prepareNavigationRead(
-                path.resolve(input.codebaseRoot, input.relativeFile),
-            ),
+            // Keep the caller's root: resolving the absolute file could select a nested Publication.
+            prepareReadiness: () => this.prepareNavigationRead(input.codebaseRoot),
             acquirePublicationLease: (prepared) => (
                 prepared.state === 'ready'
                     ? this.acquirePublicationLease(prepared.root.path, prepared.publication.id)
@@ -1115,7 +1116,8 @@ export class ToolHandlers {
             preparedRead: TrackedRootReadinessState,
             lease: PublicationLease,
         ): Promise<PrepareSymbolContextSnapshotResult> => {
-            if (preparedRead.state !== 'ready' || preparedRead.publication.id !== lease.id) {
+            if (preparedRead.state !== 'ready' || preparedRead.publication.id !== lease.id
+                || preparedRead.root.path !== input.codebaseRoot) {
                 return {
                     status: 'unavailable',
                     reason: `prepared_navigation_${preparedRead.state}`,

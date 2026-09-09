@@ -12,11 +12,11 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-function prepared(id: string): Extract<TrackedRootReadinessState, { state: 'ready' }> {
+function prepared(id: string, root = '/repo'): Extract<TrackedRootReadinessState, { state: 'ready' }> {
     const publication: PublicationRef = {
         id,
         publication: {
-            version: 1, id, canonicalRoot: '/repo', createdAt: '2026-09-09T00:00:00Z', status: 'complete',
+            version: 1, id, canonicalRoot: root, createdAt: '2026-09-09T00:00:00Z', status: 'complete',
             policy: {
                 profile: 'default', customExtensions: [], customIgnorePatterns: [], fileBasedIgnorePatterns: [],
                 supportedExtensions: ['.ts'], effectiveIgnorePatterns: [], policyHash: 'policy', controlSignature: 'control',
@@ -27,7 +27,7 @@ function prepared(id: string): Extract<TrackedRootReadinessState, { state: 'read
         },
     };
     return {
-        state: 'ready', root: { path: '/repo', info: { status: 'indexed' } },
+        state: 'ready', root: { path: root, info: { status: 'indexed' } },
         publication, navigationStatus: 'valid', navigationAuthorityMode: 'canonical_v4',
     };
 }
@@ -37,11 +37,33 @@ function owner(store: JsonNavigationStore) {
         navigationStore: store, clock: { now: () => 0 },
         getCurrentPublication: () => prepared('a').publication,
         getPublicationNavigationAddress: (publication) => ({ publicationId: publication.id, navigationRoot: `/${publication.id}/navigation` }),
-        isPathWithinCodebase: (target, root) => target === root || target.startsWith(`${root}/`),
     });
 }
 
 const missing = { status: 'missing', rootPath: '/repo', reason: 'fixture' } as const;
+
+test('readiness cache never substitutes an overlapping root in either warm-up order', async () => {
+    const parent = prepared('parent');
+    const child = prepared('child', '/repo/child');
+    const states = [parent, child];
+    for (const order of [states, [...states].reverse()]) {
+        const cache = new PreparedReadCacheOwner({
+            navigationStore: new JsonNavigationStore(), clock: { now: () => 0 },
+            getCurrentPublication: (root) => states.find((state) => state.root.path === root)?.publication ?? null,
+            getPublicationNavigationAddress: () => null,
+        });
+        const operations = { preparedCacheLookups: 0, preparedCacheHits: 0, coldReadinessChecks: 0,
+            postFreshnessColdChecks: 0, warmReceiptRevalidations: 0, registryLoads: 0, navigationValidationRuns: 0 };
+        cache.seedPreparedRead(order[0], false);
+        assert.equal((await cache.getCachedPreparedRead(order[1].root.path, operations)).status, 'miss');
+        cache.seedPreparedRead(order[1], false);
+        for (const state of states) {
+            const result = await cache.getCachedPreparedRead(state.root.path, operations);
+            assert.equal(result.status, 'hit');
+            if (result.status === 'hit') assert.equal(result.state.publication.id, state.publication.id);
+        }
+    }
+});
 
 for (const kind of ['manifest', 'symbols', 'compatibility'] as const) {
     test(`concurrent ${kind} reads share one load, and failed results can be retried`, async () => {

@@ -41,7 +41,6 @@ export interface PreparedReadCacheOwnerDependencies {
     } | null;
     navigationStore: JsonNavigationStore;
     clock: Clock;
-    isPathWithinCodebase(targetPath: string, root: string): boolean;
 }
 
 function setBoundedCacheEntry<K, V>(
@@ -261,15 +260,15 @@ export class PreparedReadCacheOwner {
     }
 
     public async getCachedPreparedRead(
-        absolutePath: string,
+        codebaseRoot: string,
         operations: SearchReadinessDebugHint["operations"],
         requireNavigation = false,
     ): Promise<CachedPreparedReadResult> {
         operations.preparedCacheLookups += 1;
         const lookup = this.preparedReadCache.lookupCandidate(
-            absolutePath,
+            codebaseRoot,
             this.dependencies.clock.now(),
-            (targetPath, root) => this.dependencies.isPathWithinCodebase(targetPath, root),
+            (requestedRoot, cachedRoot) => requestedRoot === cachedRoot,
         );
         if (lookup.status === "miss") return { status: "miss", reason: lookup.reason };
 

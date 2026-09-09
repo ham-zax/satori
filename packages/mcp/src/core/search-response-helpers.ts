@@ -485,6 +485,7 @@ export function buildSearchGroupRecommendedAction(
             args: {
                 path: absolutePath,
                 mode: "plain",
+                codebaseRoot: path.resolve(codebaseRoot),
                 open_symbol: {
                     contractVersion: 2,
                     symbolId: result.target.symbolId,

@@ -604,7 +604,6 @@ async function createEvaluationEnvironment(workspaceRoot: string): Promise<Evalu
             getCurrentPublication: () => publication,
             getPublicationNavigationAddress: () => ({ publicationId: publication.id, navigationRoot }),
             navigationStore, clock: { now: () => Date.parse(FIXED_NOW) },
-            isPathWithinCodebase: (target, root) => target === root || target.startsWith(root + path.sep),
         });
         const registryState = await prepared.loadPreparedNavigationManifest(ready);
         assert.equal(registryState.status, 'ok', JSON.stringify(registryState));

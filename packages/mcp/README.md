@@ -62,6 +62,12 @@ read_file path="/absolute/path/to/repo/src/auth.ts" start_line=1 end_line=160
 
 Public paths are absolute. Search is freshness-aware; exact reads are limited to indexed searchable roots. Follow `recommendedNextAction` when returned.
 
+Exact-symbol recommendations include `codebaseRoot` to identify the originating
+Publication when indexed roots overlap. Preserve it in the `read_file` request.
+Successful symbol-context responses also return `codebaseRoot`; reuse that root,
+the absolute file path, and the symbol ID when requesting a continuation. An
+explicit root is authorized and never replaced by another overlapping root.
+
 For a concrete symbol result, the recommended read uses bounded implementation
 context for implementation searches, call context for reference searches, and
 definition context for exact lookups. Large symbols still recommend the matched

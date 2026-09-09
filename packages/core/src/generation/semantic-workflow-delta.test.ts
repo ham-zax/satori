@@ -23,6 +23,7 @@ type WorkflowNavigationInternals = {
         navigationRoot: string,
         symbols: SymbolRecord[],
         files: SymbolRegistryManifestFile[],
+        observedFileHashes: ReadonlyMap<string, string>,
         assertMutationCurrent?: () => void,
         analysisByFile?: Map<string, unknown>,
         indexPolicy?: unknown,
@@ -43,6 +44,7 @@ type WorkflowNavigationInternals = {
         sourceNavigationRoot: string,
         publicationId: string,
         navigationRoot: string,
+        observedFileHashes: ReadonlyMap<string, string>,
         assertMutationCurrent?: () => void,
         analysisByFile?: Map<string, unknown>,
         existingRelationshipState?: unknown,
@@ -176,6 +178,7 @@ test('IndexGenerationWorkflow delta rebuild: source-only delta triggers semantic
             initialNavigationRoot,
             initialRegistry.symbols,
             initialRegistry.manifest.files,
+            new Map(initialSources.map((source) => [source.path, source.sourceHash])),
             undefined,
             undefined,
             undefined,
@@ -223,6 +226,7 @@ test('IndexGenerationWorkflow delta rebuild: source-only delta triggers semantic
             initialNavigationRoot,
             deltaPublicationId,
             deltaNavigationRoot,
+            new Map([[fileA, manifestA2.hash], [fileB, manifestB1.hash]]),
             undefined,
             new Map([[fileA, { moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [] }]]),
         );
@@ -337,12 +341,16 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
         const initialPublicationId = 'publication-initial';
         const initialNavigationRoot = path.join(stateRoot, initialPublicationId, 'navigation');
         const initialSources = [{ path: fileA, sourceHash: manifestA.hash }];
+        const observedFileHashes = new Map([
+            [fileA, manifestA.hash], [auxMod, sha256(contentMod1)], [auxWork, sha256(contentWork1)],
+        ]);
         const initialPublication = await internals.stageSymbolRegistryForCompletedIndex(
             tmpDir,
             initialPublicationId,
             initialNavigationRoot,
             initialRegistry.symbols,
             initialRegistry.manifest.files,
+            observedFileHashes,
             undefined,
             undefined,
             undefined,
@@ -355,6 +363,7 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
         // 2. Modify go.mod (auxiliary-only change, 0 source files modified)
         const contentMod2 = 'module example.com/app\n\ngo 1.22\n';
         fs.writeFileSync(path.join(tmpDir, auxMod), contentMod2, 'utf8');
+        observedFileHashes.set(auxMod, sha256(contentMod2));
 
         // 3. Reindex delta where only go.mod is reported in changedRelativePaths
         // (rebuiltSymbolRecords is empty, rebuiltManifestFiles is empty)
@@ -370,6 +379,7 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
             initialNavigationRoot,
             deltaPublicationId,
             deltaNavigationRoot,
+            observedFileHashes,
         );
 
         assert.ok(deltaResult.candidate);
@@ -380,6 +390,7 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
         // 4. A go.work-only delta invalidates the same whole Go semantic project.
         const contentWork2 = 'go 1.22\n\nuse ./\n';
         fs.writeFileSync(path.join(tmpDir, auxWork), contentWork2, 'utf8');
+        observedFileHashes.set(auxWork, sha256(contentWork2));
         const workDeltaPublicationId = 'publication-delta-work';
         const workDeltaNavigationRoot = path.join(stateRoot, workDeltaPublicationId, 'navigation');
         const workDeltaResult = await internals.rebuildNavigationArtifactsForSyncDelta(
@@ -392,6 +403,7 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
             initialNavigationRoot,
             workDeltaPublicationId,
             workDeltaNavigationRoot,
+            observedFileHashes,
         );
 
         assert.ok(workDeltaResult.candidate);

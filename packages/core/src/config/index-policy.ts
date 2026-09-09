@@ -76,6 +76,9 @@ export async function isIndexableFileObservationByPolicy(
     supportedExtensions: string[],
     readProbe: () => Promise<Buffer>,
 ): Promise<boolean> {
+    // Auxiliary inputs belong to source observation, never searchable documents.
+    if (isSemanticAuxiliaryFilename(relativePath)) return false;
+
     const normalizedExtensions = normalizeSupportedExtensions(supportedExtensions);
     const extensionSet = new Set(normalizedExtensions);
     const extension = path.extname(relativePath).toLowerCase();

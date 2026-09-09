@@ -357,6 +357,11 @@ type SearchToolTextResponse = ToolTextResponse & {
     meta?: Record<string, unknown>;
 };
 
+type ValidatedSearchRequest = {
+    input: SearchRequestInput & { debugMode: NonNullable<SearchRequestInput['debugMode']> };
+    parsedOperators: ReturnType<SearchQuerySupport['parseSearchOperators']>;
+};
+
 type CachedPreparedReadResult =
     | {
         status: "hit";
@@ -759,6 +764,17 @@ export class SearchRequestCoordinator {
         args: ToolArgs,
         sourceDriftRetryCount: 0 | 1 = 0,
     ): Promise<SearchToolTextResponse> {
+        const request = this.validateSearchRequest(args);
+        if ('content' in request) return request;
+        for (const retryCount of [0, 1] as const) {
+            if (retryCount < sourceDriftRetryCount) continue;
+            const response = await this.executeSearchAttempt(request, retryCount);
+            if (response) return response;
+        }
+        throw new Error('Search exhausted its source-drift retry without a response.');
+    }
+
+    private validateSearchRequest(args: ToolArgs): SearchToolTextResponse | ValidatedSearchRequest {
         const scope = (typeof args.scope === 'string' ? args.scope : 'runtime') as SearchScope;
         const resultMode = (typeof args.resultMode === 'string' ? args.resultMode : 'grouped') as SearchResultMode;
         const groupBy = (typeof args.groupBy === 'string' ? args.groupBy : 'symbol') as SearchGroupBy;
@@ -776,7 +792,7 @@ export class SearchRequestCoordinator {
         const rawDebugCandidateLimit = typeof args.debugCandidateLimit === 'number'
             ? args.debugCandidateLimit
             : Number(args.debugCandidateLimit);
-        const input: SearchRequestInput = {
+        const input: ValidatedSearchRequest['input'] = {
             path: typeof args.path === 'string' ? args.path : '',
             query: typeof args.query === 'string' ? args.query : '',
             scope,
@@ -849,6 +865,16 @@ export class SearchRequestCoordinator {
             };
         }
 
+        return { input, parsedOperators };
+    }
+
+    /** A retry is returned only after the read session and source evidence have released ownership. */
+    private async executeSearchAttempt(
+        request: ValidatedSearchRequest,
+        sourceDriftRetryCount: 0 | 1,
+    ): Promise<SearchToolTextResponse | undefined> {
+        const { input, parsedOperators } = request;
+        const { debugMode } = input;
         const searchDiagnostics: SearchDiagnostics = {
             queryLength: input.query.length,
             limitRequested: input.limit,
@@ -1113,7 +1139,7 @@ export class SearchRequestCoordinator {
                     this.preparedRead.isPublicationLeaseAdmitted(lease)
                 ),
             });
-            const outcome = await session.read(async (prepared, lease): Promise<SearchToolTextResponse> => {
+            const outcome = await session.read(async (prepared, lease): Promise<SearchToolTextResponse | undefined> => {
                 const {
                     absolutePath: absolutePathFromFrontDoor,
                     searchableRoot,
@@ -1830,34 +1856,7 @@ export class SearchRequestCoordinator {
                     }
                 }
                 if (barrierChanged) {
-                    await preparedEntrypointOwnerEvidence?.release();
-                    preparedEntrypointOwnerEvidence = undefined;
-                    lease.release();
-                    if (sourceDriftRetryCount === 0) {
-                        return this.attempt(args, 1);
-                    }
-                    const payload = this.hints.getToolResponseBuilders().buildSourceStateUnverifiedSearchPayload(
-                        effectiveRoot,
-                        {
-                            path: absolutePath,
-                            query: input.query,
-                            scope: input.scope,
-                            groupBy: input.groupBy,
-                            resultMode: input.resultMode,
-                            limit: input.limit,
-                        },
-                        "Source changed again while Satori was preparing this response.",
-                        "source_changed_during_request",
-                        {
-                            debugMode,
-                            freshnessDecision,
-                            readiness: readinessDebug,
-                        },
-                    );
-                    return {
-                        content: [{ type: "text", text: this.hints.stringifyToolJson(payload) }],
-                        meta: { searchDiagnostics },
-                    };
+                    return undefined;
                 }
                 if (finalized.kind === "ok" && envelope.resultMode === "grouped") {
                     envelope = attachSearchResultSet(
@@ -1876,9 +1875,9 @@ export class SearchRequestCoordinator {
                     meta: { searchDiagnostics }
                 };
             });
-            if (outcome.status === 'stale') {
+            if (outcome.status === 'stale' || outcome.result === undefined) {
                 if (sourceDriftRetryCount === 0) {
-                    return this.attempt(args, 1);
+                    return undefined;
                 }
                 const payload = this.hints.getToolResponseBuilders().buildSourceStateUnverifiedSearchPayload(
                     effectiveRoot,

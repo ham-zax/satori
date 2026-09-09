@@ -297,7 +297,7 @@ test("runtime shutdown closes each provider-owned reranker once", async () => {
     assert.equal(closeCalls, 1);
 });
 
-test("runtime shutdown drains provider synchronization before closing its vector backend", async () => {
+test("runtime shutdown drains provider synchronization before closing its backend, embedding, and reranker", async () => {
     const runtime = createRuntime(baseConfig());
     let releaseDrain!: () => void;
     let markDrainStarted!: () => void;
@@ -308,9 +308,21 @@ test("runtime shutdown drains provider synchronization before closing its vector
         markDrainStarted = resolve;
     });
     let backendClosed = false;
+    let embeddingClosed = false;
+    let rerankerClosed = false;
     const runtimeInternals = runtime as unknown as {
         activeContexts: ToolContext[];
+        activeEmbeddings: Set<Embedding>;
+        activeRerankers: Set<Reranker>;
     };
+    runtimeInternals.activeEmbeddings.add({
+        close: async () => { embeddingClosed = true; },
+    } as Embedding);
+    runtimeInternals.activeRerankers.add({
+        getIdentity: () => ({ provider: "test", model: "test", profile: "test" }),
+        rerank: async () => [],
+        close: async () => { rerankerClosed = true; },
+    });
     runtimeInternals.activeContexts.push({
         toolHandlers: {
             releaseSearchContinuationOwnership() {},
@@ -332,11 +344,17 @@ test("runtime shutdown drains provider synchronization before closing its vector
 
     const shutdown = runtime.shutdown();
     await drainStarted;
-    assert.equal(backendClosed, false);
-
-    releaseDrain();
-    await shutdown;
+    try {
+        assert.equal(backendClosed, false);
+        assert.equal(embeddingClosed, false);
+        assert.equal(rerankerClosed, false);
+    } finally {
+        releaseDrain();
+        await shutdown;
+    }
     assert.equal(backendClosed, true);
+    assert.equal(embeddingClosed, true);
+    assert.equal(rerankerClosed, true);
 });
 
 function createSyncLifecycle(options: { watcherStartError?: Error } = {}) {

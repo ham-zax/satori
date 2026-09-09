@@ -22,7 +22,6 @@ import { envManager } from '../utils/env-manager';
 import {
     DEFAULT_IGNORE_PATTERNS,
     IndexProfile,
-    getSupportedExtensionsForIndexProfile,
 } from '../config/defaults';
 import {
     normalizeSupportedExtensions,
@@ -133,12 +132,10 @@ import {
 } from './collection-naming';
 import {
     computeIndexPolicyControlSignature,
-    observeIndexPolicyInputs,
 } from './index-policy-input-observer';
 import {
     IndexPolicyAuthorityError,
     IndexPolicyRuntimeService,
-    computeIndexPolicyHash,
 } from '../policy/index-policy-runtime-service';
 import type { ResolvedIndexPolicy } from '../policy/index-policy-runtime-service';
 export type { ResolvedIndexPolicy } from '../policy/index-policy-runtime-service';
@@ -413,6 +410,7 @@ export class Context {
             getIgnoreRuleService: () => this.ignoreRuleService,
             canonicalizeCodebasePath: (codebasePath) => this.canonicalizeCodebasePath(codebasePath),
             getCurrentPublication: (canonicalRoot) => this.publicationStore.getCurrent(canonicalRoot),
+            getPublishedResolvedPolicy: (canonicalRoot) => this.indexAuthorityCoordinator.getPublishedResolvedPolicy(canonicalRoot),
             onActivateResolvedIndexPolicy: (policy, binding) => (
                 this.indexAuthorityCoordinator.activatePublishedIndexPolicy(policy, binding)
             ),
@@ -516,7 +514,7 @@ export class Context {
             refreshRuntimePolicyAuthority: (canonicalRoot) => this.refreshRuntimePolicyAuthority(canonicalRoot),
             resolveCollectionName: (codebasePath) => this.resolveCollectionName(codebasePath),
             resolveIndexPolicyFromCurrentInputs: (canonicalRoot, update, inheritActiveCustomPolicy, activateRuntimeProfile) => (
-                this.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, inheritActiveCustomPolicy, activateRuntimeProfile)
+                this.indexPolicyRuntimeService.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, inheritActiveCustomPolicy, activateRuntimeProfile)
             ),
             resolveNavigationObservationToken: (canonicalRoot, publicationId) => (
                 this.resolveNavigationObservationToken(canonicalRoot, publicationId)
@@ -1220,88 +1218,25 @@ export class Context {
         codebasePath: string,
         update: CustomIndexPolicyUpdate = {},
     ): Promise<ObservedResolvedIndexPolicy> {
-        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        return this.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, false, true);
-    }
-
-    private async resolveIndexPolicyFromCurrentInputs(
-        canonicalRoot: string,
-        update: CustomIndexPolicyUpdate,
-        inheritActiveCustomPolicy: boolean,
-        activateRuntimeProfile: boolean,
-    ): Promise<ObservedResolvedIndexPolicy> {
-        const observedInputs = await observeIndexPolicyInputs(canonicalRoot);
-        const profile = observedInputs.profileConfig.profile;
-        if (activateRuntimeProfile) {
-            this.setIndexProfileForCodebase(canonicalRoot, profile);
-        }
-        const customExtensions = update.customExtensions === undefined
-            ? inheritActiveCustomPolicy
-                ? this.indexPolicyRuntimeService.getRuntimeCustomExtensions(canonicalRoot)
-                : []
-            : normalizeSupportedExtensions(update.customExtensions);
-        const customIgnorePatterns = update.customIgnorePatterns === undefined
-            ? inheritActiveCustomPolicy
-                ? this.ignoreRuleService.getRuntimeCustomPatterns(canonicalRoot)
-                : []
-            : update.customIgnorePatterns.map((pattern) => pattern.trim()).filter(Boolean);
-        const fileBasedPatterns = [...observedInputs.fileBasedIgnorePatterns];
-        const supportedExtensions = normalizeSupportedExtensions([
-            ...getSupportedExtensionsForIndexProfile(profile),
-            ...this.indexPolicyRuntimeService.getConfiguredExtensionOverlays(),
-            ...customExtensions,
-        ]);
-        const effectiveIgnorePatterns = [
-            ...this.ignoreRuleService.getBasePatterns(),
-            ...customIgnorePatterns,
-            ...fileBasedPatterns,
-        ];
-        const policyHash = computeIndexPolicyHash(profile, supportedExtensions, effectiveIgnorePatterns);
-        return {
-            canonicalRoot,
-            profile,
-            customExtensions,
-            customIgnorePatterns,
-            fileBasedIgnorePatterns: fileBasedPatterns,
-            supportedExtensions,
-            effectiveIgnorePatterns,
-            policyHash,
-            controlSignature: observedInputs.controlSignature,
-        };
+        return this.indexPolicyRuntimeService.resolveIndexPolicyForReindex(codebasePath, update);
     }
 
     async observeIndexPolicyForIncrementalReconciliation(
         codebasePath: string,
     ): Promise<ObservedResolvedIndexPolicy> {
-        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        this.indexPolicyRuntimeService.loadCurrentPublicationPolicy(canonicalRoot);
-        return this.resolveIndexPolicyFromCurrentInputs(canonicalRoot, {}, true, false);
+        return this.indexPolicyRuntimeService.observeIndexPolicyForIncrementalReconciliation(codebasePath);
     }
 
     async isObservedIndexPolicyControlSignatureCurrent(
         policy: ObservedResolvedIndexPolicy,
     ): Promise<boolean> {
-        const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
-        return canonicalRoot === policy.canonicalRoot
-            && await computeIndexPolicyControlSignature(canonicalRoot) === policy.controlSignature;
+        return this.indexPolicyRuntimeService.isObservedIndexPolicyControlSignatureCurrent(policy);
     }
 
     activateObservedIndexPolicyForIncrementalReconciliation(
         policy: ObservedResolvedIndexPolicy,
     ): boolean {
-        const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
-        this.indexPolicyRuntimeService.loadCurrentPublicationPolicy(canonicalRoot);
-        const publishedPolicy = this.indexAuthorityCoordinator.getPublishedResolvedPolicy(canonicalRoot);
-        if (!publishedPolicy || publishedPolicy.policyHash !== policy.policyHash) {
-            return false;
-        }
-        if (publishedPolicy.controlSignature !== policy.controlSignature) {
-            return false;
-        }
-        this.setIndexProfileForCodebase(canonicalRoot, policy.profile);
-        this.ignoreRuleService.setFileBasedPatterns(canonicalRoot, policy.fileBasedIgnorePatterns);
-        this.recomputePublishedPolicyRuntimeCompatibility(canonicalRoot);
-        return true;
+        return this.indexPolicyRuntimeService.activateObservedIndexPolicyForIncrementalReconciliation(policy);
     }
 
     /**

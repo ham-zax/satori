@@ -5,7 +5,8 @@ import {
 } from '../config/defaults';
 import { normalizeSupportedExtensions } from '../config/index-policy';
 import { IgnoreRuleService } from '../core/ignore-rule-service';
-import type { PublicationRef } from '../generation/contracts';
+import type { CustomIndexPolicyUpdate, ObservedResolvedIndexPolicy, PublicationRef } from '../generation/contracts';
+import { computeIndexPolicyControlSignature, observeIndexPolicyInputs } from '../core/index-policy-input-observer';
 
 /**
  * Runtime-resolved index policy for one canonical codebase root.
@@ -59,6 +60,7 @@ export interface IndexPolicyRuntimeServiceConfig {
     getIgnoreRuleService: () => IgnoreRuleService;
     canonicalizeCodebasePath: (codebasePath: string) => string;
     getCurrentPublication: (canonicalRoot: string) => PublicationRef | null;
+    getPublishedResolvedPolicy: (canonicalRoot: string) => ResolvedIndexPolicy | undefined;
     onActivateResolvedIndexPolicy: (
         policy: ResolvedIndexPolicy,
         binding: IndexPolicyRuntimeBinding,
@@ -67,14 +69,15 @@ export interface IndexPolicyRuntimeServiceConfig {
 }
 
 /**
- * Process-local policy hydration/cache. It owns no durable policy bytes and no
- * selector: every restart reconstructs accepted policy from PublicationStore.
+ * Owns live policy resolution, reconciliation, and the process-local projection
+ * of accepted policy. Durable policy and selection remain in PublicationStore.
  */
 export class IndexPolicyRuntimeService {
     private readonly configuredExtensionOverlays: string[];
     private readonly getIgnoreRuleService: () => IgnoreRuleService;
     private readonly canonicalizeCodebasePath: (codebasePath: string) => string;
     private readonly getCurrentPublication: (canonicalRoot: string) => PublicationRef | null;
+    private readonly getPublishedResolvedPolicy: (canonicalRoot: string) => ResolvedIndexPolicy | undefined;
     private readonly onActivateResolvedIndexPolicy: (
         policy: ResolvedIndexPolicy,
         binding: IndexPolicyRuntimeBinding,
@@ -91,12 +94,89 @@ export class IndexPolicyRuntimeService {
         this.getIgnoreRuleService = config.getIgnoreRuleService;
         this.canonicalizeCodebasePath = config.canonicalizeCodebasePath;
         this.getCurrentPublication = config.getCurrentPublication;
+        this.getPublishedResolvedPolicy = config.getPublishedResolvedPolicy;
         this.onActivateResolvedIndexPolicy = config.onActivateResolvedIndexPolicy;
         this.onClearPublishedIndexPolicy = config.onClearPublishedIndexPolicy;
     }
 
     getPolicyRuntimeCompatibilityByCodebase(): ReadonlyMap<string, boolean> {
         return this.policyRuntimeCompatibilityByCodebase;
+    }
+
+    async resolveIndexPolicyForReindex(
+        codebasePath: string,
+        update: CustomIndexPolicyUpdate = {},
+    ): Promise<ObservedResolvedIndexPolicy> {
+        return this.resolveIndexPolicyFromCurrentInputs(
+            this.canonicalizeCodebasePath(codebasePath), update, false, true,
+        );
+    }
+
+    async observeIndexPolicyForIncrementalReconciliation(codebasePath: string): Promise<ObservedResolvedIndexPolicy> {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        this.loadCurrentPublicationPolicy(canonicalRoot);
+        return this.resolveIndexPolicyFromCurrentInputs(canonicalRoot, {}, true, false);
+    }
+
+    async resolveIndexPolicyFromCurrentInputs(
+        canonicalRoot: string,
+        update: CustomIndexPolicyUpdate,
+        inheritActiveCustomPolicy: boolean,
+        activateRuntimeProfile: boolean,
+    ): Promise<ObservedResolvedIndexPolicy> {
+        const observedInputs = await observeIndexPolicyInputs(canonicalRoot);
+        const profile = observedInputs.profileConfig.profile;
+        if (activateRuntimeProfile) {
+            this.setIndexProfileForCodebase(canonicalRoot, profile);
+            this.recomputePolicyRuntimeCompatibility(canonicalRoot, this.getPublishedResolvedPolicy(canonicalRoot));
+        }
+        const ignoreRules = this.getIgnoreRuleService();
+        const customExtensions = update.customExtensions === undefined
+            ? inheritActiveCustomPolicy ? this.getRuntimeCustomExtensions(canonicalRoot) : []
+            : normalizeSupportedExtensions(update.customExtensions);
+        const customIgnorePatterns = update.customIgnorePatterns === undefined
+            ? inheritActiveCustomPolicy ? ignoreRules.getRuntimeCustomPatterns(canonicalRoot) : []
+            : update.customIgnorePatterns.map((pattern) => pattern.trim()).filter(Boolean);
+        const fileBasedPatterns = [...observedInputs.fileBasedIgnorePatterns];
+        const supportedExtensions = normalizeSupportedExtensions([
+            ...getSupportedExtensionsForIndexProfile(profile),
+            ...this.configuredExtensionOverlays,
+            ...customExtensions,
+        ]);
+        const effectiveIgnorePatterns = [
+            ...ignoreRules.getBasePatterns(), ...customIgnorePatterns, ...fileBasedPatterns,
+        ];
+        return {
+            canonicalRoot,
+            profile,
+            customExtensions,
+            customIgnorePatterns,
+            fileBasedIgnorePatterns: fileBasedPatterns,
+            supportedExtensions,
+            effectiveIgnorePatterns,
+            policyHash: computeIndexPolicyHash(profile, supportedExtensions, effectiveIgnorePatterns),
+            controlSignature: observedInputs.controlSignature,
+        };
+    }
+
+    async isObservedIndexPolicyControlSignatureCurrent(policy: ObservedResolvedIndexPolicy): Promise<boolean> {
+        const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
+        return canonicalRoot === policy.canonicalRoot
+            && await computeIndexPolicyControlSignature(canonicalRoot) === policy.controlSignature;
+    }
+
+    activateObservedIndexPolicyForIncrementalReconciliation(policy: ObservedResolvedIndexPolicy): boolean {
+        const canonicalRoot = this.canonicalizeCodebasePath(policy.canonicalRoot);
+        this.loadCurrentPublicationPolicy(canonicalRoot);
+        const publishedPolicy = this.getPublishedResolvedPolicy(canonicalRoot);
+        if (!publishedPolicy || publishedPolicy.policyHash !== policy.policyHash
+            || publishedPolicy.controlSignature !== policy.controlSignature) {
+            return false;
+        }
+        this.setIndexProfileForCodebase(canonicalRoot, policy.profile);
+        this.getIgnoreRuleService().setFileBasedPatterns(canonicalRoot, policy.fileBasedIgnorePatterns);
+        this.recomputePolicyRuntimeCompatibility(canonicalRoot, publishedPolicy);
+        return true;
     }
 
     getPolicyRuntimeCompatibility(canonicalRoot: string): boolean | undefined {

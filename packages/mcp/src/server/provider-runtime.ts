@@ -643,10 +643,13 @@ export class ProviderRuntime {
 
     public async shutdown(): Promise<void> {
         await this.drainDetachedMutationCompletions();
+        // Synchronization can still use shared providers until every context has drained.
+        await Promise.all(this.activeContexts.map(async (toolContext) => {
+            toolContext.toolHandlers.releaseSearchContinuationOwnership();
+            await toolContext.syncManager.stopAndDrainLifecycle();
+        }));
         await Promise.all([
             Promise.all(this.activeContexts.map(async (toolContext) => {
-                toolContext.toolHandlers.releaseSearchContinuationOwnership();
-                await toolContext.syncManager.stopAndDrainLifecycle();
                 await toolContext.context.getVectorStore().close?.();
                 await toolContext.context.dispose?.();
             })),

@@ -116,8 +116,8 @@ test('stageSymbolRegistryForCompletedIndex fails closed when navigation source d
                 symbolCount: 0,
                 definitionStatus: 'definitions_present',
             }],
+            new Map([[filePath, initialHash]]),
         ),
         /Source changed before navigation publication for 'src\/foo\.ts'\./,
     );
 });
-

@@ -29,7 +29,7 @@
     "release:bump": "node scripts/bump-release-graph.mjs",
     "test:scripts": "node --import tsx --test --test-reporter=./scripts/satori-test-reporter.mjs scripts/*.test.mjs evals/agent-discovery/*.test.mjs",
     "test:cbm-calls-product": "pnpm run build && pnpm --filter @zokizuan/satori-mcp exec tsx ../../scripts/cbm-multilang-call-graph-product-run.ts",
-    "release": "pnpm run release:all",
+    "release": "node scripts/release.mjs",
     "release:all": "node scripts/publish-release-graph.mjs",
     "release:login": "npm login --auth-type=web",
     "release:verify": "node scripts/release-registry.mjs",

@@ -485,3 +485,14 @@ test('usage errors exit with usage message', async () => {
     /Usage:/
   );
 });
+
+test('minor shorthand previews the core release closure without writes', async () => {
+  const cwd = standardWorkspace();
+  try {
+    const plan = await runReleaseBump(bumpOptions(cwd, { argv: ['minor'] }));
+    assert.equal(plan.entries.find((entry) => entry.key === 'core').to, '3.7.0');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, 'packages/core/package.json'))).version, '3.6.0');
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});

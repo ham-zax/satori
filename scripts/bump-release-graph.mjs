@@ -240,8 +240,11 @@ export async function runReleaseBump(options = {}) {
   const argv = options.argv || [];
   const apply = argv.includes('--apply');
   const positional = argv.filter((arg) => arg !== '--apply' && arg !== '--');
+  if (positional.length === 1 && ['major', 'minor', 'patch'].includes(positional[0])) {
+    positional.unshift('core');
+  }
   if (positional.length !== 2) {
-    throw new Error('Usage: pnpm release:bump -- <core|mcp|cli> <major|minor|patch> [--apply]');
+    throw new Error('Usage: pnpm release:bump [core|mcp|cli] <major|minor|patch> [--apply]');
   }
   const [target, bump] = positional;
   const execFileSyncImpl = options.execFileSyncImpl || execFileSync;

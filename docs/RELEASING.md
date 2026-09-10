@@ -194,6 +194,7 @@ Usage:
 ```bash
 pnpm release:bump -- core minor
 pnpm release:bump -- core minor --apply
+pnpm release:bump minor # shorthand for core minor; preview only
 ```
 
 Preview mode performs no writes. Mutation requires `--apply`, which also
@@ -205,6 +206,22 @@ every reverse dependency whose exact dependency or managed-runtime target must c
 prepared-but-unpublished state, a version already high enough for the requested
 intent remains unchanged and absorbs the coordinated changes. Always use the
 planner output rather than copying version numbers from this document.
+
+### `pnpm release minor`
+
+Runs the coordinated Core minor bump with downstream MCP and CLI updates,
+commits the release manifests, pushes `master` to the canonical repository,
+then invokes the existing publication workflow. `major` and `patch` work the
+same way. This command requires a clean working tree and local `master` that
+contains canonical `master`; it never force-pushes. Commit your implementation
+changes before running it.
+
+If commit, push, or publication fails, the command stops and preserves the
+prepared files or commit. Resolve that failure before retrying. After a partial
+publication, use `pnpm release` to retry the prepared graph without requesting
+another version bump.
+
+Plain `pnpm release` remains publish-only, as does `pnpm run release:all`.
 
 ### `pnpm run release:all`
 

@@ -231,6 +231,7 @@ const EXPECTED_TOOL_NAMES = [
     "search_codebase",
     "continue_search",
     "call_graph",
+    "detect_changes",
     "file_outline",
     "read_file",
     "list_codebases",

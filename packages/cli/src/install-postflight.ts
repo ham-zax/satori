@@ -16,6 +16,7 @@ const EXPECTED_TOOL_NAMES = [
     "search_codebase",
     "continue_search",
     "call_graph",
+    "detect_changes",
     "file_outline",
     "read_file",
     "list_codebases",
@@ -277,7 +278,7 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
             name: "tool_list",
             status: toolsMatch ? "ok" : "error",
             message: toolsMatch
-                ? "Launcher exposes the fixed seven-tool Satori surface in canonical order."
+                ? "Launcher exposes the fixed eight-tool Satori surface in canonical order."
                 : `Expected tools ${JSON.stringify(EXPECTED_TOOL_NAMES)}, received ${JSON.stringify(listedNames)}.`,
         });
 

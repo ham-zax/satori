@@ -123,6 +123,7 @@ const tools = ${JSON.stringify([
             "search_codebase",
             "continue_search",
             "call_graph",
+            "detect_changes",
             "file_outline",
             "read_file",
             "list_codebases",
@@ -279,7 +280,7 @@ input.on("line", (line) => {
     });
   } else if (message.method === "tools/list") {
     reply(message.id, {
-      tools: ["manage_index", "search_codebase", "continue_search", "call_graph", "file_outline", "read_file", "list_codebases"]
+      tools: ["manage_index", "search_codebase", "continue_search", "call_graph", "detect_changes", "file_outline", "read_file", "list_codebases"]
         .map((name) => ({ name, description: "candidate fixture", inputSchema: { type: "object", properties: {} } })),
     });
   }

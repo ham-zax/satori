@@ -1,7 +1,7 @@
 import { ToolContext, ToolResponse } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 
-type NavigationToolName = "file_outline" | "call_graph" | "read_file";
+type NavigationToolName = "file_outline" | "call_graph" | "read_file" | "detect_changes";
 
 type NavigationProviderFailureInput = {
     tool: NavigationToolName;

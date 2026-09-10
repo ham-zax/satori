@@ -174,6 +174,8 @@ export function isRelationshipRecord(value: unknown): value is RelationshipRecor
         && isOptionalNonEmptyString(value.targetPath)
         && (value.span === undefined || isSymbolSpan(value.span))
         && (value.confidence === 'high' || value.confidence === 'medium' || value.confidence === 'low')
+        && (value.args === undefined || (Array.isArray(value.args) && value.args.every(arg => typeof arg === 'string')))
+        && (value.strategy === undefined || value.strategy === 'rule' || value.strategy === 'heuristic')
         && (value.resolutionAuthority === undefined || isResolutionAuthority(value.resolutionAuthority));
 }
 
@@ -347,6 +349,7 @@ export function isRelationshipAnalysisEvidence(value: unknown): value is Relatio
     });
     const callsValid = value.callSites.every((call) => (
         isRecord(call)
+        && (call.args === undefined || (Array.isArray(call.args) && call.args.every(arg => typeof arg === 'string')))
         && isNonEmptyString(call.calleeName)
         && isSourceSpan(call.span)
     ));

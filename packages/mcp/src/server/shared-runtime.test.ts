@@ -84,7 +84,7 @@ test('opted-in workspace indexing starts after handshake without blocking tools/
     t.after(async () => { await client.close(); await session.shutdown(); });
     await startedPromise;
     assert.deepEqual(roots, [path.join(stateRoot, 'workspace')]);
-    assert.equal((await client.listTools()).tools.length, 7);
+    assert.equal((await client.listTools()).tools.length, 8);
     assert.equal(host.getActivity().operations, 1);
     finish();
 });
@@ -127,7 +127,7 @@ test("one runtime host serves independent MCP sessions over separate transports"
         firstTools.tools.map((tool) => tool.name),
         secondTools.tools.map((tool) => tool.name),
     );
-    assert.equal(firstTools.tools.length, 7);
+    assert.equal(firstTools.tools.length, 8);
 
     const firstInternals = first.session as unknown as {
         continuationCoordinator: SearchContinuationCoordinator;
@@ -217,7 +217,7 @@ test("one runtime host serves independent MCP sessions over separate transports"
     assert.deepEqual(host.getActivity(), { sessions: 1, operations: 0 });
 
     const stillAvailable = await second.client.listTools();
-    assert.equal(stillAvailable.tools.length, 7);
+    assert.equal(stillAvailable.tools.length, 8);
 });
 
 test("session shutdown waits for its active operation without stopping the host", async (t) => {
@@ -365,7 +365,7 @@ test("disconnecting one session does not cancel shared provider bootstrap", asyn
     await Promise.all([firstCall, secondCall, firstShutdown]);
     assert.equal(firstShutdownCompleted, true);
     assert.equal(bootstrapCount, 1);
-    assert.equal((await second.client.listTools()).tools.length, 7);
+    assert.equal((await second.client.listTools()).tools.length, 8);
     assert.deepEqual(host.getActivity(), { sessions: 1, operations: 0 });
 });
 

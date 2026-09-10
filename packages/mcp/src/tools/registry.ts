@@ -4,6 +4,7 @@ import { manageIndexTool } from "./manage_index.js";
 import { searchCodebaseTool } from "./search_codebase.js";
 import { continueSearchTool } from "./continue_search.js";
 import { callGraphTool } from "./call_graph.js";
+import { detectChangesTool } from "./detect_changes.js";
 import { fileOutlineTool } from "./file_outline.js";
 import { readFileTool } from "./read_file.js";
 import { listCodebasesTool } from "./list_codebases.js";
@@ -19,6 +20,7 @@ export const toolList: McpTool[] = [
     searchCodebaseTool,
     continueSearchTool,
     callGraphTool,
+    detectChangesTool,
     fileOutlineTool,
     readFileTool,
     listCodebasesTool,

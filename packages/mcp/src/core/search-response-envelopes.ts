@@ -121,7 +121,7 @@ function projectGroupedDebugV2(debug: SearchGroupedDebugV2): SearchGroupedDebugV
         } : {}),
         ...(debug.freshness ? {
             freshness: {
-                newestChunkIndexedAt: debug.freshness.newestChunkIndexedAt,
+                oldestChunkIndexedAt: debug.freshness.oldestChunkIndexedAt,
                 ageBucket: debug.freshness.ageBucket,
             },
         } : {}),
@@ -171,6 +171,9 @@ export function projectGroupedResultV2(result: SearchGroupResult): SearchGrouped
                 ? { symbolId: result.target.symbolId }
                 : {}),
         },
+        ...(result.registryBuiltAt !== undefined ? { registryBuiltAt: result.registryBuiltAt } : {}),
+        indexedAt: result.indexedAt ?? null,
+        stalenessBucket: result.stalenessBucket ?? "unknown",
         displayLabel: result.displayLabel,
         language: result.language,
         ...(result.symbolKind !== undefined

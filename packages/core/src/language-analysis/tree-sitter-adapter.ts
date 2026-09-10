@@ -1132,9 +1132,12 @@ function extractCallSites(root: Node, sourceMap: Utf8SourceMap, language: string
         if (CALL_NODE_TYPES.has(node.type)) {
             const name = callableName(node);
             const statementBlock = language === 'python' ? nearestPythonStatementBlock(node) : undefined;
+            const argumentsNode = node.childForFieldName('arguments')
+                ?? node.namedChildren.find(child => child.type === 'argument_list' || child.type === 'arguments');
             if (name) calls.push({
                 calleeName: name,
                 ...callSiteEvidence(node),
+                ...(argumentsNode ? { args: argumentsNode.namedChildren.filter(child => child.type !== 'comment').map(child => child.text) } : {}),
                 span: nodeSpan(node, sourceMap),
                 ...(statementBlock ? { statementBlockSpan: nodeSpan(statementBlock, sourceMap) } : {}),
             });

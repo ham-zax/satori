@@ -48,6 +48,8 @@ export interface ModuleBinding {
 }
 
 export interface CallSite {
+    /** Source expressions in argument order; absent for legacy/unsupported evidence. */
+    readonly args?: readonly string[];
     readonly calleeName: string;
     /** Missing only on legacy persisted evidence; current adapters always set this. */
     readonly kind?: 'direct' | 'member' | 'constructor';

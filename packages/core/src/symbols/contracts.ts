@@ -130,6 +130,8 @@ export type RelationshipType =
     | 'CONFIGURES';
 
 export interface RelationshipRecord {
+    args?: readonly string[];
+    strategy?: 'rule' | 'heuristic';
     sourceKey: string;
     sourceInstanceId?: string;
     targetKey?: string;

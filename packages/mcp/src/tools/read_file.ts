@@ -56,9 +56,9 @@ export const readFileInputSchema = z.object({
     ).optional(),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
     end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
-    mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Required for exact-symbol context requests. Other reads default to plain."),
+    mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Defaults to plain, including exact-symbol requests."),
     presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
-    open_symbol: openSymbolRequestSchema.optional().describe("Strict exact-symbol context or direct-span request returning bounded symbol source with continuation-aware excerpts. Exact symbols require contractVersion 2 and exactly one context or continuation operation; direct spans use one-based inclusive startLine/endLine.")
+    open_symbol: openSymbolRequestSchema.optional().describe("Read bounded symbol source with continuation-aware excerpts using {symbolId}; defaults to contractVersion 2 and context {preset:definition}. Explicit context and continuation are mutually exclusive. Direct spans use one-based inclusive startLine/endLine.")
 }).strict().superRefine((input, ctx) => {
     if (input.codebaseRoot && !hasExactSymbolMarker(input.open_symbol)) {
         ctx.addIssue({
@@ -80,13 +80,6 @@ export const readFileInputSchema = z.object({
             code: z.ZodIssueCode.custom,
             path: ["presentation"],
             message: "presentation applies only to ordinary reads and cannot be combined with open_symbol.",
-        });
-    }
-    if (hasExactSymbolMarker(input.open_symbol) && input.mode === undefined) {
-        ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["mode"],
-            message: "mode is required for exact-symbol context requests.",
         });
     }
 });
@@ -574,7 +567,10 @@ export const readFileTool: McpTool = {
             return {
                 content: [{
                     type: "text",
-                    text: formatZodError("read_file", parsed.error)
+                    text: formatZodError("read_file", parsed.error) + "\nExample: " + JSON.stringify({
+                        path: path.isAbsolute(rawPath) ? rawPath : "/absolute/path/to/file.ts",
+                        open_symbol: { symbolId: "<symbolId from search_codebase>" },
+                    })
                 }],
                 isError: true
             };

@@ -159,8 +159,9 @@ function flattenZodIssues(issues: readonly z.ZodIssue[]): z.ZodIssue[] {
  * `open_symbol` is validated as one unit. Any exact-symbol marker
  * (`contractVersion`, `symbolId`, `symbolLabel`, `context`, `continuation`)
  * commits the whole object to exact-symbol validation; every actionable
- * violation — missing version, conflicting identity, missing operation,
+ * violation — unsupported version, conflicting identity or operations,
  * inner shape errors — is reported at a stable field path in one response.
+ * Omitted version and operation default to v2 definition context.
  * Objects without any exact-symbol marker are direct spans and remain
  * exempt from the exact-symbol contract.
  */
@@ -174,7 +175,7 @@ export const openSymbolRequestSchema = z.object({
     endLine: z.number().int().positive().optional(),
 }).strict().superRefine((value, ctx) => {
     if (hasExactSymbolMarker(value)) {
-        if (value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
+        if (value.contractVersion !== undefined && value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
                 path: ["contractVersion"],
@@ -188,7 +189,7 @@ export const openSymbolRequestSchema = z.object({
                 message: "exactly one of symbolId or symbolLabel is required.",
             });
         }
-        if (Number(Boolean(value.context)) + Number(Boolean(value.continuation)) !== 1) {
+        if (value.context !== undefined && value.continuation !== undefined) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
                 path: ["context"],
@@ -261,7 +262,12 @@ export const openSymbolRequestSchema = z.object({
             message: "endLine must not precede startLine.",
         });
     }
-});
+}).transform(value => hasExactSymbolMarker(value) ? {
+    ...value,
+    contractVersion: value.contractVersion ?? SYMBOL_CONTEXT_FORMAT_VERSION,
+    ...(value.context === undefined && value.continuation === undefined
+        ? { context: { preset: "definition" as const } } : {}),
+} : value);
 
 export type ExactSymbolOpenRequest = z.infer<typeof exactSymbolOpenRequestSchema>;
 export type SymbolContextPreset = z.infer<typeof symbolContextRequestSchema>["preset"];

@@ -2,7 +2,7 @@
 
 The MCP runtime behind [Satori](https://github.com/ham-zax/satori), the local repository-intelligence database for coding agents.
 
-This package exposes the seven primitives an MCP-compatible agent uses to interrogate that database: freshness-aware hybrid search, symbol ownership, file structure, conservative relationship navigation, exact source reads, repository discovery, and index lifecycle management.
+This package exposes the eight primitives an MCP-compatible agent uses to interrogate that database: freshness-aware hybrid search, symbol ownership, file structure, conservative relationship navigation, diff-based impact, exact source reads, repository discovery, and index lifecycle management.
 
 Most users should install Satori through `@zokizuan/satori-cli`. The installer writes a stable local launcher, configures supported MCP clients, and selects the managed runtime. This package is the server/runtime surface, not a separate end-user product and not a client-configuration manager.
 
@@ -137,11 +137,31 @@ In a fresh two-task OpenCode comparison where both arms answered correctly, Sato
 | `search_codebase` | Search the repository-intelligence Publication with semantic, lexical, and exact evidence and return owner-oriented results. `limit` bounds the frozen result set across all pages; `disclosureLimit` controls only the initial grouped page. |
 | `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. A grouped envelope without continuation reports pagination.continuation="complete" for the caller-bounded frozen set only; omittedBeyondLimitGroupCount reports groups excluded by the caller limit. |
 | `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
+| `detect_changes` | Map a Git diff to current indexed symbol seeds and bounded transitive callers. Reports incomplete coverage, unavailable source, and truncation; does not sync or reindex. |
 | `file_outline` | List indexed symbols and spans in one file. Exact Python functions and methods can request on-demand structural analysis. |
 | `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
 | `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |
 
 <!-- TOOLS_END -->
+
+`read_file` accepts `open_symbol: {"symbolId":"…"}` with an absolute file `path`;
+mode defaults to `plain` and context to `definition`. Preserve `codebaseRoot`
+from search recommendations when publications overlap.
+
+Grouped search exposes the oldest contributing `indexedAt` and `stalenessBucket`.
+Age is not proof that source changed. Exact registry hits expose `registryBuiltAt`
+separately. Outline and graph freshness also include current-source hash checks;
+per-file index dates are `null` because the symbol registry does not retain them. Call edges expose `strategy` (`rule` or
+`heuristic`), existing confidence scores, and `args` source expressions when
+available. Legacy relationship records can lack arguments; newly analyzed files
+retain them. These expressions are not evaluated values or complete data flow.
+
+`detect_changes` compares `baseRef` (default `HEAD`) to the tracked working tree
+and returns changed files, symbol seeds, and transitive callers up to depth 3.
+It includes staged and unstaged tracked edits, excludes untracked files, and
+reports missing/stale files, deleted-symbol limitations, and truncation. It uses
+current publications across bounded navigation calls, not one atomic snapshot;
+its results are advisory and do not establish complete impact coverage.
 
 ## Runtime Boundaries
 

@@ -1296,6 +1296,35 @@ export class NavigationHandlers {
                 };
             }
 
+            const fileFreshnessByPath = new Map<string, NonNullable<CallGraphResponseEnvelope["nodes"][number]["freshness"]>>();
+            for (const node of relationshipBackedGraph.nodes) {
+                let freshness = fileFreshnessByPath.get(node.file);
+                if (!freshness) {
+                    let sourceState: "fresh" | "stale" | "unknown" | "inconsistent" = "unknown";
+                    try {
+                        const sourceRead = await readAuthorizedPublishedSource({
+                            workspacePolicy, codebaseRoot: effectiveRoot,
+                            requestedPath: path.resolve(effectiveRoot, node.file), publishedRelativePaths,
+                            maxBytes: this.host.readFileMaxBytes,
+                        });
+                        sourceState = this.host.getRegistryFileFreshness({
+                            symbols: registryState.registry.symbolsByFile.get(node.file) ?? [],
+                            absoluteFile: path.resolve(effectiveRoot, node.file), sourceBytes: sourceRead.bytes,
+                        }).status;
+                    } catch (error) {
+                        if (!(error instanceof PublishedFileAuthorizationError)
+                            && !(error instanceof WorkspaceAuthorizationError)
+                            && !(error instanceof AuthorizedSourceReadError)) throw error;
+                    }
+                    freshness = { indexedAt: null, stalenessBucket: "unknown",
+                        registryBuiltAt: registryState.registry.manifest.builtAt, sourceState };
+                    fileFreshnessByPath.set(node.file, freshness);
+                }
+                node.freshness = freshness;
+            }
+            if ([...fileFreshnessByPath.values()].some(value => value.sourceState !== "fresh")) {
+                relationshipBackedGraph.warnings = [...(relationshipBackedGraph.warnings ?? []), "CALL_GRAPH_SOURCE_FRESHNESS_PARTIAL"];
+            }
             await this.host.touchWatchedCodebase(effectiveRoot);
             const navigationAuthority = resolveCallGraphNavigationAuthority({
                 publicationId: servingNavigation.publicationId,
@@ -1603,7 +1632,11 @@ export class NavigationHandlers {
             }
         }
         const freshnessProjectedPayload = withNavigationFreshness(
-            projectedPayload,
+            { ...projectedPayload, freshness: {
+                indexedAt: null, stalenessBucket: "unknown",
+                registryBuiltAt: registryState.registry.manifest.builtAt,
+                sourceState: fileFreshness.status,
+            } },
             trackedRootState.freshnessDecision,
         );
         return {

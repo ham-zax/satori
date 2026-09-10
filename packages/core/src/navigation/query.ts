@@ -502,6 +502,42 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
         return relationshipSidecar;
     }
 
+    if (input.direction !== 'both') {
+        return traverseGraphNeighbors(input, relationshipSidecar);
+    }
+    // Keep each traversal directional. Switching direction at an intermediate
+    // node would include siblings that are neither callers nor callees.
+    const [callers, callees] = await Promise.all([
+        traverseGraphNeighbors({ ...input, direction: 'callers' }, relationshipSidecar),
+        traverseGraphNeighbors({ ...input, direction: 'callees' }, relationshipSidecar),
+    ]);
+    const limit = Number.isFinite(input.limit) ? Math.max(1, Number(input.limit)) : Number.MAX_SAFE_INTEGER;
+    const merged = new Map<string, RelationshipRecord>();
+    // Alternate so a large outgoing slice cannot consume the inbound budget.
+    for (let i = 0; i < Math.max(callers.records.length, callees.records.length); i += 1) {
+        for (const record of [callers.records[i], callees.records[i]]) {
+            if (record) merged.set(buildRelationshipRecordKey(record), record);
+        }
+    }
+    const records = [...merged.values()].slice(0, limit);
+    const suppressed = new Map([...callers.suppressedLowConfidenceRecords, ...callees.suppressedLowConfidenceRecords]
+        .map(record => [buildRelationshipRecordKey(record), record]));
+    return {
+        ...callers,
+        records,
+        visitedSymbolInstanceIds: [...new Set([input.symbolInstanceId, ...records.flatMap(record =>
+            [record.sourceInstanceId, record.targetInstanceId].filter((id): id is string => Boolean(id)))])],
+        suppressedLowConfidenceRecords: [...suppressed.values()].sort(compareRelationshipQueryRecords),
+        warnings: uniqSortedWarnings([...callers.warnings, ...callees.warnings,
+            ...(merged.size > limit ? ['RELATIONSHIP_TRAVERSAL_TRUNCATED'] : [])]),
+    };
+}
+
+async function traverseGraphNeighbors(
+    input: GetGraphNeighborsInput,
+    relationshipSidecar: RelationshipQueryOk,
+): Promise<GetGraphNeighborsOk> {
+
     const includeCallers = input.direction === 'callers' || input.direction === 'both';
     const includeCallees = input.direction === 'callees' || input.direction === 'both';
     const maxDepth = Math.max(1, Math.min(3, Number.isFinite(input.depth) ? input.depth : 1));
@@ -574,6 +610,7 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
                         const supportedLowConfidenceRecord: RelationshipRecord = {
                             ...record,
                             confidence: 'medium',
+                            strategy: 'rule',
                         };
                         if (!selectedRecords.has(recordKey)) {
                             if (selectedRecords.size >= maxRecords) {
@@ -629,6 +666,9 @@ export async function getGraphNeighbors(input: GetGraphNeighborsInput): Promise<
     const warnings = [...relationshipSidecar.warnings];
     if (skippedLowConfidence.size > 0) {
         warnings.push(`RELATIONSHIP_LOW_CONFIDENCE_SKIPPED:${skippedLowConfidence.size}`);
+    }
+    if (selectedRecords.size >= maxRecords) {
+        warnings.push('RELATIONSHIP_TRAVERSAL_LIMIT_REACHED');
     }
 
     return {

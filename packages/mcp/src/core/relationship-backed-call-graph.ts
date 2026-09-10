@@ -492,6 +492,9 @@ export class RelationshipBackedCallGraph {
                         ...(record.span?.endLine ? { endLine: record.span.endLine } : {}),
                     },
                     confidence: this.mapRelationshipConfidence(record.confidence),
+                    strategy: record.strategy ?? (record.resolutionAuthority === "direct_binding" || record.resolutionAuthority === "origin_flow" ? "rule" as const : "heuristic" as const),
+                    ...(record.resolutionAuthority ? { resolutionAuthority: record.resolutionAuthority } : {}),
+                    ...(record.args !== undefined ? { args: record.args } : {}),
                 }];
             })
         );
@@ -559,7 +562,9 @@ export class RelationshipBackedCallGraph {
         const addedDynamicCalleeEdges = addUniqueDynamicEdges(dynamicCalleeFallback.edges);
         const addedDynamicCallerEdges = addUniqueDynamicEdges(dynamicCallerFallback.edges);
         const addedDynamicEdges = [...addedDynamicCalleeEdges, ...addedDynamicCallerEdges];
-        const combinedEdges = this.sortEdges([...edges, ...addedDynamicEdges]);
+        const combinedEdges = this.sortEdges([...edges, ...addedDynamicEdges].map(edge => ({
+            ...edge, strategy: edge.strategy ?? "heuristic",
+        })));
         const nodeById = new Map(nodes.map((node) => [node.symbolId, node]));
         const referencedDynamicSymbolIds = new Set<string>(addedDynamicEdges.flatMap((edge) => [edge.srcSymbolId, edge.dstSymbolId]));
         for (const symbol of [...dynamicCalleeFallback.symbols, ...dynamicCallerFallback.symbols]) {

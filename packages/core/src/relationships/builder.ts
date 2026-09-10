@@ -258,6 +258,28 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
         }
     }
 
+    // Index argument evidence once per file. Duplicate sites remain unknown;
+    // a line can contain nested or repeated calls to the same target.
+    const argsByFile = new Map<string, Map<string, readonly string[] | null>>();
+    for (const record of recordsByKey.values()) {
+        if (record.type !== 'CALLS' && record.type !== 'TESTS') continue;
+        let argsBySite = argsByFile.get(record.file);
+        if (!argsBySite) {
+            argsBySite = new Map();
+            for (const call of getEvidence(input.analysisByFile, record.file)?.callSites ?? []) {
+                for (const key of [`byte:${call.span.startByte}`, `line:${call.span.startLine}:${call.calleeName}`]) {
+                    argsBySite.set(key, argsBySite.has(key) ? null : call.args ?? null);
+                }
+            }
+            argsByFile.set(record.file, argsBySite);
+        }
+        const target = record.targetInstanceId ? input.registry.symbolsByInstanceId.get(record.targetInstanceId) : undefined;
+        const args = argsBySite.get(record.span?.startByte !== undefined
+            ? `byte:${record.span.startByte}` : `line:${record.span?.startLine}:${target?.name}`);
+        if (args) record.args = [...args];
+        record.strategy = record.resolutionAuthority === 'direct_binding' || record.resolutionAuthority === 'origin_flow'
+            ? 'rule' : 'heuristic';
+    }
     attachResolutionClaims(input.analysisByFile, allClaimsByFile);
     return [...recordsByKey.values()].sort(compareRelationshipRecords);
 }

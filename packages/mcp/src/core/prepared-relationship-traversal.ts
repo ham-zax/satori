@@ -108,6 +108,9 @@ function relationshipEdge(
             ...(record.span.endLine !== undefined ? { endLine: record.span.endLine } : {}),
         },
         confidence: confidenceScore(record.confidence),
+        strategy: record.strategy ?? (record.resolutionAuthority === "direct_binding" || record.resolutionAuthority === "origin_flow" ? "rule" : "heuristic"),
+        ...(record.resolutionAuthority ? { resolutionAuthority: record.resolutionAuthority } : {}),
+        ...(record.args !== undefined ? { args: record.args } : {}),
     };
 }
 

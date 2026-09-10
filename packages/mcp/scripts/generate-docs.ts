@@ -9,6 +9,7 @@ const START_MARKER = '<!-- TOOLS_START -->';
 const END_MARKER = '<!-- TOOLS_END -->';
 
 const TOOL_SUMMARIES: Readonly<Record<string, string>> = {
+    detect_changes: 'Map a Git diff to current indexed symbol seeds and bounded transitive callers. Reports incomplete coverage, unavailable source, and truncation; does not sync or reindex.',
     manage_index: 'Manage the repository-intelligence Publication: create the first index, synchronize source changes, inspect readiness, cancel a live supervised sync, recover with reindex, or clear index state. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance; explicit reindex remains the operator recovery override.',
     search_codebase: 'Search the repository-intelligence Publication with semantic, lexical, and exact evidence and return owner-oriented results. `limit` bounds the frozen result set across all pages; `disclosureLimit` controls only the initial grouped page.',
     continue_search: 'Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. A grouped envelope without continuation reports pagination.continuation="complete" for the caller-bounded frozen set only; omittedBeyondLimitGroupCount reports groups excluded by the caller limit.',

@@ -346,6 +346,9 @@ export function buildExactRegistryGroupResult(input: {
 
     return {
         target,
+        indexedAt: null,
+        stalenessBucket: "unknown",
+        registryBuiltAt: input.indexedAt,
         displayLabel: displaySymbolLabel,
         language: registrySymbol.language,
         symbolKind: registrySymbol.kind,
@@ -386,8 +389,8 @@ export function buildExactRegistryGroupResult(input: {
                 exactLexicalMatch: true,
                 ...(input.debugMode === "full" ? {
                     freshness: {
-                        newestChunkIndexedAt: input.indexedAt,
-                        ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
+                        oldestChunkIndexedAt: null,
+                        ageBucket: "unknown",
                     },
                     ...(graphEvidence ? { graphEvidence } : {}),
                 } : {}),
@@ -504,6 +507,8 @@ export function buildGroupedSymbolSearchResult(input: {
         : buildGraphEvidence(callGraphHint);
     return {
         target,
+        indexedAt: input.indexedAt,
+        stalenessBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
         displayLabel: repSymbolLabel,
         language: input.representative.result.language || "unknown",
         ...(symbolKind ? { symbolKind } : {}),
@@ -552,7 +557,7 @@ export function buildGroupedSymbolSearchResult(input: {
                 },
                 ...(input.debugMode === "full" ? {
                     freshness: {
-                        newestChunkIndexedAt: input.indexedAt,
+                        oldestChunkIndexedAt: input.indexedAt,
                         ageBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
                     },
                     ...(graphEvidence ? { graphEvidence } : {}),
@@ -687,16 +692,18 @@ export function buildVisibleGroupedSearchResults(input: {
         const chunkSpanEnd = Math.max(...group.chunks.map((chunk) => (chunk.result as SearchResultLike).endLine || 0));
         const previewSpan: SearchSpan = { startLine: chunkSpanStart, endLine: chunkSpanEnd };
 
-        let indexedAtMax: string | undefined;
-        let indexedAtMaxMs = Number.NEGATIVE_INFINITY;
+        let indexedAtMin: string | undefined;
+        let indexedAtMinMs = Number.POSITIVE_INFINITY;
+        let hasUnknownIndexedAt = false;
         for (const chunk of group.chunks) {
             const indexedAt = typeof (chunk.result as SearchResultLike).indexedAt === "string"
                 ? (chunk.result as SearchResultLike).indexedAt || undefined
                 : undefined;
             const indexedAtMs = input.parseIndexedAtMs(indexedAt);
-            if (indexedAtMs !== undefined && indexedAtMs > indexedAtMaxMs) {
-                indexedAtMaxMs = indexedAtMs;
-                indexedAtMax = indexedAt;
+            if (indexedAtMs === undefined) hasUnknownIndexedAt = true;
+            if (indexedAtMs !== undefined && indexedAtMs < indexedAtMinMs) {
+                indexedAtMinMs = indexedAtMs;
+                indexedAtMin = indexedAt;
             }
         }
 
@@ -729,7 +736,7 @@ export function buildVisibleGroupedSearchResults(input: {
         const groupedResult = buildGroupedSymbolSearchResult({
             representative,
             previewSpan,
-            indexedAt: indexedAtMax || null,
+            indexedAt: hasUnknownIndexedAt ? null : indexedAtMin || null,
             ownerSource: group.ownerSource,
             ownerSymbolKey: group.ownerSymbolKey,
             ownerSymbolInstanceId: group.ownerSymbolInstanceId,

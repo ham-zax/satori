@@ -203,6 +203,8 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
             if (name) {
                 callSites.push({
                     calleeName: name,
+                    ...(Array.isArray(node.arguments) && node.arguments.every(isAstNode)
+                        ? { args: node.arguments.map(argument => input.content.slice(argument.start, argument.end)) } : {}),
                     ...callSiteEvidence(node, input.content),
                     span: sourceMap.spanFromUtf16(node.start, node.end),
                 });

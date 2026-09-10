@@ -174,7 +174,7 @@ export interface SearchGroupedDebugV2 {
         evidenceChunkCount: number;
     };
     freshness?: {
-        newestChunkIndexedAt: string | null;
+        oldestChunkIndexedAt: string | null;
         ageBucket: StalenessBucket;
     };
     graphEvidence?: {
@@ -193,6 +193,9 @@ export interface SearchGroupedDebugV2 {
 }
 
 export interface SearchGroupedResultV2 {
+    registryBuiltAt?: string | null;
+    indexedAt?: string | null;
+    stalenessBucket?: StalenessBucket;
     target: SearchGroupedTargetV2;
     displayLabel: string;
     language: string;
@@ -988,7 +991,16 @@ export interface FileOutlineSymbolResult extends CanonicalSymbolIdentity {
     };
 }
 
+export interface NavigationFileFreshness {
+    /** Per-file indexing time is not retained by the symbol registry. */
+    indexedAt: null;
+    stalenessBucket: "unknown";
+    registryBuiltAt: string;
+    sourceState: "fresh" | "stale" | "unknown" | "inconsistent";
+}
+
 export interface FileOutlineResponseEnvelope {
+    freshness?: NavigationFileFreshness;
     status: FileOutlineStatus;
     reason?: NonOkReason | "invalid_request";
     path: string;
@@ -1040,6 +1052,7 @@ export type CallGraphResponseReason =
     | "vector_backend_unavailable";
 
 export interface CallGraphNodeResult {
+    freshness?: NavigationFileFreshness;
     symbolId: string;
     symbolLabel?: string;
     file: string;
@@ -1048,6 +1061,9 @@ export interface CallGraphNodeResult {
 }
 
 export interface CallGraphEdgeResult {
+    strategy?: "rule" | "heuristic";
+    resolutionAuthority?: import("@zokizuan/satori-core").RelationshipRecord["resolutionAuthority"];
+    args?: readonly string[];
     srcSymbolId: string;
     dstSymbolId: string;
     kind: CallGraphEdgeKind;

@@ -45,6 +45,7 @@ const EXPECTED_TOOLS = [
     "search_codebase",
     "continue_search",
     "call_graph",
+    "detect_changes",
     "file_outline",
     "read_file",
     "list_codebases",
@@ -287,7 +288,7 @@ function toolNames(response: JsonRpcResponse): string[] {
     return (response.result?.tools || []).map((tool) => tool.name).sort();
 }
 
-test("empty provider env still handshakes and lists exactly the seven MCP tools", async () => {
+test("empty provider env still handshakes and lists exactly the eight MCP tools", async () => {
     await withEmptyEnvSession(async (session) => {
         const response = await session.request("tools/list");
         assert.equal(response.error, undefined);

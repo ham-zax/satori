@@ -182,6 +182,7 @@ test("symbol-context handler adapter binds prepared navigation and relationship 
         kind: "call",
         site: { file: "src/caller.ts", startLine: 12, endLine: 13 },
         confidence: 0.95,
+        strategy: "heuristic",
     });
     assert.equal(result.snapshot.relationships.callees.suppressedCount, 1);
     assert.match(

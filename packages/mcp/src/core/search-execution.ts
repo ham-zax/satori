@@ -1264,7 +1264,15 @@ export async function runSearchExecution(
                     backendScoreKinds.add(backendScoreKind);
                     byChunkKey.set(key, createCandidate(result, rrf, [passId]));
                 } else {
-                    existing.fusionScore += rrf;
+                    const semanticPassDuplicate = (
+                        (passId === "primary" || passId === "expanded")
+                        && existing.retrievalPasses.some((existingPassId) => (
+                            existingPassId === "primary" || existingPassId === "expanded"
+                        ))
+                    );
+                    existing.fusionScore = semanticPassDuplicate
+                        ? Math.max(existing.fusionScore, rrf)
+                        : existing.fusionScore + rrf;
                     const nextScore = typeof result.backendScore === "number"
                         ? result.backendScore
                         : (typeof result.score === "number" ? result.score : undefined);

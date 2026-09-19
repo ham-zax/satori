@@ -72,7 +72,6 @@ export interface MutationLeaseCoordinatorOptions {
 
 const LOCK_WAIT_MS = 2_000;
 const LOCK_RETRY_MS = 25;
-const LOCK_STALE_MS = 30_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -710,7 +709,6 @@ export class MutationLeaseCoordinator {
 
     private shouldBreakLock(lockPath: string): boolean {
         try {
-            if (Date.now() - fs.statSync(lockPath).mtimeMs < LOCK_STALE_MS) return false;
             const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
             if (!isRecord(parsed) || typeof parsed.pid !== 'number') return false;
             const current = this.processInspector.inspect(parsed.pid);

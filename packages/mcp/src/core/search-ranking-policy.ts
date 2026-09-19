@@ -80,6 +80,7 @@ function isArtifactPath(normalizedPath: string): boolean {
         || hasLeadingPathSegment(normalizedPath, "report")
         || hasLeadingPathSegment(normalizedPath, "investigations")
         || hasLeadingPathSegment(normalizedPath, "investigation")
+        || hasLeadingPathSegment(normalizedPath, "scripts/archive")
         || hasPathSegment(normalizedPath, ".codebase-memory")
         || hasPathSegment(normalizedPath, ".satori");
 }

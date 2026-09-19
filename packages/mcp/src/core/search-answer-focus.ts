@@ -9,6 +9,27 @@ export type SearchAnswerFocusResolution = Readonly<{
 
 const IMPLEMENTATION_QUESTION_CUE = /\bhow\s+(?:does|do|is|are)\b|\bwhere\s+is\b.*\bimplemented\b|\bwhat\s+(?:blocks|prevents|validates|gates|controls)\b/;
 
+const SEARCH_MECHANISM_CUES = [
+    /\bcandidates?\b/,
+    /\b(?:rerank(?:er|ing)?|ranking|ranked)\b/,
+    /\bfusion\b/,
+    /\b(?:scores?|scored|scoring)\b/,
+    /\b(?:lexical|dense|sparse)\b/,
+    /\bsemantic\s+search\b/,
+    /\bquery\s+plan\b/,
+    /\bdisclosure\b/,
+] as const;
+
+function hasSearchMechanismImplementationCue(query: string): boolean {
+    let matches = 0;
+    for (const cue of SEARCH_MECHANISM_CUES) {
+        if (!cue.test(query)) continue;
+        matches += 1;
+        if (matches >= 2) return true;
+    }
+    return false;
+}
+
 export function resolveSearchAnswerFocus(
     plan: SearchQueryPlan,
 ): SearchAnswerFocusResolution {
@@ -32,6 +53,9 @@ export function resolveSearchAnswerFocus(
     }
     if (IMPLEMENTATION_QUESTION_CUE.test(plan.semanticQuery.toLowerCase())) {
         return { focus: "implementation", reasons: ["implementation_question_cue"] };
+    }
+    if (hasSearchMechanismImplementationCue(plan.semanticQuery.toLowerCase())) {
+        return { focus: "implementation", reasons: ["search_mechanism_query"] };
     }
     return { focus: "neutral", reasons: ["no_focus_signal"] };
 }

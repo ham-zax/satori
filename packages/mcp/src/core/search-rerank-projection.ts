@@ -75,10 +75,10 @@ function failure(
 }
 
 /**
- * Project the frozen canonical projection bytes only from a registry-owned
- * candidate and hash-matched current source. The candidate span is retained
- * because it is part of the qualified L3 projection, but it must remain inside
- * the canonical owner.
+ * Project frozen canonical reranker bytes from publication-bound current source.
+ * Registry-owned candidates must remain inside their canonical owner. Candidates
+ * without a resolvable owner may still use their unique manifest file identity
+ * and exact result span; this does not invent symbol ownership.
  */
 async function resolvePublicationBoundEvidence(input: {
     codebaseRoot: string;
@@ -91,21 +91,33 @@ async function resolvePublicationBoundEvidence(input: {
     | { ok: false; reason: SearchRerankProjectionFailureReason }
 > {
     const owner = resolveCanonicalOwner(input.result, input.registry);
+    const manifestFile = input.registry.manifest.files.find(
+        (file) => file.path === input.result.relativePath,
+    );
+    const expectedFile = owner?.file ?? manifestFile?.path;
+    const expectedHash = owner?.fileHash ?? manifestFile?.hash;
     const startLine = input.result.startLine;
     const endLine = input.result.endLine;
     if (
-        !owner
-        || owner.file !== input.result.relativePath
-        || !/^[a-f0-9]{64}$/.test(owner.fileHash)
+        !expectedFile
+        || expectedFile !== input.result.relativePath
+        || !expectedHash
+        || !/^[a-f0-9]{64}$/.test(expectedHash)
     ) {
         return { ok: false, reason: "owner_not_found" };
     }
     if (
         !Number.isSafeInteger(startLine)
         || !Number.isSafeInteger(endLine)
-        || (startLine as number) < owner.span.startLine
-        || (endLine as number) > owner.span.endLine
+        || (startLine as number) < 1
         || (endLine as number) < (startLine as number)
+        || (
+            owner !== undefined
+            && (
+                (startLine as number) < owner.span.startLine
+                || (endLine as number) > owner.span.endLine
+            )
+        )
     ) {
         return { ok: false, reason: "candidate_span_invalid" };
     }
@@ -114,7 +126,7 @@ async function resolvePublicationBoundEvidence(input: {
     try {
         currentSourceEvidence = await (input.readSourceEvidence ?? readCurrentSourceEvidence)(
             input.codebaseRoot,
-            owner.file,
+            expectedFile,
         );
     } catch {
         return { ok: false, reason: "source_unavailable" };
@@ -138,7 +150,7 @@ async function resolvePublicationBoundEvidence(input: {
             const canonicalRoot = await fs.realpath(input.codebaseRoot);
             const window = await readStableRootBoundFileWindow({
                 canonicalRoot,
-                relativePath: owner.file,
+                relativePath: expectedFile,
                 requestedLineRange: {
                     startLine: startLine as number,
                     endLine: endLine as number,
@@ -170,8 +182,8 @@ async function resolvePublicationBoundEvidence(input: {
         }
     }
     if (
-        evidence.relativeFile !== owner.file
-        || evidence.observedHash !== owner.fileHash
+        evidence.relativeFile !== expectedFile
+        || evidence.observedHash !== expectedHash
     ) {
         return { ok: false, reason: "source_hash_mismatch" };
     }

@@ -865,10 +865,36 @@ async function rerankSearchCandidates(
                     candidateIds: selectedCandidateIds,
                     results: rerankResults,
                 });
+                const effectiveRerankItems = input.answerFocus === "implementation"
+                    && rerankInputMetadataMap
+                    ? (() => {
+                        const retained: Array<(typeof validatedItems)[number]> = [];
+                        const deferredTests: Array<(typeof validatedItems)[number]> = [];
+                        let retainedTest = false;
+
+                        // Keep the provider's highest-ranked test as supporting
+                        // evidence, but do not let additional tests crowd out
+                        // implementation evidence in an implementation-focused answer.
+                        for (const item of validatedItems) {
+                            const candidate = rerankSlice[item.originalIndex]!;
+                            const candidateId = searchCandidateIdentity(candidate.result).candidateId;
+                            const candidateRole = rerankInputMetadataMap.get(candidateId)?.candidateRole;
+                            if (candidateRole === "test") {
+                                if (retainedTest) {
+                                    deferredTests.push(item);
+                                    continue;
+                                }
+                                retainedTest = true;
+                            }
+                            retained.push(item);
+                        }
+                        return [...retained, ...deferredTests];
+                    })()
+                    : validatedItems;
                 const reordered = applyNativeRerankToSelectedSlots({
                     allCandidates: scored,
                     selectedCandidateIds,
-                    orderedItems: validatedItems,
+                    orderedItems: effectiveRerankItems,
                     identify: (candidate) => searchCandidateIdentity(candidate.result).candidateId,
                 });
                 for (const item of validatedItems) {
@@ -884,7 +910,7 @@ async function rerankSearchCandidates(
                     appendSearchCandidateStage(
                         candidateSurvival,
                         "reranker_output",
-                        validatedItems.map((item) => rerankSlice[item.originalIndex]!),
+                        effectiveRerankItems.map((item) => rerankSlice[item.originalIndex]!),
                     );
                 }
             } catch {

@@ -306,6 +306,40 @@ function tokenizeLexicalTerms(tokens: string[]): SearchLexicalTerm[] {
     return Array.from(terms.values());
 }
 
+export function buildSearchLexicalFallbackTerms(semanticQuery: string): string[] {
+    const tokens = semanticQuery
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0);
+    const ranked = tokenizeLexicalTerms(tokens)
+        .map((term, index) => ({
+            index,
+            value: term.value
+                .replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, "")
+                .toLowerCase(),
+        }))
+        .filter((term) => (
+            term.value.length >= 3
+            && !SEARCH_QUERY_STOPWORDS.has(term.value)
+        ));
+    const deduped = new Map<string, { index: number; value: string }>();
+    for (const term of ranked) {
+        if (!deduped.has(term.value)) {
+            deduped.set(term.value, term);
+        }
+    }
+    return [...deduped.values()]
+        .sort((left, right) => (
+            Number(SEARCH_STRUCTURAL_CUE_WORDS.has(right.value))
+            - Number(SEARCH_STRUCTURAL_CUE_WORDS.has(left.value))
+            || right.value.length - left.value.length
+            || left.index - right.index
+            || left.value.localeCompare(right.value)
+        ))
+        .slice(0, 8)
+        .map((term) => term.value);
+}
+
 function isIdentifierLikeToken(token: string): boolean {
     const trimmed = token.trim();
     if (trimmed.length === 0) {

@@ -60,7 +60,10 @@ import type {
     SearchQueryPlan,
     SearchResultLike,
 } from "./search-lexical-scoring.js";
-import type { ParsedSearchOperators } from "./search-query-planning.js";
+import {
+    buildSearchLexicalFallbackTerms,
+    type ParsedSearchOperators,
+} from "./search-query-planning.js";
 import {
     buildSemanticPassFailureDiagnostic,
     type SemanticPassFailureDiagnostic,
@@ -472,8 +475,8 @@ export type SearchExecutionHost = {
         topK: number;
         retrievalMode: "dense" | "lexical" | "hybrid";
         lexicalMatchMode?: "all_terms" | "any_terms";
+        lexicalFallbackTerms?: string[];
         scorePolicy: { kind: "topk_only" } | { kind: "dense_similarity_min"; min: number };
-        diagnosticLexicalFallbackTerms?: string[];
     }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: Reranker | null;
     buildRerankDocument?: (
@@ -1056,20 +1059,17 @@ export async function runSearchExecution(
                 const scorePolicy = input.queryPlan.scorePolicyKind === "topk_only"
                     ? { kind: "topk_only" as const }
                     : { kind: "dense_similarity_min" as const, min: 0.3 };
-                const diagnosticLexicalFallbackTerms = retrievalPolicy.diagnosticCandidateLimit !== undefined
-                    ? host.searchQuerySupport
-                        .buildSearchQueryPlan(pass.query, input.parsedOperators)
-                        .lexicalTerms
-                        .map((term) => term.value)
-                    : [];
+                const lexicalFallbackTerms = input.queryPlan.retrievalMode === "dense"
+                    ? []
+                    : buildSearchLexicalFallbackTerms(pass.query);
                 return host.semanticSearch({
                     codebasePath: input.effectiveRoot,
                     query: pass.query,
                     topK: candidateLimit,
                     retrievalMode: input.queryPlan.retrievalMode,
                     scorePolicy,
-                    ...(diagnosticLexicalFallbackTerms.length > 0
-                        ? { diagnosticLexicalFallbackTerms }
+                    ...(lexicalFallbackTerms.length > 0
+                        ? { lexicalFallbackTerms }
                         : {}),
                 });
                 })),

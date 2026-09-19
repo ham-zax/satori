@@ -89,6 +89,7 @@ package-lock.json
 
 # Generated local metrics (regenerate via pnpm benchmark)
 build-benchmark.json
+benchmark-results/jev-lab/
 
 # Private commercial strategy; keep local and out of published repository docs.
 docs/product/SATORI_MONETIZATION_AND_LICENSING_STRATEGY.md

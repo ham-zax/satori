@@ -18,6 +18,13 @@ export interface SemanticSearchRequest {
      * provider-defined sparse semantics.
      */
     lexicalMatchMode?: "all_terms" | "any_terms";
+    /**
+     * Canonical high-signal terms for a bounded any-terms fallback. The fallback
+     * is eligible only when the primary standardized all-terms lexical arm is empty.
+     * Hybrid retrieval uses it to enrich dense-discovered files; it broadens file
+     * discovery only when the dense arm itself is empty.
+     */
+    lexicalFallbackTerms?: string[];
     filter?: VectorFilter;
     scorePolicy?: ScorePolicy;
 }

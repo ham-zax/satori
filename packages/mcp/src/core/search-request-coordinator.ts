@@ -1626,8 +1626,8 @@ export class SearchRequestCoordinator {
                                     ? {
                                         captureLexicalFallback: true,
                                         diagnosticCandidateLimit: retrievalPolicy.diagnosticCandidateLimit,
-                                        ...(request.diagnosticLexicalFallbackTerms
-                                            ? { lexicalFallbackTerms: request.diagnosticLexicalFallbackTerms }
+                                        ...(request.lexicalFallbackTerms
+                                            ? { lexicalFallbackTerms: request.lexicalFallbackTerms }
                                             : {}),
                                     }
                                     : {},

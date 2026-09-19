@@ -90,6 +90,7 @@ function buildSemanticSearchTraceStage(
 function buildSemanticSearchCandidateTrace(input: {
     productDense?: readonly VectorCandidate[];
     productLexical?: readonly VectorCandidate[];
+    productLexicalFallback?: readonly VectorCandidate[];
     diagnosticDense?: readonly VectorCandidate[];
     diagnosticLexical?: readonly VectorCandidate[];
     diagnosticLexicalFallback?: readonly VectorCandidate[];
@@ -122,10 +123,12 @@ function buildSemanticSearchCandidateTrace(input: {
             input.maxEntries,
         ));
     }
-    if (input.diagnosticLexicalFallback) {
+    const lexicalFallbackTrace = input.diagnosticLexicalFallback
+        ?? input.productLexicalFallback;
+    if (lexicalFallbackTrace) {
         stages.push(buildSemanticSearchTraceStage(
             'raw_lexical_fallback',
-            input.diagnosticLexicalFallback,
+            lexicalFallbackTrace,
             input.maxEntries,
         ));
     }
@@ -139,6 +142,7 @@ function buildSemanticSearchCandidateTrace(input: {
     const removedIds = [...new Set([
         ...(input.productDense ?? []).map((candidate) => candidate.document.id),
         ...(input.productLexical ?? []).map((candidate) => candidate.document.id),
+        ...(input.productLexicalFallback ?? []).map((candidate) => candidate.document.id),
     ])]
         .filter((candidateId) => !resultIds.has(candidateId))
         .sort(compareContractStrings);
@@ -461,11 +465,20 @@ export class SemanticSearchService {
         // diagnostic fallback eligibility -- never the backend-derived value.
         const effectivePrimaryMatchMode = requestedMatchMode
             ?? lexicalCapabilities.defaultMode;
+        const productLexicalFallbackTerms = resolvedRequest.lexicalFallbackTerms;
+        const productLexicalFallbackEligible = effectivePrimaryMatchMode === 'all_terms'
+            && lexicalCapabilities.supportedModes.includes('any_terms')
+            && (isSparseOnly || isHybrid)
+            && productLexicalFallbackTerms !== undefined
+            && productLexicalFallbackTerms.length > 0;
+        const productLexicalFallbackQuery = productLexicalFallbackTerms?.join(' ')
+            ?? resolvedRequest.query;
         const captureLexicalFallback = candidateTraceOptions.captureLexicalFallback === true
             && effectivePrimaryMatchMode === 'all_terms'
             && (isSparseOnly || isHybrid);
-        const lexicalFallbackTerms = candidateTraceOptions.lexicalFallbackTerms;
-        const lexicalFallbackQuery = lexicalFallbackTerms?.join(' ') ?? resolvedRequest.query;
+        const diagnosticLexicalFallbackTerms = candidateTraceOptions.lexicalFallbackTerms;
+        const diagnosticLexicalFallbackQuery = diagnosticLexicalFallbackTerms?.join(' ')
+            ?? productLexicalFallbackQuery;
         const searchType = isSparseOnly
             ? 'sparse search'
             : isHybrid
@@ -523,7 +536,32 @@ export class SemanticSearchService {
             await assertCandidateReadAuthorityUnchanged(
                 'Index generation changed during lexical retrieval.',
             );
-            const productResults = productSearchResults.slice(0, resolvedRequest.topK);
+            const productLexicalFallbackAttempted = productSearchResults.length === 0
+                && productLexicalFallbackEligible;
+            let productLexicalFallback: VectorCandidate[] = [];
+            if (productLexicalFallbackAttempted) {
+                try {
+                    productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
+                        query: productLexicalFallbackQuery,
+                        limit: resolvedRequest.topK,
+                        filter: resolvedRequest.filter,
+                        matchMode: 'any_terms',
+                    });
+                    await assertCandidateReadAuthorityUnchanged(
+                        'Index generation changed during lexical fallback retrieval.',
+                    );
+                } catch (error) {
+                    console.warn(
+                        '[Context] Lexical fallback retrieval failed; preserving the primary lexical result.',
+                        error,
+                    );
+                }
+            }
+            const productResults = (
+                productSearchResults.length > 0
+                    ? productSearchResults
+                    : productLexicalFallback
+            ).slice(0, resolvedRequest.topK);
             const diagnosticRequests: Array<Promise<DiagnosticRetrievalOutcome>> = [];
             if (diagnosticCandidateRetrievalLimit > resolvedRequest.topK) {
                 diagnosticRequests.push(retrieveDiagnosticCandidates({
@@ -544,7 +582,7 @@ export class SemanticSearchService {
                     arm: 'fallback_lexical',
                     requestedLimit: diagnosticCandidateRetrievalLimit,
                     retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
-                        query: lexicalFallbackQuery,
+                        query: diagnosticLexicalFallbackQuery,
                         limit: diagnosticCandidateRetrievalLimit,
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
@@ -587,8 +625,17 @@ export class SemanticSearchService {
                     }
                     : {}),
             });
+            const traceFallbackTerms = productLexicalFallbackAttempted
+                ? productLexicalFallbackTerms
+                : diagnosticLexicalFallbackTerms;
+            const traceFallbackQuery = productLexicalFallbackAttempted
+                ? productLexicalFallbackQuery
+                : diagnosticLexicalFallbackQuery;
             candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
                 productLexical: productSearchResults.slice(0, resolvedRequest.topK),
+                ...(productLexicalFallback.length > 0
+                    ? { productLexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK) }
+                    : {}),
                 ...(diagnosticLexical ? { diagnosticLexical } : {}),
                 ...(diagnosticLexicalFallback ? { diagnosticLexicalFallback } : {}),
                 diagnosticRetrievals: diagnosticOutcomes.map((outcome) => outcome.retrieval),
@@ -601,11 +648,11 @@ export class SemanticSearchService {
                     role: 'primary',
                     querySha256: hashSemanticSearchLexicalQuery(resolvedRequest.query),
                     matchMode: effectivePrimaryMatchMode,
-                }, ...(captureLexicalFallback ? [{
+                }, ...((productLexicalFallbackAttempted || captureLexicalFallback) ? [{
                     role: 'fallback_or' as const,
-                    querySha256: hashSemanticSearchLexicalQuery(lexicalFallbackQuery),
+                    querySha256: hashSemanticSearchLexicalQuery(traceFallbackQuery),
                     matchMode: 'any_terms' as const,
-                    ...(lexicalFallbackTerms ? { terms: [...lexicalFallbackTerms] } : {}),
+                    ...(traceFallbackTerms ? { terms: [...traceFallbackTerms] } : {}),
                 }] : [])],
             }));
             return productResults.map((result) => (
@@ -652,9 +699,43 @@ export class SemanticSearchService {
             await assertCandidateReadAuthorityUnchanged(
                 'Index generation changed during hybrid retrieval.',
             );
+            const productLexicalFallbackAttempted = productLexicalCandidates.length === 0
+                && productLexicalFallbackEligible;
+            let productLexicalFallback: VectorCandidate[] = [];
+            if (productLexicalFallbackAttempted) {
+                try {
+                    productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
+                        query: productLexicalFallbackQuery,
+                        limit: resolvedRequest.topK,
+                        filter: resolvedRequest.filter,
+                        matchMode: 'any_terms',
+                    });
+                    await assertCandidateReadAuthorityUnchanged(
+                        'Index generation changed during hybrid lexical fallback retrieval.',
+                    );
+                    // With dense evidence available, fallback enriches known files rather
+                    // than opening an unrelated lexical discovery frontier.
+                    if (productDenseCandidates.length > 0) {
+                        const denseCandidatePaths = new Set(
+                            productDenseCandidates.map((candidate) => candidate.document.relativePath),
+                        );
+                        productLexicalFallback = productLexicalFallback.filter((candidate) => (
+                            denseCandidatePaths.has(candidate.document.relativePath)
+                        ));
+                    }
+                } catch (error) {
+                    console.warn(
+                        '[Context] Hybrid lexical fallback retrieval failed; preserving dense retrieval.',
+                        error,
+                    );
+                }
+            }
+            const lexicalFusionCandidates = productLexicalCandidates.length > 0
+                ? productLexicalCandidates
+                : productLexicalFallback;
             const searchResults = fuseVectorCandidatesWithRrf({
                 dense: productDenseCandidates.slice(0, resolvedRequest.topK),
-                lexical: productLexicalCandidates.slice(0, resolvedRequest.topK),
+                lexical: lexicalFusionCandidates.slice(0, resolvedRequest.topK),
                 k: VECTOR_CANDIDATE_RRF_K_V1,
                 limit: resolvedRequest.topK,
             });
@@ -690,7 +771,7 @@ export class SemanticSearchService {
                     arm: 'fallback_lexical',
                     requestedLimit: diagnosticCandidateRetrievalLimit,
                     retrieve: () => vectorDatabase.retrieveLexical(collectionName, {
-                        query: lexicalFallbackQuery,
+                        query: diagnosticLexicalFallbackQuery,
                         limit: diagnosticCandidateRetrievalLimit,
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
@@ -748,9 +829,18 @@ export class SemanticSearchService {
                     }
                     : {}),
             });
+            const traceFallbackTerms = productLexicalFallbackAttempted
+                ? productLexicalFallbackTerms
+                : diagnosticLexicalFallbackTerms;
+            const traceFallbackQuery = productLexicalFallbackAttempted
+                ? productLexicalFallbackQuery
+                : diagnosticLexicalFallbackQuery;
             candidateTraceConsumer?.(buildSemanticSearchCandidateTrace({
                 productDense: productDenseCandidates.slice(0, resolvedRequest.topK),
                 productLexical: productLexicalCandidates.slice(0, resolvedRequest.topK),
+                ...(productLexicalFallback.length > 0
+                    ? { productLexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK) }
+                    : {}),
                 ...(diagnosticDense ? { diagnosticDense } : {}),
                 ...(diagnosticLexical ? { diagnosticLexical } : {}),
                 ...(diagnosticLexicalFallback ? { diagnosticLexicalFallback } : {}),
@@ -764,11 +854,11 @@ export class SemanticSearchService {
                     role: 'primary',
                     querySha256: hashSemanticSearchLexicalQuery(resolvedRequest.query),
                     matchMode: effectivePrimaryMatchMode,
-                }, ...(captureLexicalFallback ? [{
+                }, ...((productLexicalFallbackAttempted || captureLexicalFallback) ? [{
                     role: 'fallback_or' as const,
-                    querySha256: hashSemanticSearchLexicalQuery(lexicalFallbackQuery),
+                    querySha256: hashSemanticSearchLexicalQuery(traceFallbackQuery),
                     matchMode: 'any_terms' as const,
-                    ...(lexicalFallbackTerms ? { terms: [...lexicalFallbackTerms] } : {}),
+                    ...(traceFallbackTerms ? { terms: [...traceFallbackTerms] } : {}),
                 }] : [])],
             }));
             console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
@@ -874,8 +964,14 @@ export class SemanticSearchService {
 
     private resolveRequest(request: SemanticSearchRequest): Omit<
         Required<SemanticSearchRequest>,
-        'filter' | 'lexicalMatchMode'
-    > & { filter?: VectorFilter; lexicalMatchMode?: 'all_terms' | 'any_terms'; retrievalMode: RetrievalMode; scorePolicy: ScorePolicy } {
+        'filter' | 'lexicalMatchMode' | 'lexicalFallbackTerms'
+    > & {
+        filter?: VectorFilter;
+        lexicalMatchMode?: 'all_terms' | 'any_terms';
+        lexicalFallbackTerms?: string[];
+        retrievalMode: RetrievalMode;
+        scorePolicy: ScorePolicy;
+    } {
         const hybridEnabled = this.isHybridEnabled();
         const retrievalMode = request.retrievalMode ?? (hybridEnabled ? 'hybrid' : 'dense');
         const scorePolicy = request.scorePolicy ?? (retrievalMode === 'dense'
@@ -901,12 +997,37 @@ export class SemanticSearchService {
                 'lexicalMatchMode is invalid for dense retrieval; it applies only to lexical or hybrid retrieval.',
             );
         }
+        if (retrievalMode === 'dense' && request.lexicalFallbackTerms !== undefined) {
+            throw new Error(
+                'lexicalFallbackTerms is invalid for dense retrieval; it applies only to lexical or hybrid retrieval.',
+            );
+        }
+        if (
+            request.lexicalFallbackTerms !== undefined
+            && (
+                request.lexicalFallbackTerms.length < 1
+                || request.lexicalFallbackTerms.length > 8
+                || request.lexicalFallbackTerms.some((term) => (
+                    typeof term !== 'string'
+                    || term.length === 0
+                    || term !== term.trim()
+                    || term !== term.toLowerCase()
+                ))
+            )
+        ) {
+            throw new Error(
+                'lexicalFallbackTerms must contain 1 through 8 non-empty lowercase canonical terms.',
+            );
+        }
         return {
             codebasePath: request.codebasePath,
             query: request.query,
             topK: request.topK ?? 5,
             retrievalMode,
             lexicalMatchMode: request.lexicalMatchMode,
+            ...(request.lexicalFallbackTerms !== undefined
+                ? { lexicalFallbackTerms: [...request.lexicalFallbackTerms] }
+                : {}),
             filter: request.filter === undefined
                 ? undefined
                 : validateVectorFilter(request.filter),

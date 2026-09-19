@@ -61,6 +61,9 @@ type SearchCandidateLike = {
         content?: string | null;
         startLine?: number;
         endLine?: number;
+        evidenceContent?: string;
+        evidenceStartLine?: number;
+        evidenceEndLine?: number;
         ownerSymbolInstanceId?: string;
     };
     finalScore: number;
@@ -467,7 +470,29 @@ export function buildGroupedSymbolSearchResult(input: {
         startLine: input.representative.result.startLine ?? input.previewSpan.startLine,
         endLine: input.representative.result.endLine ?? input.previewSpan.endLine,
     };
-    const rawEvidenceSpan = isValidSearchSpan(representativeSpan) ? representativeSpan : input.previewSpan;
+    const representativeEvidenceSpan: SearchSpan = {
+        startLine: typeof input.representative.result.evidenceStartLine === "number"
+            ? input.representative.result.evidenceStartLine
+            : representativeSpan.startLine,
+        endLine: typeof input.representative.result.evidenceEndLine === "number"
+            ? input.representative.result.evidenceEndLine
+            : representativeSpan.endLine,
+    };
+    const sidecarEvidenceSpanValid = (
+        typeof input.representative.result.evidenceStartLine === "number"
+        && typeof input.representative.result.evidenceEndLine === "number"
+        && isValidSearchSpan(representativeEvidenceSpan)
+        && (
+            !registrySymbol
+            || (
+                representativeEvidenceSpan.startLine >= target.span.startLine
+                && representativeEvidenceSpan.endLine <= target.span.endLine
+            )
+        )
+    );
+    const rawEvidenceSpan = sidecarEvidenceSpanValid
+        ? representativeEvidenceSpan
+        : (isValidSearchSpan(representativeSpan) ? representativeSpan : input.previewSpan);
     const ownedEvidenceSpan = registrySymbol
         ? {
             startLine: Math.max(rawEvidenceSpan.startLine, target.span.startLine),
@@ -502,6 +527,10 @@ export function buildGroupedSymbolSearchResult(input: {
         span: target.span,
         content: String(input.representative.result.content || ""),
     });
+    const previewContent = sidecarEvidenceSpanValid
+        && typeof input.representative.result.evidenceContent === "string"
+        ? input.representative.result.evidenceContent
+        : String(input.representative.result.content || "");
     const callGraphHint = buildSearchGroupCallGraphHint({
         file: target.file,
         language: input.representative.result.language || "unknown",
@@ -534,7 +563,7 @@ export function buildGroupedSymbolSearchResult(input: {
             semantic: input.semanticMatch,
         },
         ...(input.chunkCount >= 2 ? { evidenceChunks: input.chunkCount } : {}),
-        preview: buildSearchGroupPreview(repSymbolLabel, String(input.representative.result.content || ""), input.previewMaxBytes),
+        preview: buildSearchGroupPreview(repSymbolLabel, previewContent, input.previewMaxBytes),
         ...(!searchSpansEqual(target.span, evidenceSpan) ? { evidenceSpan } : {}),
         navigation: buildSearchGraphNavigation(
             callGraphHint,

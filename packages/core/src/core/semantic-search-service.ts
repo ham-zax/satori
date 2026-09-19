@@ -246,9 +246,55 @@ function normalizeBreadcrumbs(value: unknown): string[] | undefined {
     return normalized.length > 0 ? normalized : undefined;
 }
 
+function selectLexicalOwnerEvidenceCandidate(
+    rankedResult: VectorCandidate,
+    lexicalCandidates: readonly VectorCandidate[],
+    representativeTerms: readonly string[] | undefined,
+): VectorCandidate | undefined {
+    const ownerSymbolInstanceId = rankedResult.document.metadata.ownerSymbolInstanceId;
+    if (
+        typeof ownerSymbolInstanceId !== 'string'
+        || ownerSymbolInstanceId.length === 0
+        || !representativeTerms
+        || representativeTerms.length === 0
+    ) {
+        return undefined;
+    }
+
+    const termCoverage = (candidate: VectorCandidate): number => {
+        const content = candidate.document.content.toLowerCase();
+        return representativeTerms.reduce((count, term) => (
+            term.length > 0 && content.includes(term)
+                ? count + 1
+                : count
+        ), 0);
+    };
+
+    const baselineCoverage = termCoverage(rankedResult);
+    const minimumRepresentativeCoverage = Math.ceil(representativeTerms.length / 2);
+    if (baselineCoverage < minimumRepresentativeCoverage) {
+        return undefined;
+    }
+
+    const ownerId = vectorCandidateOwnerId(rankedResult);
+    let best = rankedResult;
+    let bestCoverage = baselineCoverage;
+    for (const candidate of orderVectorCandidateArm(lexicalCandidates)) {
+        if (vectorCandidateOwnerId(candidate) !== ownerId) continue;
+        const coverage = termCoverage(candidate);
+        if (coverage > bestCoverage) {
+            best = candidate;
+            bestCoverage = coverage;
+        }
+    }
+
+    return best.document.id === rankedResult.document.id ? undefined : best;
+}
+
 function toSemanticSearchResult(
     result: VectorCandidate,
     backendScoreKind: 'dense_similarity' | 'lexical_rank' | 'rrf_fusion',
+    evidenceCandidate?: VectorCandidate,
 ): SemanticSearchResult {
     return {
         candidateId: result.document.id,
@@ -256,6 +302,11 @@ function toSemanticSearchResult(
         relativePath: result.document.relativePath,
         startLine: result.document.startLine,
         endLine: result.document.endLine,
+        ...(evidenceCandidate ? {
+            evidenceContent: evidenceCandidate.document.content,
+            evidenceStartLine: evidenceCandidate.document.startLine,
+            evidenceEndLine: evidenceCandidate.document.endLine,
+        } : {}),
         startByte: typeof result.document.metadata.startByte === 'number'
             ? result.document.metadata.startByte
             : undefined,
@@ -863,7 +914,15 @@ export class SemanticSearchService {
             }));
             console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
             const results = searchResults.map((result) => (
-                toSemanticSearchResult(result, 'rrf_fusion')
+                toSemanticSearchResult(
+                    result,
+                    'rrf_fusion',
+                    selectLexicalOwnerEvidenceCandidate(
+                        result,
+                        lexicalFusionCandidates,
+                        productLexicalFallbackTerms,
+                    ),
+                )
             ));
             console.log(`[Context] ✅ Found ${results.length} relevant hybrid results`);
             if (results.length > 0) {

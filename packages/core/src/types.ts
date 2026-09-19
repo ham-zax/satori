@@ -36,6 +36,10 @@ export interface SemanticSearchResult {
     relativePath: string;
     startLine: number;
     endLine: number;
+    /** Query-focused evidence from another chunk owned by the same symbol. */
+    evidenceContent?: string;
+    evidenceStartLine?: number;
+    evidenceEndLine?: number;
     startByte?: number;
     endByte?: number;
     language: string;

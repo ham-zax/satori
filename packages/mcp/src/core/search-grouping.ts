@@ -34,6 +34,7 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
     grouped: T[],
     limit: number,
     groupBy: SearchGroupBy,
+    implementationSeeking = false,
 ): {
     selected: T[];
     omitted: Array<{ group: T; reason: "file_diversity_cap" | "symbol_diversity_cap" | "visible_limit" }>;
@@ -94,9 +95,46 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
     // the output sequence: authoritative retrieval/reranker order remains the
     // only relevance order after diversity omits groups.
     const finalSelectedIds = new Set(selected.slice(0, limit).map((group) => group.__groupId));
-    const finalSelected = grouped
+    let finalSelected = grouped
         .filter((group) => finalSelectedIds.has(group.__groupId))
         .slice(0, limit);
+
+    if (implementationSeeking && groupBy === "symbol") {
+        const executableKinds = new Set(["class", "constructor", "function", "method"]);
+        const isExecutable = (group: T): boolean => (
+            executableKinds.has((group.symbolKind ?? "").toLowerCase())
+        );
+        const selectedByFile = new Map<string, T[]>();
+        for (const group of finalSelected) {
+            selectedByFile.set(group.target.file, [
+                ...(selectedByFile.get(group.target.file) ?? []),
+                group,
+            ]);
+        }
+
+        for (const [file, fileSelected] of selectedByFile) {
+            if (fileSelected.length < 2 || fileSelected.some(isExecutable)) {
+                continue;
+            }
+            const replacement = grouped.find((group) => (
+                group.target.file === file
+                && !finalSelectedIds.has(group.__groupId)
+                && isExecutable(group)
+            ));
+            const replaceable = [...fileSelected]
+                .reverse()
+                .find((group) => !group.__exactLexicalMatch);
+            if (!replacement || !replaceable) {
+                continue;
+            }
+            finalSelectedIds.delete(replaceable.__groupId);
+            finalSelectedIds.add(replacement.__groupId);
+        }
+
+        finalSelected = grouped
+            .filter((group) => finalSelectedIds.has(group.__groupId))
+            .slice(0, limit);
+    }
     const finalFileCounts = new Map<string, number>();
     const finalSymbolCounts = new Map<string, number>();
     for (const group of finalSelected) {

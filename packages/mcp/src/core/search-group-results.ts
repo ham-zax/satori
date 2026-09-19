@@ -90,6 +90,7 @@ type SearchQueryIntent = "identifier" | "semantic" | "mixed" | "uncertain";
 type SearchQueryPlanLike = {
     intent: SearchQueryIntent;
     referenceSeeking: boolean;
+    implementationSeeking?: boolean;
     exactMatchPinningEnabled: boolean;
 };
 
@@ -128,6 +129,7 @@ export function rankAndDiversifySearchGroups<
     groupedResults: T[];
     collapseDuplicateDeclarations: boolean;
     exactMatchPinningEnabled: boolean;
+    implementationSeeking: boolean;
     limit: number;
     groupBy: SearchGroupBy;
     orderAuthority?: SearchOrderAuthority;
@@ -155,10 +157,16 @@ export function rankAndDiversifySearchGroups<
         rankedResults,
         input.limit,
         input.groupBy,
+        input.implementationSeeking,
     );
     const completeDiversityApplied = input.limit >= rankedResults.length
         ? diversityApplied
-        : applyGroupDiversity(rankedResults, rankedResults.length, input.groupBy);
+        : applyGroupDiversity(
+            rankedResults,
+            rankedResults.length,
+            input.groupBy,
+            input.implementationSeeking,
+        );
     const visibleIds = new Set(diversityApplied.selected.map((group) => group.__groupId));
     const disclosureOrder = completeDiversityApplied.selected.filter(
         (group) => visibleIds.has(group.__groupId),
@@ -779,6 +787,7 @@ export function buildVisibleGroupedSearchResults(input: {
         collapseDuplicateDeclarations: input.queryPlan.referenceSeeking
             || input.queryPlan.intent === "identifier",
         exactMatchPinningEnabled: input.queryPlan.exactMatchPinningEnabled,
+        implementationSeeking: input.queryPlan.implementationSeeking === true,
         limit: input.limit,
         groupBy: input.groupBy,
         orderAuthority: input.orderAuthority,

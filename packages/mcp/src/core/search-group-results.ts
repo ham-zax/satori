@@ -484,7 +484,11 @@ export function buildGroupedSymbolSearchResult(input: {
         || registrySymbol?.symbolKey
         || buildFallbackGroupId(target.file, input.previewSpan);
     const repSymbolLabel = buildDisplaySymbolLabel({
-        symbolLabel: typeof input.representative.result.symbolLabel === "string" ? input.representative.result.symbolLabel : undefined,
+        symbolLabel: registrySymbol && registrySymbol.kind !== "file"
+            ? registrySymbol.label
+            : (typeof input.representative.result.symbolLabel === "string"
+                ? input.representative.result.symbolLabel
+                : undefined),
         symbolKind,
         relativePath: target.file,
         span: target.span,

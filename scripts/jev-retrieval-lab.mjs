@@ -181,6 +181,8 @@ function projectSatoriSearch(text) {
         symbolKind: typeof result?.symbolKind === "string" ? result.symbolKind : null,
         startLine: Number.isInteger(result?.target?.span?.startLine) ? result.target.span.startLine : null,
         endLine: Number.isInteger(result?.target?.span?.endLine) ? result.target.span.endLine : null,
+        evidenceStartLine: Number.isInteger(result?.evidenceSpan?.startLine) ? result.evidenceSpan.startLine : null,
+        evidenceEndLine: Number.isInteger(result?.evidenceSpan?.endLine) ? result.evidenceSpan.endLine : null,
         preview: typeof result?.preview === "string" ? result.preview.trim().slice(0, 900) : null,
     })));
 }
@@ -232,11 +234,27 @@ function exactSourceExcerpt(candidate, sourceRoot) {
     if (!fs.existsSync(resolvedFile) || !fs.statSync(resolvedFile).isFile()) return null;
 
     const lines = fs.readFileSync(resolvedFile, "utf8").split(/\r?\n/);
-    const startIndex = candidate.startLine - 1;
-    if (startIndex >= lines.length) return null;
-    const requestedEnd = Number.isInteger(candidate.endLine) && candidate.endLine >= candidate.startLine
-        ? candidate.endLine
+    const evidenceSpanValid = Number.isInteger(candidate.evidenceStartLine)
+        && Number.isInteger(candidate.evidenceEndLine)
+        && candidate.evidenceStartLine >= candidate.startLine
+        && candidate.evidenceEndLine >= candidate.evidenceStartLine
+        && (
+            !Number.isInteger(candidate.endLine)
+            || candidate.evidenceEndLine <= candidate.endLine
+        );
+    const excerptStartLine = evidenceSpanValid
+        ? candidate.evidenceStartLine
         : candidate.startLine;
+    const excerptEndLine = evidenceSpanValid
+        ? candidate.evidenceEndLine
+        : (
+            Number.isInteger(candidate.endLine) && candidate.endLine >= candidate.startLine
+                ? candidate.endLine
+                : candidate.startLine
+        );
+    const startIndex = excerptStartLine - 1;
+    if (startIndex >= lines.length) return null;
+    const requestedEnd = excerptEndLine;
     const endExclusive = Math.min(
         lines.length,
         requestedEnd,
@@ -548,10 +566,11 @@ async function main() {
         repeats: options.repeats,
         sourceReport: path.relative(process.cwd(), options.reportFile),
         sourceNormalization: {
-            mode: "exact_source_excerpt",
+            mode: "exact_matched_source_excerpt",
             sourceRoot: path.relative(process.cwd(), options.sourceRoot) || ".",
             maxChars: SOURCE_EXCERPT_MAX_CHARS,
             maxLines: SOURCE_EXCERPT_MAX_LINES,
+            preferReturnedEvidenceSpan: true,
             providerPreviewOmitted: true,
         },
         blindness: {

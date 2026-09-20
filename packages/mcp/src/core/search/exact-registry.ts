@@ -234,6 +234,53 @@ function exactMatchTiers(query: string, symbols: SymbolRecord[]): MatchTier[] {
     ];
 }
 
+function resolveIndexedExactTier(input: {
+    reason: "symbol_name" | "qualified_name";
+    candidates: readonly SymbolRecord[];
+    filterSymbol: (symbol: SymbolRecord) => boolean;
+    candidateSet: ExactRegistryLookupCandidateSet;
+}): ExactRegistryLookupResult | null {
+    const executableCandidates = input.candidates.filter((symbol) => symbol.kind !== "file");
+    const filtered = sortSymbols(uniqueByInstanceId(
+        executableCandidates.filter(input.filterSymbol),
+    ));
+    const debugBase = {
+        candidateSet: input.candidateSet,
+        inspectedSymbolCount: executableCandidates.length,
+        filteredSymbolCount: filtered.length,
+    };
+    if (filtered.length === 1) {
+        return {
+            status: "hit",
+            symbol: filtered[0],
+            reason: input.reason,
+            candidateSet: input.candidateSet,
+            debug: {
+                attempted: true,
+                status: "hit",
+                reason: input.reason,
+                ...debugBase,
+                matchedSymbolInstanceId: filtered[0].symbolInstanceId,
+            },
+        };
+    }
+    if (filtered.length > 1) {
+        return {
+            status: "ambiguous",
+            reason: "ambiguous",
+            candidateSet: input.candidateSet,
+            debug: {
+                attempted: true,
+                status: "ambiguous",
+                reason: "ambiguous",
+                ...debugBase,
+                ambiguousCount: filtered.length,
+            },
+        };
+    }
+    return null;
+}
+
 export function findExactRegistryMatch(input: ExactRegistryLookupInput): ExactRegistryLookupResult {
     const query = input.semanticQuery.trim();
     const baseDebug = (status: ExactRegistryLookupStatus, reason: ExactRegistryLookupReason, extra: Partial<ExactRegistryLookupDebug> = {}): ExactRegistryLookupDebug => ({
@@ -293,6 +340,29 @@ export function findExactRegistryMatch(input: ExactRegistryLookupInput): ExactRe
     }
 
     const scoped = exactPathScopedSymbols(input);
+    if (scoped.candidateSet === "registry_all") {
+        const indexedNameCandidates = input.registry.symbolsByName?.get(query);
+        if (indexedNameCandidates) {
+            const indexedNameResult = resolveIndexedExactTier({
+                reason: "symbol_name",
+                candidates: indexedNameCandidates,
+                filterSymbol: input.filterSymbol,
+                candidateSet: scoped.candidateSet,
+            });
+            if (indexedNameResult) return indexedNameResult;
+        }
+        const indexedQualifiedCandidates = input.registry.symbolsByQualifiedName.get(query);
+        if (indexedQualifiedCandidates) {
+            const indexedQualifiedResult = resolveIndexedExactTier({
+                reason: "qualified_name",
+                candidates: indexedQualifiedCandidates,
+                filterSymbol: input.filterSymbol,
+                candidateSet: scoped.candidateSet,
+            });
+            if (indexedQualifiedResult) return indexedQualifiedResult;
+        }
+    }
+
     const filteredSymbols = applyDeterministicFilters(scoped.symbols, input);
     const debugBase = {
         candidateSet: scoped.candidateSet,

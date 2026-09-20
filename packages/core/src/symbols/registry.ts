@@ -64,6 +64,8 @@ export interface SymbolRegistry {
     symbolsByInstanceId: Map<string, SymbolRecord>;
     symbolsByKey: Map<string, SymbolRecord[]>;
     symbolsByFile: Map<string, SymbolRecord[]>;
+    /** Derived in-memory index for deterministic exact-name lookup. */
+    symbolsByName?: Map<string, SymbolRecord[]>;
     symbolsByLabel: Map<string, SymbolRecord[]>;
     symbolsByQualifiedName: Map<string, SymbolRecord[]>;
     warnings: string[];
@@ -658,6 +660,7 @@ export function buildSymbolRegistry(input: BuildSymbolRegistryInput): SymbolRegi
     const symbolsByInstanceId = new Map<string, SymbolRecord>();
     const symbolsByKey = new Map<string, SymbolRecord[]>();
     const symbolsByFile = new Map<string, SymbolRecord[]>();
+    const symbolsByName = new Map<string, SymbolRecord[]>();
     const symbolsByLabel = new Map<string, SymbolRecord[]>();
     const symbolsByQualifiedName = new Map<string, SymbolRecord[]>();
     const warnings: string[] = [];
@@ -669,6 +672,7 @@ export function buildSymbolRegistry(input: BuildSymbolRegistryInput): SymbolRegi
         symbolsByInstanceId.set(symbol.symbolInstanceId, symbol);
         appendToMap(symbolsByKey, symbol.symbolKey, symbol);
         appendToMap(symbolsByFile, symbol.file, symbol);
+        appendToMap(symbolsByName, symbol.name, symbol);
         appendToMap(symbolsByLabel, symbol.label, symbol);
         appendToMap(symbolsByQualifiedName, symbol.qualifiedName, symbol);
     }
@@ -679,6 +683,7 @@ export function buildSymbolRegistry(input: BuildSymbolRegistryInput): SymbolRegi
         symbolsByInstanceId,
         symbolsByKey,
         symbolsByFile,
+        symbolsByName,
         symbolsByLabel,
         symbolsByQualifiedName,
         warnings,

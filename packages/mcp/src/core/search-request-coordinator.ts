@@ -1146,12 +1146,11 @@ export class SearchRequestCoordinator {
                 prepareReadiness: async () => frontDoor as SearchFrontDoorReady,
                 acquirePublicationLease: (prepared) => this.preparedRead.acquirePublicationLease(
                     prepared.effectiveRoot,
-                    prepared.freshnessDecision.mode === "served_previous_generation"
-                        ? prepared.publication.id
-                        : undefined,
+                    prepared.publication.id,
                 ),
-                isLeaseAdmitted: (_prepared, lease) => (
-                    this.preparedRead.isPublicationLeaseAdmitted(lease)
+                isLeaseAdmitted: (prepared, lease) => (
+                    prepared.publication.id === lease.id
+                    && this.preparedRead.isPublicationLeaseAdmitted(lease)
                 ),
             });
             const outcome = await session.read(async (prepared, lease): Promise<SearchToolTextResponse | undefined> => {

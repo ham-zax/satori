@@ -17,8 +17,11 @@ export interface ArchitectureOverviewBoundary {
     from: string;
     to: string;
     calls: number;
+    highConfidenceCalls: number;
     imports: number;
+    highConfidenceImports: number;
     evidenceCount: number;
+    highConfidenceEvidenceCount: number;
 }
 
 export interface ArchitectureOverviewHotspot {
@@ -27,7 +30,9 @@ export interface ArchitectureOverviewHotspot {
     file: string;
     language: string;
     callerCount: number;
+    highConfidenceCallerCount: number;
     callSiteCount: number;
+    highConfidenceCallSiteCount: number;
 }
 
 export interface ArchitectureOverviewResult {
@@ -136,15 +141,19 @@ export function buildArchitectureOverview(input: {
         from: string;
         to: string;
         calls: number;
+        highConfidenceCalls: number;
         imports: number;
+        highConfidenceImports: number;
     }>();
     const callersByTarget = new Map<string, Set<string>>();
+    const highConfidenceCallersByTarget = new Map<string, Set<string>>();
     const callSitesByTarget = new Map<string, number>();
+    const highConfidenceCallSitesByTarget = new Map<string, number>();
     let includedRelationshipCount = 0;
 
     for (const relationship of input.relationships) {
         if (relationship.type !== "CALLS" && relationship.type !== "IMPORTS") continue;
-        if (relationship.confidence === "low") continue;
+        const highConfidence = relationship.confidence === "high";
 
         const source = relationship.sourceInstanceId
             ? symbolsById.get(relationship.sourceInstanceId)
@@ -170,9 +179,21 @@ export function buildArchitectureOverview(input: {
         const to = areaForFile(targetFile);
         if (from !== to) {
             const key = `${from}\u0000${to}`;
-            const row = boundaryEvidence.get(key) ?? { from, to, calls: 0, imports: 0 };
-            if (relationship.type === "CALLS") row.calls += 1;
-            else row.imports += 1;
+            const row = boundaryEvidence.get(key) ?? {
+                from,
+                to,
+                calls: 0,
+                highConfidenceCalls: 0,
+                imports: 0,
+                highConfidenceImports: 0,
+            };
+            if (relationship.type === "CALLS") {
+                row.calls += 1;
+                if (highConfidence) row.highConfidenceCalls += 1;
+            } else {
+                row.imports += 1;
+                if (highConfidence) row.highConfidenceImports += 1;
+            }
             boundaryEvidence.set(key, row);
         }
 
@@ -186,6 +207,13 @@ export function buildArchitectureOverview(input: {
             callers.add(source.symbolInstanceId);
             callersByTarget.set(target.symbolInstanceId, callers);
             increment(callSitesByTarget, target.symbolInstanceId);
+            if (highConfidence) {
+                const highConfidenceCallers = highConfidenceCallersByTarget.get(target.symbolInstanceId)
+                    ?? new Set<string>();
+                highConfidenceCallers.add(source.symbolInstanceId);
+                highConfidenceCallersByTarget.set(target.symbolInstanceId, highConfidenceCallers);
+                increment(highConfidenceCallSitesByTarget, target.symbolInstanceId);
+            }
         }
     }
 
@@ -207,9 +235,11 @@ export function buildArchitectureOverview(input: {
         .map((row) => ({
             ...row,
             evidenceCount: row.calls + row.imports,
+            highConfidenceEvidenceCount: row.highConfidenceCalls + row.highConfidenceImports,
         }))
         .sort((left, right) => (
             right.evidenceCount - left.evidenceCount
+            || right.highConfidenceEvidenceCount - left.highConfidenceEvidenceCount
             || right.calls - left.calls
             || left.from.localeCompare(right.from)
             || left.to.localeCompare(right.to)
@@ -226,7 +256,9 @@ export function buildArchitectureOverview(input: {
                 file: symbol.file,
                 language: symbol.language,
                 callerCount: callers.size,
+                highConfidenceCallerCount: highConfidenceCallersByTarget.get(symbolId)?.size ?? 0,
                 callSiteCount: callSitesByTarget.get(symbolId) ?? 0,
+                highConfidenceCallSiteCount: highConfidenceCallSitesByTarget.get(symbolId) ?? 0,
             };
         })
         .filter((row): row is ArchitectureOverviewHotspot => row !== undefined)

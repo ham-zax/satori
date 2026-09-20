@@ -387,6 +387,7 @@ export type SearchReadinessInvalidationReason =
     | "observation_unavailable"
     | "observation_changed"
     | "revalidation_failed"
+    | "freshness_unchanged"
     | "freshness_changed";
 
 export interface SearchReadinessDebugHint {

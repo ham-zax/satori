@@ -963,10 +963,25 @@ export class SearchRequestCoordinator {
                     this.addSearchPhaseTiming(phaseTimings, 'prepareRead', prepareReadStartedAtMs);
                     return trackedRootState;
                 },
-                preparePostFreshnessTrackedRootRead: (absolutePath, invalidationReason) => {
+                preparePostFreshnessTrackedRootRead: async (absolutePath, invalidationReason) => {
+                    if (invalidationReason === "freshness_unchanged") {
+                        const cached = await this.preparedRead.getCachedPreparedRead(
+                            absolutePath,
+                            readinessDebug.operations,
+                        );
+                        if (cached.status === "hit") {
+                            preservePreparedProofAge = true;
+                            readinessDebug.proofMode = "warm";
+                            readinessDebug.invalidationReason = "none";
+                            readinessDebug.operations.warmReceiptRevalidations += 1;
+                            return cached.state;
+                        }
+                        readinessDebug.invalidationReason = cached.reason;
+                    } else {
+                        readinessDebug.invalidationReason = invalidationReason;
+                    }
                     preservePreparedProofAge = false;
                     readinessDebug.proofMode = "cold";
-                    readinessDebug.invalidationReason = invalidationReason;
                     readinessDebug.operations.coldReadinessChecks += 1;
                     readinessDebug.operations.postFreshnessColdChecks += 1;
                     return this.measureSearchPhase(

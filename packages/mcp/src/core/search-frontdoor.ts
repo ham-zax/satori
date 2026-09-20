@@ -58,7 +58,7 @@ export type SearchFrontDoorHost = {
         absolutePath: string,
         reason: Extract<
             SearchReadinessInvalidationReason,
-            "freshness_changed" | "observation_unavailable" | "observation_changed"
+            "freshness_unchanged" | "freshness_changed" | "observation_unavailable" | "observation_changed"
         >,
     ) => Promise<TrackedRootReadinessState>;
     assessSearchFreshness: (
@@ -297,9 +297,15 @@ export async function runSearchFrontDoor(
         return { kind: "blocked", payload: freshnessBlocked };
     }
 
+    const freshnessPreservesPreparedPublication = (
+        freshnessDecision.mode === "skipped_recent"
+        || freshnessDecision.mode === "skipped_source_unchanged"
+        || freshnessDecision.mode === "skipped_source_checkpoint_unavailable"
+        || freshnessDecision.mode === "read_only"
+    );
     const postFreshness = await host.preparePostFreshnessTrackedRootRead(
         absolutePath,
-        "freshness_changed",
+        freshnessPreservesPreparedPublication ? "freshness_unchanged" : "freshness_changed",
     );
     if (postFreshness.state === "ready") {
         if (path.resolve(postFreshness.root.path) !== path.resolve(initialRoot)) {

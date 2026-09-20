@@ -15,8 +15,10 @@ import {
   verifyReleaseRegistry,
 } from './release-registry.mjs';
 
-const REGISTRY_POLL_ATTEMPTS = 12;
 const REGISTRY_POLL_INTERVAL_MS = 5000;
+const REGISTRY_PROPAGATION_TIMEOUT_MS = 15 * 60 * 1000;
+const REGISTRY_POLL_ATTEMPTS = Math.floor(REGISTRY_PROPAGATION_TIMEOUT_MS / REGISTRY_POLL_INTERVAL_MS) + 1;
+const REGISTRY_PROGRESS_INTERVAL_ATTEMPTS = Math.floor(30_000 / REGISTRY_POLL_INTERVAL_MS);
 export const CANONICAL_RELEASE_REPOSITORY = 'https://github.com/ham-zax/satori.git';
 export const CANONICAL_RELEASE_REF = 'refs/remotes/satori-release/master';
 export const CANONICAL_MASTER_FETCH_ARGS = Object.freeze([
@@ -448,14 +450,21 @@ async function verifyPublished(key, version, localVersions, impls) {
       }
     }
     if (attempt < REGISTRY_POLL_ATTEMPTS) {
+      if (attempt % REGISTRY_PROGRESS_INTERVAL_ATTEMPTS === 0) {
+        const elapsedSeconds = Math.round((attempt * REGISTRY_POLL_INTERVAL_MS) / 1000);
+        log(
+          `Waiting for npm registry processing: ${packageName}@${version} is not fully visible after ${elapsedSeconds}s...`,
+        );
+      }
       await sleepImpl(REGISTRY_POLL_INTERVAL_MS);
     }
   }
+  const timeoutMinutes = REGISTRY_PROPAGATION_TIMEOUT_MS / 60_000;
   if (lastDependencyMismatch) {
-    throw new Error(`${lastDependencyMismatch} after ${REGISTRY_POLL_ATTEMPTS} attempts`);
+    throw new Error(`${lastDependencyMismatch} after waiting up to ${timeoutMinutes} minutes`);
   }
   throw new Error(
-    `${packageName}@${version} was not visible on the registry within ${REGISTRY_POLL_ATTEMPTS} attempts`
+    `${packageName}@${version} was not visible on the registry after waiting up to ${timeoutMinutes} minutes`
   );
 }
 

@@ -308,7 +308,7 @@ test('Core registry verification failure prevents MCP publish', async () => {
   });
   await assert.rejects(publishReleaseGraph(options), /not visible on the registry/);
   assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-core']);
-  assert.equal(options.records.sleepCalls.length, 11);
+  assert.equal(options.records.sleepCalls.length, 180);
 });
 
 test('MCP dependency mismatch prevents CLI publish', async () => {
@@ -357,9 +357,31 @@ test('registry visibility retries are bounded', async () => {
       throw { status: 1, stderr: 'npm error code E404\nversion not found' };
     },
   });
-  await assert.rejects(publishReleaseGraph(options), /not visible on the registry within 12 attempts/);
-  assert.deepEqual(recordedVersionCalls, Array.from({ length: 12 }, () => '@zokizuan/satori-core@3.6.0'));
-  assert.equal(options.records.sleepCalls.length, 11);
+  await assert.rejects(publishReleaseGraph(options), /not visible on the registry after waiting up to 15 minutes/);
+  assert.deepEqual(recordedVersionCalls, Array.from({ length: 181 }, () => '@zokizuan/satori-core@3.6.0'));
+  assert.equal(options.records.sleepCalls.length, 180);
+});
+
+test('registry visibility may arrive after the legacy one-minute window', async () => {
+  let coreVersionCalls = 0;
+  const logs = [];
+  const options = runnerOptions({
+    log: (line) => logs.push(line),
+    viewVersionImpl: (packageName, version) => {
+      if (packageName === NAMES.core) {
+        coreVersionCalls += 1;
+        if (coreVersionCalls <= 13) {
+          throw { status: 1, stderr: 'npm error code E404\nversion not found' };
+        }
+      }
+      return version;
+    },
+  });
+  const result = await publishReleaseGraph(options);
+  assert.deepEqual(result.published.map((entry) => entry.key), ['core', 'mcp', 'cli']);
+  assert.equal(coreVersionCalls, 14);
+  assert.equal(options.records.sleepCalls.length, 13);
+  assert.ok(logs.some((line) => line.includes('Waiting for npm registry processing')));
 });
 
 test('publish itself is never automatically retried', async () => {
@@ -653,8 +675,8 @@ test('incorrect dependency pins remain bounded and fail after all verification a
     },
   });
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
-  assert.equal(dependencyCalls, 12);
-  assert.equal(options.records.sleepCalls.length, 11);
+  assert.equal(dependencyCalls, 181);
+  assert.equal(options.records.sleepCalls.length, 180);
   assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
 });
 

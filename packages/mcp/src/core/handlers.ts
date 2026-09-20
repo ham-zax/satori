@@ -484,6 +484,7 @@ export class ToolHandlers {
             getPublicationNavigationAddress: (publication) => this.context.getPublicationNavigationAddress(publication),
             getPublicationNavigationStatus: (publication) => this.context.getPublicationNavigationStatus(publication),
             loadPreparedNavigationSymbolsByFile: this.loadPreparedNavigationSymbolsByFile.bind(this),
+            loadPreparedNavigationManifest: this.loadPreparedNavigationManifest.bind(this),
             loadPreparedNavigationCompatibility: this.loadPreparedNavigationCompatibility.bind(this),
             toolResponseBuilders: this.toolResponseBuilders,
             stringifyToolJson: this.stringifyToolJson.bind(this),
@@ -2019,6 +2020,10 @@ export class ToolHandlers {
         return composePreparedSymbolContext(normalizedInput, {
             prepareSnapshot: (request) => this.prepareSymbolContextSnapshot(request),
         });
+    }
+
+    public async handleArchitectureOverview(args: ToolArgs) {
+        return this.navigationHandlers.handleArchitectureOverview(args);
     }
 
     public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy) {

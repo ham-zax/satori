@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { architectureOverviewTool } from "./architecture_overview.js";
 import { manageIndexTool } from "./manage_index.js";
 import { searchCodebaseTool } from "./search_codebase.js";
 import { continueSearchTool } from "./continue_search.js";
@@ -18,6 +19,7 @@ type JsonSchemaObject = Record<string, unknown> & {
 export const toolList: McpTool[] = [
     manageIndexTool,
     searchCodebaseTool,
+    architectureOverviewTool,
     continueSearchTool,
     callGraphTool,
     detectChangesTool,

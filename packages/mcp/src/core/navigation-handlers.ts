@@ -16,6 +16,10 @@ import {
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
 import {
+    buildArchitectureOverview,
+    type ArchitectureOverviewScope,
+} from "./architecture-overview.js";
+import {
     PublishedFileAuthorizationError,
 } from "./published-file-authorization.js";
 import {
@@ -96,6 +100,9 @@ type NavigationHandlersHost = {
         preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
         file: string,
     ): ReturnType<JsonNavigationStore["getSymbolsByFile"]>;
+    loadPreparedNavigationManifest(
+        preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
+    ): ReturnType<JsonNavigationStore["getManifest"]>;
 
 
     loadPreparedNavigationCompatibility(
@@ -435,6 +442,143 @@ function formatUnknownError(error: unknown): string {
 
 export class NavigationHandlers {
     constructor(private readonly host: NavigationHandlersHost) {}
+
+    public async handleArchitectureOverview(
+        args: ToolArgs,
+    ): Promise<ToolTextResponse> {
+        const absolutePathResult = typeof args.path === "string"
+            ? requireAbsoluteFilesystemPath(args.path, "path")
+            : { ok: false as const, path: "", message: "path is required." };
+        if (!absolutePathResult.ok) {
+            return {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "error",
+                        reason: "invalid_path",
+                        message: absolutePathResult.message,
+                    }),
+                }],
+                isError: true,
+            };
+        }
+
+        const scope: ArchitectureOverviewScope = args.scope === "all" ? "all" : "runtime";
+        const limit = Number.isFinite(args.limit)
+            ? Math.max(1, Math.min(50, Math.floor(Number(args.limit))))
+            : 15;
+        const requestedRoot = absolutePathResult.absolutePath;
+        trackCodebasePath(requestedRoot);
+
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+            prepareReadiness: () => this.host.prepareNavigationRead(requestedRoot),
+            acquirePublicationLease: (prepared) => (
+                prepared.state === "ready"
+                    ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
+                    : undefined
+            ),
+            isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
+        });
+
+        const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
+            if (trackedRootState.state !== "ready") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: trackedRootState.state,
+                            path: requestedRoot,
+                            message: "A compatible completed Publication with navigation is required.",
+                        }),
+                    }],
+                };
+            }
+
+            const leasedRootState: Extract<TrackedRootReadinessState, { state: "ready" }> = {
+                ...trackedRootState,
+                publication: lease,
+                navigationStatus: await this.host.getPublicationNavigationStatus(lease),
+            };
+            const manifest = await this.host.loadPreparedNavigationManifest(leasedRootState);
+            if (manifest.status !== "ok") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: manifest.status === "missing"
+                                ? "missing_symbol_registry"
+                                : "incompatible_symbol_registry",
+                            path: leasedRootState.root.path,
+                            message: `Symbol registry is ${manifest.status}: ${manifest.reason}`,
+                        }),
+                    }],
+                };
+            }
+
+            const compatibility = await this.host.loadPreparedNavigationCompatibility(
+                leasedRootState,
+                manifest.manifestHash,
+            );
+            if (compatibility.relationships.status !== "ok") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: compatibility.relationships.status === "missing"
+                                ? "missing_relationship_navigation"
+                                : "incompatible_relationship_navigation",
+                            path: leasedRootState.root.path,
+                            message: `Relationship navigation is ${compatibility.relationships.status}: ${compatibility.relationships.reason}`,
+                        }),
+                    }],
+                };
+            }
+
+            const overview = buildArchitectureOverview({
+                manifest: manifest.registry.manifest,
+                symbols: manifest.registry.symbols,
+                relationships: compatibility.relationships.records,
+                scope,
+                limit,
+            });
+            const freshnessDecision = leasedRootState.freshnessDecision;
+            const warnings = freshnessDecision
+                ? buildFreshnessWarningCodes(freshnessDecision)
+                : [];
+            return {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "ok",
+                        path: leasedRootState.root.path,
+                        publicationId: lease.id,
+                        ...overview,
+                        ...(freshnessDecision?.sourceFreshness
+                            ? { sourceFreshness: freshnessDecision.sourceFreshness }
+                            : {}),
+                        ...(warnings.length > 0 ? { warnings } : {}),
+                    }),
+                }],
+            };
+        });
+
+        return outcome.status === "stale"
+            ? {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "not_ready",
+                        reason: "source_state_unverified",
+                        path: requestedRoot,
+                        message: "Publication authority changed while architecture evidence was being read; retry the request.",
+                    }),
+                }],
+            }
+            : outcome.result;
+    }
 
     public async handleFileOutline(
         args: FileOutlineInput,

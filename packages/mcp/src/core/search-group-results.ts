@@ -175,9 +175,7 @@ export function rankAndDiversifySearchGroups<
             input.behavioralOwnerSeeking,
         );
     const visibleIds = new Set(diversityApplied.selected.map((group) => group.__groupId));
-    const disclosureOrder = completeDiversityApplied.selected.filter(
-        (group) => visibleIds.has(group.__groupId),
-    ).concat(
+    const disclosureOrder = diversityApplied.selected.concat(
         completeDiversityApplied.selected.filter((group) => !visibleIds.has(group.__groupId)),
     );
     return {

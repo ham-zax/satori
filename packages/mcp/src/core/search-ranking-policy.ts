@@ -33,7 +33,8 @@ export function isTestPath(normalizedPath: string): boolean {
         || hasPathSegment(normalizedPath, "tests")
         || hasPathSegment(normalizedPath, "__tests__")
         || /\.test\.[^/]+$/.test(normalizedPath)
-        || /\.spec\.[^/]+$/.test(normalizedPath);
+        || /\.spec\.[^/]+$/.test(normalizedPath)
+        || /_(?:test|tests)\.[^/]+$/.test(normalizedPath);
 }
 
 export function isDocPath(normalizedPath: string): boolean {

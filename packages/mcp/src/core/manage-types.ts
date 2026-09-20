@@ -99,6 +99,19 @@ export interface ManageSourceFreshness {
     reason: string;
 }
 
+export interface ManageStructuralCoverage {
+    basis: "symbol_registry_manifest";
+    status: "ready" | "degraded";
+    eligibleFileCount: number;
+    gapFileCount: number;
+    gaps: Array<{
+        path: string;
+        language: string;
+        reason: "structural_evidence_unavailable";
+    }>;
+    omittedGapCount: number;
+}
+
 export interface ManageIndexResponseEnvelope {
     tool: "manage_index";
     version: 1;
@@ -129,6 +142,8 @@ export interface ManageIndexResponseEnvelope {
     symbolQuality?: SymbolQualitySummary | ManageCompactSymbolQuality;
     /** Declared claims combined with compatible per-language navigation evidence. */
     languageCapabilities?: LanguageCapabilityEvidenceSummary;
+    /** Bounded per-path structural gaps for languages that claim navigation support. */
+    structuralCoverage?: ManageStructuralCoverage;
     /** Deterministic filesystem changes observed by a completed sync. */
     syncStats?: { added: number; removed: number; modified: number };
 }

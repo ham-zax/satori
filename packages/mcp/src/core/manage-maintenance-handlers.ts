@@ -39,6 +39,7 @@ import type {
     ManageIndexStatus,
     ManageIndexStatusDetail,
     ManagePendingSync,
+    ManageStructuralCoverage,
 } from "./manage-types.js";
 import {
     formatRuntimeOwnersStatusLine,
@@ -595,6 +596,7 @@ export class ManageMaintenanceHandlers {
             // F9: observed symbol quality from registry (not parser-cause diagnosis).
             let symbolQuality: SymbolQualitySummary | undefined;
             let languageCapabilities: LanguageCapabilityEvidenceSummary | undefined;
+            let structuralCoverage: ManageStructuralCoverage | undefined;
             // Attach observed quality for lifecycle statuses that refer to a real root path.
             if (envelopeStatus === "ok" || envelopeStatus === "not_ready" || envelopeStatus === "not_indexed") {
                 const lease = trackedRootState.state === 'ready'
@@ -642,6 +644,35 @@ export class ManageMaintenanceHandlers {
                             navigationRoot: navigation.navigationRoot,
                             registryRead,
                         });
+                        if (registryRead.status === "ok" && registryRead.registry) {
+                            const structuralLanguages = new Set(
+                                languageCapabilities.languages
+                                    .filter((entry) => (
+                                        entry.declaredClaim !== "search_only"
+                                        && entry.declaredClaim !== "undeclared"
+                                    ))
+                                    .map((entry) => entry.language),
+                            );
+                            const eligibleFiles = registryRead.registry.manifest.files.filter((file) => (
+                                structuralLanguages.has(file.language.trim().toLowerCase())
+                            ));
+                            const gapFiles = eligibleFiles
+                                .filter((file) => file.definitionStatus === "structural_unavailable")
+                                .sort((left, right) => left.path.localeCompare(right.path));
+                            const disclosedGaps = gapFiles.slice(0, 50).map((file) => ({
+                                path: file.path,
+                                language: file.language,
+                                reason: "structural_evidence_unavailable" as const,
+                            }));
+                            structuralCoverage = {
+                                basis: "symbol_registry_manifest",
+                                status: gapFiles.length > 0 ? "degraded" : "ready",
+                                eligibleFileCount: eligibleFiles.length,
+                                gapFileCount: gapFiles.length,
+                                gaps: disclosedGaps,
+                                omittedGapCount: Math.max(0, gapFiles.length - disclosedGaps.length),
+                            };
+                        }
                     }
                     if (envelopeStatus === "ok") {
                         const observedSymbolQuality = symbolQuality;
@@ -721,6 +752,7 @@ export class ManageMaintenanceHandlers {
                             },
                     } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),
+                    ...(structuralCoverage ? { structuralCoverage } : {}),
                     ...(operation ? { operation } : {}),
                     ...(publication ? { publication } : {}),
                     ...(sourceFreshness ? { sourceFreshness } : {}),

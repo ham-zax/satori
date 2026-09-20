@@ -549,7 +549,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, bou
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage.",
+        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage, so read_file also serves as an exact-path coverage check: FILE_NOT_PUBLISHED means the path is outside the current Publication.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});

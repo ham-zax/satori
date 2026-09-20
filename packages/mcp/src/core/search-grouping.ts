@@ -158,9 +158,7 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
             if (!strongestExecutable || finalSelectedIds.has(strongestExecutable.__groupId)) {
                 continue;
             }
-            const replaceable = [...fileSelected]
-                .reverse()
-                .find((group) => group.score < strongestExecutable.score);
+            const replaceable = [...fileSelected].reverse()[0];
             if (!replaceable) {
                 continue;
             }

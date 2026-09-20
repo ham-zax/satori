@@ -1,5 +1,5 @@
 import { isLanguageCapabilitySupportedForLanguage } from '../../language';
-import type { RelationshipRecord } from '../../symbols';
+import { isCallableSymbolKind, type RelationshipRecord, type SymbolRecord } from '../../symbols';
 import { isTestOrFixturePath } from '../test-path';
 
 import {
@@ -12,6 +12,20 @@ import {
     resolveUnambiguousTarget,
 } from '../python-resolution';
 import type { CallResolutionContribution, CallResolutionEngine, CallResolutionEngineInput } from './contracts';
+
+function resolveSameClassThisMemberTarget(
+    source: SymbolRecord,
+    candidates: readonly SymbolRecord[],
+): SymbolRecord | undefined {
+    if (!source.parentKey) return undefined;
+    const sameClassCandidates = candidates.filter((candidate) => (
+        candidate.symbolInstanceId !== source.symbolInstanceId
+        && candidate.file === source.file
+        && candidate.parentKey === source.parentKey
+        && isCallableSymbolKind(candidate.kind)
+    ));
+    return sameClassCandidates.length === 1 ? sameClassCandidates[0] : undefined;
+}
 
 export class SyntacticResolutionContributionEngine implements CallResolutionEngine {
     resolveCalls(input: CallResolutionEngineInput): CallResolutionContribution {
@@ -38,7 +52,9 @@ export class SyntacticResolutionContributionEngine implements CallResolutionEngi
                 const target = !candidates || candidates.length === 0
                     ? undefined
                     : call.kind === 'member'
-                        ? undefined
+                        ? call.receiverText === 'this'
+                            ? resolveSameClassThisMemberTarget(source, candidates)
+                            : undefined
                         : resolveUnambiguousTarget(
                             source,
                             candidates.filter((candidate) => isEligibleCallTarget(call, candidate)),

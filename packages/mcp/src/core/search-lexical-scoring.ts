@@ -64,6 +64,7 @@ export type SearchQueryPlan = {
     testSeeking: boolean;
     documentationSeeking: boolean;
     implementationSeeking: boolean;
+    behavioralOwnerSeeking: boolean;
     writerSeeking: boolean;
     entrypointIntent: EntrypointQueryIntent;
     lexicalTerms: SearchLexicalTerm[];

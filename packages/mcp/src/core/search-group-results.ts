@@ -94,6 +94,7 @@ type SearchQueryPlanLike = {
     intent: SearchQueryIntent;
     referenceSeeking: boolean;
     implementationSeeking?: boolean;
+    behavioralOwnerSeeking?: boolean;
     exactMatchPinningEnabled: boolean;
 };
 
@@ -133,6 +134,7 @@ export function rankAndDiversifySearchGroups<
     collapseDuplicateDeclarations: boolean;
     exactMatchPinningEnabled: boolean;
     implementationSeeking: boolean;
+    behavioralOwnerSeeking: boolean;
     limit: number;
     groupBy: SearchGroupBy;
     orderAuthority?: SearchOrderAuthority;
@@ -161,6 +163,7 @@ export function rankAndDiversifySearchGroups<
         input.limit,
         input.groupBy,
         input.implementationSeeking,
+        input.behavioralOwnerSeeking,
     );
     const completeDiversityApplied = input.limit >= rankedResults.length
         ? diversityApplied
@@ -169,6 +172,7 @@ export function rankAndDiversifySearchGroups<
             rankedResults.length,
             input.groupBy,
             input.implementationSeeking,
+            input.behavioralOwnerSeeking,
         );
     const visibleIds = new Set(diversityApplied.selected.map((group) => group.__groupId));
     const disclosureOrder = completeDiversityApplied.selected.filter(
@@ -817,6 +821,7 @@ export function buildVisibleGroupedSearchResults(input: {
             || input.queryPlan.intent === "identifier",
         exactMatchPinningEnabled: input.queryPlan.exactMatchPinningEnabled,
         implementationSeeking: input.queryPlan.implementationSeeking === true,
+        behavioralOwnerSeeking: input.queryPlan.behavioralOwnerSeeking === true,
         limit: input.limit,
         groupBy: input.groupBy,
         orderAuthority: input.orderAuthority,

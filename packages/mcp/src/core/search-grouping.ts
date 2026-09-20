@@ -35,6 +35,7 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
     limit: number,
     groupBy: SearchGroupBy,
     implementationSeeking = false,
+    behavioralOwnerSeeking = false,
 ): {
     selected: T[];
     omitted: Array<{ group: T; reason: "file_diversity_cap" | "symbol_diversity_cap" | "visible_limit" }>;
@@ -98,12 +99,12 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
     let finalSelected = grouped
         .filter((group) => finalSelectedIds.has(group.__groupId))
         .slice(0, limit);
+    const executableKinds = new Set(["class", "constructor", "function", "method"]);
+    const isExecutable = (group: T): boolean => (
+        executableKinds.has((group.symbolKind ?? "").toLowerCase())
+    );
 
     if (implementationSeeking && groupBy === "symbol") {
-        const executableKinds = new Set(["class", "constructor", "function", "method"]);
-        const isExecutable = (group: T): boolean => (
-            executableKinds.has((group.symbolKind ?? "").toLowerCase())
-        );
         const selectedByFile = new Map<string, T[]>();
         for (const group of finalSelected) {
             selectedByFile.set(group.target.file, [
@@ -131,6 +132,39 @@ export function applyGroupDiversity<T extends SearchGroupResult>(
             finalSelectedIds.add(replacement.__groupId);
         }
 
+        finalSelected = grouped
+            .filter((group) => finalSelectedIds.has(group.__groupId))
+            .slice(0, limit);
+    }
+
+    if (behavioralOwnerSeeking && groupBy === "symbol") {
+        const selectedByFile = new Map<string, T[]>();
+        for (const group of finalSelected) {
+            selectedByFile.set(group.target.file, [
+                ...(selectedByFile.get(group.target.file) ?? []),
+                group,
+            ]);
+        }
+        const visibleFrontier = grouped.slice(0, limit);
+        for (const [file, fileSelected] of selectedByFile) {
+            if (fileSelected.length < 2) {
+                continue;
+            }
+            const strongestExecutable = visibleFrontier
+                .filter((group) => group.target.file === file && isExecutable(group))
+                .reduce<T | undefined>((strongest, group) => (
+                    !strongest || group.score > strongest.score ? group : strongest
+                ), undefined);
+            if (!strongestExecutable || finalSelectedIds.has(strongestExecutable.__groupId)) {
+                continue;
+            }
+            const replaceable = [...fileSelected].reverse()[0];
+            if (!replaceable) {
+                continue;
+            }
+            finalSelectedIds.delete(replaceable.__groupId);
+            finalSelectedIds.add(strongestExecutable.__groupId);
+        }
         finalSelected = grouped
             .filter((group) => finalSelectedIds.has(group.__groupId))
             .slice(0, limit);

@@ -7,8 +7,12 @@ import {
 } from './defaults';
 
 
+export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v2-single-line-web-bundles';
+
 const DEFAULT_ALL_TEXT_MAX_BYTES = 1_048_576;
 const TEXT_PROBE_BYTES = 8192;
+const GENERATED_SINGLE_LINE_WEB_ASSET_MIN_BYTES = 128 * 1024;
+const GENERATED_SINGLE_LINE_WEB_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.css']);
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
 
 export function normalizeSupportedExtension(extension: string): string {
@@ -70,6 +74,19 @@ async function isUtf8TextObservationUnderLimit(
     }
 }
 
+async function isLikelyGeneratedSingleLineWebAsset(
+    relativePath: string,
+    size: number,
+    readProbe: () => Promise<Buffer>,
+): Promise<boolean> {
+    if (size < GENERATED_SINGLE_LINE_WEB_ASSET_MIN_BYTES) return false;
+    const extension = path.extname(relativePath).toLowerCase();
+    if (!GENERATED_SINGLE_LINE_WEB_EXTENSIONS.has(extension)) return false;
+    const view = await readProbe();
+    if (view.length === 0) return false;
+    return !view.includes(0x0a) && !view.includes(0x0d);
+}
+
 export async function isIndexableFileObservationByPolicy(
     relativePath: string,
     size: number,
@@ -78,6 +95,7 @@ export async function isIndexableFileObservationByPolicy(
 ): Promise<boolean> {
     // Auxiliary inputs belong to source observation, never searchable documents.
     if (isSemanticAuxiliaryFilename(relativePath)) return false;
+    if (await isLikelyGeneratedSingleLineWebAsset(relativePath, size, readProbe)) return false;
 
     const normalizedExtensions = normalizeSupportedExtensions(supportedExtensions);
     const extensionSet = new Set(normalizedExtensions);

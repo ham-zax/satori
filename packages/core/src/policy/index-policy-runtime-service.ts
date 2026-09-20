@@ -3,7 +3,10 @@ import {
     getSupportedExtensionsForIndexProfile,
     type IndexProfile,
 } from '../config/defaults';
-import { normalizeSupportedExtensions } from '../config/index-policy';
+import {
+    INDEX_FILE_ADMISSION_VERSION,
+    normalizeSupportedExtensions,
+} from '../config/index-policy';
 import { IgnoreRuleService } from '../core/ignore-rule-service';
 import type { CustomIndexPolicyUpdate, ObservedResolvedIndexPolicy, PublicationRef } from '../generation/contracts';
 import { computeIndexPolicyControlSignature, observeIndexPolicyInputs } from '../core/index-policy-input-observer';
@@ -49,6 +52,7 @@ export function computeIndexPolicyHash(
 ): string {
     return crypto.createHash('sha256').update(JSON.stringify({
         profile,
+        fileAdmissionVersion: INDEX_FILE_ADMISSION_VERSION,
         extensions: supportedExtensions,
         ignorePatterns: effectiveIgnorePatterns,
     }), 'utf8').digest('hex');

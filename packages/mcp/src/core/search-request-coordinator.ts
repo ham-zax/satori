@@ -1166,7 +1166,7 @@ export class SearchRequestCoordinator {
                 absolutePath = absolutePathFromFrontDoor;
                 effectiveRoot = effectiveRootFromFrontDoor;
                 freshnessDecision = freshnessDecisionFromFrontDoor;
-                const navigationStatus = await this.preparedRead.getPublicationNavigationStatus(lease);
+                const navigationStatus = prepared.navigationStatus;
                 const partialIndexSearchWarnings = [
                     ...frontDoorWarnings.filter((warning) => warning !== "NAVIGATION_REINDEX_REQUIRED"),
                     ...(navigationStatus !== "valid" && navigationStatus !== "not_bound"

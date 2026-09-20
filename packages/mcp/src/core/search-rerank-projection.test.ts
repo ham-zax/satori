@@ -92,24 +92,35 @@ function evidence(overrides: Partial<CurrentSourceEvidence> = {}): CurrentSource
     };
 }
 
-test("canonical projection reports owner_not_found without a resolvable registry owner", async () => {
-    const readSourceEvidence = async () => {
-        throw new Error("must not read source without a registry owner");
-    };
+test("canonical projection admits ownerless candidates bound by the publication manifest", async () => {
     for (const result of [
         ownedResult({ ownerSymbolInstanceId: undefined }),
         ownedResult({ ownerSymbolInstanceId: "symbol-missing" }),
-        ownedResult({ relativePath: "src/other.ts" }),
     ]) {
-        assert.deepEqual(await projectPublicationBoundSearchRerankDocument({
+        const outcome = await projectPublicationBoundSearchRerankDocument({
             candidateId,
             codebaseRoot: "/repo",
             semanticQuery: "owner",
             result,
             registry: registry(),
-            readSourceEvidence,
-        }), { ok: false, candidateId, reason: "owner_not_found" });
+            readSourceEvidence: async () => evidence(),
+        });
+        assert.equal(outcome.ok, true, JSON.stringify(outcome));
     }
+});
+
+test("canonical projection reports owner_not_found without a registry owner or manifest file", async () => {
+    const readSourceEvidence = async () => {
+        throw new Error("must not read source without publication binding");
+    };
+    assert.deepEqual(await projectPublicationBoundSearchRerankDocument({
+        candidateId,
+        codebaseRoot: "/repo",
+        semanticQuery: "owner",
+        result: ownedResult({ relativePath: "src/other.ts" }),
+        registry: registry(),
+        readSourceEvidence,
+    }), { ok: false, candidateId, reason: "owner_not_found" });
 });
 
 test("canonical projection reports candidate_span_invalid for a span outside its owner", async () => {

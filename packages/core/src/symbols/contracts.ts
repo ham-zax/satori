@@ -141,7 +141,7 @@ export interface RelationshipRecord {
     file: string;
     span?: SymbolSpan;
     confidence: 'high' | 'medium' | 'low';
-    /** Present on new proof-backed native Python CALLS records. */
+    /** Present on proof-backed CALLS records. */
     resolutionAuthority?: ResolutionAuthority;
 }
 

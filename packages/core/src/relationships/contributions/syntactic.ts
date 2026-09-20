@@ -116,18 +116,23 @@ export class SyntacticResolutionContributionEngine implements CallResolutionEngi
                 const source = ownerForCall(symbolsByFile.get(file.path) ?? [], call);
                 if (!source) continue;
                 const candidates = targetIndex.get(call.calleeName);
+                const typedMemberTarget = candidates
+                    && call.kind === 'member'
+                    && call.receiverText !== 'this'
+                    ? resolveTypedMemberTarget({
+                        call,
+                        source,
+                        candidates,
+                        evidence,
+                        registry: input.registry,
+                    })
+                    : undefined;
                 const target = !candidates || candidates.length === 0
                     ? undefined
                     : call.kind === 'member'
                         ? call.receiverText === 'this'
                             ? resolveSameClassThisMemberTarget(source, candidates)
-                            : resolveTypedMemberTarget({
-                                call,
-                                source,
-                                candidates,
-                                evidence,
-                                registry: input.registry,
-                            })
+                            : typedMemberTarget
                         : resolveUnambiguousTarget(
                             source,
                             candidates.filter((candidate) => isEligibleCallTarget(call, candidate)),
@@ -142,6 +147,7 @@ export class SyntacticResolutionContributionEngine implements CallResolutionEngi
                     file: source.file,
                     span: relationshipSpan(call),
                     confidence: target.file === source.file ? 'high' : 'low',
+                    ...(typedMemberTarget ? { resolutionAuthority: 'direct_binding' as const } : {}),
                 };
                 recordsByKey.set(relationshipKey(record), record);
                 if (testReferencesReady && isTestOrFixturePath(source.file) && !isTestOrFixturePath(target.file)) {

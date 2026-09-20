@@ -99,6 +99,12 @@ export type ReceiverTypeBinding =
     | {
         readonly localName: string;
         readonly typeName: string;
+        readonly kind: 'local_annotation';
+        readonly span: SourceSpan;
+    }
+    | {
+        readonly localName: string;
+        readonly typeName: string;
         readonly kind: 'local_constructor';
         readonly span: SourceSpan;
         readonly statementBlockSpan: SourceSpan;

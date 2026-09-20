@@ -2,7 +2,7 @@ import type { Program } from 'oxc-parser' with { "resolution-mode": "require" };
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import { Utf8SourceMap } from './source-map';
-import type { CallSite, LanguageAnalysisInput, ModuleBinding } from './types';
+import type { CallSite, LanguageAnalysisInput, ModuleBinding, ReceiverTypeBinding } from './types';
 
 const { parseSync } = require('oxc-parser') as typeof import('oxc-parser', { with: { "resolution-mode": "require" } });
 
@@ -18,7 +18,7 @@ export type OxcEvidence = {
     readonly symbols: readonly ExtractedSymbol[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
-    readonly receiverTypeBindings: readonly [];
+    readonly receiverTypeBindings: readonly ReceiverTypeBinding[];
     readonly pythonFlowFacts: readonly [];
 } | {
     readonly complete: false;
@@ -133,6 +133,49 @@ function callSiteEvidence(node: AstNode, source: string): Pick<CallSite, 'kind' 
     };
 }
 
+function simpleTypeReferenceName(value: unknown): string | undefined {
+    if (!isAstNode(value)) return undefined;
+    if (value.type === 'TSTypeAnnotation' || value.type === 'TSParenthesizedType') {
+        return simpleTypeReferenceName(value.typeAnnotation);
+    }
+    if (value.type === 'TSUnionType') {
+        const members = Array.isArray(value.types)
+            ? value.types.filter(isAstNode)
+            : [];
+        const meaningful = members.filter((member) => (
+            member.type !== 'TSUndefinedKeyword'
+            && member.type !== 'TSNullKeyword'
+        ));
+        return meaningful.length === 1
+            ? simpleTypeReferenceName(meaningful[0])
+            : undefined;
+    }
+    if (value.type !== 'TSTypeReference') return undefined;
+    const typeName = value.typeName;
+    return isAstNode(typeName)
+        && typeName.type === 'Identifier'
+        && typeof typeName.name === 'string'
+        ? typeName.name
+        : undefined;
+}
+
+function variableAnnotationBinding(
+    node: AstNode,
+    sourceMap: Utf8SourceMap,
+): ReceiverTypeBinding | undefined {
+    if (node.type !== 'VariableDeclarator') return undefined;
+    const id = node.id;
+    if (!isAstNode(id) || id.type !== 'Identifier' || typeof id.name !== 'string') return undefined;
+    const typeName = simpleTypeReferenceName(id.typeAnnotation);
+    if (!typeName) return undefined;
+    return {
+        localName: id.name,
+        typeName,
+        kind: 'local_annotation',
+        span: sourceMap.spanFromUtf16(node.start, node.end),
+    };
+}
+
 function childNodes(node: AstNode): AstNode[] {
     const children: AstNode[] = [];
     for (const [key, value] of Object.entries(node)) {
@@ -176,6 +219,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
     const sourceMap = new Utf8SourceMap(input.content);
     const symbols: ExtractedSymbol[] = [];
     const callSites: CallSite[] = [];
+    const receiverTypeBindings: ReceiverTypeBinding[] = [];
     const visit = (
         node: AstNode,
         parent?: AstNode,
@@ -198,6 +242,8 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
                 span,
             });
         }
+        const annotationBinding = variableAnnotationBinding(node, sourceMap);
+        if (annotationBinding) receiverTypeBindings.push(annotationBinding);
         if (node.type === 'CallExpression' || node.type === 'NewExpression') {
             const name = calleeName(node);
             if (name) {
@@ -254,5 +300,5 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         }
     }
 
-    return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings: [], pythonFlowFacts: [] };
+    return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings, pythonFlowFacts: [] };
 }

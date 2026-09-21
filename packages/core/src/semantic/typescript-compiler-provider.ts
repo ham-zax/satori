@@ -40,6 +40,7 @@ export interface TypeScriptSemanticTarget {
 export interface TypeScriptCallEvidence {
     readonly sourceFile: string;
     readonly callSpan: SourceSpan;
+    readonly callKind: 'direct' | 'member' | 'constructor';
     readonly calleeName: string;
     readonly calleeText: string;
     readonly decision: TypeScriptSemanticDecision;
@@ -882,6 +883,11 @@ function evidenceForCall(
     return {
         sourceFile: projectFile.projectPath,
         callSpan: projectFile.sourceMap.spanFromUtf16(call.getStart(sourceFile), call.end),
+        callKind: ts.isNewExpression(call)
+            ? 'constructor'
+            : receiverForExpression(call.expression)
+                ? 'member'
+                : 'direct',
         calleeName: callCalleeName(call),
         calleeText: call.expression.getText(sourceFile),
         decision: candidates.decision,

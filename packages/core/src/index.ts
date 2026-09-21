@@ -131,12 +131,33 @@ export type {
 export {
     JsonNavigationStore,
 } from './navigation/store';
+export type {
+    NavigationResolutionEvidenceMatch,
+    NavigationResolutionEvidenceMatchKind,
+    NavigationResolutionEvidenceQueryInput,
+    NavigationResolutionEvidenceState,
+} from './navigation/store';
 export {
     isRepositoryRelativePath,
 } from './paths/repository-path';
 export {
+    RESOLUTION_CALL_CONSTRUCTS,
     isProofBackedAuthoritativeCall,
 } from './relationships/resolution';
+export type {
+    ResolutionCallConstruct,
+    ResolutionCallObservation,
+    ResolutionClaim,
+    ResolutionObservedCandidate,
+} from './relationships/resolution';
+export {
+    summarizeResolutionConstructCoverage,
+} from './relationships/resolution-coverage';
+export type {
+    ResolutionConstructCoverage,
+    ResolutionConstructCoverageGap,
+    ResolutionConstructCoverageStatus,
+} from './relationships/resolution-coverage';
 export {
     isTestOrFixturePath,
 } from './relationships/test-path';

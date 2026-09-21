@@ -84,7 +84,7 @@ test('canonicalizeSymbolSpanForHash omits absent optional fields and preserves f
 });
 
 test('relationship manifest validates compatibility anchor', () => {
-    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v2');
+    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v3');
 
     const manifest: RelationshipManifest = {
         schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,

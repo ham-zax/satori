@@ -1021,6 +1021,7 @@ export type CallGraphEdgeKind = "call" | "import" | "dynamic";
 
 export type InboundCoverageReason =
     | "no_relationships_extracted"
+    | "non_authoritative_resolution_evidence"
     | "suppressed_low_confidence"
     | "fallback_failed";
 
@@ -1030,6 +1031,9 @@ export interface InboundCoverageEvidence {
     suppressedRelationshipCount: number;
     fallbackAttempted: boolean;
     fallbackRecoveredCount: number;
+    exactReferenceCount: number;
+    ambiguousReferenceCount: number;
+    unresolvedReferenceCount: number;
     constructorResolutionApplicable: boolean;
 }
 
@@ -1087,6 +1091,37 @@ export interface CallGraphNoteResult {
     detail: string;
 }
 
+export interface CallGraphExactReferenceCandidateResult {
+    symbolId?: string;
+    qualifiedName?: string;
+    name: string;
+    file: string;
+    span: SearchSpan;
+}
+
+export interface CallGraphExactReferenceResult {
+    relationship: "caller" | "callee";
+    matchKind: import("@zokizuan/satori-core").NavigationResolutionEvidenceMatchKind;
+    decision: import("@zokizuan/satori-core").ResolutionClaim["decision"];
+    resolutionAuthority: import("@zokizuan/satori-core").ResolutionClaim["resolutionAuthority"];
+    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+    providerId: string;
+    providerVersion: string;
+    sourceSymbolId?: string;
+    sourceSymbolLabel?: string;
+    targetSymbolId?: string;
+    calleeName: string;
+    calleeText: string;
+    site: {
+        file: string;
+        startLine: number;
+        endLine?: number;
+        startColumn?: number;
+        endColumn?: number;
+    };
+    candidates: CallGraphExactReferenceCandidateResult[];
+}
+
 export interface CallGraphTestReferenceResult {
     file: string;
     symbolId: string;
@@ -1118,6 +1153,8 @@ export interface CallGraphTraversalResponseEnvelope {
     notes: CallGraphNoteResult[];
     warnings?: string[];
     inboundCoverageEvidence?: InboundCoverageEvidence;
+    exactReferences?: CallGraphExactReferenceResult[];
+    constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReferenceResult[];
     notesTruncated?: boolean;
     totalNoteCount?: number;

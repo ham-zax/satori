@@ -23,6 +23,13 @@ function claim(providerId: string, providerVersion: string, flowHops: number) {
             startByte: 0,
             endByte: 4,
         },
+        observation: {
+            kind: 'call',
+            calleeName: 'fixture',
+            calleeText: 'fixture',
+            construct: 'direct_call',
+            candidates: [],
+        },
         decision: 'unresolved',
         relationshipType: 'REFERENCES',
         resolutionAuthority: 'unresolved',

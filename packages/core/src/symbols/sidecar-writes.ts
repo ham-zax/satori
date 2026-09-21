@@ -25,6 +25,7 @@ import type {
     SourceSpan,
 } from '../language-analysis';
 import type {
+    ResolutionCallObservation,
     ResolutionClaim,
     ResolutionProofStep,
 } from '../relationships/resolution';
@@ -372,6 +373,34 @@ function canonicalizeResolutionProofStep(step: ResolutionProofStep): ResolutionP
     };
 }
 
+function canonicalizeResolutionCallObservation(
+    observation: ResolutionCallObservation,
+): ResolutionCallObservation {
+    return {
+        kind: 'call',
+        calleeName: observation.calleeName,
+        calleeText: observation.calleeText,
+        ...(observation.receiverText === undefined ? {} : { receiverText: observation.receiverText }),
+        ...(observation.receiverType === undefined ? {} : { receiverType: observation.receiverType }),
+        construct: observation.construct,
+        candidates: [...observation.candidates]
+            .map((candidate) => ({
+                file: candidate.file,
+                span: canonicalizeSourceSpan(candidate.span),
+                name: candidate.name,
+                ...(candidate.qualifiedName === undefined ? {} : { qualifiedName: candidate.qualifiedName }),
+                ...(candidate.symbolInstanceId === undefined ? {} : { symbolInstanceId: candidate.symbolInstanceId }),
+            }))
+            .sort((left, right) => (
+                compareStrings(left.file, right.file)
+                || left.span.startByte - right.span.startByte
+                || left.span.endByte - right.span.endByte
+                || compareStrings(left.name, right.name)
+                || compareStrings(left.symbolInstanceId ?? '', right.symbolInstanceId ?? '')
+            )),
+    };
+}
+
 function canonicalizeResolutionClaim(claim: ResolutionClaim): ResolutionClaim {
     return {
         providerId: claim.providerId,
@@ -382,6 +411,7 @@ function canonicalizeResolutionClaim(claim: ResolutionClaim): ResolutionClaim {
         ...(claim.targetInstanceId === undefined ? {} : { targetInstanceId: claim.targetInstanceId }),
         ...(claim.targetSymbol === undefined ? {} : { targetSymbol: claim.targetSymbol }),
         callSpan: canonicalizeSourceSpan(claim.callSpan),
+        observation: canonicalizeResolutionCallObservation(claim.observation),
         decision: claim.decision,
         relationshipType: claim.relationshipType,
         resolutionAuthority: claim.resolutionAuthority,

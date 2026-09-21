@@ -1,4 +1,11 @@
-import type { RelationshipRecord, SymbolRecord, SymbolRegistryManifest } from "@zokizuan/satori-core";
+import {
+    summarizeResolutionConstructCoverage,
+    type RelationshipRecord,
+    type ResolutionClaim,
+    type ResolutionConstructCoverage,
+    type SymbolRecord,
+    type SymbolRegistryManifest,
+} from "@zokizuan/satori-core";
 import type { PathCategory } from "./search-constants.js";
 import {
     classifyPathCategory,
@@ -49,6 +56,13 @@ export interface ArchitectureOverviewResult {
     areas: ArchitectureOverviewArea[];
     boundaries: ArchitectureOverviewBoundary[];
     hotspots: ArchitectureOverviewHotspot[];
+    relationshipEvidence: {
+        resolutionClaimCount: number;
+        resolvedClaimCount: number;
+        ambiguousClaimCount: number;
+        unresolvedClaimCount: number;
+        constructCoverage: ResolutionConstructCoverage[];
+    };
 }
 
 function normalizeFile(file: string): string {
@@ -122,6 +136,7 @@ export function buildArchitectureOverview(input: {
     manifest: SymbolRegistryManifest;
     symbols: readonly SymbolRecord[];
     relationships: readonly RelationshipRecord[];
+    resolutionClaims?: readonly ResolutionClaim[];
     scope: ArchitectureOverviewScope;
     limit: number;
 }): ArchitectureOverviewResult {
@@ -227,6 +242,10 @@ export function buildArchitectureOverview(input: {
         }
     }
 
+    const scopedClaims = (input.resolutionClaims ?? []).filter((claim) => (
+        input.scope === "all" || includeRuntimeFile(claim.sourceFile)
+    ));
+    const constructCoverage = summarizeResolutionConstructCoverage(scopedClaims, { gapLimit: 10 });
     const limit = Math.max(1, Math.floor(input.limit));
     const areas = [...areaSymbols.entries()]
         .map(([area, symbolCount]) => ({
@@ -296,5 +315,12 @@ export function buildArchitectureOverview(input: {
         areas,
         boundaries,
         hotspots,
+        relationshipEvidence: {
+            resolutionClaimCount: scopedClaims.length,
+            resolvedClaimCount: scopedClaims.filter((claim) => claim.decision === "resolved").length,
+            ambiguousClaimCount: scopedClaims.filter((claim) => claim.decision === "ambiguous").length,
+            unresolvedClaimCount: scopedClaims.filter((claim) => claim.decision === "unresolved").length,
+            constructCoverage,
+        },
     };
 }

@@ -2273,12 +2273,79 @@ function claimProofForCall(input: {
     return proof;
 }
 
+function resolutionObservationForPythonCall(input: {
+    call: CallSite;
+    proofSteps: readonly ResolutionProofStep[];
+    target?: SymbolRecord;
+    candidates?: readonly SymbolRecord[];
+}): ResolutionClaim['observation'] {
+    const candidateMap = new Map<string, SymbolRecord>();
+    for (const candidate of [...(input.candidates ?? []), ...(input.target ? [input.target] : [])]) {
+        candidateMap.set(candidate.symbolInstanceId, candidate);
+    }
+    const observedCandidates = [...candidateMap.values()]
+        .flatMap((candidate) => {
+            if (
+                candidate.span.startByte === undefined
+                || candidate.span.endByte === undefined
+                || candidate.span.startColumn === undefined
+                || candidate.span.endColumn === undefined
+            ) return [];
+            return [{
+                file: candidate.file,
+                span: {
+                    startLine: candidate.span.startLine,
+                    endLine: candidate.span.endLine,
+                    startByte: candidate.span.startByte,
+                    endByte: candidate.span.endByte,
+                    startColumn: candidate.span.startColumn,
+                    endColumn: candidate.span.endColumn,
+                },
+                name: candidate.name,
+                qualifiedName: candidate.qualifiedName,
+                symbolInstanceId: candidate.symbolInstanceId,
+            }];
+        })
+        .sort((left, right) => (
+            compareStrings(left.file, right.file)
+            || left.span.startByte - right.span.startByte
+            || compareStrings(left.symbolInstanceId, right.symbolInstanceId)
+        ));
+    const construct = input.proofSteps.some((step) => step.kind === 'callback_origin')
+        ? 'callback_flow' as const
+        : input.call.kind === 'constructor'
+            ? 'constructor_call' as const
+            : input.call.kind === 'member'
+                ? input.proofSteps.some((step) => (
+                    step.kind === 'receiver_type_binding'
+                    || step.kind === 'parameter_annotation'
+                    || step.kind === 'field_origin'
+                ))
+                    ? 'typed_member_call' as const
+                    : 'member_call' as const
+                : input.call.kind === 'direct'
+                    ? 'direct_call' as const
+                    : 'unknown_call' as const;
+    return {
+        kind: 'call',
+        calleeName: input.call.calleeName,
+        calleeText: input.call.qualifiedCallee
+            ?? (input.call.receiverText
+                ? `${input.call.receiverText}.${input.call.calleeName}`
+                : input.call.calleeName),
+        ...(input.call.receiverText ? { receiverText: input.call.receiverText } : {}),
+        construct,
+        candidates: observedCandidates,
+    };
+}
+
 function buildResolutionClaim(input: {
     source: SymbolRecord;
     call: CallSite;
     evidence: PythonResolutionAnalysisInput;
     registry: SymbolRegistry;
     target?: SymbolRecord;
+    candidates?: readonly SymbolRecord[];
     resolution?: PythonFlowResolution;
 }): ResolutionClaim {
     const decision = input.resolution?.decision ?? (input.target ? 'resolved' : 'unresolved');
@@ -2301,6 +2368,12 @@ function buildResolutionClaim(input: {
         sourceInstanceId: input.source.symbolInstanceId,
         ...(input.target ? { targetInstanceId: input.target.symbolInstanceId, targetSymbol: input.target.qualifiedName } : {}),
         callSpan: { ...input.call.span },
+        observation: resolutionObservationForPythonCall({
+            call: input.call,
+            proofSteps,
+            target: input.target,
+            candidates: input.candidates,
+        }),
         decision,
         relationshipType: decision === 'resolved' ? 'CALLS' : 'REFERENCES',
         resolutionAuthority: resolutionAuthorityForProof({
@@ -2482,6 +2555,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                     evidence,
                     registry: input.registry,
                     target,
+                    candidates,
                     resolution,
                 })
                 : undefined;

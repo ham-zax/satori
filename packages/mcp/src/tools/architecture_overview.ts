@@ -44,7 +44,7 @@ function formatWorkspaceAuthorizationError(path: string, error: unknown): ToolRe
 export const architectureOverviewTool: McpTool = {
     name: "architecture_overview",
     description: () =>
-        "Return bounded deterministic architecture facts from the current Publication's symbol registry and relationship sidecar: logical areas, cross-area CALLS/IMPORTS evidence, call hotspots, and coverage/filtering counts. This is a structural evidence view, not an inferred architecture narrative: it does not invent layers, clusters, services, or missing relationships. Use scope=runtime to suppress tests/docs/generated/configuration noise; use scope=all for the full published navigation corpus.",
+        "Return bounded deterministic architecture facts from the current Publication's symbol registry and relationship sidecar: logical areas, cross-area CALLS/IMPORTS evidence, call hotspots, filtering counts, and semantic resolution-claim construct coverage with exact gap spans. This is a structural evidence view, not an inferred architecture narrative: ambiguous/unresolved claims remain coverage evidence and are not counted as CALLS. Use scope=runtime to suppress tests/docs/generated/configuration noise; use scope=all for the full published navigation corpus.",
     inputSchemaZod: () => architectureOverviewInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = architectureOverviewInputSchema.safeParse(args || {});

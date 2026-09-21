@@ -3,6 +3,8 @@ import {
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
 } from '../symbols';
+import type { RelationshipAnalysisEvidence } from '../relationships';
+import type { ResolutionClaim } from '../relationships/resolution';
 import type {
     RelationshipManifest,
     RelationshipRecord,
@@ -33,6 +35,7 @@ type NavigationStoreRelationshipsOk = {
     manifestHash: string;
     manifest: RelationshipManifest;
     records: RelationshipRecord[];
+    analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     warnings: string[];
 };
 
@@ -103,6 +106,35 @@ export interface NavigationCompatibilityState {
 export interface NavigationCompatibilityInput extends NavigationStoreInput {
     expectedSymbolRegistryManifestHash?: string;
 }
+
+export type NavigationResolutionEvidenceMatchKind =
+    | 'source_call'
+    | 'resolved_target'
+    | 'candidate_target';
+
+export interface NavigationResolutionEvidenceQueryInput extends NavigationStoreInput {
+    expectedSymbolRegistryManifestHash?: string;
+    sourceFile?: string;
+    sourceInstanceId?: string;
+    symbolInstanceId?: string;
+    symbolQualifiedName?: string;
+}
+
+export interface NavigationResolutionEvidenceMatch {
+    claim: ResolutionClaim;
+    matchKind: NavigationResolutionEvidenceMatchKind;
+}
+
+export type NavigationResolutionEvidenceState =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        manifest: RelationshipManifest;
+        matches: NavigationResolutionEvidenceMatch[];
+        warnings: string[];
+    }
+    | NavigationStoreFailure;
 
 function normalizeRelativeFilePath(filePath: string): string {
     return filePath.trim().replace(/\\/g, '/').replace(/^\/+/, '');
@@ -253,6 +285,7 @@ async function readRelationshipState(input: NavigationRelationshipsQueryInput): 
         manifestHash: result.manifestHash,
         manifest: result.manifest,
         records: [...records].sort(compareRelationshipRecords),
+        analysisByFile: result.analysisByFile,
         warnings: result.warnings,
     };
 }
@@ -365,6 +398,58 @@ export class JsonNavigationStore {
             this.relationshipStateByRoot.delete(root);
         }
         return resolved;
+    }
+
+    public async getResolutionEvidence(
+        input: NavigationResolutionEvidenceQueryInput,
+    ): Promise<NavigationResolutionEvidenceState> {
+        const relationshipState = await this.getRelationships({
+            normalizedRootPath: input.normalizedRootPath,
+            publicationId: input.publicationId,
+            navigationRoot: input.navigationRoot,
+            expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
+        });
+        if (relationshipState.status !== 'ok') return relationshipState;
+
+        const sourceFile = input.sourceFile ? normalizeRelativeFilePath(input.sourceFile) : undefined;
+        const matches: NavigationResolutionEvidenceMatch[] = [];
+        const claims = sourceFile
+            ? relationshipState.analysisByFile.get(sourceFile)?.resolutionClaims ?? []
+            : [...relationshipState.analysisByFile.values()].flatMap((evidence) => evidence.resolutionClaims ?? []);
+        for (const claim of claims) {
+            let matchKind: NavigationResolutionEvidenceMatchKind | undefined;
+            if (input.sourceInstanceId && claim.sourceInstanceId === input.sourceInstanceId) {
+                matchKind = 'source_call';
+            } else if (
+                (input.symbolInstanceId && claim.targetInstanceId === input.symbolInstanceId)
+                || (input.symbolQualifiedName && claim.targetSymbol === input.symbolQualifiedName)
+            ) {
+                matchKind = 'resolved_target';
+            } else if (
+                claim.decision !== 'resolved'
+                && claim.observation.candidates.some((candidate) => (
+                    (input.symbolInstanceId && candidate.symbolInstanceId === input.symbolInstanceId)
+                    || (input.symbolQualifiedName && candidate.qualifiedName === input.symbolQualifiedName)
+                ))
+            ) {
+                matchKind = 'candidate_target';
+            }
+            if (matchKind) matches.push({ claim, matchKind });
+        }
+        matches.sort((left, right) => (
+            compareStrings(left.claim.sourceFile, right.claim.sourceFile)
+            || left.claim.callSpan.startByte - right.claim.callSpan.startByte
+            || left.claim.callSpan.endByte - right.claim.callSpan.endByte
+            || compareStrings(left.matchKind, right.matchKind)
+        ));
+        return {
+            status: 'ok',
+            rootPath: relationshipState.rootPath,
+            manifestHash: relationshipState.manifestHash,
+            manifest: relationshipState.manifest,
+            matches,
+            warnings: relationshipState.warnings,
+        };
     }
 
     public async getCompatibilityState(input: NavigationCompatibilityInput): Promise<NavigationCompatibilityState> {

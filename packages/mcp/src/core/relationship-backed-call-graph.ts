@@ -4,6 +4,8 @@ import {
     getRelationshipsForSymbol,
     isTestOrFixturePath,
     JsonNavigationStore,
+    summarizeResolutionConstructCoverage,
+    type NavigationResolutionEvidenceMatch,
     type RelationshipRecord,
     type SymbolRecord,
     type SymbolRegistry,
@@ -11,6 +13,7 @@ import {
 import type {
     CallGraphDirection,
     CallGraphEdgeResult as CallGraphEdge,
+    CallGraphExactReferenceResult as CallGraphExactReference,
     CallGraphNodeResult as CallGraphNode,
     CallGraphNoteResult as CallGraphNote,
     CallGraphTestReferenceResult as CallGraphTestReference,
@@ -29,6 +32,7 @@ type RelationshipBackedCallGraphHost = {
 };
 
 const DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT = 50;
+const DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT = 100;
 
 export type RelationshipBackedCallGraphInput = {
     codebaseRoot: string;
@@ -97,6 +101,8 @@ export type RelationshipBackedCallGraphResult = {
     edges: CallGraphEdge[];
     notes: CallGraphNote[];
     warnings?: string[];
+    exactReferences?: CallGraphExactReference[];
+    constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReference[];
     notesTruncated: boolean;
     totalNoteCount: number;
@@ -116,9 +122,13 @@ export type RelationshipBackedCallGraphResult = {
  */
 export function resolveInboundCoverageReason(input: {
     suppressedRelationshipCount: number;
+    nonAuthoritativeReferenceCount: number;
     fallbackAttempted: boolean;
     fallbackRecoveredCount: number;
 }): InboundCoverageReason {
+    if (input.nonAuthoritativeReferenceCount > 0) {
+        return "non_authoritative_resolution_evidence";
+    }
     if (input.suppressedRelationshipCount > 0 && input.fallbackRecoveredCount === 0) {
         return input.fallbackAttempted
             ? "fallback_failed"
@@ -241,6 +251,71 @@ export class RelationshipBackedCallGraph {
 
     private sortEdges(edges: CallGraphEdge[]): CallGraphEdge[] {
         return [...edges].sort((a, b) => this.compareEdges(a, b));
+    }
+
+    private sortExactReferences(references: CallGraphExactReference[]): CallGraphExactReference[] {
+        return [...references].sort((a, b) => {
+            const fileCmp = compareNullableStringsAsc(a.site.file, b.site.file);
+            if (fileCmp !== 0) return fileCmp;
+            const startCmp = compareNullableNumbersAsc(a.site.startLine, b.site.startLine);
+            if (startCmp !== 0) return startCmp;
+            const relationshipCmp = compareNullableStringsAsc(a.relationship, b.relationship);
+            if (relationshipCmp !== 0) return relationshipCmp;
+            const decisionCmp = compareNullableStringsAsc(a.decision, b.decision);
+            if (decisionCmp !== 0) return decisionCmp;
+            return compareNullableStringsAsc(a.calleeText, b.calleeText);
+        });
+    }
+
+    private buildExactReferences(input: {
+        matches: readonly NavigationResolutionEvidenceMatch[];
+        relationship: "caller" | "callee";
+        registry: SymbolRegistry;
+        targetSymbolId?: string;
+    }): CallGraphExactReference[] {
+        const references = input.matches.map(({ claim, matchKind }): CallGraphExactReference => {
+            const source = claim.sourceInstanceId
+                ? input.registry.symbolsByInstanceId.get(claim.sourceInstanceId)
+                : undefined;
+            return {
+                relationship: input.relationship,
+                matchKind,
+                decision: claim.decision,
+                resolutionAuthority: claim.resolutionAuthority,
+                construct: claim.observation.construct,
+                providerId: claim.providerId,
+                providerVersion: claim.providerVersion,
+                ...(claim.sourceInstanceId ? { sourceSymbolId: claim.sourceInstanceId } : {}),
+                ...(source?.label ? { sourceSymbolLabel: source.label } : {}),
+                ...(input.targetSymbolId
+                    ? { targetSymbolId: input.targetSymbolId }
+                    : claim.targetInstanceId
+                        ? { targetSymbolId: claim.targetInstanceId }
+                        : {}),
+                calleeName: claim.observation.calleeName,
+                calleeText: claim.observation.calleeText,
+                site: {
+                    file: claim.sourceFile,
+                    startLine: claim.callSpan.startLine,
+                    ...(claim.callSpan.endLine !== claim.callSpan.startLine
+                        ? { endLine: claim.callSpan.endLine }
+                        : {}),
+                    startColumn: claim.callSpan.startColumn,
+                    endColumn: claim.callSpan.endColumn,
+                },
+                candidates: claim.observation.candidates.map((candidate) => ({
+                    ...(candidate.symbolInstanceId ? { symbolId: candidate.symbolInstanceId } : {}),
+                    ...(candidate.qualifiedName ? { qualifiedName: candidate.qualifiedName } : {}),
+                    name: candidate.name,
+                    file: candidate.file,
+                    span: {
+                        startLine: candidate.span.startLine,
+                        endLine: candidate.span.endLine,
+                    },
+                })),
+            };
+        });
+        return this.sortExactReferences(references);
     }
 
     private sortTestReferences(references: CallGraphTestReference[]): CallGraphTestReference[] {
@@ -443,6 +518,50 @@ export class RelationshipBackedCallGraph {
             input.registry,
             input.resolvedSymbol.symbolInstanceId,
         );
+        const [sourceEvidence, inboundEvidence] = await Promise.all([
+            this.host.navigationStore.getResolutionEvidence({
+                normalizedRootPath: input.codebaseRoot,
+                publicationId: input.publicationId,
+                navigationRoot: input.navigationRoot,
+                expectedSymbolRegistryManifestHash: input.registryManifestHash,
+                sourceInstanceId: input.resolvedSymbol.symbolInstanceId,
+            }),
+            this.host.navigationStore.getResolutionEvidence({
+                normalizedRootPath: input.codebaseRoot,
+                publicationId: input.publicationId,
+                navigationRoot: input.navigationRoot,
+                expectedSymbolRegistryManifestHash: input.registryManifestHash,
+                symbolInstanceId: input.resolvedSymbol.symbolInstanceId,
+                symbolQualifiedName: input.resolvedSymbol.qualifiedName,
+            }),
+        ]);
+        if (sourceEvidence.status !== "ok" || inboundEvidence.status !== "ok") {
+            return null;
+        }
+        const outboundExactReferences = (input.direction === "callees" || input.direction === "both")
+            ? this.buildExactReferences({
+                matches: sourceEvidence.matches,
+                relationship: "callee",
+                registry: input.registry,
+            })
+            : [];
+        const inboundExactReferences = (input.direction === "callers" || input.direction === "both")
+            ? this.buildExactReferences({
+                matches: inboundEvidence.matches,
+                relationship: "caller",
+                registry: input.registry,
+                targetSymbolId: input.resolvedSymbol.symbolInstanceId,
+            })
+            : [];
+        const allExactReferences = this.sortExactReferences([
+            ...outboundExactReferences,
+            ...inboundExactReferences,
+        ]);
+        const exactReferencesTruncated = allExactReferences.length > DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT;
+        const exactReferences = allExactReferences.slice(0, DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT);
+        const constructCoverage = summarizeResolutionConstructCoverage(
+            sourceEvidence.matches.map((match) => match.claim),
+        );
 
         const suppressedLowConfidenceRecords = neighbors.suppressedLowConfidenceRecords || [];
         const resolveNodeSymbol = (symbolInstanceId: string): SymbolRecord | undefined => (
@@ -591,10 +710,18 @@ export class RelationshipBackedCallGraph {
         const suppressedInboundCount = suppressedLowConfidenceRecords.filter((record) => (
             record.targetInstanceId === input.resolvedSymbol.symbolInstanceId
         )).length;
+        const ambiguousInboundReferenceCount = inboundExactReferences.filter((reference) => (
+            reference.decision === "ambiguous"
+        )).length;
+        const unresolvedInboundReferenceCount = inboundExactReferences.filter((reference) => (
+            reference.decision === "unresolved"
+        )).length;
+        const nonAuthoritativeInboundReferenceCount = ambiguousInboundReferenceCount + unresolvedInboundReferenceCount;
         const inboundCoverageEvidence: InboundCoverageEvidence | undefined = hasNoInboundEdges
             ? {
                 reason: resolveInboundCoverageReason({
                     suppressedRelationshipCount: suppressedInboundCount,
+                    nonAuthoritativeReferenceCount: nonAuthoritativeInboundReferenceCount,
                     fallbackAttempted: shouldAttemptDynamicCallerFallback,
                     fallbackRecoveredCount: addedDynamicCallerEdges.length,
                 }),
@@ -602,6 +729,9 @@ export class RelationshipBackedCallGraph {
                 suppressedRelationshipCount: suppressedInboundCount,
                 fallbackAttempted: shouldAttemptDynamicCallerFallback,
                 fallbackRecoveredCount: addedDynamicCallerEdges.length,
+                exactReferenceCount: inboundExactReferences.length,
+                ambiguousReferenceCount: ambiguousInboundReferenceCount,
+                unresolvedReferenceCount: unresolvedInboundReferenceCount,
                 // Constructor-receiver resolution is the index-time extraction
                 // path that produces inbound CALLS for Python class symbols.
                 // "Applicable" records that the path exists for this symbol,
@@ -616,6 +746,10 @@ export class RelationshipBackedCallGraph {
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
             ...(hasNoInboundEdges ? [INBOUND_COVERAGE_PARTIAL_WARNING] : []),
+            ...(hasNoInboundEdges && nonAuthoritativeInboundReferenceCount > 0
+                ? [`CALL_GRAPH_NON_AUTHORITATIVE_INBOUND_REFERENCES:${nonAuthoritativeInboundReferenceCount}`]
+                : []),
+            ...(exactReferencesTruncated ? ["CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"] : []),
         ])].sort(compareContractStrings);
         // Sort first for determinism within bands, then production-first inbound note priority.
         const combinedNotes = prioritizeInboundSuppressedNotes(this.sortNotes([
@@ -670,6 +804,8 @@ export class RelationshipBackedCallGraph {
                 nodeCount: combinedNodes.length,
                 edgeCount: combinedEdges.length,
             },
+            ...(exactReferences.length > 0 ? { exactReferences } : {}),
+            ...(constructCoverage.length > 0 ? { constructCoverage } : {}),
             ...(testReferences.length > 0 ? { testReferences } : {}),
             ...(hints ? { hints } : {}),
             ...(inboundCoverageEvidence ? { inboundCoverageEvidence } : {}),

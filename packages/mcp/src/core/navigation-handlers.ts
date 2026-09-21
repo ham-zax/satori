@@ -541,6 +541,8 @@ export class NavigationHandlers {
                 manifest: manifest.registry.manifest,
                 symbols: manifest.registry.symbols,
                 relationships: compatibility.relationships.records,
+                resolutionClaims: [...compatibility.relationships.analysisByFile.values()]
+                    .flatMap((evidence) => evidence.resolutionClaims ?? []),
                 scope,
                 limit,
             });

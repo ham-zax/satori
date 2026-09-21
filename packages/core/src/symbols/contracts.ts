@@ -4,8 +4,8 @@ import type { ResolutionAuthority } from '../relationships/resolution';
 export { isRepositoryRelativePath } from '../paths/repository-path';
 
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v3';
-export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v2';
-export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v4';
+export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v3';
+export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v5';
 
 export const SYMBOL_KINDS = [
     'file',

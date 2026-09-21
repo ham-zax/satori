@@ -13,7 +13,7 @@ const inputSchema = z.object({
 
 export const detectChangesTool: McpTool = {
     name: "detect_changes",
-    description: () => "Compare a Git revision with the tracked working tree, map changed ranges to current indexed symbols, and traverse transitive callers. Bounded advisory impact, not exhaustive blast-radius proof. Reports unavailable files/seeds, truncation, and file-level seed fallback. Deleted symbols and stale source require independent verification; does not index or synchronize files.",
+    description: () => "Compare a Git revision with the tracked working tree, map changed ranges to current indexed symbols, and traverse transitive callers. Bounded advisory impact, not exhaustive blast-radius proof. Persisted ambiguous/unresolved semantic references are returned separately as uncertainCallReferences and are never counted as confirmed impacted symbols. Reports unavailable files/seeds, truncation, and file-level seed fallback. Deleted symbols and stale source require independent verification; does not index or synchronize files.",
     inputSchemaZod: () => inputSchema,
     execute: async (args, ctx) => {
         const parsed = inputSchema.safeParse(args);

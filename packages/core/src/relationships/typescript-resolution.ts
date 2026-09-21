@@ -6,8 +6,10 @@ import type {
 } from '../semantic/typescript-compiler-provider';
 import type {
     ResolutionAuthority,
+    ResolutionCallConstruct,
     ResolutionClaim,
     ResolutionDecision,
+    ResolutionObservedCandidate,
     ResolutionProofStep,
 } from './resolution';
 
@@ -70,6 +72,44 @@ function exactCaller(
 
 function targetLabel(target: TypeScriptSemanticTarget): string {
     return target.ownerName ? `${target.ownerName}.${target.name}` : target.name;
+}
+
+function observedCandidate(
+    registry: SymbolRegistry,
+    candidate: TypeScriptSemanticTarget,
+): ResolutionObservedCandidate {
+    const mapped = exactTarget(registry, candidate);
+    return {
+        file: candidate.file,
+        span: { ...candidate.span },
+        name: candidate.name,
+        qualifiedName: mapped?.qualifiedName ?? targetLabel(candidate),
+        ...(mapped ? { symbolInstanceId: mapped.symbolInstanceId } : {}),
+    };
+}
+
+function callConstruct(occurrence: TypeScriptCallEvidence): ResolutionCallConstruct {
+    if (occurrence.callKind === 'constructor') return 'constructor_call';
+    if (
+        occurrence.reason === 'dynamic_receiver'
+        || occurrence.reason === 'dynamic_callee'
+        || occurrence.reason === 'generic_receiver'
+    ) {
+        return 'dynamic_receiver';
+    }
+    if (occurrence.callKind === 'member' && occurrence.receiverType) return 'typed_member_call';
+    if (occurrence.callKind === 'member') return 'member_call';
+    return 'direct_call';
+}
+
+function receiverTextForCall(occurrence: TypeScriptCallEvidence): string | undefined {
+    for (const separator of [`?.${occurrence.calleeName}`, `.${occurrence.calleeName}`]) {
+        if (occurrence.calleeText.endsWith(separator)) {
+            const receiver = occurrence.calleeText.slice(0, -separator.length).trim();
+            if (receiver) return receiver;
+        }
+    }
+    return undefined;
 }
 
 function sourceSpanForSymbol(symbol: SymbolRecord): SourceSpan | undefined {
@@ -216,6 +256,22 @@ export function buildTypeScriptResolutionClaims(input: {
                     targetSymbol: target.qualifiedName,
                 } : {}),
                 callSpan: occurrence.callSpan,
+                observation: {
+                    kind: 'call',
+                    calleeName: occurrence.calleeName,
+                    calleeText: occurrence.calleeText,
+                    ...(receiverTextForCall(occurrence) ? { receiverText: receiverTextForCall(occurrence) } : {}),
+                    ...(occurrence.receiverType ? { receiverType: occurrence.receiverType } : {}),
+                    construct: callConstruct(occurrence),
+                    candidates: [...(occurrence.candidates ?? [])]
+                        .map((candidate) => observedCandidate(input.registry, candidate))
+                        .sort((left, right) => (
+                            left.file.localeCompare(right.file)
+                            || left.span.startByte - right.span.startByte
+                            || left.span.endByte - right.span.endByte
+                            || left.name.localeCompare(right.name)
+                        )),
+                },
                 decision,
                 relationshipType: decision === 'resolved' ? 'CALLS' : 'REFERENCES',
                 resolutionAuthority: authority,

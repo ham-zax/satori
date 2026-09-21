@@ -24,7 +24,8 @@ test('evaluateTradeOffer both preserves callers under the shared edge limit and 
         navigationStore: {
             getManifest: async () => { throw new Error('unused'); },
             getRelationships: async () => ({
-                status: 'ok', rootPath: '/fixture/colonist-assistant', manifestHash: 'fixture', records, warnings: [],
+                status: 'ok', rootPath: '/fixture/colonist-assistant', manifestHash: 'fixture', records,
+                analysisByFile: new Map(), warnings: [],
                 manifest: { schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
                     symbolRegistryManifestHash: 'fixture', relationshipVersion: 'fixture', builtAt: '2026-09-09', files: [] },
             }),

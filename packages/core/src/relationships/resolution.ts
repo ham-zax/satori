@@ -112,6 +112,36 @@ export interface ResolutionProofStep {
  * Provider-neutral evidence. A provider proposes identity; Satori validates
  * spans/snapshots and decides whether a relationship is publishable.
  */
+export const RESOLUTION_CALL_CONSTRUCTS = [
+    'direct_call',
+    'constructor_call',
+    'member_call',
+    'typed_member_call',
+    'callback_flow',
+    'dynamic_receiver',
+    'unknown_call',
+] as const;
+
+export type ResolutionCallConstruct = typeof RESOLUTION_CALL_CONSTRUCTS[number];
+
+export interface ResolutionObservedCandidate {
+    readonly file: string;
+    readonly span: SourceSpan;
+    readonly name: string;
+    readonly qualifiedName?: string;
+    readonly symbolInstanceId?: string;
+}
+
+export interface ResolutionCallObservation {
+    readonly kind: 'call';
+    readonly calleeName: string;
+    readonly calleeText: string;
+    readonly receiverText?: string;
+    readonly receiverType?: string;
+    readonly construct: ResolutionCallConstruct;
+    readonly candidates: readonly ResolutionObservedCandidate[];
+}
+
 export interface ResolutionClaim {
     readonly providerId: string;
     readonly providerVersion: string;
@@ -121,6 +151,8 @@ export interface ResolutionClaim {
     readonly targetInstanceId?: string;
     readonly targetSymbol?: string;
     readonly callSpan: SourceSpan;
+    /** Structured source observation used by navigation; never decode dependency/proof prose for these facts. */
+    readonly observation: ResolutionCallObservation;
     readonly decision: ResolutionDecision;
     readonly relationshipType: 'CALLS' | 'REFERENCES';
     /** Categorical proof authority; publication must not infer this from locality. */

@@ -64,6 +64,7 @@ function createPreparedNavigationStore(input: {
         manifestHash: input.relationshipManifestIdentity,
         manifest: input.relationshipManifest,
         records: input.relationshipRecords,
+        analysisByFile: new Map(),
         warnings: [...input.relationshipWarnings],
     });
     return {

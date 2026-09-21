@@ -64,6 +64,20 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     }
     const seedKeys = new Set(seeds.map(symbol => `${symbol.codebaseRoot}\0${symbol.symbolId}`));
     const impacted = new Map<string, CallGraphNodeResult & { codebaseRoot: string }>();
+    const uncertainCallReferences = new Map<string, {
+        seedSymbolId: string;
+        sourceSymbolId?: string;
+        sourceSymbolLabel?: string;
+        file: string;
+        startLine: number;
+        endLine?: number;
+        decision: "ambiguous" | "unresolved";
+        resolutionAuthority: import("@zokizuan/satori-core").ResolutionClaim["resolutionAuthority"];
+        construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+        providerId: string;
+        providerVersion: string;
+        calleeText: string;
+    }>();
     const unavailableSeeds: Array<{ symbolId: string; reason: string }> = [];
     for (const seed of seeds) {
         const graph = await ports.callers(seed.codebaseRoot, seed);
@@ -75,6 +89,33 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             warnings.add(warning);
             if (warning === "RELATIONSHIP_TRAVERSAL_LIMIT_REACHED" || warning === "RELATIONSHIP_TRAVERSAL_TRUNCATED") truncated = true;
         }
+        for (const reference of graph.exactReferences ?? []) {
+            if (
+                reference.relationship !== "caller"
+                || reference.decision === "resolved"
+            ) continue;
+            const key = [
+                seed.symbolId,
+                reference.sourceSymbolId ?? "",
+                reference.site.file,
+                reference.site.startLine,
+                reference.decision,
+            ].join("\0");
+            uncertainCallReferences.set(key, {
+                seedSymbolId: seed.symbolId,
+                ...(reference.sourceSymbolId ? { sourceSymbolId: reference.sourceSymbolId } : {}),
+                ...(reference.sourceSymbolLabel ? { sourceSymbolLabel: reference.sourceSymbolLabel } : {}),
+                file: reference.site.file,
+                startLine: reference.site.startLine,
+                ...(reference.site.endLine !== undefined ? { endLine: reference.site.endLine } : {}),
+                decision: reference.decision,
+                resolutionAuthority: reference.resolutionAuthority,
+                construct: reference.construct,
+                providerId: reference.providerId,
+                providerVersion: reference.providerVersion,
+                calleeText: reference.calleeText,
+            });
+        }
         for (const node of graph.nodes) {
             const key = `${seed.codebaseRoot}\0${node.symbolId}`;
             if (seedKeys.has(key) || impacted.has(key)) continue;
@@ -82,6 +123,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             impacted.set(key, { ...node, codebaseRoot: seed.codebaseRoot });
         }
     }
+    if (uncertainCallReferences.size > 0) warnings.add("IMPACT_NON_AUTHORITATIVE_CALL_REFERENCES");
     if (truncated) warnings.add("IMPACT_LIMIT_REACHED");
     return {
         status: "ok" as const, path: input.path, baseRef: input.baseRef, baseCommit,
@@ -89,6 +131,11 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         depth: input.depth, limit: input.limit, coverage: "partial" as const, truncated,
         changedFiles, seeds, impacted: [...impacted.values()].sort((a, b) =>
             compareContractStrings(a.file, b.file) || a.span.startLine - b.span.startLine || compareContractStrings(a.symbolId, b.symbolId)),
+        uncertainCallReferences: [...uncertainCallReferences.values()].sort((a, b) =>
+            compareContractStrings(a.file, b.file)
+            || a.startLine - b.startLine
+            || compareContractStrings(a.seedSymbolId, b.seedSymbolId)
+            || compareContractStrings(a.sourceSymbolId ?? "", b.sourceSymbolId ?? "")),
         unavailableFiles, unavailableSeeds, warnings: [...warnings].sort(),
     };
 }

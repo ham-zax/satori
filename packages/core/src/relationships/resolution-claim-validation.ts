@@ -1,7 +1,9 @@
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import {
+    RESOLUTION_CALL_CONSTRUCTS,
     isResolutionAuthority,
     resolutionAuthorityForProof,
+    type ResolutionCallObservation,
     type ResolutionClaim,
     type ResolutionProofStep,
 } from './resolution';
@@ -27,6 +29,7 @@ const RESOLUTION_PROOF_STEP_KINDS = new Set([
     'ambiguity',
     'unresolved_dependency',
 ]);
+const RESOLUTION_CALL_CONSTRUCT_SET = new Set<string>(RESOLUTION_CALL_CONSTRUCTS);
 const ORIGIN_FLOW_PROOF_KINDS = new Set([
     'flow_hop',
     'callback_origin',
@@ -73,6 +76,38 @@ function isSourceSpan(value: unknown): boolean {
         && (value.startLine !== value.endLine || Number(value.endColumn) >= Number(value.startColumn));
 }
 
+export function isResolutionCallObservation(value: unknown): value is ResolutionCallObservation {
+    if (!isRecord(value)
+        || !hasOnlyKeys(value, [
+            'kind',
+            'calleeName',
+            'calleeText',
+            'receiverText',
+            'receiverType',
+            'construct',
+            'candidates',
+        ])
+        || value.kind !== 'call'
+        || !isNonEmptyString(value.calleeName)
+        || !isNonEmptyString(value.calleeText)
+        || !isOptionalNonEmptyString(value.receiverText)
+        || !isOptionalNonEmptyString(value.receiverType)
+        || typeof value.construct !== 'string'
+        || !RESOLUTION_CALL_CONSTRUCT_SET.has(value.construct)
+        || !Array.isArray(value.candidates)) {
+        return false;
+    }
+    return value.candidates.every((candidate) => (
+        isRecord(candidate)
+        && hasOnlyKeys(candidate, ['file', 'span', 'name', 'qualifiedName', 'symbolInstanceId'])
+        && isRepositoryRelativePath(candidate.file)
+        && isSourceSpan(candidate.span)
+        && isNonEmptyString(candidate.name)
+        && isOptionalNonEmptyString(candidate.qualifiedName)
+        && isOptionalNonEmptyString(candidate.symbolInstanceId)
+    ));
+}
+
 export function isResolutionProofStep(value: unknown): value is ResolutionProofStep {
     if (!isRecord(value)
         || !hasOnlyKeys(value, ['kind', 'subject', 'detail', 'span', 'hop'])
@@ -98,6 +133,7 @@ export function isCanonicalResolutionClaim(value: unknown): value is ResolutionC
             'targetInstanceId',
             'targetSymbol',
             'callSpan',
+            'observation',
             'decision',
             'relationshipType',
             'resolutionAuthority',
@@ -113,6 +149,7 @@ export function isCanonicalResolutionClaim(value: unknown): value is ResolutionC
         || !isOptionalNonEmptyString(value.targetInstanceId)
         || !isOptionalNonEmptyString(value.targetSymbol)
         || !isSourceSpan(value.callSpan)
+        || !isResolutionCallObservation(value.observation)
         || typeof value.decision !== 'string'
         || !RESOLUTION_DECISIONS.has(value.decision)
         || (value.relationshipType !== 'CALLS' && value.relationshipType !== 'REFERENCES')

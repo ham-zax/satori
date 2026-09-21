@@ -207,6 +207,15 @@ export class CbmSemanticContributionEngine implements CallResolutionEngine {
 
                 let targetSymbol: SymbolRecord | undefined;
                 let decision = occ.decision;
+                const observedTargetMatches = occ.targetProvenance
+                    ? findExactSpanTarget(
+                        input.registry,
+                        occ.targetProvenance.file,
+                        occ.targetProvenance.name,
+                        occ.targetProvenance.span,
+                        occ.targetProvenance.ownerName,
+                    )
+                    : [];
 
                 if (decision === 'resolved' && !occ.targetProvenance) {
                     decision = 'unresolved';
@@ -216,22 +225,14 @@ export class CbmSemanticContributionEngine implements CallResolutionEngine {
                         detail: 'Resolved occurrence lacks target provenance',
                     });
                 } else if (occ.targetProvenance && decision === 'resolved') {
-                    const matches = findExactSpanTarget(
-                        input.registry,
-                        occ.targetProvenance.file,
-                        occ.targetProvenance.name,
-                        occ.targetProvenance.span,
-                        occ.targetProvenance.ownerName,
-                    );
-
-                    if (matches.length === 1) {
-                        targetSymbol = matches[0];
-                    } else if (matches.length > 1) {
+                    if (observedTargetMatches.length === 1) {
+                        targetSymbol = observedTargetMatches[0];
+                    } else if (observedTargetMatches.length > 1) {
                         decision = 'ambiguous';
                         proofSteps.push({
                             kind: 'ambiguity',
                             subject: occ.targetProvenance.name,
-                            detail: `Found ${matches.length} matching symbols at target span in ${occ.targetProvenance.file}`,
+                            detail: `Found ${observedTargetMatches.length} matching symbols at target span in ${occ.targetProvenance.file}`,
                         });
                     } else {
                         decision = 'unresolved';
@@ -265,6 +266,43 @@ export class CbmSemanticContributionEngine implements CallResolutionEngine {
                         targetSymbol: targetSymbol.qualifiedName,
                     } : {}),
                     callSpan: { ...occ.callSpan },
+                    observation: {
+                        kind: 'call',
+                        calleeName: occ.targetProvenance?.name ?? 'unknown',
+                        calleeText: occ.targetProvenance?.ownerName
+                            ? `${occ.targetProvenance.ownerName}.${occ.targetProvenance.name}`
+                            : (occ.targetProvenance?.name ?? 'unknown'),
+                        ...(occ.proof.receiverBinding?.receiverType
+                            ? { receiverType: occ.proof.receiverBinding.receiverType }
+                            : {}),
+                        construct: occ.proof.receiverBinding
+                            ? 'typed_member_call'
+                            : occ.proof.strategy === 'direct_call'
+                                ? 'direct_call'
+                                : 'member_call',
+                        candidates: observedTargetMatches.flatMap((candidate) => {
+                            if (
+                                candidate.span.startByte === undefined
+                                || candidate.span.endByte === undefined
+                                || candidate.span.startColumn === undefined
+                                || candidate.span.endColumn === undefined
+                            ) return [];
+                            return [{
+                                file: candidate.file,
+                                span: {
+                                    startLine: candidate.span.startLine,
+                                    endLine: candidate.span.endLine,
+                                    startByte: candidate.span.startByte,
+                                    endByte: candidate.span.endByte,
+                                    startColumn: candidate.span.startColumn,
+                                    endColumn: candidate.span.endColumn,
+                                },
+                                name: candidate.name,
+                                qualifiedName: candidate.qualifiedName,
+                                symbolInstanceId: candidate.symbolInstanceId,
+                            }];
+                        }),
+                    },
                     decision,
                     relationshipType: decision === 'resolved' ? 'CALLS' : 'REFERENCES',
                     resolutionAuthority: resolutionAuthorityForProof({

@@ -1,0 +1,188 @@
+{
+  "version": 1,
+  "family": "semantic_relationship_qualification",
+  "relationship": "CALLS",
+  "description": "Provider-neutral semantic relationship cases. Providers map language-specific fixtures and symbols onto the canonical refs in each case.",
+  "cases": [
+    {
+      "id": "direct_call",
+      "construct": "direct calls",
+      "scenario": "A caller invokes one uniquely bound function. A same-named decoy exists but is not imported or otherwise visible at the call site.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"],
+        "strategies": ["direct_call"],
+        "requiredEvidenceKinds": ["call_site", "direct_symbol_binding", "target_provenance"]
+      }
+    },
+    {
+      "id": "class_field_receiver",
+      "construct": "class-field receiver calls",
+      "scenario": "A method invokes a member through a class field whose declared or proven receiver type uniquely identifies the callee implementation.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding", "origin_flow"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "receiver_type", "field_origin", "target_provenance"]
+      }
+    },
+    {
+      "id": "constructor_parameter_property",
+      "construct": "constructor parameter properties",
+      "scenario": "A constructor parameter simultaneously defines and initializes an instance field; a later field receiver call should retain the constructor-origin binding to the exact target.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["origin_flow"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "constructor_origin", "field_origin", "receiver_type", "target_provenance"]
+      }
+    },
+    {
+      "id": "constructor_assignment_origin",
+      "construct": "constructor assignment/origin flow",
+      "scenario": "A constructor receives a dependency and assigns it to an instance field before a later method calls through that field. The exact target depends on preserving the assignment/origin chain.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["origin_flow"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "constructor_origin", "assignment_origin", "field_origin", "flow_hop", "target_provenance"]
+      }
+    },
+    {
+      "id": "alias_binding",
+      "construct": "aliases",
+      "scenario": "A uniquely imported or locally rebound alias is called. The alias must resolve to its original callable rather than to a same-named decoy.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"],
+        "strategies": ["direct_call"],
+        "requiredEvidenceKinds": ["call_site", "alias_binding", "direct_symbol_binding", "target_provenance"]
+      }
+    },
+    {
+      "id": "optional_receiver",
+      "construct": "optional receivers",
+      "scenario": "A call uses an optional/null-safe receiver whose non-null branch has one exact receiver type and method target. Optionality must not redirect the relationship to an unrelated same-named method.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding", "origin_flow"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "optional_receiver", "receiver_type", "target_provenance"]
+      }
+    },
+    {
+      "id": "inheritance_dispatch",
+      "construct": "inheritance",
+      "scenario": "A receiver of a derived type calls an inherited method that is defined only on the base type. The relationship target is the inherited base implementation.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.base"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding", "origin_flow"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "receiver_type", "inheritance", "target_provenance"]
+      }
+    },
+    {
+      "id": "interface_dispatch",
+      "construct": "interface dispatch",
+      "scenario": "A receiver is known only through an interface with two viable concrete implementations. The resolver must not fabricate one concrete CALLS target.",
+      "expected": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "targetRefs": [],
+        "candidateRefs": ["target.impl_a", "target.impl_b"],
+        "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"],
+        "strategies": ["interface_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "receiver_type", "interface_contract", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "overload_ambiguity",
+      "construct": "overload ambiguity",
+      "scenario": "Two overloads remain viable from the available static evidence. The resolver must expose the competing candidates rather than choosing one without a discriminating argument/type proof.",
+      "expected": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "targetRefs": [],
+        "candidateRefs": ["target.overload_a", "target.overload_b"],
+        "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"],
+        "strategies": ["overload_resolution"],
+        "requiredEvidenceKinds": ["call_site", "overload_candidate", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "branch_conflicted_origins",
+      "construct": "branch-conflicted origins",
+      "scenario": "A receiver may originate from two different concrete implementations on separate control-flow branches. Neither origin dominates, so the call must remain ambiguous.",
+      "expected": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "targetRefs": [],
+        "candidateRefs": ["target.branch_a", "target.branch_b"],
+        "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"],
+        "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "dynamic_unresolved",
+      "construct": "unresolved/dynamic constructs",
+      "scenario": "The callee is obtained through a dynamic construct whose concrete callable identity cannot be proven from the bounded static evidence. The resolver must abstain and explain the missing dependency.",
+      "expected": {
+        "decision": "unresolved",
+        "relationshipType": "REFERENCES",
+        "targetRefs": [],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": [],
+        "authorities": ["unresolved"],
+        "strategies": ["dynamic_dispatch", "unknown"],
+        "requiredEvidenceKinds": ["call_site", "dynamic_construct", "unresolved_dependency"]
+      }
+    },
+    {
+      "id": "wrong_target_decoy",
+      "construct": "wrong-target decoys",
+      "scenario": "The exact callee is uniquely bound, while multiple nearby same-named or structurally similar callables are plausible decoys. The resolver must select only the proven target.",
+      "expected": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"],
+        "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy_a", "target.decoy_b"],
+        "authorities": ["direct_binding", "origin_flow"],
+        "strategies": ["direct_call", "type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance"]
+      }
+    }
+  ]
+}

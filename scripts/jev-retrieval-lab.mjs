@@ -3,6 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import {
+    buildBlindRelationshipCases,
+    scoreRelationshipReport,
+    summarizeRelationshipEvaluations,
+    summarizeRelationshipPerformance,
+} from "./semantic-relationship-qualification.mjs";
+
 const DEFAULT_MODEL = "jev-latest";
 const DEFAULT_REPEATS = 2;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -73,30 +80,37 @@ const SIEVE_CRITERIA = Object.freeze({
 function usage() {
     return `Usage:
   node scripts/jev-retrieval-lab.mjs --report <code-intelligence-vs.json> --out <result.json> [options]
+  node scripts/jev-retrieval-lab.mjs --mode relationship --report <provider-report.json> --out <result.json> [options]
 
 Options:
-  --report <file>       Corrected code-intelligence-vs JSON report.
+  --mode <name>         "retrieval" (default) or "relationship".
+  --report <file>       Retrieval report or provider-neutral relationship report.
   --out <file>          Output JSON path. Parent directories are created.
+  --corpus <file>       Relationship corpus. Default: evals/semantic-relationship-qualification/corpus.json
+  --deterministic-only  Relationship mode only: skip Jev calls and emit exact + performance metrics.
   --repeats <n>         Repeat each blind Jev evaluation. Default: ${DEFAULT_REPEATS}
   --model <name>        TypeSafe model. Default: ${DEFAULT_MODEL}
   --timeout-ms <n>      Per-request timeout. Default: ${DEFAULT_TIMEOUT_MS}
-  --source-root <dir>   Repository root used to attach exact source excerpts. Default: current directory.
+  --source-root <dir>   Retrieval mode: repository root used to attach exact source excerpts. Default: current directory.
   --help                Show this help.
 
 Environment:
-  TYPESAFE_API_KEY      Required. Read only at runtime; never written to artifacts.
+  TYPESAFE_API_KEY      Required when Jev evaluation is enabled. Read only at runtime; never written to artifacts.
 
-This research harness intentionally evaluates only tasks whose kind is "search".
-It measures set-level retrieval quality and evidence completeness, then classifies each candidate's evidence role
-and whether its exact content should be kept, reduced to a reference, or dropped.
-Provider identity, provider rank/score, expected anchors, and incumbent winners are not sent to Jev.
+Retrieval mode measures set-level search quality and evidence completeness.
+Relationship mode keeps deterministic semantic correctness, blind Jev qualitative judgment, and
+provider performance/resource measurements in separate artifact sections. Provider identity, incumbent status,
+expected truth, deterministic metrics, and performance data are not sent to Jev.
 `;
 }
 
 function parseArgs(argv) {
     const options = {
+        mode: "retrieval",
         reportFile: null,
         outFile: null,
+        corpusFile: path.resolve("evals/semantic-relationship-qualification/corpus.json"),
+        deterministicOnly: false,
         repeats: DEFAULT_REPEATS,
         model: DEFAULT_MODEL,
         timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -110,8 +124,11 @@ function parseArgs(argv) {
             if (!value) throw new Error(`Missing value for ${arg}.`);
             return value;
         };
-        if (arg === "--report") options.reportFile = path.resolve(next());
+        if (arg === "--mode") options.mode = next();
+        else if (arg === "--report") options.reportFile = path.resolve(next());
         else if (arg === "--out") options.outFile = path.resolve(next());
+        else if (arg === "--corpus") options.corpusFile = path.resolve(next());
+        else if (arg === "--deterministic-only") options.deterministicOnly = true;
         else if (arg === "--repeats") options.repeats = Number.parseInt(next(), 10);
         else if (arg === "--model") options.model = next();
         else if (arg === "--timeout-ms") options.timeoutMs = Number.parseInt(next(), 10);
@@ -120,6 +137,12 @@ function parseArgs(argv) {
         else throw new Error(`Unknown argument: ${arg}`);
     }
     if (options.help) return options;
+    if (options.mode !== "retrieval" && options.mode !== "relationship") {
+        throw new Error("--mode must be either retrieval or relationship.");
+    }
+    if (options.deterministicOnly && options.mode !== "relationship") {
+        throw new Error("--deterministic-only is valid only in relationship mode.");
+    }
     if (!options.reportFile) throw new Error("--report is required.");
     if (!options.outFile) throw new Error("--out is required.");
     if (!Number.isSafeInteger(options.repeats) || options.repeats < 1 || options.repeats > 10) {
@@ -505,12 +528,122 @@ function printSummary(summary) {
     }
 }
 
+async function runRelationshipMode(options) {
+    const report = readJson(options.reportFile);
+    const corpus = readJson(options.corpusFile);
+    const deterministic = scoreRelationshipReport(corpus, report);
+    const performance = summarizeRelationshipPerformance(corpus, report);
+    const cases = buildBlindRelationshipCases(corpus, report);
+
+    const evaluations = [];
+    let qualitativeSummary = null;
+    if (!options.deterministicOnly) {
+        const apiKey = process.env.TYPESAFE_API_KEY?.trim();
+        if (!apiKey) {
+            throw new Error("TYPESAFE_API_KEY is required unless --deterministic-only is used.");
+        }
+        for (const item of cases) {
+            const evaluation = {
+                caseId: item.caseId,
+                language: item.language,
+                screenReasons: item.screenReasons,
+                blindState: item.state,
+                questions: item.questions,
+                runs: [],
+            };
+            if (item.screenReasons.length === 0) {
+                for (let repeat = 0; repeat < options.repeats; repeat += 1) {
+                    const response = await askJev({
+                        apiKey,
+                        model: options.model,
+                        state: item.state,
+                        questions: item.questions,
+                        timeoutMs: options.timeoutMs,
+                    });
+                    evaluation.runs.push({
+                        repeat: repeat + 1,
+                        model: response.model || options.model,
+                        answers: parseAnswers(response, item.questions),
+                        usage: response.usage || null,
+                    });
+                }
+            }
+            evaluations.push(evaluation);
+        }
+        qualitativeSummary = summarizeRelationshipEvaluations(evaluations);
+    }
+
+    const artifact = {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        family: "semantic_relationship_qualification",
+        provider: report.provider,
+        language: report.language,
+        sourceReport: path.relative(process.cwd(), options.reportFile),
+        sourceCorpus: path.relative(process.cwd(), options.corpusFile),
+        corpusVersion: corpus.version,
+        deterministic,
+        qualitative: options.deterministicOnly
+            ? {
+                status: "skipped",
+                reason: "deterministic_only",
+            }
+            : {
+                status: "evaluated",
+                model: options.model,
+                repeats: options.repeats,
+                blindness: {
+                    omittedFromJevState: [
+                        "provider identity and version",
+                        "incumbent or baseline status",
+                        "expected decision and target truth",
+                        "wrong-target decoy labels",
+                        "deterministic correctness metrics",
+                        "latency and resource measurements",
+                    ],
+                    providerComparisonInSinglePrompt: false,
+                },
+                evaluations,
+                summary: qualitativeSummary,
+            },
+        performance,
+    };
+
+    fs.mkdirSync(path.dirname(options.outFile), { recursive: true });
+    fs.writeFileSync(options.outFile, `${JSON.stringify(artifact, null, 2)}\n`);
+
+    process.stdout.write("Semantic Relationship Qualification\n===================================\n");
+    process.stdout.write(`- provider: ${report.provider.id}@${report.provider.version} (${report.language})\n`);
+    process.stdout.write(
+        `- deterministic: strict=${deterministic.exactness.strictCaseExact.count}/${deterministic.totalCases}, `
+        + `semantic=${deterministic.exactness.semanticExact.count}/${deterministic.totalCases}, `
+        + `unsupported=${deterministic.coverage.unsupported}, errors=${deterministic.coverage.error}, missing=${deterministic.coverage.missing}\n`,
+    );
+    process.stdout.write(
+        `- resolved targets: precision=${deterministic.resolvedTarget.precision ?? "n/a"}, `
+        + `recall=${deterministic.resolvedTarget.recall ?? "n/a"}, f1=${deterministic.resolvedTarget.f1 ?? "n/a"}\n`,
+    );
+    process.stdout.write(
+        options.deterministicOnly
+            ? "- Jev qualitative: skipped (--deterministic-only)\n"
+            : `- Jev qualitative: evaluated ${qualitativeSummary.evaluatedCases} cases, screened ${qualitativeSummary.screenedCases}\n`,
+    );
+    process.stdout.write(
+        `- performance: ${performance.caseSamples} case samples across ${performance.measuredCases} cases\n`,
+    );
+}
+
 async function main() {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {
         process.stdout.write(usage());
         return;
     }
+    if (options.mode === "relationship") {
+        await runRelationshipMode(options);
+        return;
+    }
+
     const apiKey = process.env.TYPESAFE_API_KEY?.trim();
     if (!apiKey) {
         throw new Error("TYPESAFE_API_KEY is required.");

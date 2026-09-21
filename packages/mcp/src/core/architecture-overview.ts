@@ -76,7 +76,6 @@ function areaForFile(file: string): string {
 
 const NON_RUNTIME_CATEGORIES = new Set<PathCategory>([
     "scriptRuntime",
-    "adapter",
     "example",
     "fixture",
     "artifact",
@@ -92,10 +91,21 @@ function isBenchmarkOrExperimentPath(file: string): boolean {
         || /(^|\/)[^/]*benchmark[^/]*\.[^/]+$/.test(normalized);
 }
 
+function isArchitectureSupportPath(file: string): boolean {
+    const normalized = normalizeSearchPath(file);
+    return normalized === "evals"
+        || normalized.startsWith("evals/")
+        || normalized === "third_party"
+        || normalized.startsWith("third_party/")
+        || normalized === "tools"
+        || normalized.startsWith("tools/");
+}
+
 function includeRuntimeFile(file: string): boolean {
     const category = classifyPathCategory(file);
     return !NON_RUNTIME_CATEGORIES.has(category)
-        && !isBenchmarkOrExperimentPath(file);
+        && !isBenchmarkOrExperimentPath(file)
+        && !isArchitectureSupportPath(file);
 }
 
 function includeSymbol(symbol: SymbolRecord, scope: ArchitectureOverviewScope): boolean {

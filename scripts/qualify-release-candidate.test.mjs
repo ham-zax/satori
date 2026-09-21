@@ -75,6 +75,7 @@ test('qualification stops subsequent phases when a command fails', async () => {
   );
 
   assert.deepEqual(executed, [
+    'refresh workspace links',
     'repository lint and version checks',
     'clean release build',
   ]);

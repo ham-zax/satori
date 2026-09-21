@@ -38,6 +38,7 @@ test('public release commands delegate to their authoritative owners', () => {
 test('release qualification owns the complete production gate', () => {
   const commands = RELEASE_QUALIFICATION_COMMANDS.map((entry) => `${entry.command} ${entry.args.join(' ')}`);
   for (const expected of [
+    'pnpm install --frozen-lockfile --ignore-scripts',
     'pnpm run check:fast',
     'pnpm run build',
     'pnpm -C packages/core run test:raw',

@@ -4,6 +4,7 @@ import { checkReleaseGraph } from './check-release-graph.mjs';
 import { ReleaseProgress } from './progress/release-progress.mjs';
 
 export const RELEASE_QUALIFICATION_COMMANDS = Object.freeze([
+  Object.freeze({ label: 'refresh workspace links', command: 'pnpm', args: Object.freeze(['install', '--frozen-lockfile', '--ignore-scripts']) }),
   Object.freeze({ label: 'repository lint and version checks', command: 'pnpm', args: Object.freeze(['run', 'check:fast']) }),
   Object.freeze({ label: 'clean release build', command: 'pnpm', args: Object.freeze(['run', 'build']) }),
   Object.freeze({ label: 'Core tests', command: 'pnpm', args: Object.freeze(['-C', 'packages/core', 'run', 'test:raw']) }),

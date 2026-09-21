@@ -1272,7 +1272,7 @@ test('Tree-sitter Python records bounded constructor receiver evidence', async (
     );
 });
 
-test('Tree-sitter Python records only simple directly annotated parameter receiver types', async () => {
+test('Tree-sitter Python records simple identifier and quoted forward parameter receiver types', async () => {
     const result = await createLanguageAnalysisService().analyze({
         content: [
             'def accepted(model: MetricsModel, fallback: OtherModel = None):',
@@ -1299,6 +1299,7 @@ test('Tree-sitter Python records only simple directly annotated parameter receiv
         [
             ['model', 'MetricsModel', 'parameter_annotation'],
             ['fallback', 'OtherModel', 'parameter_annotation'],
+            ['string_name', 'MetricsModel', 'parameter_annotation'],
         ],
     );
 });

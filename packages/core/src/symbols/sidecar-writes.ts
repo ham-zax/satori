@@ -334,6 +334,17 @@ function canonicalizePythonFlowFact(fact: PythonFlowFact): PythonFlowFact {
             contextSpan: canonicalizeSourceSpan(fact.contextSpan),
         };
     }
+    if (fact.kind === 'callable_signature') {
+        return {
+            kind: fact.kind,
+            callableName: fact.callableName,
+            parameterNames: [...fact.parameterNames],
+            positionalExact: fact.positionalExact,
+            decorated: fact.decorated,
+            span: canonicalizeSourceSpan(fact.span),
+            contextSpan: canonicalizeSourceSpan(fact.contextSpan),
+        };
+    }
     return {
         kind: fact.kind,
         className: fact.className,

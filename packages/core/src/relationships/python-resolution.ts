@@ -429,6 +429,21 @@ function spansEqual(
         && left.endColumn === right.endColumn);
 }
 
+function pythonImportBindingVisibleToSource(input: {
+    binding: ModuleBinding;
+    source: SymbolRecord;
+    registry: SymbolRegistry;
+    atSpan: SourceSpan;
+}): boolean {
+    const bindingOwner = ownerForCall(
+        input.registry.symbolsByFile.get(input.source.file) ?? [],
+        { calleeName: '', span: input.binding.span },
+    );
+    if (!bindingOwner) return true;
+    return bindingOwner.symbolInstanceId === input.source.symbolInstanceId
+        && input.binding.span.endByte <= input.atSpan.startByte;
+}
+
 function resolvePythonClassReference(input: {
     classReference: string;
     source: SymbolRecord;
@@ -436,6 +451,7 @@ function resolvePythonClassReference(input: {
     registry: SymbolRegistry;
     classesByName: ReadonlyMap<string, readonly SymbolRecord[]>;
     availableFiles: ReadonlySet<string>;
+    atSpan: SourceSpan;
 }): SymbolRecord | undefined {
     const classCandidatesById = new Map<string, SymbolRecord>();
     for (const candidate of input.classesByName.get(input.classReference) ?? []) {
@@ -449,6 +465,12 @@ function resolvePythonClassReference(input: {
             || !binding.moduleSpecifier
             || !binding.importedName
             || binding.localName !== input.classReference
+            || !pythonImportBindingVisibleToSource({
+                binding,
+                source: input.source,
+                registry: input.registry,
+                atSpan: input.atSpan,
+            })
         ) {
             continue;
         }
@@ -545,6 +567,7 @@ function resolvePythonDirectTarget(input: {
     evidence: PythonResolutionAnalysisInput;
     registry: SymbolRegistry;
     availableFiles: ReadonlySet<string>;
+    context: PythonFlowContext;
 }): SymbolRecord | undefined {
     if (input.source.language !== 'python') {
         return resolveUnambiguousTarget(
@@ -559,6 +582,12 @@ function resolvePythonDirectTarget(input: {
         && Boolean(binding.moduleSpecifier)
         && Boolean(binding.importedName)
         && binding.localName === input.call.calleeName
+        && pythonImportBindingVisibleToSource({
+            binding,
+            source: input.source,
+            registry: input.registry,
+            atSpan: input.call.span,
+        })
     ));
     if (importedBindings.length > 0) {
         const importedTargets = new Map<string, SymbolRecord>();
@@ -573,6 +602,7 @@ function resolvePythonDirectTarget(input: {
             for (const candidate of input.registry.symbolsByFile.get(importedFile) ?? []) {
                 if (
                     candidate.name !== binding.importedName
+                    || (isCallableSymbolKind(candidate.kind) && isDecoratedPythonCallable(input.context, candidate))
                     || (!isEligibleCallTarget(input.call, candidate)
                         && !(input.call.kind === 'direct' && candidate.kind === 'class'))
                 ) {
@@ -585,7 +615,10 @@ function resolvePythonDirectTarget(input: {
         return targets.length === 1 ? targets[0] : undefined;
     }
 
-    const sameFile = eligible.filter((candidate) => candidate.file === input.source.file);
+    const sameFile = eligible.filter((candidate) => (
+        candidate.file === input.source.file
+        && !isDecoratedPythonCallable(input.context, candidate)
+    ));
     if (sameFile.length === 1) return sameFile[0];
 
     // A same-module bare constructor call resolves to the exact class only
@@ -617,6 +650,7 @@ function resolvePythonModuleQualifiedTarget(input: {
     evidence: PythonResolutionAnalysisInput;
     registry: SymbolRegistry;
     availableFiles: ReadonlySet<string>;
+    context: PythonFlowContext;
 }): SymbolRecord | undefined {
     if (
         input.source.language !== 'python'
@@ -628,7 +662,17 @@ function resolvePythonModuleQualifiedTarget(input: {
     const receiver = input.call.receiverText.trim();
     const moduleSpecifiers = new Set<string>();
     for (const binding of input.evidence.moduleBindings) {
-        if (binding.kind !== 'import' || !binding.moduleSpecifier || binding.importedName) {
+        if (
+            binding.kind !== 'import'
+            || !binding.moduleSpecifier
+            || binding.importedName
+            || !pythonImportBindingVisibleToSource({
+                binding,
+                source: input.source,
+                registry: input.registry,
+                atSpan: input.call.span,
+            })
+        ) {
             continue;
         }
         const matchesReceiver = binding.localName
@@ -653,6 +697,7 @@ function resolvePythonModuleQualifiedTarget(input: {
     const targets = (input.registry.symbolsByFile.get(importedFile) ?? []).filter((candidate) => (
         candidate.name === input.call.calleeName
         && (candidate.kind === 'class' || isCallableSymbolKind(candidate.kind))
+        && !(isCallableSymbolKind(candidate.kind) && isDecoratedPythonCallable(input.context, candidate))
     ));
     return targets.length === 1 ? targets[0] : undefined;
 }
@@ -666,6 +711,7 @@ function resolvePythonMemberTarget(input: {
     classesByFile: ReadonlyMap<string, readonly SymbolRecord[]>;
     classesByName: ReadonlyMap<string, readonly SymbolRecord[]>;
     availableFiles: ReadonlySet<string>;
+    context: PythonFlowContext;
 }): SymbolRecord | undefined {
     if (
         input.call.kind !== 'member'
@@ -687,6 +733,7 @@ function resolvePythonMemberTarget(input: {
         evidence: input.evidence,
         registry: input.registry,
         availableFiles: input.availableFiles,
+        context: input.context,
     });
     if (moduleQualifiedTarget) {
         return moduleQualifiedTarget;
@@ -726,6 +773,12 @@ function resolvePythonMemberTarget(input: {
                 && Boolean(binding.moduleSpecifier)
                 && Boolean(binding.importedName)
                 && binding.localName === receiver
+                && pythonImportBindingVisibleToSource({
+                    binding,
+                    source: input.source,
+                    registry: input.registry,
+                    atSpan: input.call.span,
+                })
             ));
             if (importedClassBindings.length > 1) return undefined;
             classReference = [...annotatedTypes][0]
@@ -759,17 +812,15 @@ function resolvePythonMemberTarget(input: {
             registry: input.registry,
             classesByName: input.classesByName,
             availableFiles: input.availableFiles,
+            atSpan: input.call.span,
         });
     }
-    if (!targetClass) return undefined;
+    if (!targetClass || isProtocolLikeTypeName(targetClass.name, input.context.classBasesByName)) {
+        return undefined;
+    }
 
-    const matchingMembers = input.candidates.filter((candidate) => (
-        candidate.kind === 'method'
-        && candidate.symbolInstanceId !== input.source.symbolInstanceId
-        && enclosingClassForSymbol(candidate, input.classesByFile)?.symbolInstanceId
-            === targetClass.symbolInstanceId
-    ));
-    return matchingMembers.length === 1 ? matchingMembers[0] : undefined;
+    const target = exactPythonMethodTargetForClass(input.context, targetClass, input.call.calleeName);
+    return target?.symbolInstanceId === input.source.symbolInstanceId ? undefined : target;
 }
 
 interface PythonFlowContext {
@@ -782,13 +833,16 @@ interface PythonFlowContext {
     readonly classBasesByName: ReadonlyMap<string, readonly string[]>;
     readonly classClosureByName: Map<string, ReadonlySet<string>>;
     readonly runtimeTypesByClassName: ReadonlyMap<string, readonly string[]>;
-    readonly exactCallableTargetsCache: Map<string, readonly SymbolRecord[]>;
     readonly pythonEvidenceEntries: readonly [string, PythonResolutionAnalysisInput][];
+    readonly callableSignaturesById: ReadonlyMap<string, PythonCallableSignatureFact>;
     readonly callArgumentsByName: ReadonlyMap<string, readonly [string, PythonCallArgumentFact][]>;
+    readonly callArgumentsByIndex: ReadonlyMap<number, readonly [string, PythonCallArgumentFact][]>;
     readonly assignmentsByMemberName: ReadonlyMap<string, readonly [string, PythonAssignmentOriginFact][]>;
 }
 
 type PythonCallArgumentFact = Extract<PythonFlowFact, { kind: 'call_argument' }>;
+
+type PythonCallableSignatureFact = Extract<PythonFlowFact, { kind: 'callable_signature' }>;
 
 type PythonAssignmentOriginFact = Extract<PythonFlowFact, { kind: 'assignment_origin' }>;
 
@@ -843,12 +897,9 @@ function factBelongsToContext(
     fact: PythonFlowFact,
     context: SymbolRecord | undefined,
 ): boolean {
-    if (!context) {
-        return !(registry.symbolsByFile.get(file) ?? []).some((symbol) => (
-            isSourceOwner(symbol) && spanContainsSpan(symbol.span as SourceSpan, fact.contextSpan)
-        ));
-    }
-    return spanContainsSpan(context.span as SourceSpan, fact.contextSpan);
+    const factOwner = callableForContext(registry, file, fact.contextSpan);
+    if (!context) return factOwner === undefined;
+    return factOwner?.symbolInstanceId === context.symbolInstanceId;
 }
 
 function pythonFactsForFile(
@@ -856,6 +907,29 @@ function pythonFactsForFile(
     file: string,
 ): readonly PythonFlowFact[] {
     return getEvidence(context.analysisByFile, file)?.pythonFlowFacts ?? [];
+}
+
+function buildPythonCallableSignatureIndex(
+    entries: readonly [string, PythonResolutionAnalysisInput][],
+    registry: SymbolRegistry,
+): Map<string, PythonCallableSignatureFact> {
+    const signatures = new Map<string, PythonCallableSignatureFact>();
+    for (const [file, evidence] of entries) {
+        for (const fact of evidence.pythonFlowFacts ?? []) {
+            if (fact.kind !== 'callable_signature') continue;
+            const callable = callableForContext(registry, file, fact.contextSpan);
+            if (!callable || callable.name !== fact.callableName) continue;
+            signatures.set(callable.symbolInstanceId, fact);
+        }
+    }
+    return signatures;
+}
+
+function isDecoratedPythonCallable(
+    context: PythonFlowContext,
+    target: SymbolRecord,
+): boolean {
+    return context.callableSignaturesById.get(target.symbolInstanceId)?.decorated === true;
 }
 
 function normalizePythonExpression(value: string): string {
@@ -932,21 +1006,130 @@ function classNamesWithBases(
     return names;
 }
 
-function expandedClassNames(
-    typeNames: readonly string[],
+function pythonBaseName(reference: string): string {
+    return reference.trim().split('.').at(-1) ?? reference.trim();
+}
+
+function isProtocolLikeTypeName(
+    typeName: string,
     classBasesByName: ReadonlyMap<string, readonly string[]>,
-    classClosureByName: Map<string, ReadonlySet<string>>,
-): ReadonlySet<string> {
-    if (typeNames.length === 1) {
-        return classNamesWithBases(typeNames[0], classBasesByName, classClosureByName);
+    seen: ReadonlySet<string> = new Set(),
+): boolean {
+    if (seen.has(typeName)) return false;
+    const nextSeen = new Set(seen);
+    nextSeen.add(typeName);
+    for (const baseReference of classBasesByName.get(typeName) ?? []) {
+        const baseName = pythonBaseName(baseReference);
+        if (baseName === 'Protocol') return true;
+        if (isProtocolLikeTypeName(baseName, classBasesByName, nextSeen)) return true;
     }
-    const names = new Set<string>();
-    for (const typeName of typeNames) {
-        for (const className of classNamesWithBases(typeName, classBasesByName, classClosureByName)) {
-            names.add(className);
+    return false;
+}
+
+function pythonMroNames(
+    context: PythonFlowContext,
+    className: string,
+    stack: ReadonlySet<string> = new Set(),
+): readonly string[] | undefined {
+    if (stack.has(className)) return undefined;
+    const classCandidates = context.classesByName.get(className) ?? [];
+    if (classCandidates.length > 1) return undefined;
+    const bases = (context.classBasesByName.get(className) ?? []).map(pythonBaseName);
+    if (bases.length === 0) return [className];
+
+    const nextStack = new Set(stack);
+    nextStack.add(className);
+    const sequences: string[][] = [];
+    for (const baseName of bases) {
+        const baseMro = pythonMroNames(context, baseName, nextStack);
+        if (!baseMro) return undefined;
+        sequences.push([...baseMro]);
+    }
+    sequences.push([...bases]);
+
+    const merged: string[] = [];
+    while (sequences.some((sequence) => sequence.length > 0)) {
+        const candidate = sequences
+            .filter((sequence) => sequence.length > 0)
+            .map((sequence) => sequence[0])
+            .find((head) => !sequences.some((sequence) => sequence.slice(1).includes(head)));
+        if (!candidate) return undefined;
+        merged.push(candidate);
+        for (const sequence of sequences) {
+            if (sequence[0] === candidate) sequence.shift();
         }
     }
-    return names;
+    return [className, ...merged];
+}
+
+function exactPythonMethodTarget(
+    context: PythonFlowContext,
+    runtimeTypeName: string,
+    memberName: string,
+): SymbolRecord | undefined {
+    const mro = pythonMroNames(context, runtimeTypeName);
+    if (!mro) return undefined;
+    for (const className of mro) {
+        const classCandidates = context.classesByName.get(className) ?? [];
+        if (classCandidates.length > 1) return undefined;
+        const classTarget = classCandidates[0];
+        if (!classTarget) continue;
+        const declaredMembers = (context.targetIndex.get(memberName) ?? []).filter((candidate) => (
+            candidate.kind === 'method'
+            && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId
+                === classTarget.symbolInstanceId
+        ));
+        if (declaredMembers.length > 1) return undefined;
+        if (declaredMembers.length === 1) {
+            return isDecoratedPythonCallable(context, declaredMembers[0]) ? undefined : declaredMembers[0];
+        }
+    }
+    return undefined;
+}
+
+function exactPythonMethodTargetForClass(
+    context: PythonFlowContext,
+    classTarget: SymbolRecord,
+    memberName: string,
+): SymbolRecord | undefined {
+    const declaredMembers = (context.targetIndex.get(memberName) ?? []).filter((candidate) => (
+        candidate.kind === 'method'
+        && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId
+            === classTarget.symbolInstanceId
+    ));
+    if (declaredMembers.length > 1) return undefined;
+    if (declaredMembers.length === 1) {
+        return isDecoratedPythonCallable(context, declaredMembers[0]) ? undefined : declaredMembers[0];
+    }
+    const sameNameClasses = context.classesByName.get(classTarget.name) ?? [];
+    if (sameNameClasses.length !== 1) return undefined;
+    return exactPythonMethodTarget(context, classTarget.name, memberName);
+}
+
+function pythonMethodTargetsForRuntimeTypes(
+    context: PythonFlowContext,
+    typeNames: readonly string[],
+    memberName: string,
+): { targets: SymbolRecord[]; proofSteps: ResolutionProofStep[] } {
+    const targets = new Map<string, SymbolRecord>();
+    const proofSteps: ResolutionProofStep[] = [];
+
+    for (const typeName of typeNames) {
+        if (isProtocolLikeTypeName(typeName, context.classBasesByName)) continue;
+        const resolved = exactPythonMethodTarget(context, typeName, memberName);
+        if (!resolved) continue;
+        targets.set(resolved.symbolInstanceId, resolved);
+        const targetClass = enclosingClassForSymbol(resolved, context.classesByFile);
+        if (targetClass && targetClass.name !== typeName) {
+            proofSteps.push({
+                kind: 'class_inheritance',
+                subject: `${typeName} -> ${targetClass.name}`,
+                span: targetClass.span as SourceSpan,
+            });
+        }
+    }
+
+    return { targets: [...targets.values()], proofSteps };
 }
 
 function buildRuntimeTypesByClassName(
@@ -1010,60 +1193,144 @@ function appendFlowHop(
     };
 }
 
+function enclosingCallableForSymbol(
+    registry: SymbolRegistry,
+    symbol: SymbolRecord,
+): SymbolRecord | undefined {
+    return (registry.symbolsByFile.get(symbol.file) ?? [])
+        .filter((candidate) => (
+            candidate.symbolInstanceId !== symbol.symbolInstanceId
+            && isSourceOwner(candidate)
+            && symbolContains(candidate, symbol)
+        ))
+        .sort((left, right) => {
+            const leftSize = (left.span.endByte ?? left.span.endLine) - (left.span.startByte ?? left.span.startLine);
+            const rightSize = (right.span.endByte ?? right.span.endLine) - (right.span.startByte ?? right.span.startLine);
+            return leftSize - rightSize || compareStrings(left.symbolInstanceId, right.symbolInstanceId);
+        })[0];
+}
+
+function pythonDirectCandidateVisibleAt(
+    context: PythonFlowContext,
+    owner: SymbolRecord,
+    candidate: SymbolRecord,
+    atSpan: SourceSpan,
+): boolean {
+    if (candidate.kind !== 'function' && candidate.kind !== 'class') return false;
+    if (candidate.file !== owner.file) return false;
+    const enclosingCallable = enclosingCallableForSymbol(context.registry, candidate);
+    if (!enclosingCallable) return true;
+    return enclosingCallable.symbolInstanceId === owner.symbolInstanceId
+        && (candidate.span.endByte ?? Number.MAX_SAFE_INTEGER) <= atSpan.startByte;
+}
+
 function exactPythonCallableTargets(
     context: PythonFlowContext,
     file: string,
+    owner: SymbolRecord,
     calleeText: string,
+    atSpan: SourceSpan,
 ): SymbolRecord[] {
-    const cacheKey = `${file}\u0000${calleeText}`;
-    const cached = context.exactCallableTargetsCache.get(cacheKey);
-    if (cached !== undefined) return [...cached];
-    const simpleName = calleeText.split('.').at(-1);
-    if (!simpleName) {
-        context.exactCallableTargetsCache.set(cacheKey, []);
-        return [];
-    }
+    const simpleName = simplePythonName(calleeText);
+    if (!simpleName) return [];
     const evidence = getEvidence(context.analysisByFile, file);
-    if (!evidence) {
-        context.exactCallableTargetsCache.set(cacheKey, []);
-        return [];
-    }
+    if (!evidence) return [];
+
     const imported = evidence.moduleBindings.filter((binding) => (
         (binding.kind === 'import' || binding.kind === 'reexport')
         && binding.localName === simpleName
         && Boolean(binding.importedName)
         && Boolean(binding.moduleSpecifier)
+        && pythonImportBindingVisibleToSource({
+            binding,
+            source: owner,
+            registry: context.registry,
+            atSpan,
+        })
     ));
-    const importedTargets = new Map<string, SymbolRecord>();
-    for (const binding of imported) {
-        const importedFile = resolvePythonModulePath(
-            file,
-            binding.moduleSpecifier!,
-            context.registry,
-            context.availableFiles,
-        );
-        if (!importedFile) continue;
-        for (const candidate of context.targetIndex.get(binding.importedName!) ?? []) {
-            if (
-                candidate.file === importedFile
-                && isSourceOwner(candidate)
-                && candidate.name === binding.importedName
-            ) {
-                importedTargets.set(candidate.symbolInstanceId, candidate);
+    if (imported.length > 0) {
+        const importedTargets = new Map<string, SymbolRecord>();
+        for (const binding of imported) {
+            const importedFile = resolvePythonModulePath(
+                file,
+                binding.moduleSpecifier!,
+                context.registry,
+                context.availableFiles,
+            );
+            if (!importedFile) continue;
+            for (const candidate of context.targetIndex.get(binding.importedName!) ?? []) {
+                if (
+                    candidate.file === importedFile
+                    && candidate.name === binding.importedName
+                    && (candidate.kind === 'function' || candidate.kind === 'class')
+                    && !isDecoratedPythonCallable(context, candidate)
+                ) {
+                    importedTargets.set(candidate.symbolInstanceId, candidate);
+                }
             }
         }
-    }
-    if (imported.length > 0) {
-        const result = [...importedTargets.values()];
-        context.exactCallableTargetsCache.set(cacheKey, result);
-        return result;
+        return importedTargets.size === 1 ? [...importedTargets.values()] : [];
     }
 
-    const sameFile = (context.registry.symbolsByFile.get(file) ?? [])
-        .filter((candidate) => isSourceOwner(candidate) && candidate.name === simpleName);
-    const result = sameFile.length > 0 ? sameFile : [];
-    context.exactCallableTargetsCache.set(cacheKey, result);
-    return result;
+    const sameFile = (context.registry.symbolsByFile.get(file) ?? []).filter((candidate) => (
+        candidate.name === simpleName
+        && pythonDirectCandidateVisibleAt(context, owner, candidate, atSpan)
+        && !isDecoratedPythonCallable(context, candidate)
+    ));
+    return sameFile.length === 1 ? sameFile : [];
+}
+
+function positionalArgumentIndexForParameter(
+    context: PythonFlowContext,
+    target: SymbolRecord,
+    parameterName: string,
+): number | undefined {
+    const signature = context.callableSignaturesById.get(target.symbolInstanceId);
+    if (!signature?.positionalExact) return undefined;
+    let parameterNames = [...signature.parameterNames];
+    if (
+        target.kind === 'method'
+        && (parameterNames[0] === 'self' || parameterNames[0] === 'cls')
+    ) {
+        parameterNames = parameterNames.slice(1);
+    }
+    const index = parameterNames.indexOf(parameterName);
+    return index >= 0 ? index : undefined;
+}
+
+function invocationMatchesParameterOwner(
+    context: PythonFlowContext,
+    calledTargets: readonly SymbolRecord[],
+    target: SymbolRecord,
+): boolean {
+    if (calledTargets.some((candidate) => candidate.symbolInstanceId === target.symbolInstanceId)) {
+        return true;
+    }
+    if (target.kind !== 'method' || target.name !== '__init__') return false;
+    return calledTargets.some((candidate) => {
+        if (candidate.kind !== 'class') return false;
+        const constructorTargets = pythonMethodTargetsForRuntimeTypes(context, [candidate.name], '__init__').targets;
+        return constructorTargets.length === 1
+            && constructorTargets[0].symbolInstanceId === target.symbolInstanceId;
+    });
+}
+
+function pythonCallArgumentFactsForParameter(
+    context: PythonFlowContext,
+    target: SymbolRecord,
+    parameterName: string,
+): readonly [string, PythonCallArgumentFact][] {
+    const positionalIndex = positionalArgumentIndexForParameter(context, target, parameterName);
+    return [
+        ...(context.callArgumentsByName.get(parameterName) ?? []),
+        ...(positionalIndex === undefined ? [] : (context.callArgumentsByIndex.get(positionalIndex) ?? [])),
+    ].filter(([file, fact], index, entries) => entries.findIndex(([candidateFile, candidate]) => (
+        candidateFile === file
+        && candidate.span.startByte === fact.span.startByte
+        && candidate.valueText === fact.valueText
+        && candidate.argumentName === fact.argumentName
+        && candidate.argumentIndex === fact.argumentIndex
+    )) === index);
 }
 
 function resolvePythonParameterOrigins(
@@ -1076,12 +1343,20 @@ function resolvePythonParameterOrigins(
     if (stack.has(targetKey)) return [];
     const nextStack = new Set(stack);
     nextStack.add(targetKey);
+    const candidateFacts = pythonCallArgumentFactsForParameter(context, target, parameterName);
+
     const origins: PythonValueOrigin[] = [];
-    for (const [file, fact] of context.callArgumentsByName.get(parameterName) ?? []) {
-        const calledTargets = exactPythonCallableTargets(context, file, fact.calleeText);
-        if (!calledTargets.some((candidate) => candidate.symbolInstanceId === target.symbolInstanceId)) continue;
+    for (const [file, fact] of candidateFacts) {
         const caller = callableForContext(context.registry, file, fact.contextSpan);
         if (!caller) continue;
+        const calledTargets = exactPythonCallableTargets(
+            context,
+            file,
+            caller,
+            fact.calleeText,
+            fact.span,
+        );
+        if (!invocationMatchesParameterOwner(context, calledTargets, target)) continue;
         const valueOrigins = resolvePythonExpressionOrigins(
             context,
             file,
@@ -1089,6 +1364,7 @@ function resolvePythonParameterOrigins(
             fact.valueText,
             fact.span,
             nextStack,
+            fact.contextSpan,
         );
         for (const origin of valueOrigins) {
             const transferred = appendFlowHop(
@@ -1122,6 +1398,7 @@ function resolvePythonFieldOrigins(
             member.receiver,
             fact.span,
             stack,
+            fact.contextSpan,
         );
         if (!receiverOrigins.some((origin) => (
             origin.kind === 'instance'
@@ -1134,6 +1411,7 @@ function resolvePythonFieldOrigins(
             fact.valueText,
             fact.span,
             stack,
+            fact.contextSpan,
         );
         for (const origin of valueOrigins) {
             const transferred = appendFlowHop(
@@ -1149,6 +1427,86 @@ function resolvePythonFieldOrigins(
     return deduplicateOrigins(origins);
 }
 
+function pythonParameterBinding(
+    context: PythonFlowContext,
+    file: string,
+    owner: SymbolRecord,
+    parameterName: string,
+): ReceiverTypeBinding | undefined {
+    const evidence = getEvidence(context.analysisByFile, file);
+    if (!evidence) return undefined;
+    const matches = (evidence.receiverTypeBindings ?? []).filter((binding) => (
+        binding.kind === 'parameter_annotation'
+        && binding.localName === parameterName
+        && ownerForCall(
+            context.registry.symbolsByFile.get(file) ?? [],
+            { calleeName: '', span: binding.span },
+        )?.symbolInstanceId === owner.symbolInstanceId
+    ));
+    const typeNames = new Set(matches.map((binding) => binding.typeName));
+    return matches.length > 0 && typeNames.size === 1 ? matches[0] : undefined;
+}
+
+function pythonTypedParameterOrigin(
+    context: PythonFlowContext,
+    file: string,
+    owner: SymbolRecord,
+    parameterName: string,
+): PythonValueOrigin | undefined {
+    const binding = pythonParameterBinding(context, file, owner, parameterName);
+    if (!binding) return undefined;
+    const evidence = getEvidence(context.analysisByFile, file);
+    if (!evidence) return undefined;
+    const targetClass = resolvePythonClassReference({
+        classReference: binding.typeName,
+        source: owner,
+        evidence,
+        registry: context.registry,
+        classesByName: context.classesByName,
+        availableFiles: context.availableFiles,
+        atSpan: binding.span,
+    });
+    if (!targetClass) return undefined;
+    return {
+        kind: 'instance',
+        typeNames: [targetClass.name],
+        targetIds: [],
+        flowHops: 0,
+        proofSteps: [{
+            kind: 'parameter_annotation',
+            subject: `${parameterName}:${targetClass.name}`,
+            span: binding.span,
+        }],
+        dependencyKeys: [],
+    };
+}
+
+function pythonCallableHasParameter(
+    context: PythonFlowContext,
+    owner: SymbolRecord,
+    parameterName: string,
+): boolean {
+    return context.callableSignaturesById.get(owner.symbolInstanceId)?.parameterNames.includes(parameterName) === true;
+}
+
+function reachingPythonAssignments(
+    facts: readonly PythonAssignmentOriginFact[],
+    useBlockSpan: SourceSpan | undefined,
+): readonly PythonAssignmentOriginFact[] {
+    if (facts.length === 0 || !useBlockSpan) return facts;
+    const dominating = facts
+        .filter((fact) => spanContainsSpan(fact.contextSpan, useBlockSpan))
+        .sort((left, right) => right.span.endByte - left.span.endByte);
+    const dominant = dominating[0];
+    if (!dominant) return [];
+    const uncertainAfterDominant = facts.filter((fact) => (
+        fact !== dominant
+        && fact.span.endByte > dominant.span.endByte
+        && !spanContainsSpan(fact.contextSpan, useBlockSpan)
+    ));
+    return [dominant, ...uncertainAfterDominant];
+}
+
 function resolvePythonExpressionOrigins(
     context: PythonFlowContext,
     file: string,
@@ -1156,6 +1514,7 @@ function resolvePythonExpressionOrigins(
     expression: string,
     atSpan: SourceSpan,
     stack: ReadonlySet<string>,
+    atBlockSpan?: SourceSpan,
 ): PythonValueOrigin[] {
     const normalized = normalizePythonExpression(expression);
     if (!normalized) return [];
@@ -1191,6 +1550,7 @@ function resolvePythonExpressionOrigins(
             registry: context.registry,
             classesByName: context.classesByName,
             availableFiles: context.availableFiles,
+            atSpan,
         });
         if (!constructorTarget) return [];
         return [{
@@ -1218,29 +1578,72 @@ function resolvePythonExpressionOrigins(
                 && fact.span.endByte <= atSpan.startByte
             ))
             .sort((left, right) => right.span.endByte - left.span.endByte);
-        const latest = localFacts[0];
-        if (latest) {
-            const origins = resolvePythonExpressionOrigins(context, file, owner, latest.valueText, latest.span, stack);
-            return origins
-                .map((origin) => appendFlowHop(
-                    origin,
-                    'allocation_origin',
-                    latest.targetText,
-                    latest.span,
-                    flowDependencyKey(file, latest.span, latest.targetText),
-                ))
-                .filter((origin): origin is PythonValueOrigin => origin !== undefined);
+        const relevantFacts = reachingPythonAssignments(localFacts, atBlockSpan ?? atSpan);
+        if (relevantFacts.length > 0) {
+            const origins: PythonValueOrigin[] = [];
+            for (const fact of relevantFacts) {
+                const factOrigins = resolvePythonExpressionOrigins(
+                    context,
+                    file,
+                    owner,
+                    fact.valueText,
+                    fact.span,
+                    stack,
+                    fact.contextSpan,
+                );
+                if (factOrigins.length === 0) return [];
+                for (const origin of factOrigins) {
+                    const transferred = appendFlowHop(
+                        origin,
+                        'allocation_origin',
+                        fact.targetText,
+                        fact.span,
+                        flowDependencyKey(file, fact.span, fact.targetText),
+                    );
+                    if (transferred) origins.push(transferred);
+                }
+            }
+            return deduplicateOrigins(origins);
         }
         if (owner) {
             const origins = resolvePythonParameterOrigins(context, owner, simpleName, stack);
             if (origins.length > 0) return origins;
+            const typedOrigin = pythonTypedParameterOrigin(context, file, owner, simpleName);
+            if (typedOrigin && !isProtocolLikeTypeName(typedOrigin.typeNames[0], context.classBasesByName)) {
+                return [typedOrigin];
+            }
+            if (pythonCallableHasParameter(context, owner, simpleName)) return [];
+            const callableTargets = exactPythonCallableTargets(context, file, owner, simpleName, atSpan);
+            if (callableTargets.length === 1) {
+                const target = callableTargets[0];
+                return [{
+                    kind: 'callable',
+                    typeNames: [],
+                    targetIds: [target.symbolInstanceId],
+                    flowHops: 0,
+                    proofSteps: [{
+                        kind: 'exact_target_definition',
+                        subject: target.qualifiedName,
+                        span: target.span as SourceSpan,
+                    }],
+                    dependencyKeys: [],
+                }];
+            }
         }
         return [];
     }
 
     const member = pythonMemberExpression(normalized);
     if (!member) return [];
-    const receiverOrigins = resolvePythonExpressionOrigins(context, file, owner, member.receiver, atSpan, stack);
+    const receiverOrigins = resolvePythonExpressionOrigins(
+        context,
+        file,
+        owner,
+        member.receiver,
+        atSpan,
+        stack,
+        atBlockSpan,
+    );
     if (receiverOrigins.length === 0) return [];
     const origins: PythonValueOrigin[] = [];
     for (const receiverOrigin of receiverOrigins) {
@@ -1252,25 +1655,20 @@ function resolvePythonExpressionOrigins(
             stack,
         );
         origins.push(...fieldOrigins);
-        const inheritedClassNames = expandedClassNames(
+        const methodResolution = pythonMethodTargetsForRuntimeTypes(
+            context,
             receiverOrigin.typeNames,
-            context.classBasesByName,
-            context.classClosureByName,
+            member.member,
         );
-        const targets = [...(context.targetIndex.get(member.member) ?? [])].filter((candidate) => {
-            if (!isSourceOwner(candidate)) return false;
-            const candidateClass = enclosingClassForSymbol(candidate, context.classesByFile);
-            return candidateClass !== undefined && inheritedClassNames.has(candidateClass.name);
-        });
-        const uniqueTargets = new Map(targets.map((target) => [target.symbolInstanceId, target]));
-        if (uniqueTargets.size > 0) {
+        if (methodResolution.targets.length > 0) {
             origins.push({
                 kind: 'callable',
                 typeNames: receiverOrigin.typeNames,
-                targetIds: [...uniqueTargets.keys()],
+                targetIds: methodResolution.targets.map((target) => target.symbolInstanceId),
                 flowHops: receiverOrigin.flowHops,
                 proofSteps: [
                     ...receiverOrigin.proofSteps,
+                    ...methodResolution.proofSteps,
                     { kind: 'field_origin', subject: member.member, span: atSpan },
                 ],
                 dependencyKeys: receiverOrigin.dependencyKeys,
@@ -1300,6 +1698,24 @@ function buildPythonCallArgumentIndex(
                 entriesForArgument.push([file, fact]);
             } else {
                 index.set(fact.argumentName, [[file, fact]]);
+            }
+        }
+    }
+    return index;
+}
+
+function buildPythonCallArgumentIndexByPosition(
+    entries: readonly [string, PythonResolutionAnalysisInput][],
+): Map<number, readonly [string, PythonCallArgumentFact][]> {
+    const index = new Map<number, [string, PythonCallArgumentFact][]>();
+    for (const [file, evidence] of entries) {
+        for (const fact of evidence.pythonFlowFacts ?? []) {
+            if (fact.kind !== 'call_argument' || fact.argumentIndex === undefined) continue;
+            const entriesForArgument = index.get(fact.argumentIndex);
+            if (entriesForArgument) {
+                entriesForArgument.push([file, fact]);
+            } else {
+                index.set(fact.argumentIndex, [[file, fact]]);
             }
         }
     }
@@ -1354,6 +1770,28 @@ function resolvePythonServiceMemberTarget(input: {
     const fieldName = receiverParts.length === 1 ? input.call.calleeName : receiverParts[1];
     if (!fieldName) return undefined;
 
+    const serviceClass = resolvePythonClassReference({
+        classReference: serviceType,
+        source: input.source,
+        evidence: input.evidence,
+        registry: input.context.registry,
+        classesByName: input.context.classesByName,
+        availableFiles: input.context.availableFiles,
+        atSpan: input.call.span,
+    });
+    if (!serviceClass || isProtocolLikeTypeName(serviceClass.name, input.context.classBasesByName)) {
+        return undefined;
+    }
+    const initializerTargets = pythonMethodTargetsForRuntimeTypes(
+        input.context,
+        [serviceClass.name],
+        '__init__',
+    ).targets;
+    const initializer = initializerTargets.length === 1 ? initializerTargets[0] : undefined;
+    const allocationFacts = initializer
+        ? pythonCallArgumentFactsForParameter(input.context, initializer, fieldName)
+        : (input.context.callArgumentsByName.get(fieldName) ?? []);
+
     const allocationOrigins: PythonValueOrigin[] = [];
     const allocationDependencyKeys: string[] = [];
     let sawAllocation = false;
@@ -1362,11 +1800,24 @@ function resolvePythonServiceMemberTarget(input: {
         subject: `${rootReceiver}:${serviceType}`,
         span: parameterBindings[0].span,
     }];
-    for (const [file, fact] of input.context.callArgumentsByName.get(fieldName) ?? []) {
-        if (fact.calleeText.split('.').at(-1) !== serviceType) continue;
+    for (const [file, fact] of allocationFacts) {
+        const allocationContext = callableForContext(input.context.registry, file, fact.contextSpan);
+        if (!allocationContext) continue;
+        const calledTargets = exactPythonCallableTargets(
+            input.context,
+            file,
+            allocationContext,
+            fact.calleeText,
+            fact.span,
+        );
+        const invocationMatches = initializer
+            ? invocationMatchesParameterOwner(input.context, calledTargets, initializer)
+            : calledTargets.some((target) => (
+                target.kind === 'class' && target.symbolInstanceId === serviceClass.symbolInstanceId
+            ));
+        if (!invocationMatches) continue;
         sawAllocation = true;
         allocationDependencyKeys.push(flowDependencyKey(file, fact.span, `${serviceType}.${fieldName}`));
-        const allocationContext = callableForContext(input.context.registry, file, fact.contextSpan);
         const origins = resolvePythonExpressionOrigins(
             input.context,
             file,
@@ -1374,6 +1825,7 @@ function resolvePythonServiceMemberTarget(input: {
             fact.valueText,
             fact.span,
             new Set(),
+            fact.contextSpan,
         );
         for (const origin of origins) {
             const allocationOrigin = appendFlowHop(
@@ -1413,21 +1865,30 @@ function resolvePythonServiceMemberTarget(input: {
             }
             continue;
         }
-        const inherited = expandedClassNames(
-            origin.typeNames,
-            input.context.classBasesByName,
-            input.context.classClosureByName,
-        );
-        for (const target of input.context.targetIndex.get(input.call.calleeName) ?? []) {
-            if (!isSourceOwner(target)) continue;
-            const targetClass = enclosingClassForSymbol(target, input.context.classesByFile);
-            if (targetClass && inherited.has(targetClass.name)) targets.set(target.symbolInstanceId, target);
+        for (const typeName of origin.typeNames) {
+            if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
+            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName);
+            if (!resolved) continue;
+            targets.set(resolved.symbolInstanceId, resolved);
+            const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
+            if (targetClass && targetClass.name !== typeName) {
+                proofSteps.push({
+                    kind: 'class_inheritance',
+                    subject: `${typeName} -> ${targetClass.name}`,
+                    span: targetClass.span as SourceSpan,
+                });
+            }
         }
     }
     if (targets.size > 1) {
+        const candidates = [...targets.values()].map((target) => target.qualifiedName).sort(compareStrings);
         return {
             decision: 'ambiguous',
-            proofSteps: [...proofSteps, { kind: 'ambiguity', subject: `${serviceType}.${fieldName}.${input.call.calleeName}` }],
+            proofSteps: [
+                ...proofSteps,
+                { kind: 'candidate_set', subject: candidates.join('|') },
+                { kind: 'ambiguity', subject: `${serviceType}.${fieldName}.${input.call.calleeName}` },
+            ],
             flowHops: Math.max(...origins.map((origin) => origin.flowHops)),
             dependencyKeys: [...new Set(origins.flatMap((origin) => origin.dependencyKeys))],
         };
@@ -1444,6 +1905,99 @@ function resolvePythonServiceMemberTarget(input: {
     };
 }
 
+function resolvePythonOriginDirectTarget(input: {
+    call: CallSite;
+    source: SymbolRecord;
+    context: PythonFlowContext;
+}): PythonFlowResolution | undefined {
+    if (input.source.language !== 'python' || input.call.kind !== 'direct') return undefined;
+    const localAssignments = pythonFactsForFile(input.context, input.source.file).filter((fact) => (
+        fact.kind === 'assignment_origin'
+        && fact.targetText === input.call.calleeName
+        && fact.span.endByte <= input.call.span.startByte
+        && factBelongsToContext(input.context.registry, input.source.file, fact, input.source)
+    ));
+    const isParameter = pythonCallableHasParameter(input.context, input.source, input.call.calleeName);
+    if (localAssignments.length === 0 && !isParameter) return undefined;
+
+    const origins = resolvePythonExpressionOrigins(
+        input.context,
+        input.source.file,
+        input.source,
+        input.call.calleeName,
+        input.call.span,
+        new Set(),
+        input.call.statementBlockSpan,
+    );
+    if (origins.length === 0) return undefined;
+
+    const targets = new Map<string, SymbolRecord>();
+    const proofSteps: ResolutionProofStep[] = [];
+    for (const origin of origins) {
+        proofSteps.push(...origin.proofSteps);
+        if (origin.kind === 'callable') {
+            for (const targetId of origin.targetIds) {
+                const target = input.context.registry.symbolsByInstanceId.get(targetId);
+                if (
+                    target
+                    && isCallableSymbolKind(target.kind)
+                    && !isDecoratedPythonCallable(input.context, target)
+                ) {
+                    targets.set(target.symbolInstanceId, target);
+                }
+            }
+            continue;
+        }
+        for (const typeName of origin.typeNames) {
+            if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
+            const resolved = exactPythonMethodTarget(input.context, typeName, '__call__');
+            if (!resolved) continue;
+            targets.set(resolved.symbolInstanceId, resolved);
+            const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
+            if (targetClass && targetClass.name !== typeName) {
+                proofSteps.push({
+                    kind: 'class_inheritance',
+                    subject: `${typeName} -> ${targetClass.name}`,
+                    span: targetClass.span as SourceSpan,
+                });
+            }
+        }
+    }
+
+    const uniqueProofSteps = proofSteps.filter((step, index, steps) => (
+        steps.findIndex((candidate) => (
+            candidate.kind === step.kind
+            && candidate.subject === step.subject
+            && spanIdentity(candidate.span as SourceSpan | undefined) === spanIdentity(step.span as SourceSpan | undefined)
+        )) === index
+    ));
+    const flowHops = Math.max(...origins.map((origin) => origin.flowHops));
+    const dependencyKeys = [...new Set(origins.flatMap((origin) => origin.dependencyKeys))];
+    if (targets.size > 1) {
+        const candidates = [...targets.values()].map((target) => target.qualifiedName).sort(compareStrings);
+        return {
+            decision: 'ambiguous',
+            proofSteps: [
+                ...uniqueProofSteps,
+                { kind: 'candidate_set', subject: candidates.join('|') },
+                { kind: 'ambiguity', subject: input.call.calleeName },
+            ],
+            flowHops,
+            dependencyKeys,
+        };
+    }
+    const target = [...targets.values()][0];
+    return {
+        target,
+        decision: target ? 'resolved' : 'unresolved',
+        proofSteps: target
+            ? uniqueProofSteps
+            : [...uniqueProofSteps, { kind: 'unresolved_dependency', subject: input.call.calleeName }],
+        flowHops,
+        dependencyKeys,
+    };
+}
+
 function resolvePythonOriginMemberTarget(input: {
     call: CallSite;
     source: SymbolRecord;
@@ -1454,6 +2008,31 @@ function resolvePythonOriginMemberTarget(input: {
         || input.call.kind !== 'member'
         || !input.call.receiverText
     ) return undefined;
+    const receiverName = simplePythonName(input.call.receiverText);
+    if (receiverName) {
+        const evidence = getEvidence(input.context.analysisByFile, input.source.file);
+        const directParameterBinding = (evidence?.receiverTypeBindings ?? []).some((binding) => (
+            binding.kind === 'parameter_annotation'
+            && binding.localName === receiverName
+            && ownerForCall(
+                input.context.registry.symbolsByFile.get(input.source.file) ?? [],
+                { calleeName: '', span: binding.span },
+            )?.symbolInstanceId === input.source.symbolInstanceId
+        ));
+        if (directParameterBinding) return undefined;
+        const hasLocalAssignment = (evidence?.pythonFlowFacts ?? []).some((fact) => (
+            fact.kind === 'assignment_origin'
+            && fact.targetText === receiverName
+            && fact.span.endByte <= input.call.span.startByte
+            && factBelongsToContext(
+                input.context.registry,
+                input.source.file,
+                fact,
+                input.source,
+            )
+        ));
+        if (!hasLocalAssignment) return undefined;
+    }
     const origins = resolvePythonExpressionOrigins(
         input.context,
         input.source.file,
@@ -1461,6 +2040,7 @@ function resolvePythonOriginMemberTarget(input: {
         input.call.receiverText,
         input.call.span,
         new Set(),
+        input.call.statementBlockSpan,
     );
     if (origins.length === 0) return undefined;
 
@@ -1473,23 +2053,19 @@ function resolvePythonOriginMemberTarget(input: {
             if (target?.name === input.call.calleeName) targets.set(target.symbolInstanceId, target);
         }
         if (origin.kind !== 'instance') continue;
-        const inheritedClassNames = expandedClassNames(
-            origin.typeNames,
-            input.context.classBasesByName,
-            input.context.classClosureByName,
-        );
-        for (const target of input.context.targetIndex.get(input.call.calleeName) ?? []) {
-            if (!isSourceOwner(target) || target.symbolInstanceId === input.source.symbolInstanceId) continue;
-            const targetClass = enclosingClassForSymbol(target, input.context.classesByFile);
-            if (!targetClass || !inheritedClassNames.has(targetClass.name)) continue;
-            if (!origin.typeNames.includes(targetClass.name)) {
+        for (const typeName of origin.typeNames) {
+            if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
+            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName);
+            if (!resolved || resolved.symbolInstanceId === input.source.symbolInstanceId) continue;
+            targets.set(resolved.symbolInstanceId, resolved);
+            const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
+            if (targetClass && targetClass.name !== typeName) {
                 proofSteps.push({
                     kind: 'class_inheritance',
-                    subject: `${origin.typeNames.join('|')} -> ${targetClass.name}`,
+                    subject: `${typeName} -> ${targetClass.name}`,
                     span: targetClass.span as SourceSpan,
                 });
             }
-            targets.set(target.symbolInstanceId, target);
         }
     }
     const uniqueProofSteps = proofSteps.filter((step, index, steps) => (
@@ -1500,9 +2076,14 @@ function resolvePythonOriginMemberTarget(input: {
         )) === index
     ));
     if (targets.size > 1) {
+        const candidates = [...targets.values()].map((target) => target.qualifiedName).sort(compareStrings);
         return {
             decision: 'ambiguous',
-            proofSteps: [...uniqueProofSteps, { kind: 'ambiguity', subject: `${input.call.receiverText}.${input.call.calleeName}` }],
+            proofSteps: [
+                ...uniqueProofSteps,
+                { kind: 'candidate_set', subject: candidates.join('|') },
+                { kind: 'ambiguity', subject: `${input.call.receiverText}.${input.call.calleeName}` },
+            ],
             flowHops: Math.max(...origins.map((origin) => origin.flowHops)),
             dependencyKeys: [...new Set(origins.flatMap((origin) => origin.dependencyKeys))],
         };
@@ -1519,16 +2100,19 @@ function resolvePythonOriginMemberTarget(input: {
     };
 }
 
+
 function buildPythonClassBases(
     analysisByFile: ReadonlyMap<string, PythonResolutionAnalysisInput> | Record<string, PythonResolutionAnalysisInput>,
 ): Map<string, string[]> {
-    const byClass = new Map<string, Map<string, Set<string>>>();
+    const byClass = new Map<string, Map<string, string[]>>();
     for (const [file, evidence] of getEvidenceEntries(analysisByFile)) {
         for (const fact of evidence.pythonFlowFacts ?? []) {
             if (fact.kind !== 'class_bases') continue;
-            const byFile = byClass.get(fact.className) ?? new Map<string, Set<string>>();
-            const existing = byFile.get(file) ?? new Set<string>();
-            for (const baseName of fact.baseNames) existing.add(baseName);
+            const byFile = byClass.get(fact.className) ?? new Map<string, string[]>();
+            const existing = byFile.get(file) ?? [];
+            for (const baseName of fact.baseNames) {
+                if (!existing.includes(baseName)) existing.push(baseName);
+            }
             byFile.set(file, existing);
             byClass.set(fact.className, byFile);
         }
@@ -1537,9 +2121,9 @@ function buildPythonClassBases(
     for (const [className, byFile] of byClass) {
         // A type-only origin cannot safely select between same-named classes
         // from different modules. Retain inheritance only when its definition
-        // is unique in the indexed snapshot.
+        // is unique in the indexed snapshot. Base order is semantic for Python MRO.
         if (byFile.size !== 1) continue;
-        bases.set(className, [...(byFile.values().next().value as Set<string>)].sort(compareStrings));
+        bases.set(className, [...(byFile.values().next().value as string[])]);
     }
     return bases;
 }
@@ -1600,6 +2184,12 @@ function pythonFallbackProofSteps(input: {
             (binding.kind === 'import' || binding.kind === 'reexport')
             && (binding.localName === receiver
                 || (!binding.localName && binding.moduleSpecifier === receiver))
+            && pythonImportBindingVisibleToSource({
+                binding,
+                source: input.source,
+                registry: input.registry,
+                atSpan: input.call.span,
+            })
         ));
         if (imported.length === 1) {
             proof.push({
@@ -1612,6 +2202,12 @@ function pythonFallbackProofSteps(input: {
         const imported = input.evidence.moduleBindings.filter((binding) => (
             (binding.kind === 'import' || binding.kind === 'reexport')
             && binding.localName === input.call.calleeName
+            && pythonImportBindingVisibleToSource({
+                binding,
+                source: input.source,
+                registry: input.registry,
+                atSpan: input.call.span,
+            })
         ));
         if (imported.length === 1) {
             proof.push({
@@ -1730,6 +2326,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
         .filter(([, evidence]) => (evidence.pythonFlowFacts?.length ?? 0) > 0);
     const classBasesByName = buildPythonClassBases(input.analysisByFile);
     const classClosureByName = new Map<string, ReadonlySet<string>>();
+    const callableSignaturesById = buildPythonCallableSignatureIndex(pythonEvidenceEntries, input.registry);
     const flowContext: PythonFlowContext = {
         registry: input.registry,
         analysisByFile: input.analysisByFile,
@@ -1744,9 +2341,10 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
             classBasesByName,
             classClosureByName,
         ),
-        exactCallableTargetsCache: new Map(),
         pythonEvidenceEntries,
+        callableSignaturesById,
         callArgumentsByName: buildPythonCallArgumentIndex(pythonEvidenceEntries),
+        callArgumentsByIndex: buildPythonCallArgumentIndexByPosition(pythonEvidenceEntries),
         assignmentsByMemberName: buildPythonAssignmentOriginIndex(pythonEvidenceEntries),
     };
     const recordsByKey = new Map<string, RelationshipRecord>();
@@ -1764,7 +2362,11 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
             const candidates = targetIndex.get(call.calleeName);
             const evidenceForCall = evidence;
             const flowResolution = source.language === 'python'
-                ? resolvePythonServiceMemberTarget({
+                ? resolvePythonOriginDirectTarget({
+                    call,
+                    source,
+                    context: flowContext,
+                }) ?? resolvePythonServiceMemberTarget({
                     call,
                     source,
                     evidence: evidenceForCall,
@@ -1790,6 +2392,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                             evidence,
                             registry: input.registry,
                             availableFiles,
+                            context: flowContext,
                         })
                         : undefined
                     : call.kind === 'member'
@@ -1802,6 +2405,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                             classesByFile: classes.byFile,
                             classesByName: classes.byName,
                             availableFiles,
+                            context: flowContext,
                         })
                         : source.language === 'python'
                             ? resolvePythonDirectTarget({
@@ -1811,6 +2415,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                                 evidence,
                                 registry: input.registry,
                                 availableFiles,
+                                context: flowContext,
                             })
                             : resolveUnambiguousTarget(
                                 source,
@@ -1858,7 +2463,15 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                         }
                     : {
                         decision: (candidates && candidates.length > 1 ? 'ambiguous' : 'unresolved') as 'ambiguous' | 'unresolved',
-                        proofSteps: [],
+                        proofSteps: candidates && candidates.length > 1
+                            ? [{
+                                kind: 'candidate_set' as const,
+                                subject: candidates
+                                    .map((candidate) => candidate.qualifiedName)
+                                    .sort(compareStrings)
+                                    .join('|'),
+                            }]
+                            : [],
                         flowHops: 0,
                         dependencyKeys: [],
                     });

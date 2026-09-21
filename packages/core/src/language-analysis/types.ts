@@ -68,7 +68,7 @@ export type PythonFlowFact =
         readonly constructorTypeName?: string;
         readonly calleeName?: string;
         readonly span: SourceSpan;
-        /** The callable or module scope in which this value was allocated. */
+        /** Nearest lexical statement block; callable ownership is inferred by containment. */
         readonly contextSpan: SourceSpan;
     }
     | {
@@ -78,7 +78,18 @@ export type PythonFlowFact =
         readonly argumentIndex?: number;
         readonly valueText: string;
         readonly span: SourceSpan;
-        /** The callable or module scope from which the call was made. */
+        /** Nearest lexical statement block; callable ownership is inferred by containment. */
+        readonly contextSpan: SourceSpan;
+    }
+    | {
+        readonly kind: 'callable_signature';
+        readonly callableName: string;
+        readonly parameterNames: readonly string[];
+        /** True only when ordinary positional arguments map one-to-one onto parameterNames. */
+        readonly positionalExact: boolean;
+        /** True when decoration is not one of the bounded descriptor forms whose body identity remains mechanically known. */
+        readonly decorated: boolean;
+        readonly span: SourceSpan;
         readonly contextSpan: SourceSpan;
     }
     | {

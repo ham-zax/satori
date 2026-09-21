@@ -532,6 +532,7 @@ test('buildCallRelationshipsForRegistry resolves exact Python aliases and parame
             ['build', 'SpreadModelFactory.create_model'],
             ['inspect', 'MetricsModel.calculate_metrics'],
             ['inspect_other', 'OtherModel.calculate_metrics'],
+            ['string_annotation', 'MetricsModel.calculate_metrics'],
         ],
     );
 });

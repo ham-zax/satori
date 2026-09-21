@@ -267,6 +267,7 @@ test('resolvePythonRelationships reports ambiguous member calls as REFERENCES cl
     assert.deepEqual(claim.proofSteps.map((step) => step.kind), [
         'call_site',
         'containing_caller',
+        'candidate_set',
         'ambiguity',
     ]);
     assert.equal(claim.dependencyKeys.length, 1);
@@ -344,4 +345,263 @@ test('resolvePythonRelationships is side-effect free and deterministically order
     assert.deepEqual(second.records, first.records);
     assert.deepEqual(second.claimsByFile, first.claimsByFile);
     assert.ok(first.claimsByFile.size > 0);
+});
+
+test('resolvePythonRelationships scopes function-local imports to their owning callable', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/alpha.py': 'def helper(): pass\n',
+        'src/beta.py': 'def helper(): pass\n',
+        'src/app.py': [
+            'def a():',
+            '    from .alpha import helper',
+            '    helper()',
+            '',
+            'def b():',
+            '    from .beta import helper',
+            '    helper()',
+            '',
+            'def c():',
+            '    helper()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const calls = result.records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [
+            symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId || '')?.file,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ])
+        .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+
+    assert.deepEqual(calls, [
+        ['a', 'src/alpha.py', 'helper'],
+        ['b', 'src/beta.py', 'helper'],
+    ]);
+    const c = [...(result.claimsByFile.get('src/app.py') ?? [])].find((claim) => (
+        symbolsById.get(claim.sourceInstanceId || '')?.qualifiedName === 'c'
+    ));
+    assert.ok(c);
+    assert.notEqual(c.decision, 'resolved');
+    assert.equal(c.relationshipType, 'REFERENCES');
+});
+
+test('resolvePythonRelationships keeps branch-conflicted origins non-authoritative while preserving straight-line reassignment', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/app.py': [
+            'class A:',
+            '    def run(self): pass',
+            'class B:',
+            '    def run(self): pass',
+            '',
+            'def straight():',
+            '    value = A()',
+            '    value = B()',
+            '    value.run()',
+            '',
+            'def conditional(flag):',
+            '    value = A()',
+            '    if flag:',
+            '        value = B()',
+            '    value.run()',
+            '',
+            'def if_else(flag):',
+            '    if flag:',
+            '        value = A()',
+            '    else:',
+            '        value = B()',
+            '    value.run()',
+            '',
+            'def nested(first, second):',
+            '    value = A()',
+            '    if first:',
+            '        if second:',
+            '            value = B()',
+            '    value.run()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    const straightCall = result.records.find((record) => (
+        record.type === 'CALLS'
+        && symbolsById.get(record.sourceInstanceId || '')?.qualifiedName === 'straight'
+        && symbolsById.get(record.targetInstanceId || '')?.qualifiedName === 'B.run'
+    ));
+    assert.ok(straightCall);
+
+    for (const callerName of ['conditional', 'if_else', 'nested']) {
+        assert.equal(result.records.some((record) => (
+            record.type === 'CALLS'
+            && symbolsById.get(record.sourceInstanceId || '')?.qualifiedName === callerName
+            && symbolsById.get(record.targetInstanceId || '')?.name === 'run'
+        )), false, callerName);
+        const claim = [...(result.claimsByFile.get('src/app.py') ?? [])].find((candidate) => (
+            symbolsById.get(candidate.sourceInstanceId || '')?.qualifiedName === callerName
+            && candidate.proofSteps[0]?.subject === 'run'
+        ));
+        assert.ok(claim, callerName);
+        assert.notEqual(claim.decision, 'resolved', callerName);
+        assert.equal(claim.relationshipType, 'REFERENCES', callerName);
+    }
+});
+
+test('resolvePythonRelationships resolves string annotations, typed aliases, inherited methods, and overrides', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/models.py': 'class Service:\n    def run(self): pass\n',
+        'src/app.py': [
+            'from .models import Service',
+            '',
+            'class Base:',
+            '    def ping(self): pass',
+            '',
+            'class Child(Base):',
+            '    def run(self): pass',
+            '',
+            'def typed(service: "Service"):',
+            '    alias = service',
+            '    alias.run()',
+            '',
+            'def inherited():',
+            '    child = Child()',
+            '    child.ping()',
+            '',
+            'def overridden():',
+            '    child = Child()',
+            '    child.run()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+    const targetByCaller = new Map(
+        result.records
+            .filter((record) => record.type === 'CALLS')
+            .map((record) => [
+                symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+                symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+            ] as const),
+    );
+
+    assert.equal(targetByCaller.get('typed'), 'Service.run');
+    assert.equal(targetByCaller.get('inherited'), 'Base.ping');
+    assert.equal(targetByCaller.get('overridden'), 'Child.run');
+});
+
+test('resolvePythonRelationships propagates exact callbacks and callable-object origins', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/app.py': [
+            'class Handler:',
+            '    def __call__(self): pass',
+            '',
+            'def target(): pass',
+            '',
+            'def invoke(cb):',
+            '    cb()',
+            '',
+            'def entry():',
+            '    invoke(target)',
+            '    handler = Handler()',
+            '    handler()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    const callbackClaim = [...(result.claimsByFile.get('src/app.py') ?? [])].find((claim) => (
+        symbolsById.get(claim.sourceInstanceId || '')?.qualifiedName === 'invoke'
+        && claim.proofSteps[0]?.subject === 'cb'
+    ));
+    assert.equal(callbackClaim?.decision, 'resolved');
+    assert.equal(callbackClaim?.targetSymbol, 'target');
+    assert.equal(callbackClaim?.resolutionAuthority, 'origin_flow');
+
+    const callableObjectClaim = [...(result.claimsByFile.get('src/app.py') ?? [])].find((claim) => (
+        symbolsById.get(claim.sourceInstanceId || '')?.qualifiedName === 'entry'
+        && claim.proofSteps[0]?.subject === 'handler'
+    ));
+    assert.equal(callableObjectClaim?.decision, 'resolved');
+    assert.equal(callableObjectClaim?.targetSymbol, 'Handler.__call__');
+    assert.equal(callableObjectClaim?.resolutionAuthority, 'origin_flow');
+});
+
+test('resolvePythonRelationships fails closed for protocol-only dispatch and decorated callable rebinding', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/app.py': [
+            'from typing import Protocol',
+            '',
+            'class Runner(Protocol):',
+            '    def run(self): ...',
+            '',
+            'class Impl:',
+            '    def run(self): pass',
+            '',
+            'def use(value: Runner):',
+            '    value.run()',
+            '',
+            'def replacement(): pass',
+            '',
+            'def replace(fn):',
+            '    return replacement',
+            '',
+            '@replace',
+            'def original(): pass',
+            '',
+            'def go():',
+            '    original()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    for (const [callerName, calleeName] of [['use', 'run'], ['go', 'original']] as const) {
+        assert.equal(result.records.some((record) => (
+            record.type === 'CALLS'
+            && symbolsById.get(record.sourceInstanceId || '')?.qualifiedName === callerName
+        )), false, callerName);
+        const claim = [...(result.claimsByFile.get('src/app.py') ?? [])].find((candidate) => (
+            symbolsById.get(candidate.sourceInstanceId || '')?.qualifiedName === callerName
+            && candidate.proofSteps[0]?.subject === calleeName
+        ));
+        assert.ok(claim, callerName);
+        assert.notEqual(claim.decision, 'resolved', callerName);
+        assert.equal(claim.relationshipType, 'REFERENCES', callerName);
+    }
+});
+
+test('resolvePythonRelationships maps exact positional constructor arguments into parameter flow', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/app.py': [
+            'from typing import Any',
+            '',
+            'class Ledger:',
+            '    def record(self): pass',
+            '',
+            'class Engine:',
+            '    def __init__(self):',
+            '        self.ledger = Ledger()',
+            '',
+            'class Services:',
+            '    def __init__(self, ledger: Any):',
+            '        self.ledger = ledger',
+            '',
+            'def consume(services: Services):',
+            '    services.ledger.record()',
+            '',
+            'def entry():',
+            '    engine = Engine()',
+            '    services = Services(engine.ledger)',
+            '    consume(services=services)',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const claim = [...(result.claimsByFile.get('src/app.py') ?? [])].find((candidate) => (
+        candidate.callSpan.startLine === 15 && candidate.proofSteps[0]?.subject === 'record'
+    ));
+
+    assert.equal(claim?.decision, 'resolved');
+    assert.equal(claim?.targetSymbol, 'Ledger.record');
+    assert.equal(claim?.resolutionAuthority, 'origin_flow');
+    assert.equal(claim?.flowHops, 2);
+    assert.equal(claim?.proofSteps.filter((step) => step.kind === 'flow_hop').length, 2);
 });

@@ -1251,6 +1251,17 @@ function enclosingPythonClass(node: Node): Node | undefined {
     return undefined;
 }
 
+function simplePythonAnnotationTypeName(node: Node | null | undefined): string | undefined {
+    if (!node) return undefined;
+    if (node.type === 'identifier') return node.text.trim() || undefined;
+    if (node.type === 'type' && node.namedChildren.length === 1) {
+        return simplePythonAnnotationTypeName(node.namedChildren[0]);
+    }
+    const raw = node.text.trim();
+    const quoted = /^(?:'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-Za-z0-9_]*)\")$/.exec(raw);
+    return quoted?.[1] ?? quoted?.[2];
+}
+
 function extractPythonReceiverTypeBindings(
     root: Node,
     sourceMap: Utf8SourceMap,
@@ -1259,19 +1270,11 @@ function extractPythonReceiverTypeBindings(
     for (const node of root.descendantsOfType(['typed_parameter', 'typed_default_parameter'])) {
         const nameNode = node.childForFieldName('name')
             ?? node.namedChildren.find((child) => child.type === 'identifier');
-        const typeNode = node.childForFieldName('type');
-        const simpleTypeNode = typeNode?.type === 'identifier'
-            ? typeNode
-            : typeNode?.type === 'type'
-                && typeNode.namedChildren.length === 1
-                && typeNode.namedChildren[0]?.type === 'identifier'
-                ? typeNode.namedChildren[0]
-                : undefined;
-        if (nameNode?.type !== 'identifier' || !simpleTypeNode) {
+        const typeName = simplePythonAnnotationTypeName(node.childForFieldName('type'));
+        if (nameNode?.type !== 'identifier' || !typeName) {
             continue;
         }
         const localName = nameNode.text.trim();
-        const typeName = simpleTypeNode.text.trim();
         if (!localName || !typeName) {
             continue;
         }
@@ -1350,8 +1353,55 @@ function pythonFlowValueKind(node: Node): {
     return { valueKind: 'unknown' };
 }
 
-function pythonContextSpan(node: Node, root: Node, sourceMap: Utf8SourceMap): SourceSpan {
-    return nodeSpan(enclosingPythonFunction(node) ?? root, sourceMap);
+function pythonFlowBlockSpan(node: Node, root: Node, sourceMap: Utf8SourceMap): SourceSpan {
+    return nodeSpan(nearestPythonStatementBlock(node) ?? root, sourceMap);
+}
+
+function pythonParameterName(node: Node): string | undefined {
+    if (node.type === 'identifier') return node.text.trim() || undefined;
+    const nameNode = node.childForFieldName('name')
+        ?? node.namedChildren.find((child) => child.type === 'identifier');
+    return nameNode?.type === 'identifier' ? nameNode.text.trim() || undefined : undefined;
+}
+
+function pythonCallableSignature(functionNode: Node, sourceMap: Utf8SourceMap): PythonFlowFact | undefined {
+    const callableName = functionNode.childForFieldName('name')?.text.trim();
+    const parameters = functionNode.childForFieldName('parameters');
+    if (!callableName || !parameters) return undefined;
+    const parameterNames: string[] = [];
+    let positionalExact = true;
+    for (const parameter of parameters.namedChildren) {
+        if (parameter.type === 'positional_separator'
+            || parameter.type === 'keyword_separator'
+            || parameter.type === 'list_splat'
+            || parameter.type === 'dictionary_splat') {
+            positionalExact = false;
+            continue;
+        }
+        const parameterName = pythonParameterName(parameter);
+        if (!parameterName) {
+            positionalExact = false;
+            continue;
+        }
+        parameterNames.push(parameterName);
+    }
+    const decoratedDefinition = functionNode.parent?.type === 'decorated_definition'
+        ? functionNode.parent
+        : undefined;
+    const decorators = decoratedDefinition?.namedChildren.filter((child) => child.type === 'decorator') ?? [];
+    const decorated = decorators.some((decorator) => {
+        const name = decorator.text.trim().replace(/^@/, '').trim();
+        return name !== 'classmethod' && name !== 'staticmethod';
+    });
+    return {
+        kind: 'callable_signature',
+        callableName,
+        parameterNames,
+        positionalExact,
+        decorated,
+        span: nodeSpan(decoratedDefinition ?? functionNode, sourceMap),
+        contextSpan: nodeSpan(functionNode, sourceMap),
+    };
 }
 
 function extractPythonFlowFacts(
@@ -1359,6 +1409,10 @@ function extractPythonFlowFacts(
     sourceMap: Utf8SourceMap,
 ): PythonFlowFact[] {
     const facts: PythonFlowFact[] = [];
+    for (const functionNode of root.descendantsOfType('function_definition')) {
+        const signature = pythonCallableSignature(functionNode, sourceMap);
+        if (signature) facts.push(signature);
+    }
     for (const assignment of root.descendantsOfType('assignment')) {
         const target = assignment.childForFieldName('left');
         const value = assignment.childForFieldName('right');
@@ -1372,7 +1426,7 @@ function extractPythonFlowFacts(
             valueText,
             ...valueEvidence,
             span: nodeSpan(assignment, sourceMap),
-            contextSpan: pythonContextSpan(assignment, root, sourceMap),
+            contextSpan: pythonFlowBlockSpan(assignment, root, sourceMap),
         });
     }
 
@@ -1393,7 +1447,7 @@ function extractPythonFlowFacts(
                         argumentName,
                         valueText,
                         span: nodeSpan(call, sourceMap),
-                        contextSpan: pythonContextSpan(call, root, sourceMap),
+                        contextSpan: pythonFlowBlockSpan(call, root, sourceMap),
                     });
                 }
             } else if (argument.type !== 'list_splat' && argument.type !== 'dictionary_splat') {
@@ -1405,7 +1459,7 @@ function extractPythonFlowFacts(
                         argumentIndex,
                         valueText,
                         span: nodeSpan(call, sourceMap),
-                        contextSpan: pythonContextSpan(call, root, sourceMap),
+                        contextSpan: pythonFlowBlockSpan(call, root, sourceMap),
                     });
                 }
             }

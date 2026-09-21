@@ -13,7 +13,11 @@ import {
     resolvePythonRelationships,
     type PythonResolutionAnalysisInput,
 } from '../packages/core/src/relationships/python-resolution.ts';
-import type { ResolutionClaim } from '../packages/core/src/relationships/resolution.ts';
+import {
+    NATIVE_PYTHON_PROVIDER_ID,
+    NATIVE_PYTHON_PROVIDER_VERSION,
+    type ResolutionClaim,
+} from '../packages/core/src/relationships/resolution.ts';
 
 type Expectation =
     | { kind: 'target'; target: string }
@@ -541,8 +545,8 @@ const fixtures: readonly Fixture[] = [
         callFile: 'pkg/app.py',
         callLine: 10,
         callee: 'run',
-        expectation: { kind: 'observe' },
-        note: 'Observation only: a protocol declaration is a static dispatch target but does not prove a concrete runtime implementation.',
+        expectation: { kind: 'abstain' },
+        note: 'A protocol declaration constrains shape but does not prove one executable runtime implementation, so authoritative CALLS must abstain.',
     },
     {
         id: 'decorator-replacement',
@@ -564,8 +568,8 @@ const fixtures: readonly Fixture[] = [
         callFile: 'pkg/app.py',
         callLine: 10,
         callee: 'original',
-        expectation: { kind: 'observe' },
-        note: 'Native targets the decorated declaration. Runtime decorators may rebind the callable, so exactness depends on Satori\'s declared source-vs-runtime call contract.',
+        expectation: { kind: 'abstain' },
+        note: 'Decorator execution may rebind the global name to a different runtime callable. Without proof of the post-decoration value, authoritative CALLS must fail closed.',
     },
 ];
 
@@ -609,8 +613,8 @@ for (const fixture of fixtures) {
 }
 
 const summary = {
-    revision: '71fa2dddd9e2370830fcc153a1205571d26d8ed9',
-    provider: 'satori-native-python/bounded-origin-v1',
+    revision: '30af0973d9bf283776f2e3efeb5096379188443b',
+    provider: `${NATIVE_PYTHON_PROVIDER_ID}/${NATIVE_PYTHON_PROVIDER_VERSION}`,
     counts: {
         exact: rows.filter((row) => row.classification === 'exact').length,
         honestAbstention: rows.filter((row) => row.classification === 'honest_abstention').length,

@@ -252,6 +252,24 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
             && isSourceSpan(value.span)
             && isSourceSpan(value.contextSpan);
     }
+    if (value.kind === 'callable_signature') {
+        return hasOnlyKeys(value, [
+            'kind',
+            'callableName',
+            'parameterNames',
+            'positionalExact',
+            'decorated',
+            'span',
+            'contextSpan',
+        ])
+            && isNonEmptyString(value.callableName)
+            && Array.isArray(value.parameterNames)
+            && value.parameterNames.every(isNonEmptyString)
+            && typeof value.positionalExact === 'boolean'
+            && typeof value.decorated === 'boolean'
+            && isSourceSpan(value.span)
+            && isSourceSpan(value.contextSpan);
+    }
     if (value.kind !== 'class_bases') return false;
     return hasOnlyKeys(value, ['kind', 'className', 'baseNames', 'span', 'contextSpan'])
         && isNonEmptyString(value.className)

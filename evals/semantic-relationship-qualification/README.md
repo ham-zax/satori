@@ -157,7 +157,7 @@ TYPESAFE_API_KEY=... node scripts/jev-retrieval-lab.mjs \
   --repeats 2
 ```
 
-Jev receives only the case scenario and normalized provider observation. Provider identity/version, incumbent or baseline status, expected target truth, decoy labels, deterministic scores, and performance/resource measurements are excluded. Canonical scoring refs such as `target.primary` and `target.decoy` are remapped to neutral symbol IDs before the prompt is built.
+Jev receives fixed task metadata plus the normalized provider observation. Free-form `scenario`, `construct`, oracle mode/claim/perspectives, and all other oracle prose are never copied into the blind state. A case may optionally supply a separately authored `blindContext`; this is the only corpus prose admitted to the Jev state and must describe the semantic pattern without revealing expected target/candidate identity, expected decision, expected authority/strategy, decoys, or source-versus-runtime answer labels. When `blindContext` is absent, no free-form corpus context is sent. Provider identity/version, incumbent or baseline status, expected truth, deterministic scores, and performance/resource measurements remain excluded. Canonical scoring refs such as `target.primary` and `target.decoy` are remapped to neutral symbol IDs before the prompt is built.
 
 Jev reports these qualitative dimensions independently of deterministic correctness:
 
@@ -169,7 +169,7 @@ Jev reports these qualitative dimensions independently of deterministic correctn
 
 ## Adapter handoff for Agent T and Agent P
 
-Agent T and Agent P do not need to change this scorer. Each should provide a thin language/provider adapter plus fixtures for all corpus case IDs. The adapter must map its provider-native result into the report contract above, including canonical target/candidate refs, normalized evidence atoms, exact source/call/target spans, and optional performance samples.
+Agent T and Agent P do not need to change this scorer. Each should provide a thin language/provider adapter plus fixtures for all corpus case IDs. The adapter must map its provider-native result into the report contract above, including canonical target/candidate refs, normalized evidence atoms, exact source/call/target spans, and optional performance samples. Oracle/fixture metadata defines only what is expected; it must never fill authority, strategy, evidence kinds, candidate identities, or other scored fields in the observed provider report.
 
 Agent T should emit a TypeScript-provider report; Agent P should emit a Python-provider report. If either provider genuinely cannot represent a corpus case, it may return an explicit unsupported result with actionable evidence. Overlay cases may also be omitted when a provider does not claim that overlay capability; omission remains visible as missing coverage. Provider-specific diagnostics can be carried as `provider_specific` evidence, but deterministic scoring depends only on the neutral contract.
 
@@ -322,10 +322,12 @@ Legacy J1 artifacts without family breakdowns are treated as `common/common-v1`;
 T and P should not change the scorer for new syntax or language cases. A thin adapter should only:
 
 1. execute its provider over the fixture or sampled repository;
-2. map provider-native locations to exact `callSite`, `source`, `target`, and `alternatives`;
-3. map provider-native proof facts into the existing neutral mechanism/evidence vocabulary;
+2. map provider-native locations to exact `callSite`, `source`, `target`, and `alternatives`; canonical refs are assigned only after exact file/span/name/owner provenance matches, while unknown identities remain explicitly unmapped;
+3. map actual provider/`ResolutionClaim` proof facts into the neutral mechanism/evidence vocabulary; observed authority comes from the claim and observed strategy is mechanically inferred from provider evidence or reported as `unknown`;
 4. emit `unsupported` explicitly when that is the provider's claimed capability boundary;
 5. leave unsupported or unimplemented overlay cases missing when the run intentionally does not claim them;
 6. attach optional performance samples.
+
+The adapter normalization boundary deliberately does not accept expected authority, strategy, or required evidence. Missing provider proof therefore remains missing and lowers evidence/strict metrics instead of being synthesized from the oracle. Candidate array order is never a canonical identity signal.
 
 If an overlay needs a semantic distinction that cannot be represented by an exact target/candidate oracle, exact unsupported oracle, or observation-only oracle, extend the evaluation schema generically before changing production relationship contracts.

@@ -18,9 +18,12 @@ import {
     NATIVE_PYTHON_PROVIDER_ID,
     NATIVE_PYTHON_PROVIDER_VERSION,
     type ResolutionClaim,
-    type ResolutionProofStepKind,
 } from '../packages/core/src/relationships/resolution.ts';
-import type { SourceSpan } from '../packages/core/src/language-analysis/types.ts';
+import {
+    candidateNamesFromResolutionClaim,
+    inferResolutionStrategy,
+    neutralEvidenceFromResolutionClaim,
+} from './semantic-qualification-adapter-helpers.mjs';
 
 interface CanonicalTarget {
     readonly file: string;
@@ -35,11 +38,7 @@ interface QualificationFixture {
     readonly callee?: string;
     readonly sourceQualifiedName?: string;
     readonly targets?: Readonly<Record<string, CanonicalTarget>>;
-    readonly strategy?: string;
-    readonly evidenceExtras?: readonly string[];
-    readonly alternativeRefs?: readonly string[];
     readonly unsupportedReason?: string;
-    readonly unsupportedEvidence?: readonly string[];
 }
 
 interface Corpus {
@@ -142,80 +141,35 @@ function canonicalRef(ref: string, target: CanonicalTarget, symbols: readonly Sy
     };
 }
 
-const PROOF_EVIDENCE = new Map<ResolutionProofStepKind, string>([
-    ['call_site', 'call_site'],
-    ['containing_caller', 'caller_identity'],
-    ['absolute_import', 'direct_symbol_binding'],
-    ['relative_import', 'direct_symbol_binding'],
-    ['same_file_definition', 'direct_symbol_binding'],
-    ['constructor_origin', 'constructor_origin'],
-    ['parameter_annotation', 'receiver_type'],
-    ['receiver_type_binding', 'receiver_type'],
-    ['exact_target_definition', 'direct_symbol_binding'],
-    ['allocation_origin', 'assignment_origin'],
-    ['field_origin', 'field_origin'],
-    ['callback_origin', 'assignment_origin'],
-    ['class_inheritance', 'inheritance'],
-    ['flow_hop', 'flow_hop'],
-    ['candidate_set', 'candidate_set'],
-    ['ambiguity', 'ambiguity'],
-    ['unresolved_dependency', 'unresolved_dependency'],
-]);
-
-function normalizedEvidence(
+function alternativesFromClaim(
     fixture: QualificationFixture,
     claim: ResolutionClaim,
-    target: ReturnType<typeof canonicalRef> | undefined,
+    symbols: readonly SymbolRecord[],
 ) {
-    const evidence: Array<Record<string, unknown>> = [];
-    const seen = new Set<string>();
-    const push = (
-        kind: string,
-        subject: string,
-        span?: SourceSpan,
-        detail?: string,
-        file = claim.sourceFile,
-    ) => {
-        const key = [kind, subject, file, span?.startByte ?? ''].join('\0');
-        if (seen.has(key)) return;
-        seen.add(key);
-        evidence.push({
-            kind,
-            subject,
-            ...(detail ? { detail } : {}),
-            ...(span ? { file, span: { ...span } } : {}),
-        });
-    };
-
-    for (const step of claim.proofSteps) {
-        const kind = PROOF_EVIDENCE.get(step.kind);
-        if (kind) push(kind, step.subject, step.span, step.detail);
-    }
-    for (const kind of fixture.evidenceExtras ?? []) {
-        if (kind === 'alias_binding') {
-            push(kind, (fixture.callee ?? 'alias') + ' -> ' + (target?.label ?? claim.targetSymbol ?? 'target'));
-        } else if (kind === 'target_provenance' && target) {
-            push(kind, target.label, target.span as SourceSpan, undefined, target.file);
-        } else if (kind === 'receiver_type') {
-            push(kind, claim.proofSteps.find((step) => (
-                step.kind === 'parameter_annotation' || step.kind === 'constructor_origin'
-            ))?.subject ?? fixture.caseId);
-        } else if (kind === 'branch_origin') {
-            push(kind, 'multiple non-dominating assignment origins');
-        } else if (kind === 'interface_contract') {
-            push(kind, 'Runner protocol receiver');
-        } else if (kind === 'dynamic_construct') {
-            push(kind, 'getattr-derived callable');
-        } else if (kind === 'assignment_origin') {
-            push(kind, 'constructor parameter assigned to instance field');
-        } else {
-            push(kind, fixture.caseId);
+    return candidateNamesFromResolutionClaim(claim).flatMap((candidateName) => {
+        const providerMatches = symbols.filter((symbol) => symbol.qualifiedName === candidateName);
+        if (providerMatches.length !== 1) {
+            throw new Error(
+                'Provider candidate ' + candidateName + ' did not map to one exact registry symbol; saw '
+                + providerMatches.length,
+            );
         }
-    }
-    if (target) {
-        push('target_provenance', target.label, target.span as SourceSpan, undefined, target.file);
-    }
-    return evidence;
+        const symbol = providerMatches[0];
+        const canonicalMatches = Object.entries(fixture.targets ?? {}).filter(([, canonical]) => (
+            canonical.file === symbol.file
+            && canonical.qualifiedName === symbol.qualifiedName
+        ));
+        if (canonicalMatches.length === 1) {
+            const [ref, canonical] = canonicalMatches[0];
+            return [canonicalRef(ref, canonical, symbols)];
+        }
+        return [{
+            ref: `unmapped:${symbol.file}:${symbol.span.startByte}:${symbol.qualifiedName}`,
+            label: symbol.qualifiedName,
+            file: symbol.file,
+            span: { ...symbol.span },
+        }];
+    });
 }
 
 const fixtures: readonly QualificationFixture[] = [
@@ -234,8 +188,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/primary.py', qualifiedName: 'helper' },
             'target.decoy': { file: 'fixture/decoy.py', qualifiedName: 'helper' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'class_field_receiver',
@@ -261,13 +213,10 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/field.py', qualifiedName: 'Service.run' },
             'target.decoy': { file: 'fixture/field.py', qualifiedName: 'Decoy.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['receiver_type', 'target_provenance'],
     },
     {
         caseId: 'constructor_parameter_property',
         unsupportedReason: 'Python has no constructor-parameter-property syntax that simultaneously declares and initializes an instance field.',
-        unsupportedEvidence: ['constructor_origin', 'field_origin', 'receiver_type'],
     },
     {
         caseId: 'constructor_assignment_origin',
@@ -298,8 +247,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/constructor_assignment.py', qualifiedName: 'Service.run' },
             'target.decoy': { file: 'fixture/constructor_assignment.py', qualifiedName: 'Decoy.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['assignment_origin', 'receiver_type', 'target_provenance'],
     },
     {
         caseId: 'alias_binding',
@@ -316,13 +263,10 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/primary.py', qualifiedName: 'helper' },
             'target.decoy': { file: 'fixture/decoy.py', qualifiedName: 'helper' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['alias_binding', 'target_provenance'],
     },
     {
         caseId: 'optional_receiver',
         unsupportedReason: 'Python native v2 intentionally does not interpret Optional/union narrowing as exact receiver identity.',
-        unsupportedEvidence: ['optional_receiver', 'unresolved_dependency'],
     },
     {
         caseId: 'inheritance_dispatch',
@@ -348,8 +292,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.base': { file: 'fixture/inheritance.py', qualifiedName: 'Base.run' },
             'target.decoy': { file: 'fixture/inheritance.py', qualifiedName: 'Decoy.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['receiver_type', 'target_provenance'],
     },
     {
         caseId: 'interface_dispatch',
@@ -376,14 +318,10 @@ const fixtures: readonly QualificationFixture[] = [
             'target.impl_a': { file: 'fixture/interface.py', qualifiedName: 'ImplA.run' },
             'target.impl_b': { file: 'fixture/interface.py', qualifiedName: 'ImplB.run' },
         },
-        alternativeRefs: ['target.impl_a', 'target.impl_b'],
-        strategy: 'interface_dispatch',
-        evidenceExtras: ['receiver_type', 'interface_contract'],
     },
     {
         caseId: 'overload_ambiguity',
         unsupportedReason: 'Python runtime functions do not provide static overload dispatch identity equivalent to compiler overload resolution.',
-        unsupportedEvidence: ['overload_candidate', 'unresolved_dependency'],
     },
     {
         caseId: 'branch_conflicted_origins',
@@ -409,9 +347,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.branch_a': { file: 'fixture/branch.py', qualifiedName: 'A.run' },
             'target.branch_b': { file: 'fixture/branch.py', qualifiedName: 'B.run' },
         },
-        alternativeRefs: ['target.branch_a', 'target.branch_b'],
-        strategy: 'type_dispatch',
-        evidenceExtras: ['branch_origin'],
     },
     {
         caseId: 'dynamic_unresolved',
@@ -429,8 +364,6 @@ const fixtures: readonly QualificationFixture[] = [
         callee: 'getattr',
         sourceQualifiedName: 'caller',
         targets: {},
-        strategy: 'dynamic_dispatch',
-        evidenceExtras: ['dynamic_construct'],
     },
     {
         caseId: 'wrong_target_decoy',
@@ -449,8 +382,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.decoy_a': { file: 'fixture/decoy_a.py', qualifiedName: 'helper' },
             'target.decoy_b': { file: 'fixture/decoy_b.py', qualifiedName: 'helper' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.local_import',
@@ -467,8 +398,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/models.py', qualifiedName: 'helper' },
             'target.decoy': { file: 'fixture/decoy.py', qualifiedName: 'helper' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.competing_local_import',
@@ -493,8 +422,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/alpha.py', qualifiedName: 'helper' },
             'target.decoy': { file: 'fixture/beta.py', qualifiedName: 'helper' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.forward_annotation',
@@ -516,8 +443,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/models.py', qualifiedName: 'Service.run' },
             'target.decoy': { file: 'fixture/decoy.py', qualifiedName: 'Decoy.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['receiver_type', 'target_provenance'],
     },
     {
         caseId: 'python.callback_keyword',
@@ -539,8 +464,6 @@ const fixtures: readonly QualificationFixture[] = [
         targets: {
             'target.primary': { file: 'fixture/app.py', qualifiedName: 'target' },
         },
-        strategy: 'direct_call',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.keyword_flow',
@@ -575,8 +498,6 @@ const fixtures: readonly QualificationFixture[] = [
         targets: {
             'target.primary': { file: 'fixture/app.py', qualifiedName: 'Ledger.record' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.positional_flow',
@@ -611,8 +532,6 @@ const fixtures: readonly QualificationFixture[] = [
         targets: {
             'target.primary': { file: 'fixture/app.py', qualifiedName: 'Ledger.record' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.import_alias',
@@ -635,8 +554,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.primary': { file: 'fixture/models.py', qualifiedName: 'Service.run' },
             'target.decoy': { file: 'fixture/decoy.py', qualifiedName: 'Decoy.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['alias_binding', 'target_provenance'],
     },
     {
         caseId: 'python.override_dispatch',
@@ -661,8 +578,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.child': { file: 'fixture/app.py', qualifiedName: 'Child.run' },
             'target.base': { file: 'fixture/app.py', qualifiedName: 'Base.run' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.branch_conflict',
@@ -688,9 +603,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.a': { file: 'fixture/app.py', qualifiedName: 'A.run' },
             'target.b': { file: 'fixture/app.py', qualifiedName: 'B.run' },
         },
-        alternativeRefs: ['target.a', 'target.b'],
-        strategy: 'type_dispatch',
-        evidenceExtras: ['branch_origin'],
     },
     {
         caseId: 'python.callable_object',
@@ -711,8 +623,6 @@ const fixtures: readonly QualificationFixture[] = [
         targets: {
             'target.primary': { file: 'fixture/app.py', qualifiedName: 'Handler.__call__' },
         },
-        strategy: 'type_dispatch',
-        evidenceExtras: ['target_provenance'],
     },
     {
         caseId: 'python.decorator_abstention',
@@ -735,8 +645,6 @@ const fixtures: readonly QualificationFixture[] = [
         callee: 'original',
         sourceQualifiedName: 'caller',
         targets: {},
-        strategy: 'dynamic_dispatch',
-        evidenceExtras: ['dynamic_construct'],
     },
     {
         caseId: 'python.protocol_ambiguity',
@@ -763,9 +671,6 @@ const fixtures: readonly QualificationFixture[] = [
             'target.impl_a': { file: 'fixture/app.py', qualifiedName: 'ImplA.run' },
             'target.impl_b': { file: 'fixture/app.py', qualifiedName: 'ImplB.run' },
         },
-        alternativeRefs: ['target.impl_a', 'target.impl_b'],
-        strategy: 'interface_dispatch',
-        evidenceExtras: ['interface_contract'],
     },
     {
         caseId: 'python.dynamic_abstention',
@@ -783,8 +688,6 @@ const fixtures: readonly QualificationFixture[] = [
         callee: 'getattr',
         sourceQualifiedName: 'caller',
         targets: {},
-        strategy: 'dynamic_dispatch',
-        evidenceExtras: ['dynamic_construct'],
     },
 ];
 
@@ -810,10 +713,10 @@ for (const item of corpus.cases) {
             caseId: item.id,
             status: 'unsupported',
             unsupportedReason: fixture.unsupportedReason,
-            unsupportedEvidence: (fixture.unsupportedEvidence ?? []).map((kind) => ({
-                kind,
-                subject: item.id,
-            })),
+            unsupportedEvidence: [{
+                kind: 'provider_specific',
+                subject: fixture.unsupportedReason,
+            }],
             measurements: [{ wallMs: performance.now() - caseStart }],
         });
         continue;
@@ -847,32 +750,15 @@ for (const item of corpus.cases) {
         target = canonicalRef(entry[0], entry[1], registry.symbols);
     }
 
-    const candidateNames = new Set(
-        claim.proofSteps
-            .filter((step) => step.kind === 'candidate_set')
-            .flatMap((step) => step.subject.split('|')),
-    );
-    const alternatives = (fixture.alternativeRefs ?? [])
-        .filter((ref) => {
-            const canonical = fixture.targets?.[ref];
-            return canonical ? candidateNames.has(canonical.qualifiedName) : false;
-        })
-        .map((ref) => {
-            const canonical = fixture.targets?.[ref];
-            if (!canonical) throw new Error('Missing alternative target ' + ref + ' for ' + item.id);
-            return canonicalRef(ref, canonical, registry.symbols);
-        });
+    const alternatives = alternativesFromClaim(fixture, claim, registry.symbols);
 
-    const evidence = normalizedEvidence(fixture, claim, target);
+    const evidence = neutralEvidenceFromResolutionClaim(claim, { target });
     const unresolvedEvidence = claim.decision === 'resolved'
         ? []
         : evidence.filter((atom) => (
             atom.kind === 'ambiguity'
             || atom.kind === 'candidate_set'
             || atom.kind === 'unresolved_dependency'
-            || atom.kind === 'branch_origin'
-            || atom.kind === 'dynamic_construct'
-            || atom.kind === 'interface_contract'
         ));
 
     cases.push({
@@ -896,7 +782,7 @@ for (const item of corpus.cases) {
             alternatives,
             mechanism: {
                 authority: claim.resolutionAuthority,
-                strategy: fixture.strategy ?? 'unknown',
+                strategy: inferResolutionStrategy(claim),
                 detail: 'Normalized from ' + claim.providerId + '/' + claim.providerVersion + ' ResolutionClaim proof.',
             },
             evidence,
@@ -916,7 +802,7 @@ const report = {
     provider: {
         id: NATIVE_PYTHON_PROVIDER_ID,
         version: NATIVE_PYTHON_PROVIDER_VERSION,
-        adapterVersion: 'python-native-qualification-v1',
+        adapterVersion: 'python-native-qualification-v2',
     },
     language: 'python',
     cases,

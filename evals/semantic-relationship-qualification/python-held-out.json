@@ -143,6 +143,7 @@
       "id": "python.decorator_abstention",
       "construct": "decorator replacement uncertainty",
       "scenario": "A decorator may replace a declared function with a different runtime callable before a later call.",
+      "blindContext": "A decorator may alter callable identity before a later invocation. Judge only whether the provider result is supported by the evidence it presents.",
       "oracle": { "mode": "exact", "claim": "runtime_callable" },
       "expected": {
         "decision": "unresolved", "relationshipType": "REFERENCES",

@@ -304,6 +304,9 @@ export function validateRelationshipCorpus(corpus) {
         ids.add(id);
         requireString(item.construct, `corpus.cases[${index}].construct`);
         requireString(item.scenario, `corpus.cases[${index}].scenario`);
+        if (item.blindContext !== undefined) {
+            requireString(item.blindContext, `corpus.cases[${index}].blindContext`);
+        }
         if (item.qualification !== undefined) {
             validateQualification(item.qualification, `corpus.cases[${index}].qualification`);
         }
@@ -802,7 +805,6 @@ function blindTokenMap(item, result, provider) {
         ...(expected.forbiddenTargetRefs ?? []),
     ]);
     if (result.status === 'ok') {
-        refs.add(result.observation.source.ref);
         if (result.observation.target?.ref) refs.add(result.observation.target.ref);
         for (const alternative of result.observation.alternatives ?? []) refs.add(alternative.ref);
     }
@@ -891,11 +893,7 @@ export function buildBlindRelationshipCases(corpus, report) {
                 task: {
                     relationship: 'CALLS',
                     language: report.language,
-                    construct: item.construct,
-                    scenario: item.scenario,
-                    semanticClaim: oracle.claim,
-                    oracleMode: oracle.mode,
-                    ...(oracle.perspectives ? { perspectives: oracle.perspectives } : {}),
+                    ...(item.blindContext ? { context: item.blindContext } : {}),
                 },
                 result: stateResult,
             },

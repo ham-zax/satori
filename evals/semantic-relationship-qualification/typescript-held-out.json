@@ -13,6 +13,7 @@
       "id": "typescript.structural_decoy",
       "construct": "structural static-type decoy",
       "scenario": "A variable is statically typed as StructuralA but immutably initialized with StructuralB; the runtime callable is StructuralB.request.",
+      "blindContext": "A structurally compatible receiver has conflicting static-type and concrete-origin evidence. Judge only whether the provider result is supported by the evidence it presents.",
       "oracle": { "mode": "exact", "claim": "runtime_callable" },
       "expected": {
         "decision": "resolved", "relationshipType": "CALLS",

@@ -16,6 +16,11 @@ import {
     validateRelationshipCorpus,
     validateRelationshipReport,
 } from './semantic-relationship-qualification.mjs';
+import {
+    inferResolutionStrategy,
+    mapExactCanonicalTarget,
+    neutralEvidenceFromResolutionClaim,
+} from './semantic-qualification-adapter-helpers.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -380,6 +385,215 @@ test('blind Jev cases omit provider identity, expected truth, and performance', 
     }
 });
 
+test('scored evidence, strategy, and authority must come from the provider observation', () => {
+    const missingEvidence = perfectReport();
+    const missingDirect = missingEvidence.cases.find((item) => item.caseId === 'direct_call');
+    missingDirect.observation.evidence = missingDirect.observation.evidence.filter(
+        (atom) => atom.kind !== 'target_provenance',
+    );
+    let score = scoreRelationshipReport(corpus, missingEvidence);
+    assert.equal(score.exactness.semanticExact.count, 12);
+    assert.equal(score.exactness.evidenceContractExact.count, 11);
+    assert.equal(score.exactness.strictCaseExact.count, 11);
+
+    const wrongStrategy = perfectReport();
+    wrongStrategy.cases.find(
+        (item) => item.caseId === 'direct_call',
+    ).observation.mechanism.strategy = 'type_dispatch';
+    score = scoreRelationshipReport(corpus, wrongStrategy);
+    assert.equal(score.exactness.semanticExact.count, 12);
+    assert.equal(score.exactness.strategyAgreement.count, 11);
+    assert.equal(score.exactness.strictCaseExact.count, 11);
+
+    const wrongAuthority = perfectReport();
+    wrongAuthority.cases.find(
+        (item) => item.caseId === 'direct_call',
+    ).observation.mechanism.authority = 'origin_flow';
+    score = scoreRelationshipReport(corpus, wrongAuthority);
+    assert.equal(score.exactness.semanticExact.count, 12);
+    assert.equal(score.exactness.authorityAgreement.count, 11);
+    assert.equal(score.exactness.strictCaseExact.count, 11);
+});
+
+test('canonical candidate identity is mapped from exact provenance, never candidate position', () => {
+    const canonicalA = {
+        ref: 'target.a',
+        file: 'fixture/targets.ts',
+        name: 'request',
+        ownerName: 'A',
+        span: span(10, 100),
+    };
+    const canonicalB = {
+        ref: 'target.b',
+        file: 'fixture/targets.ts',
+        name: 'request',
+        ownerName: 'B',
+        span: span(20, 200),
+    };
+    const reversedActual = [
+        {
+            file: canonicalB.file,
+            name: canonicalB.name,
+            ownerName: canonicalB.ownerName,
+            span: { ...canonicalB.span },
+        },
+        {
+            file: canonicalA.file,
+            name: canonicalA.name,
+            ownerName: canonicalA.ownerName,
+            span: { ...canonicalA.span },
+        },
+    ];
+    assert.deepEqual(
+        reversedActual.map((candidate) => (
+            mapExactCanonicalTarget(candidate, [canonicalA, canonicalB]).ref
+        )),
+        ['target.b', 'target.a'],
+    );
+
+    const wrongLocation = {
+        ...reversedActual[0],
+        span: { ...reversedActual[0].span, startByte: 999, endByte: 1004 },
+    };
+    const unmapped = mapExactCanonicalTarget(wrongLocation, [canonicalA, canonicalB]);
+    assert.match(unmapped.ref, /^unmapped_/);
+
+    const report = perfectReport();
+    const ambiguous = report.cases.find((item) => item.caseId === 'branch_conflicted_origins');
+    ambiguous.observation.alternatives[0].ref = unmapped.ref;
+    const score = scoreRelationshipReport(corpus, report);
+    assert.equal(score.exactness.candidateSetExact.count, 2);
+    assert.equal(
+        score.cases.find((item) => item.caseId === 'branch_conflicted_origins').checks.candidates,
+        false,
+    );
+});
+
+test('claim normalization cannot synthesize missing oracle-required evidence', () => {
+    const claim = {
+        sourceFile: 'fixture/caller.ts',
+        resolutionAuthority: 'direct_binding',
+        proofSteps: [{
+            kind: 'call_site',
+            subject: 'service.run',
+            span: span(5),
+        }],
+    };
+    const evidence = neutralEvidenceFromResolutionClaim(claim);
+    assert.deepEqual(evidence.map((atom) => atom.kind), ['call_site']);
+    assert.equal(evidence.some((atom) => atom.kind === 'target_provenance'), false);
+    assert.equal(evidence.some((atom) => atom.kind === 'branch_origin'), false);
+    assert.equal(inferResolutionStrategy(claim), 'unknown');
+
+    const tsAdapter = fs.readFileSync(
+        path.join(repoRoot, 'scripts/typescript-semantic-qualification.mjs'),
+        'utf8',
+    );
+    const pythonAdapter = fs.readFileSync(
+        path.join(repoRoot, 'scripts/python-semantic-qualification.mts'),
+        'utf8',
+    );
+    for (const forbidden of [
+        'item.expected',
+        'spec.strategy',
+        'spec.authority',
+        'spec.evidenceKinds',
+        'candidateRefs?.[index]',
+    ]) {
+        assert.equal(tsAdapter.includes(forbidden), false, forbidden);
+    }
+    for (const forbidden of ['item.expected', 'evidenceExtras', 'fixture.strategy', 'alternativeRefs']) {
+        assert.equal(pythonAdapter.includes(forbidden), false, forbidden);
+    }
+});
+
+test('free-form oracle scenario cannot enter Jev blind state', () => {
+    const leakCorpus = {
+        version: 1,
+        family: 'semantic_relationship_qualification',
+        relationship: 'CALLS',
+        cases: [{
+            id: 'literal_target_leak',
+            construct: 'answer-bearing scenario regression',
+            scenario: 'The expected runtime callable is OracleOnlyExpected.service and the decoy is OracleOnlyDecoy.service.',
+            blindContext: 'A receiver call reports one target. Judge only whether the presented provider evidence supports that result.',
+            oracle: { mode: 'exact', claim: 'runtime_callable' },
+            expected: {
+                decision: 'resolved',
+                relationshipType: 'CALLS',
+                targetRefs: ['target.primary'],
+                candidateRefs: [],
+                forbiddenTargetRefs: ['target.decoy'],
+                authorities: ['direct_binding'],
+                strategies: ['direct_call'],
+                requiredEvidenceKinds: ['call_site'],
+            },
+        }],
+    };
+    const report = {
+        version: 1,
+        corpusVersion: 1,
+        provider: { id: 'secret-provider', version: 'secret-version' },
+        language: 'fixture-language',
+        cases: [{
+            caseId: 'literal_target_leak',
+            status: 'ok',
+            observation: {
+                decision: 'resolved',
+                relationshipType: 'CALLS',
+                callSite: {
+                    file: 'fixture/caller.src',
+                    span: span(2),
+                    text: 'service()',
+                },
+                source: {
+                    ref: 'caller',
+                    label: 'caller',
+                    file: 'fixture/caller.src',
+                    span: span(1),
+                },
+                target: {
+                    ref: 'target.primary',
+                    label: 'ObservedCallable.service',
+                    file: 'fixture/target.src',
+                    span: span(3),
+                },
+                alternatives: [],
+                mechanism: {
+                    authority: 'direct_binding',
+                    strategy: 'direct_call',
+                },
+                evidence: [{
+                    kind: 'call_site',
+                    subject: 'service()',
+                    file: 'fixture/caller.src',
+                    span: span(2),
+                }],
+                unresolvedEvidence: [],
+            },
+            measurements: [{ wallMs: 1 }],
+        }],
+        runMeasurements: [{ wallMs: 1 }],
+    };
+    const blind = buildBlindRelationshipCases(leakCorpus, report)[0];
+    const serialized = JSON.stringify({ state: blind.state, questions: blind.questions });
+
+    assert.equal(
+        blind.state.task.context,
+        'A receiver call reports one target. Judge only whether the presented provider evidence supports that result.',
+    );
+    assert.equal(Object.hasOwn(blind.state.task, 'scenario'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'construct'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'semanticClaim'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'oracleMode'), false);
+    assert.equal(serialized.includes('OracleOnlyExpected.service'), false);
+    assert.equal(serialized.includes('OracleOnlyDecoy.service'), false);
+    assert.equal(serialized.includes('target.primary'), false);
+    assert.equal(serialized.includes('target.decoy'), false);
+    assert.equal(serialized.includes('secret-provider'), false);
+    assert.equal(serialized.includes('secret-version'), false);
+});
+
 test('wrong-target decoys produce deterministic false-positive and false-negative evidence', () => {
     const report = perfectReport();
     const direct = report.cases.find((item) => item.caseId === 'direct_call');
@@ -598,9 +812,13 @@ test('observation-only oracle cases expose the semantic claim without target pas
         (item) => item.caseId === 'python.decorator_replacement_uncertainty',
     );
     assert.ok(blind);
-    assert.equal(blind.state.task.semanticClaim, 'callable_identity');
-    assert.equal(blind.state.task.oracleMode, 'observation_only');
-    assert.deepEqual(blind.state.task.perspectives, ['source_declaration', 'runtime_callable']);
+    assert.equal(blind.oracle.claim, 'callable_identity');
+    assert.equal(blind.oracle.mode, 'observation_only');
+    assert.deepEqual(blind.oracle.perspectives, ['source_declaration', 'runtime_callable']);
+    assert.equal(Object.hasOwn(blind.state.task, 'semanticClaim'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'oracleMode'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'perspectives'), false);
+    assert.equal(Object.hasOwn(blind.state.task, 'scenario'), false);
     assert.equal(JSON.stringify(blind.state).includes('target.any_runtime_replacement'), false);
 });
 

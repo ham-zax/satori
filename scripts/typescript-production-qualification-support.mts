@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 
 import { analyzeWithOxc } from '../packages/core/src/language-analysis/oxc-adapter';
 import { TypeScriptSemanticProjectAnalyzer } from '../packages/core/src/relationships/typescript-semantic-analyzer';
-import type { ResolutionClaim, ResolutionProofStepKind } from '../packages/core/src/relationships/resolution';
+import type { ResolutionClaim } from '../packages/core/src/relationships/resolution';
 import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../packages/core/src/symbols/contracts';
 import {
     buildSymbolRecordsForFile,
@@ -14,6 +14,10 @@ import {
     type SymbolRecord,
     type SymbolRegistry,
 } from '../packages/core/src/symbols/registry';
+import {
+    inferResolutionStrategy,
+    neutralEvidenceFromResolutionClaim,
+} from './semantic-qualification-adapter-helpers.mjs';
 
 interface CanonicalTarget {
     readonly file: string;
@@ -27,7 +31,6 @@ interface ProductionCaseSpec {
     readonly callee: string;
     readonly sourceQualifiedName: string;
     readonly targets: Readonly<Record<string, CanonicalTarget>>;
-    readonly strategy: string;
     readonly files: Readonly<Record<string, string>>;
     readonly mutate?: (root: string) => void;
     readonly changedFiles?: readonly string[];
@@ -35,16 +38,6 @@ interface ProductionCaseSpec {
     readonly forbiddenAffected?: readonly string[];
     readonly assertTransition?: (before: ResolutionClaim | undefined, after: ResolutionClaim) => void;
 }
-
-const PROOF_EVIDENCE = new Map<ResolutionProofStepKind, string>([
-    ['call_site', 'call_site'],
-    ['containing_caller', 'caller_identity'],
-    ['receiver_type_binding', 'receiver_type'],
-    ['candidate_set', 'candidate_set'],
-    ['ambiguity', 'ambiguity'],
-    ['unresolved_dependency', 'unresolved_dependency'],
-    ['exact_target_definition', 'target_provenance'],
-]);
 
 function tsconfig(extra: Record<string, unknown> = {}): string {
     return JSON.stringify({
@@ -70,7 +63,6 @@ const productionCases: Readonly<Record<string, ProductionCaseSpec>> = {
             'target.primary': { file: 'src/b.ts', qualifiedName: 'Service.work' },
             'target.decoy': { file: 'src/a.ts', qualifiedName: 'Service.work' },
         },
-        strategy: 'type_dispatch',
         files: {
             'tsconfig.json': tsconfig({
                 baseUrl: '.',
@@ -106,7 +98,6 @@ const productionCases: Readonly<Record<string, ProductionCaseSpec>> = {
             'target.primary': { file: 'a/src/service.ts', qualifiedName: 'Service.work' },
             'target.decoy': { file: 'b/src/service.ts', qualifiedName: 'Service.work' },
         },
-        strategy: 'type_dispatch',
         files: {
             'a/tsconfig.json': tsconfig(),
             'a/src/service.ts': "export class Service { work(): string { return 'a'; } }\n",
@@ -131,7 +122,6 @@ const productionCases: Readonly<Record<string, ProductionCaseSpec>> = {
         targets: {
             'target.primary': { file: 'src/service.ts', qualifiedName: 'Service.work' },
         },
-        strategy: 'type_dispatch',
         files: {
             'tsconfig.json': tsconfig(),
             'src/service.ts': 'export class Service { work(): number { return 1; } }\n',
@@ -292,18 +282,7 @@ function observationFor(
         target = canonicalTarget(match[0], match[1], registry);
     }
 
-    const evidence = claim.proofSteps
-        .map((step) => {
-            const kind = PROOF_EVIDENCE.get(step.kind);
-            if (!kind) return undefined;
-            return {
-                kind,
-                subject: step.subject,
-                ...(step.detail ? { detail: step.detail } : {}),
-                ...(step.span ? { file: claim.sourceFile, span: { ...step.span } } : {}),
-            };
-        })
-        .filter(Boolean);
+    const evidence = neutralEvidenceFromResolutionClaim(claim, { target });
     evidence.push({
         kind: 'provider_specific',
         subject: `affected_source_files=${affected.join(',')}`,
@@ -335,7 +314,7 @@ function observationFor(
         alternatives: [],
         mechanism: {
             authority: claim.resolutionAuthority,
-            strategy: spec.strategy,
+            strategy: inferResolutionStrategy(claim),
             detail: `Production TypeScript project evidence; affected owners: ${affected.join(', ')}.`,
         },
         evidence,

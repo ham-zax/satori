@@ -4,17 +4,25 @@ import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 
 import { analyzeWithOxc } from '../packages/core/src/language-analysis/oxc-adapter.ts';
+import { buildTypeScriptResolutionClaims } from '../packages/core/src/relationships/typescript-resolution.ts';
 import {
     TYPESCRIPT_COMPILER_PROVIDER_ID,
     TYPESCRIPT_COMPILER_PROVIDER_VERSION,
     analyzeTypeScriptProject,
 } from '../packages/core/src/semantic/typescript-compiler-provider.ts';
+import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../packages/core/src/symbols/contracts.ts';
+import { buildSymbolRecordsForFile, buildSymbolRegistry } from '../packages/core/src/symbols/registry.ts';
+import {
+    inferResolutionStrategy,
+    mapExactCanonicalTarget,
+    neutralEvidenceFromResolutionClaim,
+} from './semantic-qualification-adapter-helpers.mjs';
 import {
     TYPESCRIPT_PRODUCTION_QUALIFICATION_CASE_IDS,
     runTypeScriptProductionQualificationCase,
 } from './typescript-production-qualification-support.mts';
 
-const ADAPTER_VERSION = 'typescript-qualification-v1';
+const ADAPTER_VERSION = 'typescript-qualification-v2';
 
 const targetsSource = `
 export function directPrimary(): string { return 'direct'; }
@@ -215,174 +223,133 @@ const caseSpecs = {
     direct_call: {
         calleeText: 'directPrimary',
         caller: 'directCallCase',
-        strategy: 'direct_call',
-        authority: 'direct_binding',
-        targetRefs: { 'directPrimary': 'target.primary' },
-        evidenceKinds: ['direct_symbol_binding'],
+        targetRefs: { directPrimary: 'target.primary' },
     },
     class_field_receiver: {
         calleeText: 'this.worker.request',
         caller: 'ClassFieldCase.run',
-        strategy: 'type_dispatch',
-        authority: 'direct_binding',
         targetRefs: { 'PrimaryWorker.request': 'target.primary' },
-        evidenceKinds: ['field_origin'],
     },
     constructor_parameter_property: {
         calleeText: 'this.worker.request',
         caller: 'ConstructorParameterPropertyCase.run',
-        strategy: 'type_dispatch',
-        authority: 'origin_flow',
         targetRefs: { 'PrimaryWorker.request': 'target.primary' },
-        evidenceKinds: ['constructor_origin', 'field_origin'],
     },
     constructor_assignment_origin: {
         calleeText: 'this.worker.request',
         caller: 'ConstructorAssignmentCase.run',
-        strategy: 'type_dispatch',
-        authority: 'origin_flow',
         targetRefs: { 'PrimaryWorker.request': 'target.primary' },
-        evidenceKinds: ['constructor_origin', 'assignment_origin', 'field_origin', 'flow_hop'],
     },
     alias_binding: {
         calleeText: 'aliasedPrimary',
         caller: 'aliasBindingCase',
-        strategy: 'direct_call',
-        authority: 'direct_binding',
-        targetRefs: { 'directPrimary': 'target.primary' },
-        evidenceKinds: ['alias_binding', 'direct_symbol_binding'],
+        targetRefs: { directPrimary: 'target.primary' },
     },
     optional_receiver: {
         calleeText: 'worker?.request',
         caller: 'optionalReceiverCase',
-        strategy: 'type_dispatch',
-        authority: 'direct_binding',
         targetRefs: { 'PrimaryWorker.request': 'target.primary' },
-        evidenceKinds: ['optional_receiver'],
     },
     inheritance_dispatch: {
         calleeText: 'new DerivedWorker().inherited',
         caller: 'inheritanceDispatchCase',
-        strategy: 'type_dispatch',
-        authority: 'direct_binding',
         targetRefs: { 'BaseWorker.inherited': 'target.base' },
-        evidenceKinds: ['inheritance'],
     },
     interface_dispatch: {
         calleeText: 'worker.dispatch',
         caller: 'interfaceDispatchCase',
-        strategy: 'interface_dispatch',
-        authority: 'unresolved',
         targetRefs: {
             'ImplA.dispatch': 'target.impl_a',
             'ImplB.dispatch': 'target.impl_b',
         },
-        evidenceKinds: ['interface_contract'],
     },
     overload_ambiguity: {
         calleeText: 'overloaded',
         caller: 'overloadAmbiguityCase',
-        strategy: 'overload_resolution',
-        authority: 'direct_binding',
         targetRefs: {},
-        candidateRefs: ['target.overload_a', 'target.overload_b'],
-        evidenceKinds: ['overload_candidate'],
+        targetSpanRefs: [
+            {
+                ref: 'target.overload_a',
+                file: 'fixture/targets.ts',
+                qualifiedName: 'overloaded',
+                startLine: 52,
+            },
+            {
+                ref: 'target.overload_b',
+                file: 'fixture/targets.ts',
+                qualifiedName: 'overloaded',
+                startLine: 53,
+            },
+        ],
     },
     branch_conflicted_origins: {
         calleeText: 'worker.request',
         caller: 'branchConflictedOriginsCase',
-        strategy: 'type_dispatch',
-        authority: 'ambiguous',
         targetRefs: {
             'StructuralA.request': 'target.branch_a',
             'StructuralB.request': 'target.branch_b',
         },
-        evidenceKinds: ['branch_origin'],
     },
     dynamic_unresolved: {
         calleeText: 'value.request',
         caller: 'dynamicUnresolvedCase',
-        strategy: 'dynamic_dispatch',
-        authority: 'unresolved',
         targetRefs: {},
-        evidenceKinds: ['dynamic_construct'],
     },
     wrong_target_decoy: {
         calleeText: 'worker.request',
         caller: 'wrongTargetDecoyCase',
-        strategy: 'type_dispatch',
-        authority: 'origin_flow',
         targetRefs: {
             'PrimaryWorker.request': 'target.primary',
             'DecoyWorkerA.request': 'target.decoy_a',
             'DecoyWorkerB.request': 'target.decoy_b',
         },
-        evidenceKinds: ['assignment_origin'],
     },
     'typescript.structural_decoy': {
         calleeText: 'initialized.request',
         caller: 'structuralDecoyCase',
-        strategy: 'type_dispatch',
-        authority: 'origin_flow',
         targetRefs: {
             'StructuralB.request': 'target.primary',
             'StructuralA.request': 'target.decoy',
         },
-        evidenceKinds: ['assignment_origin'],
     },
     'typescript.mutable_reassignment': {
         calleeText: 'reassigned.request',
         caller: 'mutableReassignmentCase',
-        strategy: 'type_dispatch',
-        authority: 'ambiguous',
         targetRefs: {
             'StructuralA.request': 'target.a',
             'StructuralB.request': 'target.b',
         },
-        evidenceKinds: ['branch_origin'],
     },
     'typescript.nested_write': {
         calleeText: 'nestedBlock.request',
         caller: 'nestedWriteCase',
-        strategy: 'type_dispatch',
-        authority: 'ambiguous',
         targetRefs: {
             'StructuralA.request': 'target.a',
             'StructuralB.request': 'target.b',
         },
-        evidenceKinds: ['branch_origin'],
     },
     'typescript.loop_write': {
         calleeText: 'loopWrite.request',
         caller: 'loopWriteCase',
-        strategy: 'type_dispatch',
-        authority: 'ambiguous',
         targetRefs: {
             'StructuralA.request': 'target.a',
             'StructuralB.request': 'target.b',
         },
-        evidenceKinds: ['branch_origin'],
     },
     'typescript.closure_write': {
         calleeText: 'closureWrite.request',
         caller: 'closureWriteCase',
-        strategy: 'type_dispatch',
-        authority: 'ambiguous',
         targetRefs: {
             'StructuralA.request': 'target.a',
             'StructuralB.request': 'target.b',
         },
-        evidenceKinds: ['branch_origin'],
     },
     'typescript.open_world_single_interface': {
         calleeText: 'worker.singleOnly',
         caller: 'openWorldSingleInterfaceCase',
-        strategy: 'interface_dispatch',
-        authority: 'unresolved',
         targetRefs: {
             'SingleImpl.singleOnly': 'target.impl',
         },
-        evidenceKinds: ['interface_contract'],
     },
 };
 
@@ -425,46 +392,102 @@ function callableSymbols(source, relativePath) {
     ));
 }
 
-function findCaller(symbols, callSpan, qualifiedName) {
-    const matching = symbols
-        .filter((symbol) => (
-            symbol.qualifiedName === qualifiedName
-            && symbol.span.startByte <= callSpan.startByte
-            && symbol.span.endByte >= callSpan.endByte
-        ))
-        .sort((left, right) => (
-            (left.span.endByte - left.span.startByte)
-            - (right.span.endByte - right.span.startByte)
+function symbolAsProviderTarget(symbol) {
+    const ownerName = symbol.parentQualifiedNamePath?.at(-1);
+    return {
+        file: symbol.file,
+        span: { ...symbol.span },
+        name: symbol.name,
+        ...(ownerName ? { ownerName } : {}),
+    };
+}
+
+function buildFixtureRegistry() {
+    const symbols = [];
+    const files = [];
+    for (const fixture of fixtureFiles) {
+        const structural = analyzeWithOxc({
+            content: fixture.source,
+            language: 'typescript',
+            relativePath: fixture.path,
+        });
+        if (!structural.complete) {
+            throw new Error(`OXC failed to parse qualification fixture: ${fixture.path}`);
+        }
+        const fileSymbols = buildSymbolRecordsForFile({
+            relativePath: fixture.path,
+            language: 'typescript',
+            content: fixture.source,
+            fileHash: fixture.sourceHash,
+            extractorVersion: ADAPTER_VERSION,
+            chunks: [],
+            extractedSymbols: structural.symbols,
+        });
+        symbols.push(...fileSymbols);
+        files.push({
+            path: fixture.path,
+            hash: fixture.sourceHash,
+            language: 'typescript',
+            symbolCount: fileSymbols.length,
+            definitionStatus: 'definitions_present',
+        });
+    }
+    return buildSymbolRegistry({
+        manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+            normalizedRootPath: '/typescript-qualification',
+            rootFingerprint: 'typescript-qualification-root',
+            indexPolicyHash: 'typescript-qualification-policy',
+            languageRouterVersion: 'typescript-qualification-router',
+            extractorVersion: ADAPTER_VERSION,
+            relationshipVersion: ADAPTER_VERSION,
+            builtAt: '2026-09-21T00:00:00.000Z',
+            files,
+        },
+        symbols,
+    });
+}
+
+function canonicalTargetsForSpec(spec, registry) {
+    const canonicalTargets = [];
+    for (const [qualifiedName, ref] of Object.entries(spec.targetRefs ?? {})) {
+        const matches = registry.symbols.filter((symbol) => (
+            symbol.file === 'fixture/targets.ts'
+            && symbol.qualifiedName === qualifiedName
         ));
-    return matching[0];
+        if (matches.length !== 1) {
+            throw new Error(`Expected one canonical target ${qualifiedName}, saw ${matches.length}`);
+        }
+        canonicalTargets.push({
+            ref,
+            ...symbolAsProviderTarget(matches[0]),
+        });
+    }
+    for (const selector of spec.targetSpanRefs ?? []) {
+        const matches = registry.symbols.filter((symbol) => (
+            symbol.file === selector.file
+            && symbol.qualifiedName === selector.qualifiedName
+            && symbol.span.startLine === selector.startLine
+        ));
+        if (matches.length !== 1) {
+            throw new Error(
+                `Expected one canonical target ${selector.ref} at ${selector.file}:${selector.startLine}, saw ${matches.length}`,
+            );
+        }
+        canonicalTargets.push({
+            ref: selector.ref,
+            ...symbolAsProviderTarget(matches[0]),
+        });
+    }
+    return canonicalTargets;
 }
 
-function targetIdentity(target) {
-    return target.ownerName ? `${target.ownerName}.${target.name}` : target.name;
-}
-
-function targetRef(target, spec) {
-    if (!target) return undefined;
-    return spec.targetRefs[targetIdentity(target)];
-}
-
-function targetObservation(target, ref) {
-    return {
-        ref,
-        label: targetIdentity(target),
-        file: target.file,
-        span: target.span,
-    };
-}
-
-function evidenceAtom(kind, subject, file, span, detail) {
-    return {
-        kind,
-        subject,
-        ...(detail ? { detail } : {}),
-        ...(file ? { file } : {}),
-        ...(span ? { span } : {}),
-    };
+function sameProviderTarget(left, right) {
+    return left.file === right.file
+        && left.name === right.name
+        && (left.ownerName ?? undefined) === (right.ownerName ?? undefined)
+        && left.span.startByte === right.span.startByte
+        && left.span.endByte === right.span.endByte;
 }
 
 function occurrenceForCase(allOccurrences, spec, callers) {
@@ -483,116 +506,73 @@ function occurrenceForCase(allOccurrences, spec, callers) {
     return matches[0];
 }
 
-function observationFor(caseId, occurrence, spec, caller) {
-    const nativeDecision = occurrence.decision;
-    const normalizedDecision = nativeDecision === 'unsupported' ? 'unresolved' : nativeDecision;
-    const relationshipType = normalizedDecision === 'resolved' ? 'CALLS' : 'REFERENCES';
-    const ref = targetRef(occurrence.target, spec);
-    const target = occurrence.target && ref
-        ? targetObservation(occurrence.target, ref)
+function claimForOccurrence(claimsByFile, occurrence) {
+    const matches = (claimsByFile.get(occurrence.sourceFile) ?? []).filter((claim) => (
+        claim.callSpan.startByte === occurrence.callSpan.startByte
+        && claim.callSpan.endByte === occurrence.callSpan.endByte
+        && claim.proofSteps[0]?.subject === occurrence.calleeText
+    ));
+    if (matches.length !== 1) {
+        throw new Error(
+            `Expected one ResolutionClaim for ${occurrence.sourceFile}:${occurrence.callSpan.startLine}, saw ${matches.length}`,
+        );
+    }
+    return matches[0];
+}
+
+function observationFor(occurrence, spec, claim, registry) {
+    const source = claim.sourceInstanceId
+        ? registry.symbolsByInstanceId.get(claim.sourceInstanceId)
         : undefined;
+    if (!source || source.qualifiedName !== spec.caller) {
+        throw new Error(`Unexpected source identity for ${spec.caller}`);
+    }
+
+    const canonicalTargets = canonicalTargetsForSpec(spec, registry);
+    let target;
+    let providerTarget;
+    if (claim.targetInstanceId) {
+        const targetSymbol = registry.symbolsByInstanceId.get(claim.targetInstanceId);
+        if (!targetSymbol) {
+            throw new Error(`Missing claimed target instance for ${spec.caller}`);
+        }
+        providerTarget = symbolAsProviderTarget(targetSymbol);
+        target = mapExactCanonicalTarget(providerTarget, canonicalTargets);
+    }
 
     const alternatives = (occurrence.candidates ?? [])
-        .filter((candidate) => !occurrence.target || targetIdentity(candidate) !== targetIdentity(occurrence.target))
-        .map((candidate, index) => {
-            const candidateRef = spec.candidateRefs?.[index] ?? targetRef(candidate, spec);
-            return candidateRef ? targetObservation(candidate, candidateRef) : undefined;
-        })
-        .filter(Boolean);
+        .filter((candidate) => !providerTarget || !sameProviderTarget(candidate, providerTarget))
+        .map((candidate) => mapExactCanonicalTarget(candidate, canonicalTargets));
 
-    const evidence = [
-        evidenceAtom('call_site', occurrence.calleeText, occurrence.sourceFile, occurrence.callSpan),
-        evidenceAtom('caller_identity', caller.qualifiedName, occurrence.sourceFile, caller.span),
-    ];
-
-    if (occurrence.receiverType) {
-        evidence.push(evidenceAtom(
-            'receiver_type',
-            occurrence.receiverType,
-            occurrence.sourceFile,
-            occurrence.callSpan,
+    const evidence = neutralEvidenceFromResolutionClaim(claim, { target });
+    const unresolvedEvidence = claim.decision === 'resolved'
+        ? []
+        : evidence.filter((atom) => (
+            atom.kind === 'candidate_set'
+            || atom.kind === 'ambiguity'
+            || atom.kind === 'unresolved_dependency'
         ));
-    }
-    for (const kind of spec.evidenceKinds) {
-        evidence.push(evidenceAtom(
-            kind,
-            `${caseId}:${kind}`,
-            occurrence.sourceFile,
-            occurrence.callSpan,
-        ));
-    }
-    if (target) {
-        evidence.push(evidenceAtom(
-            'target_provenance',
-            target.label,
-            target.file,
-            target.span,
-        ));
-    }
-    if (alternatives.length > 0) {
-        evidence.push(evidenceAtom(
-            'candidate_set',
-            alternatives.map((candidate) => candidate.label).join(', '),
-            occurrence.sourceFile,
-            occurrence.callSpan,
-        ));
-    }
-    if (normalizedDecision === 'ambiguous') {
-        evidence.push(evidenceAtom(
-            'ambiguity',
-            occurrence.reason,
-            occurrence.sourceFile,
-            occurrence.callSpan,
-        ));
-    }
-
-    const unresolvedEvidence = [];
-    if (normalizedDecision !== 'resolved') {
-        unresolvedEvidence.push(evidenceAtom(
-            'unresolved_dependency',
-            occurrence.reason,
-            occurrence.sourceFile,
-            occurrence.callSpan,
-            nativeDecision === 'unsupported'
-                ? 'Provider classified the construct as an explicit unsupported/dynamic boundary.'
-                : undefined,
-        ));
-    }
-    if (nativeDecision === 'unsupported') {
-        unresolvedEvidence.push(evidenceAtom(
-            'provider_specific',
-            'native_decision=unsupported',
-            occurrence.sourceFile,
-            occurrence.callSpan,
-        ));
-    }
-
-    const authority = normalizedDecision === 'ambiguous'
-        ? 'ambiguous'
-        : normalizedDecision === 'unresolved'
-            ? 'unresolved'
-            : spec.authority;
 
     return {
-        decision: normalizedDecision,
-        relationshipType,
+        decision: claim.decision,
+        relationshipType: claim.relationshipType,
         callSite: {
             file: occurrence.sourceFile,
-            span: occurrence.callSpan,
+            span: { ...claim.callSpan },
             text: `${occurrence.calleeText}()`,
         },
         source: {
             ref: 'caller',
-            label: caller.qualifiedName,
-            file: occurrence.sourceFile,
-            span: caller.span,
+            label: source.qualifiedName,
+            file: source.file,
+            span: { ...source.span },
         },
         ...(target ? { target } : {}),
         alternatives,
         mechanism: {
-            authority,
-            strategy: spec.strategy,
-            detail: `TypeScript compiler evidence: ${occurrence.reason}.`,
+            authority: claim.resolutionAuthority,
+            strategy: inferResolutionStrategy(claim, { reason: occurrence.reason }),
+            detail: `Normalized from ${claim.providerId}/${claim.providerVersion} ResolutionClaim and compiler reason '${occurrence.reason}'.`,
         },
         evidence,
         unresolvedEvidence,
@@ -625,6 +605,14 @@ async function main() {
     const cpu = process.cpuUsage(startCpu);
     const peakRssBytes = process.memoryUsage().rss;
 
+    const registry = buildFixtureRegistry();
+    const claimsByFile = buildTypeScriptResolutionClaims({
+        registry,
+        environmentConfigId: ADAPTER_VERSION,
+        providerId: providerEvidence.providerId,
+        providerVersion: providerEvidence.providerVersion,
+        occurrencesByFile: providerEvidence.occurrencesByFile,
+    });
     const occurrences = providerEvidence.occurrencesByFile.get('fixture/cases.ts') ?? [];
     const callers = callableSymbols(casesSource, 'fixture/cases.ts');
     const cases = [];
@@ -652,21 +640,12 @@ async function main() {
         const spec = caseSpecs[caseId];
         try {
             const occurrence = occurrenceForCase(occurrences, spec, callers);
-            const caller = findCaller(callers, occurrence.callSpan, spec.caller);
-            if (!caller) {
-                cases.push({
-                    caseId,
-                    status: 'error',
-                    error: `Exact caller '${spec.caller}' not found for ${occurrence.calleeText}`,
-                    measurements: [],
-                });
-                continue;
-            }
+            const claim = claimForOccurrence(claimsByFile, occurrence);
 
             cases.push({
                 caseId,
                 status: 'ok',
-                observation: observationFor(caseId, occurrence, spec, caller),
+                observation: observationFor(occurrence, spec, claim, registry),
                 measurements: [{
                     wallMs: providerEvidence.durationMs / corpusIds.length,
                     inputBytes: Buffer.byteLength(targetsSource) + Buffer.byteLength(casesSource),

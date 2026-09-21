@@ -606,6 +606,8 @@ async function runRelationshipMode(options) {
                     omittedFromJevState: [
                         "provider identity and version",
                         "incumbent or baseline status",
+                        "free-form oracle scenario and construct prose",
+                        "oracle mode, claim, and perspective labels",
                         "expected decision and target truth",
                         "wrong-target decoy labels",
                         "deterministic correctness metrics",

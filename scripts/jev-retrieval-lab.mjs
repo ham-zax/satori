@@ -5,6 +5,7 @@ import process from "node:process";
 
 import {
     buildBlindRelationshipCases,
+    composeRelationshipCorpora,
     scoreRelationshipReport,
     summarizeRelationshipEvaluations,
     summarizeRelationshipPerformance,
@@ -86,7 +87,8 @@ Options:
   --mode <name>         "retrieval" (default) or "relationship".
   --report <file>       Retrieval report or provider-neutral relationship report.
   --out <file>          Output JSON path. Parent directories are created.
-  --corpus <file>       Relationship corpus. Default: evals/semantic-relationship-qualification/corpus.json
+  --corpus <file>       Common relationship corpus. Default: evals/semantic-relationship-qualification/corpus.json
+  --overlay <file>      Optional relationship overlay corpus. Repeat for dev, held-out, or sampled families.
   --deterministic-only  Relationship mode only: skip Jev calls and emit exact + performance metrics.
   --repeats <n>         Repeat each blind Jev evaluation. Default: ${DEFAULT_REPEATS}
   --model <name>        TypeSafe model. Default: ${DEFAULT_MODEL}
@@ -110,6 +112,7 @@ function parseArgs(argv) {
         reportFile: null,
         outFile: null,
         corpusFile: path.resolve("evals/semantic-relationship-qualification/corpus.json"),
+        overlayFiles: [],
         deterministicOnly: false,
         repeats: DEFAULT_REPEATS,
         model: DEFAULT_MODEL,
@@ -128,6 +131,7 @@ function parseArgs(argv) {
         else if (arg === "--report") options.reportFile = path.resolve(next());
         else if (arg === "--out") options.outFile = path.resolve(next());
         else if (arg === "--corpus") options.corpusFile = path.resolve(next());
+        else if (arg === "--overlay") options.overlayFiles.push(path.resolve(next()));
         else if (arg === "--deterministic-only") options.deterministicOnly = true;
         else if (arg === "--repeats") options.repeats = Number.parseInt(next(), 10);
         else if (arg === "--model") options.model = next();
@@ -530,7 +534,9 @@ function printSummary(summary) {
 
 async function runRelationshipMode(options) {
     const report = readJson(options.reportFile);
-    const corpus = readJson(options.corpusFile);
+    const commonCorpus = readJson(options.corpusFile);
+    const overlayCorpora = options.overlayFiles.map((file) => readJson(file));
+    const corpus = composeRelationshipCorpora(commonCorpus, overlayCorpora);
     const deterministic = scoreRelationshipReport(corpus, report);
     const performance = summarizeRelationshipPerformance(corpus, report);
     const cases = buildBlindRelationshipCases(corpus, report);
@@ -546,6 +552,8 @@ async function runRelationshipMode(options) {
             const evaluation = {
                 caseId: item.caseId,
                 language: item.language,
+                qualification: item.qualification,
+                oracle: item.oracle,
                 screenReasons: item.screenReasons,
                 blindState: item.state,
                 questions: item.questions,
@@ -581,7 +589,9 @@ async function runRelationshipMode(options) {
         language: report.language,
         sourceReport: path.relative(process.cwd(), options.reportFile),
         sourceCorpus: path.relative(process.cwd(), options.corpusFile),
+        sourceOverlays: options.overlayFiles.map((file) => path.relative(process.cwd(), file)),
         corpusVersion: corpus.version,
+        qualificationSets: corpus.qualificationSets,
         deterministic,
         qualitative: options.deterministicOnly
             ? {
@@ -615,8 +625,8 @@ async function runRelationshipMode(options) {
     process.stdout.write("Semantic Relationship Qualification\n===================================\n");
     process.stdout.write(`- provider: ${report.provider.id}@${report.provider.version} (${report.language})\n`);
     process.stdout.write(
-        `- deterministic: strict=${deterministic.exactness.strictCaseExact.count}/${deterministic.totalCases}, `
-        + `semantic=${deterministic.exactness.semanticExact.count}/${deterministic.totalCases}, `
+        `- deterministic: strict=${deterministic.exactness.strictCaseExact.count}/${deterministic.scoredCases}, `
+        + `semantic=${deterministic.exactness.semanticExact.count}/${deterministic.scoredCases}, `
         + `unsupported=${deterministic.coverage.unsupported}, errors=${deterministic.coverage.error}, missing=${deterministic.coverage.missing}\n`,
     );
     process.stdout.write(

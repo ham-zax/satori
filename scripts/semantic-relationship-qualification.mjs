@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
 const DECISIONS = new Set(['resolved', 'unresolved', 'ambiguous']);
+const RESULT_STATUSES = new Set(['ok', 'unsupported']);
+const ORACLE_MODES = new Set(['exact', 'observation_only']);
 const RELATIONSHIP_TYPES = new Set(['CALLS', 'REFERENCES']);
 const AUTHORITIES = new Set([
     'direct_binding',
@@ -217,11 +219,40 @@ function validateMeasurements(value, label) {
     }
 }
 
+function validateQualification(value, label) {
+    if (!isRecord(value)) fail(`${label} must be an object.`);
+    requireString(value.family, `${label}.family`);
+    requireString(value.id, `${label}.id`);
+    if (value.language !== undefined) requireString(value.language, `${label}.language`);
+    if (value.provider !== undefined) requireString(value.provider, `${label}.provider`);
+    if (value.description !== undefined) requireString(value.description, `${label}.description`);
+}
+
+function validateOracle(value, label) {
+    if (!isRecord(value)) fail(`${label} must be an object.`);
+    requireEnum(value.mode, ORACLE_MODES, `${label}.mode`);
+    requireString(value.claim, `${label}.claim`);
+    if (value.description !== undefined) requireString(value.description, `${label}.description`);
+    for (const [index, perspective] of requireArray(value.perspectives ?? [], `${label}.perspectives`).entries()) {
+        requireString(perspective, `${label}.perspectives[${index}]`);
+    }
+}
+
 function validateExpected(expected, label) {
     if (!isRecord(expected)) fail(`${label} must be an object.`);
+    const resultStatus = expected.resultStatus === undefined
+        ? 'ok'
+        : requireEnum(expected.resultStatus, RESULT_STATUSES, `${label}.resultStatus`);
+    for (const [index, kind] of requireArray(expected.requiredEvidenceKinds, `${label}.requiredEvidenceKinds`).entries()) {
+        requireEnum(kind, EVIDENCE_KINDS, `${label}.requiredEvidenceKinds[${index}]`);
+    }
+    if (resultStatus === 'unsupported') {
+        return;
+    }
+
     requireEnum(expected.decision, DECISIONS, `${label}.decision`);
     requireEnum(expected.relationshipType, RELATIONSHIP_TYPES, `${label}.relationshipType`);
-    for (const key of ['targetRefs', 'candidateRefs', 'forbiddenTargetRefs', 'authorities', 'strategies', 'requiredEvidenceKinds']) {
+    for (const key of ['targetRefs', 'candidateRefs', 'forbiddenTargetRefs', 'authorities', 'strategies']) {
         requireArray(expected[key], `${label}.${key}`);
     }
     for (const [index, authority] of expected.authorities.entries()) {
@@ -229,9 +260,6 @@ function validateExpected(expected, label) {
     }
     for (const [index, strategy] of expected.strategies.entries()) {
         requireEnum(strategy, STRATEGIES, `${label}.strategies[${index}]`);
-    }
-    for (const [index, kind] of expected.requiredEvidenceKinds.entries()) {
-        requireEnum(kind, EVIDENCE_KINDS, `${label}.requiredEvidenceKinds[${index}]`);
     }
     if (expected.decision === 'resolved' && expected.targetRefs.length === 0) {
         fail(`${label}.targetRefs must contain at least one target for a resolved case.`);
@@ -241,10 +269,33 @@ function validateExpected(expected, label) {
     }
 }
 
+function oracleForCase(item) {
+    return item.oracle ?? {
+        mode: 'exact',
+        claim: 'relationship',
+    };
+}
+
+function qualificationForCorpus(corpus, fallbackFamily = 'common') {
+    return corpus.qualification ?? {
+        family: fallbackFamily,
+        id: fallbackFamily === 'common' ? 'common-v1' : corpus.family,
+    };
+}
+
+function qualificationForCase(corpus, item) {
+    return item.qualification ?? qualificationForCorpus(corpus);
+}
+
+function qualificationKey(qualification) {
+    return `${qualification.family}::${qualification.id}`;
+}
+
 export function validateRelationshipCorpus(corpus) {
     if (!isRecord(corpus)) fail('corpus must be an object.');
     if (corpus.version !== 1) fail(`unsupported corpus version '${String(corpus.version)}'.`);
     requireString(corpus.family, 'corpus.family');
+    if (corpus.qualification !== undefined) validateQualification(corpus.qualification, 'corpus.qualification');
     const ids = new Set();
     for (const [index, item] of requireArray(corpus.cases, 'corpus.cases').entries()) {
         if (!isRecord(item)) fail(`corpus.cases[${index}] must be an object.`);
@@ -253,10 +304,61 @@ export function validateRelationshipCorpus(corpus) {
         ids.add(id);
         requireString(item.construct, `corpus.cases[${index}].construct`);
         requireString(item.scenario, `corpus.cases[${index}].scenario`);
-        validateExpected(item.expected, `corpus.cases[${index}].expected`);
+        if (item.qualification !== undefined) {
+            validateQualification(item.qualification, `corpus.cases[${index}].qualification`);
+        }
+        const oracle = oracleForCase(item);
+        validateOracle(oracle, `corpus.cases[${index}].oracle`);
+        if (oracle.mode === 'exact') {
+            validateExpected(item.expected, `corpus.cases[${index}].expected`);
+        } else if (item.expected !== undefined) {
+            validateExpected(item.expected, `corpus.cases[${index}].expected`);
+        }
     }
     if (ids.size === 0) fail('corpus must contain at least one case.');
     return corpus;
+}
+
+export function composeRelationshipCorpora(commonCorpus, overlayCorpora = []) {
+    validateRelationshipCorpus(commonCorpus);
+    const commonQualification = qualificationForCorpus(commonCorpus, 'common');
+    const qualificationSets = [{ ...commonQualification }];
+    const seenIds = new Set();
+    const cases = [];
+
+    const appendCorpus = (corpus, qualification, label) => {
+        for (const item of corpus.cases) {
+            if (seenIds.has(item.id)) fail(`${label} duplicates corpus case '${item.id}'.`);
+            seenIds.add(item.id);
+            cases.push({
+                ...item,
+                qualification: item.qualification ?? qualification,
+            });
+        }
+    };
+
+    appendCorpus(commonCorpus, commonQualification, 'common corpus');
+    for (const [index, overlay] of requireArray(overlayCorpora, 'overlayCorpora').entries()) {
+        validateRelationshipCorpus(overlay);
+        if (overlay.version !== commonCorpus.version) {
+            fail(`overlayCorpora[${index}] version ${overlay.version} does not match common corpus version ${commonCorpus.version}.`);
+        }
+        if (!overlay.qualification) {
+            fail(`overlayCorpora[${index}].qualification is required so overlay results retain family identity.`);
+        }
+        const qualification = qualificationForCorpus(overlay, 'overlay');
+        if (qualificationSets.some((item) => qualificationKey(item) === qualificationKey(qualification))) {
+            fail(`duplicate qualification set '${qualificationKey(qualification)}'.`);
+        }
+        qualificationSets.push({ ...qualification });
+        appendCorpus(overlay, qualification, `overlayCorpora[${index}]`);
+    }
+
+    return {
+        ...commonCorpus,
+        qualificationSets,
+        cases,
+    };
 }
 
 export function validateRelationshipReport(report, corpus) {
@@ -319,25 +421,56 @@ function evidenceKinds(observation) {
     ]);
 }
 
-export function scoreRelationshipReport(corpus, report) {
-    validateRelationshipReport(report, corpus);
-    const results = new Map(report.cases.map((item) => [item.caseId, item]));
+function unsupportedEvidenceKinds(result) {
+    return new Set((result?.unsupportedEvidence ?? []).map((item) => item.kind));
+}
+
+function expectedResultStatus(expected) {
+    return expected.resultStatus ?? 'ok';
+}
+
+function observedRelationship(observation) {
+    if (!observation) return null;
+    const kinds = evidenceKinds(observation);
+    return {
+        decision: observation.decision,
+        relationshipType: observation.relationshipType,
+        targetRef: observation.target?.ref ?? null,
+        alternativeRefs: (observation.alternatives ?? []).map((candidate) => candidate.ref),
+        authority: observation.mechanism.authority,
+        strategy: observation.mechanism.strategy,
+        evidenceKinds: [...kinds].sort(),
+    };
+}
+
+function scoreRelationshipCases(corpus, cases, results) {
     const rows = [];
     let ok = 0;
     let unsupported = 0;
     let errors = 0;
     let missing = 0;
+    let scoredCases = 0;
+    let observationOnlyCases = 0;
     let decisionExact = 0;
+    let decisionTotal = 0;
     let relationshipExact = 0;
+    let relationshipTotal = 0;
     let semanticExact = 0;
     let strictCaseExact = 0;
     let authorityExact = 0;
+    let authorityTotal = 0;
     let strategyExact = 0;
+    let strategyTotal = 0;
     let evidenceContractExact = 0;
+    let evidenceContractTotal = 0;
     let safeAbstentionExact = 0;
     let safeAbstentionTotal = 0;
     let candidateSetExact = 0;
     let candidateSetTotal = 0;
+    let ambiguousCandidateExact = 0;
+    let ambiguousCandidateTotal = 0;
+    let unsupportedExact = 0;
+    let unsupportedExpectedTotal = 0;
     let decoyAvoided = 0;
     let decoyTotal = 0;
     let decoyHits = 0;
@@ -347,9 +480,10 @@ export function scoreRelationshipReport(corpus, report) {
     let targetFp = 0;
     let targetFn = 0;
 
-    for (const item of corpus.cases) {
+    for (const item of cases) {
         const result = results.get(item.id);
-        const expected = item.expected;
+        const oracle = oracleForCase(item);
+        const qualification = qualificationForCase(corpus, item);
         if (!result) missing += 1;
         else if (result.status === 'ok') ok += 1;
         else if (result.status === 'unsupported') unsupported += 1;
@@ -358,8 +492,68 @@ export function scoreRelationshipReport(corpus, report) {
         const observation = result?.status === 'ok' ? result.observation : null;
         const targetRef = observation?.target?.ref ?? null;
         const alternatives = observation?.alternatives?.map((candidate) => candidate.ref) ?? [];
+        const baseRow = {
+            caseId: item.id,
+            construct: item.construct,
+            qualification,
+            oracle,
+            status: result?.status ?? 'missing',
+            ...(result?.status === 'unsupported' ? { unsupportedReason: result.unsupportedReason } : {}),
+            ...(result?.status === 'error' ? { error: result.error } : {}),
+        };
+
+        if (oracle.mode === 'observation_only') {
+            observationOnlyCases += 1;
+            rows.push({
+                ...baseRow,
+                checks: null,
+                semanticExact: null,
+                strictCaseExact: null,
+                observed: observedRelationship(observation),
+            });
+            continue;
+        }
+
+        scoredCases += 1;
+        const expected = item.expected;
+        const resultStatus = expectedResultStatus(expected);
+        if (resultStatus === 'unsupported') {
+            unsupportedExpectedTotal += 1;
+            evidenceContractTotal += 1;
+            const kinds = unsupportedEvidenceKinds(result);
+            const checks = {
+                resultStatus: result?.status === 'unsupported',
+                evidence: Boolean(result?.status === 'unsupported'
+                    && expected.requiredEvidenceKinds.every((kind) => kinds.has(kind))),
+            };
+            if (checks.resultStatus) unsupportedExact += 1;
+            if (checks.evidence) evidenceContractExact += 1;
+            const semantic = checks.resultStatus;
+            const strict = semantic && checks.evidence;
+            if (semantic) semanticExact += 1;
+            if (strict) strictCaseExact += 1;
+            if (observation?.decision === 'resolved') {
+                falseResolved += 1;
+                if (targetRef !== null) targetFp += 1;
+            }
+            rows.push({
+                ...baseRow,
+                checks,
+                semanticExact: semantic,
+                strictCaseExact: strict,
+                observed: observedRelationship(observation),
+            });
+            continue;
+        }
+
+        decisionTotal += 1;
+        relationshipTotal += 1;
+        authorityTotal += 1;
+        strategyTotal += 1;
+        evidenceContractTotal += 1;
         const requiredKinds = evidenceKinds(observation);
         const checks = {
+            resultStatus: result?.status === 'ok',
             decision: Boolean(observation && observation.decision === expected.decision),
             relationshipType: Boolean(observation && observation.relationshipType === expected.relationshipType),
             target: expected.decision === 'resolved'
@@ -389,6 +583,10 @@ export function scoreRelationshipReport(corpus, report) {
             candidateSetTotal += 1;
             if (checks.candidates) candidateSetExact += 1;
         }
+        if (expected.decision === 'ambiguous') {
+            ambiguousCandidateTotal += 1;
+            if (checks.candidates) ambiguousCandidateExact += 1;
+        }
         if (expected.forbiddenTargetRefs.length > 0) {
             decoyTotal += 1;
             if (checks.decoyAvoidance) decoyAvoided += 1;
@@ -403,7 +601,8 @@ export function scoreRelationshipReport(corpus, report) {
         if (expectedResolved && !correctTarget) targetFn += 1;
         if (expectedResolved && predictedResolved && !correctTarget) wrongTargets += 1;
 
-        const semantic = checks.decision
+        const semantic = checks.resultStatus
+            && checks.decision
             && checks.relationshipType
             && checks.target
             && checks.candidates
@@ -413,29 +612,15 @@ export function scoreRelationshipReport(corpus, report) {
         if (strict) strictCaseExact += 1;
 
         rows.push({
-            caseId: item.id,
-            construct: item.construct,
-            status: result?.status ?? 'missing',
-            ...(result?.status === 'unsupported' ? { unsupportedReason: result.unsupportedReason } : {}),
-            ...(result?.status === 'error' ? { error: result.error } : {}),
+            ...baseRow,
             checks,
             semanticExact: semantic,
             strictCaseExact: strict,
-            observed: observation
-                ? {
-                    decision: observation.decision,
-                    relationshipType: observation.relationshipType,
-                    targetRef,
-                    alternativeRefs: alternatives,
-                    authority: observation.mechanism.authority,
-                    strategy: observation.mechanism.strategy,
-                    evidenceKinds: [...requiredKinds].sort(),
-                }
-                : null,
+            observed: observedRelationship(observation),
         });
     }
 
-    const total = corpus.cases.length;
+    const total = cases.length;
     const precisionDenominator = targetTp + targetFp;
     const recallDenominator = targetTp + targetFn;
     const precision = precisionDenominator === 0 ? null : targetTp / precisionDenominator;
@@ -446,6 +631,8 @@ export function scoreRelationshipReport(corpus, report) {
 
     return {
         totalCases: total,
+        scoredCases,
+        observationOnlyCases,
         coverage: {
             ok,
             unsupported,
@@ -454,13 +641,17 @@ export function scoreRelationshipReport(corpus, report) {
             okRate: ratio(ok, total),
         },
         exactness: {
-            decisionExact: { count: decisionExact, rate: ratio(decisionExact, total) },
-            relationshipTypeExact: { count: relationshipExact, rate: ratio(relationshipExact, total) },
-            semanticExact: { count: semanticExact, rate: ratio(semanticExact, total) },
-            strictCaseExact: { count: strictCaseExact, rate: ratio(strictCaseExact, total) },
-            authorityAgreement: { count: authorityExact, rate: ratio(authorityExact, total) },
-            strategyAgreement: { count: strategyExact, rate: ratio(strategyExact, total) },
-            evidenceContractExact: { count: evidenceContractExact, rate: ratio(evidenceContractExact, total) },
+            decisionExact: { count: decisionExact, total: decisionTotal, rate: ratio(decisionExact, decisionTotal) },
+            relationshipTypeExact: { count: relationshipExact, total: relationshipTotal, rate: ratio(relationshipExact, relationshipTotal) },
+            semanticExact: { count: semanticExact, total: scoredCases, rate: ratio(semanticExact, scoredCases) },
+            strictCaseExact: { count: strictCaseExact, total: scoredCases, rate: ratio(strictCaseExact, scoredCases) },
+            authorityAgreement: { count: authorityExact, total: authorityTotal, rate: ratio(authorityExact, authorityTotal) },
+            strategyAgreement: { count: strategyExact, total: strategyTotal, rate: ratio(strategyExact, strategyTotal) },
+            evidenceContractExact: {
+                count: evidenceContractExact,
+                total: evidenceContractTotal,
+                rate: ratio(evidenceContractExact, evidenceContractTotal),
+            },
             safeAbstentionExact: {
                 count: safeAbstentionExact,
                 total: safeAbstentionTotal,
@@ -470,6 +661,16 @@ export function scoreRelationshipReport(corpus, report) {
                 count: candidateSetExact,
                 total: candidateSetTotal,
                 rate: ratio(candidateSetExact, candidateSetTotal),
+            },
+            ambiguousCandidateExact: {
+                count: ambiguousCandidateExact,
+                total: ambiguousCandidateTotal,
+                rate: ratio(ambiguousCandidateExact, ambiguousCandidateTotal),
+            },
+            unsupportedExact: {
+                count: unsupportedExact,
+                total: unsupportedExpectedTotal,
+                rate: ratio(unsupportedExact, unsupportedExpectedTotal),
             },
             decoyAvoidance: {
                 count: decoyAvoided,
@@ -492,6 +693,26 @@ export function scoreRelationshipReport(corpus, report) {
     };
 }
 
+export function scoreRelationshipReport(corpus, report) {
+    validateRelationshipReport(report, corpus);
+    const results = new Map(report.cases.map((item) => [item.caseId, item]));
+    const overall = scoreRelationshipCases(corpus, corpus.cases, results);
+    const groups = new Map();
+    for (const item of corpus.cases) {
+        const qualification = qualificationForCase(corpus, item);
+        const key = qualificationKey(qualification);
+        const group = groups.get(key) ?? { qualification, cases: [] };
+        group.cases.push(item);
+        groups.set(key, group);
+    }
+    return {
+        ...overall,
+        qualificationFamilies: [...groups.values()].map((group) => ({
+            qualification: group.qualification,
+            ...scoreRelationshipCases(corpus, group.cases, results),
+        })),
+    };
+}
 function percentile(values, p) {
     if (values.length === 0) return null;
     const sorted = [...values].sort((left, right) => left - right);
@@ -534,17 +755,27 @@ function summarizeSamples(samples) {
 
 export function summarizeRelationshipPerformance(corpus, report) {
     validateRelationshipReport(report, corpus);
+    const caseById = new Map(corpus.cases.map((item) => [item.id, item]));
     const byCase = [];
     const allSamples = [];
+    const groups = new Map();
     for (const result of report.cases) {
         const samples = result.measurements ?? [];
         if (samples.length === 0) continue;
+        const corpusCase = caseById.get(result.caseId);
+        const qualification = qualificationForCase(corpus, corpusCase);
         allSamples.push(...samples);
         byCase.push({
             caseId: result.caseId,
+            qualification,
             samples: samples.length,
             metrics: summarizeSamples(samples),
         });
+        const key = qualificationKey(qualification);
+        const group = groups.get(key) ?? { qualification, samples: [], measuredCases: 0 };
+        group.samples.push(...samples);
+        group.measuredCases += 1;
+        groups.set(key, group);
     }
     const runSamples = report.runMeasurements ?? [];
     return {
@@ -552,16 +783,23 @@ export function summarizeRelationshipPerformance(corpus, report) {
         caseSamples: allSamples.length,
         byCase,
         aggregateCaseSamples: summarizeSamples(allSamples),
+        qualificationFamilies: [...groups.values()].map((group) => ({
+            qualification: group.qualification,
+            measuredCases: group.measuredCases,
+            caseSamples: group.samples.length,
+            aggregateCaseSamples: summarizeSamples(group.samples),
+        })),
         runSamples: runSamples.length,
         aggregateRunSamples: summarizeSamples(runSamples),
     };
 }
 
 function blindTokenMap(item, result, provider) {
+    const expected = item.expected ?? {};
     const refs = new Set([
-        ...item.expected.targetRefs,
-        ...item.expected.candidateRefs,
-        ...item.expected.forbiddenTargetRefs,
+        ...(expected.targetRefs ?? []),
+        ...(expected.candidateRefs ?? []),
+        ...(expected.forbiddenTargetRefs ?? []),
     ]);
     if (result.status === 'ok') {
         refs.add(result.observation.source.ref);
@@ -640,10 +878,14 @@ export function buildBlindRelationshipCases(corpus, report) {
         const nonResolved = stateResult.status === 'unsupported'
             || stateResult.observation?.decision === 'ambiguous'
             || stateResult.observation?.decision === 'unresolved';
+        const oracle = oracleForCase(item);
+        const qualification = qualificationForCase(corpus, item);
         return {
             caseId: item.id,
             provider: report.provider,
             language: report.language,
+            qualification,
+            oracle,
             screenReasons,
             state: {
                 task: {
@@ -651,6 +893,9 @@ export function buildBlindRelationshipCases(corpus, report) {
                     language: report.language,
                     construct: item.construct,
                     scenario: item.scenario,
+                    semanticClaim: oracle.claim,
+                    oracleMode: oracle.mode,
+                    ...(oracle.perspectives ? { perspectives: oracle.perspectives } : {}),
                 },
                 result: stateResult,
             },
@@ -682,12 +927,35 @@ function topChoice(runs, key, criteria) {
     };
 }
 
+function summarizeEvaluationRows(rows) {
+    const evaluated = rows.filter((row) => row.status === 'evaluated');
+    const dimensionKeys = new Set(evaluated.flatMap((row) => Object.keys(row.dimensions)));
+    const aggregate = {};
+    for (const key of dimensionKeys) {
+        const values = evaluated.flatMap((row) => (
+            typeof row.dimensions[key] === 'number' ? [row.dimensions[key]] : []
+        ));
+        aggregate[key] = {
+            cases: values.length,
+            mean: values.length === 0 ? null : Number(mean(values).toFixed(4)),
+        };
+    }
+    return {
+        evaluatedCases: evaluated.length,
+        screenedCases: rows.length - evaluated.length,
+        dimensions: aggregate,
+        cases: rows,
+    };
+}
+
 export function summarizeRelationshipEvaluations(evaluations) {
     const rows = [];
     for (const evaluation of evaluations) {
+        const qualification = evaluation.qualification ?? { family: 'common', id: 'common-v1' };
         if (evaluation.screenReasons.length > 0) {
             rows.push({
                 caseId: evaluation.caseId,
+                qualification,
                 status: 'screened',
                 reasons: evaluation.screenReasons,
             });
@@ -702,6 +970,7 @@ export function summarizeRelationshipEvaluations(evaluations) {
         }
         rows.push({
             caseId: evaluation.caseId,
+            qualification,
             status: 'evaluated',
             dimensions,
             mechanismClassification: topChoice(
@@ -712,23 +981,126 @@ export function summarizeRelationshipEvaluations(evaluations) {
         });
     }
 
-    const evaluated = rows.filter((row) => row.status === 'evaluated');
-    const dimensionKeys = new Set(evaluated.flatMap((row) => Object.keys(row.dimensions)));
-    const aggregate = {};
-    for (const key of dimensionKeys) {
-        const values = evaluated.flatMap((row) => (
-            typeof row.dimensions[key] === 'number' ? [row.dimensions[key]] : []
-        ));
-        aggregate[key] = {
-            cases: values.length,
-            mean: values.length === 0 ? null : Number(mean(values).toFixed(4)),
-        };
+    const overall = summarizeEvaluationRows(rows);
+    const groups = new Map();
+    for (const row of rows) {
+        const key = qualificationKey(row.qualification);
+        const group = groups.get(key) ?? { qualification: row.qualification, rows: [] };
+        group.rows.push(row);
+        groups.set(key, group);
+    }
+    return {
+        ...overall,
+        qualificationFamilies: [...groups.values()].map((group) => ({
+            qualification: group.qualification,
+            ...summarizeEvaluationRows(group.rows),
+        })),
+    };
+}
+
+function metricOrNull(value) {
+    return isRecord(value) ? value : null;
+}
+
+function comparisonDeterministicRow(artifact, deterministic) {
+    const exactness = deterministic.exactness ?? {};
+    return {
+        provider: artifact.provider,
+        language: artifact.language,
+        totalCases: deterministic.totalCases,
+        scoredCases: deterministic.scoredCases ?? deterministic.totalCases,
+        observationOnlyCases: deterministic.observationOnlyCases ?? 0,
+        coverage: deterministic.coverage,
+        semanticExact: metricOrNull(exactness.semanticExact),
+        strictCaseExact: metricOrNull(exactness.strictCaseExact),
+        wrongTargetCount: exactness.wrongTargetCount ?? null,
+        falseResolvedCount: exactness.falseResolvedCount ?? null,
+        safeAbstentionExact: metricOrNull(exactness.safeAbstentionExact),
+        ambiguousCandidateExact: metricOrNull(
+            exactness.ambiguousCandidateExact ?? exactness.candidateSetExact,
+        ),
+        unsupported: {
+            reported: deterministic.coverage?.unsupported ?? null,
+            exact: metricOrNull(exactness.unsupportedExact),
+        },
+        resolvedTarget: deterministic.resolvedTarget ?? null,
+    };
+}
+
+function artifactQualificationFamilies(artifact) {
+    const families = artifact.deterministic?.qualificationFamilies;
+    if (Array.isArray(families) && families.length > 0) return families;
+    return [{
+        qualification: { family: 'common', id: 'common-v1' },
+        ...artifact.deterministic,
+    }];
+}
+
+export function compareRelationshipQualificationArtifacts(artifacts) {
+    const inputs = requireArray(artifacts, 'artifacts');
+    if (inputs.length === 0) fail('artifacts must contain at least one completed qualification artifact.');
+
+    const deterministicProviders = [];
+    const qualitativeProviders = [];
+    const performanceProviders = [];
+    const familyGroups = new Map();
+
+    for (const [index, artifact] of inputs.entries()) {
+        if (!isRecord(artifact)) fail(`artifacts[${index}] must be an object.`);
+        if (artifact.family !== 'semantic_relationship_qualification') {
+            fail(`artifacts[${index}] is not a semantic relationship qualification artifact.`);
+        }
+        if (!isRecord(artifact.provider)) fail(`artifacts[${index}].provider must be an object.`);
+        requireString(artifact.provider.id, `artifacts[${index}].provider.id`);
+        requireString(artifact.provider.version, `artifacts[${index}].provider.version`);
+        requireString(artifact.language, `artifacts[${index}].language`);
+        if (!isRecord(artifact.deterministic)) fail(`artifacts[${index}].deterministic must be an object.`);
+        if (!isRecord(artifact.qualitative)) fail(`artifacts[${index}].qualitative must be an object.`);
+        if (!isRecord(artifact.performance)) fail(`artifacts[${index}].performance must be an object.`);
+
+        deterministicProviders.push(comparisonDeterministicRow(artifact, artifact.deterministic));
+        qualitativeProviders.push({
+            provider: artifact.provider,
+            language: artifact.language,
+            status: artifact.qualitative.status,
+            model: artifact.qualitative.model ?? null,
+            repeats: artifact.qualitative.repeats ?? null,
+            summary: artifact.qualitative.summary ?? null,
+        });
+        performanceProviders.push({
+            provider: artifact.provider,
+            language: artifact.language,
+            measuredCases: artifact.performance.measuredCases ?? 0,
+            caseSamples: artifact.performance.caseSamples ?? 0,
+            aggregateCaseSamples: artifact.performance.aggregateCaseSamples ?? {},
+            runSamples: artifact.performance.runSamples ?? 0,
+            aggregateRunSamples: artifact.performance.aggregateRunSamples ?? {},
+            qualificationFamilies: artifact.performance.qualificationFamilies ?? [],
+        });
+
+        for (const family of artifactQualificationFamilies(artifact)) {
+            const qualification = family.qualification ?? { family: 'common', id: 'common-v1' };
+            const key = qualificationKey(qualification);
+            const group = familyGroups.get(key) ?? { qualification, providers: [] };
+            group.providers.push(comparisonDeterministicRow(artifact, family));
+            familyGroups.set(key, group);
+        }
     }
 
     return {
-        evaluatedCases: evaluated.length,
-        screenedCases: rows.length - evaluated.length,
-        dimensions: aggregate,
-        cases: rows,
+        version: 1,
+        family: 'semantic_relationship_provider_comparison',
+        lanes: {
+            deterministic: {
+                providers: deterministicProviders,
+                qualificationFamilies: [...familyGroups.values()],
+            },
+            qualitative: {
+                providers: qualitativeProviders,
+            },
+            performance: {
+                providers: performanceProviders,
+            },
+        },
     };
 }

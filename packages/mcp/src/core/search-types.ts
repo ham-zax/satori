@@ -788,6 +788,7 @@ export type NonOkReason =
     | "source_changed_during_request"
     | "source_state_unverified"
     | "analysis_unavailable"
+    | "structural_evidence_unavailable"
     | "unsupported_symbol_kind"
     | "embedding_provider_unavailable"
     | "vector_backend_unavailable";
@@ -1160,13 +1161,14 @@ export interface ReadFileStructuredErrorResponseEnvelope {
     indexingFailure?: IndexingFailureMetadata;
 }
 
-export type ReadFileAnnotatedOutlineStatus = "ok" | "requires_reindex" | "unsupported" | "ambiguous";
+export type ReadFileAnnotatedOutlineStatus = "ok" | "not_ready" | "requires_reindex" | "unsupported" | "ambiguous";
 
 export interface ReadFileAnnotatedResponseEnvelope {
     path: string;
     mode: "annotated";
     content: string;
     outlineStatus: ReadFileAnnotatedOutlineStatus;
+    outlineReason?: NonOkReason;
     outline: { symbols: unknown[] } | null;
     hasMore: boolean;
     warnings?: string[];

@@ -549,7 +549,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, bou
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage, so read_file also serves as an exact-path coverage check: FILE_NOT_PUBLISHED means the path is outside the current Publication.",
+        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage, so read_file also serves as an exact-path coverage check: FILE_NOT_PUBLISHED means the path is outside the current Publication. With mode=\"annotated\", outlineStatus=\"not_ready\" and outlineReason=\"structural_evidence_unavailable\" mean the file is published and readable but lacks structural extraction evidence.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -973,6 +973,7 @@ export const readFileTool: McpTool = {
                 ? normalizeRelativePath(path.relative(resolvedRoot, absolutePath))
                 : undefined;
             let outlineStatus: ReadFileAnnotatedOutlineStatus = supportedByExtension ? "requires_reindex" : "unsupported";
+            let outlineReason: ReadFileAnnotatedResponseEnvelope["outlineReason"];
             let outline: { symbols: unknown[] } | null = null;
             let hasMore = false;
             let warnings: string[] | undefined;
@@ -1009,10 +1010,13 @@ export const readFileTool: McpTool = {
                         }, ctx.workspacePolicy);
                         const parsedOutline = JSON.parse(outlineResponse.content?.[0]?.text || "{}");
                         const status = parsedOutline?.status;
-                        if (status === "ok" || status === "requires_reindex" || status === "unsupported" || status === "ambiguous") {
+                        if (status === "ok" || status === "not_ready" || status === "requires_reindex" || status === "unsupported" || status === "ambiguous") {
                             outlineStatus = status;
                         } else {
                             outlineStatus = "requires_reindex";
+                        }
+                        if (outlineStatus !== "ok" && typeof parsedOutline?.reason === "string") {
+                            outlineReason = parsedOutline.reason;
                         }
                         outline = outlineStatus === "ok" && parsedOutline?.outline ? parsedOutline.outline : null;
                         hasMore = parsedOutline?.hasMore === true;
@@ -1033,6 +1037,7 @@ export const readFileTool: McpTool = {
                 mode: "annotated",
                 content: contentWithHint,
                 outlineStatus,
+                ...(outlineReason ? { outlineReason } : {}),
                 outline,
                 hasMore,
                 ...(warnings && warnings.length > 0 ? { warnings } : {}),

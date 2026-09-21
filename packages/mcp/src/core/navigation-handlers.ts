@@ -1479,6 +1479,41 @@ export class NavigationHandlers {
             };
         }
 
+        const manifestFile = registryState.registry.manifest.files.find((file) => file.path === normalizedFile);
+        if (manifestFile?.definitionStatus === "structural_unavailable") {
+            await this.host.touchWatchedCodebase(effectiveRoot);
+            const payload = withNavigationFreshness({
+                status: "not_ready",
+                reason: "structural_evidence_unavailable",
+                path: effectiveRoot,
+                file: normalizedFile,
+                outline: null,
+                hasMore: false,
+                message: `The current Publication includes '${normalizedFile}', but structural evidence is unavailable for this file. Source remains readable and searchable.`,
+                hints: {
+                    readFile: {
+                        tool: "read_file",
+                        args: { path: absoluteFile },
+                    },
+                    structuralCoverage: {
+                        tool: "manage_index",
+                        args: { action: "status", path: effectiveRoot, detail: "full" },
+                    },
+                },
+                freshness: {
+                    indexedAt: null,
+                    stalenessBucket: "unknown",
+                    registryBuiltAt: registryState.registry.manifest.builtAt,
+                    sourceState: fileFreshness.status,
+                },
+            }, trackedRootState.freshnessDecision);
+            return {
+                content: [{ type: "text", text: this.host.stringifyToolJson(
+                    this.host.withProofDebugHint(payload, proofDebugHint),
+                ) }],
+            };
+        }
+
         const readSourceLines = async (
             codebaseRoot: string,
             relativeFilePath: string,

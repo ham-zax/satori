@@ -1,0 +1,1685 @@
+{
+  "version": 1,
+  "corpusVersion": 1,
+  "provider": {
+    "id": "satori-typescript-compiler",
+    "version": "ts-compiler-v2",
+    "adapterVersion": "typescript-qualification-v1"
+  },
+  "language": "typescript",
+  "cases": [
+    {
+      "caseId": "direct_call",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 25,
+            "endLine": 25,
+            "startByte": 432,
+            "endByte": 447,
+            "startColumn": 11,
+            "endColumn": 26
+          },
+          "text": "directPrimary()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "directCallCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 24,
+            "endLine": 26,
+            "startByte": 385,
+            "endByte": 450,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "directPrimary",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 2,
+            "endLine": 2,
+            "startByte": 8,
+            "endByte": 61,
+            "startColumn": 7,
+            "endColumn": 60
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "direct_binding",
+          "strategy": "direct_call",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "directPrimary",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 25,
+              "endLine": 25,
+              "startByte": 432,
+              "endByte": 447,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "directCallCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 24,
+              "endLine": 26,
+              "startByte": 385,
+              "endByte": 450,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "direct_symbol_binding",
+            "subject": "direct_call:direct_symbol_binding",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 25,
+              "endLine": 25,
+              "startByte": 432,
+              "endByte": 447,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "directPrimary",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 2,
+              "endLine": 2,
+              "startByte": 8,
+              "endByte": 61,
+              "startColumn": 7,
+              "endColumn": 60
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "class_field_receiver",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 31,
+            "endLine": 31,
+            "startByte": 559,
+            "endByte": 580,
+            "startColumn": 15,
+            "endColumn": 36
+          },
+          "text": "this.worker.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "ClassFieldCase.run",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 30,
+            "endLine": 32,
+            "startByte": 528,
+            "endByte": 587,
+            "startColumn": 4,
+            "endColumn": 5
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "PrimaryWorker.request",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 7,
+            "endLine": 7,
+            "startByte": 196,
+            "endByte": 235,
+            "startColumn": 4,
+            "endColumn": 43
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "this.worker.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 31,
+              "endLine": 31,
+              "startByte": 559,
+              "endByte": 580,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "ClassFieldCase.run",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 30,
+              "endLine": 32,
+              "startByte": 528,
+              "endByte": 587,
+              "startColumn": 4,
+              "endColumn": 5
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "PrimaryWorker",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 31,
+              "endLine": 31,
+              "startByte": 559,
+              "endByte": 580,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "field_origin",
+            "subject": "class_field_receiver:field_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 31,
+              "endLine": 31,
+              "startByte": 559,
+              "endByte": 580,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "PrimaryWorker.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 7,
+              "endLine": 7,
+              "startByte": 196,
+              "endByte": 235,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "constructor_parameter_property",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 38,
+            "endLine": 38,
+            "startByte": 724,
+            "endByte": 745,
+            "startColumn": 15,
+            "endColumn": 36
+          },
+          "text": "this.worker.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "ConstructorParameterPropertyCase.run",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 37,
+            "endLine": 39,
+            "startByte": 693,
+            "endByte": 752,
+            "startColumn": 4,
+            "endColumn": 5
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "PrimaryWorker.request",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 7,
+            "endLine": 7,
+            "startByte": 196,
+            "endByte": 235,
+            "startColumn": 4,
+            "endColumn": 43
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "this.worker.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 38,
+              "endLine": 38,
+              "startByte": 724,
+              "endByte": 745,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "ConstructorParameterPropertyCase.run",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 37,
+              "endLine": 39,
+              "startByte": 693,
+              "endByte": 752,
+              "startColumn": 4,
+              "endColumn": 5
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "PrimaryWorker",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 38,
+              "endLine": 38,
+              "startByte": 724,
+              "endByte": 745,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "constructor_origin",
+            "subject": "constructor_parameter_property:constructor_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 38,
+              "endLine": 38,
+              "startByte": 724,
+              "endByte": 745,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "field_origin",
+            "subject": "constructor_parameter_property:field_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 38,
+              "endLine": 38,
+              "startByte": 724,
+              "endByte": 745,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "PrimaryWorker.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 7,
+              "endLine": 7,
+              "startByte": 196,
+              "endByte": 235,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "constructor_assignment_origin",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 48,
+            "endLine": 48,
+            "startByte": 929,
+            "endByte": 950,
+            "startColumn": 15,
+            "endColumn": 36
+          },
+          "text": "this.worker.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "ConstructorAssignmentCase.run",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 47,
+            "endLine": 49,
+            "startByte": 898,
+            "endByte": 957,
+            "startColumn": 4,
+            "endColumn": 5
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "PrimaryWorker.request",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 7,
+            "endLine": 7,
+            "startByte": 196,
+            "endByte": 235,
+            "startColumn": 4,
+            "endColumn": 43
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "this.worker.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "ConstructorAssignmentCase.run",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 47,
+              "endLine": 49,
+              "startByte": 898,
+              "endByte": 957,
+              "startColumn": 4,
+              "endColumn": 5
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "PrimaryWorker",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "constructor_origin",
+            "subject": "constructor_assignment_origin:constructor_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "assignment_origin",
+            "subject": "constructor_assignment_origin:assignment_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "field_origin",
+            "subject": "constructor_assignment_origin:field_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "flow_hop",
+            "subject": "constructor_assignment_origin:flow_hop",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 48,
+              "endLine": 48,
+              "startByte": 929,
+              "endByte": 950,
+              "startColumn": 15,
+              "endColumn": 36
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "PrimaryWorker.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 7,
+              "endLine": 7,
+              "startByte": 196,
+              "endByte": 235,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "alias_binding",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 53,
+            "endLine": 53,
+            "startByte": 1017,
+            "endByte": 1033,
+            "startColumn": 11,
+            "endColumn": 27
+          },
+          "text": "aliasedPrimary()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "aliasBindingCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 52,
+            "endLine": 54,
+            "startByte": 968,
+            "endByte": 1036,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "directPrimary",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 2,
+            "endLine": 2,
+            "startByte": 8,
+            "endByte": 61,
+            "startColumn": 7,
+            "endColumn": 60
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "direct_binding",
+          "strategy": "direct_call",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "aliasedPrimary",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 53,
+              "endLine": 53,
+              "startByte": 1017,
+              "endByte": 1033,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "aliasBindingCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 52,
+              "endLine": 54,
+              "startByte": 968,
+              "endByte": 1036,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "alias_binding",
+            "subject": "alias_binding:alias_binding",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 53,
+              "endLine": 53,
+              "startByte": 1017,
+              "endByte": 1033,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "direct_symbol_binding",
+            "subject": "alias_binding:direct_symbol_binding",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 53,
+              "endLine": 53,
+              "startByte": 1017,
+              "endByte": 1033,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "directPrimary",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 2,
+              "endLine": 2,
+              "startByte": 8,
+              "endByte": 61,
+              "startColumn": 7,
+              "endColumn": 60
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "optional_receiver",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 57,
+            "endLine": 57,
+            "startByte": 1143,
+            "endByte": 1160,
+            "startColumn": 11,
+            "endColumn": 28
+          },
+          "text": "worker?.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "optionalReceiverCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 56,
+            "endLine": 58,
+            "startByte": 1045,
+            "endByte": 1163,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "PrimaryWorker.request",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 7,
+            "endLine": 7,
+            "startByte": 196,
+            "endByte": 235,
+            "startColumn": 4,
+            "endColumn": 43
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "worker?.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 57,
+              "endLine": 57,
+              "startByte": 1143,
+              "endByte": 1160,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "optionalReceiverCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 56,
+              "endLine": 58,
+              "startByte": 1045,
+              "endByte": 1163,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "PrimaryWorker | undefined",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 57,
+              "endLine": 57,
+              "startByte": 1143,
+              "endByte": 1160,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "optional_receiver",
+            "subject": "optional_receiver:optional_receiver",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 57,
+              "endLine": 57,
+              "startByte": 1143,
+              "endByte": 1160,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "PrimaryWorker.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 7,
+              "endLine": 7,
+              "startByte": 196,
+              "endByte": 235,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "inheritance_dispatch",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 61,
+            "endLine": 61,
+            "startByte": 1228,
+            "endByte": 1259,
+            "startColumn": 11,
+            "endColumn": 42
+          },
+          "text": "new DerivedWorker().inherited()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "inheritanceDispatchCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 60,
+            "endLine": 62,
+            "startByte": 1172,
+            "endByte": 1262,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "target": {
+          "ref": "target.base",
+          "label": "BaseWorker.inherited",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 27,
+            "endLine": 27,
+            "startByte": 577,
+            "endByte": 615,
+            "startColumn": 4,
+            "endColumn": 42
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "new DerivedWorker().inherited",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 61,
+              "endLine": 61,
+              "startByte": 1228,
+              "endByte": 1259,
+              "startColumn": 11,
+              "endColumn": 42
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "inheritanceDispatchCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 60,
+              "endLine": 62,
+              "startByte": 1172,
+              "endByte": 1262,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "DerivedWorker",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 61,
+              "endLine": 61,
+              "startByte": 1228,
+              "endByte": 1259,
+              "startColumn": 11,
+              "endColumn": 42
+            }
+          },
+          {
+            "kind": "inheritance",
+            "subject": "inheritance_dispatch:inheritance",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 61,
+              "endLine": 61,
+              "startByte": 1228,
+              "endByte": 1259,
+              "startColumn": 11,
+              "endColumn": 42
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "BaseWorker.inherited",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 27,
+              "endLine": 27,
+              "startByte": 577,
+              "endByte": 615,
+              "startColumn": 4,
+              "endColumn": 42
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "interface_dispatch",
+      "status": "ok",
+      "observation": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 65,
+            "endLine": 65,
+            "startByte": 1347,
+            "endByte": 1364,
+            "startColumn": 11,
+            "endColumn": 28
+          },
+          "text": "worker.dispatch()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "interfaceDispatchCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 64,
+            "endLine": 66,
+            "startByte": 1271,
+            "endByte": 1367,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "alternatives": [
+          {
+            "ref": "target.impl_a",
+            "label": "ImplA.dispatch",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 37,
+              "endLine": 37,
+              "startByte": 781,
+              "endByte": 820,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          },
+          {
+            "ref": "target.impl_b",
+            "label": "ImplB.dispatch",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 41,
+              "endLine": 41,
+              "startByte": 875,
+              "endByte": 914,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "mechanism": {
+          "authority": "ambiguous",
+          "strategy": "interface_dispatch",
+          "detail": "TypeScript compiler evidence: multiple_executable_targets."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "worker.dispatch",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "interfaceDispatchCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 64,
+              "endLine": 66,
+              "startByte": 1271,
+              "endByte": 1367,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "WorkerContract",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "interface_contract",
+            "subject": "interface_dispatch:interface_contract",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "candidate_set",
+            "subject": "ImplA.dispatch, ImplB.dispatch",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "ambiguity",
+            "subject": "multiple_executable_targets",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          }
+        ],
+        "unresolvedEvidence": [
+          {
+            "kind": "unresolved_dependency",
+            "subject": "multiple_executable_targets",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 65,
+              "endLine": 65,
+              "startByte": 1347,
+              "endByte": 1364,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          }
+        ]
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "overload_ambiguity",
+      "status": "ok",
+      "observation": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 69,
+            "endLine": 69,
+            "startByte": 1440,
+            "endByte": 1457,
+            "startColumn": 11,
+            "endColumn": 28
+          },
+          "text": "overloaded()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "overloadAmbiguityCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 68,
+            "endLine": 70,
+            "startByte": 1376,
+            "endByte": 1460,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "alternatives": [
+          {
+            "ref": "target.overload_a",
+            "label": "overloaded",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 44,
+              "endLine": 44,
+              "startByte": 925,
+              "endByte": 968,
+              "startColumn": 7,
+              "endColumn": 50
+            }
+          },
+          {
+            "ref": "target.overload_b",
+            "label": "overloaded",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 45,
+              "endLine": 45,
+              "startByte": 976,
+              "endByte": 1019,
+              "startColumn": 7,
+              "endColumn": 50
+            }
+          }
+        ],
+        "mechanism": {
+          "authority": "ambiguous",
+          "strategy": "overload_resolution",
+          "detail": "TypeScript compiler evidence: multiple_overload_candidates."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "overloaded",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 69,
+              "endLine": 69,
+              "startByte": 1440,
+              "endByte": 1457,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "overloadAmbiguityCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 68,
+              "endLine": 70,
+              "startByte": 1376,
+              "endByte": 1460,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "overload_candidate",
+            "subject": "overload_ambiguity:overload_candidate",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 69,
+              "endLine": 69,
+              "startByte": 1440,
+              "endByte": 1457,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "candidate_set",
+            "subject": "overloaded, overloaded",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 69,
+              "endLine": 69,
+              "startByte": 1440,
+              "endByte": 1457,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          },
+          {
+            "kind": "ambiguity",
+            "subject": "multiple_overload_candidates",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 69,
+              "endLine": 69,
+              "startByte": 1440,
+              "endByte": 1457,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          }
+        ],
+        "unresolvedEvidence": [
+          {
+            "kind": "unresolved_dependency",
+            "subject": "multiple_overload_candidates",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 69,
+              "endLine": 69,
+              "startByte": 1440,
+              "endByte": 1457,
+              "startColumn": 11,
+              "endColumn": 28
+            }
+          }
+        ]
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "branch_conflicted_origins",
+      "status": "ok",
+      "observation": {
+        "decision": "ambiguous",
+        "relationshipType": "REFERENCES",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 79,
+            "endLine": 79,
+            "startByte": 1678,
+            "endByte": 1694,
+            "startColumn": 11,
+            "endColumn": 27
+          },
+          "text": "worker.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "branchConflictedOriginsCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 72,
+            "endLine": 80,
+            "startByte": 1469,
+            "endByte": 1697,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "alternatives": [
+          {
+            "ref": "target.branch_a",
+            "label": "StructuralA.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 19,
+              "endLine": 19,
+              "startByte": 420,
+              "endByte": 464,
+              "startColumn": 4,
+              "endColumn": 48
+            }
+          },
+          {
+            "ref": "target.branch_b",
+            "label": "StructuralB.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 23,
+              "endLine": 23,
+              "startByte": 499,
+              "endByte": 543,
+              "startColumn": 4,
+              "endColumn": 48
+            }
+          }
+        ],
+        "mechanism": {
+          "authority": "ambiguous",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: multiple_executable_targets."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "worker.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "branchConflictedOriginsCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 72,
+              "endLine": 80,
+              "startByte": 1469,
+              "endByte": 1697,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "StructuralA",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "branch_origin",
+            "subject": "branch_conflicted_origins:branch_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "candidate_set",
+            "subject": "StructuralA.request, StructuralB.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "ambiguity",
+            "subject": "multiple_executable_targets",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          }
+        ],
+        "unresolvedEvidence": [
+          {
+            "kind": "unresolved_dependency",
+            "subject": "multiple_executable_targets",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 79,
+              "endLine": 79,
+              "startByte": 1678,
+              "endByte": 1694,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          }
+        ]
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "dynamic_unresolved",
+      "status": "ok",
+      "observation": {
+        "decision": "unresolved",
+        "relationshipType": "REFERENCES",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 83,
+            "endLine": 83,
+            "startByte": 1771,
+            "endByte": 1786,
+            "startColumn": 11,
+            "endColumn": 26
+          },
+          "text": "value.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "dynamicUnresolvedCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 82,
+            "endLine": 84,
+            "startByte": 1706,
+            "endByte": 1789,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "unresolved",
+          "strategy": "dynamic_dispatch",
+          "detail": "TypeScript compiler evidence: dynamic_receiver."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "value.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 83,
+              "endLine": 83,
+              "startByte": 1771,
+              "endByte": 1786,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "dynamicUnresolvedCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 82,
+              "endLine": 84,
+              "startByte": 1706,
+              "endByte": 1789,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "any",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 83,
+              "endLine": 83,
+              "startByte": 1771,
+              "endByte": 1786,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          },
+          {
+            "kind": "dynamic_construct",
+            "subject": "dynamic_unresolved:dynamic_construct",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 83,
+              "endLine": 83,
+              "startByte": 1771,
+              "endByte": 1786,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          }
+        ],
+        "unresolvedEvidence": [
+          {
+            "kind": "unresolved_dependency",
+            "subject": "dynamic_receiver",
+            "detail": "Provider classified the construct as an explicit unsupported/dynamic boundary.",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 83,
+              "endLine": 83,
+              "startByte": 1771,
+              "endByte": 1786,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          },
+          {
+            "kind": "provider_specific",
+            "subject": "native_decision=unsupported",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 83,
+              "endLine": 83,
+              "startByte": 1771,
+              "endByte": 1786,
+              "startColumn": 11,
+              "endColumn": 26
+            }
+          }
+        ]
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    },
+    {
+      "caseId": "wrong_target_decoy",
+      "status": "ok",
+      "observation": {
+        "decision": "resolved",
+        "relationshipType": "CALLS",
+        "callSite": {
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 88,
+            "endLine": 88,
+            "startByte": 1891,
+            "endByte": 1907,
+            "startColumn": 11,
+            "endColumn": 27
+          },
+          "text": "worker.request()"
+        },
+        "source": {
+          "ref": "caller",
+          "label": "wrongTargetDecoyCase",
+          "file": "fixture/cases.ts",
+          "span": {
+            "startLine": 86,
+            "endLine": 89,
+            "startByte": 1798,
+            "endByte": 1910,
+            "startColumn": 7,
+            "endColumn": 1
+          }
+        },
+        "target": {
+          "ref": "target.primary",
+          "label": "PrimaryWorker.request",
+          "file": "fixture/targets.ts",
+          "span": {
+            "startLine": 7,
+            "endLine": 7,
+            "startByte": 196,
+            "endByte": 235,
+            "startColumn": 4,
+            "endColumn": 43
+          }
+        },
+        "alternatives": [],
+        "mechanism": {
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "detail": "TypeScript compiler evidence: single_executable_target."
+        },
+        "evidence": [
+          {
+            "kind": "call_site",
+            "subject": "worker.request",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 88,
+              "endLine": 88,
+              "startByte": 1891,
+              "endByte": 1907,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "caller_identity",
+            "subject": "wrongTargetDecoyCase",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 86,
+              "endLine": 89,
+              "startByte": 1798,
+              "endByte": 1910,
+              "startColumn": 7,
+              "endColumn": 1
+            }
+          },
+          {
+            "kind": "receiver_type",
+            "subject": "PrimaryWorker",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 88,
+              "endLine": 88,
+              "startByte": 1891,
+              "endByte": 1907,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "assignment_origin",
+            "subject": "wrong_target_decoy:assignment_origin",
+            "file": "fixture/cases.ts",
+            "span": {
+              "startLine": 88,
+              "endLine": 88,
+              "startByte": 1891,
+              "endByte": 1907,
+              "startColumn": 11,
+              "endColumn": 27
+            }
+          },
+          {
+            "kind": "target_provenance",
+            "subject": "PrimaryWorker.request",
+            "file": "fixture/targets.ts",
+            "span": {
+              "startLine": 7,
+              "endLine": 7,
+              "startByte": 196,
+              "endByte": 235,
+              "startColumn": 4,
+              "endColumn": 43
+            }
+          }
+        ],
+        "unresolvedEvidence": []
+      },
+      "measurements": [
+        {
+          "wallMs": 33.642736250000006,
+          "inputBytes": 3020
+        }
+      ]
+    }
+  ],
+  "runMeasurements": [
+    {
+      "wallMs": 403.821855,
+      "cpuUserMs": 703.194,
+      "cpuSystemMs": 101.089,
+      "peakRssBytes": 252530688,
+      "inputBytes": 3020,
+      "outputBytes": 46470
+    }
+  ]
+}

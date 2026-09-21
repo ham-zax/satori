@@ -1,0 +1,1648 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-21T05:05:37.612Z",
+  "family": "semantic_relationship_qualification",
+  "provider": {
+    "id": "satori-typescript-compiler",
+    "version": "ts-compiler-v2",
+    "adapterVersion": "typescript-qualification-v1"
+  },
+  "language": "typescript",
+  "sourceReport": "../satori-ts-semantic-t1/evals/typescript-semantic-provider-t2/provider-report.json",
+  "sourceCorpus": "evals/semantic-relationship-qualification/corpus.json",
+  "sourceOverlays": [],
+  "corpusVersion": 1,
+  "qualificationSets": [
+    {
+      "family": "common",
+      "id": "common-v1"
+    }
+  ],
+  "deterministic": {
+    "totalCases": 12,
+    "scoredCases": 12,
+    "observationOnlyCases": 0,
+    "coverage": {
+      "ok": 12,
+      "unsupported": 0,
+      "error": 0,
+      "missing": 0,
+      "okRate": 1
+    },
+    "exactness": {
+      "decisionExact": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "relationshipTypeExact": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "semanticExact": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "strictCaseExact": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "authorityAgreement": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "strategyAgreement": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "evidenceContractExact": {
+        "count": 12,
+        "total": 12,
+        "rate": 1
+      },
+      "safeAbstentionExact": {
+        "count": 4,
+        "total": 4,
+        "rate": 1
+      },
+      "candidateSetExact": {
+        "count": 3,
+        "total": 3,
+        "rate": 1
+      },
+      "ambiguousCandidateExact": {
+        "count": 3,
+        "total": 3,
+        "rate": 1
+      },
+      "unsupportedExact": {
+        "count": 0,
+        "total": 0,
+        "rate": null
+      },
+      "decoyAvoidance": {
+        "count": 8,
+        "total": 8,
+        "rate": 1,
+        "hits": 0
+      },
+      "falseResolvedCount": 0,
+      "wrongTargetCount": 0
+    },
+    "resolvedTarget": {
+      "truePositive": 8,
+      "falsePositive": 0,
+      "falseNegative": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "cases": [
+      {
+        "caseId": "direct_call",
+        "construct": "direct calls",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "direct_binding",
+          "strategy": "direct_call",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "direct_symbol_binding",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "class_field_receiver",
+        "construct": "class-field receiver calls",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "field_origin",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "constructor_parameter_property",
+        "construct": "constructor parameter properties",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "constructor_origin",
+            "field_origin",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "constructor_assignment_origin",
+        "construct": "constructor assignment/origin flow",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "assignment_origin",
+            "call_site",
+            "caller_identity",
+            "constructor_origin",
+            "field_origin",
+            "flow_hop",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "alias_binding",
+        "construct": "aliases",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "direct_binding",
+          "strategy": "direct_call",
+          "evidenceKinds": [
+            "alias_binding",
+            "call_site",
+            "caller_identity",
+            "direct_symbol_binding",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "optional_receiver",
+        "construct": "optional receivers",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "optional_receiver",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "inheritance_dispatch",
+        "construct": "inheritance",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.base",
+          "alternativeRefs": [],
+          "authority": "direct_binding",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "inheritance",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      },
+      {
+        "caseId": "interface_dispatch",
+        "construct": "interface dispatch",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "ambiguous",
+          "relationshipType": "REFERENCES",
+          "targetRef": null,
+          "alternativeRefs": [
+            "target.impl_a",
+            "target.impl_b"
+          ],
+          "authority": "ambiguous",
+          "strategy": "interface_dispatch",
+          "evidenceKinds": [
+            "ambiguity",
+            "call_site",
+            "caller_identity",
+            "candidate_set",
+            "interface_contract",
+            "receiver_type",
+            "unresolved_dependency"
+          ]
+        }
+      },
+      {
+        "caseId": "overload_ambiguity",
+        "construct": "overload ambiguity",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "ambiguous",
+          "relationshipType": "REFERENCES",
+          "targetRef": null,
+          "alternativeRefs": [
+            "target.overload_a",
+            "target.overload_b"
+          ],
+          "authority": "ambiguous",
+          "strategy": "overload_resolution",
+          "evidenceKinds": [
+            "ambiguity",
+            "call_site",
+            "caller_identity",
+            "candidate_set",
+            "overload_candidate",
+            "unresolved_dependency"
+          ]
+        }
+      },
+      {
+        "caseId": "branch_conflicted_origins",
+        "construct": "branch-conflicted origins",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "ambiguous",
+          "relationshipType": "REFERENCES",
+          "targetRef": null,
+          "alternativeRefs": [
+            "target.branch_a",
+            "target.branch_b"
+          ],
+          "authority": "ambiguous",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "ambiguity",
+            "branch_origin",
+            "call_site",
+            "caller_identity",
+            "candidate_set",
+            "receiver_type",
+            "unresolved_dependency"
+          ]
+        }
+      },
+      {
+        "caseId": "dynamic_unresolved",
+        "construct": "unresolved/dynamic constructs",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "unresolved",
+          "relationshipType": "REFERENCES",
+          "targetRef": null,
+          "alternativeRefs": [],
+          "authority": "unresolved",
+          "strategy": "dynamic_dispatch",
+          "evidenceKinds": [
+            "call_site",
+            "caller_identity",
+            "dynamic_construct",
+            "provider_specific",
+            "receiver_type",
+            "unresolved_dependency"
+          ]
+        }
+      },
+      {
+        "caseId": "wrong_target_decoy",
+        "construct": "wrong-target decoys",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "oracle": {
+          "mode": "exact",
+          "claim": "relationship"
+        },
+        "status": "ok",
+        "checks": {
+          "resultStatus": true,
+          "decision": true,
+          "relationshipType": true,
+          "target": true,
+          "candidates": true,
+          "authority": true,
+          "strategy": true,
+          "evidence": true,
+          "decoyAvoidance": true
+        },
+        "semanticExact": true,
+        "strictCaseExact": true,
+        "observed": {
+          "decision": "resolved",
+          "relationshipType": "CALLS",
+          "targetRef": "target.primary",
+          "alternativeRefs": [],
+          "authority": "origin_flow",
+          "strategy": "type_dispatch",
+          "evidenceKinds": [
+            "assignment_origin",
+            "call_site",
+            "caller_identity",
+            "receiver_type",
+            "target_provenance"
+          ]
+        }
+      }
+    ],
+    "qualificationFamilies": [
+      {
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "totalCases": 12,
+        "scoredCases": 12,
+        "observationOnlyCases": 0,
+        "coverage": {
+          "ok": 12,
+          "unsupported": 0,
+          "error": 0,
+          "missing": 0,
+          "okRate": 1
+        },
+        "exactness": {
+          "decisionExact": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "relationshipTypeExact": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "semanticExact": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "strictCaseExact": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "authorityAgreement": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "strategyAgreement": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "evidenceContractExact": {
+            "count": 12,
+            "total": 12,
+            "rate": 1
+          },
+          "safeAbstentionExact": {
+            "count": 4,
+            "total": 4,
+            "rate": 1
+          },
+          "candidateSetExact": {
+            "count": 3,
+            "total": 3,
+            "rate": 1
+          },
+          "ambiguousCandidateExact": {
+            "count": 3,
+            "total": 3,
+            "rate": 1
+          },
+          "unsupportedExact": {
+            "count": 0,
+            "total": 0,
+            "rate": null
+          },
+          "decoyAvoidance": {
+            "count": 8,
+            "total": 8,
+            "rate": 1,
+            "hits": 0
+          },
+          "falseResolvedCount": 0,
+          "wrongTargetCount": 0
+        },
+        "resolvedTarget": {
+          "truePositive": 8,
+          "falsePositive": 0,
+          "falseNegative": 0,
+          "precision": 1,
+          "recall": 1,
+          "f1": 1
+        },
+        "cases": [
+          {
+            "caseId": "direct_call",
+            "construct": "direct calls",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "direct_binding",
+              "strategy": "direct_call",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "direct_symbol_binding",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "class_field_receiver",
+            "construct": "class-field receiver calls",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "direct_binding",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "field_origin",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "constructor_parameter_property",
+            "construct": "constructor parameter properties",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "origin_flow",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "constructor_origin",
+                "field_origin",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "constructor_assignment_origin",
+            "construct": "constructor assignment/origin flow",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "origin_flow",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "assignment_origin",
+                "call_site",
+                "caller_identity",
+                "constructor_origin",
+                "field_origin",
+                "flow_hop",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "alias_binding",
+            "construct": "aliases",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "direct_binding",
+              "strategy": "direct_call",
+              "evidenceKinds": [
+                "alias_binding",
+                "call_site",
+                "caller_identity",
+                "direct_symbol_binding",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "optional_receiver",
+            "construct": "optional receivers",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "direct_binding",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "optional_receiver",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "inheritance_dispatch",
+            "construct": "inheritance",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.base",
+              "alternativeRefs": [],
+              "authority": "direct_binding",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "inheritance",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          },
+          {
+            "caseId": "interface_dispatch",
+            "construct": "interface dispatch",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "ambiguous",
+              "relationshipType": "REFERENCES",
+              "targetRef": null,
+              "alternativeRefs": [
+                "target.impl_a",
+                "target.impl_b"
+              ],
+              "authority": "ambiguous",
+              "strategy": "interface_dispatch",
+              "evidenceKinds": [
+                "ambiguity",
+                "call_site",
+                "caller_identity",
+                "candidate_set",
+                "interface_contract",
+                "receiver_type",
+                "unresolved_dependency"
+              ]
+            }
+          },
+          {
+            "caseId": "overload_ambiguity",
+            "construct": "overload ambiguity",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "ambiguous",
+              "relationshipType": "REFERENCES",
+              "targetRef": null,
+              "alternativeRefs": [
+                "target.overload_a",
+                "target.overload_b"
+              ],
+              "authority": "ambiguous",
+              "strategy": "overload_resolution",
+              "evidenceKinds": [
+                "ambiguity",
+                "call_site",
+                "caller_identity",
+                "candidate_set",
+                "overload_candidate",
+                "unresolved_dependency"
+              ]
+            }
+          },
+          {
+            "caseId": "branch_conflicted_origins",
+            "construct": "branch-conflicted origins",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "ambiguous",
+              "relationshipType": "REFERENCES",
+              "targetRef": null,
+              "alternativeRefs": [
+                "target.branch_a",
+                "target.branch_b"
+              ],
+              "authority": "ambiguous",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "ambiguity",
+                "branch_origin",
+                "call_site",
+                "caller_identity",
+                "candidate_set",
+                "receiver_type",
+                "unresolved_dependency"
+              ]
+            }
+          },
+          {
+            "caseId": "dynamic_unresolved",
+            "construct": "unresolved/dynamic constructs",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "unresolved",
+              "relationshipType": "REFERENCES",
+              "targetRef": null,
+              "alternativeRefs": [],
+              "authority": "unresolved",
+              "strategy": "dynamic_dispatch",
+              "evidenceKinds": [
+                "call_site",
+                "caller_identity",
+                "dynamic_construct",
+                "provider_specific",
+                "receiver_type",
+                "unresolved_dependency"
+              ]
+            }
+          },
+          {
+            "caseId": "wrong_target_decoy",
+            "construct": "wrong-target decoys",
+            "qualification": {
+              "family": "common",
+              "id": "common-v1"
+            },
+            "oracle": {
+              "mode": "exact",
+              "claim": "relationship"
+            },
+            "status": "ok",
+            "checks": {
+              "resultStatus": true,
+              "decision": true,
+              "relationshipType": true,
+              "target": true,
+              "candidates": true,
+              "authority": true,
+              "strategy": true,
+              "evidence": true,
+              "decoyAvoidance": true
+            },
+            "semanticExact": true,
+            "strictCaseExact": true,
+            "observed": {
+              "decision": "resolved",
+              "relationshipType": "CALLS",
+              "targetRef": "target.primary",
+              "alternativeRefs": [],
+              "authority": "origin_flow",
+              "strategy": "type_dispatch",
+              "evidenceKinds": [
+                "assignment_origin",
+                "call_site",
+                "caller_identity",
+                "receiver_type",
+                "target_provenance"
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "qualitative": {
+    "status": "skipped",
+    "reason": "deterministic_only"
+  },
+  "performance": {
+    "measuredCases": 12,
+    "caseSamples": 12,
+    "byCase": [
+      {
+        "caseId": "direct_call",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "class_field_receiver",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "constructor_parameter_property",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "constructor_assignment_origin",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "alias_binding",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "optional_receiver",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "inheritance_dispatch",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "interface_dispatch",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "overload_ambiguity",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "branch_conflicted_origins",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "dynamic_unresolved",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      },
+      {
+        "caseId": "wrong_target_decoy",
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "samples": 1,
+        "metrics": {
+          "wallMs": {
+            "samples": 1,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 1,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      }
+    ],
+    "aggregateCaseSamples": {
+      "wallMs": {
+        "samples": 12,
+        "min": 33.642736250000006,
+        "max": 33.642736250000006,
+        "mean": 33.6427,
+        "p50": 33.642736250000006,
+        "p95": 33.642736250000006
+      },
+      "inputBytes": {
+        "samples": 12,
+        "min": 3020,
+        "max": 3020,
+        "mean": 3020,
+        "p50": 3020,
+        "p95": 3020
+      }
+    },
+    "qualificationFamilies": [
+      {
+        "qualification": {
+          "family": "common",
+          "id": "common-v1"
+        },
+        "measuredCases": 12,
+        "caseSamples": 12,
+        "aggregateCaseSamples": {
+          "wallMs": {
+            "samples": 12,
+            "min": 33.642736250000006,
+            "max": 33.642736250000006,
+            "mean": 33.6427,
+            "p50": 33.642736250000006,
+            "p95": 33.642736250000006
+          },
+          "inputBytes": {
+            "samples": 12,
+            "min": 3020,
+            "max": 3020,
+            "mean": 3020,
+            "p50": 3020,
+            "p95": 3020
+          }
+        }
+      }
+    ],
+    "runSamples": 1,
+    "aggregateRunSamples": {
+      "wallMs": {
+        "samples": 1,
+        "min": 403.821855,
+        "max": 403.821855,
+        "mean": 403.8219,
+        "p50": 403.821855,
+        "p95": 403.821855
+      },
+      "cpuUserMs": {
+        "samples": 1,
+        "min": 703.194,
+        "max": 703.194,
+        "mean": 703.194,
+        "p50": 703.194,
+        "p95": 703.194
+      },
+      "cpuSystemMs": {
+        "samples": 1,
+        "min": 101.089,
+        "max": 101.089,
+        "mean": 101.089,
+        "p50": 101.089,
+        "p95": 101.089
+      },
+      "peakRssBytes": {
+        "samples": 1,
+        "min": 252530688,
+        "max": 252530688,
+        "mean": 252530688,
+        "p50": 252530688,
+        "p95": 252530688
+      },
+      "inputBytes": {
+        "samples": 1,
+        "min": 3020,
+        "max": 3020,
+        "mean": 3020,
+        "p50": 3020,
+        "p95": 3020
+      },
+      "outputBytes": {
+        "samples": 1,
+        "min": 46470,
+        "max": 46470,
+        "mean": 46470,
+        "p50": 46470,
+        "p95": 46470
+      },
+      "cpuTotalMs": {
+        "samples": 1,
+        "min": 804.2829999999999,
+        "max": 804.2829999999999,
+        "mean": 804.283,
+        "p50": 804.2829999999999,
+        "p95": 804.2829999999999
+      }
+    }
+  }
+}

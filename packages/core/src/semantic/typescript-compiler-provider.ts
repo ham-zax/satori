@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v1';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v2';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -24,7 +24,7 @@ export type TypeScriptSemanticReason =
     | 'generic_receiver'
     | 'dynamic_callee'
     | 'missing_symbol'
-    | 'origin_unknown_after_write'
+    | 'multiple_overload_candidates'
     | 'target_not_indexable';
 
 export type TypeScriptSemanticTargetKind = 'function' | 'method' | 'constructor';
@@ -53,6 +53,7 @@ export interface TypeScriptProjectEvidence {
     readonly language: 'typescript';
     readonly providerId: typeof TYPESCRIPT_COMPILER_PROVIDER_ID;
     readonly providerVersion: typeof TYPESCRIPT_COMPILER_PROVIDER_VERSION;
+    readonly compilerVersion: string;
     readonly occurrencesByFile: ReadonlyMap<string, readonly TypeScriptCallEvidence[]>;
     readonly diagnostics?: {
         readonly syntactic: number;
@@ -78,6 +79,11 @@ interface CandidateSet {
     readonly reason: TypeScriptSemanticReason;
     readonly receiverType?: string;
     readonly targets: readonly TypeScriptSemanticTarget[];
+}
+
+interface ProjectDispatchContext {
+    readonly classTypes: readonly ts.Type[];
+    readonly targetsByTypeAndMember: Map<ts.Type, Map<string, readonly TypeScriptSemanticTarget[]>>;
 }
 
 function normalizeProjectPath(filePath: string): string {
@@ -283,8 +289,9 @@ function registryCompatibleDeclarationStart(
 function targetFromDeclaration(
     declaration: ts.Declaration,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    allowDeclarationOnly = false,
 ): TypeScriptSemanticTarget | undefined {
-    if (!isExecutableDeclaration(declaration) || !isSatoriIndexableDeclaration(declaration)) {
+    if ((!allowDeclarationOnly && !isExecutableDeclaration(declaration)) || !isSatoriIndexableDeclaration(declaration)) {
         return undefined;
     }
 
@@ -402,10 +409,85 @@ function receiverForExpression(expression: ts.LeftHandSideExpression): ts.Expres
     return undefined;
 }
 
-interface LocalOriginState {
-    readonly touched: boolean;
-    readonly known: boolean;
-    readonly targets: readonly TypeScriptSemanticTarget[];
+function collectProjectDispatchContext(
+    checker: ts.TypeChecker,
+    program: ts.Program,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): ProjectDispatchContext {
+    const classTypes: ts.Type[] = [];
+    for (const sourceFile of program.getSourceFiles()) {
+        const normalized = path.posix.normalize(sourceFile.fileName.replace(/\\/g, '/'));
+        if (!projectFilesByVirtualPath.has(normalized)) continue;
+        const visit = (node: ts.Node): void => {
+            if (ts.isClassDeclaration(node) && node.name) {
+                const isAbstract = node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword);
+                if (!isAbstract) {
+                    const symbol = checker.getSymbolAtLocation(node.name);
+                    if (symbol) {
+                        classTypes.push(checker.getDeclaredTypeOfSymbol(symbol));
+                    }
+                }
+            }
+            ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+    }
+    return {
+        classTypes,
+        targetsByTypeAndMember: new Map(),
+    };
+}
+
+function dispatchTargetsForType(
+    checker: ts.TypeChecker,
+    receiverType: ts.Type,
+    propertyName: string,
+    dispatchContext: ProjectDispatchContext,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): readonly TypeScriptSemanticTarget[] {
+    const cachedByMember = dispatchContext.targetsByTypeAndMember.get(receiverType);
+    const cached = cachedByMember?.get(propertyName);
+    if (cached) return cached;
+
+    const targets: TypeScriptSemanticTarget[] = [];
+    for (const candidateType of dispatchContext.classTypes) {
+        if (!checker.isTypeAssignableTo(candidateType, receiverType)) continue;
+        const property = checker.getPropertyOfType(candidateType, propertyName);
+        if (!property) continue;
+        targets.push(...implementationsForSymbol(checker, property, projectFilesByVirtualPath));
+    }
+
+    const unique = uniqueTargets(targets);
+    const byMember = cachedByMember ?? new Map<string, readonly TypeScriptSemanticTarget[]>();
+    byMember.set(propertyName, unique);
+    if (!cachedByMember) dispatchContext.targetsByTypeAndMember.set(receiverType, byMember);
+    return unique;
+}
+
+function hasUncertainArgument(
+    checker: ts.TypeChecker,
+    call: ts.CallExpression | ts.NewExpression,
+): boolean {
+    return (call.arguments ?? []).some((argument) => {
+        const type = checker.getTypeAtLocation(argument);
+        return (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0;
+    });
+}
+
+function overloadCandidates(
+    checker: ts.TypeChecker,
+    call: ts.CallExpression | ts.NewExpression,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): readonly TypeScriptSemanticTarget[] {
+    if (!hasUncertainArgument(checker, call)) return [];
+    const signatures: ts.Signature[] = [];
+    checker.getResolvedSignature(call, signatures);
+    if (signatures.length <= 1) return [];
+    return uniqueTargets(signatures
+        .map((signature) => signature.declaration
+            ? targetFromDeclaration(signature.declaration, projectFilesByVirtualPath, true)
+            : undefined)
+        .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
 }
 
 function assignmentTargetsForExpression(
@@ -413,6 +495,7 @@ function assignmentTargetsForExpression(
     expression: ts.Expression,
     propertyName: string,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    seenSymbols = new Set<ts.Symbol>(),
 ): readonly TypeScriptSemanticTarget[] | undefined {
     let current = expression;
     while (
@@ -431,15 +514,63 @@ function assignmentTargetsForExpression(
             current.whenTrue,
             propertyName,
             projectFilesByVirtualPath,
+            seenSymbols,
         );
         const whenFalse = assignmentTargetsForExpression(
             checker,
             current.whenFalse,
             propertyName,
             projectFilesByVirtualPath,
+            seenSymbols,
         );
         if (!whenTrue || !whenFalse) return undefined;
         return uniqueTargets([...whenTrue, ...whenFalse]);
+    }
+
+    if (ts.isIdentifier(current)) {
+        const symbol = symbolAtIdentifier(checker, current);
+        if (!symbol || seenSymbols.has(symbol)) return undefined;
+        const declaration = symbol.valueDeclaration;
+        if (
+            !declaration
+            || !ts.isVariableDeclaration(declaration)
+            || !declaration.initializer
+            || !ts.isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & ts.NodeFlags.Const) === 0
+        ) {
+            return undefined;
+        }
+        const nextSeen = new Set(seenSymbols);
+        nextSeen.add(symbol);
+        return assignmentTargetsForExpression(
+            checker,
+            declaration.initializer,
+            propertyName,
+            projectFilesByVirtualPath,
+            nextSeen,
+        );
+    }
+
+    if (
+        ts.isPropertyAccessExpression(current)
+        && current.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+        const property = resolvedSymbol(checker, checker.getSymbolAtLocation(current.name));
+        const declaration = property?.valueDeclaration;
+        if (
+            declaration
+            && ts.isPropertyDeclaration(declaration)
+            && declaration.initializer
+            && declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword)
+        ) {
+            return assignmentTargetsForExpression(
+                checker,
+                declaration.initializer,
+                propertyName,
+                projectFilesByVirtualPath,
+                seenSymbols,
+            );
+        }
     }
 
     if (!ts.isNewExpression(current)) return undefined;
@@ -455,326 +586,39 @@ function symbolAtIdentifier(checker: ts.TypeChecker, node: ts.Identifier): ts.Sy
     return resolvedSymbol(checker, checker.getSymbolAtLocation(node));
 }
 
-function isAssignmentOperator(kind: ts.SyntaxKind): boolean {
-    return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
-}
-
-function nodeContainsSymbol(
-    checker: ts.TypeChecker,
-    node: ts.Node,
-    symbol: ts.Symbol,
-): boolean {
-    let found = false;
-    const visit = (current: ts.Node): void => {
-        if (found) return;
-        if (ts.isIdentifier(current) && symbolAtIdentifier(checker, current) === symbol) {
-            found = true;
-            return;
-        }
-        ts.forEachChild(current, visit);
-    };
-    visit(node);
-    return found;
-}
-
-function nodeContainsWriteToSymbol(
-    checker: ts.TypeChecker,
-    node: ts.Node,
-    symbol: ts.Symbol,
-    beforePosition = Number.POSITIVE_INFINITY,
-): boolean {
-    let found = false;
-    const visit = (current: ts.Node): void => {
-        if (found || current.getStart() >= beforePosition) return;
-        if (
-            ts.isBinaryExpression(current)
-            && isAssignmentOperator(current.operatorToken.kind)
-            && nodeContainsSymbol(checker, current.left, symbol)
-        ) {
-            found = true;
-            return;
-        }
-        if (
-            (ts.isPrefixUnaryExpression(current) || ts.isPostfixUnaryExpression(current))
-            && (current.operator === ts.SyntaxKind.PlusPlusToken || current.operator === ts.SyntaxKind.MinusMinusToken)
-            && nodeContainsSymbol(checker, current.operand, symbol)
-        ) {
-            found = true;
-            return;
-        }
-        ts.forEachChild(current, visit);
-    };
-    visit(node);
-    return found;
-}
-
-function directAssignmentExpression(
-    checker: ts.TypeChecker,
-    statement: ts.Statement,
-    symbol: ts.Symbol,
-): ts.Expression | undefined {
-    if (!ts.isExpressionStatement(statement)) return undefined;
-    const expression = statement.expression;
-    if (
-        !ts.isBinaryExpression(expression)
-        || expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken
-        || !ts.isIdentifier(expression.left)
-        || symbolAtIdentifier(checker, expression.left) !== symbol
-    ) {
-        return undefined;
-    }
-    return expression.right;
-}
-
-function mergeOriginStates(left: LocalOriginState, right: LocalOriginState): LocalOriginState {
-    return {
-        touched: left.touched || right.touched,
-        known: left.known && right.known,
-        targets: uniqueTargets([...left.targets, ...right.targets]),
-    };
-}
-
-function applyOriginStatement(
-    checker: ts.TypeChecker,
-    statement: ts.Statement,
-    symbol: ts.Symbol,
-    propertyName: string,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-    inputState: LocalOriginState,
-): LocalOriginState {
-    const directAssignment = directAssignmentExpression(checker, statement, symbol);
-    if (directAssignment) {
-        const targets = assignmentTargetsForExpression(
-            checker,
-            directAssignment,
-            propertyName,
-            projectFilesByVirtualPath,
-        );
-        return {
-            touched: true,
-            known: Boolean(targets),
-            targets: targets ?? [],
-        };
-    }
-
-    if (ts.isBlock(statement)) {
-        let state = inputState;
-        for (const nested of statement.statements) {
-            state = applyOriginStatement(
-                checker,
-                nested,
-                symbol,
-                propertyName,
-                projectFilesByVirtualPath,
-                state,
-            );
-        }
-        return state;
-    }
-
-    if (ts.isIfStatement(statement)) {
-        const thenState = applyOriginStatement(
-            checker,
-            statement.thenStatement,
-            symbol,
-            propertyName,
-            projectFilesByVirtualPath,
-            inputState,
-        );
-        const elseState = statement.elseStatement
-            ? applyOriginStatement(
-                checker,
-                statement.elseStatement,
-                symbol,
-                propertyName,
-                projectFilesByVirtualPath,
-                inputState,
-            )
-            : inputState;
-        return mergeOriginStates(thenState, elseState);
-    }
-
-    if (nodeContainsWriteToSymbol(checker, statement, symbol)) {
-        return {
-            touched: true,
-            known: false,
-            targets: [],
-        };
-    }
-
-    return inputState;
-}
-
-function nearestStatement(node: ts.Node): ts.Statement | undefined {
-    let current: ts.Node | undefined = node;
-    while (current && !ts.isStatement(current)) current = current.parent;
-    return current && ts.isStatement(current) ? current : undefined;
-}
-
-function statementContainer(statement: ts.Statement): ts.Block | ts.SourceFile | undefined {
-    return ts.isBlock(statement.parent) || ts.isSourceFile(statement.parent)
-        ? statement.parent
-        : undefined;
-}
-
-function containingFunctionBody(node: ts.Node): ts.Block | ts.SourceFile | undefined {
-    let current: ts.Node | undefined = node;
-    while (current) {
-        if (ts.isFunctionLike(current) && 'body' in current) {
-            const body = current.body;
-            if (body && ts.isBlock(body)) return body;
-        }
-        if (ts.isSourceFile(current)) return current;
-        current = current.parent;
-    }
-    return undefined;
-}
-
-function localOriginCandidates(
+function immutableLocalOriginCandidates(
     checker: ts.TypeChecker,
     receiver: ts.Expression,
-    call: ts.CallExpression | ts.NewExpression,
     propertyName: string,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): CandidateSet | undefined {
     if (!ts.isIdentifier(receiver)) return undefined;
 
     const symbol = symbolAtIdentifier(checker, receiver);
-    if (!symbol) return undefined;
-    const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
-    if (!declaration || (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration))) {
+    const declaration = symbol?.valueDeclaration;
+    if (
+        !declaration
+        || !ts.isVariableDeclaration(declaration)
+        || !declaration.initializer
+        || !ts.isVariableDeclarationList(declaration.parent)
+        || (declaration.parent.flags & ts.NodeFlags.Const) === 0
+    ) {
         return undefined;
     }
 
-    const body = containingFunctionBody(call);
-    if (!body) return undefined;
-    const callStatement = nearestStatement(call);
-    if (!callStatement) return undefined;
-    const callStart = call.getStart();
+    const targets = assignmentTargetsForExpression(
+        checker,
+        declaration.initializer,
+        propertyName,
+        projectFilesByVirtualPath,
+    );
+    if (!targets || targets.length === 0) return undefined;
 
-    const hasPriorWrite = nodeContainsWriteToSymbol(checker, body, symbol, callStart);
-
-    let initialState: LocalOriginState = {
-        touched: false,
-        known: false,
-        targets: [],
-    };
-    let firstStatementIndex = 0;
-
-    if (ts.isVariableDeclaration(declaration)) {
-        const declarationStatement = nearestStatement(declaration);
-        if (!declarationStatement) {
-            return hasPriorWrite ? {
-                decision: 'unresolved',
-                reason: 'origin_unknown_after_write',
-                targets: [],
-            } : undefined;
-        }
-        const declarationContainer = statementContainer(declarationStatement);
-        const callContainer = statementContainer(callStatement);
-
-        if (declaration.initializer) {
-            const targets = assignmentTargetsForExpression(
-                checker,
-                declaration.initializer,
-                propertyName,
-                projectFilesByVirtualPath,
-            );
-            initialState = {
-                touched: Boolean(targets),
-                known: Boolean(targets),
-                targets: targets ?? [],
-            };
-        }
-
-        if (!hasPriorWrite) {
-            if (!initialState.touched) return undefined;
-            const targets = uniqueTargets(initialState.targets);
-            return targets.length === 1 ? {
-                decision: 'resolved',
-                reason: 'single_executable_target',
-                targets,
-            } : {
-                decision: 'ambiguous',
-                reason: 'multiple_executable_targets',
-                targets,
-            };
-        }
-
-        if (!declarationContainer || declarationContainer !== callContainer) {
-            return {
-                decision: 'unresolved',
-                reason: 'origin_unknown_after_write',
-                targets: [],
-            };
-        }
-        firstStatementIndex = declarationContainer.statements.indexOf(declarationStatement) + 1;
-    } else {
-        if (!hasPriorWrite) return undefined;
-        const callContainer = statementContainer(callStatement);
-        if (!callContainer || callContainer !== body) {
-            return {
-                decision: 'unresolved',
-                reason: 'origin_unknown_after_write',
-                targets: [],
-            };
-        }
-    }
-
-    const container = statementContainer(callStatement);
-    if (!container) return undefined;
-    const callStatementIndex = container.statements.indexOf(callStatement);
-    if (callStatementIndex < firstStatementIndex) {
-        return {
-            decision: 'unresolved',
-            reason: 'origin_unknown_after_write',
-            targets: [],
-        };
-    }
-
-    let state = initialState;
-    for (let index = firstStatementIndex; index < callStatementIndex; index += 1) {
-        state = applyOriginStatement(
-            checker,
-            container.statements[index],
-            symbol,
-            propertyName,
-            projectFilesByVirtualPath,
-            state,
-        );
-    }
-
-    if (nodeContainsWriteToSymbol(checker, callStatement, symbol, callStart)) {
-        state = { touched: true, known: false, targets: [] };
-    }
-
-    if (!state.touched) return undefined;
-    const targets = uniqueTargets(state.targets);
-    if (!state.known) {
-        return {
-            decision: 'unresolved',
-            reason: 'origin_unknown_after_write',
-            targets,
-        };
-    }
-    if (targets.length > 1) {
-        return {
-            decision: 'ambiguous',
-            reason: 'multiple_executable_targets',
-            targets,
-        };
-    }
-    if (targets.length === 1) {
-        return {
-            decision: 'resolved',
-            reason: 'single_executable_target',
-            targets,
-        };
-    }
+    const unique = uniqueTargets(targets);
     return {
-        decision: 'unresolved',
-        reason: 'origin_unknown_after_write',
-        targets: [],
+        decision: unique.length === 1 ? 'resolved' : 'ambiguous',
+        reason: unique.length === 1 ? 'single_executable_target' : 'multiple_executable_targets',
+        targets: unique,
     };
 }
 
@@ -782,6 +626,7 @@ function memberCandidates(
     checker: ts.TypeChecker,
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    dispatchContext: ProjectDispatchContext,
 ): CandidateSet | undefined {
     const receiver = receiverForExpression(call.expression);
     if (!receiver) return undefined;
@@ -820,10 +665,37 @@ function memberCandidates(
         };
     }
 
-    const originCandidates = localOriginCandidates(
+    const overloads = overloadCandidates(checker, call, projectFilesByVirtualPath);
+    if (overloads.length > 1) {
+        return {
+            decision: 'ambiguous',
+            reason: 'multiple_overload_candidates',
+            receiverType: receiverTypeText,
+            targets: overloads,
+        };
+    }
+
+    if (!ts.isIdentifier(receiver)) {
+        const expressionTargets = assignmentTargetsForExpression(
+            checker,
+            receiver,
+            propertyName,
+            projectFilesByVirtualPath,
+        );
+        if (expressionTargets && expressionTargets.length > 0) {
+            const targets = uniqueTargets(expressionTargets);
+            return {
+                decision: targets.length === 1 ? 'resolved' : 'ambiguous',
+                reason: targets.length === 1 ? 'single_executable_target' : 'multiple_executable_targets',
+                receiverType: receiverTypeText,
+                targets,
+            };
+        }
+    }
+
+    const originCandidates = immutableLocalOriginCandidates(
         checker,
         receiver,
-        call,
         propertyName,
         projectFilesByVirtualPath,
     );
@@ -855,6 +727,18 @@ function memberCandidates(
     for (const branch of branches) {
         if ((branch.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !== 0) {
             unresolvedBranch = true;
+            continue;
+        }
+
+        const dispatchTargets = dispatchTargetsForType(
+            checker,
+            branch,
+            propertyName,
+            dispatchContext,
+            projectFilesByVirtualPath,
+        );
+        if (dispatchTargets.length > 0) {
+            allTargets.push(...dispatchTargets);
             continue;
         }
 
@@ -929,6 +813,15 @@ function directCandidates(
     call: ts.CallExpression | ts.NewExpression,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
 ): CandidateSet {
+    const overloads = overloadCandidates(checker, call, projectFilesByVirtualPath);
+    if (overloads.length > 1) {
+        return {
+            decision: 'ambiguous',
+            reason: 'multiple_overload_candidates',
+            targets: overloads,
+        };
+    }
+
     const symbol = resolvedSymbol(checker, checker.getSymbolAtLocation(call.expression));
     const symbolTargets = implementationsForSymbol(checker, symbol, projectFilesByVirtualPath);
     const signature = signatureTarget(checker, call, projectFilesByVirtualPath);
@@ -963,8 +856,9 @@ function evidenceForCall(
     sourceFile: ts.SourceFile,
     projectFile: ProjectFile,
     projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    dispatchContext: ProjectDispatchContext,
 ): TypeScriptCallEvidence {
-    const member = memberCandidates(checker, call, projectFilesByVirtualPath);
+    const member = memberCandidates(checker, call, projectFilesByVirtualPath, dispatchContext);
     const candidates = member ?? directCandidates(checker, call, projectFilesByVirtualPath);
     const [target] = candidates.targets;
 
@@ -1006,6 +900,7 @@ export function analyzeTypeScriptProject(
         host,
     });
     const checker = program.getTypeChecker();
+    const dispatchContext = collectProjectDispatchContext(checker, program, projectFilesByVirtualPath);
     const occurrencesByFile = new Map<string, TypeScriptCallEvidence[]>();
 
     for (const projectFile of projectFiles) {
@@ -1024,6 +919,7 @@ export function analyzeTypeScriptProject(
                     sourceFile,
                     projectFile,
                     projectFilesByVirtualPath,
+                    dispatchContext,
                 ));
             }
             ts.forEachChild(node, visit);
@@ -1043,6 +939,7 @@ export function analyzeTypeScriptProject(
         language: 'typescript',
         providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
         providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+        compilerVersion: ts.version,
         occurrencesByFile,
         ...(diagnostics ? { diagnostics } : {}),
         durationMs: performance.now() - startedAt,

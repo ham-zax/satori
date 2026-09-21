@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "compilerVersion": "6.0.3",
+  "project": {
+    "configPath": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/tsconfig.json",
+    "configuredFileCount": 176,
+    "identity": {
+      "compilerVersion": "6.0.3",
+      "configPath": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/tsconfig.json",
+      "compilerOptionsHash": "bff4ec2eceee97984c5899c8f7ffc9dc58a8c728b387acde1c205c81e7b37e64",
+      "rootFilesHash": "fb07a38cef2d3940fa2a89f65d9404e15244836aa20702a82e5555ecd2e8c76d",
+      "projectReferencesHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "projectHash": "ee058d02ab46746cc619f027e0cfb03b9c3295a52649648d41a688783a2d3c52"
+    }
+  },
+  "languageService": {
+    "constructMs": 19.488,
+    "coldProgramMs": 1391.555,
+    "coldTotalMs": 1411.043,
+    "unchangedProgramMs": 7.38,
+    "unchangedWalks": [
+      {
+        "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+        "callCount": 260,
+        "resolvedSignatureCount": 260,
+        "durationMs": 164.58851500000014
+      },
+      {
+        "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+        "callCount": 260,
+        "resolvedSignatureCount": 260,
+        "durationMs": 0.882274999999936
+      },
+      {
+        "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+        "callCount": 260,
+        "resolvedSignatureCount": 260,
+        "durationMs": 0.6009970000000067
+      },
+      {
+        "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+        "callCount": 260,
+        "resolvedSignatureCount": 260,
+        "durationMs": 0.6781160000000455
+      },
+      {
+        "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+        "callCount": 260,
+        "resolvedSignatureCount": 260,
+        "durationMs": 0.6135770000000775
+      }
+    ],
+    "fullProjectFirstWalk": {
+      "fileCount": 175,
+      "callCount": 13878,
+      "resolvedSignatureCount": 13878,
+      "durationMs": 1528.349
+    },
+    "fullProjectWarmWalk": {
+      "fileCount": 175,
+      "callCount": 13878,
+      "resolvedSignatureCount": 13878,
+      "durationMs": 28.524
+    },
+    "oneFileUpdateProgramMs": 59.728,
+    "changedFileWalk": {
+      "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
+      "callCount": 260,
+      "resolvedSignatureCount": 260,
+      "durationMs": 83.11007000000018
+    },
+    "fullProjectAfterEditWalk": {
+      "fileCount": 175,
+      "callCount": 13878,
+      "resolvedSignatureCount": 13878,
+      "durationMs": 1384.204
+    },
+    "unchangedConfigRefreshMs": 3.15,
+    "unchangedConfigRefreshChangedProject": false
+  },
+  "memory": {
+    "rssBeforeBytes": 195133440,
+    "rssAfterColdBytes": 507899904,
+    "rssAfterEditBytes": 646049792,
+    "coldDeltaBytes": 312766464,
+    "editDeltaBytes": 138149888
+  },
+  "affectedFiles": {
+    "refreshMs": 184.775,
+    "initialAffected": [
+      "dependency.ts",
+      "consumer.ts"
+    ],
+    "affectedAfterDependencyEdit": [
+      "dependency.ts",
+      "consumer.ts"
+    ]
+  },
+  "packaging": {
+    "typescriptPackageRoot": "/home/hamza/worktrees/satori-ts-semantic-t1/node_modules/.pnpm/typescript@6.0.3/node_modules/typescript",
+    "installedBytes": 24346827
+  }
+}

@@ -21,10 +21,12 @@ export class WorkerB {
 
 export class StructuralA {
     request(): string { return 'structural-a'; }
+    structuralOnly(): void {}
 }
 
 export class StructuralB {
     request(): string { return 'structural-b'; }
+    structuralOnly(): void {}
 }
 
 export interface WorkerLike {
@@ -85,6 +87,8 @@ import {
 export class Consumer {
     private typedField: WorkerA;
     private assignedField;
+    private structuralField: StructuralA;
+    private readonly structuralReadonly: StructuralA = new StructuralB();
 
     constructor(
         private parameterProperty: WorkerA,
@@ -92,6 +96,7 @@ export class Consumer {
     ) {
         this.typedField = worker;
         this.assignedField = worker;
+        this.structuralField = new StructuralB();
     }
 
     run(local: WorkerA, iface: WorkerLike, maybe: WorkerA | undefined, chooseA: boolean): void {
@@ -106,6 +111,10 @@ export class Consumer {
 
         const alias = this.typedField;
         alias.request();
+
+        const structuralAlias = this.structuralReadonly;
+        const structuralAliasChain = structuralAlias;
+        structuralAliasChain.request();
 
         maybe?.request();
 
@@ -158,6 +167,26 @@ export class Consumer {
             loopReassigned = new StructuralB();
         }
         loopReassigned.request();
+
+        let closureReassigned: StructuralA = new StructuralA();
+        const mutateClosure = () => {
+            closureReassigned = new StructuralB();
+        };
+        mutateClosure();
+        closureReassigned.request();
+
+        const structuralBox: { worker: StructuralA } = { worker: new StructuralB() };
+        const { worker: destructuredStructural } = structuralBox;
+        destructuredStructural.request();
+
+        let nestedScopeReassigned: StructuralA = new StructuralA();
+        {
+            nestedScopeReassigned = new StructuralB();
+        }
+        nestedScopeReassigned.request();
+
+        this.structuralField.request();
+        this.structuralReadonly.request();
 
         const dynamic: any = this.typedField;
         dynamic.request();
@@ -227,8 +256,8 @@ test('TypeScript compiler provider resolves project semantic calls and abstains 
     assert.equal(reassigned?.target?.ownerName, 'WorkerB');
 
     const interfaceCall = requestCalls.find((call) => call.calleeText === 'iface.request');
-    assert.equal(interfaceCall?.decision, 'unresolved');
-    assert.equal(interfaceCall?.reason, 'declaration_without_implementation');
+    assert.equal(interfaceCall?.decision, 'ambiguous');
+    assert.equal(interfaceCall?.reason, 'multiple_executable_targets');
 
     const concreteInterface = requestCalls.find((call) => call.calleeText === 'concreteInterface.request');
     assert.equal(concreteInterface?.decision, 'resolved');
@@ -262,12 +291,44 @@ test('TypeScript compiler provider resolves project semantic calls and abstains 
     assert.equal(structurallyInitialized?.target?.ownerName, 'StructuralB');
 
     const structurallyReassigned = requestCalls.find((call) => call.calleeText === 'structurallyReassigned.request');
-    assert.equal(structurallyReassigned?.decision, 'resolved');
-    assert.equal(structurallyReassigned?.target?.ownerName, 'StructuralB');
+    assert.equal(structurallyReassigned?.decision, 'ambiguous');
+    assert.equal(structurallyReassigned?.target, undefined);
+    assert.deepEqual(
+        structurallyReassigned?.candidates?.map((target) => `${target.ownerName}.${target.name}`).sort(),
+        ['StructuralA.request', 'StructuralB.request'],
+    );
 
     const loopReassigned = requestCalls.find((call) => call.calleeText === 'loopReassigned.request');
-    assert.equal(loopReassigned?.decision, 'unresolved');
-    assert.equal(loopReassigned?.reason, 'origin_unknown_after_write');
+    assert.equal(loopReassigned?.decision, 'ambiguous');
+    assert.equal(loopReassigned?.target, undefined);
+    assert.deepEqual(
+        loopReassigned?.candidates?.map((target) => `${target.ownerName}.${target.name}`).sort(),
+        ['StructuralA.request', 'StructuralB.request'],
+    );
+
+    for (const calleeText of [
+        'closureReassigned.request',
+        'destructuredStructural.request',
+        'nestedScopeReassigned.request',
+        'this.structuralField.request',
+    ]) {
+        const call = requestCalls.find((item) => item.calleeText === calleeText);
+        assert.equal(call?.decision, 'ambiguous', calleeText);
+        assert.equal(call?.target, undefined, calleeText);
+        assert.deepEqual(
+            call?.candidates?.map((target) => `${target.ownerName}.${target.name}`).sort(),
+            ['StructuralA.request', 'StructuralB.request'],
+            calleeText,
+        );
+    }
+
+    const readonlyField = requestCalls.find((call) => call.calleeText === 'this.structuralReadonly.request');
+    assert.equal(readonlyField?.decision, 'resolved');
+    assert.equal(readonlyField?.target?.ownerName, 'StructuralB');
+
+    const structuralAliasChain = requestCalls.find((call) => call.calleeText === 'structuralAliasChain.request');
+    assert.equal(structuralAliasChain?.decision, 'resolved');
+    assert.equal(structuralAliasChain?.target?.ownerName, 'StructuralB');
 
     const inherited = (calls.get('inherited') ?? []).find((call) => call.calleeText.endsWith('.inherited'));
     assert.equal(inherited?.decision, 'resolved');

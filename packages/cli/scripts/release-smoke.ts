@@ -15,6 +15,7 @@ import {
     DEFAULT_LATEON_PROFILE_ID,
     readLateOnAcquisitionAuthority,
 } from "../src/lateon-model-store.js";
+import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.mjs";
 
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // Optional native packages remain omitted; required host-native LanceDB,
@@ -529,6 +530,8 @@ async function assertPackedPotionExecutionCapability(installRoot: string, packed
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
+    const repoRoot = path.resolve(packageRoot, "../..");
+    assertReleaseWorkspaceLinks(repoRoot);
     const corePackageRoot = path.resolve(packageRoot, "..", "core");
     const mcpPackageRoot = path.resolve(packageRoot, "..", "mcp");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-release-smoke-"));

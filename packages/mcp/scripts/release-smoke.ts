@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.mjs";
 
 const PNPM_ONLY_NPM_ENV_KEYS = new Set([
     "NPM_CONFIG__JSR_REGISTRY",
@@ -336,6 +337,8 @@ function runPackedCoreParserSmoke(runtimeRoot: string): void {
 async function main(): Promise<void> {
     const currentFile = fileURLToPath(import.meta.url);
     const packageRoot = path.resolve(path.dirname(currentFile), "..");
+    const repoRoot = path.resolve(packageRoot, "../..");
+    assertReleaseWorkspaceLinks(repoRoot);
     const corePackageRoot = path.resolve(packageRoot, "..", "core");
     const smokePackDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-mcp-release-smoke-"));
     const smokeExecDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-mcp-release-exec-"));

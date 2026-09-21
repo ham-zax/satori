@@ -11,6 +11,7 @@ import {
   buildReleaseGraphReport,
 } from './release-graph.mjs';
 import { packLocalPackage, fetchPublishedPackage } from './release-package-snapshots.mjs';
+import { assertReleaseWorkspaceLinks } from './release-workspace.mjs';
 import {
   createReleaseRegistryClient,
   registryMaxStableVersion,
@@ -110,6 +111,9 @@ export async function checkReleaseGraph(options = {}) {
     || ((packageName) => registryClient.listStableVersions(packageName));
 
   const graph = readLocalReleaseGraph(cwd);
+  if (!options.packLocalImpl) {
+    assertReleaseWorkspaceLinks(cwd);
+  }
   const localVersions = localVersionsFromGraph(graph);
 
   const tempDirectory = fs.mkdtempSync(path.join(tempRoot, 'satori-release-check-'));

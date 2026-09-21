@@ -730,18 +730,6 @@ function memberCandidates(
             continue;
         }
 
-        const dispatchTargets = dispatchTargetsForType(
-            checker,
-            branch,
-            propertyName,
-            dispatchContext,
-            projectFilesByVirtualPath,
-        );
-        if (dispatchTargets.length > 0) {
-            allTargets.push(...dispatchTargets);
-            continue;
-        }
-
         const property = checker.getPropertyOfType(branch, propertyName);
         if (!property) {
             unresolvedBranch = true;
@@ -750,11 +738,35 @@ function memberCandidates(
 
         const declarations = resolvedSymbol(checker, property)?.declarations ?? [];
         const executableDeclarations = declarations.filter(isExecutableDeclaration);
-        const targets = executableDeclarations
+        const ownTargets = executableDeclarations
             .map((declaration) => targetFromDeclaration(declaration, projectFilesByVirtualPath))
             .filter((target): target is TypeScriptSemanticTarget => Boolean(target));
 
-        if (targets.length === 0) {
+        const dispatchTargets = dispatchTargetsForType(
+            checker,
+            branch,
+            propertyName,
+            dispatchContext,
+            projectFilesByVirtualPath,
+        );
+        if (dispatchTargets.length > 1) {
+            allTargets.push(...dispatchTargets);
+            continue;
+        }
+        if (dispatchTargets.length === 1) {
+            allTargets.push(dispatchTargets[0]);
+            const receiverOwnsTarget = ownTargets.some(
+                (target) => targetKey(target) === targetKey(dispatchTargets[0]),
+            );
+            if (!receiverOwnsTarget) {
+                // Project-local assignability is candidate evidence, not a closed-world
+                // proof that an interface/structural contract has one runtime implementation.
+                unresolvedBranch = true;
+            }
+            continue;
+        }
+
+        if (ownTargets.length === 0) {
             if (executableDeclarations.length > 0) {
                 nonIndexableBranch = true;
             } else {
@@ -763,7 +775,7 @@ function memberCandidates(
             continue;
         }
 
-        allTargets.push(...targets);
+        allTargets.push(...ownTargets);
     }
 
     const targets = uniqueTargets(allTargets);

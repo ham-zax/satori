@@ -10,19 +10,31 @@ import {
 const targets = `
 export class StructuralA {
     request(): string { return 'a'; }
+    structuralOnly(): void {}
 }
 
 export class StructuralB {
     request(): string { return 'b'; }
+    structuralOnly(): void {}
 }
 
 export interface Contract {
     request(): string;
 }
+
+export interface SingleContract {
+    request(): string;
+    unique(): void;
+}
+
+export class SingleImpl implements SingleContract {
+    request(): string { return 'single'; }
+    unique(): void {}
+}
 `;
 
 const cases = `
-import { StructuralA, StructuralB, type Contract } from './targets';
+import { StructuralA, StructuralB, type Contract, type SingleContract } from './targets';
 
 export function localOrigins(flag: boolean): void {
     const initialized: StructuralA = new StructuralB();
@@ -108,6 +120,10 @@ export function optionalParameter(worker: StructuralA | undefined): string | und
 }
 
 export function interfaceParameter(worker: Contract): string {
+    return worker.request();
+}
+
+export function singleInterfaceParameter(worker: SingleContract): string {
     return worker.request();
 }
 
@@ -219,4 +235,14 @@ test('unproven aliases, nested member origins, destructuring, and externally sup
     );
     assert.equal(interfaceCall?.decision, 'ambiguous');
     assert.equal(interfaceCall?.reason, 'multiple_executable_targets');
+
+    const singleInterfaceCall = allCalls.find(
+        (call) => call.calleeText === 'worker.request' && call.receiverType === 'SingleContract',
+    );
+    assert.equal(singleInterfaceCall?.decision, 'unresolved');
+    assert.equal(singleInterfaceCall?.target, undefined);
+    assert.deepEqual(
+        singleInterfaceCall?.candidates?.map((target) => target.ownerName),
+        ['SingleImpl'],
+    );
 });

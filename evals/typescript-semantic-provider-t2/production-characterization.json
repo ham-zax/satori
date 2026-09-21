@@ -14,79 +14,79 @@
     }
   },
   "languageService": {
-    "constructMs": 19.488,
-    "coldProgramMs": 1391.555,
-    "coldTotalMs": 1411.043,
-    "unchangedProgramMs": 7.38,
+    "constructMs": 23.557,
+    "coldProgramMs": 1644.522,
+    "coldTotalMs": 1668.079,
+    "unchangedProgramMs": 1.578,
     "unchangedWalks": [
       {
         "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-        "callCount": 260,
-        "resolvedSignatureCount": 260,
-        "durationMs": 164.58851500000014
+        "callCount": 264,
+        "resolvedSignatureCount": 264,
+        "durationMs": 160.59925599999997
       },
       {
         "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-        "callCount": 260,
-        "resolvedSignatureCount": 260,
-        "durationMs": 0.882274999999936
+        "callCount": 264,
+        "resolvedSignatureCount": 264,
+        "durationMs": 0.9473649999999907
       },
       {
         "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-        "callCount": 260,
-        "resolvedSignatureCount": 260,
-        "durationMs": 0.6009970000000067
+        "callCount": 264,
+        "resolvedSignatureCount": 264,
+        "durationMs": 0.5982070000000022
       },
       {
         "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-        "callCount": 260,
-        "resolvedSignatureCount": 260,
-        "durationMs": 0.6781160000000455
+        "callCount": 264,
+        "resolvedSignatureCount": 264,
+        "durationMs": 0.6166559999996934
       },
       {
         "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-        "callCount": 260,
-        "resolvedSignatureCount": 260,
-        "durationMs": 0.6135770000000775
+        "callCount": 264,
+        "resolvedSignatureCount": 264,
+        "durationMs": 0.7185159999999087
       }
     ],
     "fullProjectFirstWalk": {
       "fileCount": 175,
-      "callCount": 13878,
-      "resolvedSignatureCount": 13878,
-      "durationMs": 1528.349
+      "callCount": 13887,
+      "resolvedSignatureCount": 13887,
+      "durationMs": 1574.119
     },
     "fullProjectWarmWalk": {
       "fileCount": 175,
-      "callCount": 13878,
-      "resolvedSignatureCount": 13878,
-      "durationMs": 28.524
+      "callCount": 13887,
+      "resolvedSignatureCount": 13887,
+      "durationMs": 29.163
     },
-    "oneFileUpdateProgramMs": 59.728,
+    "oneFileUpdateProgramMs": 61.243,
     "changedFileWalk": {
       "fileName": "/home/hamza/worktrees/satori-ts-semantic-t1/packages/core/src/semantic/typescript-compiler-provider.ts",
-      "callCount": 260,
-      "resolvedSignatureCount": 260,
-      "durationMs": 83.11007000000018
+      "callCount": 264,
+      "resolvedSignatureCount": 264,
+      "durationMs": 76.57624199999918
     },
     "fullProjectAfterEditWalk": {
       "fileCount": 175,
-      "callCount": 13878,
-      "resolvedSignatureCount": 13878,
-      "durationMs": 1384.204
+      "callCount": 13887,
+      "resolvedSignatureCount": 13887,
+      "durationMs": 1407.749
     },
-    "unchangedConfigRefreshMs": 3.15,
+    "unchangedConfigRefreshMs": 3.232,
     "unchangedConfigRefreshChangedProject": false
   },
   "memory": {
-    "rssBeforeBytes": 195133440,
-    "rssAfterColdBytes": 507899904,
-    "rssAfterEditBytes": 646049792,
-    "coldDeltaBytes": 312766464,
-    "editDeltaBytes": 138149888
+    "rssBeforeBytes": 206245888,
+    "rssAfterColdBytes": 520347648,
+    "rssAfterEditBytes": 657055744,
+    "coldDeltaBytes": 314101760,
+    "editDeltaBytes": 136708096
   },
   "affectedFiles": {
-    "refreshMs": 184.775,
+    "refreshMs": 190.871,
     "initialAffected": [
       "dependency.ts",
       "consumer.ts"

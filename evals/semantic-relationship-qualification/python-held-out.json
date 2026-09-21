@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "family": "semantic_relationship_qualification",
+  "relationship": "CALLS",
+  "qualification": {
+    "family": "language_held_out",
+    "id": "python-native-v2-held-out",
+    "language": "python",
+    "description": "Python-native v2 precision/recall cases derived from the accepted P2 challenger corpus."
+  },
+  "cases": [
+    {
+      "id": "python.local_import",
+      "construct": "lexical function-local import",
+      "scenario": "A function-local import binds a callable only within its lexical owner.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"], "strategies": ["direct_call"],
+        "requiredEvidenceKinds": ["call_site", "direct_symbol_binding", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.competing_local_import",
+      "construct": "competing local imports",
+      "scenario": "Two callables have the same qualified name in different modules; the lexical local import selects only one.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"], "strategies": ["direct_call"],
+        "requiredEvidenceKinds": ["call_site", "direct_symbol_binding", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.forward_annotation",
+      "construct": "forward string annotation",
+      "scenario": "A string annotation names the unique receiver class used by a method call.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "receiver_type", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.callback_keyword",
+      "construct": "keyword callback propagation",
+      "scenario": "An exact callable passed by keyword flows to a callback invocation.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": [],
+        "authorities": ["origin_flow"], "strategies": ["direct_call"],
+        "requiredEvidenceKinds": ["call_site", "flow_hop", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.keyword_flow",
+      "construct": "keyword constructor/service flow",
+      "scenario": "A concrete field flows through a keyword constructor argument and an Any-typed service field to the exact method.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": [],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "field_origin", "flow_hop", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.positional_flow",
+      "construct": "positional constructor/service flow",
+      "scenario": "A concrete field flows through a positional constructor argument and an Any-typed service field to the exact method.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": [],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "field_origin", "flow_hop", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.import_alias",
+      "construct": "import alias constructor origin",
+      "scenario": "An imported class alias constructs the receiver whose method is later called.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "alias_binding", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.override_dispatch",
+      "construct": "inheritance override dispatch",
+      "scenario": "A concrete child instance calls its overriding method rather than the base implementation.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.child"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.base"],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.branch_conflict",
+      "construct": "branch-conflicted origin",
+      "scenario": "Two concrete receiver origins remain reachable after a branch; neither may become authoritative.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.a", "target.b"],
+        "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "python.callable_object",
+      "construct": "callable object",
+      "scenario": "A concrete callable object invocation binds to its __call__ implementation.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": [],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance"]
+      }
+    },
+    {
+      "id": "python.decorator_abstention",
+      "construct": "decorator replacement uncertainty",
+      "scenario": "A decorator may replace a declared function with a different runtime callable before a later call.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "unresolved", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": [], "forbiddenTargetRefs": [],
+        "authorities": ["unresolved"], "strategies": ["dynamic_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "dynamic_construct", "unresolved_dependency"]
+      }
+    },
+    {
+      "id": "python.protocol_ambiguity",
+      "construct": "protocol dispatch ambiguity",
+      "scenario": "A protocol receiver has multiple compatible concrete implementations, so no one runtime implementation is authoritative.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.impl_a", "target.impl_b"],
+        "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["interface_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "interface_contract", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "python.dynamic_abstention",
+      "construct": "dynamic getattr call",
+      "scenario": "A callable obtained through getattr has no statically proven target.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "unresolved", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": [], "forbiddenTargetRefs": [],
+        "authorities": ["unresolved"], "strategies": ["dynamic_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "dynamic_construct", "unresolved_dependency"]
+      }
+    }
+  ]
+}

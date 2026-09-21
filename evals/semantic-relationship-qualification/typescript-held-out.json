@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "family": "semantic_relationship_qualification",
+  "relationship": "CALLS",
+  "qualification": {
+    "family": "language_held_out",
+    "id": "typescript-compiler-v2-held-out",
+    "language": "typescript",
+    "description": "Compiler-v2 structural precision and production project/incremental qualification."
+  },
+  "cases": [
+    {
+      "id": "typescript.structural_decoy",
+      "construct": "structural static-type decoy",
+      "scenario": "A variable is statically typed as StructuralA but immutably initialized with StructuralB; the runtime callable is StructuralB.request.",
+      "oracle": { "mode": "exact", "claim": "runtime_callable" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["origin_flow"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "assignment_origin", "target_provenance"]
+      }
+    },
+    {
+      "id": "typescript.mutable_reassignment",
+      "construct": "mutable structural reassignment",
+      "scenario": "A mutable structural receiver is assigned two compatible implementations before a call; neither target is authoritative.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.a", "target.b"], "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "typescript.nested_write",
+      "construct": "nested block structural write",
+      "scenario": "A structural receiver is written inside a nested block; bounded evidence must retain both viable implementations.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.a", "target.b"], "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "typescript.loop_write",
+      "construct": "loop structural write",
+      "scenario": "A structural receiver may be rewritten inside a loop; the resolver must not invent a single authoritative origin.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.a", "target.b"], "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "typescript.closure_write",
+      "construct": "closure structural write",
+      "scenario": "A captured structural receiver is mutated by a closure before use; the resolver must preserve ambiguity.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "ambiguous", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.a", "target.b"], "forbiddenTargetRefs": [],
+        "authorities": ["ambiguous"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "branch_origin", "candidate_set", "ambiguity"]
+      }
+    },
+    {
+      "id": "typescript.open_world_single_interface",
+      "construct": "open-world single local implementation",
+      "scenario": "An interface has one project-local compatible implementation, but that does not prove a closed-world runtime target.",
+      "oracle": { "mode": "exact", "claim": "candidate_evidence" },
+      "expected": {
+        "decision": "unresolved", "relationshipType": "REFERENCES",
+        "targetRefs": [], "candidateRefs": ["target.impl"], "forbiddenTargetRefs": [],
+        "authorities": ["unresolved"], "strategies": ["interface_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "interface_contract", "candidate_set", "unresolved_dependency"]
+      }
+    },
+    {
+      "id": "typescript.path_alias_config_change",
+      "construct": "configured paths alias invalidation",
+      "scenario": "A tsconfig paths alias retargets from one module to another; a config-only change must rebuild the configured project and publish the new exact target.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance"]
+      }
+    },
+    {
+      "id": "typescript.project_boundary",
+      "construct": "configured project boundary",
+      "scenario": "Two configured projects contain same-named services; the caller must resolve only within its configured project authority.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [],
+        "forbiddenTargetRefs": ["target.decoy"],
+        "authorities": ["direct_binding"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance"]
+      }
+    },
+    {
+      "id": "typescript.incremental_dependent",
+      "construct": "incremental dependent relationship invalidation",
+      "scenario": "Changing a dependency changes its symbol instance; the unchanged importing caller must be rebuilt while an unrelated TypeScript owner is not affected.",
+      "oracle": { "mode": "exact", "claim": "source_declaration" },
+      "expected": {
+        "decision": "resolved", "relationshipType": "CALLS",
+        "targetRefs": ["target.primary"], "candidateRefs": [], "forbiddenTargetRefs": [],
+        "authorities": ["direct_binding"], "strategies": ["type_dispatch"],
+        "requiredEvidenceKinds": ["call_site", "target_provenance", "provider_specific"]
+      }
+    }
+  ]
+}

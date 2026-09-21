@@ -32,7 +32,7 @@ test('language capability evidence combines declarations with observed registry 
     assert.deepEqual(summary.languages.map((entry) => entry.language), ['go', 'text', 'typescript']);
 
     const typescript = summary.languages[2];
-    assert.equal(typescript.declaredClaim, 'calls_v0');
+    assert.equal(typescript.declaredClaim, 'type_receiver_aware');
     assert.equal(typescript.indexedFileCount, 2);
     assert.deepEqual(typescript.symbolEvidence, {
         eligibleFiles: 1,

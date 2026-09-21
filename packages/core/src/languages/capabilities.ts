@@ -19,18 +19,21 @@ function fullNavigationLanguage(input: {
     readonly languageId: string;
     readonly aliases: readonly string[];
     readonly extensions: readonly string[];
+    readonly typeReceiverAware?: boolean;
 }): LanguageCapabilityDeclaration {
     return declaration({
-        ...input,
+        languageId: input.languageId,
+        aliases: input.aliases,
+        extensions: input.extensions,
         searchEligibility: PRODUCTION_READY,
         parserCapability: PRODUCTION_READY,
         symbolExtractionCapability: PRODUCTION_READY,
         ownerExtractionCapability: PRODUCTION_READY,
         importExportCapability: NONE,
         callsCapability: PRODUCTION_READY,
-        typeReceiverAwareCapability: NONE,
+        typeReceiverAwareCapability: input.typeReceiverAware ? PRODUCTION_READY : NONE,
         testReferenceCapability: PRODUCTION_READY,
-        publicClaim: 'calls_v0',
+        publicClaim: input.typeReceiverAware ? 'type_receiver_aware' : 'calls_v0',
     });
 }
 
@@ -383,6 +386,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
         languageId: 'typescript',
         aliases: ['ts', 'tsx'],
         extensions: ['.ts', '.tsx', '.mts', '.cts'],
+        typeReceiverAware: true,
     }),
 ];
 

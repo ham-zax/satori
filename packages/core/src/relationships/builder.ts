@@ -11,7 +11,8 @@ import {
     resolveRelativeModulePath,
 } from './python-resolution';
 
-import type { ResolutionClaim } from './resolution';
+import type { ResolutionClaim, ResolutionProjectEvidence } from './resolution';
+import { admitAuthoritativeProofBackedCalls } from './admission';
 import { pythonResolutionContributionEngine } from './contributions/python';
 import { syntacticResolutionContributionEngine } from './contributions/syntactic';
 import { CbmSemanticContributionEngine } from './contributions/cbm';
@@ -44,6 +45,7 @@ export interface BuildCallRelationshipsForRegistryInput {
     strategyRegistry?: LanguageResolutionStrategyRegistry;
     semanticRegistry?: SemanticLanguageRegistry;
     semanticEvidenceByLanguage?: ReadonlyMap<string, SemanticProjectEvidence> | Record<string, SemanticProjectEvidence>;
+    resolutionEvidenceByLanguage?: ReadonlyMap<string, ResolutionProjectEvidence> | Record<string, ResolutionProjectEvidence>;
 }
 
 
@@ -225,7 +227,36 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
         }
     }
 
-    // 4. Dispatch generic CBM contribution engine for each cbm_semantic language
+    // 4. Dispatch provider-neutral TypeScript semantic claims through central admission.
+    const typeScriptLangs = filesByStrategyAndLanguage.get('typescript_semantic');
+    if (typeScriptLangs) {
+        for (const [language, files] of typeScriptLangs) {
+            if (files.size === 0) continue;
+            const evidence = input.resolutionEvidenceByLanguage
+                ? input.resolutionEvidenceByLanguage instanceof Map
+                    ? input.resolutionEvidenceByLanguage.get(language)
+                    : (input.resolutionEvidenceByLanguage as Record<string, ResolutionProjectEvidence>)[language]
+                : undefined;
+            if (!evidence) continue;
+
+            const claims: ResolutionClaim[] = [];
+            for (const file of files) {
+                const fileClaims = evidence.claimsByFile.get(file) ?? [];
+                if (fileClaims.length > 0) {
+                    claims.push(...fileClaims);
+                }
+                allClaimsByFile.set(file, [...fileClaims]);
+            }
+            for (const record of admitAuthoritativeProofBackedCalls({
+                registry: input.registry,
+                claims,
+            })) {
+                recordsByKey.set(relationshipKey(record), record);
+            }
+        }
+    }
+
+    // 5. Dispatch generic CBM contribution engine for each cbm_semantic language
     const cbmLangs = filesByStrategyAndLanguage.get('cbm_semantic');
     if (cbmLangs) {
         for (const [language, files] of cbmLangs) {
@@ -431,6 +462,21 @@ export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): Buil
         if (resolutionChanged) affectedFiles.add(file.path);
     }
 
+    if (input.resolutionEvidenceByLanguage) {
+        const entries = input.resolutionEvidenceByLanguage instanceof Map
+            ? [...input.resolutionEvidenceByLanguage.entries()]
+            : Object.entries(input.resolutionEvidenceByLanguage);
+        for (const [lang, evidence] of entries) {
+            if (evidence.affectedSourceFiles) {
+                for (const file of evidence.affectedSourceFiles) affectedFiles.add(file);
+                continue;
+            }
+            for (const file of input.registry.manifest.files) {
+                if (file.language === lang) affectedFiles.add(file.path);
+            }
+        }
+    }
+
     if (input.semanticEvidenceByLanguage) {
         const entries = input.semanticEvidenceByLanguage instanceof Map
             ? [...input.semanticEvidenceByLanguage.entries()]
@@ -453,6 +499,7 @@ export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): Buil
         strategyRegistry: input.strategyRegistry,
         semanticRegistry: input.semanticRegistry,
         semanticEvidenceByLanguage: input.semanticEvidenceByLanguage,
+        resolutionEvidenceByLanguage: input.resolutionEvidenceByLanguage,
     });
 
     const recordsByKey = new Map<string, RelationshipRecord>();

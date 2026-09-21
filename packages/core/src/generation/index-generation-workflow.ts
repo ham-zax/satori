@@ -18,7 +18,11 @@ import type {
 import type { StagedPublicationNavigation } from '../symbols/sidecar-lifecycle';
 import type { SymbolRecord, SymbolRegistryManifestFile } from '../symbols/contracts';
 import type { SymbolRegistry } from '../symbols/registry';
-import type { RelationshipAnalysisEvidence } from '../relationships';
+import type {
+    RelationshipAnalysisEvidence,
+    ResolutionProjectAnalyzer,
+    ResolutionProjectEvidence,
+} from '../relationships';
 import { buildRelationshipDelta, buildRelationshipsForRegistry } from '../relationships';
 import type { SemanticAuxiliaryFile, SemanticProjectAnalyzer, SemanticProjectEvidence, SemanticSourceFile } from '../semantic';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../semantic/descriptor';
@@ -101,6 +105,13 @@ type ReindexByChangeResult = {
     totalChunks?: number;
     indexStatus?: 'completed' | 'limit_reached';
 };
+const TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
+
+function isTypeScriptResolutionSource(filePath: string): boolean {
+    const lower = filePath.toLowerCase();
+    return TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
 type CachedNavigationDeltaState = {
     readonly canonicalRoot: string;
     readonly publicationId: string;
@@ -228,6 +239,7 @@ export interface IndexGenerationWorkflowPorts {
     languageAnalyzer: LanguageAnalysisPort;
     semanticAnalyzer?: SemanticProjectAnalyzer;
     semanticLanguageRegistry?: SemanticLanguageRegistry;
+    resolutionAnalyzer?: ResolutionProjectAnalyzer;
     embedding: Embedding;
     vectorDatabase: VectorDatabase;
     indexAuthorityCoordinator: IndexAuthorityCoordinator;
@@ -408,11 +420,24 @@ export class IndexGenerationWorkflow {
             }
         }
 
+        const resolutionEvidenceByLanguage = new Map<string, ResolutionProjectEvidence>();
+        if (this.ports.resolutionAnalyzer) {
+            for (const language of new Set(manifestFiles.map((file) => file.language))) {
+                if (!this.ports.resolutionAnalyzer.supportsLanguage(language)) continue;
+                resolutionEvidenceByLanguage.set(language, await this.ports.resolutionAnalyzer.analyze({
+                    rootPath: canonicalRoot,
+                    language,
+                    registry,
+                }));
+            }
+        }
+
         const relationshipRecords = buildRelationshipsForRegistry({
             registry,
             analysisByFile,
             semanticRegistry: this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry,
             semanticEvidenceByLanguage,
+            resolutionEvidenceByLanguage,
         });
 
         assertMutationCurrent?.();
@@ -550,9 +575,22 @@ export class IndexGenerationWorkflow {
 
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
         const scanStartedAt = Date.now();
-        const codeFiles = await this.ports.getCodeFiles(codebasePath, indexPolicy);
+        const scannedCodeFiles = await this.ports.getCodeFiles(codebasePath, indexPolicy);
+        const scannedRelativePaths = scannedCodeFiles.map((filePath) => {
+            const relativePath = this.ports.normalizeRelativePathForCodebase(codebasePath, filePath);
+            if (!relativePath) {
+                throw new Error(`Full index selected source path '${filePath}' is outside '${canonicalRoot}'.`);
+            }
+            return relativePath;
+        });
+        const resolutionSourceControls = await this.collectResolutionSourceControls(
+            canonicalRoot,
+            scannedRelativePaths,
+        );
+        const resolutionControlSet = new Set(resolutionSourceControls);
+        const codeFiles = scannedCodeFiles.filter((filePath, index) => !resolutionControlSet.has(scannedRelativePaths[index]));
         scanFilesMs = Date.now() - scanStartedAt;
-        console.log(`[Context] 📁 Found ${codeFiles.length} code files`);
+        console.log(`[Context] 📁 Found ${codeFiles.length} searchable code files`);
         const indexingStartPercentage = 10;
         const indexingEndPercentage = 100;
         const indexingRange = indexingEndPercentage - indexingStartPercentage;
@@ -620,6 +658,7 @@ export class IndexGenerationWorkflow {
                     codebasePath,
                     indexPolicy.effectiveIgnorePatterns,
                     indexPolicy.supportedExtensions,
+                    { additionalObservablePaths: resolutionSourceControls },
                 );
                 const preparedChanges = await synchronizer.prepareChanges({
                     capturedFullIndexSource,
@@ -703,6 +742,7 @@ export class IndexGenerationWorkflow {
                         codebasePath,
                         indexPolicy.effectiveIgnorePatterns,
                         indexPolicy.supportedExtensions,
+                        { additionalObservablePaths: resolutionSourceControls },
                     );
                     const preparedChanges = await synchronizer.prepareChanges({
                         capturedFullIndexSource,
@@ -876,6 +916,7 @@ export class IndexGenerationWorkflow {
         synchronizerKey: string;
         synchronizer: FileSynchronizer;
         preparedChanges: Awaited<ReturnType<FileSynchronizer['prepareChanges']>>;
+        resolutionSourceControls: ReadonlySet<string>;
         options: ReindexByChangeOptions;
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void;
     }): Promise<ReindexByChangeResult> {
@@ -955,7 +996,10 @@ export class IndexGenerationWorkflow {
         }
 
         const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
-        const isSearchable = (filePath: string) => !semanticRegistry.isAuxiliaryPath(filePath);
+        const isSearchable = (filePath: string) => (
+            !semanticRegistry.isAuxiliaryPath(filePath)
+            && !input.resolutionSourceControls.has(filePath)
+        );
         // Older Publications indexed auxiliaries with supported extensions (e.g. Cargo.toml).
         // Remove those documents even when the source file itself has not changed.
         const legacyAuxiliaryPaths = existingRegistry.manifest.files
@@ -1116,6 +1160,7 @@ export class IndexGenerationWorkflow {
                         input.codebasePath,
                         candidateCollectionName,
                         input.preparedChanges.fileHashes,
+                        input.resolutionSourceControls,
                         totalChunks,
                         preparedNavigation,
                         observedTotalChunks,
@@ -1295,6 +1340,12 @@ export class IndexGenerationWorkflow {
             this.ports.getIndexedExtensionsForCodebase(codebasePath),
             { sourceCheckpoint: currentPublicationSource.checkpoint },
         );
+        let resolutionSourceControls = await this.collectResolutionSourceControls(
+            canonicalRoot,
+            currentSynchronizer.getTrackedRelativePaths(),
+        );
+        currentSynchronizer.setAdditionalObservablePaths(resolutionSourceControls);
+
         this.ports.registerSynchronizerForPublication(
             synchronizerKey,
             currentPublicationId,
@@ -1307,12 +1358,25 @@ export class IndexGenerationWorkflow {
         );
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
-        const preparedChanges = await currentSynchronizer.prepareChanges();
+        let preparedChanges = await currentSynchronizer.prepareChanges();
+        const nextResolutionSourcePaths = new Set(currentSynchronizer.getTrackedRelativePaths());
+        for (const filePath of preparedChanges.changes.removed) nextResolutionSourcePaths.delete(filePath);
+        for (const filePath of preparedChanges.changes.added) nextResolutionSourcePaths.add(filePath);
+        const nextResolutionSourceControls = await this.collectResolutionSourceControls(
+            canonicalRoot,
+            [...nextResolutionSourcePaths],
+        );
+        if (JSON.stringify(nextResolutionSourceControls) !== JSON.stringify(resolutionSourceControls)) {
+            resolutionSourceControls = nextResolutionSourceControls;
+            currentSynchronizer.setAdditionalObservablePaths(resolutionSourceControls);
+            preparedChanges = await currentSynchronizer.prepareChanges();
+        }
         const { added, removed, modified } = preparedChanges.changes;
         const totalChanges = added.length + removed.length + modified.length;
         const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
+        const resolutionControlSet = new Set(resolutionSourceControls);
         const searchableFileCount = [...preparedChanges.fileHashes.keys()]
-            .filter((filePath) => !semanticRegistry.isAuxiliaryPath(filePath)).length;
+            .filter((filePath) => !semanticRegistry.isAuxiliaryPath(filePath) && !resolutionControlSet.has(filePath)).length;
 
         // A quiet tree can still need to shed legacy searchable auxiliary documents.
         if (totalChanges === 0 && (
@@ -1353,9 +1417,27 @@ export class IndexGenerationWorkflow {
             synchronizerKey,
             synchronizer: currentSynchronizer,
             preparedChanges,
+            resolutionSourceControls: resolutionControlSet,
             options,
             progressCallback,
         });
+    }
+
+    private async collectResolutionSourceControls(
+        codebasePath: string,
+        sourcePaths: readonly string[],
+    ): Promise<string[]> {
+        const analyzer = this.ports.resolutionAnalyzer;
+        if (!analyzer?.getSourceControlFiles || !analyzer.supportsLanguage('typescript')) return [];
+        const typeScriptFiles = sourcePaths
+            .map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, ''))
+            .filter(isTypeScriptResolutionSource);
+        if (typeScriptFiles.length === 0) return [];
+        return [...new Set(await analyzer.getSourceControlFiles({
+            rootPath: codebasePath,
+            language: 'typescript',
+            sourceFiles: typeScriptFiles,
+        }))].sort();
     }
 
     private async collectSemanticAuxiliariesForLanguage(
@@ -1529,6 +1611,20 @@ export class IndexGenerationWorkflow {
                 }
             }
 
+            const resolutionEvidenceByLanguage = new Map<string, ResolutionProjectEvidence>();
+            if (this.ports.resolutionAnalyzer) {
+                for (const language of new Set(mergedManifestFiles.map((file) => file.language))) {
+                    if (!this.ports.resolutionAnalyzer.supportsLanguage(language)) continue;
+                    resolutionEvidenceByLanguage.set(language, await this.ports.resolutionAnalyzer.analyze({
+                        rootPath: this.ports.canonicalizeCodebasePath(codebasePath),
+                        language,
+                        registry,
+                        previousRegistry: existingRegistry,
+                        changedFiles: replacedPaths,
+                    }));
+                }
+            }
+
             const relationshipDelta = await measurePhase(
                 'publication_relationship_delta',
                 () => buildRelationshipDelta({
@@ -1540,6 +1636,7 @@ export class IndexGenerationWorkflow {
                     previousAnalysisByFile,
                     semanticRegistry,
                     semanticEvidenceByLanguage,
+                    resolutionEvidenceByLanguage,
                 }),
             );
             assertMutationCurrent?.();
@@ -1660,6 +1757,7 @@ export class IndexGenerationWorkflow {
         codebasePath: string,
         collectionName: string,
         preparedFileHashes: ReadonlyMap<string, string>,
+        resolutionSourceControls: ReadonlySet<string>,
         expectedTotalChunks: number,
         navigationCandidate: StagedPublicationNavigation,
         preparedObservedTotalChunks?: number | null,
@@ -1667,7 +1765,10 @@ export class IndexGenerationWorkflow {
         const canonicalRoot = this.ports.canonicalizeCodebasePath(codebasePath);
         const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
         const searchablePreparedFileHashes = new Map(
-            [...preparedFileHashes.entries()].filter(([filePath]) => !semanticRegistry.isAuxiliaryPath(filePath)),
+            [...preparedFileHashes.entries()].filter(([filePath]) => (
+                !semanticRegistry.isAuxiliaryPath(filePath)
+                && !resolutionSourceControls.has(filePath)
+            )),
         );
         const preparedFiles = [...searchablePreparedFileHashes].map(([filePath, hash]) => ({ path: filePath, hash }));
         if (

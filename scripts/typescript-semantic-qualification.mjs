@@ -9,6 +9,10 @@ import {
     TYPESCRIPT_COMPILER_PROVIDER_VERSION,
     analyzeTypeScriptProject,
 } from '../packages/core/src/semantic/typescript-compiler-provider.ts';
+import {
+    TYPESCRIPT_PRODUCTION_QUALIFICATION_CASE_IDS,
+    runTypeScriptProductionQualificationCase,
+} from './typescript-production-qualification-support.mts';
 
 const ADAPTER_VERSION = 'typescript-qualification-v1';
 
@@ -55,6 +59,14 @@ export class ImplB implements WorkerContract {
     dispatch(): string { return 'impl-b'; }
 }
 
+export interface SingleContract {
+    singleOnly(): string;
+}
+
+export class SingleImpl implements SingleContract {
+    singleOnly(): string { return 'single'; }
+}
+
 export function overloaded(value: string): string;
 export function overloaded(value: number): string;
 export function overloaded(value: string | number): string {
@@ -73,6 +85,7 @@ import {
     PrimaryWorker,
     StructuralA,
     StructuralB,
+    type SingleContract,
     type WorkerContract,
     directPrimary,
     overloaded,
@@ -150,6 +163,46 @@ export function dynamicUnresolvedCase(value: any): unknown {
 export function wrongTargetDecoyCase(): string {
     const worker = new PrimaryWorker();
     return worker.request();
+}
+
+export function structuralDecoyCase(): string {
+    const initialized: StructuralA = new StructuralB();
+    return initialized.request();
+}
+
+export function mutableReassignmentCase(): string {
+    let reassigned: StructuralA = new StructuralA();
+    reassigned = new StructuralB();
+    return reassigned.request();
+}
+
+export function nestedWriteCase(): string {
+    let nestedBlock: StructuralA = new StructuralA();
+    {
+        nestedBlock = new StructuralB();
+    }
+    return nestedBlock.request();
+}
+
+export function loopWriteCase(): string {
+    let loopWrite: StructuralA = new StructuralA();
+    for (let index = 0; index < 1; index += 1) {
+        loopWrite = new StructuralB();
+    }
+    return loopWrite.request();
+}
+
+export function closureWriteCase(): string {
+    let closureWrite: StructuralA = new StructuralA();
+    function mutate(): void {
+        closureWrite = new StructuralB();
+    }
+    mutate();
+    return closureWrite.request();
+}
+
+export function openWorldSingleInterfaceCase(worker: SingleContract): string {
+    return worker.singleOnly();
 }
 `;
 
@@ -265,6 +318,71 @@ const caseSpecs = {
             'DecoyWorkerB.request': 'target.decoy_b',
         },
         evidenceKinds: ['assignment_origin'],
+    },
+    'typescript.structural_decoy': {
+        calleeText: 'initialized.request',
+        caller: 'structuralDecoyCase',
+        strategy: 'type_dispatch',
+        authority: 'origin_flow',
+        targetRefs: {
+            'StructuralB.request': 'target.primary',
+            'StructuralA.request': 'target.decoy',
+        },
+        evidenceKinds: ['assignment_origin'],
+    },
+    'typescript.mutable_reassignment': {
+        calleeText: 'reassigned.request',
+        caller: 'mutableReassignmentCase',
+        strategy: 'type_dispatch',
+        authority: 'ambiguous',
+        targetRefs: {
+            'StructuralA.request': 'target.a',
+            'StructuralB.request': 'target.b',
+        },
+        evidenceKinds: ['branch_origin'],
+    },
+    'typescript.nested_write': {
+        calleeText: 'nestedBlock.request',
+        caller: 'nestedWriteCase',
+        strategy: 'type_dispatch',
+        authority: 'ambiguous',
+        targetRefs: {
+            'StructuralA.request': 'target.a',
+            'StructuralB.request': 'target.b',
+        },
+        evidenceKinds: ['branch_origin'],
+    },
+    'typescript.loop_write': {
+        calleeText: 'loopWrite.request',
+        caller: 'loopWriteCase',
+        strategy: 'type_dispatch',
+        authority: 'ambiguous',
+        targetRefs: {
+            'StructuralA.request': 'target.a',
+            'StructuralB.request': 'target.b',
+        },
+        evidenceKinds: ['branch_origin'],
+    },
+    'typescript.closure_write': {
+        calleeText: 'closureWrite.request',
+        caller: 'closureWriteCase',
+        strategy: 'type_dispatch',
+        authority: 'ambiguous',
+        targetRefs: {
+            'StructuralA.request': 'target.a',
+            'StructuralB.request': 'target.b',
+        },
+        evidenceKinds: ['branch_origin'],
+    },
+    'typescript.open_world_single_interface': {
+        calleeText: 'worker.singleOnly',
+        caller: 'openWorldSingleInterfaceCase',
+        strategy: 'interface_dispatch',
+        authority: 'unresolved',
+        targetRefs: {
+            'SingleImpl.singleOnly': 'target.impl',
+        },
+        evidenceKinds: ['interface_contract'],
     },
 };
 
@@ -481,7 +599,7 @@ function observationFor(caseId, occurrence, spec, caller) {
     };
 }
 
-function main() {
+async function main() {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {
         process.stdout.write(usage());
@@ -490,8 +608,9 @@ function main() {
 
     const corpus = JSON.parse(fs.readFileSync(options.corpus, 'utf8'));
     const corpusIds = corpus.cases.map((item) => item.id);
-    const unknown = corpusIds.filter((caseId) => !caseSpecs[caseId]);
-    if (unknown.length > 0 || corpusIds.length !== Object.keys(caseSpecs).length) {
+    const productionCaseIds = new Set(TYPESCRIPT_PRODUCTION_QUALIFICATION_CASE_IDS);
+    const unknown = corpusIds.filter((caseId) => !caseSpecs[caseId] && !productionCaseIds.has(caseId));
+    if (unknown.length > 0) {
         throw new Error(`Qualification adapter/corpus mismatch: unknown=${unknown.join(',')}`);
     }
 
@@ -511,6 +630,25 @@ function main() {
     const cases = [];
 
     for (const caseId of corpusIds) {
+        if (productionCaseIds.has(caseId)) {
+            try {
+                const result = await runTypeScriptProductionQualificationCase(caseId);
+                cases.push({
+                    caseId,
+                    status: 'ok',
+                    observation: result.observation,
+                    measurements: [result.measurement],
+                });
+            } catch (error) {
+                cases.push({
+                    caseId,
+                    status: 'error',
+                    error: error instanceof Error ? error.message : String(error),
+                    measurements: [],
+                });
+            }
+            continue;
+        }
         const spec = caseSpecs[caseId];
         try {
             const occurrence = occurrenceForCase(occurrences, spec, callers);
@@ -572,4 +710,7 @@ function main() {
     process.stdout.write(`Wrote TypeScript semantic qualification report: ${options.out}\n`);
 }
 
-main();
+main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.exitCode = 1;
+});

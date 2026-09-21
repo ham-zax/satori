@@ -15,6 +15,7 @@ import {
     type RelationshipAnalysisEvidence,
 } from './builder';
 import type { ResolutionClaim } from './resolution';
+import { DefaultLanguageResolutionStrategyRegistry } from './resolution-strategy-registry';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifest } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
 import { getLanguageIdFromFilename } from '../language';
@@ -130,6 +131,10 @@ function createSymbol(input: {
     };
 }
 
+const syntacticTypeScriptStrategyRegistry = new DefaultLanguageResolutionStrategyRegistry({
+    typescript: 'syntactic',
+});
+
 function manifest(): SymbolRegistryManifest {
     return {
         schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -211,6 +216,7 @@ test('buildCallRelationshipsForRegistry creates deterministic CALLS records from
 
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: await analyzeFiles(new Map([
             ['src/auth.ts', 'export function validateToken(token: string) { return true; }\nexport function login(token: string) {\n  return validateToken(token);\n}\n'],
             ['src/routes.ts', 'import { login } from "./auth";\nexport function route(token: string) {\n  return login(token);\n}\n'],
@@ -336,6 +342,7 @@ test('buildCallRelationshipsForRegistry adds TESTS only for resolved test-to-pro
     });
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: new Map([
             ['src/runtime.ts', {
                 moduleBindings: [],
@@ -631,6 +638,7 @@ test('buildCallRelationshipsForRegistry assigns same-line calls by byte containm
 
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: await analyzeFiles({ [file]: content }),
     });
     const nameById = new Map(symbols.map((entry) => [entry.symbolInstanceId, entry.name]));
@@ -663,6 +671,7 @@ test('buildCallRelationshipsForRegistry preserves distinct same-line call spans'
 
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: new Map([[file, {
             moduleBindings: [],
             callSites: [
@@ -773,6 +782,7 @@ test('buildCallRelationshipsForRegistry does not emit duplicate container-owned 
 
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: await analyzeFiles({
             'src/auth.ts': [
                 'export function normalize(input: string) {',
@@ -959,6 +969,7 @@ test('buildCallRelationshipsForRegistry constrains targets by call kind', () => 
 
     const records = buildCallRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: new Map<string, RelationshipAnalysisEvidence>([
             [
                 file,
@@ -995,7 +1006,11 @@ test('buildCallRelationshipsForRegistry treats components and hooks as callable 
         symbols: [fileOwner, target, widget, hook],
     });
 
-    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile: await analyzeFiles({ [file]: content }) });
+    const records = buildCallRelationshipsForRegistry({
+        registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
+        analysisByFile: await analyzeFiles({ [file]: content }),
+    });
 
     assert.deepEqual(new Set(records.map((record) => record.sourceInstanceId)), new Set([
         widget.symbolInstanceId,
@@ -1379,6 +1394,7 @@ test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS fil
 
     const records = buildRelationshipsForRegistry({
         registry,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
         analysisByFile: await analyzeFiles(new Map([
             ['src/auth.ts', authContent],
             ['src/routes.ts', routesContent],
@@ -2339,7 +2355,7 @@ test('Characterization: Python resolution preserves exact CALLS, claims, and flo
     assert.equal(queryClaim.resolutionAuthority, 'origin_flow');
 });
 
-test('Characterization: JS/TS syntactic resolution produces direct CALLS and derived TESTS edges', async () => {
+test('Characterization: explicit syntactic strategy produces direct CALLS and derived TESTS edges', async () => {
     const sources = new Map([
         ['src/math.ts', 'export function add(a: number, b: number): number { return a + b; }\n'],
         ['src/app.ts', 'import { add } from "./math";\nexport function main() { return add(1, 2); }\n'],
@@ -2380,7 +2396,11 @@ test('Characterization: JS/TS syntactic resolution produces direct CALLS and der
     });
 
 
-    const records = buildRelationshipsForRegistry({ registry, analysisByFile });
+    const records = buildRelationshipsForRegistry({
+        registry,
+        analysisByFile,
+        strategyRegistry: syntacticTypeScriptStrategyRegistry,
+    });
     
     // Production call from src/app.ts -> src/math.ts
     const appCalls = records.filter((r) => r.file === 'src/app.ts' && r.type === 'CALLS');

@@ -10,9 +10,9 @@ test('defaultResolutionStrategyRegistry maps canonical languages to their correc
     assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('py'), 'python_native');
     assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('javascript'), 'syntactic');
     assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('js'), 'syntactic');
-    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('typescript'), 'syntactic');
-    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('ts'), 'syntactic');
-    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('tsx'), 'syntactic');
+    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('typescript'), 'typescript_semantic');
+    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('ts'), 'typescript_semantic');
+    assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('tsx'), 'typescript_semantic');
     assert.equal(defaultResolutionStrategyRegistry.strategyForLanguage('scala'), 'syntactic');
     
     for (const language of ['go', 'rust', 'rs', 'java', 'csharp', 'cs', 'cpp', 'c++']) {
@@ -30,7 +30,7 @@ test('DefaultLanguageResolutionStrategyRegistry accepts custom strategy override
     assert.equal(custom.strategyForLanguage('go'), 'cbm_semantic');
     assert.equal(custom.strategyForLanguage('python'), 'none');
     assert.equal(custom.strategyForLanguage('py'), 'none');
-    assert.equal(custom.strategyForLanguage('typescript'), 'syntactic');
+    assert.equal(custom.strategyForLanguage('typescript'), 'typescript_semantic');
     assert.equal(custom.strategyForLanguage('rust'), 'cbm_semantic');
 });
 
@@ -98,18 +98,55 @@ test('custom strategy registry actively controls buildCallRelationshipsForRegist
         symbols,
     });
 
-    // 1. With default strategy (typescript -> syntactic), calls are resolved
+    // 1. TypeScript fails closed without compiler-backed resolution evidence.
+    const noEvidenceRecords = buildCallRelationshipsForRegistry({
+        registry,
+        analysisByFile,
+    });
+    assert.equal(noEvidenceRecords.length, 0);
+
+    const source = registry.symbolsByFile.get('src/app.ts')!.find((symbol) => symbol.name === 'main')!;
+    const target = registry.symbolsByFile.get('src/math.ts')!.find((symbol) => symbol.name === 'add')!;
+    const call = analysisByFile.get('src/app.ts')!.callSites[0];
+    const claim = {
+        providerId: 'test-typescript-compiler',
+        providerVersion: 'v1',
+        environmentConfigId: 'test-ts-project',
+        sourceFile: 'src/app.ts',
+        sourceInstanceId: source.symbolInstanceId,
+        targetInstanceId: target.symbolInstanceId,
+        targetSymbol: target.qualifiedName,
+        callSpan: call.span,
+        decision: 'resolved' as const,
+        relationshipType: 'CALLS' as const,
+        resolutionAuthority: 'direct_binding' as const,
+        proofSteps: [],
+        dependencyKeys: ['test-project'],
+        flowHops: 0,
+    };
+    const resolutionEvidenceByLanguage = new Map([['typescript', {
+        language: 'typescript',
+        providerId: claim.providerId,
+        providerVersion: claim.providerVersion,
+        environmentConfigId: claim.environmentConfigId,
+        claimsByFile: new Map([['src/app.ts', [claim]]]),
+        affectedSourceFiles: new Set(['src/app.ts']),
+    }]]);
+
+    // 2. The compiler-backed claim becomes CALLS only through central admission.
     const defaultRecords = buildCallRelationshipsForRegistry({
         registry,
         analysisByFile,
+        resolutionEvidenceByLanguage,
     });
     assert.equal(defaultRecords.length, 1);
     assert.equal(defaultRecords[0].type, 'CALLS');
 
-    // 2. With custom strategy override (typescript -> none), calls are suppressed even though TS is eligible
+    // 3. A strategy override to none suppresses even otherwise admissible evidence.
     const suppressedRecords = buildCallRelationshipsForRegistry({
         registry,
         analysisByFile,
+        resolutionEvidenceByLanguage,
         strategyRegistry: new DefaultLanguageResolutionStrategyRegistry({
             typescript: 'none',
         }),

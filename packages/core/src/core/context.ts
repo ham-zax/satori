@@ -52,7 +52,9 @@ import {
 } from '../paths/repository-path';
 import {
     type RelationshipAnalysisEvidence,
+    type ResolutionProjectAnalyzer,
 } from '../relationships';
+import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typescript-semantic-analyzer';
 
 import { ThreadedWasmSemanticProjectAnalyzer, type SemanticProjectAnalyzer } from '../semantic';
 
@@ -253,6 +255,7 @@ export interface ContextConfig {
     customExtensions?: string[]; // New: custom extensions from MCP
     customIgnorePatterns?: string[]; // New: custom ignore patterns from MCP
     semanticAnalyzer?: SemanticProjectAnalyzer;
+    resolutionAnalyzer?: ResolutionProjectAnalyzer;
     rootMutationRuntime?: RootMutationRuntime;
     publicationRuntime?: SharedPublicationRuntime;
 }
@@ -333,6 +336,7 @@ export class Context {
     private readonly indexingPipeline: IndexingPipeline;
     private readonly ignoreRuleService: IgnoreRuleService;
     private readonly semanticAnalyzer?: SemanticProjectAnalyzer;
+    private readonly resolutionAnalyzer?: ResolutionProjectAnalyzer;
     private disposePromise: Promise<void> | null = null;
     private vectorStoreProvider: VectorStoreProviderIdentity;
 
@@ -442,7 +446,9 @@ export class Context {
         });
 
         const semanticAnalyzer = config.semanticAnalyzer ?? new ThreadedWasmSemanticProjectAnalyzer();
+        const resolutionAnalyzer = config.resolutionAnalyzer ?? new LazyTypeScriptSemanticProjectAnalyzer();
         this.semanticAnalyzer = semanticAnalyzer;
+        this.resolutionAnalyzer = resolutionAnalyzer;
 
         this.indexGenerationWorkflow = new IndexGenerationWorkflow({
             activatePublication: (publication, lease) => this.publicationStore.activate(publication, lease),
@@ -552,6 +558,7 @@ export class Context {
             ),
             languageAnalyzer: this.languageAnalyzer,
             semanticAnalyzer,
+            resolutionAnalyzer,
         });
 
         this.indexingPipeline = new IndexingPipeline({
@@ -1746,7 +1753,10 @@ export class Context {
      */
     public dispose(): Promise<void> {
         if (!this.disposePromise) {
-            this.disposePromise = Promise.resolve(this.semanticAnalyzer?.dispose?.());
+            this.disposePromise = Promise.all([
+                Promise.resolve(this.semanticAnalyzer?.dispose?.()),
+                Promise.resolve(this.resolutionAnalyzer?.dispose?.()),
+            ]).then(() => undefined);
         }
         return this.disposePromise;
     }

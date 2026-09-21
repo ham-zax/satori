@@ -1,7 +1,11 @@
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { PythonFlowFact } from '../language-analysis';
 import type { RelationshipAnalysisEvidence } from '../relationships';
-import { isResolutionAuthority, MAX_PYTHON_FLOW_HOPS } from '../relationships/resolution';
+import {
+    isResolutionAuthority,
+    MAX_PYTHON_FLOW_HOPS,
+    NATIVE_PYTHON_PROVIDER_ID,
+} from '../relationships/resolution';
 import type { ResolutionClaim, ResolutionProofStep } from '../relationships/resolution';
 import {
     isStructuralDefinitionStatus,
@@ -329,7 +333,7 @@ export function isResolutionClaim(value: unknown): value is ResolutionClaim {
         || !Array.isArray(value.dependencyKeys)
         || !value.dependencyKeys.every(isNonEmptyString)
         || !isNonNegativeInteger(value.flowHops)
-        || value.flowHops > MAX_PYTHON_FLOW_HOPS) {
+        || (value.providerId === NATIVE_PYTHON_PROVIDER_ID && value.flowHops > MAX_PYTHON_FLOW_HOPS)) {
         return false;
     }
     if (value.decision === 'resolved') {

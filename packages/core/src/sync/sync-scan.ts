@@ -29,6 +29,7 @@ export interface SynchronizerScanContext {
     rootDir: string;
     ignoreMatcher: ReturnType<typeof ignore>;
     supportedExtensions: readonly string[];
+    additionalObservablePaths?: ReadonlySet<string>;
     excludedPaths?: ReadonlySet<string>;
     forceFullHash: boolean;
     hashConcurrency: number;
@@ -129,9 +130,16 @@ function shouldIgnore(
         return true;
     }
 
+    if (!isDirectory && context.additionalObservablePaths?.has(normalizedPath)) {
+        return false;
+    }
+
     if (isDirectory) {
-        const withSlash = normalizedPath.endsWith('/') ? normalizedPath : `${normalizedPath}/`;
-        return context.ignoreMatcher.ignores(normalizedPath) || context.ignoreMatcher.ignores(withSlash);
+        const prefix = normalizedPath.endsWith('/') ? normalizedPath : `${normalizedPath}/`;
+        if ([...(context.additionalObservablePaths ?? [])].some((filePath) => filePath.startsWith(prefix))) {
+            return false;
+        }
+        return context.ignoreMatcher.ignores(normalizedPath) || context.ignoreMatcher.ignores(prefix);
     }
 
     return context.ignoreMatcher.ignores(normalizedPath);
@@ -143,6 +151,7 @@ async function isSupportedFile(
     absolutePath: string,
     size: number,
 ): Promise<boolean> {
+    if (context.additionalObservablePaths?.has(relativePath)) return true;
     return isObservableFileByPolicy(
         relativePath,
         absolutePath,
@@ -173,7 +182,8 @@ async function hashFileBytes(
         if (!relativePath) {
             throw new Error(`Opened descriptor path is outside the synchronizer root: ${filePath}`);
         }
-        const indexable = await isObservableFileObservationByPolicy(
+        const indexable = context.additionalObservablePaths?.has(relativePath)
+            || await isObservableFileObservationByPolicy(
             relativePath,
             before.size,
             [...context.supportedExtensions],

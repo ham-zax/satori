@@ -1,4 +1,5 @@
 import type { SourceSpan } from '../language-analysis';
+import type { SymbolRegistry } from '../symbols';
 
 /** Stable semantic configuration identity; publication generations are not part of it. */
 export const PYTHON_NATIVE_ENVIRONMENT_CONFIG_ID = 'python-native-resolution-v2';
@@ -134,6 +135,37 @@ export interface ResolutionProvider<TInput = unknown> {
     readonly providerId: string;
     readonly providerVersion: string;
     resolve(input: TInput): readonly ResolutionClaim[];
+}
+
+export interface ResolutionProjectInput {
+    readonly rootPath: string;
+    readonly language: string;
+    readonly registry: SymbolRegistry;
+    readonly previousRegistry?: SymbolRegistry;
+    readonly changedFiles?: ReadonlySet<string>;
+}
+
+export interface ResolutionProjectEvidence {
+    readonly language: string;
+    readonly providerId: string;
+    readonly providerVersion: string;
+    readonly environmentConfigId: string;
+    readonly claimsByFile: ReadonlyMap<string, readonly ResolutionClaim[]>;
+    /** Exact conservative relationship owners to rebuild. Omit for whole-language fallback. */
+    readonly affectedSourceFiles?: ReadonlySet<string>;
+    /** Non-indexed source inputs whose content can change semantic identity. */
+    readonly sourceControlFiles?: readonly string[];
+}
+
+export interface ResolutionProjectAnalyzer {
+    supportsLanguage(language: string): boolean;
+    analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence>;
+    getSourceControlFiles?(input: {
+        readonly rootPath: string;
+        readonly language: string;
+        readonly sourceFiles: readonly string[];
+    }): Promise<readonly string[]>;
+    dispose?(): Promise<void>;
 }
 
 export function dependencyKeyForCall(input: {

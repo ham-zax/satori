@@ -67,6 +67,11 @@ export interface TypeScriptCompilerProviderOptions {
     readonly collectDiagnostics?: boolean;
 }
 
+export interface TypeScriptProgramSourceFile {
+    readonly projectPath: string;
+    readonly sourceFile: ts.SourceFile;
+}
+
 interface ProjectFile {
     readonly projectPath: string;
     readonly virtualPath: string;
@@ -887,35 +892,20 @@ function evidenceForCall(
     };
 }
 
-export function analyzeTypeScriptProject(
-    input: SemanticProjectInput,
-    providerOptions: TypeScriptCompilerProviderOptions = {},
+function analyzeProgramEvidence(
+    program: ts.Program,
+    projectFiles: readonly ProjectFile[],
+    collectDiagnostics: boolean,
+    startedAt: number,
+    sourceFiles?: ReadonlySet<string>,
 ): TypeScriptProjectEvidence {
-    const startedAt = performance.now();
-
-    const projectFiles = input.sourceFiles.map((file): ProjectFile => ({
-        projectPath: normalizeProjectPath(file.path),
-        virtualPath: virtualPathFor(file.path),
-        source: file.source,
-        sourceMap: new Utf8SourceMap(file.source),
-    }));
     const projectFilesByVirtualPath = new Map(projectFiles.map((file) => [file.virtualPath, file]));
-    const compilerOptions = {
-        ...defaultCompilerOptions(),
-        ...providerOptions.compilerOptions,
-        noEmit: true,
-    };
-    const host = buildCompilerHost(projectFilesByVirtualPath, compilerOptions);
-    const program = ts.createProgram({
-        rootNames: projectFiles.map((file) => file.virtualPath),
-        options: compilerOptions,
-        host,
-    });
     const checker = program.getTypeChecker();
     const dispatchContext = collectProjectDispatchContext(checker, program, projectFilesByVirtualPath);
     const occurrencesByFile = new Map<string, TypeScriptCallEvidence[]>();
 
     for (const projectFile of projectFiles) {
+        if (sourceFiles && !sourceFiles.has(projectFile.projectPath)) continue;
         const sourceFile = program.getSourceFile(projectFile.virtualPath);
         if (!sourceFile || sourceFile.isDeclarationFile) {
             occurrencesByFile.set(projectFile.projectPath, []);
@@ -940,7 +930,7 @@ export function analyzeTypeScriptProject(
         occurrencesByFile.set(projectFile.projectPath, occurrences);
     }
 
-    const diagnostics = providerOptions.collectDiagnostics
+    const diagnostics = collectDiagnostics
         ? {
             syntactic: program.getSyntacticDiagnostics().length,
             semantic: program.getSemanticDiagnostics().length,
@@ -956,4 +946,59 @@ export function analyzeTypeScriptProject(
         ...(diagnostics ? { diagnostics } : {}),
         durationMs: performance.now() - startedAt,
     };
+}
+
+export function analyzeTypeScriptProgram(
+    program: ts.Program,
+    sourceFiles: readonly TypeScriptProgramSourceFile[],
+    providerOptions: Pick<TypeScriptCompilerProviderOptions, 'collectDiagnostics'> & {
+        readonly sourceFiles?: ReadonlySet<string>;
+    } = {},
+): TypeScriptProjectEvidence {
+    const startedAt = performance.now();
+    const projectFiles = sourceFiles.map(({ projectPath, sourceFile }): ProjectFile => ({
+        projectPath: normalizeProjectPath(projectPath),
+        virtualPath: path.posix.normalize(sourceFile.fileName.replace(/\\\\/g, '/')),
+        source: sourceFile.text,
+        sourceMap: new Utf8SourceMap(sourceFile.text),
+    }));
+    return analyzeProgramEvidence(
+        program,
+        projectFiles,
+        providerOptions.collectDiagnostics ?? false,
+        startedAt,
+        providerOptions.sourceFiles,
+    );
+}
+
+export function analyzeTypeScriptProject(
+    input: SemanticProjectInput,
+    providerOptions: TypeScriptCompilerProviderOptions = {},
+): TypeScriptProjectEvidence {
+    const startedAt = performance.now();
+
+    const projectFiles = input.sourceFiles.map((file): ProjectFile => ({
+        projectPath: normalizeProjectPath(file.path),
+        virtualPath: virtualPathFor(file.path),
+        source: file.source,
+        sourceMap: new Utf8SourceMap(file.source),
+    }));
+    const projectFilesByVirtualPath = new Map(projectFiles.map((file) => [file.virtualPath, file]));
+    const compilerOptions = {
+        ...defaultCompilerOptions(),
+        ...providerOptions.compilerOptions,
+        noEmit: true,
+    };
+    const host = buildCompilerHost(projectFilesByVirtualPath, compilerOptions);
+    const program = ts.createProgram({
+        rootNames: projectFiles.map((file) => file.virtualPath),
+        options: compilerOptions,
+        host,
+    });
+    return analyzeProgramEvidence(
+        program,
+        projectFiles,
+        providerOptions.collectDiagnostics ?? false,
+        startedAt,
+    );
 }

@@ -3,6 +3,7 @@ import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '
 
 export type LanguageResolutionStrategy =
     | 'python_native'
+    | 'typescript_semantic'
     | 'syntactic'
     | 'cbm_semantic'
     | 'none';
@@ -15,7 +16,7 @@ const STATIC_BUILTIN_STRATEGIES: Readonly<Record<string, LanguageResolutionStrat
     python: 'python_native',
     javascript: 'syntactic',
     scala: 'syntactic',
-    typescript: 'syntactic',
+    typescript: 'typescript_semantic',
 };
 
 export class DefaultLanguageResolutionStrategyRegistry implements LanguageResolutionStrategyRegistry {

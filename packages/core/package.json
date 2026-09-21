@@ -50,11 +50,11 @@
     "oxc-parser": "0.139.0",
     "voyageai": "^0.3.1",
     "web-tree-sitter": "0.26.10",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "typescript": "6.0.3"
   },
   "devDependencies": {
-    "tsx": "^4.22.4",
-    "typescript": "^6.0.3"
+    "tsx": "^4.22.4"
   },
   "files": [
     "dist/**/*.js",

@@ -65,6 +65,7 @@ export interface PreparedFileChangeSet {
 
 export interface FileSynchronizerOptions {
     sourceCheckpoint?: PublicationSourceCheckpoint;
+    additionalObservablePaths?: readonly string[];
 }
 
 export interface PrepareFileChangesOptions {
@@ -108,6 +109,7 @@ export class FileSynchronizer {
     private unprocessedPaths: string[];
     private fullHashCounter: number;
     private supportedExtensions: Set<string>;
+    private additionalObservablePaths: Set<string>;
     private checkpointVersion: number;
     private commitQueue: Promise<void>;
 
@@ -124,6 +126,9 @@ export class FileSynchronizer {
         this.supportedExtensions = new Set(normalizeSupportedExtensions(
             supportedExtensions.length > 0 ? supportedExtensions : DEFAULT_SUPPORTED_EXTENSIONS,
         ));
+        this.additionalObservablePaths = this.normalizeAdditionalObservablePaths(
+            options.additionalObservablePaths ?? [],
+        );
         const checkpoint = options.sourceCheckpoint;
         if (checkpoint) {
             if (checkpoint.canonicalRoot !== this.rootDir) {
@@ -168,6 +173,22 @@ export class FileSynchronizer {
 
     private normalizeRelPath(candidatePath: string): string {
         return normalizeSynchronizerRelPath(this.rootDir, candidatePath);
+    }
+
+    private normalizeAdditionalObservablePaths(paths: readonly string[]): Set<string> {
+        const normalized = new Set<string>();
+        for (const candidatePath of paths) {
+            const relativePath = this.normalizeRelPath(candidatePath);
+            if (!relativePath || relativePath !== candidatePath.replace(/\\/g, '/')) {
+                throw new Error(`[Synchronizer] Invalid additional observable path '${candidatePath}'.`);
+            }
+            normalized.add(relativePath);
+        }
+        return normalized;
+    }
+
+    public setAdditionalObservablePaths(paths: readonly string[]): void {
+        this.additionalObservablePaths = this.normalizeAdditionalObservablePaths(paths);
     }
 
     private parsePositiveInt(rawValue: string | undefined, fallback: number, min: number, max: number): number {
@@ -222,6 +243,7 @@ export class FileSynchronizer {
             rootDir: this.rootDir,
             ignoreMatcher: this.ignoreMatcher,
             supportedExtensions: [...this.supportedExtensions],
+            additionalObservablePaths: this.additionalObservablePaths,
             excludedPaths,
             forceFullHash,
             hashConcurrency: this.getHashConcurrency(),
@@ -307,6 +329,7 @@ export class FileSynchronizer {
                 if (
                     !capturedFullIndexSource.fileHashes.has(relativePath)
                     && !isSemanticAuxiliaryFilename(relativePath)
+                    && !this.additionalObservablePaths.has(relativePath)
                 ) {
                     throw new Error('[Synchronizer] Source observation changed while the candidate Publication was being prepared.');
                 }

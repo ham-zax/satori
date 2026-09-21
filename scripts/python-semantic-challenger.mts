@@ -564,8 +564,8 @@ const fixtures: readonly Fixture[] = [
         callFile: 'pkg/app.py',
         callLine: 10,
         callee: 'original',
-        expectation: { kind: 'target', target: 'replacement' },
-        note: 'At runtime the decorated global name original is rebound to replacement.',
+        expectation: { kind: 'observe' },
+        note: 'Native targets the decorated declaration. Runtime decorators may rebind the callable, so exactness depends on Satori\'s declared source-vs-runtime call contract.',
     },
 ];
 

@@ -366,7 +366,11 @@ export function isRelationshipAnalysisEvidence(value: unknown): value is Relatio
             return Object.keys(binding).length === 5 && isSourceSpan(binding.statementBlockSpan);
         }
         return Object.keys(binding).length === 4
-            && (binding.kind === 'parameter_annotation' || binding.kind === 'self_field_constructor');
+            && (
+                binding.kind === 'parameter_annotation'
+                || binding.kind === 'local_annotation'
+                || binding.kind === 'self_field_constructor'
+            );
     });
     const flowFactsValid = value.pythonFlowFacts === undefined
         || (Array.isArray(value.pythonFlowFacts) && value.pythonFlowFacts.every(isPythonFlowFact));

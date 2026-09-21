@@ -461,7 +461,7 @@ export class McpSession {
                 capabilities: {
                     tools: {},
                 },
-                instructions: SATORI_MCP_INSTRUCTIONS,
+                instructions: [SATORI_MCP_INSTRUCTIONS, "Use architecture_overview for repository-wide areas, cross-area boundaries, and hotspots."].join(" "),
             },
         );
         this.resources = host.createSessionResources(

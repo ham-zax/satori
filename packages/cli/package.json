@@ -1,6 +1,6 @@
 {
   "name": "@zokizuan/satori-cli",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Installer and doctor CLI for Satori's repo-aware MCP tools.",
   "type": "module",
   "main": "dist/index.js",
@@ -28,8 +28,8 @@
     "jsonc-parser": "^3.3.1"
   },
   "satoriManagedRuntime": {
-    "mcp": "7.2.0",
-    "core": "3.13.0",
+    "mcp": "7.3.0",
+    "core": "3.14.0",
     "lanceDb": "0.31.0",
     "oxcParser": "0.139.0",
     "lateOn": {

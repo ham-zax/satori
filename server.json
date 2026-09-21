@@ -3,7 +3,7 @@
   "id": "satori",
   "name": "Satori MCP",
   "packageName": "@zokizuan/satori-mcp",
-  "version": "7.2.0",
+  "version": "7.3.0",
   "description": "Local-first code intelligence for AI coding agents: hybrid repository search, exact symbol/source navigation, structural outlines, conservative call relationships, and freshness-aware indexing.",
   "install": {
     "command": "npx",

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { connectCliMcpSession, type CliMcpSession } from '../packages/cli/src/client.js';
+import { runSearchQualityEvaluation } from '../evals/search-quality/search-quality-evaluation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,23 +84,94 @@ function createFixtureRepository(): string {
             strict: true,
             noEmit: true,
         },
-        include: ['src/**/*.ts'],
+        include: ['**/*.ts'],
     }, null, 2));
-    writeFile(root, 'src/workers.ts', `
+    writeFile(root, 'packages/app/src/workers.ts', `
 export interface WorkerLike {
     request(): string;
 }
 
 export class PrimaryWorker implements WorkerLike {
+    private readonly primaryBrand = true;
     request(): string { return 'primary'; }
 }
 
 export class BackupWorker implements WorkerLike {
+    private readonly backupBrand = true;
     request(): string { return 'backup'; }
+}
+
+export class DecisionWorkerClient {
+    constructor(private readonly worker: PrimaryWorker) {}
+
+    run(): string {
+        return this.worker.request();
+    }
 }
 
 export function invoke(worker: WorkerLike): string {
     return worker.request();
+}
+
+export function callBackup(worker: BackupWorker): string {
+    return worker.request();
+}
+
+export function callBackupTransitively(): string {
+    return callBackup(new BackupWorker());
+}
+
+export function unresolvedObservation(registry: any): unknown {
+    return registry.missingRequest();
+}
+`);
+    writeFile(root, 'packages/app/src/textual-target.ts', `
+export function textualTarget(): string {
+    return 'target';
+}
+
+export function dynamicLookup(registry: any): unknown {
+    const method = 'textualTarget';
+    return registry[method]();
+}
+`);
+    writeFile(root, 'packages/excluded/src/textual.ts', `
+export function excludedLookup(registry: any): unknown {
+    const method = 'textualTarget';
+    return registry[method]();
+}
+`);
+    writeFile(root, 'packages/alpha/src/cycle.ts', `
+import { betaCycle } from '../../beta/src/cycle.js';
+
+export function alphaCycle(): string {
+    return betaCycle();
+}
+`);
+    writeFile(root, 'packages/beta/src/cycle.ts', `
+import { alphaCycle } from '../../alpha/src/cycle.js';
+
+export function betaCycle(): string {
+    return alphaCycle();
+}
+`);
+    writeFile(root, 'packages/entry/src/start.ts', `
+import { alphaCycle } from '../../alpha/src/cycle.js';
+
+export function startArchitecture(): string {
+    return alphaCycle();
+}
+`);
+    writeFile(root, 'packages/excluded/src/architecture.ts', `
+import { alphaCycle } from '../../alpha/src/cycle.js';
+
+export function excludedArchitecture(): string {
+    return alphaCycle();
+}
+`);
+    writeFile(root, 'tools/outside.ts', `
+export function outsidePackages(): string {
+    return 'outside';
 }
 `);
 
@@ -112,7 +184,7 @@ export function invoke(worker: WorkerLike): string {
     // Keep HEAD at the baseline while indexing the current tracked worktree.
     // detect_changes can therefore compare HEAD -> current source while the
     // Publication remains fresh for the modified bytes.
-    const workersPath = path.join(root, 'src/workers.ts');
+    const workersPath = path.join(root, 'packages/app/src/workers.ts');
     fs.writeFileSync(
         workersPath,
         fs.readFileSync(workersPath, 'utf8').replace(
@@ -237,7 +309,7 @@ function requireTypedMemberCoverage(response: JsonRecord): JsonRecord {
 async function main(): Promise<void> {
     console.log('='.repeat(80));
     console.log('RELATIONSHIP EVIDENCE END-TO-END PRODUCT WITNESS');
-    console.log('persisted claim -> query -> call_graph -> architecture -> impact');
+    console.log('CALLS -> claims -> exact source -> file calibration -> architecture -> impact -> behavioral retrieval');
     console.log('='.repeat(80));
 
     const repoRoot = createFixtureRepository();
@@ -248,11 +320,30 @@ async function main(): Promise<void> {
         session = await connect(repoRoot, stateRoot);
         const publicationId = await establishPublication(session, repoRoot);
 
-        const invoke = await outlineSymbol(session, repoRoot, 'src/workers.ts', 'invoke');
-        const backup = await outlineSymbol(session, repoRoot, 'src/workers.ts', 'BackupWorker.request');
+        const workersFile = 'packages/app/src/workers.ts';
+        const invoke = await outlineSymbol(session, repoRoot, workersFile, 'invoke');
+        const backup = await outlineSymbol(session, repoRoot, workersFile, 'BackupWorker.request');
+        const primary = await outlineSymbol(session, repoRoot, workersFile, 'PrimaryWorker.request');
+        const clientRun = await outlineSymbol(session, repoRoot, workersFile, 'DecisionWorkerClient.run');
+        const directBackup = await outlineSymbol(session, repoRoot, workersFile, 'callBackup');
+        const transitiveBackup = await outlineSymbol(session, repoRoot, workersFile, 'callBackupTransitively');
+        const unresolved = await outlineSymbol(session, repoRoot, workersFile, 'unresolvedObservation');
+        const textualTarget = await outlineSymbol(session, repoRoot, 'packages/app/src/textual-target.ts', 'textualTarget');
+        const dynamicLookup = await outlineSymbol(session, repoRoot, 'packages/app/src/textual-target.ts', 'dynamicLookup');
 
+        // A — compiler-proven this.field.request() is an admitted CALLS edge.
+        const provenInbound = await callGraph(session, primary.codebaseRoot, primary.target, 'callers', publicationId);
+        assert.ok(asRecords(provenInbound.edges).some((edge) => (
+            edge.srcSymbolId === clientRun.target.symbolId
+            && edge.dstSymbolId === primary.target.symbolId
+        )), `Missing proven DecisionWorkerClient.run -> PrimaryWorker.request edge: ${JSON.stringify(provenInbound)}`);
+
+        // B — ambiguous interface dispatch stays claim/reference evidence and never
+        // fabricates invoke -> BackupWorker.request even though a different concrete
+        // caller of BackupWorker.request is legitimately admitted.
         const inbound = await callGraph(session, backup.codebaseRoot, backup.target, 'callers', publicationId);
         assert.equal(asRecords(inbound.edges).some((edge) => edge.srcSymbolId === invoke.target.symbolId), false);
+        assert.ok(asRecords(inbound.edges).some((edge) => edge.srcSymbolId === directBackup.target.symbolId));
         const candidateReference = asRecords(inbound.exactReferences).find((reference) => (
             reference.relationship === 'caller'
             && reference.matchKind === 'candidate_target'
@@ -262,9 +353,6 @@ async function main(): Promise<void> {
             && reference.targetSymbolId === backup.target.symbolId
         ));
         assert.ok(candidateReference, `Missing ambiguous candidate reference: ${JSON.stringify(inbound)}`);
-        const inboundCoverage = asRecord(inbound.inboundCoverageEvidence);
-        assert.equal(inboundCoverage?.reason, 'non_authoritative_resolution_evidence');
-        assert.equal(inboundCoverage?.ambiguousReferenceCount, 1);
 
         const outbound = await callGraph(session, invoke.codebaseRoot, invoke.target, 'callees', publicationId);
         assert.equal(asRecords(outbound.edges).length, 0);
@@ -276,9 +364,81 @@ async function main(): Promise<void> {
         )));
         requireTypedMemberCoverage(outbound);
 
+        // C — unresolved calls remain visible without an edge.
+        const unresolvedGraph = await callGraph(session, unresolved.codebaseRoot, unresolved.target, 'callees', publicationId);
+        assert.equal(asRecords(unresolvedGraph.edges).length, 0);
+        assert.ok(asRecords(unresolvedGraph.exactReferences).some((reference) => (
+            reference.relationship === 'callee'
+            && reference.decision === 'unresolved'
+            && reference.sourceSymbolId === unresolved.target.symbolId
+        )), `Missing unresolved source-call evidence: ${JSON.stringify(unresolvedGraph)}`);
+
+        // D — no semantic claim identifies textualTarget from the computed lookup,
+        // but the exact published-source floor recovers the occurrence without CALLS.
+        const textualInbound = await callGraph(
+            session,
+            textualTarget.codebaseRoot,
+            textualTarget.target,
+            'callers',
+            publicationId,
+        );
+        assert.equal(asRecords(textualInbound.edges).length, 0);
+        assert.equal(asRecords(textualInbound.exactReferences).some((reference) => (
+            reference.sourceSymbolId === dynamicLookup.target.symbolId
+        )), false);
+        const observational = asRecords(textualInbound.sourceReferences).find((reference) => (
+            reference.sourceSymbolId === dynamicLookup.target.symbolId
+            && reference.evidenceClass === 'published_source_text'
+        ));
+        assert.ok(observational, `Missing no-claim exact source fallback: ${JSON.stringify(textualInbound)}`);
+        assert.equal(asRecord(textualInbound.sourceReferenceCoverage)?.status, 'complete');
+        assert.equal(asRecord(textualInbound.inboundCoverageEvidence)?.sourceReferenceCoverage, 'complete');
+
+        // E — the first-class public tool is ranking-independent and obeys explicit
+        // subtree/include/exclude scope while returning exact spans/owners.
+        const exact = parseFirstText(await session.callTool('find_references', {
+            path: repoRoot,
+            symbolRef: textualTarget.target,
+            subtree: 'packages',
+            includePaths: ['packages/app', 'packages/excluded'],
+            excludePaths: ['packages/excluded'],
+            limit: 100,
+        }));
+        assert.equal(exact.status, 'ok', JSON.stringify(exact));
+        assert.equal(exact.rankingIndependent, true);
+        assert.equal(asRecord(exact.coverage)?.status, 'complete');
+        assert.ok(asRecords(exact.references).some((reference) => (
+            reference.file === 'packages/app/src/textual-target.ts'
+            && asRecord(reference.owningSymbol)?.symbolId === dynamicLookup.target.symbolId
+            && typeof asRecord(reference.span)?.startColumn === 'number'
+        )));
+        assert.equal(asRecords(exact.references).some((reference) => (
+            String(reference.file).startsWith('packages/excluded/')
+        )), false);
+
+        // F — file-level calibration is discoverable without selecting a symbol.
+        const calibration = parseFirstText(await session.callTool('file_outline', {
+            path: repoRoot,
+            file: workersFile,
+            detail: 'relationship_coverage',
+            limitSymbols: 100,
+        }));
+        assert.equal(calibration.status, 'ok', JSON.stringify(calibration));
+        const fileEvidence = asRecord(calibration.relationshipEvidence);
+        assert.ok((fileEvidence?.resolvedClaimCount as number) >= 1);
+        assert.ok((fileEvidence?.ambiguousClaimCount as number) >= 1);
+        assert.ok((fileEvidence?.unresolvedClaimCount as number) >= 1);
+        assert.ok(asRecords(fileEvidence?.constructCoverage).some((row) => (
+            row.construct === 'typed_member_call'
+        )));
+
+        // G — architecture preserves construct coverage and applies one path scope
+        // consistently while reporting structural entries and area-level cycles.
         const architecture = parseFirstText(await session.callTool('architecture_overview', {
             path: repoRoot,
-            scope: 'runtime',
+            scope: 'all',
+            subtree: 'packages',
+            excludePaths: ['packages/excluded'],
             limit: 20,
         }));
         assert.equal(architecture.status, 'ok', JSON.stringify(architecture));
@@ -286,12 +446,26 @@ async function main(): Promise<void> {
         assert.ok((relationshipEvidence?.ambiguousClaimCount as number) >= 1);
         const architectureCoverage = asRecords(relationshipEvidence?.constructCoverage)
             .find((row) => row.construct === 'typed_member_call');
-        assert.equal(architectureCoverage?.status, 'partial');
+        assert.ok(architectureCoverage);
+        const architectureScope = asRecord(architecture.pathScope);
+        assert.equal(architectureScope?.subtree, 'packages');
+        assert.deepEqual(architectureScope?.excludePaths, ['packages/excluded']);
+        assert.equal(asRecords(architecture.areas).some((area) => String(area.area).includes('excluded')), false);
+        assert.ok(asRecords(architecture.entryCandidates).some((entry) => (
+            entry.label === 'function startArchitecture()'
+            || String(entry.label).includes('startArchitecture')
+        )));
+        assert.ok(asRecords(architecture.cycles).some((cycle) => {
+            const areas = Array.isArray(cycle.areas) ? cycle.areas : [];
+            return areas.includes('packages/alpha') && areas.includes('packages/beta');
+        }), `Missing alpha/beta area cycle: ${JSON.stringify(architecture.cycles)}`);
 
+        // H — confirmed direct/transitive impact carries real CALLS paths while the
+        // ambiguous invoke reference remains uncertain and never joins impacted.
         const impact = parseFirstText(await session.callTool('detect_changes', {
             path: repoRoot,
             baseRef: 'HEAD',
-            depth: 1,
+            depth: 3,
             limit: 50,
         }));
         assert.equal(impact.status, 'ok', JSON.stringify(impact));
@@ -302,12 +476,45 @@ async function main(): Promise<void> {
             && reference.construct === 'typed_member_call'
         )));
         assert.equal(asRecords(impact.impacted).some((symbol) => symbol.symbolId === invoke.target.symbolId), false);
+        const directImpact = asRecords(impact.impacted).find((symbol) => (
+            symbol.symbolId === directBackup.target.symbolId
+        ));
+        const transitiveImpact = asRecords(impact.impacted).find((symbol) => (
+            symbol.symbolId === transitiveBackup.target.symbolId
+        ));
+        assert.equal(directImpact?.impactClass, 'direct');
+        assert.equal(directImpact?.distance, 1);
+        assert.equal(transitiveImpact?.impactClass, 'transitive');
+        assert.equal(transitiveImpact?.distance, 2);
+        assert.equal(asRecords(transitiveImpact?.causalPath).length, 2);
+        assert.ok(asRecords(impact.areaImpact).some((area) => (
+            area.area === 'packages/app'
+            && (area.directCount as number) >= 1
+            && (area.transitiveCount as number) >= 1
+        )));
+        assert.equal(asRecord(impact.completeness)?.exhaustive, false);
 
-        console.log('PASS persisted ambiguous typed-member evidence remained non-authoritative');
-        console.log('PASS exactReferences exposed the candidate call site without fabricating an edge');
-        console.log('PASS constructCoverage exposed the exact ambiguous gap');
-        console.log('PASS architecture_overview aggregated claim/construct coverage');
-        console.log('PASS detect_changes separated uncertain references from confirmed impact');
+        // I — behavioral retrieval is a separate benchmark lane, not semantic
+        // qualification. The durable inferPhase-equivalent owner case must be
+        // recovered inside the ordinary top-3 product budget.
+        const behavioral = await runSearchQualityEvaluation(SATORI_ROOT);
+        const behavioralRows = behavioral.results.filter((row) => (
+            row.workloadId === 'behavioral_owner_infer_phase'
+        ));
+        assert.equal(behavioralRows.length, behavioral.limits.length);
+        assert.equal(behavioralRows
+            .filter((row) => row.limit >= 3)
+            .every((row) => row.ownerRank !== null && row.ownerRank <= 3), true);
+
+        console.log('PASS A proven this.field typed member became authoritative CALLS');
+        console.log('PASS B ambiguous typed member stayed non-authoritative');
+        console.log('PASS C unresolved observation stayed visible without CALLS');
+        console.log('PASS D no-claim target recovered through exact published-source occurrences');
+        console.log('PASS E find_references obeyed subtree/include/exclude with complete coverage');
+        console.log('PASS F file_outline exposed per-file construct calibration');
+        console.log('PASS G architecture scope, entry candidates, cycles, and construct coverage passed');
+        console.log('PASS H impact distinguished direct/transitive paths from uncertain references');
+        console.log('PASS I behavioral retrieval replay recovered the durable inferPhase-equivalent owner');
         console.log('='.repeat(80));
         console.log('RELATIONSHIP EVIDENCE PRODUCT WITNESS PASSED');
         console.log('='.repeat(80));

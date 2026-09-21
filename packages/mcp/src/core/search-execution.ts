@@ -1126,7 +1126,10 @@ export async function runSearchExecution(
             routeKind: input.queryPlan.route.kind,
             exactRegistryFallback: input.exactRegistryEligible,
             operatorConstraintPresent: input.parsedOperators.must.length > 0,
-            explicitRoleCuePresent: input.queryPlan.implementationSeeking
+            explicitRoleCuePresent: (
+                input.queryPlan.implementationSeeking
+                && !input.queryPlan.behavioralOwnerSeeking
+            )
                 || input.queryPlan.testSeeking
                 || input.queryPlan.writerSeeking,
             primaryScopedCandidateCount,

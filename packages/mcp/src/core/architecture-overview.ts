@@ -8,6 +8,10 @@ import {
 } from "@zokizuan/satori-core";
 import type { PathCategory } from "./search-constants.js";
 import {
+    matchesPublishedPathScope,
+    type PublishedPathScope,
+} from "./navigation-path-scope.js";
+import {
     classifyPathCategory,
     normalizeSearchPath,
 } from "./search-ranking-policy.js";
@@ -31,6 +35,19 @@ export interface ArchitectureOverviewBoundary {
     highConfidenceEvidenceCount: number;
 }
 
+export interface ArchitectureOverviewEntryCandidate {
+    symbolId: string;
+    label: string;
+    file: string;
+    language: string;
+    outgoingCallCount: number;
+}
+
+export interface ArchitectureOverviewCycle {
+    areas: string[];
+    boundaryEdgeCount: number;
+}
+
 export interface ArchitectureOverviewHotspot {
     symbolId: string;
     label: string;
@@ -51,11 +68,23 @@ export interface ArchitectureOverviewResult {
         relationshipCount: number;
         includedSymbolCount: number;
         includedRelationshipCount: number;
+        eligiblePublishedFileCount: number;
+        excludedPublishedFileCountByPathScope: number;
         excludedSymbolsByCategory: Partial<Record<PathCategory, number>>;
     };
     areas: ArchitectureOverviewArea[];
     boundaries: ArchitectureOverviewBoundary[];
     hotspots: ArchitectureOverviewHotspot[];
+    entryCandidates: ArchitectureOverviewEntryCandidate[];
+    entryCandidatesTruncated: boolean;
+    entryCandidateRule: "outgoing_calls_and_no_incoming_calls_within_scope";
+    cycles: ArchitectureOverviewCycle[];
+    cyclesTruncated: boolean;
+    cycleRule: "strongly_connected_area_boundary_graph";
+    pathScope: {
+        subtree: string | null;
+        excludePaths: string[];
+    };
     relationshipEvidence: {
         resolutionClaimCount: number;
         resolvedClaimCount: number;
@@ -69,7 +98,7 @@ function normalizeFile(file: string): string {
     return file.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
-function areaForFile(file: string): string {
+export function areaForFile(file: string): string {
     const segments = normalizeFile(file).split("/").filter(Boolean);
     if (segments.length === 0) return "(root)";
     if (
@@ -122,14 +151,91 @@ function includeRuntimeFile(file: string): boolean {
         && !isArchitectureSupportPath(file);
 }
 
-function includeSymbol(symbol: SymbolRecord, scope: ArchitectureOverviewScope): boolean {
+function includeArchitectureFile(
+    file: string,
+    scope: ArchitectureOverviewScope,
+    pathScope: PublishedPathScope,
+): boolean {
+    if (!matchesPublishedPathScope(file, pathScope)) return false;
+    return scope === "all" || includeRuntimeFile(file);
+}
+
+function includeSymbol(
+    symbol: SymbolRecord,
+    scope: ArchitectureOverviewScope,
+    pathScope: PublishedPathScope,
+): boolean {
     if (symbol.kind === "file") return false;
-    if (scope === "all") return true;
-    return includeRuntimeFile(symbol.file);
+    return includeArchitectureFile(symbol.file, scope, pathScope);
 }
 
 function increment<K>(map: Map<K, number>, key: K, amount = 1): void {
     map.set(key, (map.get(key) ?? 0) + amount);
+}
+
+function buildAreaCycles(
+    boundaries: readonly { from: string; to: string }[],
+    limit: number,
+): { cycles: ArchitectureOverviewCycle[]; truncated: boolean } {
+    const adjacency = new Map<string, Set<string>>();
+    for (const boundary of boundaries) {
+        const targets = adjacency.get(boundary.from) ?? new Set<string>();
+        targets.add(boundary.to);
+        adjacency.set(boundary.from, targets);
+        if (!adjacency.has(boundary.to)) adjacency.set(boundary.to, new Set());
+    }
+    const nodes = [...adjacency.keys()].sort();
+    let index = 0;
+    const indexByNode = new Map<string, number>();
+    const lowByNode = new Map<string, number>();
+    const stack: string[] = [];
+    const onStack = new Set<string>();
+    const components: string[][] = [];
+
+    const visit = (node: string): void => {
+        indexByNode.set(node, index);
+        lowByNode.set(node, index);
+        index += 1;
+        stack.push(node);
+        onStack.add(node);
+        for (const next of [...(adjacency.get(node) ?? [])].sort()) {
+            if (!indexByNode.has(next)) {
+                visit(next);
+                lowByNode.set(node, Math.min(lowByNode.get(node)!, lowByNode.get(next)!));
+            } else if (onStack.has(next)) {
+                lowByNode.set(node, Math.min(lowByNode.get(node)!, indexByNode.get(next)!));
+            }
+        }
+        if (lowByNode.get(node) !== indexByNode.get(node)) return;
+        const component: string[] = [];
+        while (stack.length > 0) {
+            const popped = stack.pop()!;
+            onStack.delete(popped);
+            component.push(popped);
+            if (popped === node) break;
+        }
+        component.sort();
+        if (component.length > 1) components.push(component);
+    };
+    for (const node of nodes) {
+        if (!indexByNode.has(node)) visit(node);
+    }
+
+    const cycles = components.map((areas) => {
+        const members = new Set(areas);
+        const boundaryEdgeCount = boundaries.filter((boundary) => (
+            members.has(boundary.from) && members.has(boundary.to)
+        )).length;
+        return { areas, boundaryEdgeCount };
+    }).sort((left, right) => (
+        right.areas.length - left.areas.length
+        || right.boundaryEdgeCount - left.boundaryEdgeCount
+        || left.areas.join("\0").localeCompare(right.areas.join("\0"))
+    ));
+    return {
+        cycles: cycles.slice(0, limit),
+        truncated: cycles.length > limit,
+    };
 }
 
 export function buildArchitectureOverview(input: {
@@ -139,8 +245,14 @@ export function buildArchitectureOverview(input: {
     resolutionClaims?: readonly ResolutionClaim[];
     scope: ArchitectureOverviewScope;
     limit: number;
+    subtree?: string;
+    excludePaths?: readonly string[];
 }): ArchitectureOverviewResult {
-    const includedSymbols = input.symbols.filter((symbol) => includeSymbol(symbol, input.scope));
+    const pathScope: PublishedPathScope = {
+        ...(input.subtree ? { subtree: input.subtree } : {}),
+        ...(input.excludePaths ? { excludePaths: input.excludePaths } : {}),
+    };
+    const includedSymbols = input.symbols.filter((symbol) => includeSymbol(symbol, input.scope, pathScope));
     const includedIds = new Set(includedSymbols.map((symbol) => symbol.symbolInstanceId));
     const symbolsById = new Map(input.symbols.map((symbol) => [symbol.symbolInstanceId, symbol]));
 
@@ -174,6 +286,8 @@ export function buildArchitectureOverview(input: {
     const highConfidenceCallersByTarget = new Map<string, Set<string>>();
     const callSitesByTarget = new Map<string, number>();
     const highConfidenceCallSitesByTarget = new Map<string, number>();
+    const outgoingCallsBySource = new Map<string, number>();
+    const externalIncomingCallTargets = new Set<string>();
     let includedRelationshipCount = 0;
 
     for (const relationship of input.relationships) {
@@ -192,13 +306,25 @@ export function buildArchitectureOverview(input: {
         if (!sourceFile || !targetFile) continue;
 
         if (
-            input.scope === "runtime"
-            && (!includeRuntimeFile(sourceFile) || !includeRuntimeFile(targetFile))
+            !includeArchitectureFile(sourceFile, input.scope, pathScope)
+            || !includeArchitectureFile(targetFile, input.scope, pathScope)
         ) {
             continue;
         }
 
         includedRelationshipCount += 1;
+        if (
+            relationship.type === "CALLS"
+            && source?.symbolInstanceId
+            && target?.symbolInstanceId
+            && includedIds.has(source.symbolInstanceId)
+            && includedIds.has(target.symbolInstanceId)
+        ) {
+            increment(outgoingCallsBySource, source.symbolInstanceId);
+            if (source.symbolInstanceId !== target.symbolInstanceId) {
+                externalIncomingCallTargets.add(target.symbolInstanceId);
+            }
+        }
 
         const from = areaForFile(sourceFile);
         const to = areaForFile(targetFile);
@@ -243,7 +369,7 @@ export function buildArchitectureOverview(input: {
     }
 
     const scopedClaims = (input.resolutionClaims ?? []).filter((claim) => (
-        input.scope === "all" || includeRuntimeFile(claim.sourceFile)
+        includeArchitectureFile(claim.sourceFile, input.scope, pathScope)
     ));
     const constructCoverage = summarizeResolutionConstructCoverage(scopedClaims, { gapLimit: 10 });
     const limit = Math.max(1, Math.floor(input.limit));
@@ -299,6 +425,32 @@ export function buildArchitectureOverview(input: {
         ))
         .slice(0, limit);
 
+    const allEntryCandidates = [...outgoingCallsBySource.entries()]
+        .filter(([symbolId]) => !externalIncomingCallTargets.has(symbolId))
+        .map(([symbolId, outgoingCallCount]) => {
+            const symbol = symbolsById.get(symbolId);
+            if (!symbol) return undefined;
+            return {
+                symbolId,
+                label: symbol.label,
+                file: symbol.file,
+                language: symbol.language,
+                outgoingCallCount,
+            };
+        })
+        .filter((row): row is ArchitectureOverviewEntryCandidate => row !== undefined)
+        .sort((left, right) => (
+            right.outgoingCallCount - left.outgoingCallCount
+            || left.file.localeCompare(right.file)
+            || left.label.localeCompare(right.label)
+            || left.symbolId.localeCompare(right.symbolId)
+        ));
+    const entryCandidates = allEntryCandidates.slice(0, limit);
+    const areaCycles = buildAreaCycles([...boundaryEvidence.values()], limit);
+    const eligiblePublishedFileCount = input.manifest.files.filter((file) => (
+        matchesPublishedPathScope(file.path, pathScope)
+    )).length;
+
     return {
         basis: "publication_navigation",
         scope: input.scope,
@@ -308,6 +460,8 @@ export function buildArchitectureOverview(input: {
             relationshipCount: input.relationships.length,
             includedSymbolCount: includedSymbols.length,
             includedRelationshipCount,
+            eligiblePublishedFileCount,
+            excludedPublishedFileCountByPathScope: input.manifest.files.length - eligiblePublishedFileCount,
             excludedSymbolsByCategory: Object.fromEntries(
                 [...excludedSymbolsByCategory.entries()].sort(([left], [right]) => left.localeCompare(right)),
             ),
@@ -315,6 +469,16 @@ export function buildArchitectureOverview(input: {
         areas,
         boundaries,
         hotspots,
+        entryCandidates,
+        entryCandidatesTruncated: allEntryCandidates.length > limit,
+        entryCandidateRule: "outgoing_calls_and_no_incoming_calls_within_scope",
+        cycles: areaCycles.cycles,
+        cyclesTruncated: areaCycles.truncated,
+        cycleRule: "strongly_connected_area_boundary_graph",
+        pathScope: {
+            subtree: input.subtree ?? null,
+            excludePaths: [...(input.excludePaths ?? [])].sort(),
+        },
         relationshipEvidence: {
             resolutionClaimCount: scopedClaims.length,
             resolvedClaimCount: scopedClaims.filter((claim) => claim.decision === "resolved").length,

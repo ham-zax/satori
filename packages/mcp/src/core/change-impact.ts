@@ -1,7 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { compareContractStrings } from "@zokizuan/satori-core";
-import type { CallGraphResponseEnvelope, FileOutlineResponseEnvelope, CallGraphNodeResult } from "./search-types.js";
+import type {
+    CallGraphEdgeResult,
+    CallGraphResponseEnvelope,
+    FileOutlineResponseEnvelope,
+    CallGraphNodeResult,
+} from "./search-types.js";
+import { areaForFile } from "./architecture-overview.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +21,21 @@ export type ChangeImpactInput = {
 export type ChangeImpactPorts = {
     outline(file: string): Promise<FileOutlineResponseEnvelope>;
     callers(root: string, symbol: CallGraphNodeResult): Promise<CallGraphResponseEnvelope>;
+};
+
+type ConfirmedImpactPathEdge = Readonly<{
+    callerSymbolId: string;
+    calleeSymbolId: string;
+    site: CallGraphEdgeResult["site"];
+    resolutionAuthority?: CallGraphEdgeResult["resolutionAuthority"];
+}>;
+
+type ConfirmedImpactNode = CallGraphNodeResult & {
+    codebaseRoot: string;
+    impactClass: "direct" | "transitive";
+    distance: number;
+    seedSymbolId: string;
+    causalPath: ConfirmedImpactPathEdge[];
 };
 
 /** Read-only diff -> current-file symbol seeds -> bounded transitive callers. */
@@ -63,7 +84,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         }
     }
     const seedKeys = new Set(seeds.map(symbol => `${symbol.codebaseRoot}\0${symbol.symbolId}`));
-    const impacted = new Map<string, CallGraphNodeResult & { codebaseRoot: string }>();
+    const impacted = new Map<string, ConfirmedImpactNode>();
     const uncertainCallReferences = new Map<string, {
         seedSymbolId: string;
         sourceSymbolId?: string;
@@ -116,26 +137,159 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 calleeText: reference.calleeText,
             });
         }
-        for (const node of graph.nodes) {
-            const key = `${seed.codebaseRoot}\0${node.symbolId}`;
-            if (seedKeys.has(key) || impacted.has(key)) continue;
-            if (impacted.size >= input.limit) { truncated = true; break; }
-            impacted.set(key, { ...node, codebaseRoot: seed.codebaseRoot });
+        const nodesById = new Map(graph.nodes.map((node) => [node.symbolId, node]));
+        const incomingByCallee = new Map<string, CallGraphEdgeResult[]>();
+        for (const edge of graph.edges) {
+            const incoming = incomingByCallee.get(edge.dstSymbolId) ?? [];
+            incoming.push(edge);
+            incomingByCallee.set(edge.dstSymbolId, incoming);
+        }
+        for (const incoming of incomingByCallee.values()) {
+            incoming.sort((left, right) => (
+                compareContractStrings(left.srcSymbolId, right.srcSymbolId)
+                || compareContractStrings(left.site.file, right.site.file)
+                || left.site.startLine - right.site.startLine
+            ));
+        }
+
+        const seen = new Set<string>([seed.symbolId]);
+        const queue: Array<{ symbolId: string; distance: number; path: ConfirmedImpactPathEdge[] }> = [{
+            symbolId: seed.symbolId,
+            distance: 0,
+            path: [],
+        }];
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+            if (current.distance >= input.depth) continue;
+            for (const edge of incomingByCallee.get(current.symbolId) ?? []) {
+                const callerId = edge.srcSymbolId;
+                const distance = current.distance + 1;
+                const pathEdge: ConfirmedImpactPathEdge = {
+                    callerSymbolId: callerId,
+                    calleeSymbolId: current.symbolId,
+                    site: edge.site,
+                    ...(edge.resolutionAuthority
+                        ? { resolutionAuthority: edge.resolutionAuthority }
+                        : {}),
+                };
+                const causalPath = [...current.path, pathEdge];
+                if (!seen.has(callerId)) {
+                    seen.add(callerId);
+                    queue.push({ symbolId: callerId, distance, path: causalPath });
+                }
+
+                const caller = nodesById.get(callerId);
+                if (!caller) continue;
+                const key = `${seed.codebaseRoot}\0${caller.symbolId}`;
+                if (seedKeys.has(key)) continue;
+                const candidate: ConfirmedImpactNode = {
+                    ...caller,
+                    codebaseRoot: seed.codebaseRoot,
+                    impactClass: distance === 1 ? "direct" : "transitive",
+                    distance,
+                    seedSymbolId: seed.symbolId,
+                    causalPath,
+                };
+                const existing = impacted.get(key);
+                if (existing) {
+                    if (
+                        candidate.distance < existing.distance
+                        || (
+                            candidate.distance === existing.distance
+                            && compareContractStrings(candidate.seedSymbolId, existing.seedSymbolId) < 0
+                        )
+                    ) {
+                        impacted.set(key, candidate);
+                    }
+                    continue;
+                }
+                if (impacted.size >= input.limit) {
+                    truncated = true;
+                    continue;
+                }
+                impacted.set(key, candidate);
+            }
         }
     }
     if (uncertainCallReferences.size > 0) warnings.add("IMPACT_NON_AUTHORITATIVE_CALL_REFERENCES");
     if (truncated) warnings.add("IMPACT_LIMIT_REACHED");
+
+    const impactedValues = [...impacted.values()].sort((a, b) =>
+        a.distance - b.distance
+        || compareContractStrings(a.file, b.file)
+        || a.span.startLine - b.span.startLine
+        || compareContractStrings(a.symbolId, b.symbolId));
+    const uncertainValues = [...uncertainCallReferences.values()].sort((a, b) =>
+        compareContractStrings(a.file, b.file)
+        || a.startLine - b.startLine
+        || compareContractStrings(a.seedSymbolId, b.seedSymbolId)
+        || compareContractStrings(a.sourceSymbolId ?? "", b.sourceSymbolId ?? ""));
+    const seedValues = seeds.map((seed) => ({
+        ...seed,
+        impactClass: "seed" as const,
+        distance: 0,
+    }));
+
+    const areaRows = new Map<string, {
+        area: string;
+        seedCount: number;
+        directCount: number;
+        transitiveCount: number;
+        uncertainReferenceCount: number;
+    }>();
+    const areaRow = (file: string) => {
+        const area = areaForFile(file);
+        const existing = areaRows.get(area) ?? {
+            area,
+            seedCount: 0,
+            directCount: 0,
+            transitiveCount: 0,
+            uncertainReferenceCount: 0,
+        };
+        areaRows.set(area, existing);
+        return existing;
+    };
+    for (const seed of seedValues) areaRow(seed.file).seedCount += 1;
+    for (const node of impactedValues) {
+        const row = areaRow(node.file);
+        if (node.impactClass === "direct") row.directCount += 1;
+        else row.transitiveCount += 1;
+    }
+    for (const reference of uncertainValues) areaRow(reference.file).uncertainReferenceCount += 1;
+
+    const completenessReasons = new Set<string>(["depth_bound"]);
+    if (truncated) completenessReasons.add("limit");
+    if (unavailableFiles.length > 0 || unavailableSeeds.length > 0) {
+        completenessReasons.add("unavailable_navigation");
+    }
+    if (uncertainValues.length > 0) completenessReasons.add("uncertain_references");
+    if ([...warnings].some((warning) => warning.includes("SOURCE_REFERENCE_COVERAGE_PARTIAL"))) {
+        completenessReasons.add("source_reference_coverage_partial");
+    }
+
     return {
         status: "ok" as const, path: input.path, baseRef: input.baseRef, baseCommit,
         comparison: "base_to_tracked_worktree" as const,
         depth: input.depth, limit: input.limit, coverage: "partial" as const, truncated,
-        changedFiles, seeds, impacted: [...impacted.values()].sort((a, b) =>
-            compareContractStrings(a.file, b.file) || a.span.startLine - b.span.startLine || compareContractStrings(a.symbolId, b.symbolId)),
-        uncertainCallReferences: [...uncertainCallReferences.values()].sort((a, b) =>
-            compareContractStrings(a.file, b.file)
-            || a.startLine - b.startLine
-            || compareContractStrings(a.seedSymbolId, b.seedSymbolId)
-            || compareContractStrings(a.sourceSymbolId ?? "", b.sourceSymbolId ?? "")),
+        completeness: {
+            exhaustive: false,
+            reasons: [...completenessReasons].sort(),
+            changedFileLimit: 50,
+            seedLimit: 50,
+            traversalDepth: input.depth,
+            impactedLimit: input.limit,
+            unavailableFileCount: unavailableFiles.length,
+            unavailableSeedCount: unavailableSeeds.length,
+            uncertainReferenceCount: uncertainValues.length,
+        },
+        changedFiles,
+        seeds: seedValues,
+        impacted: impactedValues,
+        areaImpact: [...areaRows.values()].sort((a, b) => (
+            (b.seedCount + b.directCount + b.transitiveCount) - (a.seedCount + a.directCount + a.transitiveCount)
+            || compareContractStrings(a.area, b.area)
+        )),
+        uncertainCallReferences: uncertainValues,
         unavailableFiles, unavailableSeeds, warnings: [...warnings].sort(),
     };
 }

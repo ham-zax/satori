@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { isTestOrFixturePath } from "@zokizuan/satori-core";
 import {
     prioritizeInboundSuppressedNotes,
+    shouldInspectInboundSourceReferences,
     uniqueInboundCallerSiteFile,
 } from "./relationship-backed-call-graph.js";
 import type { CallGraphNoteResult as CallGraphNote } from "./search-types.js";
@@ -106,6 +107,33 @@ test("prioritizeInboundSuppressedNotes puts production callers first and collaps
     assert.equal(testDetailed.length, 3);
     assert.ok(prioritized.some((n) => typeof n.detail === "string" && n.detail.includes("additional low-confidence test/fixture")));
     assert.ok(prioritized.some((n) => n.detail?.includes("callee candidate")));
+});
+
+test("exact source fallback is required for absent or bounded inbound coverage, never callee-only traversal", () => {
+    assert.equal(shouldInspectInboundSourceReferences({
+        direction: "callers",
+        hasNoInboundEdges: true,
+        suppressedInboundCount: 0,
+        warnings: [],
+    }), true);
+    assert.equal(shouldInspectInboundSourceReferences({
+        direction: "both",
+        hasNoInboundEdges: false,
+        suppressedInboundCount: 0,
+        warnings: ["RELATIONSHIP_TRAVERSAL_TRUNCATED"],
+    }), true);
+    assert.equal(shouldInspectInboundSourceReferences({
+        direction: "callers",
+        hasNoInboundEdges: false,
+        suppressedInboundCount: 1,
+        warnings: [],
+    }), true);
+    assert.equal(shouldInspectInboundSourceReferences({
+        direction: "callees",
+        hasNoInboundEdges: true,
+        suppressedInboundCount: 1,
+        warnings: ["RELATIONSHIP_TRAVERSAL_LIMIT_REACHED"],
+    }), false);
 });
 
 test("uniqueInboundCallerSiteFile ignores callee-only and aggregate notes", () => {

@@ -957,7 +957,7 @@ export interface FileOutlineInput {
     resolveMode?: "outline" | "exact";
     symbolIdExact?: string;
     symbolLabelExact?: string;
-    detail?: "summary" | "analysis" | "relationships";
+    detail?: "summary" | "analysis" | "relationships" | "relationship_coverage";
 }
 
 export type FileOutlineStatus = "ok" | "not_found" | "requires_reindex" | "not_indexed" | "not_ready" | "unsupported" | "ambiguous";
@@ -1001,6 +1001,14 @@ export interface NavigationFileFreshness {
     sourceState: "fresh" | "stale" | "unknown" | "inconsistent";
 }
 
+export interface FileOutlineRelationshipEvidence {
+    resolutionClaimCount: number;
+    resolvedClaimCount: number;
+    ambiguousClaimCount: number;
+    unresolvedClaimCount: number;
+    constructCoverage: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
+}
+
 export interface FileOutlineResponseEnvelope {
     freshness?: NavigationFileFreshness;
     status: FileOutlineStatus;
@@ -1008,6 +1016,7 @@ export interface FileOutlineResponseEnvelope {
     path: string;
     file: string;
     outline: { symbols: FileOutlineSymbolResult[] } | null;
+    relationshipEvidence?: FileOutlineRelationshipEvidence;
     hasMore: boolean;
     warnings?: string[];
     freshnessDecision?: FreshnessDecision;
@@ -1022,6 +1031,8 @@ export type CallGraphEdgeKind = "call" | "import" | "dynamic";
 export type InboundCoverageReason =
     | "no_relationships_extracted"
     | "non_authoritative_resolution_evidence"
+    | "observational_source_references"
+    | "bounded_relationship_navigation"
     | "suppressed_low_confidence"
     | "fallback_failed";
 
@@ -1034,6 +1045,8 @@ export interface InboundCoverageEvidence {
     exactReferenceCount: number;
     ambiguousReferenceCount: number;
     unresolvedReferenceCount: number;
+    sourceReferenceCount: number;
+    sourceReferenceCoverage: "complete" | "partial" | "not_attempted";
     constructorResolutionApplicable: boolean;
 }
 
@@ -1122,6 +1135,23 @@ export interface CallGraphExactReferenceResult {
     candidates: CallGraphExactReferenceCandidateResult[];
 }
 
+export interface CallGraphSourceReferenceResult {
+    relationship: "caller";
+    evidenceClass: "published_source_text";
+    occurrenceKind: "member" | "identifier";
+    sourceSymbolId?: string;
+    sourceSymbolLabel?: string;
+    matchedText: string;
+    member?: string;
+    site: {
+        file: string;
+        startLine: number;
+        endLine: number;
+        startColumn: number;
+        endColumn: number;
+    };
+}
+
 export interface CallGraphTestReferenceResult {
     file: string;
     symbolId: string;
@@ -1154,6 +1184,8 @@ export interface CallGraphTraversalResponseEnvelope {
     warnings?: string[];
     inboundCoverageEvidence?: InboundCoverageEvidence;
     exactReferences?: CallGraphExactReferenceResult[];
+    sourceReferences?: CallGraphSourceReferenceResult[];
+    sourceReferenceCoverage?: import("./exact-reference-search.js").ExactReferenceSearchCoverage;
     constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReferenceResult[];
     notesTruncated?: boolean;

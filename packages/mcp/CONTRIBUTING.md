@@ -13,6 +13,7 @@ Only these tools are supported:
 - `continue_search`
 - `file_outline`
 - `call_graph`
+- `find_references`
 - `detect_changes`
 - `read_file`
 

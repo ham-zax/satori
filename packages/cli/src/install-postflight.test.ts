@@ -13,6 +13,7 @@ const TOOL_NAMES = [
     "architecture_overview",
     "continue_search",
     "call_graph",
+    "find_references",
     "detect_changes",
     "file_outline",
     "read_file",

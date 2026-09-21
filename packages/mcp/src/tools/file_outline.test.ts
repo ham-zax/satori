@@ -235,6 +235,48 @@ test('file_outline delegates an exact relationship request unchanged', async () 
     assert.equal(receivedArgs?.detail, 'relationships');
 });
 
+test('file_outline delegates file-wide relationship coverage without a symbol selector', async () => {
+    let receivedArgs: Record<string, unknown> | undefined;
+    const ctx = {
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: {
+            handleFileOutline: async (args: Record<string, unknown>) => {
+                receivedArgs = args;
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'ok',
+                            path: '/repo',
+                            file: 'src/runtime.ts',
+                            outline: { symbols: [] },
+                            relationshipEvidence: {
+                                resolutionClaimCount: 2,
+                                resolvedClaimCount: 1,
+                                ambiguousClaimCount: 1,
+                                unresolvedClaimCount: 0,
+                                constructCoverage: [],
+                            },
+                            hasMore: false,
+                        }),
+                    }],
+                };
+            },
+        },
+    } as unknown as ToolContext;
+
+    const response = await fileOutlineTool.execute({
+        path: '/repo',
+        file: 'src/runtime.ts',
+        detail: 'relationship_coverage',
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    assert.equal(receivedArgs?.resolveMode, undefined);
+    assert.equal(receivedArgs?.symbolIdExact, undefined);
+    assert.equal(receivedArgs?.detail, 'relationship_coverage');
+});
+
 test('file_outline uses provider vector context when available', async () => {
     let requestedOperation: string | undefined;
     let receivedArgs: Record<string, unknown> | undefined;

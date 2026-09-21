@@ -13,8 +13,11 @@ import { getSatoriRuntimeIdentity } from "./satori-runtime-identity.mjs";
 const EXPECTED_TOOLS = [
     "manage_index",
     "search_codebase",
+    "architecture_overview",
     "continue_search",
     "call_graph",
+    "find_references",
+    "detect_changes",
     "file_outline",
     "read_file",
     "list_codebases",

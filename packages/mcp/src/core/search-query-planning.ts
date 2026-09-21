@@ -604,7 +604,7 @@ export function buildSearchQueryPlan(
     const behavioralOwnerSeeking = !testSeeking && (
         /\bwhere\s+is\b.*\b(?:implemented|enforced)\b/.test(normalizedQuery)
         || /\bwhich\s+implementation\s+owns?\b/.test(normalizedQuery)
-        || /\bwhat\s+(?:blocks|prevents|validates|gates|controls)\b/.test(normalizedQuery)
+        || /\bwhat\s+(?:blocks|prevents|validates|gates|controls|decides|determines|selects|chooses)\b/.test(normalizedQuery)
     );
     const ownerWhereSeeking = identifierTokens.length > 0
         && !explicitReferenceSeeking

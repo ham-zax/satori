@@ -150,6 +150,7 @@ import {
 import type {
 } from "./backend-diagnostics.js";
 import { READ_FILE_MAX_BYTES_DEFAULT } from "./published-source-reader.js";
+import type { ExactReferenceSearchResult } from "./exact-reference-search.js";
 import type {
 } from "./search-lexical-scoring.js";
 import {
@@ -518,6 +519,8 @@ export class ToolHandlers {
                 direction: CallGraphDirection;
                 depth: number;
                 limit: number;
+                readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
+                findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
             }),
         };
         this.navigationHandlers = new NavigationHandlers(navigationHandlersHost);
@@ -1965,6 +1968,7 @@ export class ToolHandlers {
         depth: number;
         limit: number;
         readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
+        findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
     }): Promise<RelationshipBackedCallGraphResult | null> {
         return this.relationshipBackedCallGraph.build(input);
     }
@@ -2024,6 +2028,10 @@ export class ToolHandlers {
 
     public async handleArchitectureOverview(args: ToolArgs) {
         return this.navigationHandlers.handleArchitectureOverview(args);
+    }
+
+    public async handleFindReferences(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy) {
+        return this.navigationHandlers.handleFindReferences(args, workspacePolicy);
     }
 
     public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy) {

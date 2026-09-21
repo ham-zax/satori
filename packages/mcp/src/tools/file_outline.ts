@@ -23,7 +23,7 @@ const fileOutlineInputSchema = z.object({
     resolveMode: z.enum(['outline', 'exact']).default('outline').optional().describe('Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file.'),
     symbolIdExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol identifier match in the target file. On symbol-owned flows, pass the symbol\'s symbolInstanceId.'),
     symbolLabelExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol label match in the target file.'),
-    detail: z.enum(['summary', 'analysis', 'relationships']).default('summary').optional().describe('Summary returns the existing outline. Analysis adds Python/Go structural-v1 metrics. Relationships adds direct relationship metadata. Both detail modes require one exact canonical symbol.'),
+    detail: z.enum(['summary', 'analysis', 'relationships', 'relationship_coverage']).default('summary').optional().describe('Summary returns the outline. Analysis adds Python/Go structural-v1 metrics. Relationships adds direct metadata for one exact symbol. relationship_coverage adds file-wide observed ResolutionClaim construct calibration and does not require a symbol.'),
 }).superRefine((input, ctx) => {
     if (input.resolveMode === 'exact') {
         if (!input.symbolIdExact && !input.symbolLabelExact) {
@@ -82,7 +82,7 @@ function formatWorkspaceAuthorizationError(
 
 export const fileOutlineTool: McpTool = {
     name: 'file_outline',
-    description: () => 'Return indexed symbols for one published file, with call_graph jump handles when available. If the file is published but structural extraction was unavailable, returns status="not_ready" with reason="structural_evidence_unavailable" plus read_file and structural-coverage hints. Use detail="summary" for structure, detail="analysis" for Python or Go structural metrics, or detail="relationships" for direct relationship metadata. analysis/relationships require an exact canonical symbol.',
+    description: () => 'Return indexed symbols for one published file, with call_graph jump handles when available. If the file is published but structural extraction was unavailable, returns status="not_ready" with reason="structural_evidence_unavailable" plus read_file and structural-coverage hints. Use detail="summary" for structure, detail="analysis" for Python or Go structural metrics, detail="relationships" for direct metadata on one exact symbol, or detail="relationship_coverage" for file-wide observed call-construct calibration from persisted ResolutionClaims. analysis/relationships require an exact canonical symbol; relationship_coverage does not.',
     inputSchemaZod: () => fileOutlineInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = fileOutlineInputSchema.safeParse(args || {});

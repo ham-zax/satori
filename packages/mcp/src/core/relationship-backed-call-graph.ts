@@ -16,6 +16,7 @@ import type {
     CallGraphExactReferenceResult as CallGraphExactReference,
     CallGraphNodeResult as CallGraphNode,
     CallGraphNoteResult as CallGraphNote,
+    CallGraphSourceReferenceResult as CallGraphSourceReference,
     CallGraphTestReferenceResult as CallGraphTestReference,
     InboundCoverageEvidence,
     InboundCoverageReason,
@@ -25,6 +26,7 @@ import {
     buildSourceBackedPythonCallerFallback,
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
+import type { ExactReferenceSearchResult } from "./exact-reference-search.js";
 import { buildInboundVerificationSearchQuery } from "./search-response-helpers.js";
 
 type RelationshipBackedCallGraphHost = {
@@ -54,6 +56,7 @@ export type RelationshipBackedCallGraphInput = {
      * dynamic fallback rather than reading unauthenticated source.
      */
     readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
+    findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
 };
 
 export type CallGraphNavigationAuthority = Readonly<{
@@ -102,6 +105,8 @@ export type RelationshipBackedCallGraphResult = {
     notes: CallGraphNote[];
     warnings?: string[];
     exactReferences?: CallGraphExactReference[];
+    sourceReferences?: CallGraphSourceReference[];
+    sourceReferenceCoverage?: ExactReferenceSearchResult["coverage"];
     constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReference[];
     notesTruncated: boolean;
@@ -125,9 +130,17 @@ export function resolveInboundCoverageReason(input: {
     nonAuthoritativeReferenceCount: number;
     fallbackAttempted: boolean;
     fallbackRecoveredCount: number;
+    sourceReferenceCount?: number;
+    traversalBounded?: boolean;
 }): InboundCoverageReason {
     if (input.nonAuthoritativeReferenceCount > 0) {
         return "non_authoritative_resolution_evidence";
+    }
+    if ((input.sourceReferenceCount ?? 0) > 0) {
+        return "observational_source_references";
+    }
+    if (input.traversalBounded) {
+        return "bounded_relationship_navigation";
     }
     if (input.suppressedRelationshipCount > 0 && input.fallbackRecoveredCount === 0) {
         return input.fallbackAttempted
@@ -182,6 +195,22 @@ export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): st
 
 const MAX_DETAILED_TEST_SUPPRESSED_CALLER_NOTES = 3;
 const INBOUND_COVERAGE_PARTIAL_WARNING = "CALL_GRAPH_INBOUND_COVERAGE_PARTIAL";
+
+export function shouldInspectInboundSourceReferences(input: {
+    direction: CallGraphDirection;
+    hasNoInboundEdges: boolean;
+    suppressedInboundCount: number;
+    warnings: readonly string[];
+}): boolean {
+    const inboundRequested = input.direction === "callers" || input.direction === "both";
+    if (!inboundRequested) return false;
+    return input.hasNoInboundEdges
+        || input.suppressedInboundCount > 0
+        || input.warnings.some((warning) => (
+            warning === "RELATIONSHIP_TRAVERSAL_LIMIT_REACHED"
+            || warning === "RELATIONSHIP_TRAVERSAL_TRUNCATED"
+        ));
+}
 
 /**
  * Production suppressed callers first; collapse excess test/fixture caller notes into one summary.
@@ -717,13 +746,47 @@ export class RelationshipBackedCallGraph {
             reference.decision === "unresolved"
         )).length;
         const nonAuthoritativeInboundReferenceCount = ambiguousInboundReferenceCount + unresolvedInboundReferenceCount;
-        const inboundCoverageEvidence: InboundCoverageEvidence | undefined = hasNoInboundEdges
+        const traversalBounded = neighbors.warnings.some((warning) => (
+            warning === "RELATIONSHIP_TRAVERSAL_LIMIT_REACHED"
+            || warning === "RELATIONSHIP_TRAVERSAL_TRUNCATED"
+        ));
+        const inboundObservationalCoverageIncomplete = shouldInspectInboundSourceReferences({
+            direction: input.direction,
+            hasNoInboundEdges,
+            suppressedInboundCount,
+            warnings: neighbors.warnings,
+        });
+        const exactSourceResult = inboundObservationalCoverageIncomplete && input.findExactSourceReferences
+            ? await input.findExactSourceReferences(input.resolvedSymbol)
+            : undefined;
+        const sourceReferences: CallGraphSourceReference[] = (exactSourceResult?.references ?? [])
+            .filter((reference) => reference.occurrenceKind !== "declaration")
+            .map((reference) => ({
+                relationship: "caller" as const,
+                evidenceClass: reference.evidenceClass,
+                occurrenceKind: reference.occurrenceKind as "member" | "identifier",
+                ...(reference.owningSymbol?.symbolId
+                    ? { sourceSymbolId: reference.owningSymbol.symbolId }
+                    : {}),
+                ...(reference.owningSymbol?.symbolLabel
+                    ? { sourceSymbolLabel: reference.owningSymbol.symbolLabel }
+                    : {}),
+                matchedText: reference.matchedText,
+                ...(reference.member ? { member: reference.member } : {}),
+                site: {
+                    file: reference.file,
+                    ...reference.span,
+                },
+            }));
+        const inboundCoverageEvidence: InboundCoverageEvidence | undefined = inboundObservationalCoverageIncomplete
             ? {
                 reason: resolveInboundCoverageReason({
                     suppressedRelationshipCount: suppressedInboundCount,
                     nonAuthoritativeReferenceCount: nonAuthoritativeInboundReferenceCount,
                     fallbackAttempted: shouldAttemptDynamicCallerFallback,
                     fallbackRecoveredCount: addedDynamicCallerEdges.length,
+                    sourceReferenceCount: sourceReferences.length,
+                    traversalBounded,
                 }),
                 retrievedRelationshipCount: retrievedInboundCount,
                 suppressedRelationshipCount: suppressedInboundCount,
@@ -732,6 +795,8 @@ export class RelationshipBackedCallGraph {
                 exactReferenceCount: inboundExactReferences.length,
                 ambiguousReferenceCount: ambiguousInboundReferenceCount,
                 unresolvedReferenceCount: unresolvedInboundReferenceCount,
+                sourceReferenceCount: sourceReferences.length,
+                sourceReferenceCoverage: exactSourceResult?.coverage.status ?? "not_attempted",
                 // Constructor-receiver resolution is the index-time extraction
                 // path that produces inbound CALLS for Python class symbols.
                 // "Applicable" records that the path exists for this symbol,
@@ -745,9 +810,15 @@ export class RelationshipBackedCallGraph {
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),
-            ...(hasNoInboundEdges ? [INBOUND_COVERAGE_PARTIAL_WARNING] : []),
-            ...(hasNoInboundEdges && nonAuthoritativeInboundReferenceCount > 0
+            ...(inboundObservationalCoverageIncomplete ? [INBOUND_COVERAGE_PARTIAL_WARNING] : []),
+            ...(inboundObservationalCoverageIncomplete && nonAuthoritativeInboundReferenceCount > 0
                 ? [`CALL_GRAPH_NON_AUTHORITATIVE_INBOUND_REFERENCES:${nonAuthoritativeInboundReferenceCount}`]
+                : []),
+            ...(sourceReferences.length > 0
+                ? [`CALL_GRAPH_OBSERVATIONAL_SOURCE_REFERENCES:${sourceReferences.length}`]
+                : []),
+            ...(exactSourceResult?.coverage.status === "partial"
+                ? ["CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL"]
                 : []),
             ...(exactReferencesTruncated ? ["CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"] : []),
         ])].sort(compareContractStrings);
@@ -758,11 +829,12 @@ export class RelationshipBackedCallGraph {
             ...(addedDynamicCallerEdges.length > 0 ? dynamicCallerFallback.notes : []),
         ]));
 
-        // Empty inbound traversal: disclose advisory coverage and promote executable
-        // must: identifier search without fabricating an edge. path: uses a unique
-        // suppressed caller site when proven, never the callee defining file alone.
+        // Incomplete inbound traversal: persisted claims are already surfaced above,
+        // then the exact published-source floor runs before any ranked discovery hint.
+        // The must: query remains optional discovery only and never substitutes for
+        // observational coverage or fabricates an edge.
         let hints: Record<string, unknown> | undefined;
-        if (hasNoInboundEdges) {
+        if (inboundObservationalCoverageIncomplete) {
             const constructed = buildInboundVerificationSearchQuery({
                 symbolName: input.resolvedSymbol.name,
                 symbolLabel: input.resolvedSymbol.label,
@@ -780,7 +852,7 @@ export class RelationshipBackedCallGraph {
                                 scope: "runtime",
                                 resultMode: "grouped",
                             },
-                            reason: "Inbound graph coverage is partial and returned no callers; use deterministic must: search to verify production call sites.",
+                            reason: "Inbound CALLS coverage is incomplete. Persisted claim evidence and exact published-source occurrences were checked first; ranked must: search is optional discovery only.",
                         },
                     ],
                 };
@@ -805,6 +877,8 @@ export class RelationshipBackedCallGraph {
                 edgeCount: combinedEdges.length,
             },
             ...(exactReferences.length > 0 ? { exactReferences } : {}),
+            ...(sourceReferences.length > 0 ? { sourceReferences } : {}),
+            ...(exactSourceResult ? { sourceReferenceCoverage: exactSourceResult.coverage } : {}),
             ...(constructCoverage.length > 0 ? { constructCoverage } : {}),
             ...(testReferences.length > 0 ? { testReferences } : {}),
             ...(hints ? { hints } : {}),

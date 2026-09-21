@@ -6,6 +6,7 @@ import {
     type ToolResponse,
     absoluteFilesystemPathSchema,
     formatZodError,
+    repoRelativePathPrefixSchema,
 } from "./types.js";
 import { resolveVectorBackedToolContext } from "./provider-context.js";
 import { WorkspaceAuthorizationError } from "../core/session-workspace-policy.js";
@@ -18,8 +19,14 @@ const architectureOverviewInputSchema = z.object({
         "runtime excludes tests, documentation, generated/fixture/artifact paths, scripts/tooling, examples, benchmarks, and experiments. all includes every published non-file symbol.",
     ),
     limit: z.number().int().min(1).max(50).default(15).optional().describe(
-        "Maximum rows returned for each bounded section: areas, boundaries, and hotspots.",
+        "Maximum rows returned for each bounded section: areas, boundaries, hotspots, entry candidates, and cycles.",
     ),
+    subtree: repoRelativePathPrefixSchema(
+        "Optional repo-relative subtree prefix used to restrict all architecture evidence.",
+    ).optional(),
+    excludePaths: z.array(repoRelativePathPrefixSchema(
+        "Repo-relative file or subtree prefix excluded from all architecture evidence.",
+    )).max(64).optional(),
 }).strict();
 
 function formatWorkspaceAuthorizationError(path: string, error: unknown): ToolResponse {
@@ -44,7 +51,7 @@ function formatWorkspaceAuthorizationError(path: string, error: unknown): ToolRe
 export const architectureOverviewTool: McpTool = {
     name: "architecture_overview",
     description: () =>
-        "Return bounded deterministic architecture facts from the current Publication's symbol registry and relationship sidecar: logical areas, cross-area CALLS/IMPORTS evidence, call hotspots, filtering counts, and semantic resolution-claim construct coverage with exact gap spans. This is a structural evidence view, not an inferred architecture narrative: ambiguous/unresolved claims remain coverage evidence and are not counted as CALLS. Use scope=runtime to suppress tests/docs/generated/configuration noise; use scope=all for the full published navigation corpus.",
+        "Return bounded deterministic architecture facts from the current Publication's symbol registry and relationship sidecar: logical areas, cross-area CALLS/IMPORTS evidence, call hotspots, structural graph-root entry candidates, area-level strongly connected cycles, filtering counts, and semantic resolution-claim construct coverage with exact gap spans. subtree/excludePaths apply consistently to symbols, relationships, claims, areas, hotspots, entries, and cycles. Entry candidates are structural roots (outgoing CALLS and no external incoming CALLS), not proven runtime entry points. Cycles are SCCs of the cross-area boundary graph. Ambiguous/unresolved claims remain coverage evidence and are not counted as CALLS.",
     inputSchemaZod: () => architectureOverviewInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = architectureOverviewInputSchema.safeParse(args || {});
@@ -103,6 +110,8 @@ export const architectureOverviewTool: McpTool = {
             path: authorizedRoot,
             scope: parsed.data.scope ?? "runtime",
             limit: parsed.data.limit ?? 15,
+            ...(parsed.data.subtree ? { subtree: parsed.data.subtree } : {}),
+            ...(parsed.data.excludePaths ? { excludePaths: parsed.data.excludePaths } : {}),
         });
     },
 };

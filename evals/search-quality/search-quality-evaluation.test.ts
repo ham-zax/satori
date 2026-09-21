@@ -11,7 +11,7 @@ test('search-quality corpus is hash-bound and produces complete deterministic me
     const first = await runSearchQualityEvaluation(workspaceRoot);
     const second = await runSearchQualityEvaluation(workspaceRoot);
 
-    assert.equal(first.workloadCount, 19);
+    assert.equal(first.workloadCount, 20);
     assert.equal(first.results.length, first.workloadCount * first.limits.length);
     assert.match(first.fixtureManifestSha256, /^[a-f0-9]{64}$/);
     assert.deepEqual(first.results, second.results);
@@ -41,4 +41,16 @@ test('search-quality corpus is hash-bound and produces complete deterministic me
         result.routeObservation.selectedRoute === 'conceptual'
         && result.routeObservation.semanticExpansionAttempted
     )), true);
+
+    const behavioralOwnerResults = first.results.filter((result) => (
+        result.workloadId === 'behavioral_owner_infer_phase'
+    ));
+    assert.equal(behavioralOwnerResults.length, first.limits.length);
+    assert.equal(behavioralOwnerResults.every((result) => (
+        result.routeObservation.selectedRoute === 'conceptual'
+        && result.routeObservation.semanticExpansionAttempted
+    )), true);
+    assert.equal(behavioralOwnerResults
+        .filter((result) => result.limit >= 3)
+        .every((result) => result.ownerRank !== null && result.ownerRank <= 3), true);
 });

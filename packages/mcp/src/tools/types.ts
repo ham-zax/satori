@@ -97,26 +97,36 @@ export function absoluteFilesystemPathSchema(description: string) {
     );
 }
 
+function isSafeRepoRelativePath(value: string, allowDot: boolean): boolean {
+    const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
+    if (!normalized || (!allowDot && normalized === ".")) {
+        return false;
+    }
+    if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized)) {
+        return false;
+    }
+    if (normalized.startsWith("../") || normalized === ".." || normalized.includes("/../") || normalized.endsWith("/..")) {
+        return false;
+    }
+    return true;
+}
+
 /** Zod string for repo-relative file paths (not absolute; resolved only against a validated root by handlers). */
 export function repoRelativeFilePathSchema(description: string) {
     return z.string().min(1).describe(description).refine(
-        (value) => {
-            const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
-            // Reject empty-after-strip and bare "." (not a file path).
-            if (!normalized || normalized === ".") {
-                return false;
-            }
-            // Reject absolute and Windows drive-relative forms (C:foo, C:/x, C:\x) — CWD-dependent.
-            if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized) || /^[A-Za-z]:/.test(normalized)) {
-                return false;
-            }
-            if (normalized.startsWith("../") || normalized === ".." || normalized.includes("/../") || normalized.endsWith("/..")) {
-                return false;
-            }
-            return true;
-        },
+        (value) => isSafeRepoRelativePath(value, false),
         {
             message: "must be a repo-relative path inside the codebase root (not absolute or drive-relative; no .. escape segments; not '.')",
+        },
+    );
+}
+
+/** Zod string for repo-relative file-or-subtree prefixes used only after a validated root is bound. */
+export function repoRelativePathPrefixSchema(description: string) {
+    return z.string().min(1).describe(description).refine(
+        (value) => isSafeRepoRelativePath(value, true),
+        {
+            message: "must be a repo-relative path or subtree prefix inside the codebase root (not absolute or drive-relative; no .. escape segments)",
         },
     );
 }

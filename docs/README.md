@@ -30,9 +30,9 @@ A **Publication** is Satori's immutable snapshot of everything it knows about on
 
 ## Current product contract
 
-Satori's public MCP surface is exactly seven tools:
+Satori's public MCP surface is exactly ten tools:
 
-`manage_index`, `search_codebase`, `continue_search`, `call_graph`, `file_outline`, `read_file`, and `list_codebases`.
+`manage_index`, `search_codebase`, `architecture_overview`, `continue_search`, `call_graph`, `find_references`, `detect_changes`, `file_outline`, `read_file`, and `list_codebases`.
 
 The current product is organized around immutable Publications. A Publication binds semantic/lexical search evidence, symbol ownership, structural navigation, supported relationship evidence, source freshness, and repository policy into one generation. Readers bind to one Publication for a request; replacement work is prepared separately and activated only when it is complete enough to become current authority.
 

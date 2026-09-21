@@ -5,9 +5,11 @@ import {
     analyzePythonSymbolStructure,
     getSupportedExtensionsForCapability,
     JsonNavigationStore,
+    summarizeResolutionConstructCoverage,
     type PublicationLease,
     type PublicationRef,
     type SymbolRecord,
+    type SymbolRegistry,
     type SymbolStructuralAnalysis,
 } from "@zokizuan/satori-core";
 
@@ -26,6 +28,11 @@ import {
     AuthorizedSourceReadError,
     readAuthorizedPublishedSource,
 } from "./published-source-reader.js";
+import {
+    findExactPublishedSourceReferences,
+    type ExactReferenceSearchResult,
+    type ExactReferenceSourceRead,
+} from "./exact-reference-search.js";
 import {
     WorkspaceAuthorizationError,
     type SessionWorkspacePolicy,
@@ -194,9 +201,7 @@ type NavigationHandlersHost = {
         codebaseRoot: string;
         publicationId: string;
         navigationRoot: string;
-        registry: {
-            symbolsByInstanceId: Map<string, SymbolRecord>;
-        };
+        registry: SymbolRegistry;
         registryManifestHash: string;
         resolvedSymbol: SymbolRecord;
         sourceSpanRepair?: PythonSourceBackedSpanRepair;
@@ -204,6 +209,7 @@ type NavigationHandlersHost = {
         depth: number;
         limit: number;
         readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
+        findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
     }): Promise<RelationshipBackedCallGraphResult | null>;
 };
 
@@ -467,6 +473,10 @@ export class NavigationHandlers {
         const limit = Number.isFinite(args.limit)
             ? Math.max(1, Math.min(50, Math.floor(Number(args.limit))))
             : 15;
+        const subtree = typeof args.subtree === "string" ? args.subtree : undefined;
+        const excludePaths = Array.isArray(args.excludePaths)
+            ? args.excludePaths.filter((value): value is string => typeof value === "string")
+            : undefined;
         const requestedRoot = absolutePathResult.absolutePath;
         trackCodebasePath(requestedRoot);
 
@@ -545,6 +555,8 @@ export class NavigationHandlers {
                     .flatMap((evidence) => evidence.resolutionClaims ?? []),
                 scope,
                 limit,
+                ...(subtree ? { subtree } : {}),
+                ...(excludePaths ? { excludePaths } : {}),
             });
             const freshnessDecision = leasedRootState.freshnessDecision;
             const warnings = freshnessDecision
@@ -582,6 +594,203 @@ export class NavigationHandlers {
             : outcome.result;
     }
 
+    public async handleFindReferences(
+        args: ToolArgs,
+        workspacePolicy: SessionWorkspacePolicy,
+    ): Promise<ToolTextResponse> {
+        const absolutePathResult = typeof args.path === "string"
+            ? requireAbsoluteFilesystemPath(args.path, "path")
+            : { ok: false as const, path: "", message: "path is required." };
+        const rawSymbolRef = args.symbolRef as CallGraphSymbolRef | undefined;
+        const symbolFileResult = typeof rawSymbolRef?.file === "string"
+            ? requireRepoRelativeFilePath(rawSymbolRef.file, "symbolRef.file")
+            : { ok: false as const, path: "", message: "symbolRef.file is required." };
+        if (!absolutePathResult.ok || !symbolFileResult.ok || !rawSymbolRef?.symbolId) {
+            return {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "error",
+                        reason: "invalid_request",
+                        path: absolutePathResult.ok ? absolutePathResult.absolutePath : (typeof args.path === "string" ? args.path : ""),
+                        message: !absolutePathResult.ok
+                            ? absolutePathResult.message
+                            : !symbolFileResult.ok
+                                ? symbolFileResult.message
+                                : "symbolRef with { file, symbolId } is required.",
+                    }),
+                }],
+                isError: true,
+            };
+        }
+
+        const requestedRoot = absolutePathResult.absolutePath;
+        trackCodebasePath(requestedRoot);
+        const limit = Number.isFinite(args.limit)
+            ? Math.max(1, Math.min(500, Math.floor(Number(args.limit))))
+            : 100;
+        const scope = {
+            ...(typeof args.subtree === "string" ? { subtree: args.subtree } : {}),
+            ...(Array.isArray(args.includePaths)
+                ? { includePaths: args.includePaths.filter((value): value is string => typeof value === "string") }
+                : {}),
+            ...(Array.isArray(args.excludePaths)
+                ? { excludePaths: args.excludePaths.filter((value): value is string => typeof value === "string") }
+                : {}),
+        };
+
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+            prepareReadiness: () => this.host.prepareNavigationRead(requestedRoot),
+            acquirePublicationLease: (prepared) => (
+                prepared.state === "ready"
+                    ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
+                    : undefined
+            ),
+            isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
+        });
+
+        const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
+            if (trackedRootState.state !== "ready") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: trackedRootState.state,
+                            path: requestedRoot,
+                            message: "A compatible completed Publication with symbol navigation is required.",
+                        }),
+                    }],
+                };
+            }
+
+            const leasedRootState: Extract<TrackedRootReadinessState, { state: "ready" }> = {
+                ...trackedRootState,
+                publication: lease,
+                navigationStatus: await this.host.getPublicationNavigationStatus(lease),
+            };
+            const manifest = await this.host.loadPreparedNavigationManifest(leasedRootState);
+            if (manifest.status !== "ok") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: manifest.status === "missing"
+                                ? "missing_symbol_registry"
+                                : "incompatible_symbol_registry",
+                            path: leasedRootState.root.path,
+                            message: "Symbol registry is " + manifest.status + ": " + manifest.reason,
+                        }),
+                    }],
+                };
+            }
+
+            const normalizedSymbolFile = this.host.normalizeRelativeFilePath(symbolFileResult.relativePath);
+            const symbolsInFile = manifest.registry.symbolsByFile.get(normalizedSymbolFile) ?? [];
+            const exactSymbols = findExactRegistrySymbols({
+                symbols: symbolsInFile,
+                symbolIdExact: rawSymbolRef.symbolId,
+            });
+            if (exactSymbols.length !== 1) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_found",
+                            reason: "missing_symbol",
+                            path: leasedRootState.root.path,
+                            symbolRef: rawSymbolRef,
+                            message: exactSymbols.length === 0
+                                ? "No exact canonical symbol matched symbolRef."
+                                : "symbolRef matched more than one canonical symbol.",
+                        }),
+                    }],
+                };
+            }
+
+            const publishedRelativePaths = new Set(
+                manifest.registry.manifest.files.map((file) => file.path),
+            );
+            const readPublishedSource = async (relativeFilePath: string): Promise<ExactReferenceSourceRead> => {
+                try {
+                    const sourceRead = await readAuthorizedPublishedSource({
+                        workspacePolicy,
+                        codebaseRoot: leasedRootState.root.path,
+                        requestedPath: path.resolve(leasedRootState.root.path, relativeFilePath),
+                        publishedRelativePaths,
+                        maxBytes: this.host.readFileMaxBytes,
+                    });
+                    return {
+                        status: "ok",
+                        text: sourceRead.bytes.toString("utf8"),
+                    };
+                } catch (error) {
+                    if (error instanceof AuthorizedSourceReadError) {
+                        return {
+                            status: "skipped",
+                            code: error.code === "FILE_TOO_LARGE"
+                                ? "source_too_large"
+                                : "source_replaced",
+                            detail: error.message,
+                        };
+                    }
+                    if (
+                        error instanceof PublishedFileAuthorizationError
+                        || error instanceof WorkspaceAuthorizationError
+                    ) {
+                        return {
+                            status: "skipped",
+                            code: "source_unreadable",
+                            detail: error instanceof Error ? error.message : String(error),
+                        };
+                    }
+                    throw error;
+                }
+            };
+
+            const result = await findExactPublishedSourceReferences({
+                registry: manifest.registry,
+                target: exactSymbols[0]!,
+                scope,
+                limit,
+                readPublishedSource,
+            });
+            await this.host.touchWatchedCodebase(leasedRootState.root.path);
+            return {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "ok",
+                        path: leasedRootState.root.path,
+                        publicationId: lease.id,
+                        rankingIndependent: true,
+                        scope: {
+                            subtree: typeof args.subtree === "string" ? args.subtree : null,
+                            includePaths: Array.isArray(args.includePaths) ? args.includePaths : [],
+                            excludePaths: Array.isArray(args.excludePaths) ? args.excludePaths : [],
+                        },
+                        ...result,
+                    }),
+                }],
+            };
+        });
+
+        return outcome.status === "stale"
+            ? {
+                content: [{
+                    type: "text",
+                    text: this.host.stringifyToolJson({
+                        status: "not_ready",
+                        reason: "source_state_unverified",
+                        path: requestedRoot,
+                        message: "Publication authority changed while exact references were being inspected; retry the request.",
+                    }),
+                }],
+            }
+            : outcome.result;
+    }
+
     public async handleFileOutline(
         args: FileOutlineInput,
         workspacePolicy: SessionWorkspacePolicy,
@@ -594,7 +803,9 @@ export class NavigationHandlers {
         const resolveMode = args?.resolveMode === "exact" ? "exact" : "outline";
         const symbolIdExact = typeof args?.symbolIdExact === "string" ? args.symbolIdExact.trim() : undefined;
         const symbolLabelExact = typeof args?.symbolLabelExact === "string" ? args.symbolLabelExact.trim() : undefined;
-        const detail = args?.detail === "analysis" || args?.detail === "relationships"
+        const detail = args?.detail === "analysis"
+            || args?.detail === "relationships"
+            || args?.detail === "relationship_coverage"
             ? args.detail
             : "summary";
 
@@ -1261,6 +1472,49 @@ export class NavigationHandlers {
                     throw error;
                 }
             };
+            const readExactPublishedSource = async (
+                relativeFilePath: string,
+            ): Promise<ExactReferenceSourceRead> => {
+                try {
+                    const sourceRead = await readAuthorizedPublishedSource({
+                        workspacePolicy,
+                        codebaseRoot: effectiveRoot,
+                        requestedPath: path.resolve(effectiveRoot, relativeFilePath),
+                        publishedRelativePaths,
+                        maxBytes: this.host.readFileMaxBytes,
+                    });
+                    return { status: "ok", text: sourceRead.bytes.toString("utf8") };
+                } catch (error) {
+                    if (error instanceof AuthorizedSourceReadError) {
+                        return {
+                            status: "skipped",
+                            code: error.code === "FILE_TOO_LARGE"
+                                ? "source_too_large"
+                                : "source_replaced",
+                            detail: error.message,
+                        };
+                    }
+                    if (
+                        error instanceof PublishedFileAuthorizationError
+                        || error instanceof WorkspaceAuthorizationError
+                    ) {
+                        return {
+                            status: "skipped",
+                            code: "source_unreadable",
+                            detail: error instanceof Error ? error.message : String(error),
+                        };
+                    }
+                    throw error;
+                }
+            };
+            const findExactSourceReferences = (target: SymbolRecord) => (
+                findExactPublishedSourceReferences({
+                    registry: registryState.registry,
+                    target,
+                    limit: 100,
+                    readPublishedSource: readExactPublishedSource,
+                })
+            );
 
             const absoluteSymbolFile = path.resolve(effectiveRoot, normalizedSymbolFile);
             let symbolSourceBytes: Buffer | undefined;
@@ -1424,6 +1678,7 @@ export class NavigationHandlers {
                 depth,
                 limit,
                 readAuthorizedSourceLines,
+                findExactSourceReferences,
             });
             if (!relationshipBackedGraph) {
                 const payload = this.host.withProofDebugHint(this.host.toolResponseBuilders.buildRequiresReindexCallGraphPayload(
@@ -1574,7 +1829,7 @@ export class NavigationHandlers {
         symbolLabelExact?: string;
         windowStart?: number;
         windowEnd?: number;
-        detail: "summary" | "analysis" | "relationships";
+        detail: "summary" | "analysis" | "relationships" | "relationship_coverage";
         lease: PublicationLease;
         workspacePolicy: SessionWorkspacePolicy;
         publishedRelativePaths: ReadonlySet<string>;
@@ -1752,6 +2007,44 @@ export class NavigationHandlers {
                             : "analysis_unavailable",
                     );
                 }
+            }
+        }
+        if (detail === "relationship_coverage" && payload.status === "ok") {
+            const navigationBinding = this.host.getPublicationNavigationAddress(lease);
+            const compatibility = navigationBinding
+                ? await this.host.loadPreparedNavigationCompatibility(
+                    trackedRootState,
+                    registryState.manifestHash,
+                )
+                : undefined;
+            const relationshipState = compatibility?.relationships;
+            if (relationshipState?.status === "ok") {
+                const claims = relationshipState.analysisByFile.get(normalizedFile)?.resolutionClaims ?? [];
+                projectedPayload = {
+                    ...payload,
+                    relationshipEvidence: {
+                        resolutionClaimCount: claims.length,
+                        resolvedClaimCount: claims.filter((claim) => claim.decision === "resolved").length,
+                        ambiguousClaimCount: claims.filter((claim) => claim.decision === "ambiguous").length,
+                        unresolvedClaimCount: claims.filter((claim) => claim.decision === "unresolved").length,
+                        constructCoverage: summarizeResolutionConstructCoverage(claims, { gapLimit: 10 }),
+                    },
+                };
+            } else {
+                projectedPayload = {
+                    ...payload,
+                    relationshipEvidence: {
+                        resolutionClaimCount: 0,
+                        resolvedClaimCount: 0,
+                        ambiguousClaimCount: 0,
+                        unresolvedClaimCount: 0,
+                        constructCoverage: [],
+                    },
+                    warnings: [
+                        ...(payload.warnings ?? []),
+                        "OUTLINE_RELATIONSHIP_COVERAGE_UNAVAILABLE",
+                    ],
+                };
             }
         }
         if (detail === "relationships" && payload.status === "ok") {

@@ -11,6 +11,7 @@
     { "path": "src/public/search-api.ts", "sha256": "4dcc45ce40d23f25eaf9548c01389554759097a2e119dad3bedce5e98d745d2f" },
     { "path": "src/search/execution.ts", "sha256": "1428e84a777e27861a2d7c97eafead98363bb8dd0c960e3396ae3c1cc3e4757f" },
     { "path": "src/search/finalize.ts", "sha256": "6d249db24477fee2a259cfbe9c0786c9749b79ab7a03aeacb6f56c72f8b15b1a" },
+    { "path": "src/search/phase-inference.ts", "sha256": "97e69863ac55fea8b490a83e95663bd626aacb4f20c62984e6341d0909ec794d" },
     { "path": "src/search/query-router.ts", "sha256": "414b0b4a3a76efdf8035bb1b6de3fc14cda5635f7d1734d5b50701f40023301d" },
     { "path": "src/search/ranking.ts", "sha256": "9276a940f589ecb4dff0a7d087ab1755d6626dbf4fa4bca09c63a95673800651" },
     { "path": "src/search/resilient-execution.ts", "sha256": "328bf50733fd0601f1409fbc91ceebc8b7485418f5a88f22423e2f1bdf40974e" },
@@ -31,6 +32,9 @@
     { "id": "resilient.tailChunk", "file": "src/search/resilient-execution.ts", "startLine": 14, "endLine": 20, "symbol": "executeResilientSearch tail body", "kind": "function", "role": "owner", "family": "resilient-search", "ownerCandidateId": "resilient.executeResilientSearch" },
     { "id": "finalize.selectEvidenceGroups", "file": "src/search/finalize.ts", "startLine": 1, "endLine": 3, "symbol": "selectEvidenceGroups", "kind": "function", "role": "selection", "family": "result-finalization" },
     { "id": "finalize.finalizeResults", "file": "src/search/finalize.ts", "startLine": 5, "endLine": 7, "symbol": "finalizeResults", "kind": "function", "role": "finalization", "family": "result-finalization" },
+    { "id": "phase.normalizePhaseSignals", "file": "src/search/phase-inference.ts", "startLine": 3, "endLine": 5, "symbol": "normalizePhaseSignals", "kind": "function", "role": "orchestrator", "family": "phase-inference" },
+    { "id": "phase.inferPhase", "file": "src/search/phase-inference.ts", "startLine": 7, "endLine": 12, "symbol": "inferPhase", "kind": "function", "role": "owner", "family": "phase-inference" },
+    { "id": "phase.explainPhase", "file": "src/search/phase-inference.ts", "startLine": 14, "endLine": 16, "symbol": "explainPhase", "kind": "function", "role": "caller", "family": "phase-inference" },
     { "id": "checkpoint.writeSourceCheckpoint", "file": "src/checkpoints/checkpoint-store.ts", "startLine": 5, "endLine": 10, "symbol": "writeSourceCheckpoint", "kind": "function", "role": "owner", "family": "checkpoint-write" },
     { "id": "checkpoint.SOURCE_CHECKPOINT_MISSING", "file": "src/checkpoints/checkpoint-store.ts", "startLine": 3, "endLine": 3, "symbol": "SOURCE_CHECKPOINT_MISSING", "kind": "constant", "role": "configuration", "family": "checkpoint-write" },
     { "id": "checkpoint.refreshCheckpoint", "file": "src/checkpoints/checkpoint-service.ts", "startLine": 3, "endLine": 5, "symbol": "refreshCheckpoint", "kind": "function", "role": "caller", "family": "checkpoint-write" },
@@ -237,6 +241,18 @@
         "primary": ["execution.executeSearch", "resilient.executeResilientSearch", "resilient.genericBodyChunk", "resilient.tailChunk", "router.planQuery"],
         "expanded": ["resilient.tailChunk", "execution.executeSearch", "resilient.executeResilientSearch"],
         "rerank": ["resilient.tailChunk", "execution.executeSearch", "resilient.executeResilientSearch", "router.planQuery", "resilient.genericBodyChunk"]
+      },
+      "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
+    },
+    {
+      "id": "behavioral_owner_infer_phase",
+      "query": "what decides which retrieval phase should run from request behavior and exact identifier signals",
+      "scope": "runtime",
+      "expectedOwners": ["phase.inferPhase"],
+      "requiredRoles": ["owner"],
+      "providerRows": {
+        "primary": ["phase.normalizePhaseSignals", "phase.explainPhase", "execution.executeSearch", "phase.inferPhase"],
+        "expanded": ["phase.inferPhase", "router.planQuery", "phase.explainPhase"]
       },
       "budgets": { "maxToolCalls": 1, "maxResponseBytes": 8192 }
     },

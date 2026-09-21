@@ -8,6 +8,7 @@ import {
 import type { SymbolRecord, SymbolRegistryManifest } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
 import { getLanguageIdFromFilename } from '../language';
+import { admitAuthoritativeProofBackedCalls } from './admission';
 import {
     resolvePythonRelationships,
     type PythonResolutionAnalysisInput,
@@ -146,6 +147,12 @@ test('resolvePythonRelationships resolves direct imported calls with exact bindi
         'relative_import',
     ]);
     assert.deepEqual(claim.dependencyKeys, []);
+
+    const admitted = admitAuthoritativeProofBackedCalls({ registry, claims: [claim] });
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].sourceInstanceId, claim.sourceInstanceId);
+    assert.equal(admitted[0].targetInstanceId, claim.targetInstanceId);
+    assert.equal(admitted[0].resolutionAuthority, 'direct_binding');
 });
 
 test('resolvePythonRelationships resolves typed member calls with parameter proof', async () => {
@@ -232,6 +239,10 @@ test('resolvePythonRelationships resolves flow-origin member calls with ordered 
     );
     assert.equal(claim.dependencyKeys.length, 2);
     assert.ok(claim.dependencyKeys.every((key) => key.startsWith('src/engine.py:')));
+
+    const admitted = admitAuthoritativeProofBackedCalls({ registry, claims: [claim] });
+    assert.equal(admitted.length, 1);
+    assert.equal(admitted[0].resolutionAuthority, 'origin_flow');
 
     const engineClaims = result.claimsByFile.get('src/engine.py') ?? [];
     assert.equal(engineClaims.length, 4);

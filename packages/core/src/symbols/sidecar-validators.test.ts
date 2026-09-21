@@ -6,6 +6,7 @@ import {
     NATIVE_PYTHON_PROVIDER_ID,
     NATIVE_PYTHON_PROVIDER_VERSION,
 } from '../relationships/resolution';
+import { isCanonicalResolutionClaim } from '../relationships/resolution-claim-validation';
 import { isResolutionClaim } from './sidecar-validators';
 
 function claim(providerId: string, providerVersion: string, flowHops: number) {
@@ -38,7 +39,15 @@ test('generic resolution claim validation does not apply the Python-native hop b
     );
 });
 
-test('Python-native resolution claims retain their bounded-flow safety limit', () => {
+test('Python-native resolution claims retain their bounded-flow safety limit at the sidecar boundary', () => {
+    const overLimit = claim(
+        NATIVE_PYTHON_PROVIDER_ID,
+        NATIVE_PYTHON_PROVIDER_VERSION,
+        MAX_PYTHON_FLOW_HOPS + 1,
+    );
+    assert.equal(isCanonicalResolutionClaim(overLimit), true);
+    assert.equal(isResolutionClaim(overLimit), false);
+
     assert.equal(
         isResolutionClaim(claim(
             NATIVE_PYTHON_PROVIDER_ID,

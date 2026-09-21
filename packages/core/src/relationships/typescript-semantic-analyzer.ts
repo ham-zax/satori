@@ -61,6 +61,7 @@ interface ProjectSnapshot {
     readonly environmentConfigId: string;
     readonly files: ReadonlySet<string>;
     readonly reverseDependencies: ReadonlyMap<string, ReadonlySet<string>>;
+    readonly projectGlobalSourceFiles: ReadonlySet<string>;
     readonly referencedProjectKeys: ReadonlySet<string>;
 }
 
@@ -430,6 +431,47 @@ function buildReverseDependencies(
     return reverse;
 }
 
+function sourceCanAffectProjectGlobals(sourceFile: ts.SourceFile): boolean {
+    if (sourceFile.isDeclarationFile || !ts.isExternalModule(sourceFile)) return true;
+
+    const preprocessed = ts.preProcessFile(sourceFile.text, true, true);
+    if (
+        preprocessed.typeReferenceDirectives.length > 0
+        || preprocessed.libReferenceDirectives.length > 0
+    ) {
+        return true;
+    }
+
+    let hasGlobalAugmentation = false;
+    const visit = (node: ts.Node): void => {
+        if (hasGlobalAugmentation) return;
+        if (
+            ts.isModuleDeclaration(node)
+            && (
+                (node.flags & ts.NodeFlags.GlobalAugmentation) !== 0
+                || ts.isStringLiteral(node.name)
+            )
+        ) {
+            hasGlobalAugmentation = true;
+            return;
+        }
+        ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    return hasGlobalAugmentation;
+}
+
+function projectGlobalSourceFiles(program: ts.Program, plan: ProjectPlan): Set<string> {
+    const globalFiles = new Set<string>();
+    for (let index = 0; index < plan.absoluteFiles.length; index += 1) {
+        const sourceFile = sourceFileForProgram(program, plan.absoluteFiles[index]);
+        if (sourceFile && sourceCanAffectProjectGlobals(sourceFile)) {
+            globalFiles.add(plan.relativeFiles[index]);
+        }
+    }
+    return globalFiles;
+}
+
 function diagnosticIdentity(errors: readonly ts.Diagnostic[]): readonly number[] {
     return errors.map((error) => error.code).sort((left, right) => left - right);
 }
@@ -494,7 +536,8 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const affectedByProject = new Map<string, Set<string>>();
         const currentSnapshots = new Map<string, ProjectSnapshot>();
         const projectReferenceAuthorityReady = new Map<string, boolean>();
-        const projectChanged = new Set<string>();
+        const projectAuthorityChanged = new Set<string>();
+        const projectEnvironmentChanged = new Set<string>();
         const claimsByFile = new Map<string, readonly import('./resolution').ResolutionClaim[]>();
 
         for (const plan of plans) {
@@ -505,7 +548,10 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 || [...currentFiles].some((file) => !previous.files.has(file));
             const environmentChanged = !previous
                 || previous.environmentConfigId !== plan.environmentConfigId;
-            if (membershipChanged || environmentChanged) projectChanged.add(plan.key);
+            if (membershipChanged || environmentChanged) {
+                projectAuthorityChanged.add(plan.key);
+                projectEnvironmentChanged.add(plan.key);
+            }
 
             const session = this.getOrCreateSession(plan);
             const refreshFiles = changedFiles
@@ -525,46 +571,68 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     || !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305),
             );
             const reverseDependencies = buildReverseDependencies(program, plan);
+            const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan);
             currentSnapshots.set(plan.key, {
                 environmentConfigId: plan.environmentConfigId,
                 files: currentFiles,
                 reverseDependencies,
+                projectGlobalSourceFiles: currentProjectGlobalFiles,
                 referencedProjectKeys: new Set(plan.referencedProjectKeys),
             });
 
-            let affected: Set<string>;
-            if (!changedFiles || !previous || membershipChanged || environmentChanged) {
-                affected = new Set(plan.relativeFiles);
-            } else {
-                const directlyChanged = new Set<string>();
+            const directlyChanged = new Set<string>();
+            if (changedFiles) {
                 for (const changed of changedFiles) {
                     if (currentFileToProject.get(changed) === plan.key || this.fileToProject.get(changed) === plan.key) {
                         directlyChanged.add(changed);
                     }
                 }
-                if ([...directlyChanged].some((file) => file.endsWith('.d.ts') || file.endsWith('.d.mts') || file.endsWith('.d.cts'))) {
-                    affected = new Set(plan.relativeFiles);
-                } else {
-                    affected = transitiveDependents(
-                        [...directlyChanged],
-                        unionReverseDependencies(previous.reverseDependencies, reverseDependencies),
-                    );
-                }
+            }
+            if (directlyChanged.size > 0) projectAuthorityChanged.add(plan.key);
+
+            let affected: Set<string>;
+            if (!changedFiles || !previous || membershipChanged || environmentChanged) {
+                affected = new Set(plan.relativeFiles);
+            } else if ([...directlyChanged].some((file) => (
+                currentProjectGlobalFiles.has(file)
+                || previous.projectGlobalSourceFiles.has(file)
+            ))) {
+                affected = new Set(plan.relativeFiles);
+            } else {
+                affected = transitiveDependents(
+                    [...directlyChanged],
+                    unionReverseDependencies(previous.reverseDependencies, reverseDependencies),
+                );
             }
             affectedByProject.set(plan.key, affected);
         }
 
-        // Referenced-project source/config authority changes conservatively invalidate dependents.
+        // A referenced project's source/config/output authority can affect dependents
+        // without a direct source import. Rebuild those dependent projects conservatively.
+        const referenceInvalidatedProjects = new Set<string>();
         let expanded = true;
         while (expanded) {
             expanded = false;
             for (const plan of plans) {
-                if (projectChanged.has(plan.key)) continue;
-                if (plan.referencedProjectKeys.some((key) => projectChanged.has(key))) {
-                    projectChanged.add(plan.key);
+                if (referenceInvalidatedProjects.has(plan.key)) continue;
+                if (plan.referencedProjectKeys.some((key) => projectAuthorityChanged.has(key))) {
+                    referenceInvalidatedProjects.add(plan.key);
+                    projectAuthorityChanged.add(plan.key);
                     affectedByProject.set(plan.key, new Set(plan.relativeFiles));
                     expanded = true;
                 }
+            }
+        }
+
+        // If referenced source authority changed but no referenced output/control identity
+        // changed for this project, declarations may be stale. Fail closed until the
+        // observable project-reference boundary changes and the Program can prove readiness.
+        for (const plan of plans) {
+            if (
+                plan.referencedProjectKeys.some((key) => projectAuthorityChanged.has(key))
+                && !projectEnvironmentChanged.has(plan.key)
+            ) {
+                projectReferenceAuthorityReady.set(plan.key, false);
             }
         }
 

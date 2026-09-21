@@ -9,6 +9,7 @@ import ts from 'typescript';
 import { Context } from '../core/context';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
+import type { ResolutionProjectEvidence, ResolutionProjectInput } from '../relationships/resolution';
 import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
@@ -115,6 +116,35 @@ function tsconfig(extraCompilerOptions: Record<string, unknown> = {}): string {
         },
         include: ['src/**/*.ts'],
     }, null, 2);
+}
+
+function emitConfiguredProject(configPath: string): void {
+    const read = ts.readConfigFile(configPath, ts.sys.readFile);
+    assert.equal(read.error, undefined);
+    const parsed = ts.parseJsonConfigFileContent(
+        read.config,
+        ts.sys,
+        path.dirname(configPath),
+        undefined,
+        configPath,
+    );
+    const program = ts.createProgram({
+        rootNames: parsed.fileNames,
+        options: parsed.options,
+        projectReferences: parsed.projectReferences,
+    });
+    const emitted = program.emit();
+    assert.equal(emitted.emitSkipped, false);
+}
+
+class CapturingTypeScriptSemanticProjectAnalyzer extends TypeScriptSemanticProjectAnalyzer {
+    lastEvidence?: ResolutionProjectEvidence;
+
+    override async analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        const evidence = await super.analyze(input);
+        this.lastEvidence = evidence;
+        return evidence;
+    }
 }
 
 test('production indexing publishes proof-backed TypeScript CALLS and abstains on open-world interface dispatch', async () => {
@@ -274,6 +304,132 @@ export class Service {
     }
 });
 
+test('project-global TypeScript origin changes invalidate unchanged callers and match a fresh index', async () => {
+    const initialFiles = {
+        'tsconfig.json': tsconfig({ moduleDetection: 'legacy' }),
+        'src/a.ts': `
+class A {
+    run(): string { return 'a'; }
+}
+`,
+        'src/b.ts': `
+class B {
+    run(): string { return 'b'; }
+}
+`,
+        'src/globals.ts': 'const service = new A();\n',
+        'src/caller.ts': 'function caller(): string { return service.run(); }\n',
+    };
+    const fixture = await createFixture(initialFiles);
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const before = await readNavigation(fixture.context, fixture.root);
+        const beforeCalls = callTargets(before.relationships.records, before.registry.symbolsByInstanceId);
+        assert.equal(beforeCalls.some(({ source, target }) => (
+            source.qualifiedName === 'caller' && target.qualifiedName === 'A.run'
+        )), true);
+
+        fs.writeFileSync(path.join(fixture.root, 'src/globals.ts'), 'const service = new B();\n');
+        const delta = await fixture.context.reindexByChange(fixture.root);
+        assert.deepEqual(delta.changedFiles, ['src/globals.ts']);
+
+        const incremental = await readNavigation(fixture.context, fixture.root);
+        const incrementalCalls = callTargets(
+            incremental.relationships.records,
+            incremental.registry.symbolsByInstanceId,
+        ).filter(({ source }) => source.qualifiedName === 'caller');
+        assert.deepEqual(
+            incrementalCalls.map(({ target }) => target.qualifiedName),
+            ['B.run'],
+        );
+        assert.equal(incrementalCalls.some(({ target }) => target.qualifiedName === 'A.run'), false);
+
+        const freshFixture = await createFixture({
+            ...initialFiles,
+            'src/globals.ts': 'const service = new B();\n',
+        });
+        try {
+            await freshFixture.context.indexCodebase(freshFixture.root);
+            const fresh = await readNavigation(freshFixture.context, freshFixture.root);
+            const freshCalls = callTargets(
+                fresh.relationships.records,
+                fresh.registry.symbolsByInstanceId,
+            ).filter(({ source }) => source.qualifiedName === 'caller');
+            assert.deepEqual(
+                incrementalCalls.map(({ source, target }) => [
+                    source.file,
+                    source.qualifiedName,
+                    target.file,
+                    target.qualifiedName,
+                    target.symbolInstanceId,
+                ]),
+                freshCalls.map(({ source, target }) => [
+                    source.file,
+                    source.qualifiedName,
+                    target.file,
+                    target.qualifiedName,
+                    target.symbolInstanceId,
+                ]),
+            );
+        } finally {
+            await freshFixture.close();
+        }
+    } finally {
+        await fixture.close();
+    }
+});
+
+test('declare global augmentation changes invalidate module callers without import edges', async () => {
+    const globalDeclaration = (target: 'A' | 'B') => `
+import { ${target} } from './${target.toLowerCase()}';
+export {};
+declare global {
+    const service: ${target};
+}
+`;
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/a.ts': `export class A { run(): string { return 'a'; } }\n`,
+        'src/b.ts': `export class B { run(): string { return 'b'; } }\n`,
+        'src/globals.ts': globalDeclaration('A'),
+        'src/caller.ts': `export function caller(): string { return service.run(); }\n`,
+    });
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const before = await readNavigation(fixture.context, fixture.root);
+        const beforeManifest = JSON.parse(fs.readFileSync(
+            path.join(before.navigation.navigationRoot, 'relationships/manifest.json'),
+            'utf8',
+        )) as { files: Array<{ path: string; shardPath: string }> };
+        const beforeCallerShard = beforeManifest.files.find((file) => file.path === 'src/caller.ts')!;
+        const beforeCallerInode = fs.statSync(path.join(
+            before.navigation.navigationRoot,
+            'relationships',
+            beforeCallerShard.shardPath.replace(/^relationships\//, ''),
+        )).ino;
+
+        fs.writeFileSync(path.join(fixture.root, 'src/globals.ts'), globalDeclaration('B'));
+        const delta = await fixture.context.reindexByChange(fixture.root);
+        assert.deepEqual(delta.changedFiles, ['src/globals.ts']);
+
+        const after = await readNavigation(fixture.context, fixture.root);
+        const afterManifest = JSON.parse(fs.readFileSync(
+            path.join(after.navigation.navigationRoot, 'relationships/manifest.json'),
+            'utf8',
+        )) as { files: Array<{ path: string; shardPath: string }> };
+        const afterCallerShard = afterManifest.files.find((file) => file.path === 'src/caller.ts')!;
+        const afterCallerInode = fs.statSync(path.join(
+            after.navigation.navigationRoot,
+            'relationships',
+            afterCallerShard.shardPath.replace(/^relationships\//, ''),
+        )).ino;
+
+        assert.notEqual(afterCallerInode, beforeCallerInode);
+    } finally {
+        await fixture.close();
+    }
+});
+
 test('tsconfig path mapping is checkpoint authority and config-only changes retarget TypeScript CALLS', async () => {
     const config = (target: 'a' | 'b') => tsconfig({
         baseUrl: '.',
@@ -309,6 +465,73 @@ export function run(): string {
         assert.ok(afterCall);
         assert.equal(afterCall.target.file, 'src/b.ts');
         assert.notEqual(afterCall.record.targetInstanceId, beforeCall.record.targetInstanceId);
+    } finally {
+        await fixture.close();
+    }
+});
+
+test('project-reference source changes fail closed until output/control authority changes', async () => {
+    const analyzer = new CapturingTypeScriptSemanticProjectAnalyzer();
+    const sharedCompilerOptions = {
+        target: 'ES2022',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        strict: true,
+        composite: true,
+        declaration: true,
+        rootDir: 'src',
+        outDir: 'dist',
+    };
+    const libConfig = (extraCompilerOptions: Record<string, unknown> = {}) => JSON.stringify({
+        compilerOptions: {
+            ...sharedCompilerOptions,
+            ...extraCompilerOptions,
+        },
+        include: ['src/**/*.ts'],
+    }, null, 2);
+    const fixture = await createFixture({
+        '.gitignore': 'lib/dist/\n',
+        'lib/tsconfig.json': libConfig(),
+        'lib/src/index.ts': `export class Shared { run(): string { return 'v1'; } }\n`,
+        'app/tsconfig.json': JSON.stringify({
+            compilerOptions: sharedCompilerOptions,
+            references: [{ path: '../lib' }],
+            include: ['src/**/*.ts'],
+        }, null, 2),
+        'app/src/main.ts': `
+import { Shared } from '../../lib/src/index';
+export function useShared(): string {
+    return new Shared().run();
+}
+`,
+    }, analyzer);
+    try {
+        const libConfigPath = path.join(fixture.root, 'lib/tsconfig.json');
+        emitConfiguredProject(libConfigPath);
+        await fixture.context.indexCodebase(fixture.root);
+
+        fs.writeFileSync(
+            path.join(fixture.root, 'lib/src/index.ts'),
+            `export class Shared { run(): number { return 2; } }\n`,
+        );
+        const sourceDelta = await fixture.context.reindexByChange(fixture.root);
+        assert.equal(sourceDelta.changedFiles.includes('lib/src/index.ts'), true);
+        assert.ok(analyzer.lastEvidence);
+        assert.equal(analyzer.lastEvidence.affectedSourceFiles?.has('app/src/main.ts'), true);
+        assert.deepEqual(analyzer.lastEvidence.claimsByFile.get('app/src/main.ts'), []);
+
+        emitConfiguredProject(libConfigPath);
+        const outputDelta = await fixture.context.reindexByChange(fixture.root);
+        assert.equal(outputDelta.changedFiles.includes('lib/dist/index.d.ts'), true);
+        assert.ok(analyzer.lastEvidence);
+        assert.equal(analyzer.lastEvidence.affectedSourceFiles?.has('app/src/main.ts'), true);
+        assert.equal((analyzer.lastEvidence.claimsByFile.get('app/src/main.ts')?.length ?? 0) > 0, true);
+
+        fs.writeFileSync(libConfigPath, libConfig({ declarationMap: true }));
+        const controlDelta = await fixture.context.reindexByChange(fixture.root);
+        assert.equal(controlDelta.changedFiles.includes('lib/tsconfig.json'), true);
+        assert.ok(analyzer.lastEvidence);
+        assert.equal(analyzer.lastEvidence.affectedSourceFiles?.has('app/src/main.ts'), true);
     } finally {
         await fixture.close();
     }

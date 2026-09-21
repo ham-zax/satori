@@ -43,6 +43,7 @@ import {
 } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
 import type { ResolutionAuthority } from './resolution';
+import { isResolutionClaim } from '../symbols/sidecar-validators';
 import {
     admitResolvedCallClaims,
     buildCallRelationshipsForRegistry,
@@ -120,7 +121,11 @@ test('custom strategy registry actively controls buildCallRelationshipsForRegist
         decision: 'resolved' as const,
         relationshipType: 'CALLS' as const,
         resolutionAuthority: 'direct_binding' as const,
-        proofSteps: [],
+        proofSteps: [
+            { kind: 'call_site' as const, subject: 'add()' },
+            { kind: 'containing_caller' as const, subject: source.qualifiedName },
+            { kind: 'exact_target_definition' as const, subject: target.qualifiedName },
+        ],
         dependencyKeys: ['test-project'],
         flowHops: 0,
     };
@@ -273,11 +278,16 @@ test('admitResolvedCallClaims validates authority, symbol existence, source file
         sourceFile: 'src/app.ts',
         sourceInstanceId: 'inst-source',
         targetInstanceId: 'inst-target',
+        targetSymbol: 'add',
         callSpan: { startByte: 100, endByte: 110, startLine: 12, startColumn: 4, endLine: 12, endColumn: 14 },
         decision: 'resolved' as const,
         relationshipType: 'CALLS' as const,
         resolutionAuthority: 'direct_binding' as const,
-        proofSteps: [],
+        proofSteps: [
+            { kind: 'call_site' as const, subject: 'add()' },
+            { kind: 'containing_caller' as const, subject: 'main' },
+            { kind: 'exact_target_definition' as const, subject: 'add' },
+        ],
         dependencyKeys: [],
         flowHops: 0,
     };
@@ -313,6 +323,57 @@ test('admitResolvedCallClaims validates authority, symbol existence, source file
         registry,
         claims: [{ ...validClaim, resolutionAuthority: 'lexical_heuristic' as unknown as ResolutionAuthority }],
     }).length, 0);
+
+    // 6. Empty proof is rejected by the canonical claim contract.
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{ ...validClaim, proofSteps: [] }],
+    }).length, 0);
+
+    // 7. Resolved claims require target semantic identity.
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{ ...validClaim, targetSymbol: undefined }],
+    }).length, 0);
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{ ...validClaim, targetSymbol: 'subtract' }],
+    }).length, 0);
+
+    // 8. The selected instance and target semantic identity must agree.
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{ ...validClaim, targetInstanceId: 'inst-source' }],
+    }).length, 0);
+
+    // 9. Authority must be derivable from provider-neutral proof evidence.
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{
+            ...validClaim,
+            proofSteps: [
+                { kind: 'call_site' as const, subject: 'add()' },
+                { kind: 'containing_caller' as const, subject: 'main' },
+            ],
+        }],
+    }).length, 0);
+    assert.equal(admitResolvedCallClaims({
+        registry,
+        claims: [{
+            ...validClaim,
+            resolutionAuthority: 'origin_flow' as const,
+            proofSteps: [
+                { kind: 'call_site' as const, subject: 'add()' },
+                { kind: 'containing_caller' as const, subject: 'main' },
+                { kind: 'exact_target_definition' as const, subject: 'add' },
+            ],
+        }],
+    }).length, 0);
+
+    // 10. Admission and sidecar validation share the same malformed-claim contract.
+    const malformedClaim = { ...validClaim, providerId: '' };
+    assert.equal(isResolutionClaim(malformedClaim), false);
+    assert.equal(admitResolvedCallClaims({ registry, claims: [malformedClaim] }).length, 0);
 });
 
 

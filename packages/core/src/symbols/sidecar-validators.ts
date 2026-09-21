@@ -5,8 +5,14 @@ import {
     isResolutionAuthority,
     MAX_PYTHON_FLOW_HOPS,
     NATIVE_PYTHON_PROVIDER_ID,
+    type ResolutionClaim,
 } from '../relationships/resolution';
-import type { ResolutionClaim, ResolutionProofStep } from '../relationships/resolution';
+import {
+    isCanonicalResolutionClaim,
+} from '../relationships/resolution-claim-validation';
+export {
+    isResolutionProofStep,
+} from '../relationships/resolution-claim-validation';
 import {
     isStructuralDefinitionStatus,
     isSymbolKind,
@@ -190,27 +196,6 @@ function isSourceSpan(value: unknown): boolean {
 }
 
 const PYTHON_FLOW_VALUE_KINDS = new Set(['constructor', 'call', 'member', 'identifier', 'unknown']);
-const RESOLUTION_DECISIONS = new Set(['resolved', 'unresolved', 'ambiguous']);
-const RESOLUTION_PROOF_STEP_KINDS = new Set([
-    'call_site',
-    'containing_caller',
-    'absolute_import',
-    'relative_import',
-    'same_file_definition',
-    'constructor_origin',
-    'parameter_annotation',
-    'package_binding',
-    'receiver_type_binding',
-    'exact_target_definition',
-    'allocation_origin',
-    'field_origin',
-    'callback_origin',
-    'class_inheritance',
-    'flow_hop',
-    'candidate_set',
-    'ambiguity',
-    'unresolved_dependency',
-]);
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
     const allowed = new Set(keys);
@@ -283,73 +268,9 @@ export function isPythonFlowFact(value: unknown): value is PythonFlowFact {
         && isSourceSpan(value.contextSpan);
 }
 
-export function isResolutionProofStep(value: unknown): value is ResolutionProofStep {
-    if (!isRecord(value)
-        || !hasOnlyKeys(value, ['kind', 'subject', 'detail', 'span', 'hop'])
-        || typeof value.kind !== 'string'
-        || !RESOLUTION_PROOF_STEP_KINDS.has(value.kind)
-        || !isNonEmptyString(value.subject)
-        || !isOptionalNonEmptyString(value.detail)
-        || (value.span !== undefined && !isSourceSpan(value.span))
-        || (value.hop !== undefined && !isNonNegativeInteger(value.hop))) {
-        return false;
-    }
-    return true;
-}
-
 export function isResolutionClaim(value: unknown): value is ResolutionClaim {
-    if (!isRecord(value)
-        || !hasOnlyKeys(value, [
-            'providerId',
-            'providerVersion',
-            'environmentConfigId',
-            'sourceFile',
-            'sourceInstanceId',
-            'targetInstanceId',
-            'targetSymbol',
-            'callSpan',
-            'decision',
-            'relationshipType',
-            'resolutionAuthority',
-            'proofSteps',
-            'dependencyKeys',
-            'flowHops',
-        ])
-        || !isNonEmptyString(value.providerId)
-        || !isNonEmptyString(value.providerVersion)
-        || !isNonEmptyString(value.environmentConfigId)
-        || !isRepositoryRelativePath(value.sourceFile)
-        || !isOptionalNonEmptyString(value.sourceInstanceId)
-        || !isOptionalNonEmptyString(value.targetInstanceId)
-        || !isOptionalNonEmptyString(value.targetSymbol)
-        || !isSourceSpan(value.callSpan)
-        || typeof value.decision !== 'string'
-        || !RESOLUTION_DECISIONS.has(value.decision)
-        || (value.relationshipType !== 'CALLS' && value.relationshipType !== 'REFERENCES')
-        || !isResolutionAuthority(value.resolutionAuthority)
-        || !Array.isArray(value.proofSteps)
-        || value.proofSteps.length === 0
-        || !value.proofSteps.every(isResolutionProofStep)
-        || !Array.isArray(value.dependencyKeys)
-        || !value.dependencyKeys.every(isNonEmptyString)
-        || !isNonNegativeInteger(value.flowHops)
-        || (value.providerId === NATIVE_PYTHON_PROVIDER_ID && value.flowHops > MAX_PYTHON_FLOW_HOPS)) {
-        return false;
-    }
-    if (value.decision === 'resolved') {
-        return value.relationshipType === 'CALLS'
-            && isNonEmptyString(value.targetInstanceId)
-            && isNonEmptyString(value.targetSymbol)
-            && (value.resolutionAuthority === 'direct_binding' || value.resolutionAuthority === 'origin_flow');
-    }
-    return value.relationshipType === 'REFERENCES'
-        && value.dependencyKeys.length > 0
-        && value.targetInstanceId === undefined
-        && value.targetSymbol === undefined
-        && (value.resolutionAuthority === 'ambiguous'
-            || value.resolutionAuthority === 'unresolved'
-            || value.resolutionAuthority === 'unsupported'
-            || value.resolutionAuthority === 'heuristic_reference');
+    return isCanonicalResolutionClaim(value)
+        && (value.providerId !== NATIVE_PYTHON_PROVIDER_ID || value.flowHops <= MAX_PYTHON_FLOW_HOPS);
 }
 
 export function isRelationshipAnalysisEvidence(value: unknown): value is RelationshipAnalysisEvidence {

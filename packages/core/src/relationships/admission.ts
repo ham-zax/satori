@@ -1,5 +1,6 @@
 import { isCallableSymbolKind, type RelationshipRecord, type SymbolRegistry } from '../symbols';
 import type { ResolutionClaim } from './resolution';
+import { isCanonicalResolutionClaim } from './resolution-claim-validation';
 
 /**
  * Centrally admits resolved call claims proposed by language providers,
@@ -18,19 +19,15 @@ export function admitAuthoritativeProofBackedCalls(input: {
     const admitted: RelationshipRecord[] = [];
 
     for (const claim of input.claims) {
-        if (claim.decision !== 'resolved') continue;
-        if (claim.relationshipType !== 'CALLS') continue;
-        if (claim.resolutionAuthority !== 'direct_binding' && claim.resolutionAuthority !== 'origin_flow') {
-            continue;
-        }
+        if (!isCanonicalResolutionClaim(claim) || claim.decision !== 'resolved') continue;
+        if (!claim.sourceInstanceId || !claim.targetInstanceId || !claim.targetSymbol) continue;
 
-        if (!claim.sourceInstanceId || !claim.targetInstanceId) {
-            continue;
-        }
+        const { sourceInstanceId, targetInstanceId } = claim;
 
-        const source = symbolsByInstanceId.get(claim.sourceInstanceId);
-        const target = symbolsByInstanceId.get(claim.targetInstanceId);
+        const source = symbolsByInstanceId.get(sourceInstanceId);
+        const target = symbolsByInstanceId.get(targetInstanceId);
         if (!source || !target) continue;
+        if (claim.targetSymbol !== target.qualifiedName) continue;
 
         // Invariant: both source (caller) and target (callee) must be callable symbol kinds
         if (!isCallableSymbolKind(source.kind) || !isCallableSymbolKind(target.kind)) continue;

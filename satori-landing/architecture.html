@@ -1115,7 +1115,7 @@
               <g transform="translate(300, 130)">
                 <rect width="200" height="70" rx="8" fill="rgba(255, 255, 255, 0.05)" stroke="rgba(255, 255, 255, 0.2)" stroke-width="1" stroke-dasharray="4 4" />
                 <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Tool Registry</text>
-                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(7 MCP Tools)</text>
+                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(9 MCP Tools)</text>
               </g>
 
               <!-- MCP Runtime -->
@@ -1158,7 +1158,7 @@
             <div class="arch-mobile-link"><span>request</span></div>
             <div class="arch-mobile-node">
               <strong>Tool Registry</strong>
-              <small>Seven MCP tools</small>
+              <small>Nine MCP tools</small>
             </div>
             <div class="arch-mobile-link"><span>dispatch</span></div>
             <div class="arch-mobile-node" data-tone="runtime">
@@ -1282,9 +1282,9 @@
       <section class="section">
         <h2>Agent-Safe Tool Surface</h2>
         <p class="intro">
-          Satori exposes exactly seven public MCP tools. They cover repository
-          discovery, lifecycle, search/pagination, structural navigation, bounded
-          source reads, and call-graph context. Every tool is read-only with
+          Satori exposes exactly nine public MCP tools. They cover repository
+          discovery, lifecycle, search/pagination, architecture and structural navigation, bounded
+          source reads, change orientation, and call-graph context. Every tool is read-only with
           respect to source code; only index state is mutable through
           <code>manage_index</code>.
         </p>
@@ -1303,6 +1303,11 @@
                 <p class="refusal">Refuses to serve an incompatible Publication as current evidence.</p>
               </div>
               <div class="tool-card">
+                <h3><code>architecture_overview</code></h3>
+                <p>Summarizes bounded Publication architecture evidence as logical areas, cross-area boundaries, call hotspots, and coverage/filtering counts.</p>
+                <p class="refusal">Does not infer layers, services, clusters, or relationships that are absent from the current Publication.</p>
+              </div>
+              <div class="tool-card">
                 <h3><code>continue_search</code></h3>
                 <p>Reveals more of one frozen grouped result set without rerunning embedding, retrieval, or reranking.</p>
                 <p class="refusal">Expired, stale, conflicting, or authority-drifted handles fail closed.</p>
@@ -1316,6 +1321,11 @@
                 <h3><code>file_outline</code></h3>
                 <p>Returns Publication-owned symbols, ownership, spans, and supported structural analysis for one file.</p>
                 <p class="refusal">Exact symbol resolution reports ambiguity instead of selecting a same-name guess.</p>
+              </div>
+              <div class="tool-card">
+                <h3><code>detect_changes</code></h3>
+                <p>Maps a Git diff to current indexed symbol seeds and bounded transitive callers for change orientation.</p>
+                <p class="refusal">Does not claim complete blast-radius coverage when relationship evidence is unavailable or truncated.</p>
               </div>
               <div class="tool-card">
                 <h3><code>read_file</code></h3>
@@ -1334,7 +1344,7 @@
             <div class="tool-list">
               <div class="tool-card">
                 <h3><code>manage_index</code></h3>
-                <p>Supports create, sync, status, reindex, and clear while preserving atomic Publication activation.</p>
+                <p>Supports create, sync, status, reindex, cancel, and clear while preserving atomic Publication activation.</p>
                 <p class="refusal">Incomplete staging never becomes current; destructive actions stay explicit and incompatible live runtime owners block unsafe mutation.</p>
               </div>
             </div>

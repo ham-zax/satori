@@ -84,10 +84,11 @@ Satori is a repository code-intelligence layer for coding agents. Use it for unf
 
 ## Priority Order
 1. \`search_codebase\` — run hybrid repository search and follow \`recommendedNextAction\`
-2. \`continue_search\` — reveal more from the same frozen ranking when returned
-3. \`read_file\` / \`file_outline\` — inspect exact source or indexed structure
-4. \`call_graph\` — inspect conservative relationships for graph-ready targets
-5. \`list_codebases\` / \`manage_index status\` — inspect index readiness and capabilities
+2. \`architecture_overview\` — inspect repository-wide areas, cross-area boundaries, and hotspots
+3. \`continue_search\` — reveal more from the same frozen ranking when returned
+4. \`read_file\` / \`file_outline\` — inspect exact source or indexed structure
+5. \`call_graph\` — inspect conservative relationships for graph-ready targets
+6. \`list_codebases\` / \`manage_index status\` — inspect index readiness and capabilities
 
 ## Boundaries
 - Read \`warnings[].action\` and follow structured remediation.

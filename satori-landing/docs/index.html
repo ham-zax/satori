@@ -7,7 +7,7 @@
     <title>Satori Docs | Learn and Operate the Repository Intelligence Database</title>
     <meta
       name="description"
-      content="Learn Satori from first repository to exact source: install the local repository-intelligence database, understand Publications, use real coding workflows, and reference the seven MCP tools and lifecycle operations."
+      content="Learn Satori from first repository to exact source: install the local repository-intelligence database, understand Publications, use real coding workflows, and reference the nine MCP tools and lifecycle operations."
     />
     <meta name="keywords" content="Satori docs, MCP install, AI coding agent documentation, semantic code search docs, repo indexing, call graph, code navigation" />
     <meta name="robots" content="index,follow" />
@@ -654,7 +654,7 @@
         <div class="section-kicker">Five-minute path</div>
         <h2>Install once. Index one repo. Ask one useful question.</h2>
         <p class="lede">
-          You do not need to learn the seven MCP tools before Satori becomes useful. The normal
+          You do not need to learn the nine MCP tools before Satori becomes useful. The normal
           experience is an agent using those tools for you while you stay focused on the repository question.
         </p>
         <div class="docs-start-grid">
@@ -1233,11 +1233,11 @@ npx -y @zokizuan/satori-cli@latest install --runtime voyage --vector-store milvu
       </section>
 
       <section class="section" id="tools">
-        <h2>Seven Tools</h2>
+        <h2>Nine Tools</h2>
         <p class="lede">
-          The live MCP registry exposes exactly seven tools. Together they cover
-          repository discovery, lifecycle, search/pagination, structural
-          navigation, bounded source reads, and call-graph context without adding
+          The live MCP registry exposes exactly nine tools. Together they cover
+          repository discovery, lifecycle, search/pagination, architecture and structural
+          navigation, bounded source reads, change orientation, and call-graph context without adding
           source-code write commands.
         </p>
         <div class="tool-grid">
@@ -1253,7 +1253,7 @@ npx -y @zokizuan/satori-cli@latest install --runtime voyage --vector-store milvu
             <h3>manage_index</h3>
             <p>
               Supports <code>create</code>, <code>reindex</code>,
-              <code>sync</code>, <code>status</code>, and <code>clear</code>.
+              <code>sync</code>, <code>status</code>, <code>cancel</code>, and <code>clear</code>.
               Indexing builds a complete staged generation before it becomes the
               current Publication; status separates durable Publication state from
               process-lifetime progress.
@@ -1266,6 +1266,14 @@ npx -y @zokizuan/satori-cli@latest install --runtime voyage --vector-store milvu
               <code>docs</code>, or <code>mixed</code> scope, path operators,
               filters, owner-symbol grouping, freshness checks, structured
               warnings, and optional debug modes.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>architecture_overview</h3>
+            <p>
+              Summarizes bounded Publication architecture evidence as logical
+              areas, cross-area CALLS/IMPORTS boundaries, call hotspots, and
+              coverage/filtering counts without inventing missing relationships.
             </p>
           </div>
           <div class="panel">
@@ -1290,6 +1298,14 @@ npx -y @zokizuan/satori-cli@latest install --runtime voyage --vector-store milvu
               Traverses bounded caller/callee relationship context and supported
               test references from an exact symbol reference. Output follows the
               language's declared capability boundary.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>detect_changes</h3>
+            <p>
+              Maps a Git diff to current indexed symbol seeds and bounded
+              transitive callers so agents can orient a change without treating
+              the result as complete blast-radius proof.
             </p>
           </div>
           <div class="panel">

@@ -245,12 +245,13 @@ identify the owner, and show me the exact implementation to inspect first.
 ```text
 search_codebase
     -> owner-oriented result
+    -> architecture_overview when repository-wide context is useful
     -> file_outline / call_graph when useful
     -> read_file for exact proof
     -> continue_search only if the frozen result has more useful evidence
 ```
 
-You normally do not need to orchestrate these tools manually. They are the seven MCP primitives your coding agent uses to interrogate the repository database.
+You normally do not need to orchestrate these tools manually. They are the nine MCP primitives your coding agent uses to interrogate the repository database.
 
 ## How Satori changes the workflow
 
@@ -437,9 +438,11 @@ Restart OpenCode after restoring the published runtime.
 |---|---|
 | `manage_index` | Manage the repository-intelligence Publication: create the first index, synchronize source changes, inspect readiness, cancel a live supervised sync, recover with reindex, or clear index state. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance; explicit reindex remains the operator recovery override. |
 | `search_codebase` | Search the repository-intelligence Publication with semantic, lexical, and exact evidence and return owner-oriented results. Start here for behavior, ownership, configuration, or path discovery. |
+| `architecture_overview` | Summarize bounded Publication architecture evidence as logical areas, cross-area boundaries, and hotspots. |
 | `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. |
 | `file_outline` | List the indexed symbols and spans in one file. Use it to choose an exact owner before reading implementation. |
 | `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
+| `detect_changes` | Map a Git diff to current indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
 | `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |
 
@@ -449,11 +452,12 @@ Public paths are absolute. `read_file` is restricted to tracked searchable roots
 
 ```text
 1. search_codebase for behavior or ownership
-2. follow recommendedNextAction when returned
-3. use file_outline to inspect one file's owners
-4. use call_graph for advisory relationship context
-5. use read_file for exact proof
-6. use continue_search only when the frozen result has more useful evidence
+2. use architecture_overview when you need repository-wide areas, boundaries, or hotspots
+3. follow recommendedNextAction when returned
+4. use file_outline to inspect one file's owners
+5. use call_graph for advisory relationship context
+6. use read_file for exact proof
+7. use continue_search only when the frozen result has more useful evidence
 ```
 
 When a tracked Publication becomes incompatible with a managed offline runtime, Satori automatically starts or joins one background reindex and returns `not_ready`/`indexing` so the caller can retry without asking the user to repair the index. Explicit `manage_index reindex` remains the recovery override when automatic maintenance is unavailable, suppressed after a failed automatic attempt, or intentionally disabled for connected/remote providers. Use `sync` for ordinary source changes when refreshed indexed evidence is needed. Search and navigation do not wait for a same-root sync: when a compatible completed Publication exists, they continue from that pinned generation with stale/unverified provenance and pending-sync metadata. Create/reindex operations that do not expose a readable generation still return `not_ready` with the active operation so drivers can retry deterministically. For grouped pagination, `limit` bounds the frozen result set across every page and `disclosureLimit` controls only the initial page: `limit=20, disclosureLimit=6` returns up to six initially and freezes up to twenty. Search continuation `"complete"` means complete for that caller-bounded frozen set, never for the full available pool; `omittedBeyondLimitGroupCount` reports groups excluded by `limit`. Treat inbound call-graph results as leads to verify, not compiler-grade blast-radius proof.
@@ -639,7 +643,7 @@ Structural definition coverage is intentionally language-specific:
 | Package | Purpose |
 |---|---|
 | [`@zokizuan/satori-cli`](./packages/cli) | Installer, doctor, and command-line access to MCP tools. |
-| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and seven public tools. |
+| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and nine public tools. |
 | [`@zokizuan/satori-core`](./packages/core) | Indexing, analysis, embeddings, storage, and retrieval. |
 
 ## Development

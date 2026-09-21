@@ -10,6 +10,7 @@ import { CliError } from "./errors.js";
 const TOOL_NAMES = [
     "manage_index",
     "search_codebase",
+    "architecture_overview",
     "continue_search",
     "call_graph",
     "detect_changes",

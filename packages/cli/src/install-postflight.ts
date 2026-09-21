@@ -14,6 +14,7 @@ import { resolveRuntimeOwnerRegistryPath } from "./runtime-owner-path.js";
 const EXPECTED_TOOL_NAMES = [
     "manage_index",
     "search_codebase",
+    "architecture_overview",
     "continue_search",
     "call_graph",
     "detect_changes",
@@ -278,7 +279,7 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
             name: "tool_list",
             status: toolsMatch ? "ok" : "error",
             message: toolsMatch
-                ? "Launcher exposes the fixed eight-tool Satori surface in canonical order."
+                ? "Launcher exposes the fixed nine-tool Satori surface in canonical order."
                 : `Expected tools ${JSON.stringify(EXPECTED_TOOL_NAMES)}, received ${JSON.stringify(listedNames)}.`,
         });
 

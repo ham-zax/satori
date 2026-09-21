@@ -43,16 +43,16 @@ function buildContext(overrides: Partial<ContextMcpConfig> = {}): ToolContext {
     } as ToolContext;
 }
 
-test('tool registry exposes the eight public tools', () => {
+test('tool registry exposes the nine public tools', () => {
     const names = Object.keys(toolRegistry);
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'continue_search', 'call_graph', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
 });
 
-test('generated ListTools payload returns the eight tools', () => {
+test('generated ListTools payload returns the nine tools', () => {
     const list = getMcpToolList(buildContext());
     const names = list.map((tool) => tool.name);
 
-    assert.deepEqual(names, ['manage_index', 'search_codebase', 'continue_search', 'call_graph', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
+    assert.deepEqual(names, ['manage_index', 'search_codebase', 'architecture_overview', 'continue_search', 'call_graph', 'detect_changes', 'file_outline', 'read_file', 'list_codebases']);
 });
 
 test('search_codebase description exposes current retrieval and remediation guidance', () => {

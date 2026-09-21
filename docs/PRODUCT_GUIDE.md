@@ -379,14 +379,16 @@ No model API key is required for that default runtime after installation.
 
 Satori also supports advanced connected configurations, including Voyage embeddings and LanceDB or Milvus/Zilliz storage. Those paths are configuration choices rather than the default product story.
 
-## The seven MCP tools
+## The nine MCP tools
 
 | Tool | What it is for |
 |---|---|
 | `search_codebase` | Find behavior, ownership, identifiers, configuration, and relevant code evidence. |
+| `architecture_overview` | Summarize bounded Publication architecture evidence as logical areas, cross-area boundaries, and hotspots. |
 | `continue_search` | Reveal more of the same frozen grouped result set without rerunning retrieval. |
 | `file_outline` | Inspect indexed owners and structural spans in one file. |
 | `call_graph` | Follow supported callers, callees, imports, and exports as conservative navigation evidence. |
+| `detect_changes` | Map a Git diff to indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read an exact indexed symbol or bounded source window. |
 | `list_codebases` | Discover known repository Publications and readiness. |
 | `manage_index` | Create, sync, inspect, reindex/recover, cancel supported live sync work, or clear index state. |

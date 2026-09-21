@@ -121,6 +121,7 @@ import readline from "node:readline";
 const tools = ${JSON.stringify([
             "manage_index",
             "search_codebase",
+            "architecture_overview",
             "continue_search",
             "call_graph",
             "detect_changes",
@@ -280,7 +281,7 @@ input.on("line", (line) => {
     });
   } else if (message.method === "tools/list") {
     reply(message.id, {
-      tools: ["manage_index", "search_codebase", "continue_search", "call_graph", "detect_changes", "file_outline", "read_file", "list_codebases"]
+      tools: ["manage_index", "search_codebase", "architecture_overview", "continue_search", "call_graph", "detect_changes", "file_outline", "read_file", "list_codebases"]
         .map((name) => ({ name, description: "candidate fixture", inputSchema: { type: "object", properties: {} } })),
     });
   }

@@ -229,6 +229,7 @@ export function assertSupportedPotionPlatform(input: Pick<InstallPreflightInput,
 const EXPECTED_TOOL_NAMES = [
     "manage_index",
     "search_codebase",
+    "architecture_overview",
     "continue_search",
     "call_graph",
     "detect_changes",

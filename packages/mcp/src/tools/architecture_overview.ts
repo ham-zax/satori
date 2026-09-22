@@ -19,7 +19,7 @@ const architectureOverviewInputSchema = z.object({
         "runtime excludes tests, documentation, generated/fixture/artifact paths, scripts/tooling, examples, benchmarks, and experiments. all includes every published non-file symbol.",
     ),
     limit: z.number().int().min(1).max(50).default(15).optional().describe(
-        "Maximum rows returned for each bounded section: areas, boundaries, fan-in, fan-out, hotspots, entry candidates, and cycles.",
+        "Maximum rows returned for each bounded section: areas, boundaries, fan-in, fan-out, hotspots, entry candidates, cycles, packages, package boundaries, package fan-in/fan-out, and package cycles.",
     ),
     subtree: repoRelativePathPrefixSchema(
         "Optional repo-relative subtree prefix used to restrict all architecture evidence.",
@@ -51,7 +51,7 @@ function formatWorkspaceAuthorizationError(path: string, error: unknown): ToolRe
 export const architectureOverviewTool: McpTool = {
     name: "architecture_overview",
     description: () =>
-        "Return bounded deterministic architecture facts from the current Publication's symbol registry and relationship sidecar: logical areas, cross-area CALLS/IMPORTS boundaries, area fan-in/fan-out summaries, call hotspots, structural graph-root entry candidates, area-level strongly connected cycles, filtering counts, and semantic resolution-claim construct coverage with exact gap spans. subtree/excludePaths apply consistently to symbols, relationships, claims, areas, boundaries, fan-in/fan-out, hotspots, entries, and cycles. Fan-in/fan-out summarize cross-area relationship evidence and distinct counterpart areas; boundaries remain the canonical dependency rows. Entry candidates are structural roots (outgoing CALLS and no external incoming CALLS), not proven runtime entry points. Cycles are SCCs of the cross-area boundary graph. Ambiguous/unresolved claims remain coverage evidence and are not counted as CALLS.",
+        "Return bounded deterministic architecture facts from the current Publication's symbol registry, relationship sidecar, and persisted package ownership snapshot. Existing logical areas, cross-area CALLS/IMPORTS boundaries, area fan-in/fan-out, hotspots, structural graph-root entry candidates, area SCC cycles, filtering counts, and semantic resolution-claim coverage remain unchanged. packageArchitecture adds factual workspace/package identities, scoped package file/symbol counts, cross-package CALLS/IMPORTS boundaries, package fan-in/fan-out, and owned-package SCC cycles; root packageRoot=\"\" is distinct from null unowned files/endpoints, and null endpoints are excluded only from package cycle calculation. subtree/excludePaths and runtime/all scope filter underlying file/symbol/relationship evidence before both area and package aggregation. Fan-in/fan-out summarize distinct counterpart nodes and relationship evidence; boundaries remain the canonical dependency rows. Entry candidates are structural roots, not proven runtime entry points. Ambiguous/unresolved claims remain coverage evidence and are not counted as CALLS.",
     inputSchemaZod: () => architectureOverviewInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = architectureOverviewInputSchema.safeParse(args || {});

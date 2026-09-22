@@ -482,6 +482,7 @@ export class ToolHandlers {
             prepareNavigationRead: this.prepareNavigationRead.bind(this),
             acquirePublicationLease: this.acquirePublicationLease.bind(this),
             isPublicationAdmitted: (publication) => this.context.isPublicationReadAdmitted(publication),
+            getPublicationPackageOwnership: (publication) => this.context.getPublicationPackageOwnership(publication),
             getPublicationNavigationAddress: (publication) => this.context.getPublicationNavigationAddress(publication),
             getPublicationNavigationStatus: (publication) => this.context.getPublicationNavigationStatus(publication),
             loadPreparedNavigationSymbolsByFile: this.loadPreparedNavigationSymbolsByFile.bind(this),

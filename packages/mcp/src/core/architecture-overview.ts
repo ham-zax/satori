@@ -1,5 +1,7 @@
 import {
     summarizeResolutionConstructCoverage,
+    type PackageOwnershipPackage,
+    type PublicationPackageOwnership,
     type RelationshipRecord,
     type ResolutionClaim,
     type ResolutionConstructCoverage,
@@ -68,6 +70,74 @@ export interface ArchitectureOverviewHotspot {
     highConfidenceCallSiteCount: number;
 }
 
+export interface ArchitectureOverviewPackage {
+    packageRoot: string;
+    name: string | null;
+    ecosystem: "node";
+    workspaceMember: boolean;
+    fileCount: number;
+    symbolCount: number;
+}
+
+export interface ArchitectureOverviewPackageBoundary {
+    fromPackageRoot: string | null;
+    fromPackageName: string | null;
+    toPackageRoot: string | null;
+    toPackageName: string | null;
+    calls: number;
+    highConfidenceCalls: number;
+    imports: number;
+    highConfidenceImports: number;
+    evidenceCount: number;
+    highConfidenceEvidenceCount: number;
+}
+
+export interface ArchitectureOverviewPackageFlow {
+    packageRoot: string | null;
+    packageName: string | null;
+    counterpartPackageCount: number;
+    calls: number;
+    imports: number;
+    evidenceCount: number;
+    highConfidenceEvidenceCount: number;
+}
+
+export interface ArchitectureOverviewPackageCycle {
+    packageRoots: string[];
+    boundaryEdgeCount: number;
+}
+
+export interface ArchitectureOverviewPackageArchitecture {
+    workspace: {
+        kind: "pnpm" | "package_json";
+        manifestPath: string;
+    } | null;
+    coverage: {
+        totalPersistedPackageCount: number;
+        includedPackageCount: number;
+        includedPackageOwnedFileCount: number;
+        includedUnownedFileCount: number;
+        includedRelationshipCount: number;
+        boundaryRelationshipCount: number;
+    };
+    packages: ArchitectureOverviewPackage[];
+    boundaries: ArchitectureOverviewPackageBoundary[];
+    fanIn: ArchitectureOverviewPackageFlow[];
+    fanOut: ArchitectureOverviewPackageFlow[];
+    fanInRule: "cross_package_incoming_calls_and_imports";
+    fanOutRule: "cross_package_outgoing_calls_and_imports";
+    cycles: ArchitectureOverviewPackageCycle[];
+    cyclesTruncated: boolean;
+    cycleRule: "strongly_connected_owned_package_boundary_graph_excluding_unowned";
+}
+
+export class ArchitecturePackageOwnershipError extends Error {
+    public constructor(message: string) {
+        super(message);
+        this.name = "ArchitecturePackageOwnershipError";
+    }
+}
+
 export interface ArchitectureOverviewResult {
     basis: "publication_navigation";
     scope: ArchitectureOverviewScope;
@@ -105,6 +175,7 @@ export interface ArchitectureOverviewResult {
         unresolvedClaimCount: number;
         constructCoverage: ResolutionConstructCoverage[];
     };
+    packageArchitecture: ArchitectureOverviewPackageArchitecture;
 }
 
 function normalizeFile(file: string): string {
@@ -285,8 +356,108 @@ function buildAreaCycles(
     };
 }
 
+function compareNullablePackageRoot(
+    left: string | null,
+    right: string | null,
+): number {
+    if (left === right) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    return left.localeCompare(right);
+}
+
+function packageNameForRoot(
+    packagesByRoot: ReadonlyMap<string, PackageOwnershipPackage>,
+    packageRoot: string | null,
+): string | null {
+    return packageRoot === null
+        ? null
+        : packagesByRoot.get(packageRoot)?.name ?? null;
+}
+
+function buildPackageFlow(
+    boundaries: readonly ArchitectureOverviewPackageBoundary[],
+    packagesByRoot: ReadonlyMap<string, PackageOwnershipPackage>,
+    direction: "in" | "out",
+    limit: number,
+): ArchitectureOverviewPackageFlow[] {
+    const byPackage = new Map<string | null, ArchitectureOverviewPackageFlow>();
+    for (const boundary of boundaries) {
+        const packageRoot = direction === "in"
+            ? boundary.toPackageRoot
+            : boundary.fromPackageRoot;
+        const existing = byPackage.get(packageRoot) ?? {
+            packageRoot,
+            packageName: packageNameForRoot(packagesByRoot, packageRoot),
+            counterpartPackageCount: 0,
+            calls: 0,
+            imports: 0,
+            evidenceCount: 0,
+            highConfidenceEvidenceCount: 0,
+        };
+        existing.counterpartPackageCount += 1;
+        existing.calls += boundary.calls;
+        existing.imports += boundary.imports;
+        existing.evidenceCount += boundary.evidenceCount;
+        existing.highConfidenceEvidenceCount += boundary.highConfidenceEvidenceCount;
+        byPackage.set(packageRoot, existing);
+    }
+    return [...byPackage.values()]
+        .sort((left, right) => (
+            right.evidenceCount - left.evidenceCount
+            || right.highConfidenceEvidenceCount - left.highConfidenceEvidenceCount
+            || right.counterpartPackageCount - left.counterpartPackageCount
+            || right.calls - left.calls
+            || compareNullablePackageRoot(left.packageRoot, right.packageRoot)
+        ))
+        .slice(0, limit);
+}
+
+function buildPackageCycles(
+    boundaries: readonly ArchitectureOverviewPackageBoundary[],
+    limit: number,
+): { cycles: ArchitectureOverviewPackageCycle[]; truncated: boolean } {
+    const ownedBoundaries = boundaries
+        .filter((boundary): boundary is ArchitectureOverviewPackageBoundary & {
+            fromPackageRoot: string;
+            toPackageRoot: string;
+        } => boundary.fromPackageRoot !== null && boundary.toPackageRoot !== null)
+        .map((boundary) => ({
+            from: boundary.fromPackageRoot,
+            to: boundary.toPackageRoot,
+        }));
+    const areaCycles = buildAreaCycles(ownedBoundaries, limit);
+    return {
+        cycles: areaCycles.cycles.map((cycle) => ({
+            packageRoots: cycle.areas,
+            boundaryEdgeCount: cycle.boundaryEdgeCount,
+        })),
+        truncated: areaCycles.truncated,
+    };
+}
+
+function buildPackageOwnershipIndex(
+    manifest: SymbolRegistryManifest,
+    ownership: PublicationPackageOwnership,
+): Map<string, string | null> {
+    const manifestPaths = new Set(manifest.files.map((file) => normalizeFile(file.path)));
+    const ownershipByFile = new Map(
+        ownership.files.map((file) => [normalizeFile(file.path), file.packageRoot] as const),
+    );
+    if (
+        ownershipByFile.size !== manifestPaths.size
+        || [...manifestPaths].some((filePath) => !ownershipByFile.has(filePath))
+    ) {
+        throw new ArchitecturePackageOwnershipError(
+            "Publication package ownership does not match the leased symbol-registry file set.",
+        );
+    }
+    return ownershipByFile;
+}
+
 export function buildArchitectureOverview(input: {
     manifest: SymbolRegistryManifest;
+    packageOwnership: PublicationPackageOwnership;
     symbols: readonly SymbolRecord[];
     relationships: readonly RelationshipRecord[];
     resolutionClaims?: readonly ResolutionClaim[];
@@ -302,6 +473,33 @@ export function buildArchitectureOverview(input: {
     const includedSymbols = input.symbols.filter((symbol) => includeSymbol(symbol, input.scope, pathScope));
     const includedIds = new Set(includedSymbols.map((symbol) => symbol.symbolInstanceId));
     const symbolsById = new Map(input.symbols.map((symbol) => [symbol.symbolInstanceId, symbol]));
+    const ownershipByFile = buildPackageOwnershipIndex(input.manifest, input.packageOwnership);
+    const packagesByRoot = new Map(input.packageOwnership.packages.map((pkg) => [pkg.root, pkg] as const));
+    const includedOwnershipFiles = input.packageOwnership.files.filter((file) => (
+        includeArchitectureFile(file.path, input.scope, pathScope)
+    ));
+    const includedPackageRoots = new Set<string>();
+    const packageFiles = new Map<string, number>();
+    let includedUnownedFileCount = 0;
+    for (const file of includedOwnershipFiles) {
+        if (file.packageRoot === null) {
+            includedUnownedFileCount += 1;
+            continue;
+        }
+        includedPackageRoots.add(file.packageRoot);
+        increment(packageFiles, file.packageRoot);
+    }
+    const packageSymbols = new Map<string, number>();
+    for (const symbol of includedSymbols) {
+        const normalizedFile = normalizeFile(symbol.file);
+        if (!ownershipByFile.has(normalizedFile)) {
+            throw new ArchitecturePackageOwnershipError(
+                `Included symbol file '${normalizedFile}' is missing from Publication package ownership.`,
+            );
+        }
+        const packageRoot = ownershipByFile.get(normalizedFile) ?? null;
+        if (packageRoot !== null) increment(packageSymbols, packageRoot);
+    }
 
     const excludedSymbolsByCategory = new Map<PathCategory, number>();
     if (input.scope === "runtime") {
@@ -329,6 +527,14 @@ export function buildArchitectureOverview(input: {
         imports: number;
         highConfidenceImports: number;
     }>();
+    const packageBoundaryEvidence = new Map<string, {
+        fromPackageRoot: string | null;
+        toPackageRoot: string | null;
+        calls: number;
+        highConfidenceCalls: number;
+        imports: number;
+        highConfidenceImports: number;
+    }>();
     const callersByTarget = new Map<string, Set<string>>();
     const highConfidenceCallersByTarget = new Map<string, Set<string>>();
     const callSitesByTarget = new Map<string, number>();
@@ -337,6 +543,8 @@ export function buildArchitectureOverview(input: {
     const externalIncomingCallTargets = new Set<string>();
     const scopedRelationships: RelationshipRecord[] = [];
     let includedRelationshipCount = 0;
+    let includedPackageRelationshipCount = 0;
+    let packageBoundaryRelationshipCount = 0;
 
     for (const relationship of input.relationships) {
         if (relationship.type !== "CALLS" && relationship.type !== "IMPORTS") continue;
@@ -362,6 +570,41 @@ export function buildArchitectureOverview(input: {
 
         scopedRelationships.push(relationship);
         includedRelationshipCount += 1;
+
+        const normalizedSourceFile = normalizeFile(sourceFile);
+        const normalizedTargetFile = normalizeFile(targetFile);
+        if (
+            !ownershipByFile.has(normalizedSourceFile)
+            || !ownershipByFile.has(normalizedTargetFile)
+        ) {
+            throw new ArchitecturePackageOwnershipError(
+                `Scoped relationship '${relationship.type}' references a file missing from Publication package ownership.`,
+            );
+        }
+        const fromPackageRoot = ownershipByFile.get(normalizedSourceFile) ?? null;
+        const toPackageRoot = ownershipByFile.get(normalizedTargetFile) ?? null;
+        includedPackageRelationshipCount += 1;
+        if (fromPackageRoot !== toPackageRoot) {
+            packageBoundaryRelationshipCount += 1;
+            const packageBoundaryKey = JSON.stringify([fromPackageRoot, toPackageRoot]);
+            const packageRow = packageBoundaryEvidence.get(packageBoundaryKey) ?? {
+                fromPackageRoot,
+                toPackageRoot,
+                calls: 0,
+                highConfidenceCalls: 0,
+                imports: 0,
+                highConfidenceImports: 0,
+            };
+            if (relationship.type === "CALLS") {
+                packageRow.calls += 1;
+                if (highConfidence) packageRow.highConfidenceCalls += 1;
+            } else {
+                packageRow.imports += 1;
+                if (highConfidence) packageRow.highConfidenceImports += 1;
+            }
+            packageBoundaryEvidence.set(packageBoundaryKey, packageRow);
+        }
+
         if (
             relationship.type === "CALLS"
             && source?.symbolInstanceId
@@ -505,6 +748,70 @@ export function buildArchitectureOverview(input: {
         matchesPublishedPathScope(file.path, pathScope)
     )).length;
 
+    const allPackages = [...includedPackageRoots]
+        .map((packageRoot): ArchitectureOverviewPackage => {
+            const pkg = packagesByRoot.get(packageRoot);
+            if (!pkg) {
+                throw new ArchitecturePackageOwnershipError(
+                    `Included package root '${packageRoot}' is missing from Publication package metadata.`,
+                );
+            }
+            return {
+                packageRoot,
+                name: pkg.name,
+                ecosystem: pkg.ecosystem,
+                workspaceMember: pkg.workspaceMember,
+                fileCount: packageFiles.get(packageRoot) ?? 0,
+                symbolCount: packageSymbols.get(packageRoot) ?? 0,
+            };
+        })
+        .sort((left, right) => (
+            right.symbolCount - left.symbolCount
+            || right.fileCount - left.fileCount
+            || left.packageRoot.localeCompare(right.packageRoot)
+        ));
+    const allPackageBoundaries = [...packageBoundaryEvidence.values()]
+        .map((row): ArchitectureOverviewPackageBoundary => ({
+            ...row,
+            fromPackageName: packageNameForRoot(packagesByRoot, row.fromPackageRoot),
+            toPackageName: packageNameForRoot(packagesByRoot, row.toPackageRoot),
+            evidenceCount: row.calls + row.imports,
+            highConfidenceEvidenceCount: row.highConfidenceCalls + row.highConfidenceImports,
+        }))
+        .sort((left, right) => (
+            right.evidenceCount - left.evidenceCount
+            || right.highConfidenceEvidenceCount - left.highConfidenceEvidenceCount
+            || right.calls - left.calls
+            || compareNullablePackageRoot(left.fromPackageRoot, right.fromPackageRoot)
+            || compareNullablePackageRoot(left.toPackageRoot, right.toPackageRoot)
+        ));
+    const packageCycles = buildPackageCycles(allPackageBoundaries, limit);
+    const packageArchitecture: ArchitectureOverviewPackageArchitecture = {
+        workspace: input.packageOwnership.workspace
+            ? {
+                kind: input.packageOwnership.workspace.kind,
+                manifestPath: input.packageOwnership.workspace.manifestPath,
+            }
+            : null,
+        coverage: {
+            totalPersistedPackageCount: input.packageOwnership.packages.length,
+            includedPackageCount: allPackages.length,
+            includedPackageOwnedFileCount: includedOwnershipFiles.length - includedUnownedFileCount,
+            includedUnownedFileCount,
+            includedRelationshipCount: includedPackageRelationshipCount,
+            boundaryRelationshipCount: packageBoundaryRelationshipCount,
+        },
+        packages: allPackages.slice(0, limit),
+        boundaries: allPackageBoundaries.slice(0, limit),
+        fanIn: buildPackageFlow(allPackageBoundaries, packagesByRoot, "in", limit),
+        fanOut: buildPackageFlow(allPackageBoundaries, packagesByRoot, "out", limit),
+        fanInRule: "cross_package_incoming_calls_and_imports",
+        fanOutRule: "cross_package_outgoing_calls_and_imports",
+        cycles: packageCycles.cycles,
+        cyclesTruncated: packageCycles.truncated,
+        cycleRule: "strongly_connected_owned_package_boundary_graph_excluding_unowned",
+    };
+
     return {
         basis: "publication_navigation",
         scope: input.scope,
@@ -544,5 +851,6 @@ export function buildArchitectureOverview(input: {
             unresolvedClaimCount: scopedClaims.filter((claim) => claim.decision === "unresolved").length,
             constructCoverage,
         },
+        packageArchitecture,
     };
 }

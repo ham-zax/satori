@@ -8,6 +8,7 @@ import {
     JsonNavigationStore,
     summarizeResolutionConstructCoverage,
     type PublicationLease,
+    type PublicationPackageOwnership,
     type PublicationRef,
     type SymbolRecord,
     type SymbolRegistry,
@@ -19,6 +20,7 @@ import {
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
 import {
+    ArchitecturePackageOwnershipError,
     buildArchitectureOverview,
     type ArchitectureOverviewScope,
 } from "./architecture-overview.js";
@@ -109,6 +111,7 @@ type NavigationHandlersHost = {
 
     acquirePublicationLease(codebasePath: string, publicationId?: string): PublicationLease | undefined;
     isPublicationAdmitted(publication: PublicationRef): Promise<boolean>;
+    getPublicationPackageOwnership(publication: PublicationRef): PublicationPackageOwnership | null;
     getPublicationNavigationAddress(publication: PublicationRef): {
         publicationId: string;
         navigationRoot: string;
@@ -523,6 +526,49 @@ export class NavigationHandlers {
                 publication: lease,
                 navigationStatus: await this.host.getPublicationNavigationStatus(lease),
             };
+            let packageOwnership: PublicationPackageOwnership | null;
+            try {
+                packageOwnership = this.host.getPublicationPackageOwnership(lease);
+            } catch (error) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: "incompatible_package_ownership",
+                            path: leasedRootState.root.path,
+                            message: `Publication package ownership could not be read: ${formatUnknownError(error)}`,
+                        }),
+                    }],
+                };
+            }
+            if (!packageOwnership) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: "missing_package_ownership",
+                            path: leasedRootState.root.path,
+                            message: "The leased Publication is missing its package ownership snapshot.",
+                        }),
+                    }],
+                };
+            }
+            if (packageOwnership.canonicalRoot !== lease.publication.canonicalRoot) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: "incompatible_package_ownership",
+                            path: leasedRootState.root.path,
+                            message: "The leased Publication package ownership root is incompatible.",
+                        }),
+                    }],
+                };
+            }
+
             const manifest = await this.host.loadPreparedNavigationManifest(leasedRootState);
             if (manifest.status !== "ok") {
                 return {
@@ -560,17 +606,34 @@ export class NavigationHandlers {
                 };
             }
 
-            const overview = buildArchitectureOverview({
-                manifest: manifest.registry.manifest,
-                symbols: manifest.registry.symbols,
-                relationships: compatibility.relationships.records,
-                resolutionClaims: [...compatibility.relationships.analysisByFile.values()]
-                    .flatMap((evidence) => evidence.resolutionClaims ?? []),
-                scope,
-                limit,
-                ...(subtree ? { subtree } : {}),
-                ...(excludePaths ? { excludePaths } : {}),
-            });
+            let overview;
+            try {
+                overview = buildArchitectureOverview({
+                    manifest: manifest.registry.manifest,
+                    packageOwnership,
+                    symbols: manifest.registry.symbols,
+                    relationships: compatibility.relationships.records,
+                    resolutionClaims: [...compatibility.relationships.analysisByFile.values()]
+                        .flatMap((evidence) => evidence.resolutionClaims ?? []),
+                    scope,
+                    limit,
+                    ...(subtree ? { subtree } : {}),
+                    ...(excludePaths ? { excludePaths } : {}),
+                });
+            } catch (error) {
+                if (!(error instanceof ArchitecturePackageOwnershipError)) throw error;
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: "incompatible_package_ownership",
+                            path: leasedRootState.root.path,
+                            message: error.message,
+                        }),
+                    }],
+                };
+            }
             const freshnessDecision = leasedRootState.freshnessDecision;
             const warnings = freshnessDecision
                 ? buildFreshnessWarningCodes(freshnessDecision)

@@ -57,6 +57,10 @@ import {
 import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typescript-semantic-analyzer';
 
 import { ThreadedWasmSemanticProjectAnalyzer, type SemanticProjectAnalyzer } from '../semantic';
+import {
+    PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+    type PublicationPackageOwnership,
+} from '../packages/ownership';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -457,6 +461,9 @@ export class Context {
             ),
             stagePublicationSourceCheckpoint: (canonicalRoot, publicationId, checkpoint, lease) => (
                 this.publicationStore.stageSourceCheckpoint(canonicalRoot, publicationId, checkpoint, lease)
+            ),
+            stagePublicationPackageOwnership: (canonicalRoot, publicationId, ownership, lease) => (
+                this.publicationStore.stagePackageOwnership(canonicalRoot, publicationId, ownership, lease)
             ),
             preparePublicationNavigationRoot: (canonicalRoot, publicationId, lease) => (
                 this.publicationStore.prepareNavigationRoot(canonicalRoot, publicationId, lease)
@@ -953,6 +960,7 @@ export class Context {
                 extractorVersion: SYMBOL_EXTRACTOR_VERSION,
                 embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
                 lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
+                packageOwnershipVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
             }),
             embeddingIdentity: JSON.stringify({
                 provider: embeddingIdentity.provider,
@@ -1014,6 +1022,21 @@ export class Context {
         );
     }
 
+    public getPublicationPackageOwnership(publication: PublicationRef): PublicationPackageOwnership | null {
+        return this.publicationStore.getPackageOwnership(
+            publication.publication.canonicalRoot,
+            publication.id,
+        );
+    }
+
+    private hasPublicationPackageOwnership(publication: PublicationRef): boolean {
+        try {
+            return this.getPublicationPackageOwnership(publication) !== null;
+        } catch {
+            return false;
+        }
+    }
+
     public acquireCurrentPublicationRead(codebasePath: string): PublicationLease | null {
         return this.publicationStore.acquireCurrentRead(this.canonicalizeCodebasePath(codebasePath));
     }
@@ -1030,6 +1053,7 @@ export class Context {
         return canonicalRoot === publication.publication.canonicalRoot
             && publication.id === publication.publication.id
             && this.isPublicationFormatCurrent(publication.publication)
+            && this.hasPublicationPackageOwnership(publication)
             && await computeIndexPolicyControlSignature(canonicalRoot)
                 === publication.publication.policy.controlSignature;
     }
@@ -1074,6 +1098,12 @@ export class Context {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const publication = this.publicationStore.getCurrent(canonicalRoot);
         if (!publication) return { status: 'missing' };
+        if (
+            !this.isPublicationFormatCurrent(publication.publication)
+            || !this.hasPublicationPackageOwnership(publication)
+        ) {
+            return { status: 'requires_reindex' };
+        }
 
         try {
             this.refreshRuntimePolicyAuthority(canonicalRoot);
@@ -1085,9 +1115,7 @@ export class Context {
             return { status: 'runtime_policy_incompatible' };
         }
         if (!await this.isPublicationReadAdmitted(publication)) {
-            return this.isPublicationFormatCurrent(publication.publication)
-                ? { status: 'runtime_policy_incompatible' }
-                : { status: 'requires_reindex' };
+            return { status: 'runtime_policy_incompatible' };
         }
         return {
             status: 'valid',
@@ -1100,6 +1128,7 @@ export class Context {
         const publication = this.getCurrentPublication(codebasePath);
         return publication !== null
             && this.isPublicationFormatCurrent(publication.publication)
+            && this.hasPublicationPackageOwnership(publication)
             && await this.vectorDatabase.hasCollection(publication.publication.vector.collectionName);
     }
 

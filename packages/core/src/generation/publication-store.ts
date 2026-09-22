@@ -21,6 +21,10 @@ import {
     parsePublicationSourceCheckpoint,
     type PublicationSourceCheckpoint,
 } from '../sync/snapshot-codec';
+import {
+    parsePublicationPackageOwnership,
+    type PublicationPackageOwnership,
+} from '../packages/ownership';
 
 interface CurrentPublicationPointer {
     version: 1;
@@ -366,6 +370,21 @@ export class PublicationStore {
         }
     }
 
+    getPackageOwnership(root: string, id: PublicationId): PublicationPackageOwnership | null {
+        const canonicalRoot = canonicalizeRoot(root);
+        assertPublicationId(id);
+        const ownershipPath = this.packageOwnershipPath(canonicalRoot, id);
+        try {
+            return parsePublicationPackageOwnership(
+                fs.readFileSync(ownershipPath, 'utf8'),
+                canonicalRoot,
+            );
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        }
+    }
+
     getCurrentSourceCheckpoint(root: string): {
         ref: PublicationRef;
         checkpoint: PublicationSourceCheckpoint;
@@ -445,6 +464,33 @@ export class PublicationStore {
         this.writeDurableFile(sourcePath, `${JSON.stringify(validated, null, 2)}\n`);
     }
 
+    stagePackageOwnership(
+        root: string,
+        id: PublicationId,
+        ownership: PublicationPackageOwnership,
+        lease: RootMutationLease,
+    ): void {
+        const canonicalRoot = canonicalizeRoot(root);
+        if (!this.mutationCoordinator.isLeaseForRoot(lease, canonicalRoot)) {
+            throw new Error(`Mutation lease does not own Publication package root '${canonicalRoot}'.`);
+        }
+        this.mutationCoordinator.assertCurrent(lease);
+        assertPublicationId(id);
+        const validated = parsePublicationPackageOwnership(JSON.stringify(ownership), canonicalRoot);
+        const ownershipPath = this.packageOwnershipPath(canonicalRoot, id);
+        if (fs.existsSync(ownershipPath)) {
+            const existing = parsePublicationPackageOwnership(
+                fs.readFileSync(ownershipPath, 'utf8'),
+                canonicalRoot,
+            );
+            if (JSON.stringify(existing) !== JSON.stringify(validated)) {
+                throw new Error(`Publication '${id}' package ownership is immutable and already has different content.`);
+            }
+            return;
+        }
+        this.writeDurableFile(ownershipPath, `${JSON.stringify(validated, null, 2)}\n`);
+    }
+
     activate(publication: Publication, lease: RootMutationLease): PublicationRef {
         const canonicalRoot = canonicalizeRoot(publication.canonicalRoot);
         if (canonicalRoot !== publication.canonicalRoot) {
@@ -489,6 +535,10 @@ export class PublicationStore {
                 const sourceCheckpoint = this.getSourceCheckpoint(canonicalRoot, validated.id);
                 if (!sourceCheckpoint) {
                     throw new Error(`Publication '${validated.id}' is missing source.json.`);
+                }
+                const packageOwnership = this.getPackageOwnership(canonicalRoot, validated.id);
+                if (!packageOwnership) {
+                    throw new Error(`Publication '${validated.id}' is missing ownership.json.`);
                 }
 
                 // Make every staged local candidate resource durable before its ID can
@@ -885,6 +935,10 @@ export class PublicationStore {
 
     private sourceCheckpointPath(canonicalRoot: string, id: PublicationId): string {
         return path.join(this.generationRoot(canonicalRoot, id), 'source.json');
+    }
+
+    private packageOwnershipPath(canonicalRoot: string, id: PublicationId): string {
+        return path.join(this.generationRoot(canonicalRoot, id), 'ownership.json');
     }
 
     private writeDurableFile(targetPath: string, contents: string): void {

@@ -141,6 +141,17 @@ export {
     isRepositoryRelativePath,
 } from './paths/repository-path';
 export {
+    PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+} from './packages/ownership';
+export type {
+    DiscoveredPackageOwnership,
+    PackageFileOwnership,
+    PackageOwnershipPackage,
+    PackageWorkspaceKind,
+    PackageWorkspaceRecord,
+    PublicationPackageOwnership,
+} from './packages/ownership';
+export {
     RESOLUTION_CALL_CONSTRUCTS,
     isProofBackedAuthoritativeCall,
 } from './relationships/resolution';

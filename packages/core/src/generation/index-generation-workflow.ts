@@ -47,6 +47,11 @@ import { stagePublicationNavigation } from '../symbols/sidecar-lifecycle';
 import type { SatoriRepoConfig } from '../config/repo-config';
 import { validateRepositoryRelativePath, type RepositoryRelativePath } from '../paths/repository-path';
 import type { CustomIndexPolicyUpdate } from './contracts';
+import {
+    buildPublicationPackageOwnership,
+    discoverPackageOwnership,
+    type PublicationPackageOwnership,
+} from '../packages/ownership';
 
 import {
     buildSymbolRegistry,
@@ -136,6 +141,12 @@ export interface IndexGenerationWorkflowPorts {
         canonicalRoot: string,
         publicationId: string,
         checkpoint: PublicationSourceCheckpoint,
+        lease: RootMutationLease,
+    ): void;
+    stagePublicationPackageOwnership(
+        canonicalRoot: string,
+        publicationId: string,
+        ownership: PublicationPackageOwnership,
         lease: RootMutationLease,
     ): void;
     preparePublicationNavigationRoot(
@@ -587,8 +598,13 @@ export class IndexGenerationWorkflow {
             canonicalRoot,
             scannedRelativePaths,
         );
-        const resolutionControlSet = new Set(resolutionSourceControls);
-        const codeFiles = scannedCodeFiles.filter((filePath, index) => !resolutionControlSet.has(scannedRelativePaths[index]));
+        const packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
+        const publicationSourceControls = this.mergePublicationSourceControls(
+            resolutionSourceControls,
+            packageOwnershipSourceControls,
+        );
+        const publicationControlSet = new Set(publicationSourceControls);
+        const codeFiles = scannedCodeFiles.filter((filePath, index) => !publicationControlSet.has(scannedRelativePaths[index]));
         scanFilesMs = Date.now() - scanStartedAt;
         console.log(`[Context] 📁 Found ${codeFiles.length} searchable code files`);
         const indexingStartPercentage = 10;
@@ -658,7 +674,7 @@ export class IndexGenerationWorkflow {
                     codebasePath,
                     indexPolicy.effectiveIgnorePatterns,
                     indexPolicy.supportedExtensions,
-                    { additionalObservablePaths: resolutionSourceControls },
+                    { additionalObservablePaths: publicationSourceControls },
                 );
                 const preparedChanges = await synchronizer.prepareChanges({
                     capturedFullIndexSource,
@@ -682,6 +698,17 @@ export class IndexGenerationWorkflow {
                     result.sourceFiles,
                 );
                 navigationMs = Date.now() - navigationStartedAt;
+                const packageOwnership = buildPublicationPackageOwnership(
+                    canonicalRoot,
+                    result.sourceFiles.map((source) => source.path),
+                    preparedChanges.fileHashes,
+                );
+                this.ports.stagePublicationPackageOwnership(
+                    canonicalRoot,
+                    publicationId,
+                    packageOwnership,
+                    mutationLease,
+                );
                 this.ports.stagePublicationSourceCheckpoint(
                     canonicalRoot,
                     publicationId,
@@ -742,11 +769,22 @@ export class IndexGenerationWorkflow {
                         codebasePath,
                         indexPolicy.effectiveIgnorePatterns,
                         indexPolicy.supportedExtensions,
-                        { additionalObservablePaths: resolutionSourceControls },
+                        { additionalObservablePaths: publicationSourceControls },
                     );
                     const preparedChanges = await synchronizer.prepareChanges({
                         capturedFullIndexSource,
                     });
+                    const packageOwnership = buildPublicationPackageOwnership(
+                        canonicalRoot,
+                        result.sourceFiles.slice(0, result.processedFiles).map((source) => source.path),
+                        preparedChanges.fileHashes,
+                    );
+                    this.ports.stagePublicationPackageOwnership(
+                        canonicalRoot,
+                        publicationId,
+                        packageOwnership,
+                        mutationLease,
+                    );
                     this.ports.stagePublicationSourceCheckpoint(
                         canonicalRoot,
                         publicationId,
@@ -917,6 +955,7 @@ export class IndexGenerationWorkflow {
         synchronizer: FileSynchronizer;
         preparedChanges: Awaited<ReturnType<FileSynchronizer['prepareChanges']>>;
         resolutionSourceControls: ReadonlySet<string>;
+        packageOwnershipSourceControls: ReadonlySet<string>;
         options: ReindexByChangeOptions;
         progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void;
     }): Promise<ReindexByChangeResult> {
@@ -996,9 +1035,13 @@ export class IndexGenerationWorkflow {
         }
 
         const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
+        const publicationSourceControls = new Set([
+            ...input.resolutionSourceControls,
+            ...input.packageOwnershipSourceControls,
+        ]);
         const isSearchable = (filePath: string) => (
             !semanticRegistry.isAuxiliaryPath(filePath)
-            && !input.resolutionSourceControls.has(filePath)
+            && !publicationSourceControls.has(filePath)
         );
         // Older Publications indexed auxiliaries with supported extensions (e.g. Cargo.toml).
         // Remove those documents even when the source file itself has not changed.
@@ -1145,6 +1188,17 @@ export class IndexGenerationWorkflow {
             await measurePublicationPhase(
                 'publication_checkpoint_stage',
                 async () => {
+                    const packageOwnership = buildPublicationPackageOwnership(
+                        input.canonicalRoot,
+                        [...searchablePreparedFileHashes.keys()],
+                        input.preparedChanges.fileHashes,
+                    );
+                    this.ports.stagePublicationPackageOwnership(
+                        input.canonicalRoot,
+                        publicationId,
+                        packageOwnership,
+                        mutationLease,
+                    );
                     this.ports.stagePublicationSourceCheckpoint(
                         input.canonicalRoot,
                         publicationId,
@@ -1160,7 +1214,7 @@ export class IndexGenerationWorkflow {
                         input.codebasePath,
                         candidateCollectionName,
                         input.preparedChanges.fileHashes,
-                        input.resolutionSourceControls,
+                        publicationSourceControls,
                         totalChunks,
                         preparedNavigation,
                         observedTotalChunks,
@@ -1344,7 +1398,12 @@ export class IndexGenerationWorkflow {
             canonicalRoot,
             currentSynchronizer.getTrackedRelativePaths(),
         );
-        currentSynchronizer.setAdditionalObservablePaths(resolutionSourceControls);
+        let packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
+        let publicationSourceControls = this.mergePublicationSourceControls(
+            resolutionSourceControls,
+            packageOwnershipSourceControls,
+        );
+        currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
 
         this.ports.registerSynchronizerForPublication(
             synchronizerKey,
@@ -1366,17 +1425,26 @@ export class IndexGenerationWorkflow {
             canonicalRoot,
             [...nextResolutionSourcePaths],
         );
-        if (JSON.stringify(nextResolutionSourceControls) !== JSON.stringify(resolutionSourceControls)) {
+        const nextPackageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
+        const nextPublicationSourceControls = this.mergePublicationSourceControls(
+            nextResolutionSourceControls,
+            nextPackageOwnershipSourceControls,
+        );
+        if (JSON.stringify(nextPublicationSourceControls) !== JSON.stringify(publicationSourceControls)) {
             resolutionSourceControls = nextResolutionSourceControls;
-            currentSynchronizer.setAdditionalObservablePaths(resolutionSourceControls);
+            packageOwnershipSourceControls = nextPackageOwnershipSourceControls;
+            publicationSourceControls = nextPublicationSourceControls;
+            currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
             preparedChanges = await currentSynchronizer.prepareChanges();
         }
         const { added, removed, modified } = preparedChanges.changes;
         const totalChanges = added.length + removed.length + modified.length;
         const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
         const resolutionControlSet = new Set(resolutionSourceControls);
+        const packageOwnershipControlSet = new Set(packageOwnershipSourceControls);
+        const publicationControlSet = new Set(publicationSourceControls);
         const searchableFileCount = [...preparedChanges.fileHashes.keys()]
-            .filter((filePath) => !semanticRegistry.isAuxiliaryPath(filePath) && !resolutionControlSet.has(filePath)).length;
+            .filter((filePath) => !semanticRegistry.isAuxiliaryPath(filePath) && !publicationControlSet.has(filePath)).length;
 
         // A quiet tree can still need to shed legacy searchable auxiliary documents.
         if (totalChanges === 0 && (
@@ -1418,6 +1486,7 @@ export class IndexGenerationWorkflow {
             synchronizer: currentSynchronizer,
             preparedChanges,
             resolutionSourceControls: resolutionControlSet,
+            packageOwnershipSourceControls: packageOwnershipControlSet,
             options,
             progressCallback,
         });
@@ -1438,6 +1507,16 @@ export class IndexGenerationWorkflow {
             language: 'typescript',
             sourceFiles: typeScriptFiles,
         }))].sort();
+    }
+
+    private collectPackageOwnershipSourceControls(codebasePath: string): string[] {
+        return discoverPackageOwnership(codebasePath).controlFiles.map(([filePath]) => filePath);
+    }
+
+    private mergePublicationSourceControls(
+        ...controlSets: readonly (readonly string[])[]
+    ): string[] {
+        return [...new Set(controlSets.flatMap((controls) => [...controls]))].sort();
     }
 
     private async collectSemanticAuxiliariesForLanguage(
@@ -1757,7 +1836,7 @@ export class IndexGenerationWorkflow {
         codebasePath: string,
         collectionName: string,
         preparedFileHashes: ReadonlyMap<string, string>,
-        resolutionSourceControls: ReadonlySet<string>,
+        publicationSourceControls: ReadonlySet<string>,
         expectedTotalChunks: number,
         navigationCandidate: StagedPublicationNavigation,
         preparedObservedTotalChunks?: number | null,
@@ -1767,7 +1846,7 @@ export class IndexGenerationWorkflow {
         const searchablePreparedFileHashes = new Map(
             [...preparedFileHashes.entries()].filter(([filePath]) => (
                 !semanticRegistry.isAuxiliaryPath(filePath)
-                && !resolutionSourceControls.has(filePath)
+                && !publicationSourceControls.has(filePath)
             )),
         );
         const preparedFiles = [...searchablePreparedFileHashes].map(([filePath, hash]) => ({ path: filePath, hash }));

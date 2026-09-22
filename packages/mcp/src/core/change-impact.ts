@@ -23,20 +23,30 @@ export type ChangeImpactPorts = {
     callers(root: string, symbol: CallGraphNodeResult): Promise<CallGraphResponseEnvelope>;
 };
 
-type ConfirmedImpactPathEdge = Readonly<{
+type ImpactPathEdge = Readonly<{
     callerSymbolId: string;
     calleeSymbolId: string;
     site: CallGraphEdgeResult["site"];
+    strategy: "rule" | "heuristic";
+    confidence: number;
     resolutionAuthority?: CallGraphEdgeResult["resolutionAuthority"];
 }>;
 
-type ConfirmedImpactNode = CallGraphNodeResult & {
+type ImpactEvidenceClass = "proof_backed" | "heuristic";
+
+type ImpactNode = CallGraphNodeResult & {
     codebaseRoot: string;
     impactClass: "direct" | "transitive";
+    evidenceClass: ImpactEvidenceClass;
     distance: number;
     seedSymbolId: string;
-    causalPath: ConfirmedImpactPathEdge[];
+    causalPath: ImpactPathEdge[];
 };
+
+function isProofBackedImpactEdge(edge: ImpactPathEdge): boolean {
+    return edge.resolutionAuthority === "direct_binding"
+        || edge.resolutionAuthority === "origin_flow";
+}
 
 /** Read-only diff -> current-file symbol seeds -> bounded transitive callers. */
 export async function detectChangeImpact(input: ChangeImpactInput, ports: ChangeImpactPorts) {
@@ -84,7 +94,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         }
     }
     const seedKeys = new Set(seeds.map(symbol => `${symbol.codebaseRoot}\0${symbol.symbolId}`));
-    const impacted = new Map<string, ConfirmedImpactNode>();
+    const impacted = new Map<string, ImpactNode>();
     const uncertainCallReferences = new Map<string, {
         seedSymbolId: string;
         sourceSymbolId?: string;
@@ -153,7 +163,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         }
 
         const seen = new Set<string>([seed.symbolId]);
-        const queue: Array<{ symbolId: string; distance: number; path: ConfirmedImpactPathEdge[] }> = [{
+        const queue: Array<{ symbolId: string; distance: number; path: ImpactPathEdge[] }> = [{
             symbolId: seed.symbolId,
             distance: 0,
             path: [],
@@ -164,15 +174,25 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             for (const edge of incomingByCallee.get(current.symbolId) ?? []) {
                 const callerId = edge.srcSymbolId;
                 const distance = current.distance + 1;
-                const pathEdge: ConfirmedImpactPathEdge = {
+                const pathEdge: ImpactPathEdge = {
                     callerSymbolId: callerId,
                     calleeSymbolId: current.symbolId,
                     site: edge.site,
+                    strategy: edge.strategy ?? (
+                        edge.resolutionAuthority === "direct_binding"
+                        || edge.resolutionAuthority === "origin_flow"
+                            ? "rule"
+                            : "heuristic"
+                    ),
+                    confidence: edge.confidence,
                     ...(edge.resolutionAuthority
                         ? { resolutionAuthority: edge.resolutionAuthority }
                         : {}),
                 };
                 const causalPath = [...current.path, pathEdge];
+                const evidenceClass: ImpactEvidenceClass = causalPath.every(isProofBackedImpactEdge)
+                    ? "proof_backed"
+                    : "heuristic";
                 if (!seen.has(callerId)) {
                     seen.add(callerId);
                     queue.push({ symbolId: callerId, distance, path: causalPath });
@@ -182,20 +202,29 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 if (!caller) continue;
                 const key = `${seed.codebaseRoot}\0${caller.symbolId}`;
                 if (seedKeys.has(key)) continue;
-                const candidate: ConfirmedImpactNode = {
+                const candidate: ImpactNode = {
                     ...caller,
                     codebaseRoot: seed.codebaseRoot,
                     impactClass: distance === 1 ? "direct" : "transitive",
+                    evidenceClass,
                     distance,
                     seedSymbolId: seed.symbolId,
                     causalPath,
                 };
                 const existing = impacted.get(key);
                 if (existing) {
+                    const candidateHasShorterPath = candidate.distance < existing.distance;
+                    const sameDistance = candidate.distance === existing.distance;
+                    const candidateHasStrongerEvidence = sameDistance
+                        && candidate.evidenceClass === "proof_backed"
+                        && existing.evidenceClass !== "proof_backed";
+                    const sameDistanceAndEvidence = sameDistance
+                        && candidate.evidenceClass === existing.evidenceClass;
                     if (
-                        candidate.distance < existing.distance
+                        candidateHasShorterPath
+                        || candidateHasStrongerEvidence
                         || (
-                            candidate.distance === existing.distance
+                            sameDistanceAndEvidence
                             && compareContractStrings(candidate.seedSymbolId, existing.seedSymbolId) < 0
                         )
                     ) {
@@ -212,6 +241,9 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         }
     }
     if (uncertainCallReferences.size > 0) warnings.add("IMPACT_NON_AUTHORITATIVE_CALL_REFERENCES");
+    if ([...impacted.values()].some((node) => node.evidenceClass === "heuristic")) {
+        warnings.add("IMPACT_HEURISTIC_CALL_PATHS");
+    }
     if (truncated) warnings.add("IMPACT_LIMIT_REACHED");
 
     const impactedValues = [...impacted.values()].sort((a, b) =>
@@ -235,6 +267,10 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         seedCount: number;
         directCount: number;
         transitiveCount: number;
+        proofBackedDirectCount: number;
+        proofBackedTransitiveCount: number;
+        heuristicDirectCount: number;
+        heuristicTransitiveCount: number;
         uncertainReferenceCount: number;
     }>();
     const areaRow = (file: string) => {
@@ -244,6 +280,10 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             seedCount: 0,
             directCount: 0,
             transitiveCount: 0,
+            proofBackedDirectCount: 0,
+            proofBackedTransitiveCount: 0,
+            heuristicDirectCount: 0,
+            heuristicTransitiveCount: 0,
             uncertainReferenceCount: 0,
         };
         areaRows.set(area, existing);
@@ -252,8 +292,15 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     for (const seed of seedValues) areaRow(seed.file).seedCount += 1;
     for (const node of impactedValues) {
         const row = areaRow(node.file);
-        if (node.impactClass === "direct") row.directCount += 1;
-        else row.transitiveCount += 1;
+        if (node.impactClass === "direct") {
+            row.directCount += 1;
+            if (node.evidenceClass === "proof_backed") row.proofBackedDirectCount += 1;
+            else row.heuristicDirectCount += 1;
+        } else {
+            row.transitiveCount += 1;
+            if (node.evidenceClass === "proof_backed") row.proofBackedTransitiveCount += 1;
+            else row.heuristicTransitiveCount += 1;
+        }
     }
     for (const reference of uncertainValues) areaRow(reference.file).uncertainReferenceCount += 1;
 
@@ -263,6 +310,8 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         completenessReasons.add("unavailable_navigation");
     }
     if (uncertainValues.length > 0) completenessReasons.add("uncertain_references");
+    const heuristicImpactCount = impactedValues.filter((node) => node.evidenceClass === "heuristic").length;
+    if (heuristicImpactCount > 0) completenessReasons.add("heuristic_relationship_paths");
     if ([...warnings].some((warning) => warning.includes("SOURCE_REFERENCE_COVERAGE_PARTIAL"))) {
         completenessReasons.add("source_reference_coverage_partial");
     }
@@ -281,6 +330,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             unavailableFileCount: unavailableFiles.length,
             unavailableSeedCount: unavailableSeeds.length,
             uncertainReferenceCount: uncertainValues.length,
+            heuristicImpactCount,
         },
         changedFiles,
         seeds: seedValues,

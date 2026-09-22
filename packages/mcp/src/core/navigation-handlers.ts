@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -724,6 +725,7 @@ export class NavigationHandlers {
                     return {
                         status: "ok",
                         text: sourceRead.bytes.toString("utf8"),
+                        sourceSha256: crypto.createHash("sha256").update(sourceRead.bytes).digest("hex"),
                     };
                 } catch (error) {
                     if (error instanceof AuthorizedSourceReadError) {
@@ -757,6 +759,10 @@ export class NavigationHandlers {
                 readPublishedSource,
             });
             await this.host.touchWatchedCodebase(leasedRootState.root.path);
+            const freshnessDecision = leasedRootState.freshnessDecision;
+            const warnings = freshnessDecision
+                ? buildFreshnessWarningCodes(freshnessDecision)
+                : [];
             return {
                 content: [{
                     type: "text",
@@ -771,6 +777,8 @@ export class NavigationHandlers {
                             excludePaths: Array.isArray(args.excludePaths) ? args.excludePaths : [],
                         },
                         ...result,
+                        ...(freshnessDecision ? { freshnessDecision } : {}),
+                        ...(warnings.length > 0 ? { warnings } : {}),
                     }),
                 }],
             };
@@ -1483,7 +1491,11 @@ export class NavigationHandlers {
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
                     });
-                    return { status: "ok", text: sourceRead.bytes.toString("utf8") };
+                    return {
+                        status: "ok",
+                        text: sourceRead.bytes.toString("utf8"),
+                        sourceSha256: crypto.createHash("sha256").update(sourceRead.bytes).digest("hex"),
+                    };
                 } catch (error) {
                     if (error instanceof AuthorizedSourceReadError) {
                         return {

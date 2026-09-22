@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isTestOrFixturePath } from "@zokizuan/satori-core";
 import {
+    isTestOrFixturePath,
+    type SymbolRecord,
+    type SymbolRegistry,
+} from "@zokizuan/satori-core";
+import {
+    RelationshipBackedCallGraph,
     prioritizeInboundSuppressedNotes,
     shouldInspectInboundSourceReferences,
     uniqueInboundCallerSiteFile,
@@ -152,4 +157,117 @@ test("uniqueInboundCallerSiteFile ignores callee-only and aggregate notes", () =
         },
     ];
     assert.equal(uniqueInboundCallerSiteFile(ignored), undefined);
+});
+
+test("call graph source fallback propagates partial Publication coverage without fabricating stale references", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "typescript",
+        kind: "function",
+        qualifiedName: "target",
+        name: "target",
+        label: "function target()",
+        span: { startLine: 1, endLine: 1 },
+        parentQualifiedNamePath: [],
+        file: "src/target.ts",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const caller = {
+        ...target,
+        symbolKey: "caller-key",
+        symbolInstanceId: "caller-id",
+        qualifiedName: "caller",
+        name: "caller",
+        label: "function caller()",
+        file: "src/caller.ts",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([
+            [target.file, [target]],
+            [caller.file, [caller]],
+        ]),
+        symbolsByInstanceId: new Map([
+            [target.symbolInstanceId, target],
+            [caller.symbolInstanceId, caller],
+        ]),
+    } as unknown as SymbolRegistry;
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        files: [],
+    };
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records: [],
+            analysisByFile: new Map(),
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-old",
+        navigationRoot: "/state/publication-old/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+        findExactSourceReferences: async () => ({
+            target: {
+                symbolId: target.symbolInstanceId,
+                symbolLabel: target.label,
+                name: target.name,
+                qualifiedName: target.qualifiedName,
+                file: target.file,
+                span: target.span,
+            },
+            references: [{
+                file: "src/current.ts",
+                span: { startLine: 2, endLine: 2, startColumn: 3, endColumn: 9 },
+                owningSymbol: {
+                    symbolId: caller.symbolInstanceId,
+                    symbolLabel: caller.label,
+                    file: caller.file,
+                    span: caller.span,
+                },
+                occurrenceKind: "identifier",
+                matchedText: "target",
+                evidenceClass: "published_source_text",
+            }],
+            coverage: {
+                status: "partial",
+                publishedFileCount: 3,
+                eligibleFileCount: 3,
+                inspectedFileCount: 2,
+                skippedFileCount: 1,
+                matchedOccurrenceCount: 1,
+                returnedOccurrenceCount: 1,
+                reasons: [{ code: "source_changed", file: "src/stale.ts" }],
+            },
+        }),
+    });
+
+    assert.ok(result);
+    assert.equal(result!.sourceReferenceCoverage?.status, "partial");
+    assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCoverage, "partial");
+    assert.ok(result!.warnings?.includes("CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL"));
+    assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.file), ["src/current.ts"]);
+    assert.equal(result!.sourceReferences?.some((reference) => reference.site.file === "src/stale.ts"), false);
 });

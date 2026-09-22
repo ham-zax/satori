@@ -28,6 +28,13 @@ test("find_references schema requires canonical symbol target and safe repo-rela
     }).success, false);
 });
 
+test("find_references documents Publication-hash-bound completeness", () => {
+    const description = findReferencesTool.description({} as ToolContext);
+    assert.match(description, /Publication content hash/i);
+    assert.match(description, /changed\/unverified source/i);
+    assert.match(description, /coverage=partial/i);
+});
+
 test("find_references dispatches through the authorized root without provider retrieval", async () => {
     const root = path.resolve("/tmp/repo");
     let dispatched: unknown;

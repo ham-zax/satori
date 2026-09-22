@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
 import { findExactPublishedSourceReferences } from "./exact-reference-search.js";
@@ -68,6 +69,23 @@ const sources = new Map([
     ["src/ignored/caller.ts", "export function ignoredRun(client: any) {\n  return client.request();\n}\n"],
 ]);
 
+function sha256(value: string): string {
+    return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function withPublishedHashes(nav: SymbolRegistry): SymbolRegistry {
+    return {
+        ...nav,
+        manifest: {
+            ...nav.manifest,
+            files: nav.manifest.files.map((entry) => ({
+                ...entry,
+                hash: sha256(sources.get(entry.path)!),
+            })),
+        },
+    } as SymbolRegistry;
+}
+
 test("exact reference search scans the scoped Publication source universe without ranking", async () => {
     const nav = registry();
     const target = nav.symbolsByInstanceId.get("target")!;
@@ -129,4 +147,55 @@ test("exact reference completeness becomes partial for output limits or skipped 
     assert.ok(skipped.coverage.reasons.some((reason) => (
         reason.code === "source_too_large" && reason.file === "src/caller.ts"
     )));
+});
+
+test("Publication hash without bound source bytes is source_unverified and never complete", async () => {
+    const nav = withPublishedHashes(registry());
+    const target = nav.symbolsByInstanceId.get("target")!;
+    const result = await findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        scope: { includePaths: ["src/caller.ts"] },
+        readPublishedSource: async (file) => ({ status: "ok", text: sources.get(file)! }),
+    });
+
+    assert.equal(result.coverage.status, "partial");
+    assert.equal(result.coverage.inspectedFileCount, 0);
+    assert.equal(result.coverage.skippedFileCount, 1);
+    assert.deepEqual(result.references, []);
+    assert.ok(result.coverage.reasons.some((reason) => (
+        reason.code === "source_unverified" && reason.file === "src/caller.ts"
+    )));
+});
+
+test("Unicode identifier continuations do not create false exact references", async () => {
+    const target = symbol({
+        symbolInstanceId: "foo-target",
+        name: "foo",
+        file: "src/foo.ts",
+        span: { startLine: 1, endLine: 1 },
+    });
+    const nav = {
+        manifest: { files: [{ path: "src/foo.ts" }] },
+        symbolsByFile: new Map([["src/foo.ts", [target]]]),
+        symbolsByInstanceId: new Map([[target.symbolInstanceId, target]]),
+    } as unknown as SymbolRegistry;
+    const text = [
+        "foo();",
+        "fooβ();",
+        "βfoo();",
+        "foo\u0301();",
+        "foo$bar();",
+        "foo_bar();",
+    ].join("\n");
+
+    const result = await findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        readPublishedSource: async () => ({ status: "ok", text }),
+    });
+
+    assert.equal(result.coverage.status, "complete");
+    assert.deepEqual(result.references.map((reference) => reference.span.startLine), [1]);
+    assert.equal(result.references[0]?.matchedText, "foo");
 });

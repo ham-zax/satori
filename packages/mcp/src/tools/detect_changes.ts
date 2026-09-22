@@ -13,7 +13,7 @@ const inputSchema = z.object({
 
 export const detectChangesTool: McpTool = {
     name: "detect_changes",
-    description: () => "Compare a Git revision with the tracked working tree, map changed ranges to current indexed symbols, and traverse bounded inbound CALLS. Seeds are labeled separately; confirmed callers are labeled direct or transitive and retain causal CALLS paths back to the changed seed. areaImpact aggregates confirmed impact with the same natural repository area grouping as architecture_overview. Persisted ambiguous/unresolved semantic references remain separate in uncertainCallReferences and never become confirmed impact. completeness discloses depth, limit, unavailable-navigation, and uncertainty bounds; this is advisory and never an exhaustive blast-radius proof.",
+    description: () => "Compare a Git revision with the tracked working tree, map changed ranges to current indexed symbols, and traverse bounded inbound CALLS. Seeds are labeled separately; graph-derived callers are labeled direct or transitive and retain causal CALLS paths back to the changed seed. Each impacted node declares evidenceClass=proof_backed or heuristic, and every causal-path edge preserves strategy, confidence, and resolution authority so heuristic CALLS are never presented as semantic proof. areaImpact breaks those evidence classes out explicitly. Persisted ambiguous/unresolved semantic references remain separate in uncertainCallReferences. completeness discloses depth, limit, unavailable-navigation, heuristic-path, and uncertainty bounds; this is advisory and never an exhaustive blast-radius proof.",
     inputSchemaZod: () => inputSchema,
     execute: async (args, ctx) => {
         const parsed = inputSchema.safeParse(args);

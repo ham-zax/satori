@@ -9,7 +9,7 @@ export const EXACT_REFERENCE_EVIDENCE_CLASS = "published_source_text" as const;
 export type ExactReferenceOccurrenceKind = "declaration" | "member" | "identifier";
 
 export type ExactReferenceCoverageReason = Readonly<{
-    code: "source_unreadable" | "source_too_large" | "source_replaced" | "result_limit";
+    code: "source_unreadable" | "source_too_large" | "source_replaced" | "source_changed" | "source_unverified" | "result_limit";
     file?: string;
     detail?: string;
 }>;
@@ -59,7 +59,7 @@ export type ExactReferenceSearchResult = Readonly<{
 }>;
 
 export type ExactReferenceSourceRead =
-    | Readonly<{ status: "ok"; text: string }>
+    | Readonly<{ status: "ok"; text: string; sourceSha256?: string }>
     | Readonly<{
         status: "skipped";
         code: Exclude<ExactReferenceCoverageReason["code"], "result_limit">;
@@ -133,12 +133,17 @@ export async function findExactPublishedSourceReferences(input: {
     readPublishedSource(file: string): Promise<ExactReferenceSourceRead>;
 }): Promise<ExactReferenceSearchResult> {
     const limit = Math.max(1, Math.floor(input.limit ?? 100));
-    const publishedFiles = input.registry.manifest.files
-        .map((entry) => entry.path.replace(/\\/g, "/"))
-        .sort(compareStrings);
-    const eligibleFiles = publishedFiles.filter((file) => (
-        matchesPublishedPathScope(file, input.scope ?? {})
+    const publishedEntries = input.registry.manifest.files
+        .map((entry) => ({
+            path: entry.path.replace(/\\/g, "/"),
+            hash: entry.hash,
+        }))
+        .sort((left, right) => compareStrings(left.path, right.path));
+    const publishedFiles = publishedEntries.map((entry) => entry.path);
+    const eligibleEntries = publishedEntries.filter((entry) => (
+        matchesPublishedPathScope(entry.path, input.scope ?? {})
     ));
+    const eligibleFiles = eligibleEntries.map((entry) => entry.path);
     const references: ExactSourceReference[] = [];
     const reasons: ExactReferenceCoverageReason[] = [];
     let inspectedFileCount = 0;
@@ -176,9 +181,11 @@ export async function findExactPublishedSourceReferences(input: {
     }
 
     const escaped = escapeRegExp(identifier);
-    const matcher = new RegExp("(^|[^A-Za-z0-9_$])(" + escaped + ")(?=$|[^A-Za-z0-9_$])", "g");
+    const identifierPart = "\\p{ID_Continue}$\\u200C\\u200D";
+    const matcher = new RegExp("(^|[^" + identifierPart + "])(" + escaped + ")(?=$|[^" + identifierPart + "])", "gu");
 
-    for (const file of eligibleFiles) {
+    for (const entry of eligibleEntries) {
+        const file = entry.path;
         const source = await input.readPublishedSource(file);
         if (source.status === "skipped") {
             reasons.push({
@@ -187,6 +194,34 @@ export async function findExactPublishedSourceReferences(input: {
                 ...(source.detail ? { detail: source.detail } : {}),
             });
             continue;
+        }
+        const expectedSourceHash = entry.hash?.trim().toLowerCase();
+        if (expectedSourceHash) {
+            if (!/^[a-f0-9]{64}$/.test(expectedSourceHash)) {
+                reasons.push({
+                    code: "source_unverified",
+                    file,
+                    detail: "Publication source identity is not a valid SHA-256 content hash.",
+                });
+                continue;
+            }
+            const observedSha256 = source.sourceSha256?.trim().toLowerCase();
+            if (!observedSha256) {
+                reasons.push({
+                    code: "source_unverified",
+                    file,
+                    detail: "Current source bytes could not be bound to the Publication content hash.",
+                });
+                continue;
+            }
+            if (observedSha256 !== expectedSourceHash) {
+                reasons.push({
+                    code: "source_changed",
+                    file,
+                    detail: "Current source bytes differ from the Publication content hash.",
+                });
+                continue;
+            }
         }
         inspectedFileCount += 1;
         const lines = source.text.split(/\r?\n/);

@@ -135,6 +135,12 @@ export function dynamicLookup(registry: any): unknown {
     return registry[method]();
 }
 `);
+    writeFile(root, 'packages/app/src/textual-caller.ts', `
+export function externalDynamicLookup(registry: any): unknown {
+    const method = 'textualTarget';
+    return registry[method]();
+}
+`);
     writeFile(root, 'packages/excluded/src/textual.ts', `
 export function excludedLookup(registry: any): unknown {
     const method = 'textualTarget';
@@ -321,6 +327,8 @@ async function main(): Promise<void> {
         const publicationId = await establishPublication(session, repoRoot);
 
         const workersFile = 'packages/app/src/workers.ts';
+        const textualTargetFile = 'packages/app/src/textual-target.ts';
+        const textualCallerFile = 'packages/app/src/textual-caller.ts';
         const invoke = await outlineSymbol(session, repoRoot, workersFile, 'invoke');
         const backup = await outlineSymbol(session, repoRoot, workersFile, 'BackupWorker.request');
         const primary = await outlineSymbol(session, repoRoot, workersFile, 'PrimaryWorker.request');
@@ -328,8 +336,8 @@ async function main(): Promise<void> {
         const directBackup = await outlineSymbol(session, repoRoot, workersFile, 'callBackup');
         const transitiveBackup = await outlineSymbol(session, repoRoot, workersFile, 'callBackupTransitively');
         const unresolved = await outlineSymbol(session, repoRoot, workersFile, 'unresolvedObservation');
-        const textualTarget = await outlineSymbol(session, repoRoot, 'packages/app/src/textual-target.ts', 'textualTarget');
-        const dynamicLookup = await outlineSymbol(session, repoRoot, 'packages/app/src/textual-target.ts', 'dynamicLookup');
+        const textualTarget = await outlineSymbol(session, repoRoot, textualTargetFile, 'textualTarget');
+        const dynamicLookup = await outlineSymbol(session, repoRoot, textualTargetFile, 'dynamicLookup');
 
         // A — compiler-proven this.field.request() is an admitted CALLS edge.
         const provenInbound = await callGraph(session, primary.codebaseRoot, primary.target, 'callers', publicationId);
@@ -460,7 +468,7 @@ async function main(): Promise<void> {
             return areas.includes('packages/alpha') && areas.includes('packages/beta');
         }), `Missing alpha/beta area cycle: ${JSON.stringify(architecture.cycles)}`);
 
-        // H — confirmed direct/transitive impact carries real CALLS paths while the
+        // H — proof-backed direct/transitive impact carries real CALLS paths while the
         // ambiguous invoke reference remains uncertain and never joins impacted.
         const impact = parseFirstText(await session.callTool('detect_changes', {
             path: repoRoot,
@@ -506,6 +514,92 @@ async function main(): Promise<void> {
             .filter((row) => row.limit >= 3)
             .every((row) => row.ownerRank !== null && row.ownerRank <= 3), true);
 
+        // J — after Publication, a changed caller cannot be scanned as if it still
+        // belonged to that Publication generation. The old target identity remains
+        // canonical, but the changed caller is skipped and completeness is partial.
+        const textualCallerPath = path.join(repoRoot, textualCallerFile);
+        const publishedCallerSource = fs.readFileSync(textualCallerPath, 'utf8');
+        fs.writeFileSync(
+            textualCallerPath,
+            publishedCallerSource.replace('textualTarget', 'textualTargetChanged'),
+        );
+        const staleCallerExact = parseFirstText(await session.callTool('find_references', {
+            path: repoRoot,
+            symbolRef: textualTarget.target,
+            includePaths: [textualTargetFile, textualCallerFile],
+            limit: 100,
+        }));
+        assert.equal(staleCallerExact.status, 'ok', JSON.stringify(staleCallerExact));
+        assert.equal(staleCallerExact.publicationId, publicationId);
+        const staleCallerCoverage = asRecord(staleCallerExact.coverage);
+        assert.equal(staleCallerCoverage?.status, 'partial');
+        assert.equal(staleCallerCoverage?.eligibleFileCount, 2);
+        assert.equal(staleCallerCoverage?.inspectedFileCount, 1);
+        assert.equal(staleCallerCoverage?.skippedFileCount, 1);
+        assert.ok(asRecords(staleCallerCoverage?.reasons).some((reason) => (
+            reason.code === 'source_changed' && reason.file === textualCallerFile
+        )), `Missing stale-caller source_changed reason: ${JSON.stringify(staleCallerExact)}`);
+        assert.equal(asRecords(staleCallerExact.references).some((reference) => (
+            reference.file === textualCallerFile
+        )), false);
+        assert.notEqual(staleCallerCoverage?.status, 'complete');
+
+        // K — call_graph uses the same generation-bound scanner. A stale caller
+        // therefore makes source-reference coverage partial and never contributes
+        // observational evidence from its post-Publication bytes.
+        const staleCallerGraph = await callGraph(
+            session,
+            textualTarget.codebaseRoot,
+            textualTarget.target,
+            'callers',
+            publicationId,
+        );
+        const staleGraphCoverage = asRecord(staleCallerGraph.sourceReferenceCoverage);
+        assert.equal(staleGraphCoverage?.status, 'partial');
+        assert.ok(asRecords(staleGraphCoverage?.reasons).some((reason) => (
+            reason.code === 'source_changed' && reason.file === textualCallerFile
+        )), `Missing call_graph source_changed reason: ${JSON.stringify(staleCallerGraph)}`);
+        assert.equal(asRecords(staleCallerGraph.sourceReferences).some((reference) => (
+            asRecord(reference.site)?.file === textualCallerFile
+        )), false);
+        assert.equal(asRecord(staleCallerGraph.inboundCoverageEvidence)?.sourceReferenceCoverage, 'partial');
+        assert.ok(Array.isArray(staleCallerGraph.warnings)
+            && staleCallerGraph.warnings.includes('CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL'));
+
+        // Restore the caller to its exact published bytes so only the target differs
+        // in the next generation-identity case.
+        fs.writeFileSync(textualCallerPath, publishedCallerSource);
+
+        // L — renaming the target after Publication cannot mix the old canonical
+        // symbol identity with post-Publication target bytes and report complete.
+        const textualTargetPath = path.join(repoRoot, textualTargetFile);
+        const publishedTargetSource = fs.readFileSync(textualTargetPath, 'utf8');
+        fs.writeFileSync(
+            textualTargetPath,
+            publishedTargetSource.replace('export function textualTarget', 'export function renamedTextualTarget'),
+        );
+        const staleTargetExact = parseFirstText(await session.callTool('find_references', {
+            path: repoRoot,
+            symbolRef: textualTarget.target,
+            includePaths: [textualTargetFile, textualCallerFile],
+            limit: 100,
+        }));
+        assert.equal(staleTargetExact.status, 'ok', JSON.stringify(staleTargetExact));
+        assert.equal(staleTargetExact.publicationId, publicationId);
+        assert.equal(asRecord(staleTargetExact.target)?.symbolId, textualTarget.target.symbolId);
+        const staleTargetCoverage = asRecord(staleTargetExact.coverage);
+        assert.equal(staleTargetCoverage?.status, 'partial');
+        assert.equal(staleTargetCoverage?.eligibleFileCount, 2);
+        assert.equal(staleTargetCoverage?.inspectedFileCount, 1);
+        assert.equal(staleTargetCoverage?.skippedFileCount, 1);
+        assert.ok(asRecords(staleTargetCoverage?.reasons).some((reason) => (
+            reason.code === 'source_changed' && reason.file === textualTargetFile
+        )), `Missing stale-target source_changed reason: ${JSON.stringify(staleTargetExact)}`);
+        assert.equal(asRecords(staleTargetExact.references).some((reference) => (
+            reference.file === textualTargetFile
+        )), false);
+        assert.notEqual(staleTargetCoverage?.status, 'complete');
+
         console.log('PASS A proven this.field typed member became authoritative CALLS');
         console.log('PASS B ambiguous typed member stayed non-authoritative');
         console.log('PASS C unresolved observation stayed visible without CALLS');
@@ -513,8 +607,11 @@ async function main(): Promise<void> {
         console.log('PASS E find_references obeyed subtree/include/exclude with complete coverage');
         console.log('PASS F file_outline exposed per-file construct calibration');
         console.log('PASS G architecture scope, entry candidates, cycles, and construct coverage passed');
-        console.log('PASS H impact distinguished direct/transitive paths from uncertain references');
+        console.log('PASS H impact distinguished proof-backed paths from uncertain references');
         console.log('PASS I behavioral retrieval replay recovered the durable inferPhase-equivalent owner');
+        console.log('PASS J stale caller was excluded from Publication-coherent find_references coverage');
+        console.log('PASS K call_graph source fallback reported partial coverage for stale source');
+        console.log('PASS L stale target could not combine old identity with current bytes as complete');
         console.log('='.repeat(80));
         console.log('RELATIONSHIP EVIDENCE PRODUCT WITNESS PASSED');
         console.log('='.repeat(80));

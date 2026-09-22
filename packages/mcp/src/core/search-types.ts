@@ -241,6 +241,7 @@ export type SearchCandidateSurvivalStageName =
     | "raw_lexical_fallback"
     | "diagnostic_dense"
     | "diagnostic_lexical"
+    | "diagnostic_fallback_lexical"
     | "core_fusion"
     | "core_result"
     | "mcp_pass"
@@ -299,6 +300,7 @@ export interface SearchCandidateSurvivalRemoval {
     passId?: string;
     reason:
         | "core_fusion_limit"
+        | "dense_path_filter"
         | "dirty_source_suppressed"
         | "scope_filter"
         | "requested_subdirectory_filter"

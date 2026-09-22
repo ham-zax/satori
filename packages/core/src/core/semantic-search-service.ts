@@ -25,6 +25,7 @@ import { validateVectorFilter } from '../vectordb/filters';
 import type { PublicationLease, PublicationRef } from '../generation/contracts';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import {
+    admitLexicalFallbackCandidates,
     fuseVectorCandidatesWithRrf,
     orderVectorCandidateArm,
     vectorCandidateOwnerId,
@@ -87,13 +88,14 @@ function buildSemanticSearchTraceStage(
     };
 }
 
-function buildSemanticSearchCandidateTrace(input: {
+export function buildSemanticSearchCandidateTrace(input: {
     productDense?: readonly VectorCandidate[];
     productLexical?: readonly VectorCandidate[];
     productLexicalFallback?: readonly VectorCandidate[];
     diagnosticDense?: readonly VectorCandidate[];
     diagnosticLexical?: readonly VectorCandidate[];
     diagnosticLexicalFallback?: readonly VectorCandidate[];
+    densePathFilteredIds?: readonly string[];
     diagnosticRetrievals: readonly SemanticSearchDiagnosticRetrieval[];
     result: readonly VectorCandidate[];
     hybrid: boolean;
@@ -123,12 +125,17 @@ function buildSemanticSearchCandidateTrace(input: {
             input.maxEntries,
         ));
     }
-    const lexicalFallbackTrace = input.diagnosticLexicalFallback
-        ?? input.productLexicalFallback;
-    if (lexicalFallbackTrace) {
+    if (input.productLexicalFallback) {
         stages.push(buildSemanticSearchTraceStage(
             'raw_lexical_fallback',
-            lexicalFallbackTrace,
+            input.productLexicalFallback,
+            input.maxEntries,
+        ));
+    }
+    if (input.diagnosticLexicalFallback) {
+        stages.push(buildSemanticSearchTraceStage(
+            'diagnostic_fallback_lexical',
+            input.diagnosticLexicalFallback,
             input.maxEntries,
         ));
     }
@@ -146,11 +153,21 @@ function buildSemanticSearchCandidateTrace(input: {
     ])]
         .filter((candidateId) => !resultIds.has(candidateId))
         .sort(compareContractStrings);
-    const removals = removedIds.slice(0, input.maxEntries).map((candidateId) => ({
-        candidateId,
-        afterStage: 'core_fusion' as const,
-        reason: 'core_fusion_limit' as const,
-    }));
+    const densePathFilteredIds = [...new Set(input.densePathFilteredIds ?? [])]
+        .filter((candidateId) => !resultIds.has(candidateId))
+        .sort(compareContractStrings);
+    const removals = [
+        ...removedIds.slice(0, input.maxEntries).map((candidateId) => ({
+            candidateId,
+            afterStage: 'core_fusion' as const,
+            reason: 'core_fusion_limit' as const,
+        })),
+        ...densePathFilteredIds.map((candidateId) => ({
+            candidateId,
+            afterStage: 'raw_lexical_fallback' as const,
+            reason: 'dense_path_filter' as const,
+        })),
+    ].slice(0, input.maxEntries);
     return {
         schemaVersion: 'semantic_search_candidate_trace_v1',
         maxEntriesPerStage: input.maxEntries,
@@ -160,7 +177,10 @@ function buildSemanticSearchCandidateTrace(input: {
         diagnosticRetrievals: [...input.diagnosticRetrievals],
         stages,
         removals,
-        omittedRemovals: Math.max(0, removedIds.length - removals.length),
+        omittedRemovals: Math.max(
+            0,
+            removedIds.length + densePathFilteredIds.length - removals.length,
+        ),
     };
 }
 
@@ -753,6 +773,7 @@ export class SemanticSearchService {
             const productLexicalFallbackAttempted = productLexicalCandidates.length === 0
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
+            const densePathFilteredIds: string[] = [];
             if (productLexicalFallbackAttempted) {
                 try {
                     productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
@@ -765,14 +786,20 @@ export class SemanticSearchService {
                         'Index generation changed during hybrid lexical fallback retrieval.',
                     );
                     // With dense evidence available, fallback enriches known files rather
-                    // than opening an unrelated lexical discovery frontier.
+                    // than opening an unrelated lexical discovery frontier. A small
+                    // bounded prefix of the strongest fallback rows may still open a
+                    // new file frontier so strong lexical evidence survives a dense
+                    // miss; the tail remains constrained to dense-discovered paths.
                     if (productDenseCandidates.length > 0) {
                         const denseCandidatePaths = new Set(
                             productDenseCandidates.map((candidate) => candidate.document.relativePath),
                         );
-                        productLexicalFallback = productLexicalFallback.filter((candidate) => (
-                            denseCandidatePaths.has(candidate.document.relativePath)
-                        ));
+                        const admission = admitLexicalFallbackCandidates({
+                            fallback: productLexicalFallback,
+                            densePaths: denseCandidatePaths,
+                        });
+                        productLexicalFallback = admission.admitted;
+                        densePathFilteredIds.push(...admission.densePathFilteredIds);
                     }
                 } catch (error) {
                     console.warn(
@@ -895,6 +922,7 @@ export class SemanticSearchService {
                 ...(diagnosticDense ? { diagnosticDense } : {}),
                 ...(diagnosticLexical ? { diagnosticLexical } : {}),
                 ...(diagnosticLexicalFallback ? { diagnosticLexicalFallback } : {}),
+                ...(densePathFilteredIds.length > 0 ? { densePathFilteredIds } : {}),
                 diagnosticRetrievals: diagnosticOutcomes.map((outcome) => outcome.retrieval),
                 result: searchResults,
                 hybrid: true,

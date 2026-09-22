@@ -11,6 +11,37 @@ type RankedCandidate = {
 /** Backend-arm RRF policy v1. MCP multi-pass fusion has a separate policy. */
 export const VECTOR_CANDIDATE_RRF_K_V1 = 100;
 
+/**
+ * Bounded lexical discovery prefix. Lexical fallback normally enriches files
+ * already discovered by dense retrieval, but the strongest few fallback rows
+ * may open a new file frontier so strong lexical evidence is not lost to a
+ * dense miss. The fallback arm must be strongest-first (backend retrieval
+ * order); only the leading prefix is exempt from the dense-path requirement.
+ */
+export const LEXICAL_FALLBACK_DISCOVERY_PREFIX = 2;
+
+export function admitLexicalFallbackCandidates(input: {
+    readonly fallback: readonly VectorCandidate[];
+    readonly densePaths: ReadonlySet<string>;
+}): {
+    readonly admitted: VectorCandidate[];
+    readonly densePathFilteredIds: string[];
+} {
+    const admitted: VectorCandidate[] = [];
+    const densePathFilteredIds: string[] = [];
+    input.fallback.forEach((candidate, index) => {
+        if (
+            index < LEXICAL_FALLBACK_DISCOVERY_PREFIX
+            || input.densePaths.has(candidate.document.relativePath)
+        ) {
+            admitted.push(candidate);
+        } else {
+            densePathFilteredIds.push(candidate.document.id);
+        }
+    });
+    return { admitted, densePathFilteredIds };
+}
+
 function assertValidCandidate(candidate: VectorCandidate): void {
     if (candidate.document.id.length === 0) {
         throw new Error('Vector candidate document ID must be non-empty.');

@@ -61,6 +61,7 @@ export type SemanticSearchCandidateTraceStageName =
     | 'raw_lexical_fallback'
     | 'diagnostic_dense'
     | 'diagnostic_lexical'
+    | 'diagnostic_fallback_lexical'
     | 'core_fusion'
     | 'core_result';
 
@@ -86,8 +87,8 @@ export interface SemanticSearchCandidateTraceStage {
 
 export interface SemanticSearchCandidateTraceRemoval {
     candidateId: string;
-    afterStage: 'core_fusion';
-    reason: 'core_fusion_limit';
+    afterStage: 'raw_lexical_fallback' | 'core_fusion';
+    reason: 'core_fusion_limit' | 'dense_path_filter';
 }
 
 export type SemanticSearchDiagnosticRetrievalArm =

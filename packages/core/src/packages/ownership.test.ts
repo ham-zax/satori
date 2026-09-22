@@ -295,6 +295,7 @@ test('unsafe workspace glob expansion is rejected before filesystem globbing', (
             '../outside/*',
             '{../outside,packages/*}',
             '@(../outside|packages/*)',
+            '[.][.]/outside',
             'packages/**/../outside',
             '/outside/*',
             'C:/outside/*',

@@ -49,6 +49,7 @@ import { validateRepositoryRelativePath, type RepositoryRelativePath } from '../
 import type { CustomIndexPolicyUpdate } from './contracts';
 import {
     buildPublicationPackageOwnership,
+    computePublicationPackageOwnershipDigest,
     discoverPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
@@ -504,6 +505,7 @@ export class IndexGenerationWorkflow {
         indexedFiles: number;
         totalChunks: number;
         status: Publication['status'];
+        packageOwnershipDigest: string;
     }): Publication {
         const format = this.ports.buildPublicationFormat();
         return Object.freeze({
@@ -528,6 +530,7 @@ export class IndexGenerationWorkflow {
                 indexedFiles: input.indexedFiles,
                 totalChunks: input.totalChunks,
             }),
+            packageOwnership: Object.freeze({ digest: input.packageOwnershipDigest }),
             navigation: input.status === 'complete'
                 ? Object.freeze({ relativeRoot: 'navigation' as const })
                 : null,
@@ -732,6 +735,7 @@ export class IndexGenerationWorkflow {
                     indexedFiles: result.processedFiles,
                     totalChunks: result.totalChunks,
                     status: 'complete',
+                    packageOwnershipDigest: computePublicationPackageOwnershipDigest(packageOwnership),
                 });
                 try {
                     this.ports.activatePublication(publication, mutationLease);
@@ -804,6 +808,7 @@ export class IndexGenerationWorkflow {
                         indexedFiles: result.processedFiles,
                         totalChunks: result.totalChunks,
                         status: 'partial',
+                        packageOwnershipDigest: computePublicationPackageOwnershipDigest(packageOwnership),
                     });
                     try {
                         this.ports.activatePublication(publication, mutationLease);
@@ -1199,6 +1204,7 @@ export class IndexGenerationWorkflow {
             const searchablePreparedFileHashes = new Map(
                 [...input.preparedChanges.fileHashes.entries()].filter(([filePath]) => isSearchable(filePath)),
             );
+            let packageOwnershipDigest: string | null = null;
             await measurePublicationPhase(
                 'publication_checkpoint_stage',
                 async () => {
@@ -1207,6 +1213,7 @@ export class IndexGenerationWorkflow {
                         [...searchablePreparedFileHashes.keys()],
                         input.preparedChanges.fileHashes,
                     );
+                    packageOwnershipDigest = computePublicationPackageOwnershipDigest(packageOwnership);
                     this.ports.stagePublicationPackageOwnership(
                         input.canonicalRoot,
                         publicationId,
@@ -1242,6 +1249,9 @@ export class IndexGenerationWorkflow {
                         );
                     }
                     input.options.assertMutationCurrent?.();
+                    if (!packageOwnershipDigest) {
+                        throw new Error('Atomic delta Publication is missing package ownership digest.');
+                    }
                     const publication = this.buildTask2Publication({
                         publicationId,
                         canonicalRoot: input.canonicalRoot,
@@ -1250,6 +1260,7 @@ export class IndexGenerationWorkflow {
                         indexedFiles: searchablePreparedFileHashes.size,
                         totalChunks,
                         status: 'complete',
+                        packageOwnershipDigest,
                     });
                     try {
                         this.ports.activatePublication(publication, mutationLease);

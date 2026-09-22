@@ -58,6 +58,7 @@ import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typ
 
 import { ThreadedWasmSemanticProjectAnalyzer, type SemanticProjectAnalyzer } from '../semantic';
 import {
+    computePublicationPackageOwnershipDigest,
     PACKAGE_OWNERSHIP_SCHEMA_VERSION,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
@@ -1033,7 +1034,13 @@ export class Context {
         try {
             const ownership = this.getPublicationPackageOwnership(publication);
             const checkpoint = this.getPublicationSourceCheckpoint(publication);
-            if (!ownership || !checkpoint) return false;
+            if (!ownership || !checkpoint || !publication.publication.packageOwnership) return false;
+            if (
+                computePublicationPackageOwnershipDigest(ownership)
+                !== publication.publication.packageOwnership.digest
+            ) {
+                return false;
+            }
 
             const sourceHashes = new Map(checkpoint.fileHashes);
             const controlPaths = new Set<string>();

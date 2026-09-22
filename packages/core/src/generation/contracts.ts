@@ -37,6 +37,9 @@ export interface Publication {
         indexedFiles: number;
         totalChunks: number;
     }>;
+    readonly packageOwnership?: null | Readonly<{
+        digest: string;
+    }>;
     readonly navigation: null | Readonly<{
         relativeRoot: 'navigation';
     }>;

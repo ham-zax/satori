@@ -191,7 +191,7 @@ function parseInlineYamlList(raw: string): string[] {
 function normalizeWorkspacePattern(raw: string): string {
     const normalizedRaw = raw.replace(/\\/g, '/');
     if (
-        /[{}]/.test(normalizedRaw)
+        /[{}\[\]]/.test(normalizedRaw)
         || /[!@+?*]\(/.test(normalizedRaw)
     ) {
         throw new Error("Invalid workspace package pattern '" + raw + "'.");
@@ -664,6 +664,16 @@ export function parsePublicationPackageOwnership(
         files,
         controlFiles,
     };
+}
+
+export function computePublicationPackageOwnershipDigest(
+    ownership: PublicationPackageOwnership,
+): string {
+    const validated = parsePublicationPackageOwnership(
+        JSON.stringify(ownership),
+        ownership.canonicalRoot,
+    );
+    return hashBytes(Buffer.from(JSON.stringify(validated), 'utf8'));
 }
 
 export function buildPublicationPackageOwnership(

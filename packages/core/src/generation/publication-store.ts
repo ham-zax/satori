@@ -22,6 +22,7 @@ import {
     type PublicationSourceCheckpoint,
 } from '../sync/snapshot-codec';
 import {
+    computePublicationPackageOwnershipDigest,
     parsePublicationPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
@@ -193,6 +194,11 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         || typeof value.vector.totalChunks !== 'number'
         || !Number.isSafeInteger(value.vector.totalChunks)
         || value.vector.totalChunks < 0
+        || (value.packageOwnership !== undefined && value.packageOwnership !== null && (
+            !isRecord(value.packageOwnership)
+            || typeof value.packageOwnership.digest !== 'string'
+            || !/^[a-f0-9]{64}$/.test(value.packageOwnership.digest)
+        ))
         || (value.status === 'complete' && (
             !isRecord(value.navigation)
             || value.navigation.relativeRoot !== 'navigation'
@@ -230,6 +236,9 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
             indexedFiles: Number(value.vector.indexedFiles),
             totalChunks: Number(value.vector.totalChunks),
         }),
+        packageOwnership: value.packageOwnership === undefined || value.packageOwnership === null
+            ? null
+            : Object.freeze({ digest: value.packageOwnership.digest as string }),
         navigation: value.navigation === null
             ? null
             : Object.freeze({ relativeRoot: 'navigation' as const }),
@@ -539,6 +548,13 @@ export class PublicationStore {
                 const packageOwnership = this.getPackageOwnership(canonicalRoot, validated.id);
                 if (!packageOwnership) {
                     throw new Error(`Publication '${validated.id}' is missing ownership.json.`);
+                }
+                if (
+                    !validated.packageOwnership
+                    || computePublicationPackageOwnershipDigest(packageOwnership)
+                        !== validated.packageOwnership.digest
+                ) {
+                    throw new Error(`Publication '${validated.id}' ownership.json does not match its descriptor digest.`);
                 }
 
                 // Make every staged local candidate resource durable before its ID can

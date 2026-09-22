@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Context } from '../core/context';
+import { IndexingPipeline } from '../core/indexing-pipeline';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { resolvePublicationGenerationRoot } from './publication-store';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
@@ -330,11 +331,14 @@ test('read admission rejects semantically corrupt or unbound package ownership s
             packages: Array<{
                 root: string;
                 manifestPath: string;
+                name: string | null;
+                workspaceMember: boolean;
             }>;
             files: Array<{
                 path: string;
                 packageRoot: string | null;
             }>;
+            controlFiles: Array<[string, string]>;
         };
 
         const expectRequiresReindex = async (mutate: (value: typeof original) => void) => {
@@ -372,6 +376,26 @@ test('read admission rejects semantically corrupt or unbound package ownership s
             corrupted.files = corrupted.files.filter((entry) => entry.path !== 'root.py');
         });
 
+        await expectRequiresReindex((corrupted) => {
+            const rootPackage = corrupted.packages.find((entry) => entry.root === '');
+            assert.ok(rootPackage);
+            rootPackage.name = 'forged-name';
+        });
+
+        await expectRequiresReindex((corrupted) => {
+            corrupted.packages = corrupted.packages.filter(
+                (entry) => entry.root !== 'packages/a/plugins/b',
+            );
+            corrupted.controlFiles = corrupted.controlFiles.filter(
+                ([filePath]) => filePath !== 'packages/a/plugins/b/package.json',
+            );
+            const file = corrupted.files.find(
+                (entry) => entry.path === 'packages/a/plugins/b/b.py',
+            );
+            assert.ok(file);
+            file.packageRoot = 'packages/a';
+        });
+
         fs.unlinkSync(ownershipPath);
         assert.equal(
             (await fixture.context.getCurrentPublicationForValidation(root)).status,
@@ -389,6 +413,63 @@ test('read admission rejects semantically corrupt or unbound package ownership s
         assert.equal(
             (await fixture.context.getCurrentPublicationForValidation(root)).status,
             'valid',
+        );
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('partial Publication ownership is sealed to its exact indexed file identity', async (t) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-package-partial-integrity-'));
+    const root = path.join(tempRoot, 'repo');
+    const databasePath = path.join(tempRoot, 'vectors');
+
+    writeFile(root, 'package.json', JSON.stringify({ name: '@fixture/root' }));
+    writeFile(root, 'a.py', 'def a():\n    return 1\n');
+    writeFile(root, 'b.py', 'def b():\n    return 2\n');
+
+    const fixture = createContext(databasePath);
+    try {
+        const processFileList = IndexingPipeline.prototype.processFileList;
+        const partialPipeline = t.mock.method(
+            IndexingPipeline.prototype,
+            'processFileList',
+            async function (this: IndexingPipeline, input: Parameters<typeof processFileList>[0]) {
+                const result = await processFileList.call(this, input);
+                return {
+                    ...result,
+                    status: 'limit_reached' as const,
+                    processedFiles: 1,
+                };
+            },
+        );
+        await fixture.context.indexCodebase(root);
+        partialPipeline.mock.restore();
+
+        const current = fixture.context.getCurrentPublication(root);
+        assert.ok(current);
+        assert.equal(current.publication.status, 'partial');
+        const ownership = fixture.context.getPublicationPackageOwnership(current);
+        assert.ok(ownership);
+        assert.equal(ownership.files.length, 1);
+
+        const ownershipPath = path.join(
+            resolvePublicationGenerationRoot(root, current.id),
+            'ownership.json',
+        );
+        const corrupted = JSON.parse(fs.readFileSync(ownershipPath, 'utf8')) as {
+            files: Array<{ path: string; packageRoot: string | null }>;
+        };
+        const originalPath = corrupted.files[0]?.path;
+        assert.ok(originalPath === 'a.py' || originalPath === 'b.py');
+        corrupted.files[0].path = originalPath === 'a.py' ? 'b.py' : 'a.py';
+        fs.writeFileSync(ownershipPath, JSON.stringify(corrupted, null, 2) + '\n');
+
+        assert.deepEqual(
+            await fixture.context.getCurrentPublicationForValidation(root),
+            { status: 'requires_reindex' },
         );
     } finally {
         await fixture.context.dispose();

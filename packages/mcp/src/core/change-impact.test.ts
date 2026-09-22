@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type {
+    CallGraphEdgeResult,
     CallGraphNodeResult,
     CallGraphResponseEnvelope,
     FileOutlineResponseEnvelope,
@@ -158,7 +159,62 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
         const heuristicTransitive = node("heuristic-transitive", "packages/heuristic/src/transitive.ts");
         const proofTransitive = node("proof-transitive", "packages/proof/src/transitive.ts");
         const mixed = node("mixed", "packages/mixed/src/mixed.ts");
-        const result = await detectChangeImpact({
+        const mixedUpstream = node("mixed-upstream", "packages/mixed/src/upstream.ts");
+        const edges: CallGraphEdgeResult[] = [{
+            srcSymbolId: heuristicDirect.symbolId,
+            dstSymbolId: seed.symbolId,
+            kind: "call",
+            site: { file: heuristicDirect.file, startLine: 2 },
+            strategy: "heuristic",
+            confidence: 0.95,
+        }, {
+            srcSymbolId: proofDirect.symbolId,
+            dstSymbolId: seed.symbolId,
+            kind: "call",
+            site: { file: proofDirect.file, startLine: 2 },
+            strategy: "rule",
+            confidence: 1,
+            resolutionAuthority: "direct_binding",
+        }, {
+            srcSymbolId: heuristicTransitive.symbolId,
+            dstSymbolId: heuristicDirect.symbolId,
+            kind: "call",
+            site: { file: heuristicTransitive.file, startLine: 3 },
+            strategy: "heuristic",
+            confidence: 0.9,
+        }, {
+            srcSymbolId: proofTransitive.symbolId,
+            dstSymbolId: proofDirect.symbolId,
+            kind: "call",
+            site: { file: proofTransitive.file, startLine: 3 },
+            strategy: "rule",
+            confidence: 0.9,
+            resolutionAuthority: "origin_flow",
+        }, {
+            srcSymbolId: mixed.symbolId,
+            dstSymbolId: heuristicDirect.symbolId,
+            kind: "call",
+            site: { file: mixed.file, startLine: 4 },
+            strategy: "heuristic",
+            confidence: 0.88,
+        }, {
+            srcSymbolId: mixed.symbolId,
+            dstSymbolId: proofDirect.symbolId,
+            kind: "call",
+            site: { file: mixed.file, startLine: 5 },
+            strategy: "rule",
+            confidence: 0.99,
+            resolutionAuthority: "direct_binding",
+        }, {
+            srcSymbolId: mixedUpstream.symbolId,
+            dstSymbolId: mixed.symbolId,
+            kind: "call",
+            site: { file: mixedUpstream.file, startLine: 6 },
+            strategy: "rule",
+            confidence: 1,
+            resolutionAuthority: "direct_binding",
+        }];
+        const runImpact = async (graphEdges: CallGraphEdgeResult[]) => detectChangeImpact({
             path: repo,
             baseRef: "HEAD",
             depth: 3,
@@ -188,53 +244,8 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
                 direction: "callers",
                 depth: 3,
                 limit: 20,
-                nodes: [seed, heuristicDirect, proofDirect, heuristicTransitive, proofTransitive, mixed],
-                edges: [{
-                    srcSymbolId: heuristicDirect.symbolId,
-                    dstSymbolId: seed.symbolId,
-                    kind: "call",
-                    site: { file: heuristicDirect.file, startLine: 2 },
-                    strategy: "heuristic",
-                    confidence: 0.95,
-                }, {
-                    srcSymbolId: proofDirect.symbolId,
-                    dstSymbolId: seed.symbolId,
-                    kind: "call",
-                    site: { file: proofDirect.file, startLine: 2 },
-                    strategy: "rule",
-                    confidence: 1,
-                    resolutionAuthority: "direct_binding",
-                }, {
-                    srcSymbolId: heuristicTransitive.symbolId,
-                    dstSymbolId: heuristicDirect.symbolId,
-                    kind: "call",
-                    site: { file: heuristicTransitive.file, startLine: 3 },
-                    strategy: "heuristic",
-                    confidence: 0.9,
-                }, {
-                    srcSymbolId: proofTransitive.symbolId,
-                    dstSymbolId: proofDirect.symbolId,
-                    kind: "call",
-                    site: { file: proofTransitive.file, startLine: 3 },
-                    strategy: "rule",
-                    confidence: 0.9,
-                    resolutionAuthority: "origin_flow",
-                }, {
-                    srcSymbolId: mixed.symbolId,
-                    dstSymbolId: heuristicDirect.symbolId,
-                    kind: "call",
-                    site: { file: mixed.file, startLine: 4 },
-                    strategy: "heuristic",
-                    confidence: 0.88,
-                }, {
-                    srcSymbolId: mixed.symbolId,
-                    dstSymbolId: proofDirect.symbolId,
-                    kind: "call",
-                    site: { file: mixed.file, startLine: 5 },
-                    strategy: "rule",
-                    confidence: 0.99,
-                    resolutionAuthority: "direct_binding",
-                }],
+                nodes: [seed, heuristicDirect, proofDirect, heuristicTransitive, proofTransitive, mixed, mixedUpstream],
+                edges: graphEdges,
                 notes: [],
                 exactReferences: [{
                     relationship: "caller",
@@ -253,6 +264,8 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
                 }],
             } as unknown as CallGraphResponseEnvelope),
         });
+        const result = await runImpact(edges);
+        const reversedResult = await runImpact([...edges].reverse());
 
         const byId = new Map(result.impacted.map((item) => [item.symbolId, item]));
         assert.equal(byId.get(proofDirect.symbolId)?.evidenceClass, "proof_backed");
@@ -278,6 +291,17 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
             seed.symbolId,
             proofDirect.symbolId,
         ]);
+        const mixedUpstreamImpact = byId.get(mixedUpstream.symbolId);
+        assert.equal(mixedUpstreamImpact?.distance, 3);
+        assert.equal(mixedUpstreamImpact?.evidenceClass, "proof_backed");
+        assert.deepEqual(mixedUpstreamImpact?.causalPath.map((edge) => edge.calleeSymbolId), [
+            seed.symbolId,
+            proofDirect.symbolId,
+            mixed.symbolId,
+        ]);
+        const reversedMixedUpstream = reversedResult.impacted.find((item) => item.symbolId === mixedUpstream.symbolId);
+        assert.equal(reversedMixedUpstream?.evidenceClass, "proof_backed");
+        assert.deepEqual(reversedMixedUpstream?.causalPath, mixedUpstreamImpact?.causalPath);
 
         const proofArea = result.areaImpact.find((row) => row.area === "packages/proof");
         assert.equal(proofArea?.proofBackedDirectCount, 1);

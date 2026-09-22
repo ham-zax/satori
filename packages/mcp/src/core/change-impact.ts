@@ -162,14 +162,29 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             ));
         }
 
-        const seen = new Set<string>([seed.symbolId]);
-        const queue: Array<{ symbolId: string; distance: number; path: ImpactPathEdge[] }> = [{
+        const traversalState = new Map<string, {
+            distance: number;
+            evidenceClass: ImpactEvidenceClass;
+        }>([[seed.symbolId, { distance: 0, evidenceClass: "proof_backed" }]]);
+        const queue: Array<{
+            symbolId: string;
+            distance: number;
+            path: ImpactPathEdge[];
+            evidenceClass: ImpactEvidenceClass;
+        }> = [{
             symbolId: seed.symbolId,
             distance: 0,
             path: [],
+            evidenceClass: "proof_backed",
         }];
         while (queue.length > 0) {
             const current = queue.shift()!;
+            const bestTraversal = traversalState.get(current.symbolId);
+            if (
+                !bestTraversal
+                || current.distance !== bestTraversal.distance
+                || current.evidenceClass !== bestTraversal.evidenceClass
+            ) continue;
             if (current.distance >= input.depth) continue;
             for (const edge of incomingByCallee.get(current.symbolId) ?? []) {
                 const callerId = edge.srcSymbolId;
@@ -190,12 +205,21 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                         : {}),
                 };
                 const causalPath = [...current.path, pathEdge];
-                const evidenceClass: ImpactEvidenceClass = causalPath.every(isProofBackedImpactEdge)
-                    ? "proof_backed"
-                    : "heuristic";
-                if (!seen.has(callerId)) {
-                    seen.add(callerId);
-                    queue.push({ symbolId: callerId, distance, path: causalPath });
+                const evidenceClass: ImpactEvidenceClass = (
+                    current.evidenceClass === "proof_backed"
+                    && isProofBackedImpactEdge(pathEdge)
+                ) ? "proof_backed" : "heuristic";
+                const existingTraversal = traversalState.get(callerId);
+                const shouldAdvanceTraversal = !existingTraversal
+                    || distance < existingTraversal.distance
+                    || (
+                        distance === existingTraversal.distance
+                        && evidenceClass === "proof_backed"
+                        && existingTraversal.evidenceClass === "heuristic"
+                    );
+                if (shouldAdvanceTraversal) {
+                    traversalState.set(callerId, { distance, evidenceClass });
+                    queue.push({ symbolId: callerId, distance, path: causalPath, evidenceClass });
                 }
 
                 const caller = nodesById.get(callerId);

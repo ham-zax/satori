@@ -174,13 +174,11 @@ function summarizePayload(
     payload: CallGraphResponseEnvelope,
     summary: CallGraphEvidenceSummaryResult,
 ): CallGraphResponseEnvelope {
-    const {
-        exactReferences: _exactReferences,
-        sourceReferences: _sourceReferences,
-        testReferences: _testReferences,
-        evidencePage: _evidencePage,
-        ...rest
-    } = payload;
+    const rest = { ...payload };
+    delete rest.exactReferences;
+    delete rest.sourceReferences;
+    delete rest.testReferences;
+    delete rest.evidencePage;
     return {
         ...rest,
         edges: payload.edges.map(({ args: _args, ...edge }) => edge),

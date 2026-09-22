@@ -30,6 +30,19 @@ test('unquoted must: value with punctuation stays a single token', () => {
     assert.deepEqual(parsed.must, ['replace(tzinfo=None)']);
 });
 
+test('lang: aliases normalize through the canonical language registry', () => {
+    assert.deepEqual(parseSearchOperators('lang:py worker').lang, ['python']);
+    assert.deepEqual(parseSearchOperators('lang:python worker').lang, ['python']);
+    assert.deepEqual(parseSearchOperators('lang:ts worker').lang, ['typescript']);
+    assert.deepEqual(parseSearchOperators('lang:tsx worker').lang, ['typescript']);
+    assert.equal(parseSearchOperators('lang:py').semanticQuery, 'python');
+});
+
+test('lang: preserves unregistered normalized values instead of guessing', () => {
+    const parsed = parseSearchOperators('lang:NotARegisteredLanguage worker');
+    assert.deepEqual(parsed.lang, ['notaregisteredlanguage']);
+});
+
 test('query plans do not carry a numeric lexical relevance weight', () => {
     const parsed = parseSearchOperators('where is the search reranker order decided');
     const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);

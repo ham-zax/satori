@@ -113,9 +113,42 @@ function parseCursor(
 }
 
 function evidenceSummary(payload: CallGraphResponseEnvelope): CallGraphEvidenceSummaryResult {
-    const exactReferenceCount = payload.exactReferences?.length ?? 0;
+    const exactReferences = payload.exactReferences ?? [];
+    const exactReferenceCount = exactReferences.length;
     const sourceReferenceCount = payload.sourceReferences?.length ?? 0;
     const testReferenceCount = payload.testReferences?.length ?? 0;
+    const targetSymbolId = payload.symbolRef.symbolId;
+    const callEdges = payload.edges.filter((edge) => edge.kind === "call");
+    const inboundCallerOwnerIds = new Set(
+        callEdges
+            .filter((edge) => edge.dstSymbolId === targetSymbolId)
+            .map((edge) => edge.srcSymbolId),
+    );
+    const resolvedExactTargetReferences = exactReferences.filter((reference) => (
+        reference.relationship === "caller"
+        && reference.matchKind === "resolved_target"
+        && reference.decision === "resolved"
+    ));
+    const resolvedExactTargetReferencesWithOwner = resolvedExactTargetReferences.filter(
+        (reference) => Boolean(reference.sourceSymbolId),
+    );
+    const resolvedExactTargetReferenceOwnerIds = new Set(
+        resolvedExactTargetReferencesWithOwner.flatMap((reference) => (
+            reference.sourceSymbolId ? [reference.sourceSymbolId] : []
+        )),
+    );
+    const referenceOnlyOwnerCount = [...resolvedExactTargetReferenceOwnerIds]
+        .filter((sourceSymbolId) => !inboundCallerOwnerIds.has(sourceSymbolId))
+        .length;
+    const ownerlessResolvedExactTargetReferenceCount = resolvedExactTargetReferences
+        .filter((reference) => !reference.sourceSymbolId)
+        .length;
+    const ambiguousTargetReferenceCount = exactReferences.filter((reference) => (
+        reference.relationship === "caller" && reference.decision === "ambiguous"
+    )).length;
+    const unresolvedTargetReferenceCount = exactReferences.filter((reference) => (
+        reference.relationship === "caller" && reference.decision === "unresolved"
+    )).length;
     const constructGapCount = (payload.constructCoverage ?? [])
         .reduce((total, coverage) => total + coverage.gapCount, 0);
     const edgeArgumentEdgeCount = payload.edges.filter((edge) => (edge.args?.length ?? 0) > 0).length;
@@ -129,7 +162,16 @@ function evidenceSummary(payload: CallGraphResponseEnvelope): CallGraphEvidenceS
     if (edgeArgumentEdgeCount > 0) availableKinds.push("edge_arguments");
 
     return {
+        callEdgeCount: callEdges.length,
+        inboundCallerOwnerCount: inboundCallerOwnerIds.size,
         exactReferenceCount,
+        resolvedExactTargetReferenceCount: resolvedExactTargetReferences.length,
+        resolvedExactTargetReferenceWithOwnerCount: resolvedExactTargetReferencesWithOwner.length,
+        resolvedExactTargetReferenceOwnerCount: resolvedExactTargetReferenceOwnerIds.size,
+        referenceOnlyOwnerCount,
+        ownerlessResolvedExactTargetReferenceCount,
+        ambiguousTargetReferenceCount,
+        unresolvedTargetReferenceCount,
         sourceReferenceCount,
         testReferenceCount,
         constructGapCount,

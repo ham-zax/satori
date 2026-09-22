@@ -1,3 +1,4 @@
+import { normalizeLanguageId } from "@zokizuan/satori-core";
 import { SEARCH_OPERATOR_PREFIX_MAX_CHARS } from "./search-constants.js";
 import type {
     SearchIntentConfidence,
@@ -226,7 +227,7 @@ export function parseSearchOperators(query: string): ParsedSearchOperators {
         }
 
         if (key === "lang") {
-            operators.lang.push(value.toLowerCase());
+            operators.lang.push(normalizeLanguageId(value));
             continue;
         }
         if (key === "path") {

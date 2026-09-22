@@ -8,25 +8,30 @@ import {
 import type { CallGraphResponseEnvelope } from "./search-types.js";
 
 function payload(publicationId = "publication-1"): CallGraphResponseEnvelope {
-    const exactReferences = Array.from({ length: 3 }, (_, index) => ({
-        relationship: "caller" as const,
-        matchKind: "resolved_target" as const,
-        decision: "resolved" as const,
-        resolutionAuthority: "direct_binding" as const,
-        construct: "typed_member_call" as const,
-        providerId: "fixture",
-        providerVersion: "v1",
-        targetSymbolId: "target",
-        calleeName: "request",
-        calleeText: "client.request",
-        site: {
-            file: `tests/case-${index}.ts`,
-            startLine: index + 1,
-            startColumn: 0,
-            endColumn: 14,
-        },
-        candidates: [],
-    }));
+    const exactReferenceOwnerIds = ["caller", "reference-only-owner", undefined] as const;
+    const exactReferences = Array.from({ length: 3 }, (_, index) => {
+        const sourceSymbolId = exactReferenceOwnerIds[index];
+        return {
+            relationship: "caller" as const,
+            matchKind: "resolved_target" as const,
+            decision: "resolved" as const,
+            resolutionAuthority: "direct_binding" as const,
+            construct: "typed_member_call" as const,
+            providerId: "fixture",
+            providerVersion: "v1",
+            ...(sourceSymbolId ? { sourceSymbolId } : {}),
+            targetSymbolId: "target",
+            calleeName: "request",
+            calleeText: "client.request",
+            site: {
+                file: `tests/case-${index}.ts`,
+                startLine: index + 1,
+                startColumn: 0,
+                endColumn: 14,
+            },
+            candidates: [],
+        };
+    });
     return {
         status: "ok",
         supported: true,
@@ -133,7 +138,16 @@ test("call graph defaults to summary-only evidence", () => {
     assert.deepEqual(projected.constructCoverage?.[0]?.gapSpans, []);
     assert.equal(projected.constructCoverage?.[0]?.gapsTruncated, true);
     assert.deepEqual(projected.evidenceSummary, {
+        callEdgeCount: 1,
+        inboundCallerOwnerCount: 1,
         exactReferenceCount: 3,
+        resolvedExactTargetReferenceCount: 3,
+        resolvedExactTargetReferenceWithOwnerCount: 2,
+        resolvedExactTargetReferenceOwnerCount: 2,
+        referenceOnlyOwnerCount: 1,
+        ownerlessResolvedExactTargetReferenceCount: 1,
+        ambiguousTargetReferenceCount: 0,
+        unresolvedTargetReferenceCount: 0,
         sourceReferenceCount: 1,
         testReferenceCount: 1,
         constructGapCount: 2,
@@ -146,6 +160,54 @@ test("call graph defaults to summary-only evidence", () => {
             "edge_arguments",
         ],
     });
+});
+
+test("call graph summary distinguishes reference-only and ownerless exact target evidence", () => {
+    const input = payload();
+    input.edges = [];
+
+    const projected = projectCallGraphEvidence(input);
+
+    assert.equal(projected.exactReferences, undefined);
+    assert.equal(projected.evidenceSummary?.callEdgeCount, 0);
+    assert.equal(projected.evidenceSummary?.inboundCallerOwnerCount, 0);
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceCount, 3);
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceWithOwnerCount, 2);
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceOwnerCount, 2);
+    assert.equal(projected.evidenceSummary?.referenceOnlyOwnerCount, 2);
+    assert.equal(projected.evidenceSummary?.ownerlessResolvedExactTargetReferenceCount, 1);
+    assert.equal(projected.evidenceSummary?.sourceReferenceCount, 1);
+});
+
+test("call graph summary keeps ambiguous and unresolved target evidence separate from resolved references", () => {
+    const input = payload();
+    const resolvedReference = input.exactReferences?.[0];
+    assert.ok(resolvedReference);
+    input.exactReferences = [
+        ...(input.exactReferences ?? []),
+        {
+            ...resolvedReference,
+            matchKind: "candidate_target",
+            decision: "ambiguous",
+            resolutionAuthority: "ambiguous",
+            sourceSymbolId: "ambiguous-owner",
+        },
+        {
+            ...resolvedReference,
+            matchKind: "candidate_target",
+            decision: "unresolved",
+            resolutionAuthority: "unresolved",
+            sourceSymbolId: "unresolved-owner",
+        },
+    ];
+
+    const projected = projectCallGraphEvidence(input);
+
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceCount, 3);
+    assert.equal(projected.evidenceSummary?.ambiguousTargetReferenceCount, 1);
+    assert.equal(projected.evidenceSummary?.unresolvedTargetReferenceCount, 1);
+    assert.equal(projected.evidenceSummary?.inboundCallerOwnerCount, 1);
+    assert.equal(projected.evidenceSummary?.referenceOnlyOwnerCount, 1);
 });
 
 test("call graph evidence pages continue within the same publication", () => {

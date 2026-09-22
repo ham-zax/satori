@@ -1177,7 +1177,27 @@ export type CallGraphEvidenceKind =
     | "edge_arguments";
 
 export interface CallGraphEvidenceSummaryResult {
+    /** CALLS edges returned by this bounded graph traversal; exact references never increment this count. */
+    callEdgeCount: number;
+    /** Distinct canonical source-symbol owners with a returned CALLS edge directly into the requested target. */
+    inboundCallerOwnerCount: number;
+    /** All persisted semantic reference rows available for evidence paging in the requested direction. */
     exactReferenceCount: number;
+    /** Resolved persisted references whose exact target is the requested symbol. */
+    resolvedExactTargetReferenceCount: number;
+    /** Resolved exact target-reference rows that already carry a canonical source-symbol owner. */
+    resolvedExactTargetReferenceWithOwnerCount: number;
+    /** Distinct canonical source-symbol owners represented by resolved exact target references. */
+    resolvedExactTargetReferenceOwnerCount: number;
+    /** Distinct resolved exact-reference owners with no returned CALLS edge into the requested target. */
+    referenceOnlyOwnerCount: number;
+    /** Resolved exact target-reference rows for which no canonical source-symbol owner is available. */
+    ownerlessResolvedExactTargetReferenceCount: number;
+    /** Ambiguous semantic target evidence for the requested symbol; never counted as CALLS. */
+    ambiguousTargetReferenceCount: number;
+    /** Unresolved semantic target evidence for the requested symbol; never counted as CALLS. */
+    unresolvedTargetReferenceCount: number;
+    /** Publication-validated textual source occurrences; observational only. */
     sourceReferenceCount: number;
     testReferenceCount: number;
     constructGapCount: number;

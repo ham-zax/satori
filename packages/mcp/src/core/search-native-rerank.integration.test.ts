@@ -324,6 +324,31 @@ test("requested subdirectory is a hard scope before native provider admission", 
     assert.equal(outcome.filterSummary.removedByRequestedSubdirectory, 2);
 });
 
+test("lang alias filtering is a hard boundary before semantic reranker admission", async () => {
+    const providerCandidateIds: string[][] = [];
+    const reranker = buildReranker((documents) => reverseResults(documents), (_documents, candidateIds) => {
+        providerCandidateIds.push([...candidateIds]);
+    });
+    const results = [
+        candidate("typescript-a", "src/a.ts", 0.7),
+        candidate("typescript-b", "src/b.ts", 0.65),
+        { ...candidate("python", "src/c.py", 0.99), language: "python" },
+    ];
+    const outcome = await run(
+        buildInput("lang:ts how does the worker dispatch behavior"),
+        buildHost(results, reranker),
+    );
+
+    assert.equal(outcome.kind, "ok");
+    if (outcome.kind !== "ok") return;
+    assert.deepEqual(providerCandidateIds, [["typescript-a", "typescript-b"]]);
+    assert.equal(outcome.filterSummary.removedByLanguage, 1);
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["typescript-b", "typescript-a"],
+    );
+});
+
 test("root requests admit every candidate when no subdirectory is requested", async () => {
     const providerCandidateIds: string[][] = [];
     const reranker = buildReranker((documents) => reverseResults(documents), (_documents, candidateIds) => {

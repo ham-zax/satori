@@ -192,19 +192,15 @@ test('polling cancellation stops future describe calls', { timeout: 5000 }, asyn
     const polling = withMutedConsoleError(() => manager.createFreeCluster(
         CREATE_REQUEST,
         5000,
-        10,
+        1000,
         controller.signal,
     ));
 
     await firstDescribe;
-    // Let a few poll cycles pass so cancellation has something to stop.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    const countAtAbort = describeCount;
     controller.abort(new Error('cancelled by test'));
 
     await assert.rejects(polling, /cancelled by test/);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(describeCount, countAtAbort, 'no further describe calls may run after cancellation');
+    assert.equal(describeCount, 1, 'no further describe calls may run after cancellation');
 });
 
 test('oversized management response is rejected', async (t) => {

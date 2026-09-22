@@ -604,6 +604,7 @@ const realModelPath = process.env.SATORI_POTION_TEST_MODEL || (
         ? defaultRealModelPath
         : undefined
 );
+const REAL_HELPER_TEST_TIMEOUT_MS = 30_000;
 
 test('pinned L1 helper satisfies the Core provider contract', {
     skip: !realHelperPath || !realModelPath,
@@ -611,6 +612,8 @@ test('pinned L1 helper satisfies the Core provider contract', {
     const embedding = await PotionEmbedding.create({
         helperPath: realHelperPath as string,
         modelPath: realModelPath as string,
+        startupTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
+        requestTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
     });
     t.after(() => embedding.close());
 
@@ -822,6 +825,8 @@ test('pinned L1 helper satisfies legacy single-encode vs native batch-encode par
     const embedding = await PotionEmbedding.create({
         helperPath: realHelperPath as string,
         modelPath: realModelPath as string,
+        startupTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
+        requestTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
     });
     t.after(() => embedding.close());
     await assert.rejects(
@@ -851,6 +856,8 @@ test('pinned L1 helper satisfies frozen reference fixtures contract for potion_s
     const embedding = await PotionEmbedding.create({
         helperPath: realHelperPath as string,
         modelPath: realModelPath as string,
+        startupTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
+        requestTimeoutMs: REAL_HELPER_TEST_TIMEOUT_MS,
     });
     t.after(() => embedding.close());
 

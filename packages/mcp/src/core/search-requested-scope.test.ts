@@ -63,6 +63,15 @@ test("candidateWithinRequestedSubdirectory keeps sibling subdirectories disjoint
     assert.equal(candidateWithinRequestedSubdirectory("src/beta/b.ts", beta), true);
 });
 
+test("nested call graph target eligibility rejects symbols outside the requested subtree", () => {
+    const requested = resolveRequestedSearchSubdirectory({
+        indexedRoot: "/repo",
+        requestedPath: "/repo/packages/a",
+    });
+    assert.equal(candidateWithinRequestedSubdirectory("packages/a/src/target.ts", requested), true);
+    assert.equal(candidateWithinRequestedSubdirectory("packages/b/src/target.ts", requested), false);
+});
+
 test("candidateWithinRequestedSubdirectory rejects prefix collisions and escapes", () => {
     const scope = resolveRequestedSearchSubdirectory({
         indexedRoot: path.join(path.sep, "repo"),

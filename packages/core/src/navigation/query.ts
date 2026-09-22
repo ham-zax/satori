@@ -55,6 +55,7 @@ export interface GetGraphNeighborsInput extends GetRelationshipManifestInput {
     direction: 'callers' | 'callees' | 'both';
     allowedTypes?: RelationshipType[];
     allowedConfidences?: Array<RelationshipRecord['confidence']>;
+    recordFilter?: (record: RelationshipRecord) => boolean;
     limit?: number;
 }
 
@@ -588,6 +589,9 @@ async function traverseGraphNeighbors(
             }
 
             for (const record of recordList) {
+                if (input.recordFilter && !input.recordFilter(record)) {
+                    continue;
+                }
                 if (!matchesType(record, input.allowedTypes)) {
                     continue;
                 }

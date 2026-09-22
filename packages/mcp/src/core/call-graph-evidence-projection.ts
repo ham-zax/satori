@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import type {
     CallGraphEvidenceKind,
@@ -6,7 +7,7 @@ import type {
     CallGraphResponseEnvelope,
 } from "./search-types.js";
 
-const CALL_GRAPH_EVIDENCE_CURSOR_FORMAT_VERSION = 1 as const;
+const CALL_GRAPH_EVIDENCE_CURSOR_FORMAT_VERSION = 2 as const;
 const MAX_CALL_GRAPH_EVIDENCE_CURSOR_BYTES = 1_024;
 
 export interface CallGraphEvidenceRequest {
@@ -23,12 +24,13 @@ type CallGraphEvidenceCursor = {
     direction: "callers" | "callees" | "both";
     depth: number;
     graphLimit: number;
+    scopeIdentity: string;
     offset: number;
 };
 
 export class InvalidCallGraphEvidenceContinuationError extends Error {
     constructor() {
-        super("The call_graph evidence continuation is invalid for the current Publication.");
+        super("The call_graph evidence continuation is invalid for the current Publication and requested path scope.");
         this.name = "InvalidCallGraphEvidenceContinuationError";
     }
 }
@@ -58,6 +60,7 @@ function parseCursor(
         direction: "callers" | "callees" | "both";
         depth: number;
         graphLimit: number;
+        scopeIdentity: string;
     },
 ): CallGraphEvidenceCursor {
     if (
@@ -73,7 +76,7 @@ function parseCursor(
             parsed === null
             || typeof parsed !== "object"
             || Array.isArray(parsed)
-            || Object.keys(parsed).length !== 8
+            || Object.keys(parsed).length !== 9
             || parsed.formatVersion !== CALL_GRAPH_EVIDENCE_CURSOR_FORMAT_VERSION
             || parsed.publicationId !== expected.publicationId
             || parsed.symbolId !== expected.symbolId
@@ -81,6 +84,7 @@ function parseCursor(
             || parsed.direction !== expected.direction
             || parsed.depth !== expected.depth
             || parsed.graphLimit !== expected.graphLimit
+            || parsed.scopeIdentity !== expected.scopeIdentity
             || !isEvidenceKind(parsed.kind)
             || (parsed.direction !== "callers" && parsed.direction !== "callees" && parsed.direction !== "both")
             || !Number.isSafeInteger(parsed.depth)
@@ -100,6 +104,7 @@ function parseCursor(
             direction: parsed.direction,
             depth: Number(parsed.depth),
             graphLimit: Number(parsed.graphLimit),
+            scopeIdentity: parsed.scopeIdentity,
             offset: Number(parsed.offset),
         };
         if (serializeCursor(cursor) !== serialized) {
@@ -252,6 +257,12 @@ export function projectCallGraphEvidence(
     if (request.cursor && !publicationId) {
         throw new InvalidCallGraphEvidenceContinuationError();
     }
+    const scopeIdentity = crypto.createHash("sha256")
+        .update(serializeCanonicalJson({
+            path: payload.path,
+            codebaseRoot: payload.codebaseRoot ?? payload.path,
+        }), "utf8")
+        .digest("hex");
     const traversalIdentity = {
         publicationId: publicationId!,
         symbolId: payload.symbolRef.symbolId,
@@ -259,6 +270,7 @@ export function projectCallGraphEvidence(
         direction: payload.direction ?? "both",
         depth: payload.depth ?? 1,
         graphLimit: payload.limit ?? 20,
+        scopeIdentity,
     } as const;
     const offset = request.cursor
         ? parseCursor(request.cursor, traversalIdentity).offset

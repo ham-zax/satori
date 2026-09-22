@@ -1967,6 +1967,7 @@ export class ToolHandlers {
         direction: CallGraphDirection;
         depth: number;
         limit: number;
+        pathScope?: import("./navigation-path-scope.js").PublishedPathScope;
         readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
         findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
     }): Promise<RelationshipBackedCallGraphResult | null> {

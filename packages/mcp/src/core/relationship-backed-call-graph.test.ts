@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    buildSymbolRegistry,
     isTestOrFixturePath,
+    type RelationshipRecord,
     type SymbolRecord,
     type SymbolRegistry,
 } from "@zokizuan/satori-core";
@@ -11,6 +13,7 @@ import {
     shouldInspectInboundSourceReferences,
     uniqueInboundCallerSiteFile,
 } from "./relationship-backed-call-graph.js";
+import { projectCallGraphEvidence } from "./call-graph-evidence-projection.js";
 import type { CallGraphNoteResult as CallGraphNote } from "./search-types.js";
 
 test("uniqueInboundCallerSiteFile returns sole suppressed caller site, else undefined", () => {
@@ -368,4 +371,359 @@ test("call graph retains exact reference evidence beyond the legacy 100-row disc
     assert.equal(result!.exactReferences?.length, 125);
     assert.equal(result!.exactReferences?.[124]?.site.file, "tests/case-124.ts");
     assert.equal(result!.warnings?.includes("CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"), false);
+});
+
+test("call graph path scope excludes sibling graph and semantic evidence before summary and paging", async () => {
+    const symbol = (id: string, file: string, name: string): SymbolRecord => ({
+        symbolKey: `${id}-key`,
+        symbolInstanceId: id,
+        language: "typescript",
+        kind: "function",
+        qualifiedName: name,
+        name,
+        label: `function ${name}()`,
+        span: { startLine: 1, endLine: 3 },
+        parentQualifiedNamePath: [],
+        file,
+        fileHash: `${id}-hash`,
+        extractorVersion: "fixture",
+    });
+    const target = symbol("target-id", "packages/a/src/target.ts", "target");
+    const localCaller = symbol("local-caller-id", "packages/a/src/local-caller.ts", "localCaller");
+    const siblingCaller = symbol("sibling-caller-id", "packages/b/src/caller.ts", "siblingCaller");
+    const localTest = symbol("local-test-id", "packages/a/test/target.test.ts", "localTest");
+    const siblingTest = symbol("sibling-test-id", "packages/b/test/target.test.ts", "siblingTest");
+    const registry = buildSymbolRegistry({
+        manifest: { files: [] } as never,
+        symbols: [target, localCaller, siblingCaller, localTest, siblingTest],
+    });
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        files: [],
+    };
+    const callRecord = (source: SymbolRecord): RelationshipRecord => ({
+        sourceKey: source.symbolKey,
+        sourceInstanceId: source.symbolInstanceId,
+        targetKey: target.symbolKey,
+        targetInstanceId: target.symbolInstanceId,
+        type: "CALLS",
+        file: source.file,
+        span: { startLine: 2, endLine: 2 },
+        confidence: "high",
+        resolutionAuthority: "direct_binding",
+    });
+    const testRecord = (source: SymbolRecord): RelationshipRecord => ({
+        sourceKey: source.symbolKey,
+        sourceInstanceId: source.symbolInstanceId,
+        targetKey: target.symbolKey,
+        targetInstanceId: target.symbolInstanceId,
+        type: "TESTS",
+        file: source.file,
+        span: { startLine: 2, endLine: 2 },
+        confidence: "high",
+    });
+    const resolvedTargetMatch = (sourceFile: string, sourceInstanceId?: string) => ({
+        matchKind: "resolved_target" as const,
+        claim: {
+            providerId: "fixture",
+            providerVersion: "v1",
+            environmentConfigId: "fixture-env",
+            sourceFile,
+            ...(sourceInstanceId ? { sourceInstanceId } : {}),
+            targetInstanceId: target.symbolInstanceId,
+            targetSymbol: target.qualifiedName,
+            callSpan: {
+                startLine: 2,
+                endLine: 2,
+                startByte: 10,
+                endByte: 20,
+                startColumn: 0,
+                endColumn: 10,
+            },
+            observation: {
+                kind: "call" as const,
+                calleeName: "target",
+                calleeText: "target()",
+                construct: "direct_call" as const,
+                candidates: [],
+            },
+            decision: "resolved" as const,
+            relationshipType: "REFERENCES" as const,
+            resolutionAuthority: "direct_binding" as const,
+            proofSteps: [],
+            dependencyKeys: [],
+            flowHops: 0,
+        },
+    });
+    const sourceGapMatch = (sourceFile: string) => ({
+        matchKind: "source_call" as const,
+        claim: {
+            providerId: "fixture",
+            providerVersion: "v1",
+            environmentConfigId: "fixture-env",
+            sourceFile,
+            sourceInstanceId: target.symbolInstanceId,
+            callSpan: {
+                startLine: 2,
+                endLine: 2,
+                startByte: 30,
+                endByte: 40,
+                startColumn: 0,
+                endColumn: 10,
+            },
+            observation: {
+                kind: "call" as const,
+                calleeName: "missing",
+                calleeText: "missing()",
+                construct: "direct_call" as const,
+                candidates: [],
+            },
+            decision: "unresolved" as const,
+            relationshipType: "CALLS" as const,
+            resolutionAuthority: "unresolved" as const,
+            proofSteps: [],
+            dependencyKeys: [],
+            flowHops: 0,
+        },
+    });
+    const records = [
+        callRecord(localCaller),
+        callRecord(siblingCaller),
+        testRecord(localTest),
+        testRecord(siblingTest),
+    ];
+    const navigationStore = {
+        getManifest: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "registry-hash",
+            registryManifestHash: "registry-hash",
+            registry,
+            warnings: [],
+        }),
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            records,
+            analysisByFile: new Map(),
+            warnings: [],
+        }),
+        getResolutionEvidence: async (input: { sourceInstanceId?: string }) => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            matches: input.sourceInstanceId
+                ? [
+                    sourceGapMatch(target.file),
+                    sourceGapMatch("packages/b/src/foreign-source.ts"),
+                ]
+                : [
+                    resolvedTargetMatch(localCaller.file, localCaller.symbolInstanceId),
+                    resolvedTargetMatch(siblingCaller.file, siblingCaller.symbolInstanceId),
+                    resolvedTargetMatch("packages/a/src/ownerless.ts"),
+                    resolvedTargetMatch("packages/b/src/ownerless.ts"),
+                ],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 2,
+        limit: 20,
+        pathScope: { subtree: "packages/a" },
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result!.edges.map((edge) => edge.srcSymbolId), [localCaller.symbolInstanceId]);
+    assert.deepEqual(result!.nodes.map((node) => node.symbolId).sort(), [
+        localCaller.symbolInstanceId,
+        target.symbolInstanceId,
+    ].sort());
+    assert.deepEqual(result!.exactReferences?.map((reference) => reference.site.file), [
+        localCaller.file,
+        "packages/a/src/ownerless.ts",
+    ]);
+    assert.deepEqual(result!.testReferences?.map((reference) => reference.file), [localTest.file]);
+    assert.equal(result!.constructCoverage?.[0]?.gapCount, 1);
+    assert.equal(result!.constructCoverage?.[0]?.gapSpans[0]?.file, target.file);
+
+    const envelope = {
+        status: "ok" as const,
+        path: "/repo/packages/a",
+        codebaseRoot: "/repo",
+        symbolRef: { file: target.file, symbolId: target.symbolInstanceId },
+        navigationAuthority: {
+            publicationId: "publication-1",
+            relationshipManifestSha256: "relationship-hash",
+            relationshipBuiltAt: relationshipManifest.builtAt,
+            publicationCompletedAt: relationshipManifest.builtAt,
+        },
+        ...result!,
+    };
+    const projected = projectCallGraphEvidence(envelope);
+    assert.equal(projected.evidenceSummary?.callEdgeCount, 1);
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceCount, 2);
+    assert.equal(projected.evidenceSummary?.resolvedExactTargetReferenceOwnerCount, 1);
+    assert.equal(projected.evidenceSummary?.referenceOnlyOwnerCount, 0);
+    assert.equal(projected.evidenceSummary?.ownerlessResolvedExactTargetReferenceCount, 1);
+    assert.equal(projected.evidenceSummary?.testReferenceCount, 1);
+    assert.equal(projected.evidenceSummary?.constructGapCount, 1);
+
+    const firstPage = projectCallGraphEvidence(envelope, {
+        kind: "exact_references",
+        limit: 1,
+    });
+    assert.equal(firstPage.evidencePage?.availableCount, 2);
+    assert.match(
+        firstPage.evidencePage?.kind === "exact_references"
+            ? firstPage.evidencePage.items[0]?.site.file ?? ""
+            : "",
+        /^packages\/a\//,
+    );
+    const secondPage = projectCallGraphEvidence(envelope, {
+        kind: "exact_references",
+        limit: 1,
+        cursor: firstPage.evidencePage?.nextCursor,
+    });
+    assert.equal(secondPage.evidencePage?.returnedCount, 1);
+    assert.match(
+        secondPage.evidencePage?.kind === "exact_references"
+            ? secondPage.evidencePage.items[0]?.site.file ?? ""
+            : "",
+        /^packages\/a\//,
+    );
+
+    const rootResult = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 2,
+        limit: 20,
+    });
+    assert.ok(rootResult);
+    assert.deepEqual(rootResult!.edges.map((edge) => edge.srcSymbolId).sort(), [
+        localCaller.symbolInstanceId,
+        siblingCaller.symbolInstanceId,
+    ].sort());
+    assert.equal(rootResult!.exactReferences?.length, 4);
+    assert.equal(rootResult!.testReferences?.length, 2);
+});
+
+test("call graph path scope filters textual fallback references returned by the source floor", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "typescript",
+        kind: "function",
+        qualifiedName: "target",
+        name: "target",
+        label: "function target()",
+        span: { startLine: 1, endLine: 1 },
+        parentQualifiedNamePath: [],
+        file: "packages/a/src/target.ts",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = buildSymbolRegistry({
+        manifest: { files: [] } as never,
+        symbols: [target],
+    });
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        files: [],
+    };
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            records: [],
+            analysisByFile: new Map(),
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+        pathScope: { subtree: "packages/a" },
+        findExactSourceReferences: async () => ({
+            target: {
+                symbolId: target.symbolInstanceId,
+                symbolLabel: target.label,
+                name: target.name,
+                qualifiedName: target.qualifiedName,
+                file: target.file,
+                span: target.span,
+            },
+            references: [
+                {
+                    file: "packages/a/src/local.ts",
+                    span: { startLine: 2, endLine: 2, startColumn: 0, endColumn: 6 },
+                    occurrenceKind: "identifier",
+                    matchedText: "target",
+                    evidenceClass: "published_source_text",
+                },
+                {
+                    file: "packages/b/src/sibling.ts",
+                    span: { startLine: 3, endLine: 3, startColumn: 0, endColumn: 6 },
+                    occurrenceKind: "identifier",
+                    matchedText: "target",
+                    evidenceClass: "published_source_text",
+                },
+            ],
+            coverage: {
+                status: "complete",
+                publishedFileCount: 2,
+                eligibleFileCount: 1,
+                inspectedFileCount: 1,
+                skippedFileCount: 0,
+                matchedOccurrenceCount: 1,
+                returnedOccurrenceCount: 1,
+                reasons: [],
+            },
+        }),
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.file), [
+        "packages/a/src/local.ts",
+    ]);
+    assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCount, 1);
 });

@@ -27,6 +27,10 @@ import {
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
 import type { ExactReferenceSearchResult } from "./exact-reference-search.js";
+import {
+    matchesPublishedPathScope,
+    type PublishedPathScope,
+} from "./navigation-path-scope.js";
 import { buildInboundVerificationSearchQuery } from "./search-response-helpers.js";
 
 type RelationshipBackedCallGraphHost = {
@@ -44,6 +48,7 @@ export type RelationshipBackedCallGraphInput = {
     direction: CallGraphDirection;
     depth: number;
     limit: number;
+    pathScope?: PublishedPathScope;
     /**
      * Publication-authorized source reader for the Python source-backed
      * fallback. When absent the dynamic fallback is SKIPPED entirely (no
@@ -190,6 +195,50 @@ export function uniqueInboundCallerSiteFile(notes: readonly CallGraphNote[]): st
     return [...preferred][0];
 }
 
+function hasPublishedPathScope(scope: PublishedPathScope | undefined): scope is PublishedPathScope {
+    return Boolean(
+        scope?.subtree
+        || (scope?.includePaths?.length ?? 0) > 0
+        || (scope?.excludePaths?.length ?? 0) > 0
+    );
+}
+
+function relationshipWithinPathScope(
+    record: RelationshipRecord,
+    registry: SymbolRegistry,
+    scope: PublishedPathScope | undefined,
+): boolean {
+    if (!hasPublishedPathScope(scope)) return true;
+    if (!matchesPublishedPathScope(record.file, scope)) return false;
+    if (record.sourceInstanceId) {
+        const source = registry.symbolsByInstanceId.get(record.sourceInstanceId);
+        if (!source || !matchesPublishedPathScope(source.file, scope)) return false;
+    }
+    if (record.targetInstanceId) {
+        const target = registry.symbolsByInstanceId.get(record.targetInstanceId);
+        if (!target || !matchesPublishedPathScope(target.file, scope)) return false;
+    }
+    return true;
+}
+
+function resolutionEvidenceWithinPathScope(
+    match: NavigationResolutionEvidenceMatch,
+    registry: SymbolRegistry,
+    scope: PublishedPathScope | undefined,
+): boolean {
+    if (!hasPublishedPathScope(scope)) return true;
+    if (!matchesPublishedPathScope(match.claim.sourceFile, scope)) return false;
+    if (
+        match.matchKind === "source_call"
+        && match.claim.decision === "resolved"
+        && match.claim.targetInstanceId
+    ) {
+        const target = registry.symbolsByInstanceId.get(match.claim.targetInstanceId);
+        if (!target || !matchesPublishedPathScope(target.file, scope)) return false;
+    }
+    return true;
+}
+
 const MAX_DETAILED_TEST_SUPPRESSED_CALLER_NOTES = 3;
 const INBOUND_COVERAGE_PARTIAL_WARNING = "CALL_GRAPH_INBOUND_COVERAGE_PARTIAL";
 
@@ -297,11 +346,18 @@ export class RelationshipBackedCallGraph {
         matches: readonly NavigationResolutionEvidenceMatch[];
         relationship: "caller" | "callee";
         registry: SymbolRegistry;
+        pathScope?: PublishedPathScope;
         targetSymbolId?: string;
     }): CallGraphExactReference[] {
         const references = input.matches.map(({ claim, matchKind }): CallGraphExactReference => {
             const source = claim.sourceInstanceId
                 ? input.registry.symbolsByInstanceId.get(claim.sourceInstanceId)
+                : undefined;
+            const scopedSource = source && (
+                !hasPublishedPathScope(input.pathScope)
+                || matchesPublishedPathScope(source.file, input.pathScope)
+            )
+                ? source
                 : undefined;
             return {
                 relationship: input.relationship,
@@ -311,8 +367,8 @@ export class RelationshipBackedCallGraph {
                 construct: claim.observation.construct,
                 providerId: claim.providerId,
                 providerVersion: claim.providerVersion,
-                ...(claim.sourceInstanceId ? { sourceSymbolId: claim.sourceInstanceId } : {}),
-                ...(source?.label ? { sourceSymbolLabel: source.label } : {}),
+                ...(scopedSource ? { sourceSymbolId: scopedSource.symbolInstanceId } : {}),
+                ...(scopedSource?.label ? { sourceSymbolLabel: scopedSource.label } : {}),
                 ...(input.targetSymbolId
                     ? { targetSymbolId: input.targetSymbolId }
                     : claim.targetInstanceId
@@ -329,16 +385,19 @@ export class RelationshipBackedCallGraph {
                     startColumn: claim.callSpan.startColumn,
                     endColumn: claim.callSpan.endColumn,
                 },
-                candidates: claim.observation.candidates.map((candidate) => ({
-                    ...(candidate.symbolInstanceId ? { symbolId: candidate.symbolInstanceId } : {}),
-                    ...(candidate.qualifiedName ? { qualifiedName: candidate.qualifiedName } : {}),
-                    name: candidate.name,
-                    file: candidate.file,
-                    span: {
-                        startLine: candidate.span.startLine,
-                        endLine: candidate.span.endLine,
-                    },
-                })),
+                candidates: claim.observation.candidates
+                    .filter((candidate) => !hasPublishedPathScope(input.pathScope)
+                        || matchesPublishedPathScope(candidate.file, input.pathScope))
+                    .map((candidate) => ({
+                        ...(candidate.symbolInstanceId ? { symbolId: candidate.symbolInstanceId } : {}),
+                        ...(candidate.qualifiedName ? { qualifiedName: candidate.qualifiedName } : {}),
+                        name: candidate.name,
+                        file: candidate.file,
+                        span: {
+                            startLine: candidate.span.startLine,
+                            endLine: candidate.span.endLine,
+                        },
+                    })),
             };
         });
         return this.sortExactReferences(references);
@@ -520,6 +579,13 @@ export class RelationshipBackedCallGraph {
             depth: input.depth,
             direction: input.direction,
             allowedTypes: ["CALLS"],
+            ...(hasPublishedPathScope(input.pathScope)
+                ? {
+                    recordFilter: (record: RelationshipRecord) => (
+                        relationshipWithinPathScope(record, input.registry, input.pathScope)
+                    ),
+                }
+                : {}),
             limit: input.limit,
         });
         if (neighbors.status !== "ok") {
@@ -550,8 +616,14 @@ export class RelationshipBackedCallGraph {
         if (testRelationshipResult.status !== "ok" || sourceCallRelationshipResult.status !== "ok") {
             return null;
         }
+        const scopedTestRelationships = testRelationshipResult.records.filter((record) => (
+            relationshipWithinPathScope(record, input.registry, input.pathScope)
+        ));
+        const scopedSourceCallRelationships = sourceCallRelationshipResult.records.filter((record) => (
+            relationshipWithinPathScope(record, input.registry, input.pathScope)
+        ));
         const testReferences = this.buildTestReferences(
-            testRelationshipResult.records,
+            scopedTestRelationships,
             input.registry,
             input.resolvedSymbol.symbolInstanceId,
         );
@@ -575,18 +647,26 @@ export class RelationshipBackedCallGraph {
         if (sourceEvidence.status !== "ok" || inboundEvidence.status !== "ok") {
             return null;
         }
+        const sourceEvidenceMatches = sourceEvidence.matches.filter((match) => (
+            resolutionEvidenceWithinPathScope(match, input.registry, input.pathScope)
+        ));
+        const inboundEvidenceMatches = inboundEvidence.matches.filter((match) => (
+            resolutionEvidenceWithinPathScope(match, input.registry, input.pathScope)
+        ));
         const outboundExactReferences = (input.direction === "callees" || input.direction === "both")
             ? this.buildExactReferences({
-                matches: sourceEvidence.matches,
+                matches: sourceEvidenceMatches,
                 relationship: "callee",
                 registry: input.registry,
+                pathScope: input.pathScope,
             })
             : [];
         const inboundExactReferences = (input.direction === "callers" || input.direction === "both")
             ? this.buildExactReferences({
-                matches: inboundEvidence.matches,
+                matches: inboundEvidenceMatches,
                 relationship: "caller",
                 registry: input.registry,
+                pathScope: input.pathScope,
                 targetSymbolId: input.resolvedSymbol.symbolInstanceId,
             })
             : [];
@@ -595,10 +675,10 @@ export class RelationshipBackedCallGraph {
             ...inboundExactReferences,
         ]);
         const constructCoverage = summarizeResolutionConstructCoverage(
-            sourceEvidence.matches.map((match) => match.claim),
+            sourceEvidenceMatches.map((match) => match.claim),
             {
                 gapLimit: Number.MAX_SAFE_INTEGER,
-                relationships: sourceCallRelationshipResult.records,
+                relationships: scopedSourceCallRelationships,
             },
         );
 
@@ -770,7 +850,17 @@ export class RelationshipBackedCallGraph {
             ? await input.findExactSourceReferences(input.resolvedSymbol)
             : undefined;
         const sourceReferences: CallGraphSourceReference[] = (exactSourceResult?.references ?? [])
-            .filter((reference) => reference.occurrenceKind !== "declaration")
+            .filter((reference) => (
+                reference.occurrenceKind !== "declaration"
+                && (!hasPublishedPathScope(input.pathScope)
+                    || (
+                        matchesPublishedPathScope(reference.file, input.pathScope)
+                        && (
+                            !reference.owningSymbol
+                            || matchesPublishedPathScope(reference.owningSymbol.file, input.pathScope)
+                        )
+                    ))
+            ))
             .map((reference) => ({
                 relationship: "caller" as const,
                 evidenceClass: reference.evidenceClass,

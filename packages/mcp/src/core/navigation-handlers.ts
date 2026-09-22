@@ -49,6 +49,11 @@ import {
     projectCallGraphEvidence,
     type CallGraphEvidenceRequest,
 } from "./call-graph-evidence-projection.js";
+import type { PublishedPathScope } from "./navigation-path-scope.js";
+import {
+    candidateWithinRequestedSubdirectory,
+    resolveRequestedSearchSubdirectory,
+} from "./search-requested-scope.js";
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
@@ -214,6 +219,7 @@ type NavigationHandlersHost = {
         direction: CallGraphDirection;
         depth: number;
         limit: number;
+        pathScope?: PublishedPathScope;
         readAuthorizedSourceLines?: (codebaseRoot: string, relativeFilePath: string) => Promise<string[] | undefined>;
         findExactSourceReferences?: (target: SymbolRecord) => Promise<ExactReferenceSearchResult>;
     }): Promise<RelationshipBackedCallGraphResult | null>;
@@ -258,13 +264,14 @@ function buildSourceStateUnverifiedCallGraphPayload(
         direction: CallGraphDirection;
         depth: number;
         limit: number;
+        requestedPath?: string;
     },
 ): CallGraphResponseEnvelope {
     return {
         status: "not_ready",
         supported: true,
         reason: "source_state_unverified",
-        path: codebasePath,
+        path: context.requestedPath ?? codebasePath,
         codebaseRoot: codebasePath,
         symbolRef: context.symbolRef,
         direction: context.direction,
@@ -1387,6 +1394,13 @@ export class NavigationHandlers {
             const searchableRoot = leasedRootState.root;
             effectiveRoot = searchableRoot.path;
             const proofDebugHint = leasedRootState.proofDebugHint;
+            const requestedSubdirectory = resolveRequestedSearchSubdirectory({
+                indexedRoot: effectiveRoot,
+                requestedPath: absolutePath,
+            });
+            const callGraphPathScope: PublishedPathScope | undefined = requestedSubdirectory
+                ? { subtree: requestedSubdirectory.relativePrefix }
+                : undefined;
 
             if (this.host.isPartialIndexNavigationUnavailable(searchableRoot.info)) {
                 const payload = this.host.withProofDebugHint(this.host.toolResponseBuilders.buildRequiresReindexCallGraphPayload(
@@ -1407,6 +1421,26 @@ export class NavigationHandlers {
             }
 
             const normalizedSymbolFile = this.host.normalizeRelativeFilePath(symbolRef.file);
+            if (!candidateWithinRequestedSubdirectory(normalizedSymbolFile, requestedSubdirectory)) {
+                const payload = withNavigationFreshness(this.host.withProofDebugHint({
+                    status: "not_found" as const,
+                    path: absolutePath,
+                    codebaseRoot: effectiveRoot,
+                    symbolRef,
+                    supported: false,
+                    reason: "missing_symbol",
+                    message: `Symbol '${normalizedSymbolFile}' is outside the requested call_graph path scope '${absolutePath}'.`,
+                    nodes: [],
+                    edges: [],
+                    notes: [],
+                    notesTruncated: false,
+                    totalNoteCount: 0,
+                    returnedNoteCount: 0,
+                } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                };
+            }
             const registryState = await this.host.loadPreparedNavigationSymbolsByFile(
                 leasedRootState,
                 normalizedSymbolFile,
@@ -1483,6 +1517,9 @@ export class NavigationHandlers {
                 codebaseRoot: string,
                 relativeFilePath: string,
             ): Promise<string[] | undefined> => {
+                if (!candidateWithinRequestedSubdirectory(relativeFilePath, requestedSubdirectory)) {
+                    return undefined;
+                }
                 try {
                     const sourceRead = await readAuthorizedPublishedSource({
                         workspacePolicy,
@@ -1544,6 +1581,7 @@ export class NavigationHandlers {
                 findExactPublishedSourceReferences({
                     registry: registryState.registry,
                     target,
+                    ...(callGraphPathScope ? { scope: callGraphPathScope } : {}),
                     limit: Number.MAX_SAFE_INTEGER,
                     readPublishedSource: readExactPublishedSource,
                 })
@@ -1710,6 +1748,7 @@ export class NavigationHandlers {
                 direction,
                 depth,
                 limit,
+                ...(callGraphPathScope ? { pathScope: callGraphPathScope } : {}),
                 readAuthorizedSourceLines,
                 findExactSourceReferences,
             });
@@ -1768,7 +1807,8 @@ export class NavigationHandlers {
             });
             const fullPayload = withNavigationFreshness(this.host.withProofDebugHint({
                 status: "ok" as const,
-                path: effectiveRoot,
+                path: absolutePath,
+                codebaseRoot: effectiveRoot,
                 symbolRef,
                 ...(navigationAuthority ? { navigationAuthority } : {}),
                 ...relationshipBackedGraph,
@@ -1784,7 +1824,7 @@ export class NavigationHandlers {
                         buildSourceStateUnverifiedCallGraphPayload(
                             this.host,
                             effectiveRoot,
-                            { symbolRef, direction, depth, limit },
+                            { symbolRef, direction, depth, limit, requestedPath: absolutePath },
                         ),
                     ) }],
                 }

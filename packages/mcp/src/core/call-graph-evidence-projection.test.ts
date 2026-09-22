@@ -256,6 +256,50 @@ test("call graph evidence pages continue within the same publication", () => {
     );
 });
 
+test("call graph evidence continuations are bound to the requested path scope", () => {
+    const scoped = {
+        ...payload(),
+        path: "/repo/packages/a",
+        codebaseRoot: "/repo",
+    };
+    const first = projectCallGraphEvidence(scoped, {
+        kind: "exact_references",
+        limit: 1,
+    });
+    const cursor = first.evidencePage?.nextCursor;
+    assert.ok(cursor);
+
+    assert.throws(
+        () => projectCallGraphEvidence({
+            ...scoped,
+            path: "/repo/packages/b",
+        }, {
+            kind: "exact_references",
+            limit: 1,
+            cursor,
+        }),
+        InvalidCallGraphEvidenceContinuationError,
+    );
+    assert.throws(
+        () => projectCallGraphEvidence({
+            ...scoped,
+            path: "/repo",
+        }, {
+            kind: "exact_references",
+            limit: 1,
+            cursor,
+        }),
+        InvalidCallGraphEvidenceContinuationError,
+    );
+
+    const next = projectCallGraphEvidence(scoped, {
+        kind: "exact_references",
+        limit: 1,
+        cursor,
+    });
+    assert.equal(next.evidencePage?.returnedCount, 1);
+});
+
 test("call graph pages construct gaps and edge arguments without duplicating them in the summary", () => {
     const gaps = projectCallGraphEvidence(payload(), {
         kind: "construct_gaps",

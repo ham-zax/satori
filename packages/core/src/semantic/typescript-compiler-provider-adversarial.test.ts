@@ -18,6 +18,16 @@ export class StructuralB {
     structuralOnly(): void {}
 }
 
+export class ProjectWideDecoyA {
+    request(): string { return 'decoy-a'; }
+    structuralOnly(): void {}
+}
+
+export class ProjectWideDecoyB {
+    request(): string { return 'decoy-b'; }
+    structuralOnly(): void {}
+}
+
 export interface Contract {
     request(): string;
 }
@@ -74,6 +84,10 @@ export function localOrigins(flag: boolean): void {
         closureWrite = new StructuralB();
     })();
     closureWrite.request();
+
+    let destructuredWrite: StructuralA = new StructuralA();
+    [destructuredWrite] = [new StructuralB()];
+    destructuredWrite.request();
 
     const holder: { worker: StructuralA } = { worker: new StructuralB() };
     holder.worker.request();
@@ -218,6 +232,13 @@ test('unproven aliases, nested member origins, destructuring, and externally sup
         const call = allCalls.find((item) => item.calleeText === calleeText);
         assert.equal(call?.decision, 'ambiguous', calleeText);
     }
+
+    const destructuredWrite = callByText(evidence, 'destructuredWrite.request');
+    assert.equal(destructuredWrite.decision, 'ambiguous');
+    assert.deepEqual(
+        destructuredWrite.candidates?.map((target) => target.ownerName).sort(),
+        ['ProjectWideDecoyA', 'ProjectWideDecoyB', 'StructuralA', 'StructuralB'],
+    );
 
     const fieldCalls = allCalls.filter((call) => call.calleeText === 'this.worker.request');
     assert.equal(fieldCalls.length, 3);

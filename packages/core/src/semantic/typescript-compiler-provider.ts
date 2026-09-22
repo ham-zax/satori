@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v3';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v4';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -674,6 +674,151 @@ function immutableLocalOriginCandidates(
     };
 }
 
+function enclosingFunctionLike(node: ts.Node): ts.FunctionLikeDeclaration | undefined {
+    let current: ts.Node | undefined = node.parent;
+    while (current && !ts.isSourceFile(current)) {
+        if (
+            ts.isFunctionDeclaration(current)
+            || ts.isMethodDeclaration(current)
+            || ts.isConstructorDeclaration(current)
+            || ts.isGetAccessorDeclaration(current)
+            || ts.isSetAccessorDeclaration(current)
+            || ts.isFunctionExpression(current)
+            || ts.isArrowFunction(current)
+        ) {
+            return current;
+        }
+        current = current.parent;
+    }
+    return undefined;
+}
+
+function nodeReferencesSymbol(
+    checker: ts.TypeChecker,
+    node: ts.Node,
+    symbol: ts.Symbol,
+): boolean {
+    let found = false;
+    const visit = (current: ts.Node): void => {
+        if (found) return;
+        if (ts.isIdentifier(current) && symbolAtIdentifier(checker, current) === symbol) {
+            found = true;
+            return;
+        }
+        ts.forEachChild(current, visit);
+    };
+    visit(node);
+    return found;
+}
+
+function mutableLocalOriginCandidates(
+    checker: ts.TypeChecker,
+    receiver: ts.Expression,
+    propertyName: string,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): CandidateSet | undefined {
+    if (!ts.isIdentifier(receiver)) return undefined;
+
+    const symbol = symbolAtIdentifier(checker, receiver);
+    const declaration = symbol?.valueDeclaration;
+    if (
+        !symbol
+        || !declaration
+        || !ts.isVariableDeclaration(declaration)
+        || !ts.isVariableDeclarationList(declaration.parent)
+        || (declaration.parent.flags & ts.NodeFlags.Let) === 0
+    ) {
+        return undefined;
+    }
+
+    const owner = enclosingFunctionLike(declaration);
+    if (!owner?.body) return undefined;
+
+    const targets: TypeScriptSemanticTarget[] = [];
+    let complete = true;
+    const collect = (expression: ts.Expression): void => {
+        const assignedTargets = assignmentTargetsForExpression(
+            checker,
+            expression,
+            propertyName,
+            projectFilesByVirtualPath,
+        );
+        if (!assignedTargets || assignedTargets.length === 0) {
+            complete = false;
+            return;
+        }
+        targets.push(...assignedTargets);
+    };
+
+    if (declaration.initializer) collect(declaration.initializer);
+    if (!complete) return undefined;
+
+    const visit = (node: ts.Node): void => {
+        if (!complete) return;
+
+        if (
+            ts.isCallExpression(node)
+            && ts.isIdentifier(node.expression)
+            && node.expression.text === 'eval'
+        ) {
+            complete = false;
+            return;
+        }
+
+        if (
+            ts.isBinaryExpression(node)
+            && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+            && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+            && nodeReferencesSymbol(checker, node.left, symbol)
+        ) {
+            if (
+                node.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+                || !ts.isIdentifier(node.left)
+                || symbolAtIdentifier(checker, node.left) !== symbol
+            ) {
+                complete = false;
+                return;
+            }
+            collect(node.right);
+            if (!complete) return;
+        }
+
+        if (
+            (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+            && (node.operator === ts.SyntaxKind.PlusPlusToken
+                || node.operator === ts.SyntaxKind.MinusMinusToken)
+            && nodeReferencesSymbol(checker, node.operand, symbol)
+        ) {
+            complete = false;
+            return;
+        }
+
+        if (
+            (ts.isForInStatement(node) || ts.isForOfStatement(node))
+            && !ts.isVariableDeclarationList(node.initializer)
+            && nodeReferencesSymbol(checker, node.initializer, symbol)
+        ) {
+            complete = false;
+            return;
+        }
+
+        ts.forEachChild(node, visit);
+    };
+    visit(owner.body);
+
+    if (!complete) return undefined;
+
+    const unique = uniqueTargets(targets);
+    // Mutable-origin evidence is candidate-only. A single observed origin does
+    // not establish a new authoritative runtime target.
+    if (unique.length < 2) return undefined;
+    return {
+        decision: 'ambiguous',
+        reason: 'multiple_executable_targets',
+        targets: unique,
+    };
+}
+
 function memberCandidates(
     checker: ts.TypeChecker,
     call: ts.CallExpression | ts.NewExpression,
@@ -767,6 +912,19 @@ function memberCandidates(
     if (originCandidates) {
         return {
             ...originCandidates,
+            receiverType: receiverTypeText,
+        };
+    }
+
+    const mutableOriginCandidates = mutableLocalOriginCandidates(
+        checker,
+        receiver,
+        propertyName,
+        projectFilesByVirtualPath,
+    );
+    if (mutableOriginCandidates) {
+        return {
+            ...mutableOriginCandidates,
             receiverType: receiverTypeText,
         };
     }

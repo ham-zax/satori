@@ -82,11 +82,19 @@ test('package ownership persists with the Publication and reopens without reposi
         assert.ok(ownership);
         assert.equal(ownership.workspace?.kind, 'pnpm');
         assert.equal(
+            ownership.packages.find((entry) => entry.root === '')?.name,
+            'workspace-root',
+        );
+        assert.equal(
             ownership.packages.find((entry) => entry.root === 'packages/a')?.name,
             '@fixture/a',
         );
         assert.equal(ownerFor(ownership, 'packages/a/src/a.py'), 'packages/a');
-        assert.equal(ownerFor(ownership, 'repository.py'), null);
+        assert.equal(ownerFor(ownership, 'repository.py'), '');
+        assert.equal(
+            ownership.controlFiles.some(([filePath]) => filePath === 'package.json'),
+            true,
+        );
 
         const persistedPath = path.join(
             resolvePublicationGenerationRoot(root, current.id),
@@ -105,6 +113,10 @@ test('package ownership persists with the Publication and reopens without reposi
         assert.deepEqual(
             first.context.getPublicationPackageOwnership(reopenedPublication),
             expected,
+        );
+        assert.equal(
+            (await first.context.getCurrentPublicationForValidation(root)).status,
+            'valid',
         );
     } finally {
         await first.context.dispose();
@@ -166,6 +178,218 @@ test('incremental sync reassigns unchanged files when a nested workspace package
             false,
         );
         assert.equal(ownerFor(restoredOwnership, 'packages/a/plugins/b/src/b.py'), 'packages/a');
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('root package identity changes refresh ownership without ordinary source changes', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-package-root-refresh-'));
+    const root = path.join(tempRoot, 'repo');
+    const databasePath = path.join(tempRoot, 'vectors');
+
+    writeFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n");
+    writeFile(root, 'package.json', JSON.stringify({ name: 'root-before', private: true }));
+    writeFile(root, 'packages/a/package.json', JSON.stringify({ name: '@fixture/a' }));
+    writeFile(root, 'repository.py', 'def repository():\n    return 1\n');
+
+    const fixture = createContext(databasePath);
+    try {
+        await fixture.context.indexCodebase(root);
+        const before = fixture.context.getCurrentPublication(root);
+        assert.ok(before);
+        const beforeOwnership = fixture.context.getPublicationPackageOwnership(before);
+        assert.ok(beforeOwnership);
+        const beforeRootControlHash = beforeOwnership.controlFiles
+            .find(([filePath]) => filePath === 'package.json')?.[1];
+        assert.ok(beforeRootControlHash);
+        assert.equal(
+            beforeOwnership.packages.find((entry) => entry.root === '')?.name,
+            'root-before',
+        );
+
+        writeFile(root, 'package.json', JSON.stringify({ name: 'root-after', private: true }));
+        await fixture.context.reindexByChange(root);
+
+        const after = fixture.context.getCurrentPublication(root);
+        assert.ok(after);
+        assert.notEqual(after.id, before.id);
+        const afterOwnership = fixture.context.getPublicationPackageOwnership(after);
+        assert.ok(afterOwnership);
+        assert.equal(
+            afterOwnership.packages.find((entry) => entry.root === '')?.name,
+            'root-after',
+        );
+        assert.equal(ownerFor(afterOwnership, 'repository.py'), '');
+        assert.notEqual(
+            afterOwnership.controlFiles.find(([filePath]) => filePath === 'package.json')?.[1],
+            beforeRootControlHash,
+        );
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('workspace membership transitions synchronize in both searchability directions', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-package-membership-sync-'));
+    const root = path.join(tempRoot, 'repo');
+    const databasePath = path.join(tempRoot, 'vectors');
+
+    writeFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'packages/**'\n");
+    writeFile(root, 'packages/a/package.json', JSON.stringify({ name: '@fixture/a' }));
+    writeFile(root, 'packages/a/src/a.py', 'def a():\n    return 1\n');
+
+    const fixture = createContext(databasePath);
+    try {
+        await fixture.context.indexCodebase(root);
+        const initial = fixture.context.getCurrentPublication(root);
+        assert.ok(initial);
+        const initialOwnership = fixture.context.getPublicationPackageOwnership(initial);
+        assert.ok(initialOwnership);
+        assert.equal(ownerFor(initialOwnership, 'packages/a/src/a.py'), 'packages/a');
+        assert.equal(
+            initialOwnership.files.some((entry) => entry.path === 'packages/a/package.json'),
+            false,
+        );
+
+        writeFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'other/**'\n");
+        await fixture.context.reindexByChange(root);
+
+        const removed = fixture.context.getCurrentPublication(root);
+        assert.ok(removed);
+        assert.notEqual(removed.id, initial.id);
+        const removedOwnership = fixture.context.getPublicationPackageOwnership(removed);
+        assert.ok(removedOwnership);
+        assert.equal(
+            removedOwnership.packages.some((entry) => entry.root === 'packages/a'),
+            false,
+        );
+        assert.equal(ownerFor(removedOwnership, 'packages/a/src/a.py'), null);
+        assert.equal(
+            ownerFor(removedOwnership, 'packages/a/package.json'),
+            null,
+        );
+
+        writeFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'packages/**'\n");
+        await fixture.context.reindexByChange(root);
+
+        const restored = fixture.context.getCurrentPublication(root);
+        assert.ok(restored);
+        assert.notEqual(restored.id, removed.id);
+        const restoredOwnership = fixture.context.getPublicationPackageOwnership(restored);
+        assert.ok(restoredOwnership);
+        assert.equal(
+            restoredOwnership.packages.find((entry) => entry.root === 'packages/a')?.name,
+            '@fixture/a',
+        );
+        assert.equal(ownerFor(restoredOwnership, 'packages/a/src/a.py'), 'packages/a');
+        assert.equal(
+            restoredOwnership.files.some((entry) => entry.path === 'packages/a/package.json'),
+            false,
+        );
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('read admission rejects semantically corrupt or unbound package ownership sidecars', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-package-corruption-'));
+    const root = path.join(tempRoot, 'repo');
+    const databasePath = path.join(tempRoot, 'vectors');
+
+    writeFile(root, 'pnpm-workspace.yaml', "packages:\n  - 'packages/**'\n");
+    writeFile(root, 'package.json', JSON.stringify({ name: '@fixture/root' }));
+    writeFile(root, 'packages/a/package.json', JSON.stringify({ name: '@fixture/a' }));
+    writeFile(root, 'packages/a/plugins/b/package.json', JSON.stringify({ name: '@fixture/b' }));
+    writeFile(root, 'root.py', 'def root():\n    return 1\n');
+    writeFile(root, 'packages/a/a.py', 'def a():\n    return 1\n');
+    writeFile(root, 'packages/a/plugins/b/b.py', 'def b():\n    return 1\n');
+
+    const fixture = createContext(databasePath);
+    try {
+        await fixture.context.indexCodebase(root);
+        const current = fixture.context.getCurrentPublication(root);
+        assert.ok(current);
+        assert.equal(
+            (await fixture.context.getCurrentPublicationForValidation(root)).status,
+            'valid',
+        );
+
+        const ownershipPath = path.join(
+            resolvePublicationGenerationRoot(root, current.id),
+            'ownership.json',
+        );
+        const originalSource = fs.readFileSync(ownershipPath, 'utf8');
+        const original = JSON.parse(originalSource) as {
+            packages: Array<{
+                root: string;
+                manifestPath: string;
+            }>;
+            files: Array<{
+                path: string;
+                packageRoot: string | null;
+            }>;
+        };
+
+        const expectRequiresReindex = async (mutate: (value: typeof original) => void) => {
+            const corrupted = structuredClone(original);
+            mutate(corrupted);
+            fs.writeFileSync(ownershipPath, JSON.stringify(corrupted, null, 2) + '\n');
+            assert.equal(
+                (await fixture.context.getCurrentPublicationForValidation(root)).status,
+                'requires_reindex',
+            );
+            fs.writeFileSync(ownershipPath, originalSource);
+        };
+
+        await expectRequiresReindex((corrupted) => {
+            const file = corrupted.files.find((entry) => entry.path === 'root.py');
+            assert.ok(file);
+            file.packageRoot = null;
+        });
+
+        await expectRequiresReindex((corrupted) => {
+            const file = corrupted.files.find(
+                (entry) => entry.path === 'packages/a/plugins/b/b.py',
+            );
+            assert.ok(file);
+            file.packageRoot = 'packages/a';
+        });
+
+        await expectRequiresReindex((corrupted) => {
+            const pkg = corrupted.packages.find((entry) => entry.root === 'packages/a/plugins/b');
+            assert.ok(pkg);
+            pkg.manifestPath = 'packages/a/package.json';
+        });
+
+        await expectRequiresReindex((corrupted) => {
+            corrupted.files = corrupted.files.filter((entry) => entry.path !== 'root.py');
+        });
+
+        fs.unlinkSync(ownershipPath);
+        assert.equal(
+            (await fixture.context.getCurrentPublicationForValidation(root)).status,
+            'requires_reindex',
+        );
+        fs.writeFileSync(ownershipPath, originalSource);
+
+        fs.writeFileSync(ownershipPath, '{ malformed');
+        assert.equal(
+            (await fixture.context.getCurrentPublicationForValidation(root)).status,
+            'requires_reindex',
+        );
+        fs.writeFileSync(ownershipPath, originalSource);
+
+        assert.equal(
+            (await fixture.context.getCurrentPublicationForValidation(root)).status,
+            'valid',
+        );
     } finally {
         await fixture.context.dispose();
         await fixture.database.close();

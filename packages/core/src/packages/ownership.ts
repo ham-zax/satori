@@ -189,9 +189,16 @@ function parseInlineYamlList(raw: string): string[] {
 }
 
 function normalizeWorkspacePattern(raw: string): string {
-    const negated = raw.startsWith('!');
-    const body = (negated ? raw.slice(1) : raw)
-        .replace(/\\/g, '/')
+    const normalizedRaw = raw.replace(/\\/g, '/');
+    if (
+        /[{}]/.test(normalizedRaw)
+        || /[!@+?*]\(/.test(normalizedRaw)
+    ) {
+        throw new Error("Invalid workspace package pattern '" + raw + "'.");
+    }
+
+    const negated = normalizedRaw.startsWith('!');
+    const body = (negated ? normalizedRaw.slice(1) : normalizedRaw)
         .replace(/^\.\//, '')
         .replace(/\/+$/, '');
     if (
@@ -365,12 +372,27 @@ export function discoverPackageOwnership(
     const controls = new Map<string, string>();
     const packages: PackageOwnershipPackage[] = [];
 
+    const rootManifestPath = 'package.json';
+    const rootManifest = readControlFile(canonicalRoot, rootManifestPath);
+    const parsedRootManifest = rootManifest ? parsePackageJson(rootManifest.bytes) : null;
+    if (rootManifest) {
+        controls.set(rootManifestPath, rootManifest.hash);
+        packages.push({
+            ecosystem: 'node',
+            root: '',
+            manifestPath: rootManifestPath,
+            name: packageName(parsedRootManifest),
+            workspaceMember: false,
+        });
+    }
+
     const pnpmWorkspacePath = 'pnpm-workspace.yaml';
     const pnpmWorkspace = readControlFile(canonicalRoot, pnpmWorkspacePath);
     if (pnpmWorkspace) {
         controls.set(pnpmWorkspacePath, pnpmWorkspace.hash);
         const patterns = parsePnpmWorkspacePatterns(pnpmWorkspace.bytes.toString('utf8'));
         for (const manifestPath of discoverWorkspaceManifestPaths(canonicalRoot, patterns)) {
+            if (manifestPath === rootManifestPath) continue;
             const discovered = packageForManifest(canonicalRoot, manifestPath, true);
             if (!discovered) continue;
             packages.push(discovered.record);
@@ -389,8 +411,6 @@ export function discoverPackageOwnership(
         };
     }
 
-    const rootManifestPath = 'package.json';
-    const rootManifest = readControlFile(canonicalRoot, rootManifestPath);
     if (!rootManifest) {
         return {
             workspace: null,
@@ -399,11 +419,10 @@ export function discoverPackageOwnership(
         };
     }
 
-    controls.set(rootManifestPath, rootManifest.hash);
-    const parsedRootManifest = parsePackageJson(rootManifest.bytes);
     const workspacePatterns = packageJsonWorkspacePatterns(parsedRootManifest);
     if (workspacePatterns !== null) {
         for (const manifestPath of discoverWorkspaceManifestPaths(canonicalRoot, workspacePatterns)) {
+            if (manifestPath === rootManifestPath) continue;
             const discovered = packageForManifest(canonicalRoot, manifestPath, true);
             if (!discovered) continue;
             packages.push(discovered.record);
@@ -422,17 +441,11 @@ export function discoverPackageOwnership(
         };
     }
 
-    packages.push({
-        ecosystem: 'node',
-        root: '',
-        manifestPath: rootManifestPath,
-        name: packageName(parsedRootManifest),
-        workspaceMember: false,
-    });
     return {
         workspace: null,
         packages,
-        controlFiles: [...controls.entries()],
+        controlFiles: [...controls.entries()]
+            .sort(([left], [right]) => compareContractStrings(left, right)),
     };
 }
 
@@ -512,10 +525,18 @@ export function parsePublicationPackageOwnership(
         ) {
             throw new Error('Invalid Publication package workspace record.');
         }
+        const workspaceKind = parsed.workspace.kind;
+        const workspaceManifestPath = normalizeRelativePath(parsed.workspace.manifestPath);
+        const expectedWorkspaceManifestPath = workspaceKind === 'pnpm'
+            ? 'pnpm-workspace.yaml'
+            : 'package.json';
+        if (workspaceManifestPath !== expectedWorkspaceManifestPath) {
+            throw new Error('Publication package workspace manifest path does not match its workspace kind.');
+        }
         workspace = {
-            kind: parsed.workspace.kind,
+            kind: workspaceKind,
             root: '',
-            manifestPath: normalizeRelativePath(parsed.workspace.manifestPath),
+            manifestPath: workspaceManifestPath,
             patterns: parsed.workspace.patterns.map((entry) => normalizeWorkspacePattern(String(entry))),
         };
     }
@@ -539,14 +560,38 @@ export function parsePublicationPackageOwnership(
         }
         packageRoots.add(root);
 
+        const manifestPath = normalizeRelativePath(entry.manifestPath);
+        const expectedManifestPath = root === '' ? 'package.json' : root + '/package.json';
+        if (manifestPath !== expectedManifestPath) {
+            throw new Error('Publication package manifest path does not match its package root.');
+        }
+
+        const name = entry.name === null ? null : entry.name.trim();
+        if (name !== null && (name.length === 0 || name !== entry.name)) {
+            throw new Error('Invalid Publication package identity.');
+        }
+        if (root === '' && entry.workspaceMember) {
+            throw new Error('Publication workspace root package cannot be marked as a workspace member.');
+        }
+        if (root !== '' && (!workspace || !entry.workspaceMember)) {
+            throw new Error('Publication child package must be a workspace member.');
+        }
+
         return {
             ecosystem: 'node' as const,
             root,
-            manifestPath: normalizeRelativePath(entry.manifestPath),
-            name: entry.name === null ? null : entry.name,
+            manifestPath,
+            name,
             workspaceMember: entry.workspaceMember,
         };
     }).sort(comparePackageRecords);
+
+    if (
+        workspace?.kind === 'package_json'
+        && !packages.some((entry) => entry.root === '')
+    ) {
+        throw new Error('package.json workspace Publication is missing its root package.');
+    }
 
     const seenFiles = new Set<string>();
     const files: PackageFileOwnership[] = parsed.files.map((entry) => {
@@ -574,6 +619,9 @@ export function parsePublicationPackageOwnership(
         if (packageRoot !== null && !packageRoots.has(packageRoot)) {
             throw new Error('Publication file package owner does not name a persisted package root.');
         }
+        if (packageRoot !== nearestPackageRoot(packages, filePath)) {
+            throw new Error('Publication file package owner is not the nearest enclosing package root.');
+        }
 
         return { path: filePath, packageRoot };
     }).sort((left, right) => compareContractStrings(left.path, right.path));
@@ -598,11 +646,14 @@ export function parsePublicationPackageOwnership(
         return [controlPath, entry[1]] as const;
     }).sort(([left], [right]) => compareContractStrings(left, right));
 
-    if (workspace && !seenControls.has(workspace.manifestPath)) {
-        throw new Error('Publication package workspace manifest is missing from control files.');
-    }
-    if (packages.some((entry) => !seenControls.has(entry.manifestPath))) {
-        throw new Error('Publication package manifest is missing from control files.');
+    const expectedControlPaths = new Set<string>();
+    if (workspace) expectedControlPaths.add(workspace.manifestPath);
+    for (const pkg of packages) expectedControlPaths.add(pkg.manifestPath);
+    if (
+        seenControls.size !== expectedControlPaths.size
+        || [...expectedControlPaths].some((controlPath) => !seenControls.has(controlPath))
+    ) {
+        throw new Error('Publication package ownership control set does not match its package/workspace manifests.');
     }
 
     return {

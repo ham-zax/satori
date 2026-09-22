@@ -1029,9 +1029,55 @@ export class Context {
         );
     }
 
-    private hasPublicationPackageOwnership(publication: PublicationRef): boolean {
+    private async hasValidPublicationPackageOwnership(publication: PublicationRef): Promise<boolean> {
         try {
-            return this.getPublicationPackageOwnership(publication) !== null;
+            const ownership = this.getPublicationPackageOwnership(publication);
+            const checkpoint = this.getPublicationSourceCheckpoint(publication);
+            if (!ownership || !checkpoint) return false;
+
+            const sourceHashes = new Map(checkpoint.fileHashes);
+            const controlPaths = new Set<string>();
+            for (const [controlPath, expectedHash] of ownership.controlFiles) {
+                if (sourceHashes.get(controlPath) !== expectedHash) return false;
+                controlPaths.add(controlPath);
+            }
+
+            if (
+                ownership.workspace?.kind === 'pnpm'
+                && sourceHashes.has('package.json')
+                && !ownership.packages.some((pkg) => pkg.root === '')
+            ) {
+                return false;
+            }
+
+            if (ownership.files.length !== publication.publication.vector.indexedFiles) {
+                return false;
+            }
+            const ownershipPaths = new Set(ownership.files.map((file) => file.path));
+            for (const filePath of ownershipPaths) {
+                if (!sourceHashes.has(filePath) || controlPaths.has(filePath)) {
+                    return false;
+                }
+            }
+
+            if (publication.publication.status === 'complete') {
+                const navigation = this.getPublicationNavigationAddress(publication);
+                if (!navigation) return false;
+                const registry = await readSymbolRegistrySidecar({
+                    normalizedRootPath: publication.publication.canonicalRoot,
+                    publicationId: navigation.publicationId,
+                    navigationRoot: navigation.navigationRoot,
+                });
+                if (
+                    registry.status !== 'ok'
+                    || registry.registry.manifest.files.length !== ownershipPaths.size
+                    || registry.registry.manifest.files.some((file) => !ownershipPaths.has(file.path))
+                ) {
+                    return false;
+                }
+            }
+
+            return true;
         } catch {
             return false;
         }
@@ -1053,7 +1099,7 @@ export class Context {
         return canonicalRoot === publication.publication.canonicalRoot
             && publication.id === publication.publication.id
             && this.isPublicationFormatCurrent(publication.publication)
-            && this.hasPublicationPackageOwnership(publication)
+            && await this.hasValidPublicationPackageOwnership(publication)
             && await computeIndexPolicyControlSignature(canonicalRoot)
                 === publication.publication.policy.controlSignature;
     }
@@ -1100,7 +1146,7 @@ export class Context {
         if (!publication) return { status: 'missing' };
         if (
             !this.isPublicationFormatCurrent(publication.publication)
-            || !this.hasPublicationPackageOwnership(publication)
+            || !await this.hasValidPublicationPackageOwnership(publication)
         ) {
             return { status: 'requires_reindex' };
         }
@@ -1128,7 +1174,7 @@ export class Context {
         const publication = this.getCurrentPublication(codebasePath);
         return publication !== null
             && this.isPublicationFormatCurrent(publication.publication)
-            && this.hasPublicationPackageOwnership(publication)
+            && await this.hasValidPublicationPackageOwnership(publication)
             && await this.vectorDatabase.hasCollection(publication.publication.vector.collectionName);
     }
 

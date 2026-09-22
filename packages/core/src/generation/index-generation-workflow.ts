@@ -1045,14 +1045,24 @@ export class IndexGenerationWorkflow {
         );
         // Older Publications indexed auxiliaries with supported extensions (e.g. Cargo.toml).
         // Remove those documents even when the source file itself has not changed.
+        const existingSearchablePaths = new Set(
+            existingRegistry.manifest.files.map((file) => file.path),
+        );
+        const newlySearchablePaths = [...input.preparedChanges.fileHashes.keys()]
+            .filter((filePath) => isSearchable(filePath) && !existingSearchablePaths.has(filePath));
         const legacyAuxiliaryPaths = existingRegistry.manifest.files
             .filter((file) => !isSearchable(file.path))
             .map((file) => file.path);
         const searchableChangedFiles = Array.from(new Set([
             ...changedFiles.filter(isSearchable),
+            ...newlySearchablePaths,
             ...legacyAuxiliaryPaths,
         ]));
-        const navigationChangedFiles = Array.from(new Set([...changedFiles, ...legacyAuxiliaryPaths]));
+        const navigationChangedFiles = Array.from(new Set([
+            ...changedFiles,
+            ...newlySearchablePaths,
+            ...legacyAuxiliaryPaths,
+        ]));
         const publicationId = mutationLease.operationId;
         const candidateCollectionName = this.ports.resolvePublicationCollectionName(input.codebasePath, publicationId);
         const publicationState = { activated: false };
@@ -1084,7 +1094,11 @@ export class IndexGenerationWorkflow {
                     }
 
                     let processedChanges = 0;
-                    const filesToIndex = [...added, ...modified]
+                    const filesToIndex = Array.from(new Set([
+                        ...added,
+                        ...modified,
+                        ...newlySearchablePaths,
+                    ]))
                         .filter(isSearchable)
                         .map((file) => path.join(input.codebasePath, file));
                     const indexedDelta = filesToIndex.length > 0

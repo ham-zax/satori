@@ -1,5 +1,11 @@
 import type { SourceSpan } from '../language-analysis';
-import { RESOLUTION_CALL_CONSTRUCTS, type ResolutionCallConstruct, type ResolutionClaim } from './resolution';
+import type { RelationshipRecord } from '../symbols';
+import {
+    RESOLUTION_CALL_CONSTRUCTS,
+    isProofBackedAuthoritativeCall,
+    type ResolutionCallConstruct,
+    type ResolutionClaim,
+} from './resolution';
 
 export type ResolutionConstructCoverageStatus = 'ready' | 'partial' | 'unsupported';
 
@@ -40,9 +46,42 @@ function statusForCounts(input: {
     resolvedCount: number;
     unsupportedCount: number;
 }): ResolutionConstructCoverageStatus {
-    if (input.observedCount > 0 && input.resolvedCount === input.observedCount) return 'ready';
-    if (input.observedCount > 0 && input.unsupportedCount === input.observedCount) return 'unsupported';
+    const repositoryRelevantCount = input.observedCount - input.unsupportedCount;
+    if (input.observedCount > 0 && repositoryRelevantCount === 0) return 'unsupported';
+    if (repositoryRelevantCount > 0 && input.resolvedCount === repositoryRelevantCount) return 'ready';
     return 'partial';
+}
+
+function exactCallSiteKey(input: {
+    file: string;
+    sourceInstanceId?: string;
+    span?: {
+        startByte?: number;
+        endByte?: number;
+    };
+}): string | undefined {
+    if (
+        !input.sourceInstanceId
+        || input.span?.startByte === undefined
+        || input.span?.endByte === undefined
+    ) {
+        return undefined;
+    }
+    return [input.file, input.sourceInstanceId, input.span.startByte, input.span.endByte].join('\0');
+}
+
+function authoritativeResolvedCallSites(relationships: readonly RelationshipRecord[]): ReadonlySet<string> {
+    const resolved = new Set<string>();
+    for (const relationship of relationships) {
+        if (!isProofBackedAuthoritativeCall(relationship)) continue;
+        const key = exactCallSiteKey({
+            file: relationship.file,
+            sourceInstanceId: relationship.sourceInstanceId,
+            span: relationship.span,
+        });
+        if (key) resolved.add(key);
+    }
+    return resolved;
 }
 
 /**
@@ -52,9 +91,13 @@ function statusForCounts(input: {
  */
 export function summarizeResolutionConstructCoverage(
     claims: readonly ResolutionClaim[],
-    options?: { readonly gapLimit?: number },
+    options?: {
+        readonly gapLimit?: number;
+        readonly relationships?: readonly RelationshipRecord[];
+    },
 ): ResolutionConstructCoverage[] {
     const gapLimit = Math.max(0, Math.floor(options?.gapLimit ?? 20));
+    const resolvedCallSites = authoritativeResolvedCallSites(options?.relationships ?? []);
     const byConstruct = new Map<ResolutionCallConstruct, ResolutionClaim[]>();
     for (const claim of claims) {
         const group = byConstruct.get(claim.observation.construct) ?? [];
@@ -73,13 +116,30 @@ export function summarizeResolutionConstructCoverage(
                 || left.callSpan.endByte - right.callSpan.endByte
                 || compareStrings(left.providerId, right.providerId)
             ));
-            const resolvedCount = sorted.filter((claim) => claim.decision === 'resolved').length;
-            const ambiguousCount = sorted.filter((claim) => claim.decision === 'ambiguous').length;
-            const unsupportedCount = sorted.filter((claim) => claim.resolutionAuthority === 'unsupported').length;
-            const unresolvedCount = sorted.filter((claim) => (
-                claim.decision === 'unresolved' && claim.resolutionAuthority !== 'unsupported'
+            const isResolvedForCoverage = (claim: ResolutionClaim): boolean => {
+                if (claim.decision === 'resolved') return true;
+                const key = exactCallSiteKey({
+                    file: claim.sourceFile,
+                    sourceInstanceId: claim.sourceInstanceId,
+                    span: claim.callSpan,
+                });
+                return Boolean(key && resolvedCallSites.has(key));
+            };
+            const resolvedCount = sorted.filter(isResolvedForCoverage).length;
+            const ambiguousCount = sorted.filter((claim) => (
+                !isResolvedForCoverage(claim) && claim.decision === 'ambiguous'
             )).length;
-            const gaps = sorted.filter((claim) => claim.decision !== 'resolved');
+            const unsupportedCount = sorted.filter((claim) => (
+                !isResolvedForCoverage(claim) && claim.resolutionAuthority === 'unsupported'
+            )).length;
+            const unresolvedCount = sorted.filter((claim) => (
+                !isResolvedForCoverage(claim)
+                && claim.decision === 'unresolved'
+                && claim.resolutionAuthority !== 'unsupported'
+            )).length;
+            const gaps = sorted.filter((claim) => (
+                !isResolvedForCoverage(claim) && claim.resolutionAuthority !== 'unsupported'
+            ));
             const providers = [...new Map(sorted.map((claim) => [
                 `${claim.providerId}\0${claim.providerVersion}`,
                 { providerId: claim.providerId, providerVersion: claim.providerVersion },

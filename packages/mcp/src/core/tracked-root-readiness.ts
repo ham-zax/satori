@@ -129,6 +129,8 @@ export type ReadinessPhase =
     | "collection_probe";
 
 export class TrackedRootReadiness {
+    private readonly evaluationFlights = new Map<string, Promise<TrackedRootReadinessState>>();
+
     constructor(private readonly host: TrackedRootReadinessHost) {}
 
     private measurePhase<T>(
@@ -387,7 +389,7 @@ export class TrackedRootReadiness {
                 this.host.hasSearchableGeneration?.(indexingRoot.path) ?? false;
             let searchableRead: Extract<TrackedRootReadinessState, { state: "ready" }> | undefined;
             if (searchableGenerationAvailable && operation?.action === "sync") {
-                const evaluated = await this.evaluateRootReadiness(indexingRoot, accessMode, onPhase);
+                const evaluated = await this.evaluateRootReadinessCoalesced(indexingRoot, accessMode, onPhase);
                 if (evaluated.state === "ready") {
                     searchableRead = evaluated;
                 }
@@ -407,7 +409,33 @@ export class TrackedRootReadiness {
             };
         }
 
-        return this.evaluateRootReadiness(searchableRoot, accessMode, onPhase);
+        return this.evaluateRootReadinessCoalesced(searchableRoot, accessMode, onPhase);
+    }
+
+    private evaluateRootReadinessCoalesced(
+        targetRoot: TrackedRootEntry,
+        accessMode: "semantic" | "navigation",
+        onPhase?: (phase: ReadinessPhase, durationMs: number) => void,
+    ): Promise<TrackedRootReadinessState> {
+        const key = `${targetRoot.path}\0${accessMode}`;
+        const existing = this.evaluationFlights.get(key);
+        if (existing) return existing;
+
+        const flight = this.evaluateRootReadiness(targetRoot, accessMode, onPhase);
+        this.evaluationFlights.set(key, flight);
+        void flight.then(
+            () => {
+                if (this.evaluationFlights.get(key) === flight) {
+                    this.evaluationFlights.delete(key);
+                }
+            },
+            () => {
+                if (this.evaluationFlights.get(key) === flight) {
+                    this.evaluationFlights.delete(key);
+                }
+            },
+        );
+        return flight;
     }
 
     private async scheduleAutomaticReindex(

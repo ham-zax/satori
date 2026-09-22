@@ -219,6 +219,85 @@ export function interfaceCall(worker: WorkerLike): string {
     }
 });
 
+test('production indexing resolves same-class TypeScript this-member calls', async () => {
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/client.ts': `
+export class Client {
+    request(): void {
+        this.cancelDecision();
+        this.pump();
+    }
+
+    private cancelDecision(): void {}
+    private pump(): void {}
+}
+`,
+    });
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const state = await readNavigation(fixture.context, fixture.root);
+        const claims = state.relationships.analysisByFile.get('src/client.ts')?.resolutionClaims ?? [];
+        const byCallee = new Map(claims.map((claim) => [claim.observation.calleeText, claim]));
+
+        for (const calleeText of ['this.cancelDecision', 'this.pump']) {
+            const claim = byCallee.get(calleeText);
+            assert.ok(claim, calleeText);
+            assert.equal(claim.decision, 'resolved', calleeText);
+            assert.equal(claim.relationshipType, 'CALLS', calleeText);
+            assert.equal(claim.resolutionAuthority, 'direct_binding', calleeText);
+        }
+    } finally {
+        await fixture.close();
+    }
+});
+
+test('production indexing preserves exact TypeScript target references without fabricating anonymous caller edges', async () => {
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/worker.ts': `
+export class Worker {
+    request(): string { return 'worker'; }
+}
+`,
+        'src/cases.test.ts': `
+import { Worker } from './worker';
+
+declare function scenario(callback: () => void): void;
+
+scenario(() => {
+    const client = new Worker();
+    client.request();
+});
+`,
+    });
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const state = await readNavigation(fixture.context, fixture.root);
+        const claims = state.relationships.analysisByFile.get('src/cases.test.ts')?.resolutionClaims ?? [];
+        const requestClaim = claims.find((claim) => claim.observation.calleeText === 'client.request');
+
+        assert.ok(requestClaim);
+        assert.equal(requestClaim.decision, 'resolved');
+        assert.equal(requestClaim.relationshipType, 'REFERENCES');
+        assert.equal(requestClaim.resolutionAuthority, 'direct_binding');
+        assert.equal(requestClaim.sourceInstanceId, undefined);
+        assert.equal(requestClaim.targetSymbol, 'Worker.request');
+        assert.equal(typeof requestClaim.targetInstanceId, 'string');
+
+        const calls = callTargets(state.relationships.records, state.registry.symbolsByInstanceId);
+        assert.equal(
+            calls.some(({ target, record }) => (
+                target.qualifiedName === 'Worker.request'
+                && record.file === 'src/cases.test.ts'
+            )),
+            false,
+        );
+    } finally {
+        await fixture.close();
+    }
+});
+
 test('one TypeScript source edit rewrites an unchanged dependent caller but shares unrelated relationship owners', async () => {
     const fixture = await createFixture({
         'tsconfig.json': tsconfig(),

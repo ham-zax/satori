@@ -47,3 +47,20 @@ test('query plans do not flag documentation-seeking for unrelated queries', () =
     assert.equal(buildSearchQueryPlan('how does regime filtering gate entry decisions', true).documentationSeeking, false);
     assert.equal(buildSearchQueryPlan('who calls validate_order', true).documentationSeeking, false);
 });
+
+test('how-does behavioral questions request owner-oriented semantic expansion', () => {
+    const plan = buildSearchQueryPlan(
+        'how does the decision worker send board snapshots and reject late responses',
+        true,
+    );
+
+    assert.equal(plan.behavioralOwnerSeeking, true);
+    assert.equal(plan.documentationSeeking, false);
+    assert.equal(plan.route.kind, 'conceptual');
+
+    const documentationPlan = buildSearchQueryPlan(
+        'how does the README explain deployment configuration',
+        true,
+    );
+    assert.equal(documentationPlan.behavioralOwnerSeeking, false);
+});

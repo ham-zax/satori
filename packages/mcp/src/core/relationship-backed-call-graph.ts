@@ -33,9 +33,6 @@ type RelationshipBackedCallGraphHost = {
     navigationStore: JsonNavigationStore;
 };
 
-const DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT = 50;
-const DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT = 100;
-
 export type RelationshipBackedCallGraphInput = {
     codebaseRoot: string;
     publicationId: string;
@@ -410,8 +407,7 @@ export class RelationshipBackedCallGraph {
             ].join("\0");
             referencesByKey.set(key, reference);
         }
-        return this.sortTestReferences([...referencesByKey.values()])
-            .slice(0, DEFAULT_CALL_GRAPH_TEST_REFERENCE_LIMIT);
+        return this.sortTestReferences([...referencesByKey.values()]);
     }
 
     private sortNotes(notes: CallGraphNote[]): CallGraphNote[] {
@@ -529,17 +525,29 @@ export class RelationshipBackedCallGraph {
         if (neighbors.status !== "ok") {
             return null;
         }
-        const testRelationshipResult = await getRelationshipsForSymbol({
-            normalizedRootPath: input.codebaseRoot,
-            publicationId: input.publicationId,
-            navigationRoot: input.navigationRoot,
-            expectedSymbolRegistryManifestHash: input.registryManifestHash,
-            navigationStore: this.host.navigationStore,
-            targetInstanceId: input.resolvedSymbol.symbolInstanceId,
-            direction: "callers",
-            types: ["TESTS"],
-        });
-        if (testRelationshipResult.status !== "ok") {
+        const [testRelationshipResult, sourceCallRelationshipResult] = await Promise.all([
+            getRelationshipsForSymbol({
+                normalizedRootPath: input.codebaseRoot,
+                publicationId: input.publicationId,
+                navigationRoot: input.navigationRoot,
+                expectedSymbolRegistryManifestHash: input.registryManifestHash,
+                navigationStore: this.host.navigationStore,
+                targetInstanceId: input.resolvedSymbol.symbolInstanceId,
+                direction: "callers",
+                types: ["TESTS"],
+            }),
+            getRelationshipsForSymbol({
+                normalizedRootPath: input.codebaseRoot,
+                publicationId: input.publicationId,
+                navigationRoot: input.navigationRoot,
+                expectedSymbolRegistryManifestHash: input.registryManifestHash,
+                navigationStore: this.host.navigationStore,
+                sourceInstanceId: input.resolvedSymbol.symbolInstanceId,
+                direction: "callees",
+                types: ["CALLS"],
+            }),
+        ]);
+        if (testRelationshipResult.status !== "ok" || sourceCallRelationshipResult.status !== "ok") {
             return null;
         }
         const testReferences = this.buildTestReferences(
@@ -582,14 +590,16 @@ export class RelationshipBackedCallGraph {
                 targetSymbolId: input.resolvedSymbol.symbolInstanceId,
             })
             : [];
-        const allExactReferences = this.sortExactReferences([
+        const exactReferences = this.sortExactReferences([
             ...outboundExactReferences,
             ...inboundExactReferences,
         ]);
-        const exactReferencesTruncated = allExactReferences.length > DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT;
-        const exactReferences = allExactReferences.slice(0, DEFAULT_CALL_GRAPH_EXACT_REFERENCE_LIMIT);
         const constructCoverage = summarizeResolutionConstructCoverage(
             sourceEvidence.matches.map((match) => match.claim),
+            {
+                gapLimit: Number.MAX_SAFE_INTEGER,
+                relationships: sourceCallRelationshipResult.records,
+            },
         );
 
         const suppressedLowConfidenceRecords = neighbors.suppressedLowConfidenceRecords || [];
@@ -820,7 +830,6 @@ export class RelationshipBackedCallGraph {
             ...(exactSourceResult?.coverage.status === "partial"
                 ? ["CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL"]
                 : []),
-            ...(exactReferencesTruncated ? ["CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"] : []),
         ])].sort(compareContractStrings);
         // Sort first for determinism within bands, then production-first inbound note priority.
         const combinedNotes = prioritizeInboundSuppressedNotes(this.sortNotes([

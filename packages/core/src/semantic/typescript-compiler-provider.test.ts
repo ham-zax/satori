@@ -351,6 +351,43 @@ test('TypeScript compiler provider resolves project semantic calls and abstains 
     assert.equal(genericReceiver?.reason, 'generic_receiver');
 });
 
+test('TypeScript compiler provider resolves private this members and excludes non-project APIs from repository targets', () => {
+    const source = `
+export class Client {
+    request(): number {
+        this.cancelDecision();
+        this.pump();
+        return Math.max(1, performance.now());
+    }
+
+    private cancelDecision(): void {}
+    private pump(): void {}
+}
+
+export function coerce(): boolean {
+    return Boolean(1);
+}
+`;
+    const evidence = analyzeTypeScriptProject({
+        language: 'typescript',
+        sourceFiles: [{ path: 'src/client.ts', source, sourceHash: 'client' }],
+        auxiliaryFiles: [],
+    });
+    const calls = evidence.occurrencesByFile.get('src/client.ts') ?? [];
+
+    for (const calleeText of ['this.cancelDecision', 'this.pump']) {
+        const call = calls.find((item) => item.calleeText === calleeText);
+        assert.equal(call?.decision, 'resolved', calleeText);
+        assert.equal(call?.target?.ownerName, 'Client', calleeText);
+    }
+
+    for (const calleeText of ['Math.max', 'performance.now', 'Boolean']) {
+        const call = calls.find((item) => item.calleeText === calleeText);
+        assert.equal(call?.decision, 'unsupported', calleeText);
+        assert.equal(call?.target, undefined, calleeText);
+    }
+});
+
 test('TypeScript target provenance spans match OXC symbol spans and reject same-name decoys', () => {
     const evidence = analyzeTypeScriptProject(project());
     const structural = analyzeWithOxc({

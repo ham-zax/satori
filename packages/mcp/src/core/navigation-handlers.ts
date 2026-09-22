@@ -44,6 +44,11 @@ import {
 } from "./registry-file-outline.js";
 import { prepareRelationshipTraversals } from "./prepared-relationship-traversal.js";
 import { PreparedPublicationReadSession } from "./prepared-publication-read-session.js";
+import {
+    InvalidCallGraphEvidenceContinuationError,
+    projectCallGraphEvidence,
+    type CallGraphEvidenceRequest,
+} from "./call-graph-evidence-projection.js";
 import type {
     CompletionProbeDebugHint,
     TrackedRootReadiness,
@@ -1150,6 +1155,22 @@ export class NavigationHandlers {
             : "both";
         const depth = Number.isFinite(args?.depth) ? Math.max(1, Math.min(3, Number(args.depth))) : 1;
         const limit = Number.isFinite(args?.limit) ? Math.max(1, Number(args.limit)) : 20;
+        const evidenceInput = args?.evidence as {
+            kind?: CallGraphEvidenceRequest["kind"];
+            cursor?: string;
+            limit?: number;
+        } | undefined;
+        const evidenceRequest: CallGraphEvidenceRequest | undefined = evidenceInput?.kind
+            ? {
+                kind: evidenceInput.kind,
+                limit: Number.isFinite(evidenceInput.limit)
+                    ? Math.max(1, Math.min(50, Number(evidenceInput.limit)))
+                    : 10,
+                ...(typeof evidenceInput.cursor === "string"
+                    ? { cursor: evidenceInput.cursor }
+                    : {}),
+            }
+            : undefined;
         const symbolRef = args?.symbolRef as CallGraphSymbolRef | undefined;
         const symbolFileResult = typeof symbolRef?.file === "string"
             ? requireRepoRelativeFilePath(symbolRef.file, "symbolRef.file")
@@ -1523,7 +1544,7 @@ export class NavigationHandlers {
                 findExactPublishedSourceReferences({
                     registry: registryState.registry,
                     target,
-                    limit: 100,
+                    limit: Number.MAX_SAFE_INTEGER,
                     readPublishedSource: readExactPublishedSource,
                 })
             );
@@ -1745,13 +1766,14 @@ export class NavigationHandlers {
                 relationshipBuiltAt: compatibility.relationships.manifest.builtAt,
                 publicationCompletedAt: lease.publication.createdAt,
             });
-            const payload = withNavigationFreshness(this.host.withProofDebugHint({
+            const fullPayload = withNavigationFreshness(this.host.withProofDebugHint({
                 status: "ok" as const,
                 path: effectiveRoot,
                 symbolRef,
                 ...(navigationAuthority ? { navigationAuthority } : {}),
                 ...relationshipBackedGraph,
             } satisfies CallGraphResponseEnvelope, proofDebugHint), leasedRootState.freshnessDecision);
+            const payload = projectCallGraphEvidence(fullPayload, evidenceRequest);
             return {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
@@ -1771,6 +1793,7 @@ export class NavigationHandlers {
             const pathResult = typeof args?.path === "string"
                 ? requireAbsoluteFilesystemPath(args.path)
                 : null;
+            const invalidEvidenceContinuation = error instanceof InvalidCallGraphEvidenceContinuationError;
             const payload = this.host.toolResponseBuilders.buildInvalidCallGraphRequestPayload(
                 {
                     path: pathResult?.ok ? pathResult.absolutePath : (typeof args?.path === "string" ? args.path : ""),
@@ -1779,8 +1802,11 @@ export class NavigationHandlers {
                     depth,
                     limit,
                 },
-                `Unexpected call_graph failure: ${formatUnknownError(error)}`,
-                "not_ready",
+                invalidEvidenceContinuation
+                    ? error.message
+                    : `Unexpected call_graph failure: ${formatUnknownError(error)}`,
+                invalidEvidenceContinuation ? "not_found" : "not_ready",
+                invalidEvidenceContinuation ? "invalid_evidence_continuation" : undefined,
             );
             return {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
@@ -2039,7 +2065,10 @@ export class NavigationHandlers {
                         resolvedClaimCount: claims.filter((claim) => claim.decision === "resolved").length,
                         ambiguousClaimCount: claims.filter((claim) => claim.decision === "ambiguous").length,
                         unresolvedClaimCount: claims.filter((claim) => claim.decision === "unresolved").length,
-                        constructCoverage: summarizeResolutionConstructCoverage(claims, { gapLimit: 10 }),
+                        constructCoverage: summarizeResolutionConstructCoverage(claims, {
+                            gapLimit: 10,
+                            relationships: relationshipState.records,
+                        }),
                     },
                 };
             } else {

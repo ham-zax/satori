@@ -165,11 +165,16 @@ export function isCanonicalResolutionClaim(value: unknown): value is ResolutionC
 
     if (value.decision === 'resolved') {
         if (
-            value.relationshipType !== 'CALLS'
-            || !isNonEmptyString(value.sourceInstanceId)
-            || !isNonEmptyString(value.targetInstanceId)
+            !isNonEmptyString(value.targetInstanceId)
             || !isNonEmptyString(value.targetSymbol)
             || (value.resolutionAuthority !== 'direct_binding' && value.resolutionAuthority !== 'origin_flow')
+        ) {
+            return false;
+        }
+        if (
+            value.relationshipType === 'CALLS'
+                ? !isNonEmptyString(value.sourceInstanceId)
+                : value.sourceInstanceId !== undefined
         ) {
             return false;
         }

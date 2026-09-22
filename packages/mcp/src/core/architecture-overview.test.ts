@@ -39,6 +39,47 @@ function call(source: SymbolRecord, target: SymbolRecord): RelationshipRecord {
     } as RelationshipRecord;
 }
 
+test("architecture overview reports bounded cross-area fan-in and fan-out", () => {
+    const a = sym("a", "packages/a/src/a.ts");
+    const b = sym("b", "packages/b/src/b.ts");
+    const c = sym("c", "packages/c/src/c.ts");
+    const symbols = [a, b, c];
+    const manifest = {
+        files: symbols.map((symbol) => ({ path: symbol.file })),
+    } as unknown as SymbolRegistryManifest;
+
+    const result = buildArchitectureOverview({
+        manifest,
+        symbols,
+        relationships: [
+            call(b, a),
+            call(c, a),
+            call(a, b),
+        ],
+        scope: "all",
+        limit: 10,
+    });
+
+    assert.deepEqual(result.fanIn[0], {
+        area: "packages/a",
+        counterpartAreaCount: 2,
+        calls: 2,
+        imports: 0,
+        evidenceCount: 2,
+        highConfidenceEvidenceCount: 2,
+    });
+    assert.deepEqual(result.fanOut[0], {
+        area: "packages/a",
+        counterpartAreaCount: 1,
+        calls: 1,
+        imports: 0,
+        evidenceCount: 1,
+        highConfidenceEvidenceCount: 1,
+    });
+    assert.equal(result.fanInRule, "cross_area_incoming_calls_and_imports");
+    assert.equal(result.fanOutRule, "cross_area_outgoing_calls_and_imports");
+});
+
 test("architecture overview applies subtree/exclusions to entries, cycles, and claims", () => {
     const a = sym("a", "packages/a/src/a.ts");
     const b = sym("b", "packages/b/src/b.ts");

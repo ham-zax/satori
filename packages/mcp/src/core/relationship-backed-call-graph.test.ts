@@ -271,3 +271,101 @@ test("call graph source fallback propagates partial Publication coverage without
     assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.file), ["src/current.ts"]);
     assert.equal(result!.sourceReferences?.some((reference) => reference.site.file === "src/stale.ts"), false);
 });
+
+test("call graph retains exact reference evidence beyond the legacy 100-row disclosure ceiling", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "typescript",
+        kind: "method",
+        qualifiedName: "Target.request",
+        name: "request",
+        label: "method request()",
+        span: { startLine: 1, endLine: 3 },
+        parentQualifiedNamePath: ["Target"],
+        file: "src/target.ts",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([[target.file, [target]]]),
+        symbolsByInstanceId: new Map([[target.symbolInstanceId, target]]),
+    } as unknown as SymbolRegistry;
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        files: [],
+    };
+    const inboundMatches = Array.from({ length: 125 }, (_, index) => ({
+        matchKind: "resolved_target" as const,
+        claim: {
+            providerId: "fixture",
+            providerVersion: "v1",
+            environmentConfigId: "fixture-env",
+            sourceFile: `tests/case-${String(index).padStart(3, "0")}.ts`,
+            targetInstanceId: target.symbolInstanceId,
+            targetSymbol: target.qualifiedName,
+            callSpan: {
+                startLine: index + 1,
+                endLine: index + 1,
+                startByte: index * 10,
+                endByte: index * 10 + 8,
+                startColumn: 0,
+                endColumn: 8,
+            },
+            observation: {
+                kind: "call" as const,
+                calleeName: "request",
+                calleeText: "client.request",
+                construct: "typed_member_call" as const,
+                candidates: [],
+            },
+            decision: "resolved" as const,
+            relationshipType: "REFERENCES" as const,
+            resolutionAuthority: "direct_binding" as const,
+            proofSteps: [{
+                kind: "exact_target_definition" as const,
+                subject: target.qualifiedName,
+            }],
+            dependencyKeys: [],
+            flowHops: 0,
+        },
+    }));
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records: [],
+            analysisByFile: new Map(),
+            warnings: [],
+        }),
+        getResolutionEvidence: async (input: { sourceInstanceId?: string }) => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: input.sourceInstanceId ? [] : inboundMatches,
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+    });
+
+    assert.ok(result);
+    assert.equal(result!.exactReferences?.length, 125);
+    assert.equal(result!.exactReferences?.[124]?.site.file, "tests/case-124.ts");
+    assert.equal(result!.warnings?.includes("CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"), false);
+});

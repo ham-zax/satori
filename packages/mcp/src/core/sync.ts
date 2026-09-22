@@ -885,6 +885,31 @@ export class SyncManager {
             });
         }
 
+        if (flightEpoch !== undefined && this.hasPendingWatcherObservation(codebasePath)) {
+            const compareSourceObservation = this.context.compareSourceObservationToFreshnessCheckpoint;
+            if (typeof compareSourceObservation === 'function') {
+                try {
+                    const observationComparisonStartedAt = Date.now();
+                    const comparison = await compareSourceObservation.call(
+                        this.context,
+                        codebasePath,
+                        sourcePublication,
+                    );
+                    options.onPhaseTiming?.(
+                        'exact_path_comparison',
+                        Math.max(0, Date.now() - observationComparisonStartedAt),
+                    );
+                    if (comparison.status === 'matches') {
+                        // Cover only watcher events captured before this complete source
+                        // observation. Later events remain pending and still invalidate reads.
+                        this.coverWatcherObservation(codebasePath, flightEpoch);
+                    }
+                } catch {
+                    // Preserve the existing fail-closed watcher_event_pending result.
+                }
+            }
+        }
+
         let exactMatched = false;
         let exactComparisonUnverifiedReason:
             | 'exact_source_comparison_unavailable'

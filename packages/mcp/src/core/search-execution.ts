@@ -147,6 +147,7 @@ export type SearchExpansionReason =
     | "deterministic_route_primary"
     | "mixed_route"
     | "operator_constraint"
+    | "behavioral_owner_query"
     | "explicit_role_cue"
     | "primary_candidate_pool_sufficient"
     | "primary_candidate_pool_small"
@@ -249,6 +250,7 @@ export function resolveSearchExpansionDecision(input: {
     routeKind: SearchQueryPlan["route"]["kind"];
     exactRegistryFallback: boolean;
     operatorConstraintPresent: boolean;
+    behavioralOwnerSeeking?: boolean;
     explicitRoleCuePresent: boolean;
     primaryScopedCandidateCount: number;
     primaryFailed: boolean;
@@ -304,6 +306,13 @@ export function resolveSearchExpansionDecision(input: {
         return {
             expand: true,
             reason: "operator_constraint",
+            primaryScopedCandidateCount: input.primaryScopedCandidateCount,
+        };
+    }
+    if (input.behavioralOwnerSeeking) {
+        return {
+            expand: true,
+            reason: "behavioral_owner_query",
             primaryScopedCandidateCount: input.primaryScopedCandidateCount,
         };
     }
@@ -1126,6 +1135,7 @@ export async function runSearchExecution(
             routeKind: input.queryPlan.route.kind,
             exactRegistryFallback: input.exactRegistryEligible,
             operatorConstraintPresent: input.parsedOperators.must.length > 0,
+            behavioralOwnerSeeking: input.queryPlan.behavioralOwnerSeeking,
             explicitRoleCuePresent: (
                 input.queryPlan.implementationSeeking
                 && !input.queryPlan.behavioralOwnerSeeking

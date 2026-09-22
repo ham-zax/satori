@@ -31,6 +31,21 @@ test('semantic expansion is skipped for bounded primary evidence and determinist
     );
 });
 
+test('behavioral-owner queries expand even when the primary candidate pool is numerically sufficient', () => {
+    assert.deepEqual(
+        resolveSearchExpansionDecision({
+            ...defaults,
+            behavioralOwnerSeeking: true,
+            primaryScopedCandidateCount: 23,
+        }),
+        {
+            expand: true,
+            reason: 'behavioral_owner_query',
+            primaryScopedCandidateCount: 23,
+        },
+    );
+});
+
 test('semantic expansion remains available for ambiguous, constrained, mixed and failed primary passes', () => {
     assert.deepEqual(
         resolveSearchExpansionDecision({ ...defaults }),

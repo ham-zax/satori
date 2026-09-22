@@ -225,23 +225,25 @@ export function buildTypeScriptResolutionClaims(input: {
 
             let decision: ResolutionDecision;
             let authority: ResolutionAuthority;
+            let relationshipType: ResolutionClaim['relationshipType'];
             let target: SymbolRecord | undefined;
             let detail: string | undefined;
 
-            if (occurrence.decision === 'resolved' && caller && mappedTarget) {
+            if (occurrence.decision === 'resolved' && mappedTarget) {
                 decision = 'resolved';
                 authority = 'direct_binding';
+                relationshipType = caller ? 'CALLS' : 'REFERENCES';
                 target = mappedTarget;
             } else if (occurrence.decision === 'ambiguous') {
                 decision = 'ambiguous';
                 authority = 'ambiguous';
+                relationshipType = 'REFERENCES';
             } else {
                 decision = 'unresolved';
                 authority = occurrence.decision === 'unsupported' ? 'unsupported' : 'unresolved';
+                relationshipType = 'REFERENCES';
                 if (occurrence.decision === 'resolved') {
-                    detail = !caller
-                        ? 'Compiler target was exact, but the call did not map to one canonical Satori caller instance.'
-                        : 'Compiler target did not map to one canonical Satori target instance.';
+                    detail = 'Compiler target did not map to one canonical Satori target instance.';
                 }
             }
 
@@ -273,9 +275,9 @@ export function buildTypeScriptResolutionClaims(input: {
                         )),
                 },
                 decision,
-                relationshipType: decision === 'resolved' ? 'CALLS' : 'REFERENCES',
+                relationshipType,
                 resolutionAuthority: authority,
-                proofSteps: proofSteps(occurrence, caller, target, decision, detail),
+                proofSteps: proofSteps(occurrence, caller, mappedTarget, decision, detail),
                 dependencyKeys: dependencyKeys(occurrence, input.environmentConfigId),
                 flowHops: 0,
             });

@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v2';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v3';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -271,6 +271,14 @@ function isSatoriIndexableDeclaration(declaration: ts.Declaration): boolean {
         return ts.isClassLike(declaration.parent);
     }
     return ts.isFunctionDeclaration(declaration);
+}
+
+function declarationBelongsToProject(
+    declaration: ts.Declaration,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): boolean {
+    const sourceFileName = path.posix.normalize(declaration.getSourceFile().fileName.replace(/\\/g, '/'));
+    return projectFilesByVirtualPath.has(sourceFileName);
 }
 
 function registryCompatibleDeclarationStart(
@@ -592,6 +600,44 @@ function symbolAtIdentifier(checker: ts.TypeChecker, node: ts.Identifier): ts.Sy
     return resolvedSymbol(checker, checker.getSymbolAtLocation(node));
 }
 
+function isPrivateClassMemberDeclaration(declaration: ts.Declaration): boolean {
+    if (!ts.isClassElement(declaration)) return false;
+    if ('name' in declaration && declaration.name && ts.isPrivateIdentifier(declaration.name)) {
+        return true;
+    }
+    const modifiers = ts.canHaveModifiers(declaration) ? ts.getModifiers(declaration) : undefined;
+    return Boolean(modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword));
+}
+
+function privateThisMemberCandidates(
+    checker: ts.TypeChecker,
+    call: ts.CallExpression | ts.NewExpression,
+    receiver: ts.Expression,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+): CandidateSet | undefined {
+    if (receiver.kind !== ts.SyntaxKind.ThisKeyword || ts.isNewExpression(call)) return undefined;
+    const expression = call.expression;
+    const symbol = ts.isPropertyAccessExpression(expression)
+        ? resolvedSymbol(checker, checker.getSymbolAtLocation(expression.name))
+        : resolvedSymbol(checker, checker.getSymbolAtLocation(expression));
+    const executableDeclarations = (symbol?.declarations ?? []).filter(isExecutableDeclaration);
+    if (
+        executableDeclarations.length === 0
+        || executableDeclarations.some((declaration) => !isPrivateClassMemberDeclaration(declaration))
+    ) {
+        return undefined;
+    }
+    const targets = uniqueTargets(executableDeclarations
+        .map((declaration) => targetFromDeclaration(declaration, projectFilesByVirtualPath))
+        .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
+    if (targets.length === 0) return undefined;
+    return {
+        decision: targets.length === 1 ? 'resolved' : 'ambiguous',
+        reason: targets.length === 1 ? 'single_executable_target' : 'multiple_executable_targets',
+        targets,
+    };
+}
+
 function immutableLocalOriginCandidates(
     checker: ts.TypeChecker,
     receiver: ts.Expression,
@@ -652,6 +698,19 @@ function memberCandidates(
         receiver,
         ts.TypeFormatFlags.NoTruncation,
     );
+
+    const privateThisCandidates = privateThisMemberCandidates(
+        checker,
+        call,
+        receiver,
+        projectFilesByVirtualPath,
+    );
+    if (privateThisCandidates) {
+        return {
+            ...privateThisCandidates,
+            receiverType: receiverTypeText,
+        };
+    }
 
     if ((receiverType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) {
         return {
@@ -744,6 +803,9 @@ function memberCandidates(
 
         const declarations = resolvedSymbol(checker, property)?.declarations ?? [];
         const executableDeclarations = declarations.filter(isExecutableDeclaration);
+        const hasProjectDeclaration = declarations.some((declaration) => (
+            declarationBelongsToProject(declaration, projectFilesByVirtualPath)
+        ));
         const ownTargets = executableDeclarations
             .map((declaration) => targetFromDeclaration(declaration, projectFilesByVirtualPath))
             .filter((target): target is TypeScriptSemanticTarget => Boolean(target));
@@ -773,7 +835,7 @@ function memberCandidates(
         }
 
         if (ownTargets.length === 0) {
-            if (executableDeclarations.length > 0) {
+            if (!hasProjectDeclaration || executableDeclarations.length > 0) {
                 nonIndexableBranch = true;
             } else {
                 unresolvedBranch = true;
@@ -860,10 +922,16 @@ function directCandidates(
         };
     }
 
-    const declarationCount = symbol?.declarations?.length ?? 0;
+    const declarations = symbol?.declarations ?? [];
+    const declarationCount = declarations.length;
+    const hasProjectDeclaration = declarations.some((declaration) => (
+        declarationBelongsToProject(declaration, projectFilesByVirtualPath)
+    ));
     return {
-        decision: declarationCount > 0 ? 'unresolved' : 'unsupported',
-        reason: declarationCount > 0 ? 'declaration_without_implementation' : 'missing_symbol',
+        decision: declarationCount > 0 && hasProjectDeclaration ? 'unresolved' : 'unsupported',
+        reason: declarationCount > 0
+            ? (hasProjectDeclaration ? 'declaration_without_implementation' : 'target_not_indexable')
+            : 'missing_symbol',
         targets: [],
     };
 }

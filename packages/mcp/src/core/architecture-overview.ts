@@ -35,6 +35,15 @@ export interface ArchitectureOverviewBoundary {
     highConfidenceEvidenceCount: number;
 }
 
+export interface ArchitectureOverviewAreaFlow {
+    area: string;
+    counterpartAreaCount: number;
+    calls: number;
+    imports: number;
+    evidenceCount: number;
+    highConfidenceEvidenceCount: number;
+}
+
 export interface ArchitectureOverviewEntryCandidate {
     symbolId: string;
     label: string;
@@ -74,6 +83,10 @@ export interface ArchitectureOverviewResult {
     };
     areas: ArchitectureOverviewArea[];
     boundaries: ArchitectureOverviewBoundary[];
+    fanIn: ArchitectureOverviewAreaFlow[];
+    fanOut: ArchitectureOverviewAreaFlow[];
+    fanInRule: "cross_area_incoming_calls_and_imports";
+    fanOutRule: "cross_area_outgoing_calls_and_imports";
     hotspots: ArchitectureOverviewHotspot[];
     entryCandidates: ArchitectureOverviewEntryCandidate[];
     entryCandidatesTruncated: boolean;
@@ -171,6 +184,40 @@ function includeSymbol(
 
 function increment<K>(map: Map<K, number>, key: K, amount = 1): void {
     map.set(key, (map.get(key) ?? 0) + amount);
+}
+
+function buildAreaFlow(
+    boundaries: readonly ArchitectureOverviewBoundary[],
+    direction: "in" | "out",
+    limit: number,
+): ArchitectureOverviewAreaFlow[] {
+    const byArea = new Map<string, ArchitectureOverviewAreaFlow>();
+    for (const boundary of boundaries) {
+        const area = direction === "in" ? boundary.to : boundary.from;
+        const existing = byArea.get(area) ?? {
+            area,
+            counterpartAreaCount: 0,
+            calls: 0,
+            imports: 0,
+            evidenceCount: 0,
+            highConfidenceEvidenceCount: 0,
+        };
+        existing.counterpartAreaCount += 1;
+        existing.calls += boundary.calls;
+        existing.imports += boundary.imports;
+        existing.evidenceCount += boundary.evidenceCount;
+        existing.highConfidenceEvidenceCount += boundary.highConfidenceEvidenceCount;
+        byArea.set(area, existing);
+    }
+    return [...byArea.values()]
+        .sort((left, right) => (
+            right.evidenceCount - left.evidenceCount
+            || right.highConfidenceEvidenceCount - left.highConfidenceEvidenceCount
+            || right.counterpartAreaCount - left.counterpartAreaCount
+            || right.calls - left.calls
+            || left.area.localeCompare(right.area)
+        ))
+        .slice(0, limit);
 }
 
 function buildAreaCycles(
@@ -371,7 +418,10 @@ export function buildArchitectureOverview(input: {
     const scopedClaims = (input.resolutionClaims ?? []).filter((claim) => (
         includeArchitectureFile(claim.sourceFile, input.scope, pathScope)
     ));
-    const constructCoverage = summarizeResolutionConstructCoverage(scopedClaims, { gapLimit: 10 });
+    const constructCoverage = summarizeResolutionConstructCoverage(scopedClaims, {
+        gapLimit: 10,
+        relationships: input.relationships,
+    });
     const limit = Math.max(1, Math.floor(input.limit));
     const areas = [...areaSymbols.entries()]
         .map(([area, symbolCount]) => ({
@@ -386,7 +436,7 @@ export function buildArchitectureOverview(input: {
         ))
         .slice(0, limit);
 
-    const boundaries = [...boundaryEvidence.values()]
+    const allBoundaries = [...boundaryEvidence.values()]
         .map((row) => ({
             ...row,
             evidenceCount: row.calls + row.imports,
@@ -398,8 +448,10 @@ export function buildArchitectureOverview(input: {
             || right.calls - left.calls
             || left.from.localeCompare(right.from)
             || left.to.localeCompare(right.to)
-        ))
-        .slice(0, limit);
+        ));
+    const boundaries = allBoundaries.slice(0, limit);
+    const fanIn = buildAreaFlow(allBoundaries, "in", limit);
+    const fanOut = buildAreaFlow(allBoundaries, "out", limit);
 
     const hotspots = [...callersByTarget.entries()]
         .map(([symbolId, callers]) => {
@@ -446,7 +498,7 @@ export function buildArchitectureOverview(input: {
             || left.symbolId.localeCompare(right.symbolId)
         ));
     const entryCandidates = allEntryCandidates.slice(0, limit);
-    const areaCycles = buildAreaCycles([...boundaryEvidence.values()], limit);
+    const areaCycles = buildAreaCycles(allBoundaries, limit);
     const eligiblePublishedFileCount = input.manifest.files.filter((file) => (
         matchesPublishedPathScope(file.path, pathScope)
     )).length;
@@ -468,6 +520,10 @@ export function buildArchitectureOverview(input: {
         },
         areas,
         boundaries,
+        fanIn,
+        fanOut,
+        fanInRule: "cross_area_incoming_calls_and_imports",
+        fanOutRule: "cross_area_outgoing_calls_and_imports",
         hotspots,
         entryCandidates,
         entryCandidatesTruncated: allEntryCandidates.length > limit,

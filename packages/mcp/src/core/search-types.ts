@@ -465,6 +465,7 @@ export interface SearchDebugHint {
             | "deterministic_route_primary"
             | "mixed_route"
             | "operator_constraint"
+            | "behavioral_owner_query"
             | "explicit_role_cue"
             | "primary_candidate_pool_sufficient"
             | "primary_candidate_pool_small"
@@ -1061,6 +1062,7 @@ export type CallGraphResponseStatus =
 export type CallGraphResponseReason =
     | NavigationUnavailableReason
     | "invalid_symbol_ref"
+    | "invalid_evidence_continuation"
     | "indexing"
     | "index_failed"
     | "not_indexed"
@@ -1167,6 +1169,62 @@ export interface CallGraphTestReferenceResult {
     confidence: number;
 }
 
+export type CallGraphEvidenceKind =
+    | "exact_references"
+    | "source_references"
+    | "test_references"
+    | "construct_gaps"
+    | "edge_arguments";
+
+export interface CallGraphEvidenceSummaryResult {
+    exactReferenceCount: number;
+    sourceReferenceCount: number;
+    testReferenceCount: number;
+    constructGapCount: number;
+    edgeArgumentEdgeCount: number;
+    availableKinds: CallGraphEvidenceKind[];
+}
+
+export interface CallGraphConstructGapPageItem {
+    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+    gap: import("@zokizuan/satori-core").ResolutionConstructCoverageGap;
+}
+
+export interface CallGraphEdgeArgumentsPageItem {
+    srcSymbolId: string;
+    dstSymbolId: string;
+    site: CallGraphEdgeResult["site"];
+    args: readonly string[];
+}
+
+type CallGraphEvidencePageBase = {
+    availableCount: number;
+    returnedCount: number;
+    nextCursor?: string;
+};
+
+export type CallGraphEvidencePageResult =
+    | (CallGraphEvidencePageBase & {
+        kind: "exact_references";
+        items: CallGraphExactReferenceResult[];
+    })
+    | (CallGraphEvidencePageBase & {
+        kind: "source_references";
+        items: CallGraphSourceReferenceResult[];
+    })
+    | (CallGraphEvidencePageBase & {
+        kind: "test_references";
+        items: CallGraphTestReferenceResult[];
+    })
+    | (CallGraphEvidencePageBase & {
+        kind: "construct_gaps";
+        items: CallGraphConstructGapPageItem[];
+    })
+    | (CallGraphEvidencePageBase & {
+        kind: "edge_arguments";
+        items: CallGraphEdgeArgumentsPageItem[];
+    });
+
 export interface CallGraphTraversalResponseEnvelope {
     status: CallGraphResponseStatus;
     supported: boolean;
@@ -1188,6 +1246,8 @@ export interface CallGraphTraversalResponseEnvelope {
     sourceReferenceCoverage?: import("./exact-reference-search.js").ExactReferenceSearchCoverage;
     constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReferenceResult[];
+    evidenceSummary?: CallGraphEvidenceSummaryResult;
+    evidencePage?: CallGraphEvidencePageResult;
     notesTruncated?: boolean;
     totalNoteCount?: number;
     returnedNoteCount?: number;

@@ -15,7 +15,7 @@ import type {
 
 const SEARCH_OPERATOR_KEYS = new Set(["lang", "path", "-path", "must", "exclude"]);
 const SEARCH_QUERY_STOPWORDS = new Set([
-    "a", "an", "and", "are", "as", "at", "be", "by", "find", "for", "from", "how",
+    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "find", "for", "from", "how",
     "in", "is", "it", "logic", "of", "or", "the", "to", "used", "uses", "using",
     "what", "where", "which", "who", "why",
 ]);
@@ -264,6 +264,7 @@ function tokenizeLexicalTerms(tokens: string[]): SearchLexicalTerm[] {
         const normalized = value
             .replace(/^['"`]+|['"`]+$/g, "")
             .replace(/[(){}\[\],;]+/g, " ")
+            .replace(/^[!?.,:]+|[!?.,:]+$/g, "")
             .trim()
             .toLowerCase();
         if (normalized.length === 0) {
@@ -345,7 +346,6 @@ function isIdentifierLikeToken(token: string): boolean {
     if (trimmed.length === 0) {
         return false;
     }
-
     return /[A-Z]/.test(trimmed)
         || /[_/\\.\-:]/.test(trimmed)
         || /\d/.test(trimmed);
@@ -601,10 +601,12 @@ export function buildSearchQueryPlan(
     const documentationSeeking = /\b(doc|docs|documentation|documented|readme|guide|manual)\b/.test(normalizedQuery);
     const writerSeeking = /\b(writes?|writing|written|updates?|updated|updating|creates?|created|creating|generates?|generated|generating|emits?|emitted|emitting|persists?|persisted|persisting|configures?|configured|configuring|installs?|installed|installing)\b/.test(normalizedQuery);
     const implementationCue = /\b(implement|implements|implemented|implementation|owner|owning|built|build|builds|builder|construct|constructed|create|creates|created|install|installs|installed|emit|emits|emitted|producer|produces|normalize|normalizes|normalized|cap|caps|capped|script|scripts|check|checks|checked|wire|wired|assemble|assembles|assembled|decide|decides|decided|deciding|freshness|reconcile|reconciles|reconciled|reconciliation|control)\b/.test(normalizedQuery);
+    const behavioralHowCue = /\bhow\s+(?:does|do|is|are)\b[^\n?]*\b(?:send|sends|sending|reject|rejects|rejecting|drop|drops|dropping|cancel|cancels|cancelling|queue|queues|queuing|dispatch|dispatches|dispatching|route|routes|routing|handle|handles|handling|block|blocks|blocking|prevent|prevents|preventing|validate|validates|validating|gate|gates|gating|control|controls|controlling|decide|decides|deciding|determine|determines|determining|select|selects|selecting|choose|chooses|choosing)\b/.test(normalizedQuery);
     const behavioralOwnerSeeking = !testSeeking && (
         /\bwhere\s+is\b.*\b(?:implemented|enforced)\b/.test(normalizedQuery)
         || /\bwhich\s+implementation\s+owns?\b/.test(normalizedQuery)
         || /\bwhat\s+(?:blocks|prevents|validates|gates|controls|decides|determines|selects|chooses)\b/.test(normalizedQuery)
+        || (!documentationSeeking && !writerSeeking && behavioralHowCue)
     );
     const ownerWhereSeeking = identifierTokens.length > 0
         && !explicitReferenceSeeking

@@ -119,6 +119,71 @@ test('call_graph normalizes direction bidirectional to both before validation/di
     assert.equal(receivedArgs?.direction, 'both');
 });
 
+test('call_graph forwards bounded evidence paging requests', async () => {
+    let receivedArgs: Record<string, unknown> | undefined;
+    const ctx = {
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: {
+            handleCallGraph: async (args: Record<string, unknown>) => {
+                receivedArgs = args;
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({ status: 'ok' })
+                    }]
+                };
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+        evidence: {
+            kind: 'exact_references',
+            limit: 7,
+            cursor: '{"cursor":"fixture"}'
+        }
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    assert.deepEqual(receivedArgs?.evidence, {
+        kind: 'exact_references',
+        limit: 7,
+        cursor: '{"cursor":"fixture"}'
+    });
+});
+
+test('call_graph rejects unbounded evidence page sizes', async () => {
+    const ctx = {
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('handler must not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+        evidence: {
+            kind: 'construct_gaps',
+            limit: 51
+        }
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /Invalid arguments for 'call_graph'/);
+    assert.match(response.content[0]?.text || '', /evidence/);
+});
+
 test('call_graph keeps strict validation for invalid direction values', async () => {
     const ctx = {
         workspacePolicy: REPO_WORKSPACE_POLICY,

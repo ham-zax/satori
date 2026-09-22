@@ -80,6 +80,71 @@ test("architecture overview reports bounded cross-area fan-in and fan-out", () =
     assert.equal(result.fanOutRule, "cross_area_outgoing_calls_and_imports");
 });
 
+test("architecture overview does not reconcile scoped claims with out-of-scope call evidence", () => {
+    const a = sym("a", "packages/a/src/a.ts");
+    const b = sym("b", "packages/b/src/b.ts");
+    const span = {
+        startLine: 2,
+        endLine: 2,
+        startByte: 10,
+        endByte: 21,
+        startColumn: 4,
+        endColumn: 15,
+    };
+    const relationship = {
+        ...call(a, b),
+        span,
+        resolutionAuthority: "direct_binding",
+    } as RelationshipRecord;
+    const claim = {
+        providerId: "fixture-provider",
+        providerVersion: "fixture-v1",
+        sourceFile: a.file,
+        sourceInstanceId: a.symbolInstanceId,
+        callSpan: span,
+        observation: {
+            kind: "call",
+            construct: "direct_call",
+            calleeName: "b",
+            calleeText: "b()",
+            candidates: [],
+        },
+        decision: "unresolved",
+        relationshipType: "REFERENCES",
+        resolutionAuthority: "unresolved",
+    } as unknown as ResolutionClaim;
+    const manifest = {
+        files: [{ path: a.file }, { path: b.file }],
+    } as unknown as SymbolRegistryManifest;
+
+    const result = buildArchitectureOverview({
+        manifest,
+        symbols: [a, b],
+        relationships: [relationship],
+        resolutionClaims: [claim],
+        scope: "all",
+        limit: 10,
+        subtree: "packages/a",
+    });
+
+    assert.equal(result.coverage.includedRelationshipCount, 0);
+    assert.deepEqual(result.boundaries, []);
+    assert.equal(result.relationshipEvidence.resolutionClaimCount, 1);
+    assert.deepEqual(result.relationshipEvidence.constructCoverage.map((coverage) => ({
+        construct: coverage.construct,
+        status: coverage.status,
+        resolvedCount: coverage.resolvedCount,
+        unresolvedCount: coverage.unresolvedCount,
+        gapCount: coverage.gapCount,
+    })), [{
+        construct: "direct_call",
+        status: "partial",
+        resolvedCount: 0,
+        unresolvedCount: 1,
+        gapCount: 1,
+    }]);
+});
+
 test("architecture overview applies subtree/exclusions to entries, cycles, and claims", () => {
     const a = sym("a", "packages/a/src/a.ts");
     const b = sym("b", "packages/b/src/b.ts");

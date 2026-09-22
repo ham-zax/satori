@@ -335,6 +335,7 @@ export function buildArchitectureOverview(input: {
     const highConfidenceCallSitesByTarget = new Map<string, number>();
     const outgoingCallsBySource = new Map<string, number>();
     const externalIncomingCallTargets = new Set<string>();
+    const scopedRelationships: RelationshipRecord[] = [];
     let includedRelationshipCount = 0;
 
     for (const relationship of input.relationships) {
@@ -359,6 +360,7 @@ export function buildArchitectureOverview(input: {
             continue;
         }
 
+        scopedRelationships.push(relationship);
         includedRelationshipCount += 1;
         if (
             relationship.type === "CALLS"
@@ -420,7 +422,7 @@ export function buildArchitectureOverview(input: {
     ));
     const constructCoverage = summarizeResolutionConstructCoverage(scopedClaims, {
         gapLimit: 10,
-        relationships: input.relationships,
+        relationships: scopedRelationships,
     });
     const limit = Math.max(1, Math.floor(input.limit));
     const areas = [...areaSymbols.entries()]

@@ -182,13 +182,7 @@ export interface ResolutionProjectEvidence {
     readonly providerId: string;
     readonly providerVersion: string;
     readonly environmentConfigId: string;
-    /** All observed provider claims retained for qualification and navigation evidence. */
     readonly claimsByFile: ReadonlyMap<string, readonly ResolutionClaim[]>;
-    /**
-     * Claims eligible to enter central publication admission after provider composition.
-     * Omit when every observed claim is eligible. Raw claims remain in claimsByFile.
-     */
-    readonly admissionClaimsByFile?: ReadonlyMap<string, readonly ResolutionClaim[]>;
     /** Exact conservative relationship owners to rebuild. Omit for whole-language fallback. */
     readonly affectedSourceFiles?: ReadonlySet<string>;
     /** Non-indexed source inputs whose content can change semantic identity. */

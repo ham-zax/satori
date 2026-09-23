@@ -34,15 +34,10 @@ export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectA
     }
 
     private loadAnalyzer(): Promise<ResolutionProjectAnalyzer> {
-        this.analyzerPromise ??= Promise.all([
-            import('./typescript-semantic-analyzer.js'),
-            import('./typescript-provider-composition.js'),
-        ]).then(([{ TypeScriptSemanticProjectAnalyzer }, { CompositeTypeScriptResolutionProjectAnalyzer }]) => (
-            new CompositeTypeScriptResolutionProjectAnalyzer([{
-                analyzer: new TypeScriptSemanticProjectAnalyzer(this.maxSessions),
-                participation: 'admission',
-            }])
-        ));
+        this.analyzerPromise ??= import('./typescript-semantic-analyzer.js')
+            .then(({ TypeScriptSemanticProjectAnalyzer }) => (
+                new TypeScriptSemanticProjectAnalyzer(this.maxSessions)
+            ));
         return this.analyzerPromise;
     }
 }

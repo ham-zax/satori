@@ -27,7 +27,7 @@ export interface ResolutionConstructCoverage {
     readonly resolvedCount: number;
     readonly ambiguousCount: number;
     readonly unresolvedCount: number;
-    /** Provider-resolved observations withheld by publication admission. */
+    /** Provider-resolved observations not represented by the supplied authoritative relationship context. */
     readonly withheldResolvedCount?: number;
     readonly unsupportedCount: number;
     readonly providers: readonly {
@@ -131,18 +131,17 @@ export function summarizeResolutionConstructCoverage(
                 });
                 const publishedTargets = key ? resolvedCallTargets.get(key) : undefined;
                 if (publishedTargets) {
-                    // Non-resolved observations describe the same site that publication
-                    // successfully resolved through another provider. A provider-resolved
-                    // observation counts only when it names the target actually published.
+                    // Non-resolved observations retain exact-site coverage when the supplied
+                    // authoritative relationship context represents that site. A resolved
+                    // observation counts only when that context represents its exact target.
                     if (claim.decision !== 'resolved') return true;
                     return Boolean(
                         claim.targetInstanceId
                         && publishedTargets.has(claim.targetInstanceId)
                     );
                 }
-                // Publication-backed callers must report what central admission actually
-                // published, not a shadow provider's resolved opinion. Standalone callers
-                // without relationship context retain the claim-local fallback.
+                // Callers supplying authoritative relationship context report only what that
+                // context represents. Standalone callers retain the claim-local fallback.
                 if (options?.relationships !== undefined) return false;
                 return claim.decision === 'resolved';
             };

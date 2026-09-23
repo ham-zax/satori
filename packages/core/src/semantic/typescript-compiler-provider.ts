@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v4';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v5';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -504,13 +504,7 @@ function overloadCandidates(
         .filter((target): target is TypeScriptSemanticTarget => Boolean(target)));
 }
 
-function assignmentTargetsForExpression(
-    checker: ts.TypeChecker,
-    expression: ts.Expression,
-    propertyName: string,
-    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
-    seenSymbols = new Set<ts.Symbol>(),
-): readonly TypeScriptSemanticTarget[] | undefined {
+function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
     let current = expression;
     while (
         ts.isParenthesizedExpression(current)
@@ -521,6 +515,17 @@ function assignmentTargetsForExpression(
     ) {
         current = current.expression;
     }
+    return current;
+}
+
+function assignmentTargetsForExpression(
+    checker: ts.TypeChecker,
+    expression: ts.Expression,
+    propertyName: string,
+    projectFilesByVirtualPath: ReadonlyMap<string, ProjectFile>,
+    seenSymbols = new Set<ts.Symbol>(),
+): readonly TypeScriptSemanticTarget[] | undefined {
+    const current = unwrapTransparentExpression(expression);
 
     if (ts.isConditionalExpression(current)) {
         const whenTrue = assignmentTargetsForExpression(
@@ -711,6 +716,11 @@ function nodeReferencesSymbol(
     return found;
 }
 
+function isDirectEvalCall(call: ts.CallExpression): boolean {
+    const callee = unwrapTransparentExpression(call.expression);
+    return ts.isIdentifier(callee) && callee.text === 'eval';
+}
+
 function mutableLocalOriginCandidates(
     checker: ts.TypeChecker,
     receiver: ts.Expression,
@@ -756,11 +766,7 @@ function mutableLocalOriginCandidates(
     const visit = (node: ts.Node): void => {
         if (!complete) return;
 
-        if (
-            ts.isCallExpression(node)
-            && ts.isIdentifier(node.expression)
-            && node.expression.text === 'eval'
-        ) {
+        if (ts.isCallExpression(node) && isDirectEvalCall(node)) {
             complete = false;
             return;
         }

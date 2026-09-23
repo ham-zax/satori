@@ -44,7 +44,13 @@ export class SingleImpl implements SingleContract {
 `;
 
 const cases = `
-import { StructuralA, StructuralB, type Contract, type SingleContract } from './targets';
+import {
+    ProjectWideDecoyA,
+    StructuralA,
+    StructuralB,
+    type Contract,
+    type SingleContract,
+} from './targets';
 
 export function localOrigins(flag: boolean): void {
     const initialized: StructuralA = new StructuralB();
@@ -95,6 +101,14 @@ export function localOrigins(flag: boolean): void {
     const destructureSource: { worker: StructuralA } = { worker: new StructuralB() };
     const { worker: destructured } = destructureSource;
     destructured.request();
+}
+
+export function wrappedEvalWriteCase(): string {
+    let wrappedEvalWrite: StructuralA = new StructuralA();
+    wrappedEvalWrite = new StructuralB();
+    ((eval as typeof eval)!)("wrappedEvalWrite = new ProjectWideDecoyA()");
+    void ProjectWideDecoyA;
+    return wrappedEvalWrite.request();
 }
 
 export class FieldInitializer {
@@ -265,5 +279,18 @@ test('unproven aliases, nested member origins, destructuring, and externally sup
     assert.deepEqual(
         singleInterfaceCall?.candidates?.map((target) => target.ownerName),
         ['SingleImpl'],
+    );
+});
+
+test('transparent direct eval wrappers force mutable-origin fallback', () => {
+    const evidence = analyzeTypeScriptProject(project(), { collectDiagnostics: true });
+    assert.equal(evidence.diagnostics?.syntactic, 0);
+    assert.equal(evidence.diagnostics?.semantic, 0);
+
+    const wrappedEvalWrite = callByText(evidence, 'wrappedEvalWrite.request');
+    assert.equal(wrappedEvalWrite.decision, 'ambiguous');
+    assert.deepEqual(
+        wrappedEvalWrite.candidates?.map((target) => target.ownerName).sort(),
+        ['ProjectWideDecoyA', 'ProjectWideDecoyB', 'StructuralA', 'StructuralB'],
     );
 });

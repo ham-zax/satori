@@ -24,7 +24,7 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v3');
     assert.equal(
         RELATIONSHIP_BUILDER_VERSION,
-        'relationship-v17+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v4+relationship-evidence-v1',
+        'relationship-v17+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v5+relationship-evidence-v1',
     );
 
     assert.equal(defaultSemanticLanguageRegistry.getStrategyForLanguage('go'), 'cbm_semantic');

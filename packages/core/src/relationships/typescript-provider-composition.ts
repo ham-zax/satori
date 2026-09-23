@@ -189,8 +189,9 @@ export class CompositeTypeScriptResolutionProjectAnalyzer implements ResolutionP
         const admissionClaimsByFile = reconcileAdmissionClaims(laneEvidence);
         const sourceControlFiles = mergeSourceControlFiles(laneEvidence);
         const affectedSourceFiles = mergeAffectedSourceFiles(laneEvidence);
-        const environmentConfigId = `typescript-provider-composite:${stableHash(
-            laneEvidence
+        const environmentConfigId = `typescript-provider-composite:${stableHash({
+            compositeVersion: TYPESCRIPT_PROVIDER_COMPOSITE_VERSION,
+            lanes: laneEvidence
                 .map(({ participation, evidence }) => ({
                     participation,
                     providerId: evidence.providerId,
@@ -203,7 +204,7 @@ export class CompositeTypeScriptResolutionProjectAnalyzer implements ResolutionP
                     || compareStrings(left.participation, right.participation)
                     || compareStrings(left.environmentConfigId, right.environmentConfigId)
                 )),
-        )}`;
+        })}`;
 
         return {
             language: 'typescript',

@@ -72,16 +72,21 @@ function exactCallSiteKey(input: {
     return [input.file, input.sourceInstanceId, input.span.startByte, input.span.endByte].join('\0');
 }
 
-function authoritativeResolvedCallSites(relationships: readonly RelationshipRecord[]): ReadonlySet<string> {
-    const resolved = new Set<string>();
+function authoritativeResolvedCallTargets(
+    relationships: readonly RelationshipRecord[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+    const resolved = new Map<string, Set<string>>();
     for (const relationship of relationships) {
-        if (!isProofBackedAuthoritativeCall(relationship)) continue;
+        if (!isProofBackedAuthoritativeCall(relationship) || !relationship.targetInstanceId) continue;
         const key = exactCallSiteKey({
             file: relationship.file,
             sourceInstanceId: relationship.sourceInstanceId,
             span: relationship.span,
         });
-        if (key) resolved.add(key);
+        if (!key) continue;
+        const targets = resolved.get(key) ?? new Set<string>();
+        targets.add(relationship.targetInstanceId);
+        resolved.set(key, targets);
     }
     return resolved;
 }
@@ -99,7 +104,7 @@ export function summarizeResolutionConstructCoverage(
     },
 ): ResolutionConstructCoverage[] {
     const gapLimit = Math.max(0, Math.floor(options?.gapLimit ?? 20));
-    const resolvedCallSites = authoritativeResolvedCallSites(options?.relationships ?? []);
+    const resolvedCallTargets = authoritativeResolvedCallTargets(options?.relationships ?? []);
     const byConstruct = new Map<ResolutionCallConstruct, ResolutionClaim[]>();
     for (const claim of claims) {
         const group = byConstruct.get(claim.observation.construct) ?? [];
@@ -124,7 +129,17 @@ export function summarizeResolutionConstructCoverage(
                     sourceInstanceId: claim.sourceInstanceId,
                     span: claim.callSpan,
                 });
-                if (key && resolvedCallSites.has(key)) return true;
+                const publishedTargets = key ? resolvedCallTargets.get(key) : undefined;
+                if (publishedTargets) {
+                    // Non-resolved observations describe the same site that publication
+                    // successfully resolved through another provider. A provider-resolved
+                    // observation counts only when it names the target actually published.
+                    if (claim.decision !== 'resolved') return true;
+                    return Boolean(
+                        claim.targetInstanceId
+                        && publishedTargets.has(claim.targetInstanceId)
+                    );
+                }
                 // Publication-backed callers must report what central admission actually
                 // published, not a shadow provider's resolved opinion. Standalone callers
                 // without relationship context retain the claim-local fallback.

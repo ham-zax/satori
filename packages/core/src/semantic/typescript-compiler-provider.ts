@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v5';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v6';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -717,6 +717,7 @@ function nodeReferencesSymbol(
 }
 
 function isDirectEvalCall(call: ts.CallExpression): boolean {
+    if (call.questionDotToken) return false;
     const callee = unwrapTransparentExpression(call.expression);
     return ts.isIdentifier(callee) && callee.text === 'eval';
 }

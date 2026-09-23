@@ -111,6 +111,15 @@ export function wrappedEvalWriteCase(): string {
     return wrappedEvalWrite.request();
 }
 
+export function optionalEvalWriteCase(): string {
+    let optionalEvalWrite: StructuralA = new StructuralA();
+    optionalEvalWrite = new StructuralB();
+    eval?.("optionalEvalWrite = new ProjectWideDecoyA()");
+    ((eval as typeof eval)!)?.("optionalEvalWrite = new ProjectWideDecoyA()");
+    void ProjectWideDecoyA;
+    return optionalEvalWrite.request();
+}
+
 export class FieldInitializer {
     private readonly worker: StructuralA = new StructuralB();
 
@@ -292,5 +301,18 @@ test('transparent direct eval wrappers force mutable-origin fallback', () => {
     assert.deepEqual(
         wrappedEvalWrite.candidates?.map((target) => target.ownerName).sort(),
         ['ProjectWideDecoyA', 'ProjectWideDecoyB', 'StructuralA', 'StructuralB'],
+    );
+});
+
+test('optional eval calls remain indirect for mutable-origin precision', () => {
+    const evidence = analyzeTypeScriptProject(project(), { collectDiagnostics: true });
+    assert.equal(evidence.diagnostics?.syntactic, 0);
+    assert.equal(evidence.diagnostics?.semantic, 0);
+
+    const optionalEvalWrite = callByText(evidence, 'optionalEvalWrite.request');
+    assert.equal(optionalEvalWrite.decision, 'ambiguous');
+    assert.deepEqual(
+        optionalEvalWrite.candidates?.map((target) => target.ownerName).sort(),
+        ['StructuralA', 'StructuralB'],
     );
 });

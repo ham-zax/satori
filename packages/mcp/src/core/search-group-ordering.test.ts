@@ -126,6 +126,92 @@ test("diversity omissions preserve the authoritative sequence across relaxed pas
     assert.deepEqual(applied.selected.map((result) => result.__groupId), ["a", "b", "c", "d"]);
 });
 
+test("symbol diversity admits one complementary executable owner without becoming rank authority", () => {
+    const results: Sortable[] = [
+        group({ file: "a.ts", displayLabel: "function First()", symbolKind: "function", score: 0.9, __groupId: "a1", __symbolInstanceId: "owner-a1" }),
+        group({ file: "a.ts", displayLabel: "function Second()", symbolKind: "function", score: 0.8, __groupId: "a2", __symbolInstanceId: "owner-a2" }),
+        group({ file: "a.ts", displayLabel: "function Third()", symbolKind: "function", score: 0.01, __groupId: "a3", __symbolInstanceId: "owner-a3" }),
+        group({ file: "a.ts", displayLabel: "function Fourth()", symbolKind: "function", score: 1, __groupId: "a4", __symbolInstanceId: "owner-a4" }),
+        group({ file: "b.ts", displayLabel: "function B()", symbolKind: "function", score: 0.7, __groupId: "b", __symbolInstanceId: "owner-b" }),
+        group({ file: "c.ts", displayLabel: "function C()", symbolKind: "function", score: 0.6, __groupId: "c", __symbolInstanceId: "owner-c" }),
+    ];
+
+    const applied = applyGroupDiversity(results, 5, "symbol");
+
+    assert.deepEqual(applied.selected.map((result) => result.__groupId), ["a1", "a2", "a3", "b", "c"]);
+    assert.equal(applied.selected.filter((result) => result.target.file === "a.ts").length, 3);
+    assert.equal(applied.summary.usedRelaxedCap, false);
+    assert.equal(applied.summary.usedComplementaryOwnerSlot, true);
+    assert.equal(
+        applied.omitted.find(({ group: omitted }) => omitted.__groupId === "a4")?.reason,
+        "file_diversity_cap",
+    );
+});
+
+test("eligible complementary owner omitted by the visible limit is not mislabeled as file-capped", () => {
+    const results: Sortable[] = [
+        group({ file: "a.ts", displayLabel: "function First()", symbolKind: "function", score: 1, __groupId: "a1", __symbolInstanceId: "owner-a1" }),
+        group({ file: "a.ts", displayLabel: "function Second()", symbolKind: "function", score: 0.9, __groupId: "a2", __symbolInstanceId: "owner-a2" }),
+        group({ file: "b.ts", displayLabel: "function B()", symbolKind: "function", score: 0.8, __groupId: "b", __symbolInstanceId: "owner-b" }),
+        group({ file: "a.ts", displayLabel: "function Third()", symbolKind: "function", score: 0.7, __groupId: "a3", __symbolInstanceId: "owner-a3" }),
+    ];
+
+    const applied = applyGroupDiversity(results, 3, "symbol");
+
+    assert.deepEqual(applied.selected.map((result) => result.__groupId), ["a1", "a2", "b"]);
+    assert.equal(applied.summary.usedComplementaryOwnerSlot, false);
+    assert.equal(
+        applied.omitted.find(({ group: omitted }) => omitted.__groupId === "a3")?.reason,
+        "visible_limit",
+    );
+});
+
+test("complementary owner slot rejects duplicate owners and still prevents file flooding", () => {
+    const results: Sortable[] = [
+        group({ file: "dup.ts", displayLabel: "function Shared()", symbolKind: "function", score: 1, __groupId: "dup-1", __symbolInstanceId: "shared-owner" }),
+        group({ file: "dup.ts", displayLabel: "function SharedAgain()", symbolKind: "function", score: 0.99, __groupId: "dup-2", __symbolInstanceId: "shared-owner" }),
+        group({ file: "a.ts", displayLabel: "function First()", symbolKind: "function", score: 0.9, __groupId: "a1", __symbolInstanceId: "owner-a1" }),
+        group({ file: "a.ts", displayLabel: "function Second()", symbolKind: "function", score: 0.8, __groupId: "a2", __symbolInstanceId: "owner-a2" }),
+        group({ file: "a.ts", displayLabel: "function Third()", symbolKind: "function", score: 0.7, __groupId: "a3", __symbolInstanceId: "owner-a3" }),
+        group({ file: "a.ts", displayLabel: "function Fourth()", symbolKind: "function", score: 0.6, __groupId: "a4", __symbolInstanceId: "owner-a4" }),
+        group({ file: "b.ts", displayLabel: "function B()", symbolKind: "function", score: 0.5, __groupId: "b", __symbolInstanceId: "owner-b" }),
+    ];
+
+    const applied = applyGroupDiversity(results, 5, "symbol");
+
+    assert.deepEqual(applied.selected.map((result) => result.__groupId), ["dup-1", "a1", "a2", "a3", "b"]);
+    assert.equal(applied.selected.length, 5);
+    assert.equal(applied.selected.filter((result) => result.target.file === "a.ts").length, 3);
+    assert.equal(
+        applied.omitted.find(({ group: omitted }) => omitted.__groupId === "dup-2")?.reason,
+        "symbol_diversity_cap",
+    );
+    assert.equal(
+        applied.omitted.find(({ group: omitted }) => omitted.__groupId === "a4")?.reason,
+        "file_diversity_cap",
+    );
+});
+
+test("non-executable third sibling remains capped when diverse files can fill the limit", () => {
+    const results: Sortable[] = [
+        group({ file: "a.ts", displayLabel: "property first", symbolKind: "property", score: 1, __groupId: "a1", __symbolInstanceId: "owner-a1" }),
+        group({ file: "a.ts", displayLabel: "property second", symbolKind: "property", score: 0.9, __groupId: "a2", __symbolInstanceId: "owner-a2" }),
+        group({ file: "a.ts", displayLabel: "property third", symbolKind: "property", score: 0.8, __groupId: "a3", __symbolInstanceId: "owner-a3" }),
+        group({ file: "b.ts", displayLabel: "function B()", symbolKind: "function", score: 0.7, __groupId: "b", __symbolInstanceId: "owner-b" }),
+        group({ file: "c.ts", displayLabel: "function C()", symbolKind: "function", score: 0.6, __groupId: "c", __symbolInstanceId: "owner-c" }),
+        group({ file: "d.ts", displayLabel: "function D()", symbolKind: "function", score: 0.5, __groupId: "d", __symbolInstanceId: "owner-d" }),
+    ];
+
+    const applied = applyGroupDiversity(results, 5, "symbol");
+
+    assert.deepEqual(applied.selected.map((result) => result.__groupId), ["a1", "a2", "b", "c", "d"]);
+    assert.equal(applied.summary.usedRelaxedCap, false);
+    assert.equal(
+        applied.omitted.find(({ group: omitted }) => omitted.__groupId === "a3")?.reason,
+        "file_diversity_cap",
+    );
+});
+
 test("native duplicate declaration collapse keeps the earliest authoritative group", () => {
     const groups = [
         group({

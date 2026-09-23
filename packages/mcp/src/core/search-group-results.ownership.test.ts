@@ -521,5 +521,9 @@ test("grouped disclosure order preserves the visible prefix and global diversity
         result.disclosureOrder.filter(({ target }) => target.file === "src/a.ts").length,
         3,
     );
+    assert.deepEqual(
+        result.disclosureOrder.map(({ target }) => `${target.file}:${target.span.startLine}`),
+        ["src/a.ts:1", "src/a.ts:1000", "src/a.ts:2000", "src/b.ts:1", "src/c.ts:1"],
+    );
     assert.ok(result.disclosureOrder.length < result.rankedResults.length);
 });

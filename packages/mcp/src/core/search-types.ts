@@ -562,6 +562,7 @@ export interface SearchDebugHint {
         skippedByFileCap: number;
         skippedBySymbolCap: number;
         usedRelaxedCap: boolean;
+        usedComplementaryOwnerSlot: boolean;
     };
     changedFilesBoost: {
         enabled: boolean;

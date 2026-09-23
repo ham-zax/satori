@@ -125,6 +125,8 @@ export {
     getGraphNeighbors,
     getRelationshipsForSymbol,
 } from './navigation/query';
+export { TRACE_PATH_RELATIONSHIP_KINDS, traceRelationshipPath } from './navigation/trace-path';
+export type { TracePathRelationshipKind, TraceRelationshipPathInput, TraceRelationshipPathResult } from './navigation/trace-path';
 export type {
     GetRelationshipManifestInput,
 } from './navigation/query';

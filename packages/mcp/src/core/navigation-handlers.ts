@@ -7,12 +7,14 @@ import {
     getSupportedExtensionsForCapability,
     JsonNavigationStore,
     summarizeResolutionConstructCoverage,
+    traceRelationshipPath,
     type PublicationLease,
     type PublicationPackageOwnership,
     type PublicationRef,
     type SymbolRecord,
     type SymbolRegistry,
     type SymbolStructuralAnalysis,
+    type TraceRelationshipPathInput,
 } from "@zokizuan/satori-core";
 
 import {
@@ -117,6 +119,7 @@ type NavigationHandlersHost = {
         navigationRoot: string;
     } | null;
     getPublicationNavigationStatus(publication: PublicationRef): Promise<import("@zokizuan/satori-core").PublicationNavigationStatus>;
+    tracePath?: (input: TraceRelationshipPathInput) => ReturnType<typeof traceRelationshipPath>;
     loadPreparedNavigationSymbolsByFile(
         preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
         file: string,
@@ -464,6 +467,108 @@ function formatUnknownError(error: unknown): string {
 
 export class NavigationHandlers {
     constructor(private readonly host: NavigationHandlersHost) {}
+
+    public async handleTracePath(args: ToolArgs): Promise<ToolTextResponse> {
+        const requestedPath = String(args.path);
+        const respond = (payload: Record<string, unknown>): ToolTextResponse => ({
+            content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+        });
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+            prepareReadiness: () => this.host.prepareNavigationRead(requestedPath),
+            acquirePublicationLease: (prepared) => prepared.state === "ready"
+                ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
+                : undefined,
+            isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
+        });
+        const outcome = await session.read(async (prepared, lease) => {
+            if (prepared.state !== "ready") {
+                return respond({ status: "not_ready", reason: prepared.state, path: requestedPath });
+            }
+            if (lease.id !== prepared.publication.id
+                || lease.publication.canonicalRoot !== prepared.root.path) {
+                return respond({ status: "not_ready", reason: "publication_identity_changed", path: requestedPath });
+            }
+            const navigation = this.host.getPublicationNavigationAddress(lease);
+            if (!navigation || navigation.publicationId !== lease.id) {
+                return respond({
+                    status: "not_ready", reason: "missing_publication_navigation", path: requestedPath,
+                });
+            }
+            let scopeSubtree: string | undefined;
+            try {
+                scopeSubtree = resolveRequestedSearchSubdirectory({
+                    indexedRoot: lease.publication.canonicalRoot,
+                    requestedPath,
+                })?.relativePrefix;
+            } catch {
+                return respond({ status: "error", reason: "path_outside_indexed_root", path: requestedPath });
+            }
+            const result = await (this.host.tracePath ?? traceRelationshipPath)({
+                normalizedRootPath: lease.publication.canonicalRoot,
+                publicationId: lease.id,
+                navigationRoot: navigation.navigationRoot,
+                sourceSymbolId: String(args.sourceSymbolId),
+                targetSymbolId: String(args.targetSymbolId),
+                allowedTypes: args.relationshipKinds as TraceRelationshipPathInput["allowedTypes"],
+                ...(scopeSubtree ? { scopeSubtree } : {}),
+                maxDepth: Number(args.maxDepth),
+                maxVisitedNodes: Number(args.maxVisitedNodes),
+                maxTraversedEdges: Number(args.maxTraversedEdges),
+            });
+            if (result.status === "missing_symbol") {
+                return respond({
+                    status: "not_found", reason: "missing_symbol", symbol: result.symbol,
+                    path: requestedPath, publicationId: lease.id,
+                });
+            }
+            if (result.status !== "ok") {
+                return respond({
+                    status: "not_ready", reason: `${result.status}_navigation`,
+                    path: requestedPath, publicationId: lease.id, message: result.reason,
+                });
+            }
+            return respond({
+                status: "ok",
+                path: requestedPath,
+                codebaseRoot: lease.publication.canonicalRoot,
+                publicationId: lease.id,
+                sourceSymbolId: args.sourceSymbolId,
+                targetSymbolId: args.targetSymbolId,
+                relationshipKinds: args.relationshipKinds,
+                maxDepth: args.maxDepth,
+                maxVisitedNodes: args.maxVisitedNodes,
+                maxTraversedEdges: args.maxTraversedEdges,
+                found: result.path !== null,
+                shortestPath: result.path && {
+                    nodes: result.path.nodes.map((node) => ({
+                        symbolId: node.symbolInstanceId,
+                        label: node.label,
+                        kind: node.kind,
+                        file: node.file,
+                        language: node.language,
+                        span: node.span,
+                    })),
+                    edges: result.path.edges.map((edge) => ({
+                        kind: edge.type,
+                        sourceSymbolId: edge.sourceInstanceId,
+                        targetSymbolId: edge.targetInstanceId,
+                        site: { file: edge.file, span: edge.span },
+                        confidence: edge.confidence,
+                        ...(edge.strategy ? { strategy: edge.strategy } : {}),
+                        ...(edge.resolutionAuthority ? { resolutionAuthority: edge.resolutionAuthority } : {}),
+                    })),
+                },
+                coverage: result.coverage,
+                warnings: result.warnings,
+                message: result.path
+                    ? "One shortest path found in the selected Publication and relationship scope."
+                    : "No path found within this Publication, path scope, relationship kinds, and traversal budgets.",
+            });
+        });
+        return outcome.status === "completed"
+            ? outcome.result
+            : respond({ status: "not_ready", reason: "publication_read_not_admitted", path: requestedPath });
+    }
 
     public async handleArchitectureOverview(
         args: ToolArgs,

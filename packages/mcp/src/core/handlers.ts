@@ -2044,6 +2044,10 @@ export class ToolHandlers {
         return this.navigationHandlers.handleCallGraph(args, workspacePolicy);
     }
 
+    public async handleTracePath(args: ToolArgs) {
+        return this.navigationHandlers.handleTracePath(args);
+    }
+
     public async handleClearIndex(args: ToolArgs) {
         return this.manageMaintenanceHandlers.handleClearIndex(args);
     }

@@ -442,6 +442,7 @@ Restart OpenCode after restoring the published runtime.
 | `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. |
 | `file_outline` | List the indexed symbols and spans in one file. Use it to choose an exact owner before reading implementation. |
 | `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
+| `trace_path` | Find one bounded shortest path between exact published symbols over selected persisted relationships, with scope and truncation evidence. |
 | `detect_changes` | Map a Git diff to current indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
 | `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |

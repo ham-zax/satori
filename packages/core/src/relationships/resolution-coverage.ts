@@ -12,7 +12,7 @@ export type ResolutionConstructCoverageStatus = 'ready' | 'partial' | 'unsupport
 export interface ResolutionConstructCoverageGap {
     readonly file: string;
     readonly span: SourceSpan;
-    readonly decision: 'ambiguous' | 'unresolved';
+    readonly decision: ResolutionClaim['decision'];
     readonly resolutionAuthority: ResolutionClaim['resolutionAuthority'];
     readonly providerId: string;
     readonly providerVersion: string;
@@ -27,6 +27,8 @@ export interface ResolutionConstructCoverage {
     readonly resolvedCount: number;
     readonly ambiguousCount: number;
     readonly unresolvedCount: number;
+    /** Provider-resolved observations withheld by publication admission. */
+    readonly withheldResolvedCount?: number;
     readonly unsupportedCount: number;
     readonly providers: readonly {
         readonly providerId: string;
@@ -117,13 +119,17 @@ export function summarizeResolutionConstructCoverage(
                 || compareStrings(left.providerId, right.providerId)
             ));
             const isResolvedForCoverage = (claim: ResolutionClaim): boolean => {
-                if (claim.decision === 'resolved') return true;
                 const key = exactCallSiteKey({
                     file: claim.sourceFile,
                     sourceInstanceId: claim.sourceInstanceId,
                     span: claim.callSpan,
                 });
-                return Boolean(key && resolvedCallSites.has(key));
+                if (key && resolvedCallSites.has(key)) return true;
+                // Publication-backed callers must report what central admission actually
+                // published, not a shadow provider's resolved opinion. Standalone callers
+                // without relationship context retain the claim-local fallback.
+                if (options?.relationships !== undefined) return false;
+                return claim.decision === 'resolved';
             };
             const resolvedCount = sorted.filter(isResolvedForCoverage).length;
             const ambiguousCount = sorted.filter((claim) => (
@@ -136,6 +142,9 @@ export function summarizeResolutionConstructCoverage(
                 !isResolvedForCoverage(claim)
                 && claim.decision === 'unresolved'
                 && claim.resolutionAuthority !== 'unsupported'
+            )).length;
+            const withheldResolvedCount = sorted.filter((claim) => (
+                !isResolvedForCoverage(claim) && claim.decision === 'resolved'
             )).length;
             const gaps = sorted.filter((claim) => (
                 !isResolvedForCoverage(claim) && claim.resolutionAuthority !== 'unsupported'
@@ -159,13 +168,14 @@ export function summarizeResolutionConstructCoverage(
                 resolvedCount,
                 ambiguousCount,
                 unresolvedCount,
+                ...(withheldResolvedCount > 0 ? { withheldResolvedCount } : {}),
                 unsupportedCount,
                 providers,
                 gapCount: gaps.length,
                 gapSpans: gaps.slice(0, gapLimit).map((claim) => ({
                     file: claim.sourceFile,
                     span: { ...claim.callSpan },
-                    decision: claim.decision as 'ambiguous' | 'unresolved',
+                    decision: claim.decision,
                     resolutionAuthority: claim.resolutionAuthority,
                     providerId: claim.providerId,
                     providerVersion: claim.providerVersion,

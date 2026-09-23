@@ -242,8 +242,11 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
             const claims: ResolutionClaim[] = [];
             for (const file of files) {
                 const fileClaims = evidence.claimsByFile.get(file) ?? [];
-                if (fileClaims.length > 0) {
-                    claims.push(...fileClaims);
+                const admissionClaims = evidence.admissionClaimsByFile
+                    ? evidence.admissionClaimsByFile.get(file) ?? []
+                    : fileClaims;
+                if (admissionClaims.length > 0) {
+                    claims.push(...admissionClaims);
                 }
                 allClaimsByFile.set(file, [...fileClaims]);
             }

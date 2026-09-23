@@ -12,7 +12,7 @@ Current production surface:
 
 | Language | Structural backend | CALLS backend | Public calls | Test references |
 |---|---|---|---|---|
-| TypeScript | OXC | Satori syntactic | `calls_v0` | production |
+| TypeScript | OXC | `typescript_semantic` (Satori compiler claims) | `type_receiver_aware` | production |
 | JavaScript | OXC | Satori syntactic | `calls_v0` | production |
 | Python | Satori Tree-sitter WASM | `python_native` | `calls_v0` | production |
 | Go | CBM WASM | `cbm_semantic` | `calls_v0` | production |
@@ -22,7 +22,7 @@ Current production surface:
 | Rust | structural symbols + CBM project analyzer | `cbm_semantic` | `calls_v0` | none |
 | Scala | Satori Tree-sitter WASM | Satori syntactic | `calls_v0` | none |
 
-`calls_v0` is a conservative navigation claim, not a promise of compiler-complete dynamic dispatch. Java/C# currently admit exact static bindings inside proved project authority; C++ admits exact same-translation-unit direct calls; Rust requires Cargo ownership and excludes unmodeled `cfg`/receiver cases; Scala admits unique direct non-member calls and abstains on member or ambiguous targets.
+`calls_v0` is a conservative navigation claim, not a promise of compiler-complete dynamic dispatch. TypeScript is separately promoted as `type_receiver_aware`: it uses configured compiler projects and exact OXC caller/target binding, retaining ambiguity for open-world interface dispatch, mutable origins, and unresolved/dynamic constructs. Java/C# currently admit exact static bindings inside proved project authority; C++ admits exact same-translation-unit direct calls; Rust requires Cargo ownership and excludes unmodeled `cfg`/receiver cases; Scala admits unique direct non-member calls and abstains on member or ambiguous targets.
 
 The generic relationship pipeline is decoupled into descriptors, strategy dispatch/admission, and backend-specific evidence. CBM-backed languages additionally use an isolated WebAssembly semantic engine:
 
@@ -63,15 +63,16 @@ Language capabilities, file extensions, semantic revisions, grammar references, 
 ### Tier 2: Generic Strategy Dispatch & Central Admission
 Relationship construction in `packages/core/src/relationships/builder.ts` is strategy-driven. Language-specific semantics stay in the selected analyzer/resolver rather than leaking into generic relationship admission:
 
-1. **Resolution Strategy Selection:** Each source file is routed to its designated strategy (`python_native`, `cbm_semantic`, `syntactic`). Python uses the native Python resolver; TypeScript, JavaScript, and Scala use the built-in syntactic resolver; descriptor-registered languages use the CBM semantic path.
-2. **Generic CBM Contribution Engine (`cbm.ts`):** Handles any CBM-backed language uniformly by consuming `SemanticProjectEvidence` produced by the semantic analyzer.
-3. **Neutral Central Admission (`admission.ts`):** `admitAuthoritativeProofBackedCalls` validates every call claim against the repository's `SymbolRegistry`:
+1. **Resolution Strategy Selection:** Each source file is routed to its designated strategy (`python_native`, `typescript_semantic`, `cbm_semantic`, `syntactic`). Python uses the native Python resolver; TypeScript uses project-scoped compiler evidence; JavaScript and Scala use the built-in syntactic resolver; descriptor-registered languages use the CBM semantic path.
+2. **TypeScript Project Evidence:** `TypeScriptSemanticProjectAnalyzer` owns configured/inferred TypeScript project sessions, project/config freshness, and provider-neutral `ResolutionClaim`s. `CompositeTypeScriptResolutionProjectAnalyzer` is the composition boundary for additional TypeScript providers: every provider claim remains observable, while only reconciled admission-lane claims may reach publication admission. Shadow lanes never add or suppress public CALLS.
+3. **Generic CBM Contribution Engine (`cbm.ts`):** Handles any CBM-backed language uniformly by consuming `SemanticProjectEvidence` produced by the semantic analyzer.
+4. **Neutral Central Admission (`admission.ts`):** `admitAuthoritativeProofBackedCalls` validates every call claim against the repository's `SymbolRegistry`:
    - Enforces exact byte span containment within source callable symbols (`function`, `method`, `component`, `hook`, `test`).
    - Enforces existence and matching of target callable symbols.
    - Stamps deterministic confidence (`high` for intra-file, `low` for cross-file) and authoritative proof provenance (`direct_binding`, `origin_flow`).
 
 ### Tier 3: CBM WebAssembly Engine
-Go, Java, C#, C++, and Rust semantic project analysis is executed in a sandboxed WebAssembly module compiled from C11 sources (`third_party/cbm-semantic/`) with Emscripten. TypeScript/JavaScript, Python, and Scala do not use this CBM semantic path:
+Go, Java, C#, C++, and Rust semantic project analysis is executed in a sandboxed WebAssembly module compiled from C11 sources (`third_party/cbm-semantic/`) with Emscripten. TypeScript uses its separate compiler-backed project analyzer and neutral-claim composition boundary; JavaScript, Python, and Scala do not use this CBM semantic path:
 
 * **64-Byte POD ABI:** Relationships, definitions, and diagnostics are exported as fixed-width, memory-aligned 64-byte C structures (`SatoriSemanticResultV1`, `SatoriSemanticDefinitionV1`, `SatoriSemanticDiagnosticV1`) with static compile-time assertions on struct sizes and field offsets.
 * **String Table Offsets:** All strings cross the WASM/TS boundary as 32-bit byte offsets into a contiguous UTF-8 buffer, eliminating dynamic string allocation overhead.
@@ -92,6 +93,10 @@ Go, Java, C#, C++, and Rust semantic project analysis is executed in a sandboxed
    - A single `SemanticLanguageRegistry` instance is instantiated per runtime composition and threaded through `IndexGenerationWorkflow` $\to$ `buildRelationshipsForRegistry` $\to$ `LanguageResolutionStrategyRegistry` $\to$ `CbmSemanticContributionEngine`.
 4. **Publication Freshness:**
    - Relationship output is part of the same immutable Publication as search and symbol state. Sync/reindex may reuse bounded analysis work internally, but readers never observe a mixed generation: the replacement Publication becomes current only after its complete navigation state is ready.
+   - TypeScript semantic environment identity includes compiler/config/project inputs such as `tsconfig.json`/`jsconfig.json`, `extends`, path mappings, project references, and relevant package/module controls. A composed provider environment includes every participating lane's environment identity and source-control files.
+5. **TypeScript Structural Authority and Provider Conflict:**
+   - OXC/Satori remains authoritative for public symbol identity, byte spans, lexical ownership, and the Publication symbol registry. Provider-native names are evidence only until they map to exact canonical caller/target instances.
+   - Provider identity is provenance, not priority. Admission-lane claims that disagree on a canonical caller/target, or retain competing positive candidates, are withheld from central CALLS admission. Identical canonical proofs deduplicate into the single Publication relationship graph; raw provider claims remain available as resolution evidence.
 
 ---
 

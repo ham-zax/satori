@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { TRACE_PATH_RELATIONSHIP_KINDS } from '@zokizuan/satori-core';
 import { requireAbsoluteFilesystemPath } from '../utils.js';
 import { WorkspaceAuthorizationError } from '../core/session-workspace-policy.js';
-import { resolveVectorBackedToolContext } from './provider-context.js';
 import {
     absoluteFilesystemPathSchema,
     formatZodError,
@@ -75,8 +74,6 @@ export const tracePathTool: McpTool = {
             throw error;
         }
         const input = { ...parsed.data, path: canonicalPath };
-        const resolved = await resolveVectorBackedToolContext(ctx, { tool: 'trace_path', path: canonicalPath });
-        if (!resolved.ok) return resolved.response;
-        return resolved.context.toolHandlers.handleTracePath(input);
+        return ctx.toolHandlers.handleTracePath(input);
     },
 };

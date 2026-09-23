@@ -57,3 +57,31 @@ test('trace_path dispatches canonical path and default bounds', async () => {
         maxTraversedEdges: 500,
     });
 });
+
+test('trace_path stays available when the vector provider is unavailable', async () => {
+    let providerRequested = false;
+    let handled = false;
+    const ctx = {
+        workspacePolicy: { authorizePath: () => ({ canonicalPath: '/repo/canonical' }) },
+        providerRuntime: {
+            requireToolContext: async () => {
+                providerRequested = true;
+                throw new Error('vector backend must not be consulted');
+            },
+        },
+        toolHandlers: {
+            handleTracePath: async () => {
+                handled = true;
+                return { content: [{ type: 'text', text: '{"status":"ok"}' }] };
+            },
+        },
+    } as unknown as Parameters<typeof tracePathTool.execute>[1];
+
+    const response = await tracePathTool.execute({
+        path: '/repo/requested', sourceSymbolId: 'a', targetSymbolId: 'b',
+    }, ctx);
+
+    assert.equal(response.isError, undefined);
+    assert.equal(providerRequested, false);
+    assert.equal(handled, true);
+});

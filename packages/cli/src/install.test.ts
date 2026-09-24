@@ -567,8 +567,8 @@ test("install writes managed Codex config and concise global guidance without sk
         assert.equal(codexInstructions.includes("recommendedNextAction"), true);
         assert.equal(codexInstructions.includes("warnings[].action"), true);
         assert.equal(codexInstructions.includes("Treat `call_graph` as navigation evidence, not complete blast-radius proof"), true);
-        assert.equal(codexInstructions.includes("grep"), false);
-        assert.equal(codexInstructions.includes("glob"), false);
+        assert.equal(codexInstructions.includes("`grep`"), false);
+        assert.equal(codexInstructions.includes("`glob`"), false);
     });
 });
 

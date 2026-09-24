@@ -1,8 +1,8 @@
 # @zokizuan/satori-mcp
 
-The MCP runtime behind [Satori](https://github.com/ham-zax/satori), the local repository-intelligence database for coding agents.
+The MCP runtime behind [Satori](https://github.com/ham-zax/satori), a local-first code-intelligence layer for coding agents.
 
-This package exposes the eight primitives an MCP-compatible agent uses to interrogate that database: freshness-aware hybrid search, symbol ownership, file structure, conservative relationship navigation, diff-based impact, exact source reads, repository discovery, and index lifecycle management.
+Agents can ask a repository question in natural language and move from hybrid semantic + lexical search to owning symbols, exact source, structural context, references, relationship navigation, architecture evidence, change orientation, and freshness-aware index state. The live MCP registry exposes 11 tools, including bounded `trace_path` and ranking-independent `find_references`.
 
 Most users should install Satori through `@zokizuan/satori-cli`. The installer writes a stable local launcher, configures supported MCP clients, and selects the managed runtime. This package is the server/runtime surface, not a separate end-user product and not a client-configuration manager.
 
@@ -17,7 +17,7 @@ npx -y @zokizuan/satori-cli@latest doctor
 to force configuration of all three. A persistent `satori` command is optional:
 `npm install -g @zokizuan/satori-cli@latest`.
 
-The local Potion runtime currently supports Linux x64, including Windows through WSL2. Connected Voyage and explicit local Ollama configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
+The qualified default offline path supports Linux x64, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Explicit local Ollama and connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
 
 When installed through the CLI, compatible offline Potion + LanceDB clients
 share one private local host, provider/LanceDB state, and one Potion worker. Each

@@ -7,7 +7,7 @@
     <title>Satori Architecture | Repository Intelligence, Publications, Local Retrieval</title>
     <meta
       name="description"
-      content="How Satori turns a repository into a coherent intelligence database: hybrid retrieval, symbol ownership, structural and relationship evidence, source freshness, atomic Publications, and a shared local runtime."
+      content="How Satori turns natural-language repository questions into grounded code evidence: hybrid retrieval, symbol ownership, structural and relationship evidence, source freshness, atomic Publications, and a shared local runtime."
     />
     <meta name="keywords" content="Satori architecture, MCP server architecture, repository intelligence, semantic code search, symbol registry, call graph, atomic publication, repo indexing, LanceDB" />
     <meta name="robots" content="index,follow" />
@@ -1034,10 +1034,10 @@
         <div class="hero-eyebrow">Architecture / repository intelligence authority</div>
         <h1>One repository generation. Multiple evidence layers.</h1>
         <p>
-          Satori is built as a repository-intelligence database rather than a pile of independent search tools.
-          Semantic and lexical retrieval, symbol ownership, structural navigation, supported relationships,
-          source freshness, and exact source are bound to one immutable <strong>Publication</strong> so an agent
-          knows which repository state produced the answer.
+          Satori is built as one repository-intelligence authority rather than a pile of independent search tools.
+          Natural-language semantic retrieval, lexical evidence, symbol ownership, structural navigation, supported
+          relationships, source freshness, and exact source are bound to one immutable <strong>Publication</strong>
+          so an agent knows which repository state produced the answer.
         </p>
         <div class="architecture-layer-rail" role="list" aria-label="Satori repository intelligence architecture">
           <div role="listitem"><span>01</span><b>Retrieve</b><small>semantic + BM25 + exact evidence</small></div>
@@ -1059,7 +1059,7 @@
         <div class="section-kicker">How the product stays coherent</div>
         <h2>System Overview</h2>
         <p class="intro">
-          Agent requests route through a fixed seven-tool MCP surface into one repository-intelligence authority.
+          Agent requests route through a fixed 11-tool MCP surface into one repository-intelligence authority.
           The runtime selects the current Publication, validates compatibility and freshness, and keeps the request
           pinned to that immutable generation. Indexing and maintenance build the next Publication separately and
           activate it only after the replacement is ready to become current authority.
@@ -1209,7 +1209,7 @@
           </article>
           <article class="card">
             <h3><code>@zokizuan/satori-mcp</code></h3>
-            <p>Owns the MCP server, seven-tool contract, lifecycle state, and agent envelopes.</p>
+            <p>Owns the MCP server, 11-tool contract, lifecycle state, and agent envelopes.</p>
           </article>
           <article class="card">
             <h3><code>@zokizuan/satori-cli</code></h3>
@@ -1282,11 +1282,11 @@
       <section class="section">
         <h2>Agent-Safe Tool Surface</h2>
         <p class="intro">
-          Satori exposes exactly nine public MCP tools. They cover repository
-          discovery, lifecycle, search/pagination, architecture and structural navigation, bounded
-          source reads, change orientation, and call-graph context. Every tool is read-only with
-          respect to source code; only index state is mutable through
-          <code>manage_index</code>.
+          Satori exposes exactly 11 public MCP tools. They cover repository discovery,
+          lifecycle, natural-language + lexical search and pagination, architecture, structural and
+          relationship navigation, exact references, bounded source reads, and change orientation.
+          Every tool is read-only with respect to source code; only Satori index state is mutable
+          through <code>manage_index</code>.
         </p>
         <div class="grid-3">
           <article class="tool-group">
@@ -1336,6 +1336,16 @@
                 <h3><code>call_graph</code></h3>
                 <p>Traverses bounded caller/callee relationship context and supported test references for an exact symbol reference.</p>
                 <p class="refusal">Unsupported dispatch or missing relationship authority returns a capability/readiness fallback rather than a fabricated edge.</p>
+              </div>
+              <div class="tool-card">
+                <h3><code>trace_path</code></h3>
+                <p>Finds one deterministic shortest path between exact published symbol IDs over selected persisted relationships.</p>
+                <p class="refusal">Hard depth/node/edge budgets report truncation; an empty result is not global proof that no path exists.</p>
+              </div>
+              <div class="tool-card">
+                <h3><code>find_references</code></h3>
+                <p>Scans validated published source for exact textual occurrences of one canonical symbol, independent of semantic ranking.</p>
+                <p class="refusal">Textual matches remain observational evidence and never become CALLS without normal relationship proof.</p>
               </div>
             </div>
           </article>

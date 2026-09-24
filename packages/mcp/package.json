@@ -1,7 +1,8 @@
 {
   "name": "@zokizuan/satori-mcp",
   "version": "7.4.1",
-  "description": "Local-first code intelligence for AI coding agents: hybrid repository search, exact symbol/source navigation, structural outlines, conservative call relationships, and freshness-aware indexing.",
+  "description": "Local-first code intelligence for AI coding agents: natural-language + lexical repository search, exact source/symbol navigation, relationships, freshness, and indexing.",
+  "keywords": ["mcp", "model-context-protocol", "code-intelligence", "natural-language-search", "semantic-search", "code-search", "coding-agents", "claude-code", "codex", "opencode"],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

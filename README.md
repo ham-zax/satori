@@ -4,11 +4,11 @@
 [![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=npm)](https://www.npmjs.com/package/@zokizuan/satori-cli)
 
-**Understand any codebase before you touch it.**
+**Ask your codebase in natural language, then verify the answer in real source.**
 
-Satori turns a repository into a **local intelligence database** that coding agents can search, navigate, and interrogate. It combines semantic retrieval, exact lexical evidence, symbol ownership, parser-derived structure, conservative code relationships, exact source spans, and source freshness—then exposes that intelligence through MCP to Codex, Claude Code, OpenCode, and other compatible harnesses.
+Satori is a **local-first code-intelligence layer** for coding agents. Ask where behavior lives in plain English, even when you do not know the filename or symbol yet. Satori combines semantic meaning with BM25 and exact lexical evidence, maps results back to owning symbols, and lets the agent continue into file structure, conservative relationship evidence, exact source spans, and freshness-aware navigation through MCP.
 
-The default managed runtime is local: Potion embeddings + BM25 + LateOn reranking + LanceDB on Linux x64 / WSL2. No model API key is required for the offline path after installation.
+On the qualified Linux x64 / WSL2 path, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. Codex, Claude Code, and OpenCode are supported directly by the installer.
 
 ```text
 Repository
@@ -23,7 +23,7 @@ semantic + lexical evidence
 Ask -> locate owner -> trace -> read exact source
 ```
 
-Satori does **not** edit your source code. It gives the agent better repository evidence before the edit.
+Satori's MCP tool surface does **not** expose source-code write commands. It manages its own index/runtime state and supported client configuration; your coding agent or editor owns source changes.
 
 ## 30-second example
 
@@ -89,8 +89,8 @@ A Satori Publication is an immutable snapshot of everything Satori knows about o
 - **Plan refactors.** Inspect the owner, nearby structure, exact source, and supported relationships before the first change.
 - **Reduce context waste.** Prefer symbol-sized evidence and bounded source over broad repository/file dumps.
 - **Help smaller/local models.** Spend scarce context on the code that matters rather than on discovery.
-- **Give multiple agents one code map.** Compatible local sessions can share the managed runtime and repository intelligence.
-- **Keep the map current.** Ordinary edits converge through sync; managed offline rebuild-safe incompatibilities can reindex automatically instead of making the user babysit the index.
+- **Give multiple agents one local intelligence runtime.** Compatible local sessions can share the managed runtime and repository intelligence.
+- **Keep repository intelligence current.** Ordinary edits converge through sync; managed offline rebuild-safe incompatibilities can reindex automatically instead of making the user babysit the index.
 
 ## Features
 
@@ -98,7 +98,7 @@ A Satori Publication is an immutable snapshot of everything Satori knows about o
 
 Semantic retrieval finds concepts; BM25 and exact evidence keep literal code facts precise. Owner-oriented grouping reduces duplicate chunk noise.
 
-### Code map and exact source
+### Structure, navigation, and exact source
 
 TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, and Scala have production symbol navigation plus the current qualified `CALLS v0` slice. `file_outline` exposes structure; `read_file` opens an exact indexed symbol or bounded source range.
 
@@ -251,7 +251,7 @@ search_codebase
     -> continue_search only if the frozen result has more useful evidence
 ```
 
-You normally do not need to orchestrate these tools manually. They are the nine MCP primitives your coding agent uses to interrogate the repository database.
+You normally do not need to orchestrate these tools manually. They are the 11 MCP primitives your coding agent uses to interrogate the repository intelligence layer.
 
 ## How Satori changes the workflow
 
@@ -260,7 +260,7 @@ You normally do not need to orchestrate these tools manually. They are the nine 
 | Guess filenames and repeat broad searches | Ask where behavior lives in plain English |
 | Read large files to reconstruct ownership | Open an exact symbol or bounded source span |
 | Lose literals in semantic-only search | Combine semantic, BM25, path, symbol, and exact evidence |
-| Rebuild a mental map in every session | Reuse a persistent Publication-backed code map |
+| Rebuild a mental map in every session | Reuse persistent Publication-backed repository intelligence |
 | Work from an index that may have drifted | Carry explicit source freshness and maintenance state |
 | Assemble relationships from scattered reads | Follow conservative owner-oriented navigation evidence |
 

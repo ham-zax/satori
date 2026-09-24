@@ -1,7 +1,8 @@
 {
   "name": "@zokizuan/satori-core",
   "version": "3.16.0",
-  "description": "Core indexing and retrieval engine for Satori's codebase map.",
+  "description": "Indexing, language analysis, Publications, and hybrid retrieval for Satori's local-first code intelligence.",
+  "keywords": ["code-intelligence", "code-search", "semantic-search", "hybrid-search", "repository", "typescript"],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

@@ -2,7 +2,7 @@
 
 Installer, diagnostics, and command-line access for [Satori](https://github.com/ham-zax/satori).
 
-The CLI installs one managed MCP runtime, writes a stable launcher under `~/.satori/`, configures Codex, Claude Code, OpenCode, or all three, and verifies the installed protocol path.
+The CLI installs one managed MCP runtime, writes a stable launcher under `~/.satori/`, configures Codex, Claude Code, OpenCode, or all three, and verifies the installed protocol path. The default qualified offline install gives those agents natural-language repository search using local Potion embeddings, BM25, LateOn reranking, and LanceDB without requiring a model API key after installation.
 
 ## Quick Start
 

@@ -1,10 +1,10 @@
 # Satori Product Guide
 
-Satori is a **local repository-intelligence database for developers and coding agents**.
+Satori is a **local-first code-intelligence layer for developers and coding agents**.
 
-It indexes the parts of a codebase that help an agent understand what the software does: source, symbols, structural spans, lexical identifiers, semantic meaning, supported relationships, source freshness, and the exact repository generation those facts came from.
+You can ask where behavior lives in natural language without knowing the right filename or identifier first. Satori combines semantic meaning with lexical and exact evidence, then maps the result back to source, symbols, structural spans, supported relationships, source freshness, and the exact repository generation those facts came from.
 
-The result is a small, queryable intelligence layer that sits between an AI coding agent and a large repository.
+The result is a queryable repository-intelligence layer that sits between an AI coding agent and a large codebase.
 
 > **Understand any codebase before you touch it.**
 
@@ -379,7 +379,7 @@ No model API key is required for that default runtime after installation.
 
 Satori also supports advanced connected configurations, including Voyage embeddings and LanceDB or Milvus/Zilliz storage. Those paths are configuration choices rather than the default product story.
 
-## The nine MCP tools
+## The 11 MCP tools
 
 | Tool | What it is for |
 |---|---|
@@ -388,6 +388,8 @@ Satori also supports advanced connected configurations, including Voyage embeddi
 | `continue_search` | Reveal more of the same frozen grouped result set without rerunning retrieval. |
 | `file_outline` | Inspect indexed owners and structural spans in one file. |
 | `call_graph` | Follow supported callers, callees, imports, and exports as conservative navigation evidence. |
+| `trace_path` | Find one bounded deterministic path between two exact published symbol IDs over selected persisted relationships. |
+| `find_references` | Find ranking-independent exact textual occurrences of one canonical symbol across validated published source. |
 | `detect_changes` | Map a Git diff to indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read an exact indexed symbol or bounded source window. |
 | `list_codebases` | Discover known repository Publications and readiness. |
@@ -413,9 +415,9 @@ Language capability details and extension rules live in [`architecture/LANGUAGE_
 
 ## What Satori does not promise
 
-### It does not edit source code
+### It does not expose source-code write tools
 
-Satori is the intelligence layer. Your editor or coding agent owns mutations.
+Satori's MCP surface is the intelligence layer. It manages Satori's own index/runtime state and supported client configuration; your editor or coding agent owns repository source mutations.
 
 ### It does not prove every possible caller
 

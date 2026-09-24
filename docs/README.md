@@ -1,6 +1,6 @@
 # Satori Documentation
 
-Satori is a **local repository-intelligence database for developers and coding agents**. These docs are organized so you can first learn the product, then use it, then inspect the architecture and operational details when you need them.
+Satori is a **local-first code-intelligence layer for developers and coding agents**. It lets an agent ask a repository question in natural language, find the relevant implementation through semantic + lexical evidence, and continue into exact source, symbols, references, structure, and conservative relationships. These docs are organized so you can first learn that workflow, then inspect architecture and operations when you need them.
 
 ## Start here
 
@@ -24,15 +24,15 @@ A **Publication** is Satori's immutable snapshot of everything it knows about on
 
 ## Operate and ship it
 
-- [`../satori-landing/docs/index.html`](../satori-landing/docs/index.html) — installation, repository profiles, MCP workflows, seven-tool reference, lifecycle states, debugging, and troubleshooting.
+- [`../satori-landing/docs/index.html`](../satori-landing/docs/index.html) — installation, repository profiles, MCP workflows, 11-tool reference, lifecycle states, debugging, and troubleshooting.
 - [`../packages/mcp/README.md`](../packages/mcp/README.md) — package-focused MCP runtime documentation.
 - [`RELEASING.md`](RELEASING.md) — release graph, qualification, npm authentication, publication, and registry verification.
 
 ## Current product contract
 
-Satori's public MCP surface is exactly ten tools:
+Satori's public MCP surface is exactly 11 tools:
 
-`manage_index`, `search_codebase`, `architecture_overview`, `continue_search`, `call_graph`, `find_references`, `detect_changes`, `file_outline`, `read_file`, and `list_codebases`.
+`manage_index`, `search_codebase`, `architecture_overview`, `continue_search`, `call_graph`, `trace_path`, `find_references`, `detect_changes`, `file_outline`, `read_file`, and `list_codebases`.
 
 The current product is organized around immutable Publications. A Publication binds semantic/lexical search evidence, symbol ownership, structural navigation, supported relationship evidence, source freshness, and repository policy into one generation. Readers bind to one Publication for a request; replacement work is prepared separately and activated only when it is complete enough to become current authority.
 

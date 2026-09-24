@@ -17,6 +17,7 @@ const EXPECTED_TOOL_NAMES = [
     "architecture_overview",
     "continue_search",
     "call_graph",
+    "trace_path",
     "find_references",
     "detect_changes",
     "file_outline",

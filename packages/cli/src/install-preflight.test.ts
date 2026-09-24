@@ -124,6 +124,7 @@ const tools = ${JSON.stringify([
             "architecture_overview",
             "continue_search",
             "call_graph",
+            "trace_path",
             "find_references",
             "detect_changes",
             "file_outline",
@@ -282,7 +283,7 @@ input.on("line", (line) => {
     });
   } else if (message.method === "tools/list") {
     reply(message.id, {
-      tools: ["manage_index", "search_codebase", "architecture_overview", "continue_search", "call_graph", "find_references", "detect_changes", "file_outline", "read_file", "list_codebases"]
+      tools: ["manage_index", "search_codebase", "architecture_overview", "continue_search", "call_graph", "trace_path", "find_references", "detect_changes", "file_outline", "read_file", "list_codebases"]
         .map((name) => ({ name, description: "candidate fixture", inputSchema: { type: "object", properties: {} } })),
     });
   }

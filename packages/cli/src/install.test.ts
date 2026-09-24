@@ -2060,8 +2060,8 @@ test("managed offline launchers attach independent sessions to one shared runtim
             }),
         ]);
 
-        assert.equal((await first.listTools()).tools.length, 10);
-        assert.equal((await second.listTools()).tools.length, 10);
+        assert.equal((await first.listTools()).tools.length, 11);
+        assert.equal((await second.listTools()).tools.length, 11);
         assert.notEqual(first.launcherPid, second.launcherPid);
 
         const metadataRoot = path.join(stateRoot, "runtime-host");
@@ -2076,7 +2076,7 @@ test("managed offline launchers attach independent sessions to one shared runtim
 
         await first.close();
         first = undefined;
-        assert.equal((await second.listTools()).tools.length, 10);
+        assert.equal((await second.listTools()).tools.length, 11);
         await second.close();
         second = undefined;
 
@@ -2101,8 +2101,8 @@ test("managed offline launchers attach independent sessions to one shared runtim
                 writeStderr: () => {},
             }),
         ]);
-        assert.equal((await replacement.listTools()).tools.length, 10);
-        assert.equal((await replacementSecond.listTools()).tools.length, 10);
+        assert.equal((await replacement.listTools()).tools.length, 11);
+        assert.equal((await replacementSecond.listTools()).tools.length, 11);
         const replacementMetadata = JSON.parse(fs.readFileSync(
             path.join(metadataRoot, identities[0]!, "host.json"),
             "utf8",

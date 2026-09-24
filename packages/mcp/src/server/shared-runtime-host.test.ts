@@ -26,6 +26,7 @@ import {
     resolveSharedRuntimePaths,
 } from "./shared-runtime-identity.js";
 import { readHostMetadata } from "./shared-runtime-lifecycle.js";
+import { toolRegistry } from "../tools/registry.js";
 
 type JsonRpcResponse = {
     id?: unknown;
@@ -370,12 +371,12 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
         first.request("tools/list"),
         second.request("tools/list"),
     ]);
-    assert.equal(firstTools.result?.tools?.length, 10);
-    assert.equal(secondTools.result?.tools?.length, 10);
+    assert.equal(firstTools.result?.tools?.length, Object.keys(toolRegistry).length);
+    assert.equal(secondTools.result?.tools?.length, Object.keys(toolRegistry).length);
 
     await first.close();
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 1, operations: 0 });
-    assert.equal((await second.request("tools/list")).result?.tools?.length, 10);
+    assert.equal((await second.request("tools/list")).result?.tools?.length, Object.keys(toolRegistry).length);
     await second.close();
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 0, operations: 0 });
 });
@@ -706,7 +707,7 @@ test("a new session cancels idle shutdown before listener closure", async (t) =>
     await new Promise((resolve) => setTimeout(resolve, 50));
     client = await createBridge(runtimeEntry, runtimeEnv);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal((await client.request("tools/list")).result?.tools?.length, 10);
+    assert.equal((await client.request("tools/list")).result?.tools?.length, Object.keys(toolRegistry).length);
     assert.deepEqual(runtimeHost.getActivity(), { sessions: 1, operations: 0 });
 });
 

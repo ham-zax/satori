@@ -87,12 +87,15 @@ Satori is a repository code-intelligence layer for coding agents. Use it for unf
 2. \`architecture_overview\` — inspect repository-wide areas, cross-area boundaries, and hotspots
 3. \`continue_search\` — reveal more from the same frozen ranking when returned
 4. \`read_file\` / \`file_outline\` — inspect exact source or indexed structure
-5. \`call_graph\` — inspect conservative relationships for graph-ready targets
-6. \`list_codebases\` / \`manage_index status\` — inspect index readiness and capabilities
+5. \`call_graph\` / \`trace_path\` — inspect conservative relationship context or one bounded persisted path for exact published symbols
+6. \`find_references\` — scan validated published source for ranking-independent exact textual occurrences
+7. \`list_codebases\` / \`manage_index status\` — inspect index readiness and capabilities
 
 ## Boundaries
 - Read \`warnings[].action\` and follow structured remediation.
 - Treat \`call_graph\` as navigation evidence, not complete blast-radius proof; verify important inbound impact.
+- Treat \`trace_path\` as bounded persisted-path evidence; truncation or no returned path is not global proof that no path exists.
+- Treat \`find_references\` as textual occurrence evidence, not semantic CALLS proof.
 `;
 
 export type ExecFileSyncLike = typeof execFileSync;

@@ -847,10 +847,11 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
           <div class="panel">
             <h3>Claude Runtime Env</h3>
             <p>
-              The generated <code>~/.claude.json</code> entry writes
-              <code>mcpServers.satori.env</code> with <code>${VAR:-}</code>
-              pass-through values. Replace any value with a literal if you want
-              Claude to own that setting.
+              The generated <code>~/.claude.json</code> entry points Claude at
+              the managed Satori launcher. Fresh installs omit empty
+              <code>mcpServers.satori.env</code> overrides so the MCP process can
+              inherit its host environment. Reinstall preserves existing
+              non-empty Satori env values that Claude already owns.
             </p>
           </div>
           <div class="panel">

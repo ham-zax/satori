@@ -443,6 +443,7 @@ Restart OpenCode after restoring the published runtime.
 | `file_outline` | List the indexed symbols and spans in one file. Use it to choose an exact owner before reading implementation. |
 | `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
 | `trace_path` | Find one bounded shortest path between exact published symbols over selected persisted relationships, with scope and truncation evidence. |
+| `find_references` | Scan validated published source for ranking-independent exact textual occurrences of one canonical symbol, with exact spans and coverage evidence. |
 | `detect_changes` | Map a Git diff to current indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read a bounded source span or one exact indexed symbol. Large ranges are compacted so agent UIs receive structure instead of implementation floods. |
 | `list_codebases` | List known indexed repositories, readiness, and runtime-owner state. Use it to discover existing publications before creating another one. |
@@ -456,9 +457,10 @@ Public paths are absolute. `read_file` is restricted to tracked searchable roots
 2. use architecture_overview when you need repository-wide areas, boundaries, or hotspots
 3. follow recommendedNextAction when returned
 4. use file_outline to inspect one file's owners
-5. use call_graph for advisory relationship context
-6. use read_file for exact proof
-7. use continue_search only when the frozen result has more useful evidence
+5. use call_graph or trace_path for bounded relationship context
+6. use find_references when you need ranking-independent exact textual occurrences
+7. use read_file for exact proof
+8. use continue_search only when the frozen result has more useful evidence
 ```
 
 When a tracked Publication becomes incompatible with a managed offline runtime, Satori automatically starts or joins one background reindex and returns `not_ready`/`indexing` so the caller can retry without asking the user to repair the index. Explicit `manage_index reindex` remains the recovery override when automatic maintenance is unavailable, suppressed after a failed automatic attempt, or intentionally disabled for connected/remote providers. Use `sync` for ordinary source changes when refreshed indexed evidence is needed. Search and navigation do not wait for a same-root sync: when a compatible completed Publication exists, they continue from that pinned generation with stale/unverified provenance and pending-sync metadata. Create/reindex operations that do not expose a readable generation still return `not_ready` with the active operation so drivers can retry deterministically. For grouped pagination, `limit` bounds the frozen result set across every page and `disclosureLimit` controls only the initial page: `limit=20, disclosureLimit=6` returns up to six initially and freezes up to twenty. Search continuation `"complete"` means complete for that caller-bounded frozen set, never for the full available pool; `omittedBeyondLimitGroupCount` reports groups excluded by `limit`. Treat inbound call-graph results as leads to verify, not compiler-grade blast-radius proof.
@@ -644,7 +646,7 @@ Structural definition coverage is intentionally language-specific:
 | Package | Purpose |
 |---|---|
 | [`@zokizuan/satori-cli`](./packages/cli) | Installer, doctor, and command-line access to MCP tools. |
-| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and nine public tools. |
+| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and 11 public tools. |
 | [`@zokizuan/satori-core`](./packages/core) | Indexing, analysis, embeddings, storage, and retrieval. |
 
 ## Development

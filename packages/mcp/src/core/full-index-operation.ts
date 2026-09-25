@@ -8,6 +8,7 @@ import {
 } from "@zokizuan/satori-core";
 import type { SyncManager, WatcherBootstrapCapture } from "./sync.js";
 import {
+    RootMutationCancelledError,
     RootMutationRuntime,
     type MutationOperationPhase,
 } from "@zokizuan/satori-core/integration";
@@ -17,6 +18,11 @@ export interface FullIndexOperationInput {
     readonly forceReindex: boolean;
     readonly policyUpdate?: CustomIndexPolicyUpdate;
 }
+
+export type FullIndexCandidateResult = Pick<
+    IndexCodebaseResult,
+    "indexedFiles" | "totalChunks" | "status" | "collectionName" | "publication"
+>;
 
 export type FullIndexCandidateRunner = (input: Readonly<{
     codebasePath: string;
@@ -29,7 +35,7 @@ export type FullIndexCandidateRunner = (input: Readonly<{
         total: number;
         percentage: number;
     }) => void;
-}>) => Promise<IndexCodebaseResult>;
+}>) => Promise<FullIndexCandidateResult>;
 
 export interface FullIndexOperationHost {
     readonly context: Context;
@@ -65,7 +71,7 @@ export class FullIndexOperation {
         private readonly candidateRunner?: FullIndexCandidateRunner,
     ) {}
 
-    private runCandidate(input: Parameters<FullIndexCandidateRunner>[0]): Promise<IndexCodebaseResult> {
+    private runCandidate(input: Parameters<FullIndexCandidateRunner>[0]): Promise<FullIndexCandidateResult> {
         if (this.candidateRunner) {
             return this.candidateRunner(input);
         }
@@ -315,6 +321,7 @@ export class FullIndexOperation {
                 return;
             }
 
+            const cancelled = error instanceof RootMutationCancelledError;
             let errorMessage = formatUnknownError(error);
             if (isCollectionLimitError(error)) {
                 errorMessage = await this.host.buildCollectionLimitMessage(absolutePath);
@@ -333,6 +340,11 @@ export class FullIndexOperation {
             }
             this.host.mutationRuntime.assertCurrent(absolutePath);
             await restoreActiveWatcherAfterRejectedCandidate();
+
+            if (cancelled) {
+                console.warn(`[BACKGROUND-INDEX] Indexing cancelled for ${absolutePath}: ${errorMessage}`);
+                throw error;
+            }
 
             try {
                 publishBackgroundPhase("failed", { error: errorMessage });

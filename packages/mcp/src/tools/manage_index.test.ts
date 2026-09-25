@@ -135,7 +135,7 @@ test("manage_index description documents the current lifecycle contract", () => 
     }
     assert.match(description, /Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance/i);
     assert.match(description, /explicit reindex is the operator recovery override/i);
-    assert.match(description, /cancel requires the exact live sync operationId/i);
+    assert.match(description, /cancel requires the exact live supervised create\/reindex\/sync operationId/i);
     assert.match(description, /process-lifetime diagnostic state, not persistent history/i);
 });
 

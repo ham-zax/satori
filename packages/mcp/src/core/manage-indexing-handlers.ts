@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import { fileURLToPath } from "node:url";
 import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
@@ -21,10 +22,16 @@ import {
     RootMutationRuntime,
     formatRootMutationBlockedMessage,
     type MutationOperationPhase,
+    type RootMutationExecution,
     type RootMutationOperation,
     type RootMutationStart,
 } from "@zokizuan/satori-core/integration";
-import { FullIndexOperation } from "./full-index-operation.js";
+import {
+    FullIndexOperation,
+    type FullIndexCandidateResult,
+    type FullIndexCandidateRunner,
+} from "./full-index-operation.js";
+import { spawnSupervisedMutationWorker } from "../server/mutation-worker-supervisor.js";
 
 type ToolTextResponse = {
     content: Array<{ type: "text"; text: string }>;
@@ -180,8 +187,136 @@ function formatUnknownError(error: unknown): string {
     }
 }
 
+const FULL_INDEX_NO_PROGRESS_TIMEOUT_MS = 30 * 60 * 1000;
+
+function resolveMutationIndexWorkerPath(): string {
+    const built = fileURLToPath(new URL("../server/mutation-index-worker.js", import.meta.url));
+    if (fs.existsSync(built)) return built;
+    return fileURLToPath(new URL("../server/mutation-index-worker.ts", import.meta.url));
+}
+
+function parseFullIndexWorkerResult(
+    value: Readonly<Record<string, unknown>> | undefined,
+): FullIndexCandidateResult {
+    if (!value) {
+        throw new Error("Mutation index worker completed without a result.");
+    }
+    const indexedFiles = value.indexedFiles;
+    const totalChunks = value.totalChunks;
+    const status = value.status;
+    const collectionName = value.collectionName;
+    const publication = value.publication;
+    if (!Number.isSafeInteger(indexedFiles) || (indexedFiles as number) < 0) {
+        throw new Error("Mutation index worker result has invalid indexedFiles.");
+    }
+    if (!Number.isSafeInteger(totalChunks) || (totalChunks as number) < 0) {
+        throw new Error("Mutation index worker result has invalid totalChunks.");
+    }
+    if (status !== "completed" && status !== "limit_reached") {
+        throw new Error("Mutation index worker result has invalid status.");
+    }
+    if (typeof collectionName !== "string" || collectionName.length === 0) {
+        throw new Error("Mutation index worker result has invalid collectionName.");
+    }
+    if (!publication || typeof publication !== "object" || Array.isArray(publication)) {
+        throw new Error("Mutation index worker result has invalid publication.");
+    }
+    const publicationRecord = publication as Record<string, unknown>;
+    if (typeof publicationRecord.id !== "string" || publicationRecord.id.length === 0) {
+        throw new Error("Mutation index worker result has invalid publication id.");
+    }
+    if (publicationRecord.status !== "staged" && publicationRecord.status !== "activated") {
+        throw new Error("Mutation index worker result has invalid publication status.");
+    }
+    return {
+        indexedFiles: indexedFiles as number,
+        totalChunks: totalChunks as number,
+        status,
+        collectionName,
+        publication: {
+            id: publicationRecord.id,
+            status: publicationRecord.status,
+        },
+    };
+}
+
 export class ManageIndexingHandlers {
     constructor(private readonly host: ManageIndexingHandlersHost) {}
+
+    private createSupervisedCandidateRunner(
+        execution: RootMutationExecution,
+        action: "create" | "reindex",
+    ): FullIndexCandidateRunner {
+        return async (input) => {
+            let completedResult: Readonly<Record<string, unknown>> | undefined;
+            const worker = spawnSupervisedMutationWorker({
+                operationId: execution.id,
+                workerPath: resolveMutationIndexWorkerPath(),
+                workerArgs: [JSON.stringify({
+                    path: input.codebasePath,
+                    action,
+                    forceReindex: input.forceReindex,
+                    indexPolicy: input.indexPolicy,
+                    deferPartialPublication: input.deferPartialPublication,
+                })],
+                signal: execution.signal,
+                noProgressTimeoutMs: FULL_INDEX_NO_PROGRESS_TIMEOUT_MS,
+                onHeartbeat: () => {
+                    const operation = this.host.mutationRuntime.getCurrentOperation(input.codebasePath);
+                    if (
+                        operation?.id === execution.id
+                        && operation.phase !== "completed"
+                        && operation.phase !== "failed"
+                        && operation.phase !== "blocked"
+                        && operation.phase !== "cancelled"
+                    ) {
+                        execution.heartbeat();
+                    }
+                },
+                onProgress: (progress) => {
+                    const percentage = progress.progress ?? 0;
+                    input.onProgress({
+                        phase: progress.phase ?? "writing",
+                        current: percentage,
+                        total: 100,
+                        percentage,
+                    });
+                },
+                onNoProgress: () => {
+                    this.host.mutationRuntime.requestCancellation(
+                        execution.id,
+                        "full_index_no_progress_timeout",
+                    );
+                },
+                onCompleted: (result) => {
+                    completedResult = result;
+                },
+            });
+
+            try {
+                await worker.ready;
+                if (execution.signal.aborted) {
+                    throw execution.signal.reason ?? new Error("Full index cancelled before executor binding.");
+                }
+                execution.bindExecutor(worker.executor);
+                worker.start();
+            } catch (error) {
+                worker.requestCancellation("full_index_startup_failed");
+                await worker.completion.catch(() => undefined);
+                throw error;
+            }
+
+            try {
+                await worker.completion;
+            } catch (error) {
+                if (execution.signal.aborted) {
+                    throw execution.signal.reason ?? error;
+                }
+                throw error;
+            }
+            return parseFullIndexWorkerResult(completedResult);
+        };
+    }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs): Promise<ToolTextResponse> {
         return this.handleIndexCodebaseInternal(args);
@@ -252,7 +387,7 @@ export class ManageIndexingHandlers {
             if (runtimeOwnerConflict) return runtimeOwnerConflict;
             this.host.assertIndexMutationCapabilities();
 
-            const mutation = this.host.mutationRuntime.start(absolutePath, mutationAction, async () => {
+            const mutation = this.host.mutationRuntime.start(absolutePath, mutationAction, async (execution) => {
                 let dropSummaryLine = "";
                 let lastOperation = this.host.mutationRuntime.getCurrentOperation(absolutePath);
                 const transitionOperation = (
@@ -382,7 +517,10 @@ export class ManageIndexingHandlers {
                     await this.host.touchWatchedCodebase(absolutePath);
                     this.host.mutationRuntime.assertCurrent(absolutePath);
 
-                    const fullIndexOperation = new FullIndexOperation(this.host);
+                    const fullIndexOperation = new FullIndexOperation(
+                        this.host,
+                        this.createSupervisedCandidateRunner(execution, mutationAction),
+                    );
                     const pathInfo = codebasePath !== absolutePath
                         ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
                         : "";

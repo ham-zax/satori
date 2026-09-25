@@ -1049,12 +1049,17 @@ export class ManageMaintenanceHandlers {
                 },
             );
         }
-        if (activeMutation.action !== "sync") {
+        const supervisedAction = activeMutation.action === "sync"
+            || activeMutation.action === "create"
+            || activeMutation.action === "reindex";
+        const hasBoundExecutor = activeMutation.executorPid !== undefined
+            && activeMutation.executorProcessGroupId !== undefined;
+        if (!supervisedAction || !hasBoundExecutor) {
             return this.host.manageResponse(
                 "cancel",
                 absolutePath,
                 "blocked",
-                `Operation '${operationId}' is a live '${activeMutation.action}' mutation, but only supervised sync operations are cancellable through this control plane.`,
+                `Operation '${operationId}' is a live '${activeMutation.action}' mutation without a cancellable supervised executor. No force-unlock was attempted.`,
                 {
                     reason: "operation_not_cancellable",
                     hints: { activeMutation },
@@ -1085,7 +1090,7 @@ export class ManageMaintenanceHandlers {
             "cancel",
             absolutePath,
             "ok",
-            `Cancellation was requested for sync operation '${operationId}'. The writer lease remains held until the supervised executor process tree is proven quiescent.`,
+            `Cancellation was requested for ${activeMutation.action} operation '${operationId}'. The writer lease remains held until the supervised executor process tree is proven quiescent.`,
             {
                 reason: "cancellation_requested",
                 ...(operation ? { operation } : {}),
@@ -1093,7 +1098,9 @@ export class ManageMaintenanceHandlers {
                     status: this.host.buildStatusHint(absolutePath),
                     ...(currentActivity ? { activeMutation: currentActivity } : {}),
                 },
-                pendingSync: pendingSyncProjection(operation, currentActivity),
+                ...(activeMutation.action === "sync"
+                    ? { pendingSync: pendingSyncProjection(operation, currentActivity) }
+                    : {}),
             },
         );
     }

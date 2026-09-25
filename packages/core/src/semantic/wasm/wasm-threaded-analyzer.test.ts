@@ -27,6 +27,10 @@ test('threaded analysis preserves skipped source and auxiliary files while analy
         ]);
         assert.equal(result.occurrencesByFile.has('large.go'), false);
         assert.ok((result.occurrencesByFile.get('main.go')?.length ?? 0) > 0);
+        assert.equal(result.coverage?.status, 'degraded');
+        assert.equal(result.coverage?.sourceFileCount, 2);
+        assert.equal(result.coverage?.analyzedSourceFileCount, 1);
+        assert.deepEqual(result.coverage?.skippedFiles, result.skippedFiles);
     } finally {
         await analyzer.dispose();
     }

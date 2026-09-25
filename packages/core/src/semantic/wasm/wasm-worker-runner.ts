@@ -1,6 +1,11 @@
 import { parentPort } from 'node:worker_threads';
 import { WasmSemanticProjectAnalyzer } from './wasm-analyzer';
-import type { SemanticProjectInput, SemanticResolvedOccurrence, SemanticSkippedFile } from '../contracts';
+import type {
+    SemanticProjectInput,
+    SemanticProviderCoverage,
+    SemanticResolvedOccurrence,
+    SemanticSkippedFile,
+} from '../contracts';
 
 const analyzer = new WasmSemanticProjectAnalyzer();
 
@@ -17,6 +22,7 @@ export type WasmWorkerResponse =
             language: string;
             occurrencesEntries: Array<[string, SemanticResolvedOccurrence[]]>;
             skippedFiles?: readonly SemanticSkippedFile[];
+            coverage?: SemanticProviderCoverage;
         };
     }
     | {
@@ -40,6 +46,7 @@ if (parentPort) {
                     language: evidence.language,
                     occurrencesEntries,
                     ...(evidence.skippedFiles ? { skippedFiles: evidence.skippedFiles } : {}),
+                    ...(evidence.coverage ? { coverage: evidence.coverage } : {}),
                 },
             };
             parentPort!.postMessage(response);

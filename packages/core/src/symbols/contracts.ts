@@ -1,10 +1,14 @@
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { ResolutionAuthority } from '../relationships/resolution';
+import {
+    SEMANTIC_PROVIDER_COVERAGE_STATUSES,
+    type SemanticProviderCoverage,
+} from '../semantic/contracts';
 
 export { isRepositoryRelativePath } from '../paths/repository-path';
 
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v3';
-export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v3';
+export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v4';
 export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v5';
 
 export const SYMBOL_KINDS = [
@@ -151,6 +155,7 @@ export interface RelationshipManifest {
     symbolRegistryManifestHash: string;
     relationshipVersion: string;
     builtAt: string;
+    providerCoverage: SemanticProviderCoverage[];
     files: RelationshipManifestFile[];
 }
 
@@ -234,6 +239,43 @@ export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistr
     ));
 }
 
+function isSemanticProviderCoverage(value: unknown): value is SemanticProviderCoverage {
+    if (!isRecord(value)
+        || !isNonEmptyString(value.language)
+        || !isNonEmptyString(value.providerId)
+        || !isNonEmptyString(value.providerVersion)
+        || !SEMANTIC_PROVIDER_COVERAGE_STATUSES.includes(value.status as never)
+        || !isNonNegativeInteger(value.sourceFileCount)
+        || !isNonNegativeInteger(value.analyzedSourceFileCount)
+        || Number(value.analyzedSourceFileCount) > Number(value.sourceFileCount)) {
+        return false;
+    }
+    if (value.environmentConfigId !== undefined && !isNonEmptyString(value.environmentConfigId)) {
+        return false;
+    }
+    if (value.failureReason !== undefined
+        && value.failureReason !== 'provider_failure'
+        && value.failureReason !== 'resource_limit') {
+        return false;
+    }
+    if (value.failureMessage !== undefined
+        && (!isNonEmptyString(value.failureMessage) || value.failureMessage.length > 1024)) {
+        return false;
+    }
+    if (value.skippedFiles !== undefined && (
+        !Array.isArray(value.skippedFiles)
+        || !value.skippedFiles.every((file) => (
+            isRecord(file)
+            && isRepositoryRelativePath(file.path)
+            && file.reason === 'source_too_large'
+            && isNonNegativeInteger(file.bytes)
+        ))
+    )) {
+        return false;
+    }
+    return true;
+}
+
 export function isRelationshipManifest(value: unknown): value is RelationshipManifest {
     if (!(isRecord(value)
         && value.schemaVersion === RELATIONSHIP_MANIFEST_SCHEMA_VERSION
@@ -241,6 +283,8 @@ export function isRelationshipManifest(value: unknown): value is RelationshipMan
         && isNonEmptyString(value.symbolRegistryManifestHash)
         && isNonEmptyString(value.relationshipVersion)
         && isNonEmptyString(value.builtAt)
+        && Array.isArray(value.providerCoverage)
+        && value.providerCoverage.every(isSemanticProviderCoverage)
         && Array.isArray(value.files))) {
         return false;
     }

@@ -17,6 +17,12 @@ export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectA
         return this.loadAnalyzer().then((analyzer) => analyzer.analyze(input));
     }
 
+    async getProviderMetadata(language: string) {
+        if (!this.supportsLanguage(language)) return undefined;
+        const analyzer = await this.loadAnalyzer();
+        return analyzer.getProviderMetadata?.(language);
+    }
+
     async getSourceControlFiles(input: {
         readonly rootPath: string;
         readonly language: string;

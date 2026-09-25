@@ -185,10 +185,30 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
                 occurrencesByFile.set(raw.sourceFile, occurrences);
             }
 
+            const descriptor = this.languageRegistry.getDescriptor(input.language);
+            const sourcePaths = new Set(input.sourceFiles.map((source) => source.path));
+            const skippedSourceFileCount = skippedFiles
+                .filter((file) => sourcePaths.has(file.path))
+                .length;
             return {
                 language: input.language,
                 occurrencesByFile,
                 ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
+                ...(descriptor ? {
+                    coverage: {
+                        language: input.language,
+                        providerId: descriptor.providerId,
+                        providerVersion: descriptor.providerVersion,
+                        environmentConfigId: descriptor.environmentConfigId,
+                        status: skippedFiles.length > 0 ? 'degraded' : 'complete',
+                        sourceFileCount: input.sourceFiles.length,
+                        analyzedSourceFileCount: Math.max(
+                            0,
+                            input.sourceFiles.length - skippedSourceFileCount,
+                        ),
+                        ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
+                    },
+                } : {}),
             };
         } finally {
             session.destroy();

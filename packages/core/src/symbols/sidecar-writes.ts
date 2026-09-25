@@ -24,6 +24,7 @@ import type {
     PythonFlowFact,
     SourceSpan,
 } from '../language-analysis';
+import type { SemanticProviderCoverage } from '../semantic/contracts';
 import type {
     ResolutionCallObservation,
     ResolutionClaim,
@@ -66,6 +67,7 @@ export interface WriteRelationshipSidecarInput {
     builtAt: string;
     records: RelationshipRecord[];
     analysisByFile?: Map<string, RelationshipAnalysisEvidence> | Record<string, RelationshipAnalysisEvidence>;
+    providerCoverage?: readonly SemanticProviderCoverage[];
     files?: SymbolRegistryManifestFile[];
     navigationRoot: string;
     beforePublish?: () => void;
@@ -266,6 +268,7 @@ function buildRelationshipManifest(
     relationshipVersion: string,
     builtAt: string,
     files: RelationshipManifestFile[],
+    providerCoverage: readonly SemanticProviderCoverage[] = [],
 ): RelationshipManifest {
     return {
         schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
@@ -273,6 +276,27 @@ function buildRelationshipManifest(
         symbolRegistryManifestHash: registryManifestHash,
         relationshipVersion,
         builtAt,
+        providerCoverage: [...providerCoverage]
+            .map((coverage) => ({
+                language: coverage.language,
+                providerId: coverage.providerId,
+                providerVersion: coverage.providerVersion,
+                ...(coverage.environmentConfigId
+                    ? { environmentConfigId: coverage.environmentConfigId }
+                    : {}),
+                status: coverage.status,
+                sourceFileCount: coverage.sourceFileCount,
+                analyzedSourceFileCount: coverage.analyzedSourceFileCount,
+                ...(coverage.failureReason ? { failureReason: coverage.failureReason } : {}),
+                ...(coverage.failureMessage
+                    ? { failureMessage: coverage.failureMessage.slice(0, 1024) }
+                    : {}),
+            }))
+            .sort((left, right) => (
+                compareStrings(left.language, right.language)
+                || compareStrings(left.providerId, right.providerId)
+                || compareStrings(left.providerVersion, right.providerVersion)
+            )),
         files: [...files].sort((a, b) => compareStrings(a.path, b.path)),
     };
 }
@@ -580,6 +604,7 @@ async function writeRelationshipSidecarInternal(
             input.relationshipVersion,
             input.builtAt,
             manifestFiles,
+            input.providerCoverage,
         );
         const serializedManifest = serializeJson(manifest);
         manifestHash = hashSerializedString(serializedManifest);

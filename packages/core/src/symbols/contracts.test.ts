@@ -84,7 +84,7 @@ test('canonicalizeSymbolSpanForHash omits absent optional fields and preserves f
 });
 
 test('relationship manifest validates compatibility anchor', () => {
-    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v3');
+    assert.equal(RELATIONSHIP_MANIFEST_SCHEMA_VERSION, 'relationship_v4');
 
     const manifest: RelationshipManifest = {
         schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
@@ -92,6 +92,7 @@ test('relationship manifest validates compatibility anchor', () => {
         symbolRegistryManifestHash: 'registry-manifest-hash',
         relationshipVersion: 'relationship-v1',
         builtAt: '2026-06-17T00:00:00.000Z',
+        providerCoverage: [],
         files: [{
             path: 'src/app.ts',
             hash: 'file-hash',

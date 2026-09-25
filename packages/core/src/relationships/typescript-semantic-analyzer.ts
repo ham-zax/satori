@@ -492,6 +492,14 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         return language.trim().toLowerCase() === 'typescript';
     }
 
+    getProviderMetadata(language: string) {
+        if (!this.supportsLanguage(language)) return undefined;
+        return {
+            providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
+            providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+        };
+    }
+
     async getSourceControlFiles(input: {
         readonly rootPath: string;
         readonly language: string;
@@ -521,6 +529,15 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 claimsByFile: new Map(),
                 affectedSourceFiles: new Set(),
                 sourceControlFiles: [],
+                coverage: {
+                    language: 'typescript',
+                    providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
+                    providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+                    environmentConfigId: `typescript:${ts.version}:empty`,
+                    status: 'complete',
+                    sourceFileCount: 0,
+                    analyzedSourceFileCount: 0,
+                },
             };
         }
 
@@ -636,6 +653,13 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             }
         }
 
+        const unavailableSourceFiles = new Set<string>();
+        for (const plan of plans) {
+            if (plan.configErrors.length > 0 || projectReferenceAuthorityReady.get(plan.key) === false) {
+                for (const file of plan.relativeFiles) unavailableSourceFiles.add(file);
+            }
+        }
+
         const manifestByPath = new Map(input.registry.manifest.files.map((file) => [file.path, file]));
         const affectedSourceFiles = new Set<string>();
 
@@ -708,6 +732,22 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             claimsByFile,
             affectedSourceFiles,
             sourceControlFiles,
+            coverage: {
+                language: 'typescript',
+                providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
+                providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+                environmentConfigId: evidenceEnvironmentConfigId,
+                status: unavailableSourceFiles.size === 0
+                    ? 'complete'
+                    : unavailableSourceFiles.size === typeScriptFiles.length
+                        ? 'unavailable'
+                        : 'degraded',
+                sourceFileCount: typeScriptFiles.length,
+                analyzedSourceFileCount: Math.max(
+                    0,
+                    typeScriptFiles.length - unavailableSourceFiles.size,
+                ),
+            },
         };
     }
 

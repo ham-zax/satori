@@ -1,6 +1,7 @@
 import { readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols/sidecar';
 import type { ReadSymbolRegistrySidecarResult } from '../symbols/sidecar';
 import type { StructuralDefinitionStatus } from '../symbols/contracts';
+import type { SemanticProviderCoverage } from '../semantic/contracts';
 import type { PublicLanguageClaim } from './types';
 import { getLanguageCapabilityDeclaration } from './capabilities';
 
@@ -42,6 +43,7 @@ export interface LanguageCapabilityEvidenceInput {
     relationshipStatus: NavigationEvidenceStatus;
     files: readonly { language: string; definitionStatus: StructuralDefinitionStatus }[];
     symbols: readonly { language: string; kind: string; file?: string }[];
+    providerCoverage?: readonly SemanticProviderCoverage[];
 }
 
 function compareStrings(left: string, right: string): number {
@@ -132,11 +134,20 @@ export function computeLanguageCapabilityEvidence(
             const relationshipEvidence = supportsCallGraph
                 ? input.relationshipStatus
                 : 'not_applicable';
+            const providerCoverage = (input.providerCoverage ?? [])
+                .filter((coverage) => canonicalLanguage(coverage.language) === language);
+            const providerUnavailable = providerCoverage.some((coverage) => coverage.status === 'unavailable');
+            const providerDegraded = providerCoverage.some((coverage) => coverage.status === 'degraded');
             let callGraph: EffectiveLanguageCapabilityState = 'not_applicable';
             if (supportsCallGraph) {
-                if (!input.searchable || input.relationshipStatus !== 'compatible' || symbolNavigation === 'unavailable') {
+                if (
+                    !input.searchable
+                    || input.relationshipStatus !== 'compatible'
+                    || symbolNavigation === 'unavailable'
+                    || providerUnavailable
+                ) {
                     callGraph = 'unavailable';
-                } else if (symbolNavigation === 'degraded') {
+                } else if (symbolNavigation === 'degraded' || providerDegraded) {
                     callGraph = 'degraded';
                 } else {
                     callGraph = 'ready';
@@ -150,6 +161,13 @@ export function computeLanguageCapabilityEvidence(
             if (!searchOnly && definitionBearingFiles === 0) degradationReasons.push('definition_evidence_missing');
             if (supportsCallGraph && input.relationshipStatus !== 'compatible') {
                 degradationReasons.push(`relationship_sidecar_${input.relationshipStatus}`);
+            }
+            for (const coverage of providerCoverage) {
+                if (coverage.status === 'unavailable') {
+                    degradationReasons.push(`relationship_provider_unavailable:${coverage.providerId}`);
+                } else if (coverage.status === 'degraded') {
+                    degradationReasons.push(`relationship_provider_degraded:${coverage.providerId}`);
+                }
             }
 
             return {
@@ -216,5 +234,8 @@ export async function resolveLanguageCapabilityEvidence(input: {
             : relationships.status === 'corrupt' ? 'incompatible' : relationships.status,
         files: registry.registry.manifest.files,
         symbols: registry.registry.symbols,
+        ...(relationships.status === 'ok'
+            ? { providerCoverage: relationships.manifest.providerCoverage }
+            : {}),
     });
 }

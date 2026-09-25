@@ -74,6 +74,56 @@ test('language capability evidence combines declarations with observed registry 
     assert.equal(text.capabilities.callGraph, 'not_applicable');
 });
 
+test('provider coverage degrades call-graph readiness without disabling searchable symbols', () => {
+    const unavailable = computeLanguageCapabilityEvidence({
+        searchable: true,
+        registryStatus: 'compatible',
+        relationshipStatus: 'compatible',
+        files: [{ language: 'typescript', definitionStatus: 'definitions_present' }],
+        symbols: [{ language: 'typescript', kind: 'function', file: 'src/run.ts' }],
+        providerCoverage: [{
+            language: 'typescript',
+            providerId: 'satori-typescript-compiler',
+            providerVersion: 'ts-compiler-v7',
+            status: 'unavailable',
+            sourceFileCount: 1,
+            analyzedSourceFileCount: 0,
+            failureReason: 'provider_failure',
+            failureMessage: 'fixture compiler failure',
+        }],
+    });
+    const unavailableTypeScript = unavailable.languages[0];
+    assert.equal(unavailableTypeScript.capabilities.semanticSearch, 'ready');
+    assert.equal(unavailableTypeScript.capabilities.exactSymbol, 'ready');
+    assert.equal(unavailableTypeScript.capabilities.callGraph, 'unavailable');
+    assert.deepEqual(unavailableTypeScript.degradationReasons, [
+        'relationship_provider_unavailable:satori-typescript-compiler',
+    ]);
+
+    const degraded = computeLanguageCapabilityEvidence({
+        searchable: true,
+        registryStatus: 'compatible',
+        relationshipStatus: 'compatible',
+        files: [{ language: 'go', definitionStatus: 'definitions_present' }],
+        symbols: [{ language: 'go', kind: 'function', file: 'main.go' }],
+        providerCoverage: [{
+            language: 'go',
+            providerId: 'fixture-go',
+            providerVersion: 'v1',
+            status: 'degraded',
+            sourceFileCount: 2,
+            analyzedSourceFileCount: 1,
+            skippedFiles: [{ path: 'generated.go', reason: 'source_too_large', bytes: 2_000_000 }],
+        }],
+    });
+    const degradedGo = degraded.languages[0];
+    assert.equal(degradedGo.capabilities.semanticSearch, 'ready');
+    assert.equal(degradedGo.capabilities.callGraph, 'degraded');
+    assert.deepEqual(degradedGo.degradationReasons, [
+        'relationship_provider_degraded:fixture-go',
+    ]);
+});
+
 test('Go call graph evidence requires compatible Publication relationship navigation', () => {
     const summary = computeLanguageCapabilityEvidence({
         searchable: true,

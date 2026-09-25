@@ -27,7 +27,8 @@ test('evaluateTradeOffer both preserves callers under the shared edge limit and 
                 status: 'ok', rootPath: '/fixture/colonist-assistant', manifestHash: 'fixture', records,
                 analysisByFile: new Map(), warnings: [],
                 manifest: { schemaVersion: RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
-                    symbolRegistryManifestHash: 'fixture', relationshipVersion: 'fixture', builtAt: '2026-09-09', files: [] },
+                    symbolRegistryManifestHash: 'fixture', relationshipVersion: 'fixture', builtAt: '2026-09-09',
+                    providerCoverage: [], files: [] },
             }),
         },
     };
@@ -107,6 +108,7 @@ test('recordFilter constrains traversal without narrowing low-confidence qualifi
                     symbolRegistryManifestHash: 'fixture',
                     relationshipVersion: 'fixture',
                     builtAt: '2026-09-22',
+                    providerCoverage: [],
                     files: [],
                 },
             }),

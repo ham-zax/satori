@@ -9,7 +9,11 @@ import ts from 'typescript';
 import { Context } from '../core/context';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
-import type { ResolutionProjectEvidence, ResolutionProjectInput } from '../relationships/resolution';
+import type {
+    ResolutionProjectAnalyzer,
+    ResolutionProjectEvidence,
+    ResolutionProjectInput,
+} from '../relationships/resolution';
 import {
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
@@ -38,7 +42,7 @@ class FixtureEmbedding extends Embedding {
 
 async function createFixture(
     files: Readonly<Record<string, string>>,
-    resolutionAnalyzer?: TypeScriptSemanticProjectAnalyzer,
+    resolutionAnalyzer?: ResolutionProjectAnalyzer,
 ) {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-semantic-publication-'));
     const root = path.join(tempRoot, 'repo');
@@ -146,6 +150,50 @@ class CapturingTypeScriptSemanticProjectAnalyzer extends TypeScriptSemanticProje
         return evidence;
     }
 }
+
+test('late TypeScript resolution failure preserves a searchable Publication with unavailable call-graph coverage', async () => {
+    const failingAnalyzer: ResolutionProjectAnalyzer = {
+        supportsLanguage: (language) => language === 'typescript',
+        getProviderMetadata: () => ({
+            providerId: 'satori-typescript-compiler',
+            providerVersion: 'ts-compiler-v7',
+        }),
+        analyze: async () => {
+            throw new Error('fixture compiler crashed after vector finalization');
+        },
+    };
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/run.ts': `
+export function target(): string { return 'ok'; }
+export function run(): string { return target(); }
+`,
+    }, failingAnalyzer);
+
+    try {
+        const result = await fixture.context.indexCodebase(fixture.root);
+        assert.equal(result.status, 'completed');
+        assert.equal(result.publication.status, 'activated');
+
+        const state = await readNavigation(fixture.context, fixture.root);
+        assert.equal(state.current.publication.status, 'complete');
+        assert.equal(
+            state.relationships.records.some((record) => record.type === 'CALLS'),
+            false,
+        );
+        const coverage = state.relationships.manifest.providerCoverage.find(
+            (entry) => entry.providerId === 'satori-typescript-compiler',
+        );
+        assert.ok(coverage);
+        assert.equal(coverage.status, 'unavailable');
+        assert.equal(coverage.failureReason, 'provider_failure');
+        assert.match(coverage.failureMessage ?? '', /fixture compiler crashed/);
+        assert.equal(coverage.sourceFileCount, 1);
+        assert.equal(coverage.analyzedSourceFileCount, 0);
+    } finally {
+        await fixture.close();
+    }
+});
 
 test('production indexing publishes proof-backed TypeScript CALLS and abstains on open-world interface dispatch', async () => {
     const fixture = await createFixture({

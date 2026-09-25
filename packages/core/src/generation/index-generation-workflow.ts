@@ -24,7 +24,13 @@ import type {
     ResolutionProjectEvidence,
 } from '../relationships';
 import { buildRelationshipDelta, buildRelationshipsForRegistry } from '../relationships';
-import type { SemanticAuxiliaryFile, SemanticProjectAnalyzer, SemanticProjectEvidence, SemanticSourceFile } from '../semantic';
+import type {
+    SemanticAuxiliaryFile,
+    SemanticProjectAnalyzer,
+    SemanticProjectEvidence,
+    SemanticProviderCoverage,
+    SemanticSourceFile,
+} from '../semantic';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../semantic/descriptor';
 import type { LanguageAnalysisPort } from '../language-analysis';
 import type { RelationshipRecord } from '../symbols/contracts';
@@ -118,6 +124,37 @@ function isTypeScriptResolutionSource(filePath: string): boolean {
     return TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
 
+function boundedProviderFailureMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.trim() || 'provider failure';
+    return normalized.length <= 1024 ? normalized : `${normalized.slice(0, 1021)}...`;
+}
+
+function providerCoverageKey(coverage: Pick<SemanticProviderCoverage, 'language' | 'providerId'>): string {
+    return `${coverage.language}\0${coverage.providerId}`;
+}
+
+function unavailableProviderCoverage(input: {
+    language: string;
+    providerId: string;
+    providerVersion: string;
+    environmentConfigId?: string;
+    sourceFileCount: number;
+    error: unknown;
+}): SemanticProviderCoverage {
+    return {
+        language: input.language,
+        providerId: input.providerId,
+        providerVersion: input.providerVersion,
+        ...(input.environmentConfigId ? { environmentConfigId: input.environmentConfigId } : {}),
+        status: 'unavailable',
+        sourceFileCount: input.sourceFileCount,
+        analyzedSourceFileCount: 0,
+        failureReason: 'provider_failure',
+        failureMessage: boundedProviderFailureMessage(input.error),
+    };
+}
+
 type CachedNavigationDeltaState = {
     readonly canonicalRoot: string;
     readonly publicationId: string;
@@ -128,6 +165,7 @@ type CachedNavigationDeltaState = {
     readonly registry: SymbolRegistry;
     readonly records: readonly RelationshipRecord[];
     readonly analysisByFile: Map<string, RelationshipAnalysisEvidence>;
+    readonly providerCoverage: readonly SemanticProviderCoverage[];
 };
 
 // ---- Narrow dependency ports ----
@@ -270,7 +308,6 @@ export interface IndexGenerationWorkflowPorts {
     clearSynchronizerMutationTarget(synchronizerKey: string): void;
 }
 
-
 export class IndexGenerationWorkflow {
     private readonly reindexByChangeQueues = new Map<string, Promise<void>>();
     /**
@@ -382,6 +419,7 @@ export class IndexGenerationWorkflow {
         }
 
 
+        const providerCoverageByKey = new Map<string, SemanticProviderCoverage>();
         const semanticEvidenceByLanguage = new Map<string, SemanticProjectEvidence>();
         if (this.ports.semanticAnalyzer) {
             const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
@@ -423,12 +461,47 @@ export class IndexGenerationWorkflow {
                     semanticRegistry,
                     observedFileHashes,
                 );
-                const evidence = await this.ports.semanticAnalyzer.analyze({
-                    language,
-                    sourceFiles,
-                    auxiliaryFiles,
-                });
-                semanticEvidenceByLanguage.set(language, evidence);
+                const descriptor = semanticRegistry.getDescriptor(language);
+                if (!descriptor) {
+                    throw new Error(`Semantic provider metadata is unavailable for '${language}'.`);
+                }
+                try {
+                    const evidence = await this.ports.semanticAnalyzer.analyze({
+                        language,
+                        sourceFiles,
+                        auxiliaryFiles,
+                    });
+                    semanticEvidenceByLanguage.set(language, evidence);
+                    const coverage = evidence.coverage ?? {
+                        language,
+                        providerId: descriptor.providerId,
+                        providerVersion: descriptor.providerVersion,
+                        environmentConfigId: descriptor.environmentConfigId,
+                        status: 'complete' as const,
+                        sourceFileCount: sourceFiles.length,
+                        analyzedSourceFileCount: sourceFiles.length,
+                    };
+                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                } catch (error) {
+                    const coverage = unavailableProviderCoverage({
+                        language,
+                        providerId: descriptor.providerId,
+                        providerVersion: descriptor.providerVersion,
+                        environmentConfigId: descriptor.environmentConfigId,
+                        sourceFileCount: sourceFiles.length,
+                        error,
+                    });
+                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                    semanticEvidenceByLanguage.set(language, {
+                        language,
+                        occurrencesByFile: new Map(),
+                        coverage,
+                    });
+                    console.warn(
+                        `[Context] Optional semantic provider '${coverage.providerId}' failed for '${language}'; `
+                        + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                    );
+                }
             }
         }
 
@@ -436,11 +509,61 @@ export class IndexGenerationWorkflow {
         if (this.ports.resolutionAnalyzer) {
             for (const language of new Set(manifestFiles.map((file) => file.language))) {
                 if (!this.ports.resolutionAnalyzer.supportsLanguage(language)) continue;
-                resolutionEvidenceByLanguage.set(language, await this.ports.resolutionAnalyzer.analyze({
-                    rootPath: canonicalRoot,
-                    language,
-                    registry,
-                }));
+                const sourceFileCount = manifestFiles.filter((file) => file.language === language).length;
+                try {
+                    const evidence = await this.ports.resolutionAnalyzer.analyze({
+                        rootPath: canonicalRoot,
+                        language,
+                        registry,
+                    });
+                    resolutionEvidenceByLanguage.set(language, evidence);
+                    const coverage = evidence.coverage ?? {
+                        language,
+                        providerId: evidence.providerId,
+                        providerVersion: evidence.providerVersion,
+                        environmentConfigId: evidence.environmentConfigId,
+                        status: 'complete' as const,
+                        sourceFileCount,
+                        analyzedSourceFileCount: sourceFileCount,
+                    };
+                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                } catch (error) {
+                    let metadata: Awaited<ReturnType<NonNullable<ResolutionProjectAnalyzer['getProviderMetadata']>>>;
+                    try {
+                        metadata = await this.ports.resolutionAnalyzer.getProviderMetadata?.(language);
+                    } catch {
+                        metadata = undefined;
+                    }
+                    if (!metadata) throw error;
+                    const coverage = unavailableProviderCoverage({
+                        language,
+                        providerId: metadata.providerId,
+                        providerVersion: metadata.providerVersion,
+                        ...(metadata.environmentConfigId
+                            ? { environmentConfigId: metadata.environmentConfigId }
+                            : {}),
+                        sourceFileCount,
+                        error,
+                    });
+                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                    resolutionEvidenceByLanguage.set(language, {
+                        language,
+                        providerId: coverage.providerId,
+                        providerVersion: coverage.providerVersion,
+                        environmentConfigId: coverage.environmentConfigId ?? `unavailable:${coverage.providerId}`,
+                        claimsByFile: new Map(),
+                        affectedSourceFiles: new Set(
+                            manifestFiles
+                                .filter((file) => file.language === language)
+                                .map((file) => file.path),
+                        ),
+                        coverage,
+                    });
+                    console.warn(
+                        `[Context] Optional resolution provider '${coverage.providerId}' failed for '${language}'; `
+                        + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                    );
+                }
             }
         }
 
@@ -459,6 +582,7 @@ export class IndexGenerationWorkflow {
             registry,
             records: relationshipRecords,
             analysisByFile,
+            providerCoverage: [...providerCoverageByKey.values()],
         });
         this.stagePreparedNavigationDelta(result, {
             canonicalRoot,
@@ -469,6 +593,7 @@ export class IndexGenerationWorkflow {
             registry,
             records: relationshipRecords,
             analysisByFile,
+            providerCoverage: [...providerCoverageByKey.values()],
         });
         console.log(`[Context] 🧭 Staged Publication '${publicationId}' navigation with ${result.symbolCount} symbols across ${result.fileShardCount} symbol shards and ${result.relationshipCount} relationships across ${result.relationshipFileShardCount} relationship shards`);
         return result;
@@ -1613,6 +1738,7 @@ export class IndexGenerationWorkflow {
                 status: 'ok' as const,
                 records: existingRelationshipState.records,
                 analysisByFile: existingRelationshipState.analysisByFile,
+                providerCoverage: existingRelationshipState.providerCoverage,
             }
             : await measurePhase(
                 'publication_relationship_load',
@@ -1666,6 +1792,14 @@ export class IndexGenerationWorkflow {
             });
 
             const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
+            const inheritedProviderCoverage: readonly SemanticProviderCoverage[] = existingRelationshipState
+                ? existingRelationshipState.providerCoverage
+                : ('manifest' in existingRelationships
+                    ? existingRelationships.manifest.providerCoverage
+                    : []);
+            const providerCoverageByKey = new Map<string, SemanticProviderCoverage>(
+                inheritedProviderCoverage.map((coverage) => [providerCoverageKey(coverage), coverage]),
+            );
             const semanticEvidenceByLanguage = new Map<string, SemanticProjectEvidence>();
 
             if (this.ports.semanticAnalyzer) {
@@ -1705,13 +1839,53 @@ export class IndexGenerationWorkflow {
                         }
                         sourceFiles.push({ path: f.path, source, sourceHash });
                     }
-                    const auxiliaryFiles = await this.collectSemanticAuxiliariesForLanguage(codebasePath, lang, semanticRegistry, observedFileHashes);
-                    const evidence = await this.ports.semanticAnalyzer.analyze({
-                        language: lang,
-                        sourceFiles,
-                        auxiliaryFiles,
-                    });
-                    semanticEvidenceByLanguage.set(lang, evidence);
+                    const auxiliaryFiles = await this.collectSemanticAuxiliariesForLanguage(
+                        codebasePath,
+                        lang,
+                        semanticRegistry,
+                        observedFileHashes,
+                    );
+                    const descriptor = semanticRegistry.getDescriptor(lang);
+                    if (!descriptor) {
+                        throw new Error(`Semantic provider metadata is unavailable for '${lang}'.`);
+                    }
+                    try {
+                        const evidence = await this.ports.semanticAnalyzer.analyze({
+                            language: lang,
+                            sourceFiles,
+                            auxiliaryFiles,
+                        });
+                        semanticEvidenceByLanguage.set(lang, evidence);
+                        const coverage = evidence.coverage ?? {
+                            language: lang,
+                            providerId: descriptor.providerId,
+                            providerVersion: descriptor.providerVersion,
+                            environmentConfigId: descriptor.environmentConfigId,
+                            status: 'complete' as const,
+                            sourceFileCount: sourceFiles.length,
+                            analyzedSourceFileCount: sourceFiles.length,
+                        };
+                        providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                    } catch (error) {
+                        const coverage = unavailableProviderCoverage({
+                            language: lang,
+                            providerId: descriptor.providerId,
+                            providerVersion: descriptor.providerVersion,
+                            environmentConfigId: descriptor.environmentConfigId,
+                            sourceFileCount: sourceFiles.length,
+                            error,
+                        });
+                        providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                        semanticEvidenceByLanguage.set(lang, {
+                            language: lang,
+                            occurrencesByFile: new Map(),
+                            coverage,
+                        });
+                        console.warn(
+                            `[Context] Optional semantic provider '${coverage.providerId}' failed for '${lang}' during delta rebuild; `
+                            + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                        );
+                    }
                 }
             }
 
@@ -1719,13 +1893,61 @@ export class IndexGenerationWorkflow {
             if (this.ports.resolutionAnalyzer) {
                 for (const language of new Set(mergedManifestFiles.map((file) => file.language))) {
                     if (!this.ports.resolutionAnalyzer.supportsLanguage(language)) continue;
-                    resolutionEvidenceByLanguage.set(language, await this.ports.resolutionAnalyzer.analyze({
-                        rootPath: this.ports.canonicalizeCodebasePath(codebasePath),
-                        language,
-                        registry,
-                        previousRegistry: existingRegistry,
-                        changedFiles: replacedPaths,
-                    }));
+                    const languageFiles = mergedManifestFiles
+                        .filter((file) => file.language === language)
+                        .map((file) => file.path);
+                    try {
+                        const evidence = await this.ports.resolutionAnalyzer.analyze({
+                            rootPath: this.ports.canonicalizeCodebasePath(codebasePath),
+                            language,
+                            registry,
+                            previousRegistry: existingRegistry,
+                            changedFiles: replacedPaths,
+                        });
+                        resolutionEvidenceByLanguage.set(language, evidence);
+                        const coverage = evidence.coverage ?? {
+                            language,
+                            providerId: evidence.providerId,
+                            providerVersion: evidence.providerVersion,
+                            environmentConfigId: evidence.environmentConfigId,
+                            status: 'complete' as const,
+                            sourceFileCount: languageFiles.length,
+                            analyzedSourceFileCount: languageFiles.length,
+                        };
+                        providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                    } catch (error) {
+                        let metadata: Awaited<ReturnType<NonNullable<ResolutionProjectAnalyzer['getProviderMetadata']>>>;
+                        try {
+                            metadata = await this.ports.resolutionAnalyzer.getProviderMetadata?.(language);
+                        } catch {
+                            metadata = undefined;
+                        }
+                        if (!metadata) throw error;
+                        const coverage = unavailableProviderCoverage({
+                            language,
+                            providerId: metadata.providerId,
+                            providerVersion: metadata.providerVersion,
+                            ...(metadata.environmentConfigId
+                                ? { environmentConfigId: metadata.environmentConfigId }
+                                : {}),
+                            sourceFileCount: languageFiles.length,
+                            error,
+                        });
+                        providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                        resolutionEvidenceByLanguage.set(language, {
+                            language,
+                            providerId: coverage.providerId,
+                            providerVersion: coverage.providerVersion,
+                            environmentConfigId: coverage.environmentConfigId ?? `unavailable:${coverage.providerId}`,
+                            claimsByFile: new Map(),
+                            affectedSourceFiles: new Set(languageFiles),
+                            coverage,
+                        });
+                        console.warn(
+                            `[Context] Optional resolution provider '${coverage.providerId}' failed for '${language}' during delta rebuild; `
+                            + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                        );
+                    }
                 }
             }
 
@@ -1752,6 +1974,7 @@ export class IndexGenerationWorkflow {
                     registry,
                     records: relationshipDelta.records,
                     analysisByFile: retainedAnalysisByFile,
+                    providerCoverage: [...providerCoverageByKey.values()],
                     deltaReuse: {
                         basePublicationId: sourcePublicationId,
                         baseNavigationRoot: sourceNavigationRoot,
@@ -1777,6 +2000,7 @@ export class IndexGenerationWorkflow {
                     registry,
                     records: relationshipDelta.records,
                     analysisByFile: retainedAnalysisByFile,
+                    providerCoverage: [...providerCoverageByKey.values()],
                 },
             };
         }

@@ -8,6 +8,7 @@ import type { RelationshipRecord } from './contracts';
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { SymbolRegistry } from './registry';
 import type { RelationshipAnalysisEvidence } from '../relationships';
+import type { SemanticProviderCoverage } from '../semantic/contracts';
 import {
     SYMBOL_INDEX_SCHEMA_VERSION,
     isSymbolIndexFile,
@@ -61,6 +62,7 @@ export interface StagePublicationNavigationInput {
     registry: SymbolRegistry;
     records: RelationshipRecord[];
     analysisByFile: Map<string, RelationshipAnalysisEvidence> | Record<string, RelationshipAnalysisEvidence>;
+    providerCoverage?: readonly SemanticProviderCoverage[];
     deltaReuse?: {
         basePublicationId: string;
         baseNavigationRoot: string;
@@ -292,6 +294,7 @@ export async function stagePublicationNavigation(
             files: input.registry.manifest.files,
             records: input.records,
             analysisByFile: input.analysisByFile,
+            providerCoverage: input.providerCoverage,
         }, reuse?.relationships);
 
         const physical = await fsyncDirectoryTree(buildRoot, reuse?.symbols.sharedFileSizes);

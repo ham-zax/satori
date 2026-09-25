@@ -81,6 +81,27 @@ export interface SemanticSkippedFile {
     readonly bytes: number;
 }
 
+export const SEMANTIC_PROVIDER_COVERAGE_STATUSES = [
+    'complete',
+    'degraded',
+    'unavailable',
+] as const;
+
+export type SemanticProviderCoverageStatus = typeof SEMANTIC_PROVIDER_COVERAGE_STATUSES[number];
+
+export interface SemanticProviderCoverage {
+    readonly language: string;
+    readonly providerId: string;
+    readonly providerVersion: string;
+    readonly environmentConfigId?: string;
+    readonly status: SemanticProviderCoverageStatus;
+    readonly sourceFileCount: number;
+    readonly analyzedSourceFileCount: number;
+    readonly skippedFiles?: readonly SemanticSkippedFile[];
+    readonly failureReason?: 'provider_failure' | 'resource_limit';
+    readonly failureMessage?: string;
+}
+
 export interface SemanticProjectEvidence {
     readonly language: string;
     readonly occurrencesByFile: ReadonlyMap<string, readonly SemanticResolvedOccurrence[]>;
@@ -89,4 +110,6 @@ export interface SemanticProjectEvidence {
      * Absent or empty when nothing was skipped.
      */
     readonly skippedFiles?: readonly SemanticSkippedFile[];
+    /** Truthful provider coverage for capability/status projection. */
+    readonly coverage?: SemanticProviderCoverage;
 }

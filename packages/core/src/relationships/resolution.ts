@@ -1,5 +1,6 @@
 import type { SourceSpan } from '../language-analysis';
 import type { SymbolRegistry } from '../symbols';
+import type { SemanticProviderCoverage } from '../semantic';
 
 /** Stable semantic configuration identity; publication generations are not part of it. */
 export const PYTHON_NATIVE_ENVIRONMENT_CONFIG_ID = 'python-native-resolution-v2';
@@ -187,11 +188,22 @@ export interface ResolutionProjectEvidence {
     readonly affectedSourceFiles?: ReadonlySet<string>;
     /** Non-indexed source inputs whose content can change semantic identity. */
     readonly sourceControlFiles?: readonly string[];
+    /** Truthful provider coverage for capability/status projection. */
+    readonly coverage?: SemanticProviderCoverage;
 }
 
 export interface ResolutionProjectAnalyzer {
     supportsLanguage(language: string): boolean;
     analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence>;
+    getProviderMetadata?(language: string): Readonly<{
+        providerId: string;
+        providerVersion: string;
+        environmentConfigId?: string;
+    }> | undefined | Promise<Readonly<{
+        providerId: string;
+        providerVersion: string;
+        environmentConfigId?: string;
+    }> | undefined>;
     getSourceControlFiles?(input: {
         readonly rootPath: string;
         readonly language: string;

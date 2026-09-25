@@ -283,8 +283,8 @@
 
 - [x] Task 1 — supervised full-index worker.
 - [x] Task 2 — cancellation/no-progress unification.
-- [ ] Task 3 — persisted semantic coverage contract.
-- [ ] Task 4 — degraded semantic Publication behavior.
+- [x] Task 3 — persisted semantic coverage contract.
+- [x] Task 4 — degraded semantic Publication behavior.
 - [ ] Task 5 — repository-scale resource budgets.
 - [ ] Task 6 — candidate receipt/orphan recovery.
 - [ ] Task 7 — classified automatic retry.

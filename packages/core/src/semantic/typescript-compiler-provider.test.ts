@@ -453,3 +453,50 @@ test('TypeScript compiler provider handles constructor inference, aliases, optio
         assert.equal(call?.target?.ownerName, 'WorkerA', calleeText);
     }
 });
+
+test('TypeScript receiver descriptions stay bounded for large external structural types', () => {
+    const fields = Array.from({ length: 100 }, (_, index) => `field${index}: string;`).join('\n');
+    const source = `declare const external: { run(): void; ${fields} };\nexternal.run();`;
+    const evidence = analyzeTypeScriptProject({
+        language: 'typescript',
+        sourceFiles: [{ path: 'src/consumer.ts', source, sourceHash: 'consumer' }],
+        auxiliaryFiles: [],
+    }, {
+        compilerOptions: { noErrorTruncation: true },
+    });
+    const call = evidence.occurrencesByFile.get('src/consumer.ts')?.[0];
+
+    assert.equal(call?.calleeText, 'external.run');
+    assert.equal(call?.receiverType, 'object');
+});
+
+test('TypeScript receiver descriptions keep inaccessible aliases instead of expanding them', () => {
+    const fields = Array.from({ length: 80 }, (_, index) => `field${index}: string;`).join('\n');
+    const matchers = `
+export declare function expect<T>(value: T): Matchers<T>;
+type Matchers<T> = {
+    not: Matchers<T>;
+    run(): void;
+    ${fields}
+};
+`;
+    const consumer = `
+import { expect } from './matchers';
+declare const external: { id: string };
+expect(external).run();
+`;
+    const evidence = analyzeTypeScriptProject({
+        language: 'typescript',
+        sourceFiles: [
+            { path: 'src/matchers.ts', source: matchers, sourceHash: 'matchers' },
+            { path: 'src/alias-consumer.ts', source: consumer, sourceHash: 'alias-consumer' },
+        ],
+        auxiliaryFiles: [],
+    }, {
+        compilerOptions: { noErrorTruncation: true },
+    });
+    const call = evidence.occurrencesByFile.get('src/alias-consumer.ts')
+        ?.find((item) => item.calleeText === 'expect(external).run');
+
+    assert.equal(call?.receiverType, 'Matchers');
+});

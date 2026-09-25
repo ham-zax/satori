@@ -182,7 +182,7 @@ function shouldAwaitManagedIndex(toolName: string, args: Record<string, unknown>
 function isManageIndexTerminal(result: unknown): boolean {
     const phase = operationPhase(result);
     const state = inferManageStatusState(result);
-    if (phase === "failed" || phase === "blocked") {
+    if (phase === "failed" || phase === "blocked" || phase === "cancelled") {
         return true;
     }
     if (phase === "completed") {
@@ -420,6 +420,18 @@ function evaluateToolResultForError(
     return null;
 }
 
+function manageIndexOperationFailureExit(
+    result: unknown,
+    writers: { writeStderr: (text: string) => void; },
+): number | null {
+    const phase = operationPhase(result);
+    if (phase === "failed" || phase === "blocked" || phase === "cancelled") {
+        writers.writeStderr(`E_TOOL_ERROR manage_index operation phase=${phase}\n`);
+        return 1;
+    }
+    return null;
+}
+
 async function invokeTool(
     toolName: string,
     args: Record<string, unknown>,
@@ -463,7 +475,10 @@ async function invokeTool(
         maybeEmitTextSummary(writers, result);
     }
 
-    const finalErrorExit = initialErrorExit ?? evaluateToolResultForError(result, writers);
+    const awaitedManageIndex = initialErrorExit === null && shouldAwaitManagedIndex(toolName, args);
+    const finalErrorExit = initialErrorExit
+        ?? (awaitedManageIndex ? manageIndexOperationFailureExit(result, writers) : null)
+        ?? evaluateToolResultForError(result, writers);
     if (finalErrorExit !== null) {
         return finalErrorExit;
     }

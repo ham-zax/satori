@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v6';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v7';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -826,6 +826,62 @@ function mutableLocalOriginCandidates(
     };
 }
 
+const MAX_RECEIVER_TYPE_DESCRIPTION_LENGTH = 256;
+const MAX_RECEIVER_TYPE_COMPONENTS = 8;
+
+function clipReceiverTypeDescription(value: string): string {
+    if (value.length <= MAX_RECEIVER_TYPE_DESCRIPTION_LENGTH) return value;
+    return `${value.slice(0, MAX_RECEIVER_TYPE_DESCRIPTION_LENGTH - 3)}...`;
+}
+
+function receiverTypeSymbolName(type: ts.Type): string | undefined {
+    const aliasName = type.aliasSymbol?.getName();
+    if (aliasName) return clipReceiverTypeDescription(aliasName);
+
+    const symbolName = type.getSymbol()?.getName();
+    if (!symbolName || symbolName === '__type' || symbolName === '__object' || symbolName === '__function') {
+        return undefined;
+    }
+    return clipReceiverTypeDescription(symbolName);
+}
+
+function receiverTypePrimitiveName(type: ts.Type): string | undefined {
+    const flags = type.flags;
+    if ((flags & ts.TypeFlags.Any) !== 0) return 'any';
+    if ((flags & ts.TypeFlags.Unknown) !== 0) return 'unknown';
+    if ((flags & ts.TypeFlags.Never) !== 0) return 'never';
+    if ((flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) !== 0) return 'string';
+    if ((flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral)) !== 0) return 'number';
+    if ((flags & (ts.TypeFlags.BigInt | ts.TypeFlags.BigIntLiteral)) !== 0) return 'bigint';
+    if ((flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0) return 'boolean';
+    if ((flags & ts.TypeFlags.ESSymbol) !== 0) return 'symbol';
+    if ((flags & ts.TypeFlags.Void) !== 0) return 'void';
+    if ((flags & ts.TypeFlags.Undefined) !== 0) return 'undefined';
+    if ((flags & ts.TypeFlags.Null) !== 0) return 'null';
+    return undefined;
+}
+
+function describeReceiverType(type: ts.Type, depth = 0): string {
+    const symbolName = receiverTypeSymbolName(type);
+    if (symbolName) return symbolName;
+
+    const primitiveName = receiverTypePrimitiveName(type);
+    if (primitiveName) return primitiveName;
+
+    if (depth < 2 && type.isUnionOrIntersection()) {
+        const separator = type.isUnion() ? ' | ' : ' & ';
+        const parts = type.types
+            .slice(0, MAX_RECEIVER_TYPE_COMPONENTS)
+            .map((part) => describeReceiverType(part, depth + 1));
+        if (type.types.length > MAX_RECEIVER_TYPE_COMPONENTS) parts.push('...');
+        return clipReceiverTypeDescription(parts.join(separator));
+    }
+
+    if ((type.flags & ts.TypeFlags.Object) !== 0) return 'object';
+    if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) return 'type_parameter';
+    return 'type';
+}
+
 function memberCandidates(
     checker: ts.TypeChecker,
     call: ts.CallExpression | ts.NewExpression,
@@ -845,11 +901,10 @@ function memberCandidates(
     }
 
     const receiverType = checker.getTypeAtLocation(receiver);
-    const receiverTypeText = checker.typeToString(
-        receiverType,
-        receiver,
-        ts.TypeFormatFlags.NoTruncation,
-    );
+    // Descriptive evidence only. Do not call TypeChecker.typeToString here:
+    // project noErrorTruncation settings can force anonymous structural types
+    // to expand into very large strings retained once per call during indexing.
+    const receiverTypeText = describeReceiverType(receiverType);
 
     const privateThisCandidates = privateThisMemberCandidates(
         checker,

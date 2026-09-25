@@ -57,7 +57,7 @@ interface MockCliSession {
     close(): Promise<void>;
 }
 
-function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "manage_wait" | "manage_initial_error" | "manage_initial_blocked" = "normal"): MockCliSession {
+function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "manage_wait" | "manage_initial_error" | "manage_initial_blocked" | "manage_terminal_failed" = "normal"): MockCliSession {
     let statusPolls = 0;
     return {
         async listTools(): Promise<ListToolsResult> {
@@ -138,6 +138,26 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
                 }
                 if (args.action === "status") {
                     return { isError: false, content: [{ type: "text", text: "POLLED_STATUS_SHOULD_NOT_HAPPEN" }] };
+                }
+            }
+            if (mode === "manage_terminal_failed" && name === "manage_index") {
+                if (args.action === "create" || args.action === "reindex") {
+                    return {
+                        isError: false,
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({ status: "ok", operation: { phase: "accepted" } }),
+                        }],
+                    };
+                }
+                if (args.action === "status") {
+                    return {
+                        isError: false,
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({ status: "ok", operation: { phase: "failed" } }),
+                        }],
+                    };
                 }
             }
             return {
@@ -1496,6 +1516,23 @@ test("runCli exits on initial manage_index blocked envelope without polling stat
     assert.equal(stderr.includes("E_TOOL_ERROR"), true);
     assert.equal(stderr.includes("status=not_ready"), true);
     assert.equal(stdout.includes("POLLED_STATUS_SHOULD_NOT_HAPPEN"), false);
+});
+
+test("runCli exits when awaited manage_index operation fails while publication status stays ok", async () => {
+    const io = captureIo();
+
+    const exitCode = await runCli(["manage_index", "--action", "reindex", "--path", "/repo"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        connectSession: async () => createMockSession("manage_terminal_failed"),
+        startupTimeoutMs: 10000,
+        callTimeoutMs: 10000,
+    });
+
+    const { stdout, stderr } = io.read();
+    assert.equal(exitCode, 1);
+    assert.equal(stderr.includes("E_TOOL_ERROR manage_index operation phase=failed"), true);
+    assert.equal(stdout.includes('\\"phase\\":\\"failed\\"'), true);
 });
 
 if (RUN_LIVE_SERVER_SMOKE) {

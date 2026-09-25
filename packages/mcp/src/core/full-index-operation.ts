@@ -231,14 +231,14 @@ export class FullIndexOperation {
                 this.host.mutationRuntime.assertCurrent(absolutePath);
                 publishBackgroundPhase("failed", {
                     progress: 99,
-                    error: "The replacement candidate reached the chunk limit; the previous complete Publication remains current.",
+                    error: "The replacement candidate reached an indexing resource limit; the previous complete Publication remains current.",
                 });
                 this.host.setIndexingStats({
                     indexedFiles: previousCompleteGeneration.indexedFiles,
                     totalChunks: previousCompleteGeneration.totalChunks,
                 });
                 await restoreActiveWatcherAfterRejectedCandidate();
-                console.warn(`[BACKGROUND-INDEX] Candidate for '${absolutePath}' reached the chunk limit; preserved previous complete collection '${previousCompleteGeneration.collectionName}'.`);
+                console.warn(`[BACKGROUND-INDEX] Candidate for '${absolutePath}' reached an indexing resource limit; preserved previous complete collection '${previousCompleteGeneration.collectionName}'.`);
                 return;
             }
 
@@ -287,7 +287,7 @@ export class FullIndexOperation {
 
             let message = `Background indexing completed for '${absolutePath}'.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`;
             if (stats.status === "limit_reached") {
-                message += "\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached."
+                message += "\n⚠️  Warning: Indexing stopped because an indexing resource limit was reached."
                     + " Search may return incomplete results with SEARCH_PARTIAL_INDEX warnings."
                     + " file_outline/call_graph are unavailable until a full reindex completes successfully."
                     + " This is not a fully complete index.";

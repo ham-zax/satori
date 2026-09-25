@@ -29,6 +29,50 @@ export interface TypeScriptSemanticWalkMeasurement {
     readonly durationMs: number;
 }
 
+export interface TypeScriptSourceBudget {
+    readonly maxFileBytes: number;
+    readonly maxProjectBytes: number;
+}
+
+export class TypeScriptSourceBudgetTracker {
+    private readonly admittedBytesByFile = new Map<string, number>();
+    private totalBytes = 0;
+    private failureMessage?: string;
+
+    constructor(private readonly budget: TypeScriptSourceBudget) {}
+
+    admit(fileName: string, bytes: number): boolean {
+        if (this.failureMessage) return false;
+        if (!Number.isSafeInteger(bytes) || bytes < 0) {
+            this.failureMessage = `TypeScript semantic source '${fileName}' has an invalid byte size.`;
+            return false;
+        }
+        if (bytes > this.budget.maxFileBytes) {
+            this.failureMessage = `TypeScript semantic source '${fileName}' is ${bytes} bytes, exceeding the ${this.budget.maxFileBytes} byte per-file budget.`;
+            return false;
+        }
+        const previous = this.admittedBytesByFile.get(fileName) ?? 0;
+        const nextTotal = this.totalBytes - previous + bytes;
+        if (nextTotal > this.budget.maxProjectBytes) {
+            this.failureMessage = `TypeScript semantic project source bytes would reach ${nextTotal}, exceeding the ${this.budget.maxProjectBytes} byte project budget while admitting '${fileName}'.`;
+            return false;
+        }
+        this.admittedBytesByFile.set(fileName, bytes);
+        this.totalBytes = nextTotal;
+        return true;
+    }
+
+    getFailureMessage(): string | undefined {
+        return this.failureMessage;
+    }
+
+    reset(): void {
+        this.admittedBytesByFile.clear();
+        this.totalBytes = 0;
+        this.failureMessage = undefined;
+    }
+}
+
 function hash(value: unknown): string {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -120,8 +164,13 @@ export class TypeScriptLanguageServiceSession {
     private readonly fileVersions = new Map<string, number>();
     private readonly overrides = new Map<string, string>();
 
-    constructor(configPath: string) {
+    private readonly sourceBudget?: TypeScriptSourceBudgetTracker;
+
+    constructor(configPath: string, resourceBudget?: TypeScriptSourceBudget) {
         this.project = loadTypeScriptConfiguredProject(configPath);
+        this.sourceBudget = resourceBudget
+            ? new TypeScriptSourceBudgetTracker(resourceBudget)
+            : undefined;
         this.languageService = this.createLanguageService();
     }
 
@@ -149,12 +198,20 @@ export class TypeScriptLanguageServiceSession {
         return program;
     }
 
+    getResourceLimitFailure(): string | undefined {
+        return this.sourceBudget?.getFailureMessage();
+    }
+
     getDefinitionAtPosition(fileName: string, position: number): readonly ts.DefinitionInfo[] {
         return this.languageService.getDefinitionAtPosition(normalizedPath(fileName), position) ?? [];
     }
 
     updateFile(fileName: string, source: string): void {
         const absoluteFileName = normalizedPath(fileName);
+        const sourceBytes = Buffer.byteLength(source, 'utf8');
+        if (this.sourceBudget && !this.sourceBudget.admit(absoluteFileName, sourceBytes)) {
+            return;
+        }
         this.overrides.set(absoluteFileName, source);
         this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
     }
@@ -172,6 +229,7 @@ export class TypeScriptLanguageServiceSession {
             return false;
         }
         this.project = next;
+        this.sourceBudget?.reset();
         this.languageService.dispose();
         this.languageService = this.createLanguageService();
         return true;
@@ -222,9 +280,23 @@ export class TypeScriptLanguageServiceSession {
             getScriptFileNames: () => [...project.fileNames],
             getScriptSnapshot: (fileName) => {
                 const absoluteFileName = normalizedPath(fileName);
-                const source = this.overrides.get(absoluteFileName)
-                    ?? (fs.existsSync(absoluteFileName) ? fs.readFileSync(absoluteFileName, 'utf8') : undefined);
-                return source === undefined ? undefined : ts.ScriptSnapshot.fromString(source);
+                const override = this.overrides.get(absoluteFileName);
+                if (override !== undefined) {
+                    return ts.ScriptSnapshot.fromString(override);
+                }
+                if (!fs.existsSync(absoluteFileName)) return undefined;
+                if (this.sourceBudget) {
+                    let stat: fs.Stats;
+                    try {
+                        stat = fs.statSync(absoluteFileName);
+                    } catch {
+                        return undefined;
+                    }
+                    if (!stat.isFile() || !this.sourceBudget.admit(absoluteFileName, stat.size)) {
+                        return undefined;
+                    }
+                }
+                return ts.ScriptSnapshot.fromString(fs.readFileSync(absoluteFileName, 'utf8'));
             },
             getScriptVersion: (fileName) => String(this.fileVersions.get(normalizedPath(fileName)) ?? 0),
             fileExists: ts.sys.fileExists,

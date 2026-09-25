@@ -14,8 +14,10 @@ import {
 } from '../semantic/typescript-compiler-provider';
 import {
     TypeScriptLanguageServiceSession,
+    TypeScriptSourceBudgetTracker,
     loadTypeScriptConfiguredProject,
     type TypeScriptConfiguredProject,
+    type TypeScriptSourceBudget,
 } from '../semantic/typescript-configured-project';
 import type {
     ResolutionProjectAnalyzer,
@@ -34,11 +36,21 @@ const ROOT_MODULE_CONTROL_FILES = [
     'bun.lockb',
 ] as const;
 const DEFAULT_MAX_SESSIONS = 4;
+export const DEFAULT_MAX_TYPESCRIPT_SEMANTIC_SOURCE_FILE_BYTES = 4 * 1024 * 1024;
+export const DEFAULT_MAX_TYPESCRIPT_SEMANTIC_PROJECT_BYTES = 64 * 1024 * 1024;
+
+export type TypeScriptSemanticResourceBudget = TypeScriptSourceBudget;
+
+const DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET: TypeScriptSemanticResourceBudget = Object.freeze({
+    maxFileBytes: DEFAULT_MAX_TYPESCRIPT_SEMANTIC_SOURCE_FILE_BYTES,
+    maxProjectBytes: DEFAULT_MAX_TYPESCRIPT_SEMANTIC_PROJECT_BYTES,
+});
 
 type ProjectMode = 'configured' | 'inferred';
 
 interface ProgramSession {
     getProgram(): ts.Program;
+    getResourceLimitFailure(): string | undefined;
     updateFile(fileName: string, source: string): void;
     dispose(): void;
 }
@@ -50,6 +62,8 @@ interface ProjectPlan {
     readonly configPath?: string;
     readonly relativeFiles: readonly string[];
     readonly absoluteFiles: readonly string[];
+    /** Compiler root files that the configured/inferred LanguageService can load. */
+    readonly compilerRootFiles: readonly string[];
     readonly options: ts.CompilerOptions;
     readonly configErrors: readonly ts.Diagnostic[];
     readonly controlFiles: readonly string[];
@@ -96,10 +110,23 @@ function stableHash(value: unknown): string {
 }
 
 function fileContentHash(filePath: string): string {
+    let fd: number | undefined;
     try {
-        return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+        fd = fs.openSync(filePath, 'r');
+        const hash = createHash('sha256');
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        let position = 0;
+        while (true) {
+            const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+            if (bytesRead <= 0) break;
+            hash.update(buffer.subarray(0, bytesRead));
+            position += bytesRead;
+        }
+        return hash.digest('hex');
     } catch {
         return 'missing';
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
     }
 }
 
@@ -302,16 +329,62 @@ function controlIdentity(rootPath: string, controlFiles: readonly string[]): rea
     ] as const);
 }
 
+function projectSetEnvironmentConfigId(
+    plans: readonly ProjectPlan[],
+    resourceBudget: TypeScriptSemanticResourceBudget,
+): string {
+    return `typescript:${ts.version}:project-set:${stableHash({
+        providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+        resourceBudget,
+        projects: plans
+            .map((plan) => [plan.key, plan.environmentConfigId] as const)
+            .sort(([left], [right]) => left.localeCompare(right)),
+    })}`;
+}
+
+function compilerRootResourceFailure(
+    plans: readonly ProjectPlan[],
+    resourceBudget: TypeScriptSemanticResourceBudget,
+): string | undefined {
+    const seen = new Set<string>();
+    let totalBytes = 0;
+    for (const plan of plans) {
+        for (const compilerRootFile of plan.compilerRootFiles) {
+            const absoluteFile = normalizeAbsolute(compilerRootFile);
+            if (seen.has(absoluteFile)) continue;
+            seen.add(absoluteFile);
+            let stat: fs.Stats;
+            try {
+                stat = fs.statSync(absoluteFile);
+            } catch {
+                continue;
+            }
+            if (!stat.isFile()) continue;
+            if (stat.size > resourceBudget.maxFileBytes) {
+                return `TypeScript semantic source '${absoluteFile}' is ${stat.size} bytes, exceeding the ${resourceBudget.maxFileBytes} byte per-file budget.`;
+            }
+            totalBytes += stat.size;
+            if (totalBytes > resourceBudget.maxProjectBytes) {
+                return `TypeScript semantic root source bytes reached ${totalBytes}, exceeding the ${resourceBudget.maxProjectBytes} byte project budget.`;
+            }
+        }
+    }
+    return undefined;
+}
+
 class InferredLanguageServiceSession implements ProgramSession {
     private readonly versions = new Map<string, number>();
     private readonly overrides = new Map<string, string>();
     private readonly languageService: ts.LanguageService;
+    private readonly sourceBudget: TypeScriptSourceBudgetTracker;
 
     constructor(
         private readonly rootPath: string,
         private readonly fileNames: readonly string[],
         private readonly options: ts.CompilerOptions,
+        resourceBudget: TypeScriptSourceBudget,
     ) {
+        this.sourceBudget = new TypeScriptSourceBudgetTracker(resourceBudget);
         const host: ts.LanguageServiceHost = {
             getCompilationSettings: () => this.options,
             getCurrentDirectory: () => this.rootPath,
@@ -319,9 +392,21 @@ class InferredLanguageServiceSession implements ProgramSession {
             getScriptFileNames: () => [...this.fileNames],
             getScriptSnapshot: (fileName) => {
                 const normalized = normalizeAbsolute(fileName);
-                const source = this.overrides.get(normalized)
-                    ?? (fs.existsSync(normalized) ? fs.readFileSync(normalized, 'utf8') : undefined);
-                return source === undefined ? undefined : ts.ScriptSnapshot.fromString(source);
+                const override = this.overrides.get(normalized);
+                if (override !== undefined) {
+                    return ts.ScriptSnapshot.fromString(override);
+                }
+                if (!fs.existsSync(normalized)) return undefined;
+                let stat: fs.Stats;
+                try {
+                    stat = fs.statSync(normalized);
+                } catch {
+                    return undefined;
+                }
+                if (!stat.isFile() || !this.sourceBudget.admit(normalized, stat.size)) {
+                    return undefined;
+                }
+                return ts.ScriptSnapshot.fromString(fs.readFileSync(normalized, 'utf8'));
             },
             getScriptVersion: (fileName) => String(this.versions.get(normalizeAbsolute(fileName)) ?? 0),
             fileExists: ts.sys.fileExists,
@@ -340,8 +425,15 @@ class InferredLanguageServiceSession implements ProgramSession {
         return program;
     }
 
+    getResourceLimitFailure(): string | undefined {
+        return this.sourceBudget.getFailureMessage();
+    }
+
     updateFile(fileName: string, source: string): void {
         const normalized = normalizeAbsolute(fileName);
+        if (!this.sourceBudget.admit(normalized, Buffer.byteLength(source, 'utf8'))) {
+            return;
+        }
         this.overrides.set(normalized, source);
         this.versions.set(normalized, (this.versions.get(normalized) ?? 0) + 1);
     }
@@ -482,9 +574,21 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     private fileToProject = new Map<string, string>();
     private useCounter = 0;
 
-    constructor(private readonly maxSessions: number = DEFAULT_MAX_SESSIONS) {
+    constructor(
+        private readonly maxSessions: number = DEFAULT_MAX_SESSIONS,
+        private readonly resourceBudget: TypeScriptSemanticResourceBudget =
+            DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET,
+    ) {
         if (!Number.isInteger(maxSessions) || maxSessions < 1) {
             throw new Error('TypeScript semantic session cache bound must be a positive integer.');
+        }
+        if (
+            !Number.isSafeInteger(resourceBudget.maxFileBytes)
+            || resourceBudget.maxFileBytes <= 0
+            || !Number.isSafeInteger(resourceBudget.maxProjectBytes)
+            || resourceBudget.maxProjectBytes <= 0
+        ) {
+            throw new Error('TypeScript semantic resource budgets must be positive safe integers.');
         }
     }
 
@@ -546,6 +650,35 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         for (const plan of plans) {
             for (const file of plan.relativeFiles) currentFileToProject.set(file, plan.key);
         }
+        const sourceControlFiles = [...new Set(plans.flatMap((plan) => plan.controlFiles))].sort();
+        const evidenceEnvironmentConfigId = projectSetEnvironmentConfigId(plans, this.resourceBudget);
+        const resourceLimitEvidence = (failureMessage: string): ResolutionProjectEvidence => {
+            this.clearSessionState();
+            return {
+                language: 'typescript',
+                providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
+                providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+                environmentConfigId: evidenceEnvironmentConfigId,
+                claimsByFile: new Map(),
+                affectedSourceFiles: new Set(typeScriptFiles),
+                sourceControlFiles,
+                coverage: {
+                    language: 'typescript',
+                    providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
+                    providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+                    environmentConfigId: evidenceEnvironmentConfigId,
+                    status: 'unavailable',
+                    sourceFileCount: typeScriptFiles.length,
+                    analyzedSourceFileCount: 0,
+                    failureReason: 'resource_limit',
+                    failureMessage,
+                },
+            };
+        };
+        const rootResourceFailure = compilerRootResourceFailure(plans, this.resourceBudget);
+        if (rootResourceFailure) {
+            return resourceLimitEvidence(rootResourceFailure);
+        }
 
         const changedFiles = input.changedFiles
             ? new Set([...input.changedFiles].map(normalizeRelative))
@@ -580,12 +713,25 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     session.updateFile(absoluteFile, fs.readFileSync(absoluteFile, 'utf8'));
                 }
             }
+            const updateResourceFailure = session.getResourceLimitFailure();
+            if (updateResourceFailure) {
+                return resourceLimitEvidence(updateResourceFailure);
+            }
 
             const program = session.getProgram();
+            const programResourceFailure = session.getResourceLimitFailure();
+            if (programResourceFailure) {
+                return resourceLimitEvidence(programResourceFailure);
+            }
+            const semanticDiagnostics = program.getSemanticDiagnostics();
+            const diagnosticResourceFailure = session.getResourceLimitFailure();
+            if (diagnosticResourceFailure) {
+                return resourceLimitEvidence(diagnosticResourceFailure);
+            }
             projectReferenceAuthorityReady.set(
                 plan.key,
                 plan.referencedProjectKeys.length === 0
-                    || !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305),
+                    || !semanticDiagnostics.some((diagnostic) => diagnostic.code === 6305),
             );
             const reverseDependencies = buildReverseDependencies(program, plan);
             const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan);
@@ -682,7 +828,15 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 }
             }
             const activeSession = this.sessions.get(plan.key)!.session;
+            const activeResourceFailure = activeSession.getResourceLimitFailure();
+            if (activeResourceFailure) {
+                return resourceLimitEvidence(activeResourceFailure);
+            }
             const program = activeSession.getProgram();
+            const activeProgramResourceFailure = activeSession.getResourceLimitFailure();
+            if (activeProgramResourceFailure) {
+                return resourceLimitEvidence(activeProgramResourceFailure);
+            }
 
             if (plan.configErrors.length > 0 || projectReferenceAuthorityReady.get(plan.key) === false) {
                 for (const file of affected) {
@@ -715,11 +869,6 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 claimsByFile.set(file, projectClaims.get(file) ?? []);
             }
         }
-
-        const sourceControlFiles = [...new Set(plans.flatMap((plan) => plan.controlFiles))].sort();
-        const evidenceEnvironmentConfigId = `typescript:${ts.version}:project-set:${stableHash(
-            plans.map((plan) => [plan.key, plan.environmentConfigId]).sort(([left], [right]) => left.localeCompare(right)),
-        )}`;
 
         this.snapshots = currentSnapshots;
         this.fileToProject = currentFileToProject;
@@ -760,6 +909,10 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     async dispose(): Promise<void> {
+        this.clearSessionState();
+    }
+
+    private clearSessionState(): void {
         for (const cached of this.sessions.values()) cached.session.dispose();
         this.sessions.clear();
         this.snapshots.clear();
@@ -815,6 +968,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 registryFiles: sortedFiles,
                 configErrors: diagnosticIdentity(project.errors),
                 controls: controlIdentity(normalizedRoot, control.controls),
+                semanticResourceBudget: this.resourceBudget,
             })}`;
             plans.push({
                 key: configuredProjectKey(project.configPath),
@@ -823,6 +977,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 configPath: project.configPath,
                 relativeFiles: sortedFiles,
                 absoluteFiles,
+                compilerRootFiles: project.fileNames,
                 options: project.options,
                 configErrors: project.errors,
                 controlFiles: control.controls
@@ -845,6 +1000,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 compilerOptions: normalizedCompilerOptions(options),
                 registryFiles: sortedFiles,
                 controls: controlIdentity(normalizedRoot, controls),
+                semanticResourceBudget: this.resourceBudget,
             })}`;
             plans.push({
                 key: inferredProjectKey(normalizedRoot),
@@ -852,6 +1008,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 rootPath: normalizedRoot,
                 relativeFiles: sortedFiles,
                 absoluteFiles,
+                compilerRootFiles: absoluteFiles,
                 options,
                 configErrors: [],
                 controlFiles: controls
@@ -877,8 +1034,13 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         const session: ProgramSession = plan.mode === 'configured'
-            ? new TypeScriptLanguageServiceSession(plan.configPath!)
-            : new InferredLanguageServiceSession(plan.rootPath, plan.absoluteFiles, plan.options);
+            ? new TypeScriptLanguageServiceSession(plan.configPath!, this.resourceBudget)
+            : new InferredLanguageServiceSession(
+                plan.rootPath,
+                plan.absoluteFiles,
+                plan.options,
+                this.resourceBudget,
+            );
         this.sessions.set(plan.key, {
             key: plan.key,
             environmentConfigId: plan.environmentConfigId,
@@ -920,7 +1082,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (!fs.existsSync(absolute)) {
                 throw new Error(`TypeScript semantic source disappeared before claim publication: '${relativeFile}'.`);
             }
-            const currentHash = createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
+            const currentHash = fileContentHash(absolute);
             if (currentHash !== manifest.hash) {
                 throw new Error(`TypeScript semantic source changed before claim publication: '${relativeFile}'.`);
             }

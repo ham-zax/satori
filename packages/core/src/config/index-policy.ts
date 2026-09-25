@@ -7,8 +7,9 @@ import {
 } from './defaults';
 
 
-export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v2-single-line-web-bundles';
+export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v3-source-byte-budget';
 
+export const MAX_INDEXED_SOURCE_FILE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_ALL_TEXT_MAX_BYTES = 1_048_576;
 const TEXT_PROBE_BYTES = 8192;
 const GENERATED_SINGLE_LINE_WEB_ASSET_MIN_BYTES = 128 * 1024;
@@ -95,6 +96,10 @@ export async function isIndexableFileObservationByPolicy(
 ): Promise<boolean> {
     // Auxiliary inputs belong to source observation, never searchable documents.
     if (isSemanticAuxiliaryFilename(relativePath)) return false;
+    // Search admission is bounded independently of extension. Explicitly supported
+    // generated/source files must not bypass the memory envelope merely because
+    // their suffix is known.
+    if (size > MAX_INDEXED_SOURCE_FILE_BYTES) return false;
     if (await isLikelyGeneratedSingleLineWebAsset(relativePath, size, readProbe)) return false;
 
     const normalizedExtensions = normalizeSupportedExtensions(supportedExtensions);

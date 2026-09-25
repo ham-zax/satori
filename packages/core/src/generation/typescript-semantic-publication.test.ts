@@ -195,6 +195,82 @@ export function run(): string { return target(); }
     }
 });
 
+test('TypeScript semantic resource limits degrade call-graph coverage without failing searchable publication', async () => {
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(1, {
+        maxFileBytes: 128,
+        maxProjectBytes: 256,
+    });
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/oversized.ts': `
+export function target(): string { return 'ok'; }
+export function run(): string {
+    const padding = '${'x'.repeat(256)}';
+    return padding ? target() : '';
+}
+`,
+    }, analyzer);
+
+    try {
+        const result = await fixture.context.indexCodebase(fixture.root);
+        assert.equal(result.status, 'completed');
+        assert.equal(result.publication.status, 'activated');
+
+        const state = await readNavigation(fixture.context, fixture.root);
+        const coverage = state.relationships.manifest.providerCoverage.find(
+            (entry) => entry.providerId === 'satori-typescript-compiler',
+        );
+        assert.ok(coverage);
+        assert.equal(coverage.status, 'unavailable');
+        assert.equal(coverage.failureReason, 'resource_limit');
+        assert.match(coverage.failureMessage ?? '', /per-file budget/);
+        assert.equal(coverage.analyzedSourceFileCount, 0);
+        assert.equal(
+            state.relationships.records.some((record) => record.type === 'CALLS'),
+            false,
+        );
+    } finally {
+        await fixture.close();
+        await analyzer.dispose();
+    }
+});
+
+test('TypeScript semantic project byte limits degrade call-graph coverage without failing searchable publication', async () => {
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(1, {
+        maxFileBytes: 512,
+        maxProjectBytes: 300,
+    });
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/one.ts': `
+export const one = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+`,
+        'src/two.ts': `
+export const two = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+`,
+    }, analyzer);
+
+    try {
+        const result = await fixture.context.indexCodebase(fixture.root);
+        assert.equal(result.status, 'completed');
+        assert.equal(result.publication.status, 'activated');
+
+        const state = await readNavigation(fixture.context, fixture.root);
+        const coverage = state.relationships.manifest.providerCoverage.find(
+            (entry) => entry.providerId === 'satori-typescript-compiler',
+        );
+        assert.ok(coverage);
+        assert.equal(coverage.status, 'unavailable');
+        assert.equal(coverage.failureReason, 'resource_limit');
+        assert.match(coverage.failureMessage ?? '', /project budget/);
+        assert.equal(coverage.sourceFileCount, 2);
+        assert.equal(coverage.analyzedSourceFileCount, 0);
+    } finally {
+        await fixture.close();
+        await analyzer.dispose();
+    }
+});
+
 test('production indexing publishes proof-backed TypeScript CALLS and abstains on open-world interface dispatch', async () => {
     const fixture = await createFixture({
         'tsconfig.json': tsconfig(),

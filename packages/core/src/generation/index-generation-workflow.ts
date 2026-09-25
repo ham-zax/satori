@@ -1004,7 +1004,7 @@ export class IndexGenerationWorkflow {
         }
 
         progressCallback?.({
-            phase: result.status === 'completed' ? 'Indexing complete!' : 'Indexing stopped at chunk limit',
+            phase: result.status === 'completed' ? 'Indexing complete!' : 'Indexing stopped at resource limit',
             current: result.processedFiles,
             total: codeFiles.length,
             percentage: 100

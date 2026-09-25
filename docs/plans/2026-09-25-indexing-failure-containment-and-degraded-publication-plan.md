@@ -285,7 +285,7 @@
 - [x] Task 2 — cancellation/no-progress unification.
 - [x] Task 3 — persisted semantic coverage contract.
 - [x] Task 4 — degraded semantic Publication behavior.
-- [ ] Task 5 — repository-scale resource budgets.
+- [x] Task 5 — repository-scale resource budgets.
 - [ ] Task 6 — candidate receipt/orphan recovery.
 - [ ] Task 7 — classified automatic retry.
 - [ ] Task 8 — final operational documentation and integration closure.

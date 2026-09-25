@@ -47,6 +47,7 @@ import { compareContractStrings } from '../utils/compare-contract-strings';
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
 const INDEX_CHUNK_LIMIT = 450_000;
+export const MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION = 512 * 1024 * 1024;
 
 export type IndexingPipelineMetrics = {
     analysisMs: number;
@@ -484,6 +485,7 @@ export class IndexingPipeline {
         let chunkBufferEstimatedTokens = 0;
         let processedFiles = 0;
         let totalChunks = 0;
+        let indexedSourceBytes = 0;
         let limitReached = false;
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
@@ -555,6 +557,17 @@ export class IndexingPipeline {
                     input.indexPolicy,
                 );
                 if (analyzed === null) continue;
+                if (
+                    indexedSourceBytes + analyzed.sourceStat.size
+                    > MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION
+                ) {
+                    console.warn(
+                        `[Context] ⚠️  Searchable source byte limit of ${MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION} reached before '${analyzed.relativePath}'. Stopping indexing with a partial candidate.`,
+                    );
+                    limitReached = true;
+                    break;
+                }
+                indexedSourceBytes += analyzed.sourceStat.size;
                 const symbolFacts = this.buildAnalyzedFileSymbolFacts(analyzed);
                 const chunks = chunksWithResolvedOwners(
                     analyzed.chunks,

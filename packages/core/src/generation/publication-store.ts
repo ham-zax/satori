@@ -298,8 +298,8 @@ export class PublicationStore {
             throw new Error(`Mutation lease does not own index candidate root '${canonicalRoot}'.`);
         }
         this.mutationCoordinator.assertCurrent(lease);
-        if (lease.action !== 'create' && lease.action !== 'reindex') {
-            throw new Error(`Index candidate receipts require a create/reindex lease, saw '${lease.action}'.`);
+        if (lease.action !== 'create' && lease.action !== 'reindex' && lease.action !== 'sync') {
+            throw new Error(`Index candidate receipts require a create/reindex/sync lease, saw '${lease.action}'.`);
         }
         if (!collectionName) {
             throw new Error('Index candidate collection name must be non-empty.');

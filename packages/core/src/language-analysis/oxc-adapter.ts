@@ -75,7 +75,7 @@ function symbolKind(
             return 'method';
         case 'PropertyDefinition': return isFunctionValue(node.value) ? 'method' : 'variable';
         case 'VariableDeclarator':
-            if (parent?.type !== 'VariableDeclaration' || insideCallable) return undefined;
+            if (parent?.type !== 'VariableDeclaration' || (insideCallable && !isFunctionValue(node.init))) return undefined;
             return isFunctionValue(node.init) ? 'function' : 'variable';
         default: return undefined;
     }

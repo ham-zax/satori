@@ -6,7 +6,7 @@ export interface IndexCandidateReceipt {
     readonly version: typeof INDEX_CANDIDATE_RECEIPT_VERSION;
     readonly canonicalRoot: string;
     readonly operationId: string;
-    readonly action: 'create' | 'reindex';
+    readonly action: 'create' | 'reindex' | 'sync';
     readonly generation: number;
     readonly collectionName: string;
     readonly ownerId: string;
@@ -38,7 +38,7 @@ export function parseIndexCandidateReceipt(
         || value.version !== INDEX_CANDIDATE_RECEIPT_VERSION
         || !isNonEmptyString(value.canonicalRoot)
         || !isNonEmptyString(value.operationId)
-        || (value.action !== 'create' && value.action !== 'reindex')
+        || (value.action !== 'create' && value.action !== 'reindex' && value.action !== 'sync')
         || !Number.isSafeInteger(value.generation)
         || Number(value.generation) < 1
         || !isNonEmptyString(value.collectionName)

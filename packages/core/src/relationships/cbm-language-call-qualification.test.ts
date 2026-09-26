@@ -393,3 +393,27 @@ test('Rust admits bare calls through use imports as exact direct calls', async (
     assert.equal(resolved?.proof.strategy, 'direct_call');
     assert.equal(calls(records).length, 1);
 });
+
+test('Rust test-only direct calls remain unadmitted while ordinary direct calls resolve', async () => {
+    const cargo = [{
+        path: 'Cargo.toml',
+        role: 'manifest',
+        source: '[package]\nname = "demo"\nversion = "0.1.0"\n',
+    }];
+    const testOnlySource = [
+        'pub fn search_maxn() -> i32 { 1 }',
+        '#[cfg(test)] mod tests {',
+        '    use super::*;',
+        '    #[test] fn calls_maxn() { search_maxn(); }',
+        '}',
+    ].join('\n');
+    const ordinarySource = testOnlySource.replace('#[cfg(test)] mod tests', 'mod tests');
+    const testOnly = await analyze('rust', [{ path: 'src/lib.rs', source: testOnlySource }], cargo);
+    const ordinary = await analyze('rust', [{ path: 'src/lib.rs', source: ordinarySource }], cargo);
+
+    assert.equal((testOnly.occurrencesByFile.get('src/lib.rs') ?? []).length, 0);
+    assert.equal((ordinary.occurrencesByFile.get('src/lib.rs') ?? []).some((occurrence) => (
+        occurrence.decision === 'resolved'
+        && occurrence.proof.strategy === 'direct_call'
+    )), true);
+});

@@ -11,7 +11,7 @@ import {
     getRootMutationCoordinator,
 } from './root-mutation-runtime';
 
-test('candidate receipt survives the old mutation and is reclaimable by a newer root lease', async () => {
+async function assertCandidateReceiptSurvives(action: 'create' | 'sync'): Promise<void> {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-candidate-receipt-'));
     const repoRoot = path.join(tempRoot, 'repo');
     fs.mkdirSync(repoRoot);
@@ -26,7 +26,7 @@ test('candidate receipt survives the old mutation and is reclaimable by a newer 
     const collectionName = 'code_chunks_deadbeef__gen_candidate';
 
     try {
-        await runtime.run(repoRoot, 'create', async () => {
+        await runtime.run(repoRoot, action, async () => {
             const lease = getCurrentRootMutationLease(runtime, repoRoot);
             const reserved = store.reserveIndexCandidate(repoRoot, collectionName, lease);
             assert.equal(reserved.phase, 'reserved');
@@ -58,4 +58,10 @@ test('candidate receipt survives the old mutation and is reclaimable by a newer 
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-});
+}
+
+for (const action of ['create', 'sync'] as const) {
+    test(`${action} candidate receipt survives the old mutation and is reclaimable by a newer root lease`, async () => {
+        await assertCandidateReceiptSurvives(action);
+    });
+}

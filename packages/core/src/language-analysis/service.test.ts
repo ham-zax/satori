@@ -8,6 +8,7 @@ import { Parser } from 'web-tree-sitter';
 
 import { createLanguageAnalysisService } from './service';
 import { getLanguageCapabilityDeclarations } from '../languages/capabilities';
+import { buildSymbolRecordsForFile, resolveOwnerSymbolForChunk } from '../symbols/registry';
 
 const localRequire = createRequire(__filename);
 
@@ -79,6 +80,45 @@ test('Oxc callable expressions are navigation symbols and suppress local scalar 
     assert.ok(result.symbols.some((symbol) => symbol.kind === 'variable' && symbol.name === 'moduleConstant'));
     assert.ok(!result.symbols.some((symbol) => symbol.name === 'temporary'));
     assert.equal(result.callSites.filter((call) => call.calleeName === 'helper').length, 2);
+});
+
+test('nested callable declarations publish a concrete owner for search navigation', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const source = [
+        '(() => {',
+        '    const temporary = 1;',
+        '    const buildSnapshot = (): number => {',
+        '        return temporary;',
+        '    };',
+        '    return buildSnapshot();',
+        '})();',
+    ].join('\n');
+    const result = await analyzer.analyze({
+        content: source,
+        language: 'typescript',
+        relativePath: 'src/bridge.ts',
+    });
+
+    assert.equal(result.structuralStatus, 'complete');
+    assert.ok(!result.symbols.some((symbol) => symbol.name === 'temporary'));
+    const extracted = result.symbols.find((symbol) => symbol.name === 'buildSnapshot');
+    assert.equal(extracted?.kind, 'function');
+    assert.equal(extracted?.span.startLine, 3);
+
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/bridge.ts',
+        language: 'typescript',
+        content: source,
+        fileHash: 'bridge-hash',
+        extractorVersion: 'test',
+        chunks: [...result.chunks],
+        extractedSymbols: result.symbols,
+    });
+    const matchingChunk = result.chunks.find((chunk) => chunk.metadata.symbolLabel?.includes('buildSnapshot'));
+    assert.ok(matchingChunk);
+    const owner = resolveOwnerSymbolForChunk({ chunk: matchingChunk, symbols: records });
+    assert.equal(owner.name, 'buildSnapshot');
+    assert.equal(owner.kind, 'function');
 });
 
 test('language analysis classifies direct, member, and constructor calls explicitly', async () => {

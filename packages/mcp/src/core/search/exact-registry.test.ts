@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     buildSymbolRegistry,
+    buildSymbolRecordsForFile,
+    createLanguageAnalysisService,
 } from "@zokizuan/satori-core";
 import type { SymbolRecord, SymbolRegistryManifest } from "@zokizuan/satori-core";
 
@@ -11,6 +13,7 @@ import {
     findExactRegistryMatch,
     shouldAttemptExactRegistryLookup,
 } from "./exact-registry.js";
+import { parseSearchOperators } from "../search-query-planning.js";
 
 function manifest(files: Array<Omit<SymbolRegistryManifestFile, "definitionStatus">>): SymbolRegistryManifest {
     return {
@@ -100,6 +103,53 @@ test("findExactRegistryMatch returns exact symbolInstanceId matches from the cur
     assert.equal(result.reason, "symbol_instance_id");
     if (result.status === "hit") {
         assert.equal(result.symbol.symbolInstanceId, "sym-prepare");
+    }
+});
+
+test("must:buildSnapshot opens a nested callable definition instead of its file owner", async () => {
+    const file = "src/bridge.ts";
+    const source = [
+        "(() => {",
+        "    const buildSnapshot = (): number => {",
+        "        return 42;",
+        "    };",
+        "    return buildSnapshot();",
+        "})();",
+    ].join("\n");
+    const analysis = await createLanguageAnalysisService().analyze({
+        content: source,
+        language: "typescript",
+        relativePath: file,
+    });
+    const records = buildSymbolRecordsForFile({
+        relativePath: file,
+        language: "typescript",
+        content: source,
+        fileHash: "bridge-hash",
+        extractorVersion: "test-extractor",
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+    const published = buildSymbolRegistry({
+        manifest: manifest([{
+            path: file,
+            hash: "bridge-hash",
+            language: "typescript",
+            symbolCount: records.length - 1,
+        }]),
+        symbols: records,
+    });
+    const operators = parseSearchOperators("must:buildSnapshot");
+    const result = findExactRegistryMatch(lookupInput({
+        registry: published,
+        semanticQuery: operators.semanticQuery,
+    }));
+
+    assert.equal(result.status, "hit");
+    if (result.status === "hit") {
+        assert.equal(result.symbol.name, "buildSnapshot");
+        assert.equal(result.symbol.kind, "function");
+        assert.equal(result.symbol.span.startLine, 2);
     }
 });
 

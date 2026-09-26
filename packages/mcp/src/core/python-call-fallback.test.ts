@@ -11,6 +11,7 @@ import {
     type SymbolRegistryManifest,
 } from "@zokizuan/satori-core";
 import {
+    buildSourceBackedPythonCalleeFallback,
     buildSourceBackedPythonCallerFallback,
     repairSourceBackedPythonSpan,
 } from "./python-call-fallback.js";
@@ -220,6 +221,155 @@ test("Python source repair does not absorb an unrelated decorator or comment", (
     });
     assert.equal(repaired.validated, true);
     assert.deepEqual(repaired.symbol.span, { startLine: 6, endLine: 7 });
+});
+
+test("callee fallback recognizes a same-file function shadowing a Python built-in", async () => {
+    const file = "src/example.py";
+    const lines = [
+        "def len(values):",
+        "    return 7",
+        "",
+        "def caller():",
+        "    return len([1, 2])",
+    ];
+    const target: SymbolRecord = {
+        symbolKey: "python:function:len",
+        symbolInstanceId: "syminst_len",
+        language: "python",
+        kind: "function",
+        name: "len",
+        qualifiedName: "len",
+        label: "function len(values)",
+        file,
+        span: { startLine: 1, endLine: 2 },
+        parentQualifiedNamePath: [],
+        fileHash: "indexed_hash",
+        extractorVersion: "test",
+    };
+    const caller: SymbolRecord = {
+        ...target,
+        symbolKey: "python:function:caller",
+        symbolInstanceId: "syminst_caller",
+        name: "caller",
+        qualifiedName: "caller",
+        label: "function caller()",
+        span: { startLine: 4, endLine: 5 },
+    };
+    const registry = buildSymbolRegistry({
+        manifest: testManifest([
+            { path: file, hash: "indexed_hash", language: "python", symbolCount: 2, definitionStatus: "definitions_present" },
+        ]),
+        symbols: [target, caller],
+    });
+
+    const result = await buildSourceBackedPythonCalleeFallback({
+        codebaseRoot: "/repo",
+        registry,
+        source: caller,
+        sortEdges: (edges) => edges,
+        readSourceLines: async () => lines,
+    });
+
+    assert.deepEqual(result.edges.map((edge) => [edge.srcSymbolId, edge.dstSymbolId, edge.site.startLine]), [
+        [caller.symbolInstanceId, target.symbolInstanceId, 5],
+    ]);
+
+    const callerResult = await buildSourceBackedPythonCallerFallback({
+        codebaseRoot: "/repo",
+        registry,
+        resolvedTarget: target,
+        suppressedRecords: [{
+            sourceKey: caller.symbolKey,
+            sourceInstanceId: caller.symbolInstanceId,
+            targetKey: target.symbolKey,
+            targetInstanceId: target.symbolInstanceId,
+            type: "CALLS",
+            file,
+            span: { startLine: 5, endLine: 5 },
+            confidence: "low",
+        }],
+        sortEdges: (edges) => edges,
+        sortNotes: (notes) => notes,
+        readSourceLines: async () => lines,
+    });
+    assert.deepEqual(callerResult.edges.map((edge) => [edge.srcSymbolId, edge.dstSymbolId]), [
+        [caller.symbolInstanceId, target.symbolInstanceId],
+    ]);
+
+    const memberCallResult = await buildSourceBackedPythonCallerFallback({
+        codebaseRoot: "/repo",
+        registry,
+        resolvedTarget: target,
+        suppressedRecords: [{
+            sourceKey: caller.symbolKey,
+            sourceInstanceId: caller.symbolInstanceId,
+            targetKey: target.symbolKey,
+            targetInstanceId: target.symbolInstanceId,
+            type: "CALLS",
+            file,
+            span: { startLine: 5, endLine: 5 },
+            confidence: "low",
+        }],
+        sortEdges: (edges) => edges,
+        sortNotes: (notes) => notes,
+        readSourceLines: async () => [...lines.slice(0, 4), "    return object.len([1, 2])"],
+    });
+    assert.deepEqual(memberCallResult.edges, []);
+
+    const parameterShadowResult = await buildSourceBackedPythonCalleeFallback({
+        codebaseRoot: "/repo",
+        registry,
+        source: caller,
+        sortEdges: (edges) => edges,
+        readSourceLines: async () => [...lines.slice(0, 3), "def caller(len):", lines[4]],
+    });
+    assert.deepEqual(parameterShadowResult.edges, []);
+
+    const localRebindingResult = await buildSourceBackedPythonCalleeFallback({
+        codebaseRoot: "/repo",
+        registry,
+        source: { ...caller, span: { startLine: 4, endLine: 6 } },
+        sortEdges: (edges) => edges,
+        readSourceLines: async () => [
+            ...lines.slice(0, 4),
+            "    len = lambda values: 3",
+            lines[4],
+        ],
+    });
+    assert.deepEqual(localRebindingResult.edges, []);
+
+    for (const moduleBinding of ["len = lambda values: 3", "from other import len"]) {
+        const reboundLines = [...lines];
+        reboundLines[2] = moduleBinding;
+        const reboundCalleeResult = await buildSourceBackedPythonCalleeFallback({
+            codebaseRoot: "/repo",
+            registry,
+            source: caller,
+            sortEdges: (edges) => edges,
+            readSourceLines: async () => reboundLines,
+        });
+        assert.deepEqual(reboundCalleeResult.edges, [], moduleBinding);
+
+        const reboundCallerResult = await buildSourceBackedPythonCallerFallback({
+            codebaseRoot: "/repo",
+            registry,
+            resolvedTarget: target,
+            suppressedRecords: [{
+                sourceKey: caller.symbolKey,
+                sourceInstanceId: caller.symbolInstanceId,
+                targetKey: target.symbolKey,
+                targetInstanceId: target.symbolInstanceId,
+                type: "CALLS",
+                file,
+                span: { startLine: 5, endLine: 5 },
+                confidence: "low",
+            }],
+            sortEdges: (edges) => edges,
+            sortNotes: (notes) => notes,
+            readSourceLines: async () => reboundLines,
+        });
+        assert.deepEqual(reboundCallerResult.edges, [], moduleBinding);
+    }
 });
 
 test("caller fallback skips records whose authorized source is denied and leaks no call names", async () => {

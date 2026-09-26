@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
     compareContractStrings,
     getGraphNeighbors,
@@ -934,16 +935,62 @@ export class RelationshipBackedCallGraph {
         // observational coverage or fabricates an edge.
         let hints: Record<string, unknown> | undefined;
         if (inboundObservationalCoverageIncomplete) {
+            const hasProvenInboundCall = combinedEdges.some((edge) => (
+                edge.kind === "call"
+                && edge.dstSymbolId === input.resolvedSymbol.symbolInstanceId
+            ));
+            const exactFallback = !hasProvenInboundCall
+                ? inboundExactReferences.find((reference) => (
+                    reference.matchKind === "resolved_target"
+                    && reference.decision === "resolved"
+                ))
+                : undefined;
+            const sourceFallback = !hasProvenInboundCall && !exactFallback
+                ? (sourceReferences.find((reference) => {
+                    const owner = reference.sourceSymbolId
+                        ? input.registry.symbolsByInstanceId.get(reference.sourceSymbolId)
+                        : undefined;
+                    return owner?.kind === "function" || owner?.kind === "method";
+                }) ?? sourceReferences[0])
+                : undefined;
+            const fallbackSite = exactFallback?.site ?? sourceFallback?.site;
+            const absoluteFallbackPath = fallbackSite
+                ? path.resolve(input.codebaseRoot, fallbackSite.file)
+                : undefined;
+            const relativeFallbackPath = absoluteFallbackPath
+                ? path.relative(input.codebaseRoot, absoluteFallbackPath)
+                : undefined;
+            const fallbackStep = fallbackSite
+                && absoluteFallbackPath
+                && relativeFallbackPath
+                && relativeFallbackPath !== ".."
+                && !relativeFallbackPath.startsWith(`..${path.sep}`)
+                && !path.isAbsolute(relativeFallbackPath)
+                && Number.isSafeInteger(fallbackSite.startLine)
+                && fallbackSite.startLine > 0
+                ? {
+                    tool: "read_file",
+                    args: {
+                        path: absoluteFallbackPath,
+                        start_line: fallbackSite.startLine,
+                        end_line: fallbackSite.endLine ?? fallbackSite.startLine,
+                    },
+                    reason: exactFallback
+                        ? "A persisted exact target reference points to this source site, but no CALLS edge was admitted. Inspect the site before treating it as a caller."
+                        : "A published source occurrence points to this site. It is observational text, not a proven call.",
+                }
+                : undefined;
             const constructed = buildInboundVerificationSearchQuery({
                 symbolName: input.resolvedSymbol.name,
                 symbolLabel: input.resolvedSymbol.label,
                 symbolId: input.resolvedSymbol.symbolInstanceId,
                 file: uniqueInboundCallerSiteFile(combinedNotes),
             });
-            if (constructed.query) {
+            if (fallbackStep || constructed.query) {
                 hints = {
                     nextSteps: [
-                        {
+                        ...(fallbackStep ? [fallbackStep] : []),
+                        ...(constructed.query ? [{
                             tool: "search_codebase",
                             args: {
                                 path: input.codebaseRoot,
@@ -952,7 +999,7 @@ export class RelationshipBackedCallGraph {
                                 resultMode: "grouped",
                             },
                             reason: "Inbound CALLS coverage is incomplete. Persisted claim evidence and exact published-source occurrences were checked first; ranked must: search is optional discovery only.",
-                        },
+                        }] : []),
                     ],
                 };
             }

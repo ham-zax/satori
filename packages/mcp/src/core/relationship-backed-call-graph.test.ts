@@ -186,15 +186,27 @@ test("call graph source fallback propagates partial Publication coverage without
         label: "function caller()",
         file: "src/caller.ts",
     } as SymbolRecord;
+    const importOwner = {
+        ...caller,
+        symbolKey: "module-key",
+        symbolInstanceId: "module-id",
+        kind: "module",
+        qualifiedName: "tests",
+        name: "tests",
+        label: "module tests",
+        file: "src/current.ts",
+    } as SymbolRecord;
     const registry = {
         manifest: { files: [] },
         symbolsByFile: new Map([
             [target.file, [target]],
             [caller.file, [caller]],
+            [importOwner.file, [importOwner]],
         ]),
         symbolsByInstanceId: new Map([
             [target.symbolInstanceId, target],
             [caller.symbolInstanceId, caller],
+            [importOwner.symbolInstanceId, importOwner],
         ]),
     } as unknown as SymbolRegistry;
     const relationshipManifest = {
@@ -243,6 +255,18 @@ test("call graph source fallback propagates partial Publication coverage without
             },
             references: [{
                 file: "src/current.ts",
+                span: { startLine: 1, endLine: 1, startColumn: 3, endColumn: 9 },
+                owningSymbol: {
+                    symbolId: importOwner.symbolInstanceId,
+                    symbolLabel: importOwner.label,
+                    file: importOwner.file,
+                    span: importOwner.span,
+                },
+                occurrenceKind: "identifier",
+                matchedText: "target",
+                evidenceClass: "published_source_text",
+            }, {
+                file: "src/current.ts",
                 span: { startLine: 2, endLine: 2, startColumn: 3, endColumn: 9 },
                 owningSymbol: {
                     symbolId: caller.symbolInstanceId,
@@ -260,8 +284,8 @@ test("call graph source fallback propagates partial Publication coverage without
                 eligibleFileCount: 3,
                 inspectedFileCount: 2,
                 skippedFileCount: 1,
-                matchedOccurrenceCount: 1,
-                returnedOccurrenceCount: 1,
+                matchedOccurrenceCount: 2,
+                returnedOccurrenceCount: 2,
                 reasons: [{ code: "source_changed", file: "src/stale.ts" }],
             },
         }),
@@ -271,8 +295,20 @@ test("call graph source fallback propagates partial Publication coverage without
     assert.equal(result!.sourceReferenceCoverage?.status, "partial");
     assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCoverage, "partial");
     assert.ok(result!.warnings?.includes("CALL_GRAPH_SOURCE_REFERENCE_COVERAGE_PARTIAL"));
-    assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.file), ["src/current.ts"]);
+    assert.deepEqual(result!.sourceReferences?.map((reference) => reference.site.startLine), [1, 2]);
     assert.equal(result!.sourceReferences?.some((reference) => reference.site.file === "src/stale.ts"), false);
+    const sourceFallback = (result!.hints?.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
+    assert.equal(sourceFallback.tool, "read_file");
+    assert.deepEqual(sourceFallback.args, { path: "/repo/src/current.ts", start_line: 2, end_line: 2 });
+    assert.match(sourceFallback.reason, /observational text, not a proven call/);
+    const projected = projectCallGraphEvidence({
+        status: "ok",
+        path: "/repo",
+        symbolRef: { file: target.file, symbolId: target.symbolInstanceId },
+        ...result!,
+    });
+    assert.equal(projected.sourceReferences, undefined);
+    assert.deepEqual((projected.hints?.nextSteps as unknown[])[0], sourceFallback);
 });
 
 test("call graph retains exact reference evidence beyond the legacy 100-row disclosure ceiling", async () => {
@@ -371,6 +407,10 @@ test("call graph retains exact reference evidence beyond the legacy 100-row disc
     assert.equal(result!.exactReferences?.length, 125);
     assert.equal(result!.exactReferences?.[124]?.site.file, "tests/case-124.ts");
     assert.equal(result!.warnings?.includes("CALL_GRAPH_EXACT_REFERENCES_LIMIT_REACHED"), false);
+    const exactFallback = (result!.hints?.nextSteps as Array<{ tool: string; args: { path: string; start_line: number }; reason: string }>)[0];
+    assert.equal(exactFallback.tool, "read_file");
+    assert.deepEqual(exactFallback.args, { path: "/repo/tests/case-000.ts", start_line: 1, end_line: 1 });
+    assert.match(exactFallback.reason, /no CALLS edge was admitted/);
 });
 
 test("call graph path scope excludes sibling graph and semantic evidence before summary and paging", async () => {

@@ -86,6 +86,60 @@ function resolveUnambiguousDirectCallTarget(
     return nonSelfCandidates.length === 1 ? nonSelfCandidates[0] : undefined;
 }
 
+function resolveSourceBackedDirectCallTarget(
+    source: SymbolRecord,
+    candidates: SymbolRecord[],
+    callName: string,
+    allowCrossFileCandidate: boolean,
+    sourceLines: string[],
+    codebaseRoot: string,
+): SymbolRecord | undefined {
+    const isBuiltinName = PYTHON_BUILTIN_CALL_NAMES.has(callName.toLowerCase());
+    // A bare built-in name can refer to a published local definition. Without
+    // an exact binding, a same-named definition in another file is not proof.
+    const eligible = isBuiltinName
+        ? candidates.filter((candidate) => (
+            candidate.file === source.file
+            && candidate.kind === "function"
+            && candidate.parentQualifiedNamePath.length === 0
+            && candidate.name === callName
+        ))
+        : candidates.filter((candidate) => candidate.name === callName);
+    const target = resolveUnambiguousDirectCallTarget(source, eligible, {
+        allowCrossFileCandidate: !isBuiltinName && allowCrossFileCandidate,
+    });
+    if (target && isBuiltinName && hasPotentialPythonCompetingBinding(source, target, callName, sourceLines, codebaseRoot)) {
+        return undefined;
+    }
+    return target;
+}
+
+function hasPotentialPythonCompetingBinding(
+    source: SymbolRecord,
+    target: SymbolRecord,
+    name: string,
+    lines: string[],
+    codebaseRoot: string,
+): boolean {
+    const repaired = repairSourceBackedPythonSpan({ codebaseRoot, symbol: source, sourceLines: lines });
+    const targetDefinitionIndex = findPythonDefinitionIndexNearSpan(lines, target);
+    if (!repaired.validated || targetDefinitionIndex === undefined) return true;
+    const namePattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "g");
+    // Module-level rebinding can replace the published definition just as a
+    // caller-local binding can. Abstain on either unless the text is a call.
+    for (let lineNo = 1; lineNo <= lines.length; lineNo += 1) {
+        if (lineNo === targetDefinitionIndex + 1) continue;
+        const line = lines[lineNo - 1] ?? "";
+        for (const match of line.matchAll(namePattern)) {
+            const before = line.slice(0, match.index);
+            const after = line.slice((match.index ?? 0) + name.length);
+            // Text cannot prove which callable a non-call occurrence binds.
+            if (/\b(?:def|class)\s*$/.test(before) || !/^\s*\(/.test(after)) return true;
+        }
+    }
+    return false;
+}
+
 function buildDirectCallTargetIndex(registry: SymbolRegistry): Map<string, SymbolRecord[]> {
     const targetsByName = new Map<string, SymbolRecord[]>();
     for (const symbol of registry.symbols.filter((candidate) => candidate.kind !== "file")) {
@@ -425,12 +479,14 @@ export async function buildSourceBackedPythonCalleeFallback(input: {
         }
         for (const callName of extractDirectCallNamesFromLine(line, {
             includeAttributeCalls: false,
-            ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
         })) {
-            const target = resolveUnambiguousDirectCallTarget(
+            const target = resolveSourceBackedDirectCallTarget(
                 source,
                 targetsByName.get(callName.toLowerCase()) || [],
-                { allowCrossFileCandidate: false }
+                callName,
+                false,
+                lines,
+                input.codebaseRoot,
             );
             if (!target) {
                 continue;
@@ -553,11 +609,15 @@ export async function buildSourceBackedPythonCallerFallback(input: {
         }
 
         const verifiedTarget = extractDirectCallNamesFromLine(siteLine.replace(/#.*$/, ""), {
-            ignoredNames: PYTHON_BUILTIN_CALL_NAMES,
+            includeAttributeCalls: false,
         })
-            .map((callName) => resolveUnambiguousDirectCallTarget(
+            .map((callName) => resolveSourceBackedDirectCallTarget(
                 repairedSource,
-                targetsByName.get(callName.toLowerCase()) || []
+                targetsByName.get(callName.toLowerCase()) || [],
+                callName,
+                true,
+                sourceLines,
+                input.codebaseRoot,
             ))
             .find((candidate) => candidate?.symbolInstanceId === target.symbolInstanceId);
         if (!verifiedTarget) {

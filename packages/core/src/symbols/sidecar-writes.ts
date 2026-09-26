@@ -287,6 +287,11 @@ function buildRelationshipManifest(
                 status: coverage.status,
                 sourceFileCount: coverage.sourceFileCount,
                 analyzedSourceFileCount: coverage.analyzedSourceFileCount,
+                ...(coverage.skippedFiles ? {
+                    skippedFiles: [...coverage.skippedFiles]
+                        .map((file) => ({ path: file.path, reason: file.reason, bytes: file.bytes }))
+                        .sort((left, right) => compareStrings(left.path, right.path)),
+                } : {}),
                 ...(coverage.failureReason ? { failureReason: coverage.failureReason } : {}),
                 ...(coverage.failureMessage
                     ? { failureMessage: coverage.failureMessage.slice(0, 1024) }

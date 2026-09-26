@@ -446,8 +446,9 @@ export function spawnSupervisedMutationWorker(
         requestCancellation("worker_process_error");
     });
 
-    worker.once("exit", (_code, _signal) => {
+    worker.once("exit", (code, signal) => {
         workerExitSeen = true;
+        const exitDetail = signal ? `signal ${signal}` : code === null ? 'unknown exit' : `exit code ${code}`;
         clearNoProgressTimer();
         if (cancelTimer) clearTimeout(cancelTimer);
         if (sourceAbortListener && options.signal) {
@@ -463,13 +464,13 @@ export function spawnSupervisedMutationWorker(
             if (!readyResolved) {
                 failReadiness(new MutationWorkerFailureError(
                     options.operationId,
-                    "Mutation worker exited before the containment handshake completed.",
+                    `Mutation worker exited before the containment handshake completed (${exitDetail}).`,
                 ));
             }
             if (containmentViolation) {
                 rejectCompletion(new MutationWorkerFailureError(
                     options.operationId,
-                    "Mutation worker exited while descendants were still live; the process group was forcibly quiesced.",
+                    `Mutation worker exited while descendants were still live (${exitDetail}); the process group was forcibly quiesced.`,
                 ));
                 return;
             }
@@ -491,7 +492,7 @@ export function spawnSupervisedMutationWorker(
             }
             rejectCompletion(new MutationWorkerFailureError(
                 options.operationId,
-                "Mutation worker exited without a terminal operation message.",
+                `Mutation worker exited without a terminal operation message (${exitDetail}).`,
             ));
         })().catch((error) => {
             // Process-group proof above is intentionally unbounded while a

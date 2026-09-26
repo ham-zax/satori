@@ -47,9 +47,10 @@ import type { Embedding, EmbeddingOperationMetricsSnapshot } from '../embedding'
 import { FileSynchronizer } from '../sync/synchronizer';
 import type { PublicationSourceCheckpoint } from '../sync/snapshot-codec';
 import type { IndexAuthorityCoordinator } from './index-authority-coordinator';
-import type {
-    IndexedSourceFileObservation,
-    ProcessedFileList,
+import {
+    MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION,
+    type IndexedSourceFileObservation,
+    type ProcessedFileList,
 } from '../core/indexing-pipeline';
 import type { RootMutationLease } from './root-mutation-coordinator';
 import { PublicationActivationError } from './publication-store';
@@ -1250,6 +1251,19 @@ export class IndexGenerationWorkflow {
         const publicationState = { activated: false };
         try {
             input.options.assertMutationCurrent?.();
+            const sourceStats = new Map(input.preparedChanges.sourceCheckpoint.fileStats);
+            let searchableSourceBytes = 0;
+            for (const filePath of input.preparedChanges.fileHashes.keys()) {
+                if (!isSearchable(filePath)) continue;
+                const size = sourceStats.get(filePath)?.size;
+                if (size === undefined) {
+                    throw new Error(`Atomic delta publication is missing source stat evidence for '${filePath}'.`);
+                }
+                if (searchableSourceBytes > MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION - size) {
+                    throw new Error(`Atomic delta publication reached the searchable source byte resource limit of ${MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION}.`);
+                }
+                searchableSourceBytes += size;
+            }
             await measurePublicationPhase(
                 'publication_fork',
                 () => this.ports.vectorDatabase.forkCollection!(

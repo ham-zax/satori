@@ -213,6 +213,39 @@ test('resource-blocked automatic reindex stays suppressed until a later manual s
     releaseCompletion?.();
 });
 
+test('a worker abort is resource-blocked and does not trigger another automatic reindex', async () => {
+    let now = 0;
+    let launchCount = 0;
+    let currentOperation: RootMutationOperation | undefined;
+    const coordinator = new IndexMaintenanceCoordinator({
+        ...options,
+        now: () => now,
+        retryBackoffMs: 10,
+        getOperation: () => currentOperation,
+        startReindex: async () => {
+            launchCount += 1;
+            const operationId = `abort-${launchCount}`;
+            currentOperation = {
+                id: operationId,
+                action: 'reindex',
+                canonicalRoot: '/repo',
+                generation: launchCount,
+                acceptedAt: new Date(0).toISOString(),
+                phase: 'failed',
+                updatedAt: new Date(0).toISOString(),
+                error: 'Mutation worker exited without a terminal operation message (signal SIGABRT).',
+            };
+            return { accepted: true, operationId, completion: Promise.resolve() };
+        },
+    });
+
+    assert.equal((await coordinator.requestAutomaticReindex('/repo', 'requires_reindex')).outcome, 'started');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    now = 100_000;
+    assert.equal((await coordinator.requestAutomaticReindex('/repo', 'requires_reindex')).outcome, 'suppressed');
+    assert.equal(launchCount, 1);
+});
+
 test('cancelled automatic reindex never retries automatically', async () => {
     let now = 0;
     let launchCount = 0;

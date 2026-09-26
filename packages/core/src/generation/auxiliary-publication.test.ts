@@ -5,11 +5,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { Context } from '../core/context';
-import { IndexingPipeline } from '../core/indexing-pipeline';
+import { IndexingPipeline, MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION } from '../core/indexing-pipeline';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
 import { DefaultSemanticLanguageRegistry } from '../semantic/descriptor';
 import { readSymbolRegistrySidecar } from '../symbols';
+import { FileSynchronizer } from '../sync/synchronizer';
 
 class FixtureEmbedding extends Embedding {
     protected maxTokens = 8192;
@@ -191,6 +192,36 @@ test('Full and incremental semantic inputs use the checkpoint ignore policy', as
         await fixture.context.reindexByChange(fixture.root);
         assertAuxiliaries();
         assert.equal(fixture.semanticCalls.length, 2);
+    } finally {
+        await fixture.close();
+    }
+});
+
+test('Incremental sync refuses a complete candidate over the aggregate searchable source budget', async (t) => {
+    const fixture = await createFixture();
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const previous = fixture.context.getCurrentPublication(fixture.root);
+        assert.ok(previous);
+        fs.appendFileSync(path.join(fixture.root, 'lib.rs'), 'pub fn added() {}\n');
+        const prepareChanges = FileSynchronizer.prototype.prepareChanges;
+        t.mock.method(FileSynchronizer.prototype, 'prepareChanges', async function (
+            this: FileSynchronizer, options: Parameters<typeof prepareChanges>[0],
+        ) {
+            const prepared = await prepareChanges.call(this, options);
+            return {
+                ...prepared,
+                sourceCheckpoint: {
+                    ...prepared.sourceCheckpoint,
+                    fileStats: prepared.sourceCheckpoint.fileStats.map(([filePath, stat]) => [
+                        filePath,
+                        { ...stat, size: filePath === 'lib.rs' ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION : stat.size },
+                    ]),
+                },
+            };
+        });
+        await assert.rejects(fixture.context.reindexByChange(fixture.root), /searchable source byte resource limit/);
+        assert.equal(fixture.context.getCurrentPublication(fixture.root)?.id, previous.id);
     } finally {
         await fixture.close();
     }

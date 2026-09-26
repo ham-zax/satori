@@ -63,7 +63,7 @@ function classifyFailure(
     if (operation?.phase === "cancelled") return "cancelled";
     const text = errorText(operation, error);
     if (/\bcancel(?:led|lation)?\b/.test(text)) return "cancelled";
-    if (/(resource limit|chunk limit|collection limit|out of memory|heap|memory limit|quota|enospc|disk full)/.test(text)) {
+    if (/(resource limit|chunk limit|collection limit|out of memory|heap|memory limit|quota|enospc|disk full|signal sigabrt|signal sigkill|exit code 134\b|exit code 137\b)/.test(text)) {
         return "resource_blocked";
     }
     if (/(incompatible|unsupported|invalid|missing .*config|configuration|permission|eacces|eperm|policy_changed|source changed|does not exist|not a directory|required capability)/.test(text)) {

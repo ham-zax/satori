@@ -115,6 +115,7 @@ import {
 } from './indexing-pipeline';
 import { IndexAuthorityCoordinator } from '../generation/index-authority-coordinator';
 import { IndexGenerationWorkflow } from '../generation/index-generation-workflow';
+import type { IndexCandidateReceipt } from '../generation/index-candidate-receipt';
 import { IndexTeardownWorkflow } from '../generation/index-teardown-workflow';
 import {
     PublicationStore,
@@ -468,6 +469,19 @@ export class Context {
             ),
             preparePublicationNavigationRoot: (canonicalRoot, publicationId, lease) => (
                 this.publicationStore.prepareNavigationRoot(canonicalRoot, publicationId, lease)
+            ),
+            reserveIndexCandidate: (canonicalRoot, collectionName, lease) => (
+                this.publicationStore.reserveIndexCandidate(canonicalRoot, collectionName, lease)
+            ),
+            markIndexCandidateCollectionCreated: (canonicalRoot, operationId, lease) => (
+                this.publicationStore.markIndexCandidateCollectionCreated(
+                    canonicalRoot,
+                    operationId,
+                    lease,
+                )
+            ),
+            clearIndexCandidate: (canonicalRoot, operationId, lease) => (
+                this.publicationStore.clearIndexCandidate(canonicalRoot, operationId, lease)
             ),
             discardUnpublishedPublication: (canonicalRoot, publicationId, lease) => (
                 this.publicationStore.discardUnpublished(canonicalRoot, publicationId, lease)
@@ -1014,6 +1028,33 @@ export class Context {
 
     public listCurrentPublications(): PublicationRef[] {
         return this.publicationStore.listCurrent();
+    }
+
+    public listIndexCandidateReceipts(): IndexCandidateReceipt[] {
+        return this.publicationStore.listIndexCandidateReceipts();
+    }
+
+    public isPublicationCollectionReferenced(
+        codebasePath: string,
+        collectionName: string,
+    ): boolean {
+        return this.publicationStore.isCollectionReferencedByAnyPublication(
+            this.canonicalizeCodebasePath(codebasePath),
+            collectionName,
+        );
+    }
+
+    public clearIndexCandidateReceiptForCollection(
+        codebasePath: string,
+        collectionName: string,
+    ): boolean {
+        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
+        const lease = getCurrentRootMutationLease(this.rootMutationRuntime, canonicalRoot);
+        return this.publicationStore.clearIndexCandidateForCollection(
+            canonicalRoot,
+            collectionName,
+            lease,
+        );
     }
 
     public getPublicationSourceCheckpoint(publication: PublicationRef): PublicationSourceCheckpoint | null {

@@ -94,6 +94,10 @@ type ManageIndexingHandlersHost = {
     isZillizBackend(): boolean;
     dropZillizCollectionForCreate(collectionName: string): Promise<ZillizCollectionDropResult>;
     buildCollectionLimitMessage(codebasePath: string): Promise<string>;
+    recoverStaleIndexCandidates(codebasePath: string): Promise<Readonly<{
+        recoveredCollections: readonly string[];
+        clearedReceipts: readonly string[];
+    }>>;
     manageVectorBackendResponse(
         action: ManageIndexAction,
         path: string,
@@ -403,6 +407,13 @@ export class ManageIndexingHandlers {
                 });
 
                 try {
+                    const recoveredCandidates = await this.host.recoverStaleIndexCandidates(absolutePath);
+                    if (recoveredCandidates.recoveredCollections.length > 0) {
+                        dropSummaryLine += `\nRecovered ${recoveredCandidates.recoveredCollections.length} stale index candidate collection(s) from an interrupted prior mutation.`;
+                    } else if (recoveredCandidates.clearedReceipts.length > 0) {
+                        dropSummaryLine += `\nCleared ${recoveredCandidates.clearedReceipts.length} stale index candidate receipt(s).`;
+                    }
+
                     const existingPublication = this.host.context.getCurrentPublication(absolutePath);
                     if (!forceReindex && existingPublication) {
                         const proof = await this.host.validateCompletionProof(absolutePath);

@@ -147,18 +147,29 @@ export class VectorBackendMaintenance {
     } {
         const byCollectionName = new Map<string, string>();
         const ambiguousCollections = new Set<string>();
-        for (const publication of this.host.context.listCurrentPublications()) {
-            const canonicalRoot = this.host.canonicalizeCodebasePath(publication.publication.canonicalRoot);
-            const collectionName = publication.publication.vector.collectionName;
+        const addOwnership = (collectionName: string, canonicalRoot: string): void => {
             const existingRoot = byCollectionName.get(collectionName);
             if (existingRoot && existingRoot !== canonicalRoot) {
                 byCollectionName.delete(collectionName);
                 ambiguousCollections.add(collectionName);
-                continue;
+                return;
             }
             if (!ambiguousCollections.has(collectionName)) {
                 byCollectionName.set(collectionName, canonicalRoot);
             }
+        };
+
+        for (const publication of this.host.context.listCurrentPublications()) {
+            addOwnership(
+                publication.publication.vector.collectionName,
+                this.host.canonicalizeCodebasePath(publication.publication.canonicalRoot),
+            );
+        }
+        for (const receipt of this.host.context.listIndexCandidateReceipts()) {
+            addOwnership(
+                receipt.collectionName,
+                this.host.canonicalizeCodebasePath(receipt.canonicalRoot),
+            );
         }
         return { byCollectionName, ambiguousCollections };
     }
@@ -325,6 +336,58 @@ Agent instructions:
     public isZillizBackend(): boolean {
         const backendInfo = this.getVectorBackendInfo();
         return backendInfo?.provider === "zilliz";
+    }
+
+    public async recoverStaleIndexCandidates(codebasePath: string): Promise<Readonly<{
+        recoveredCollections: readonly string[];
+        clearedReceipts: readonly string[];
+    }>> {
+        const canonicalRoot = this.host.canonicalizeCodebasePath(codebasePath);
+        this.host.mutationRuntime.assertCurrent(canonicalRoot);
+        const activeMutation = this.host.mutationRuntime.getActiveMutation(canonicalRoot);
+        if (!activeMutation) {
+            throw new Error(`No live mutation owns stale candidate recovery for '${canonicalRoot}'.`);
+        }
+
+        const receipts = this.host.context.listIndexCandidateReceipts()
+            .filter((receipt) => this.host.canonicalizeCodebasePath(receipt.canonicalRoot) === canonicalRoot)
+            .filter((receipt) => receipt.operationId !== activeMutation.id);
+        const recoveredCollections: string[] = [];
+        const clearedReceipts: string[] = [];
+        const vectorDb = this.getVectorStore();
+
+        for (const receipt of receipts) {
+            this.host.mutationRuntime.assertCurrent(canonicalRoot);
+            if (receipt.generation >= activeMutation.generation) {
+                throw new Error(
+                    `Index candidate '${receipt.operationId}' generation ${receipt.generation} is not older than active generation ${activeMutation.generation} for '${canonicalRoot}'.`,
+                );
+            }
+
+            if (this.host.context.isPublicationCollectionReferenced(canonicalRoot, receipt.collectionName)) {
+                this.host.context.clearIndexCandidateReceiptForCollection(
+                    canonicalRoot,
+                    receipt.collectionName,
+                );
+                clearedReceipts.push(receipt.collectionName);
+                continue;
+            }
+
+            if (await vectorDb.hasCollection(receipt.collectionName)) {
+                await deleteCollectionWithVerification(vectorDb, receipt.collectionName, {
+                    beforeDropAttempt: () => this.host.mutationRuntime.assertCurrent(canonicalRoot),
+                });
+                recoveredCollections.push(receipt.collectionName);
+            }
+            this.host.mutationRuntime.assertCurrent(canonicalRoot);
+            this.host.context.clearIndexCandidateReceiptForCollection(
+                canonicalRoot,
+                receipt.collectionName,
+            );
+            clearedReceipts.push(receipt.collectionName);
+        }
+
+        return { recoveredCollections, clearedReceipts };
     }
 
     public async buildCollectionLimitMessage(targetCodebasePath: string): Promise<string> {

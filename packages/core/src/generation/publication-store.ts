@@ -26,6 +26,11 @@ import {
     parsePublicationPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
+import {
+    INDEX_CANDIDATE_RECEIPT_VERSION,
+    parseIndexCandidateReceipt,
+    type IndexCandidateReceipt,
+} from './index-candidate-receipt';
 
 interface CurrentPublicationPointer {
     version: 1;
@@ -281,6 +286,150 @@ export class PublicationStore {
 
     usesRootMutationRuntime(runtime: RootMutationRuntime): boolean {
         return this.mutationCoordinator === getRootMutationCoordinator(runtime);
+    }
+
+    reserveIndexCandidate(
+        root: string,
+        collectionName: string,
+        lease: RootMutationLease,
+    ): IndexCandidateReceipt {
+        const canonicalRoot = canonicalizeRoot(root);
+        if (!this.mutationCoordinator.isLeaseForRoot(lease, canonicalRoot)) {
+            throw new Error(`Mutation lease does not own index candidate root '${canonicalRoot}'.`);
+        }
+        this.mutationCoordinator.assertCurrent(lease);
+        if (lease.action !== 'create' && lease.action !== 'reindex') {
+            throw new Error(`Index candidate receipts require a create/reindex lease, saw '${lease.action}'.`);
+        }
+        if (!collectionName) {
+            throw new Error('Index candidate collection name must be non-empty.');
+        }
+        assertPublicationId(lease.operationId);
+
+        const receiptPath = this.candidateReceiptPath(canonicalRoot, lease.operationId);
+        const now = new Date().toISOString();
+        const receipt: IndexCandidateReceipt = Object.freeze({
+            version: INDEX_CANDIDATE_RECEIPT_VERSION,
+            canonicalRoot,
+            operationId: lease.operationId,
+            action: lease.action,
+            generation: lease.generation,
+            collectionName,
+            ownerId: lease.ownerId,
+            pid: lease.pid,
+            ...(lease.processStartTime ? { processStartTime: lease.processStartTime } : {}),
+            createdAt: lease.acquiredAt,
+            updatedAt: now,
+            phase: 'reserved',
+        });
+
+        if (fs.existsSync(receiptPath)) {
+            const existing = this.readCandidateReceipt(receiptPath);
+            if (
+                existing.canonicalRoot !== receipt.canonicalRoot
+                || existing.operationId !== receipt.operationId
+                || existing.action !== receipt.action
+                || existing.generation !== receipt.generation
+                || existing.collectionName !== receipt.collectionName
+                || existing.ownerId !== receipt.ownerId
+                || existing.pid !== receipt.pid
+                || existing.processStartTime !== receipt.processStartTime
+            ) {
+                throw new Error(`Index candidate receipt '${receiptPath}' already belongs to different authority.`);
+            }
+            return existing;
+        }
+
+        this.writeDurableFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+        this.fsyncDirectory(path.dirname(receiptPath));
+        this.fsyncDirectory(this.publicationRoot(canonicalRoot));
+        this.fsyncDirectory(this.publicationsRoot);
+        this.fsyncDirectory(this.stateRoot);
+        return receipt;
+    }
+
+    markIndexCandidateCollectionCreated(
+        root: string,
+        operationId: string,
+        lease: RootMutationLease,
+    ): IndexCandidateReceipt {
+        const canonicalRoot = canonicalizeRoot(root);
+        const current = this.requireCandidateReceiptForLease(canonicalRoot, operationId, lease);
+        if (current.phase === 'collection_created') return current;
+        const updated = Object.freeze({
+            ...current,
+            phase: 'collection_created' as const,
+            updatedAt: new Date().toISOString(),
+        });
+        this.replaceDurableFile(
+            this.candidateReceiptPath(canonicalRoot, operationId),
+            `${JSON.stringify(updated, null, 2)}\n`,
+        );
+        return updated;
+    }
+
+    clearIndexCandidate(
+        root: string,
+        operationId: string,
+        lease: RootMutationLease,
+    ): void {
+        const canonicalRoot = canonicalizeRoot(root);
+        this.requireCandidateReceiptForLease(canonicalRoot, operationId, lease);
+        this.removeCandidateReceipt(canonicalRoot, operationId);
+    }
+
+    clearIndexCandidateForCollection(
+        root: string,
+        collectionName: string,
+        lease: RootMutationLease,
+    ): boolean {
+        const canonicalRoot = canonicalizeRoot(root);
+        if (!this.mutationCoordinator.isLeaseForRoot(lease, canonicalRoot)) {
+            throw new Error(`Mutation lease does not own index candidate root '${canonicalRoot}'.`);
+        }
+        this.mutationCoordinator.assertCurrent(lease);
+        const receipts = this.listCandidateReceiptsForRoot(canonicalRoot);
+        const matches = receipts.filter((receipt) => receipt.collectionName === collectionName);
+        if (matches.length === 0) return false;
+        if (matches.length !== 1) {
+            throw new Error(`Collection '${collectionName}' has ambiguous index candidate ownership for '${canonicalRoot}'.`);
+        }
+        this.removeCandidateReceipt(canonicalRoot, matches[0].operationId);
+        return true;
+    }
+
+    isCollectionReferencedByAnyPublication(root: string, collectionName: string): boolean {
+        const canonicalRoot = canonicalizeRoot(root);
+        return this.listGenerationPublications(canonicalRoot)
+            .some((ref) => ref.publication.vector.collectionName === collectionName);
+    }
+
+    listIndexCandidateReceipts(): IndexCandidateReceipt[] {
+        let rootEntries: fs.Dirent[];
+        try {
+            rootEntries = fs.readdirSync(this.publicationsRoot, { withFileTypes: true });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+            throw error;
+        }
+
+        const receipts: IndexCandidateReceipt[] = [];
+        for (const rootEntry of rootEntries) {
+            const publicationRoot = path.join(this.publicationsRoot, rootEntry.name);
+            if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) {
+                throw new Error(`Publication state contains unsupported root entry '${publicationRoot}'.`);
+            }
+            for (const receipt of this.listCandidateReceiptsInPublicationRoot(publicationRoot)) {
+                if (publicationRootKey(receipt.canonicalRoot) !== rootEntry.name) {
+                    throw new Error(`Index candidate receipt for '${receipt.canonicalRoot}' is stored under the wrong Publication root.`);
+                }
+                receipts.push(receipt);
+            }
+        }
+        return receipts.sort((left, right) => (
+            left.canonicalRoot.localeCompare(right.canonicalRoot)
+            || left.operationId.localeCompare(right.operationId)
+        ));
     }
 
     getCurrent(root: string): PublicationRef | null {
@@ -723,9 +872,10 @@ export class PublicationStore {
             try {
                 generationEntries = fs.readdirSync(generationsRoot, { withFileTypes: true });
             } catch (error) {
-                if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-                throw error;
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') generationEntries = [];
+                else throw error;
             }
+            const candidateReceipts = this.listCandidateReceiptsInPublicationRoot(publicationRoot);
 
             const pointerPath = path.join(publicationRoot, 'current.json');
             let current: CurrentPublicationPointer | null = null;
@@ -739,6 +889,7 @@ export class PublicationStore {
                 publicationRoot,
                 generationEntries,
                 current,
+                candidateReceipts,
             );
             if (!canonicalRoot || this.mutationCoordinator.getActiveLease(canonicalRoot)) continue;
 
@@ -772,6 +923,7 @@ export class PublicationStore {
         publicationRoot: string,
         generationEntries: readonly fs.Dirent[],
         current: CurrentPublicationPointer | null,
+        candidateReceipts: readonly IndexCandidateReceipt[],
     ): string | null {
         const acceptRoot = (candidate: string, expected?: string): string => {
             const canonicalRoot = canonicalizeRoot(candidate);
@@ -796,10 +948,17 @@ export class PublicationStore {
             if (publication.id !== current.publicationId) {
                 throw new Error(`Current Publication '${current.publicationId}' does not match its descriptor.`);
             }
-            return acceptRoot(publication.canonicalRoot);
+            const currentRoot = acceptRoot(publication.canonicalRoot);
+            for (const receipt of candidateReceipts) {
+                acceptRoot(receipt.canonicalRoot, currentRoot);
+            }
+            return currentRoot;
         }
 
         let canonicalRoot: string | undefined;
+        for (const receipt of candidateReceipts) {
+            canonicalRoot = acceptRoot(receipt.canonicalRoot, canonicalRoot);
+        }
         for (const entry of generationEntries) {
             if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
             const generationRoot = path.join(publicationRoot, 'generations', entry.name);
@@ -923,6 +1082,105 @@ export class PublicationStore {
         return { id, publication };
     }
 
+    private candidateReceiptsRoot(canonicalRoot: string): string {
+        return path.join(this.publicationRoot(canonicalRoot), 'candidates');
+    }
+
+    private candidateReceiptPath(canonicalRoot: string, operationId: string): string {
+        assertPublicationId(operationId);
+        return path.join(this.candidateReceiptsRoot(canonicalRoot), `${operationId}.json`);
+    }
+
+    private readCandidateReceipt(receiptPath: string): IndexCandidateReceipt {
+        return parseIndexCandidateReceipt(
+            JSON.parse(fs.readFileSync(receiptPath, 'utf8')),
+            receiptPath,
+        );
+    }
+
+    private listCandidateReceiptsForRoot(canonicalRoot: string): IndexCandidateReceipt[] {
+        const publicationRoot = this.publicationRoot(canonicalRoot);
+        return this.listCandidateReceiptsInPublicationRoot(publicationRoot)
+            .map((receipt) => {
+                if (receipt.canonicalRoot !== canonicalRoot) {
+                    throw new Error(`Index candidate receipt for '${receipt.canonicalRoot}' is stored under '${canonicalRoot}'.`);
+                }
+                return receipt;
+            });
+    }
+
+    private listCandidateReceiptsInPublicationRoot(publicationRoot: string): IndexCandidateReceipt[] {
+        const candidatesRoot = path.join(publicationRoot, 'candidates');
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(candidatesRoot, { withFileTypes: true });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+            throw error;
+        }
+
+        const receipts: IndexCandidateReceipt[] = [];
+        for (const entry of entries) {
+            const receiptPath = path.join(candidatesRoot, entry.name);
+            if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) {
+                throw new Error(`Publication state contains unsupported index candidate entry '${receiptPath}'.`);
+            }
+            const operationId = entry.name.slice(0, -'.json'.length);
+            assertPublicationId(operationId);
+            const receipt = this.readCandidateReceipt(receiptPath);
+            if (receipt.operationId !== operationId) {
+                throw new Error(`Index candidate receipt '${receiptPath}' does not match its addressed operation id.`);
+            }
+            receipts.push(receipt);
+        }
+        return receipts.sort((left, right) => left.operationId.localeCompare(right.operationId));
+    }
+
+    private requireCandidateReceiptForLease(
+        canonicalRoot: string,
+        operationId: string,
+        lease: RootMutationLease,
+    ): IndexCandidateReceipt {
+        if (!this.mutationCoordinator.isLeaseForRoot(lease, canonicalRoot)) {
+            throw new Error(`Mutation lease does not own index candidate root '${canonicalRoot}'.`);
+        }
+        this.mutationCoordinator.assertCurrent(lease);
+        if (lease.operationId !== operationId) {
+            throw new Error(`Mutation lease '${lease.operationId}' does not own candidate '${operationId}'.`);
+        }
+        const receiptPath = this.candidateReceiptPath(canonicalRoot, operationId);
+        const receipt = this.readCandidateReceipt(receiptPath);
+        if (
+            receipt.canonicalRoot !== canonicalRoot
+            || receipt.operationId !== lease.operationId
+            || receipt.generation !== lease.generation
+            || receipt.ownerId !== lease.ownerId
+            || receipt.pid !== lease.pid
+            || receipt.processStartTime !== lease.processStartTime
+        ) {
+            throw new Error(`Index candidate receipt '${receiptPath}' no longer matches the active mutation lease.`);
+        }
+        return receipt;
+    }
+
+    private removeCandidateReceipt(canonicalRoot: string, operationId: string): void {
+        const receiptPath = this.candidateReceiptPath(canonicalRoot, operationId);
+        try {
+            fs.unlinkSync(receiptPath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw error;
+        }
+        const candidatesRoot = path.dirname(receiptPath);
+        this.fsyncDirectory(candidatesRoot);
+        try {
+            fs.rmdirSync(candidatesRoot);
+            this.fsyncDirectory(this.publicationRoot(canonicalRoot));
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY') throw error;
+        }
+    }
+
     private readPublication(descriptorPath: string): Publication {
         return parsePublication(JSON.parse(fs.readFileSync(descriptorPath, 'utf8')), descriptorPath);
     }
@@ -965,6 +1223,18 @@ export class PublicationStore {
             fs.fsyncSync(descriptor);
         } finally {
             fs.closeSync(descriptor);
+        }
+    }
+
+    private replaceDurableFile(targetPath: string, contents: string): void {
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        const temporaryPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        try {
+            this.writeDurableFile(temporaryPath, contents);
+            fs.renameSync(temporaryPath, targetPath);
+            this.fsyncDirectory(path.dirname(targetPath));
+        } finally {
+            fs.rmSync(temporaryPath, { force: true });
         }
     }
 

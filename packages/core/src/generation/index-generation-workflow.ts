@@ -35,7 +35,11 @@ import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '
 import type { LanguageAnalysisPort } from '../language-analysis';
 import type { RelationshipRecord } from '../symbols/contracts';
 
-import type { VectorFilter, VectorWriteMetricsSnapshot } from '../vectordb';
+import {
+    deleteCollectionWithVerification,
+    type VectorFilter,
+    type VectorWriteMetricsSnapshot,
+} from '../vectordb';
 import type { VectorDatabase } from '../vectordb/types';
 import type { IndexProfile } from '../config/defaults';
 import type { ResolvedIndexPolicy, IndexPolicyRuntimeService } from '../policy/index-policy-runtime-service';
@@ -171,6 +175,21 @@ type CachedNavigationDeltaState = {
 // ---- Narrow dependency ports ----
 export interface IndexGenerationWorkflowPorts {
     activatePublication(publication: Publication, lease: RootMutationLease): PublicationRef;
+    reserveIndexCandidate(
+        canonicalRoot: string,
+        collectionName: string,
+        lease: RootMutationLease,
+    ): void;
+    markIndexCandidateCollectionCreated(
+        canonicalRoot: string,
+        operationId: string,
+        lease: RootMutationLease,
+    ): void;
+    clearIndexCandidate(
+        canonicalRoot: string,
+        operationId: string,
+        lease: RootMutationLease,
+    ): void;
     getCurrentPublicationSourceCheckpoint(canonicalRoot: string): {
         ref: PublicationRef;
         checkpoint: PublicationSourceCheckpoint;
@@ -703,12 +722,18 @@ export class IndexGenerationWorkflow {
 
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         const writeCollectionName = this.ports.resolvePublicationCollectionName(codebasePath, publicationId);
+        this.ports.reserveIndexCandidate(canonicalRoot, writeCollectionName, mutationLease);
         const prepareStartedAt = Date.now();
         await this.ports.prepareCollection(
             codebasePath,
             true,
             options.assertMutationCurrent,
             writeCollectionName,
+        );
+        this.ports.markIndexCandidateCollectionCreated(
+            canonicalRoot,
+            publicationId,
+            mutationLease,
         );
         prepareCollectionMs = Date.now() - prepareStartedAt;
 
@@ -875,6 +900,13 @@ export class IndexGenerationWorkflow {
                     console.warn(`[Context] Publication '${publicationId}' became crash-durable before activation acknowledgement failed: ${error.activationCause instanceof Error ? error.activationCause.message : String(error.activationCause)}`);
                 }
                 publicationStatus = 'activated';
+                try {
+                    this.ports.clearIndexCandidate(canonicalRoot, publicationId, mutationLease);
+                } catch (receiptError) {
+                    console.warn(
+                        `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
+                    );
+                }
                 this.promotePreparedNavigationDelta(
                     navigationCandidate,
                     () => this.ports.resolveNavigationObservationToken(canonicalRoot, publicationId),
@@ -948,6 +980,13 @@ export class IndexGenerationWorkflow {
                         console.warn(`[Context] Publication '${publicationId}' became crash-durable before activation acknowledgement failed: ${error.activationCause instanceof Error ? error.activationCause.message : String(error.activationCause)}`);
                     }
                     publicationStatus = 'activated';
+                    try {
+                        this.ports.clearIndexCandidate(canonicalRoot, publicationId, mutationLease);
+                    } catch (receiptError) {
+                        console.warn(
+                            `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
+                        );
+                    }
                     await preparedChanges.commit(options.assertMutationCurrent);
                     this.ports.registerSynchronizerForPublication(
                         writeCollectionName,
@@ -998,7 +1037,20 @@ export class IndexGenerationWorkflow {
                         `[Context] Failed to discard unpublished Publication '${publicationId}': ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
                     );
                 }
-                await this.ports.vectorDatabase.dropCollection(writeCollectionName).catch(() => undefined);
+                try {
+                    await deleteCollectionWithVerification(
+                        this.ports.vectorDatabase,
+                        writeCollectionName,
+                        {
+                            beforeDropAttempt: options.assertMutationCurrent,
+                        },
+                    );
+                    this.ports.clearIndexCandidate(canonicalRoot, publicationId, mutationLease);
+                } catch (cleanupError) {
+                    console.warn(
+                        `[Context] Unpublished collection '${writeCollectionName}' remains cleanup-pending; retaining its durable candidate receipt: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                    );
+                }
                 throw error;
             }
         }

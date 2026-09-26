@@ -583,6 +583,7 @@ export class ToolHandlers {
             isZillizBackend: this.isZillizBackend.bind(this),
             dropZillizCollectionForCreate: this.dropZillizCollectionForCreate.bind(this),
             buildCollectionLimitMessage: this.buildCollectionLimitMessage.bind(this),
+            recoverStaleIndexCandidates: this.recoverStaleIndexCandidates.bind(this),
             manageVectorBackendResponse: this.toolResponseBuilders.manageVectorBackendResponse.bind(this.toolResponseBuilders),
             touchWatchedCodebase: this.touchWatchedCodebase.bind(this),
             loadIndexProfileForCodebase: this.loadIndexProfileForCodebase.bind(this),
@@ -1981,6 +1982,10 @@ export class ToolHandlers {
 
     private async buildCollectionLimitMessage(targetCodebasePath: string): Promise<string> {
         return this.vectorBackendMaintenance.buildCollectionLimitMessage(targetCodebasePath);
+    }
+
+    private async recoverStaleIndexCandidates(codebasePath: string) {
+        return this.vectorBackendMaintenance.recoverStaleIndexCandidates(codebasePath);
     }
 
     private async dropZillizCollectionForCreate(collectionName: string) {

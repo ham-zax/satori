@@ -247,11 +247,11 @@
 - Produces: terminal classification `deterministic | resource_blocked | retryable_external | cancelled` plus bounded retry/backoff state.
 
 **Steps:**
-- [ ] Carry a typed terminal reason from supervised full-index completion into the maintenance coordinator.
-- [ ] Keep deterministic/resource failures suppressed until relevant state changes or a manual operation succeeds.
-- [ ] Retry transient provider/network/worker-start failures with bounded backoff, retaining single-flight coalescing.
-- [ ] Never retry cancellation automatically.
-- [ ] Add required tests proving bounded retry and no retry storm.
+- [x] Derive a typed terminal failure classification from the supervised mutation receipt inside the maintenance coordinator without expanding the durable receipt schema.
+- [x] Keep deterministic/resource failures suppressed until relevant state changes or a manual operation succeeds.
+- [x] Retry transient provider/network/worker-start failures with bounded backoff, retaining single-flight coalescing.
+- [x] Never retry cancellation automatically.
+- [x] Add required tests proving bounded retry and no retry storm.
 
 **Acceptance criteria:**
 - One transient failure does not disable automatic repair for an entire runtime epoch.
@@ -268,12 +268,12 @@
 - Produces: operator/developer documentation matching actual failure containment and degradation semantics.
 
 **Steps:**
-- [ ] Document the control-process/worker boundary and which failures are contained.
-- [ ] Document searchable Publication versus semantic-capability degradation.
-- [ ] Document resource-limit and automatic-retry outcomes.
-- [ ] Run the repository-required focused tests for each changed behavior contract.
-- [ ] Run package typecheck/lint/build checks required by the touched package instructions.
-- [ ] Inspect the final diff for unrelated mutation before integration.
+- [x] Document the control-process/worker boundary and which failures are contained.
+- [x] Document searchable Publication versus semantic-capability degradation.
+- [x] Document resource-limit and automatic-retry outcomes.
+- [x] Run the repository-required focused tests for each changed behavior contract.
+- [x] Run package typechecks and touched-file lint required by the affected package instructions.
+- [x] Inspect the final diff for unrelated mutation before integration.
 
 **Acceptance criteria:**
 - Documentation, public tool description, status behavior, and executable behavior describe the same lifecycle.
@@ -288,7 +288,7 @@
 - [x] Task 5 — repository-scale resource budgets.
 - [x] Task 6 — candidate receipt/orphan recovery.
 - [x] Task 7 — classified automatic retry.
-- [ ] Task 8 — final operational documentation and integration closure.
+- [x] Task 8 — final operational documentation and integration closure.
 
 ## Implementation Order
 
@@ -301,4 +301,11 @@
 7. Task 7 — classified automatic retry.
 8. Task 8 — final operational documentation and integration closure.
 
-The first implementation wave should stop after Tasks 1–2 are stable because they change the mutation-executor ownership boundary. Tasks 3–4 form a separate semantic/publication contract wave and should not be mixed into the worker migration until the supervised full-index path is proven.
+The first implementation wave stopped after Tasks 1–2 were stable because they changed the mutation-executor ownership boundary. Tasks 3–4 were completed as a separate semantic/publication contract wave after the supervised full-index path was proven.
+
+## Accepted Implementation Deviations
+
+- **Candidate recovery lease:** Task 6 originally described a separate startup/GC lease. The implementation reclaims stale candidates at the start of the next same-root create/reindex while that newer durable root lease is current. Recovery requires the stale receipt generation to be older than the active generation, and any collection referenced by any Publication generation is preserved. This keeps recovery on the existing single-writer boundary without introducing a second mutation path.
+- **Automatic failure classification persistence:** Task 7 originally described carrying a new typed terminal reason through the durable mutation receipt. The implementation keeps the durable mutation schema unchanged and derives the process-local classification from the terminal phase/error/cancel reason inside `IndexMaintenanceCoordinator`. This is sufficient for bounded retry policy and avoids a persistent-format migration solely for scheduler state.
+- **Resource budgets:** Search admission now caps individual searchable sources at 8 MiB and aggregate searchable source bytes at 512 MiB per full Publication. TypeScript compiler-backed semantics separately default to 4 MiB per source and 64 MiB per compiler project. WASM-backed semantics retain their existing 1 MiB per-source budget. Search and semantic limits intentionally have different outcomes: aggregate search overflow is `limit_reached` partial state, while optional semantic overflow is persisted degraded/unavailable provider coverage.
+- **Candidate receipt location:** Candidate receipts are stored under the root-keyed Publication state in a dedicated `candidates/` namespace, outside generation directories. Startup orphan pruning uses those receipts as root evidence but does not discard them; backend recovery clears them only after activation, proven absence, or verified collection deletion.

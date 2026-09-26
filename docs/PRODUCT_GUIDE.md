@@ -348,7 +348,7 @@ agent asks a repository question
 
 The user should not be asked to approve routine rebuild-safe reindexing on this managed local path.
 
-Automatic failures are bounded rather than retried on every subsequent read in the same runtime epoch.
+Automatic failures are classified rather than retried on every subsequent read. Transient provider/network/worker failures retry after bounded exponential backoff. Deterministic configuration/incompatibility failures, resource limits, and cancellation remain suppressed until relevant state changes or a successful manual create/reindex supersedes the failed operation.
 
 ### Explicit reindex: recovery override
 
@@ -358,6 +358,14 @@ Automatic failures are bounded rather than retried on every subsequent read in t
 - the runtime is connected/remote and a silent full rebuild could have cost or operational consequences;
 - automatic maintenance failed and has been suppressed;
 - an operator deliberately wants to rebuild.
+
+### Failure containment and degraded intelligence
+
+Create/reindex candidate construction runs in a supervised child process group rather than the MCP control process. A worker crash, cancellation, or no-progress timeout terminates that mutation without force-unlocking the root; a previous completed Publication remains current until a replacement is proven and activated.
+
+Optional semantic-provider failure is different from searchable-payload failure. Satori can activate a searchable Publication with persisted provider coverage marking the affected call graph `degraded` or `unavailable`, instead of discarding completed embeddings or falsely reporting complete relationship coverage. Search admission and compiler semantics also have explicit byte budgets so pathological source files produce partial/degraded status rather than uncontrolled heap growth.
+
+Full-index candidates receive durable ownership receipts before remote/local collection creation. If a process exits before Publication activation, the next same-root create/reindex can prove and reclaim an unreferenced stale candidate; descriptor-backed Publication collections are preserved.
 
 ### Clear remains explicit
 
@@ -393,7 +401,7 @@ Satori also supports advanced connected configurations, including Voyage embeddi
 | `detect_changes` | Map a Git diff to indexed symbol seeds and bounded transitive callers for change orientation. |
 | `read_file` | Read an exact indexed symbol or bounded source window. |
 | `list_codebases` | Discover known repository Publications and readiness. |
-| `manage_index` | Create, sync, inspect, reindex/recover, cancel supported live sync work, or clear index state. |
+| `manage_index` | Create, sync, inspect, reindex/recover, cancel an exact live supervised create/reindex/sync operation, or clear index state. |
 
 For exact schemas and operational status payloads, use the [public operational docs](../satori-landing/docs/index.html) or [`packages/mcp/README.md`](../packages/mcp/README.md).
 

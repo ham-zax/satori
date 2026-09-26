@@ -81,20 +81,25 @@ client finishes its MCP handshake, Satori indexes the authorized session roots
 (`SATORI_SESSION_ROOTS_JSON`, or the launcher's working directory) one at a time.
 Existing publications are preserved. Indexing uses the repository's existing
 index policy and the normal background operation limits; inspect progress with
-`manage_index status`. Each root is attempted once per runtime. A failed attempt
-requires explicit recovery through `manage_index create`; reconnecting does not
-start a retry loop. The option defaults to off and has no effect on connected
-runtimes. File-change observation remains controlled by `MCP_ENABLE_WATCHER`.
+`manage_index status`. Workspace creates and compatibility reindexes are
+single-flight. Transient provider/network/worker failures may retry in the same
+runtime after bounded exponential backoff, while deterministic configuration or
+compatibility failures, resource limits, and cancellation stay suppressed until
+relevant state changes or a successful manual create/reindex supersedes them.
+The option defaults to off and has no effect on connected runtimes. File-change
+observation remains controlled by `MCP_ENABLE_WATCHER`.
 
-Semantic relationship analysis runs one WASM session per language over that
-language's whole file set. Sources over 1 MiB are skipped for relationship
-analysis (with a warning and `skippedFiles` in the analyzer result) instead of being
-duplicated into WASM linear memory, where multi-megabyte generated files
-observe roughly 40x transient blowup and abort the session. Skipped files
-remain chunked, embedded, and searchable; only their call-graph edges are
-missing. The structured skip report is not yet exposed by `manage_index status`.
-The per-file limit does not bound the combined size of a language session.
-Broad workspace roots (filesystem root, home directory, state root)
+Semantic relationship analysis is resource-bounded independently from search.
+WASM-backed languages skip sources over 1 MiB rather than duplicating them into
+linear memory. TypeScript compiler-backed analysis defaults to 4 MiB per source
+and 64 MiB across the compiler project. Skipped or failed provider work remains
+searchable but is persisted as `degraded` / `unavailable` provider coverage, so
+`manage_index status` capability evidence cannot report a healthy call graph
+when the owning provider did not cover the required source set. Search itself
+has separate admission limits: 8 MiB per searchable source and 512 MiB of
+aggregate searchable source bytes per full Publication; the aggregate limit
+publishes `limit_reached` partial search state rather than running until heap
+exhaustion. Broad workspace roots (filesystem root, home directory, state root)
 stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
 
 ## Measured Performance
@@ -133,7 +138,7 @@ In a fresh two-task OpenCode comparison where both arms answered correctly, Sato
 
 | Tool | Purpose |
 |---|---|
-| `manage_index` | Manage the repository-intelligence Publication: create the first index, synchronize source changes, inspect readiness, cancel a live supervised sync, recover with reindex, or clear index state. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance; explicit reindex remains the operator recovery override. |
+| `manage_index` | Manage the repository-intelligence Publication: create the first index, synchronize source changes, inspect readiness, cancel a live supervised create/reindex/sync operation by exact operation ID, recover with reindex, or clear index state. Managed offline runtimes automatically start or join rebuild-safe background reindex maintenance; explicit reindex remains the operator recovery override. |
 | `search_codebase` | Search the repository-intelligence Publication with semantic, lexical, and exact evidence and return owner-oriented results. `limit` bounds the frozen result set across all pages; `disclosureLimit` controls only the initial grouped page. |
 | `architecture_overview` | Summarize bounded Publication architecture evidence as existing logical areas plus factual package architecture from the same persisted ownership snapshot: scoped package identities/counts, cross-package CALLS/IMPORTS boundaries, package fan-in/fan-out, and owned-package cycles. Optional subtree/exclusions and runtime/all scope filter evidence before both projections. |
 | `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. A grouped envelope without continuation reports pagination.continuation="complete" for the caller-bounded frozen set only; omittedBeyondLimitGroupCount reports groups excluded by the caller limit. |
@@ -174,7 +179,8 @@ its results are advisory and do not establish complete impact coverage.
 - Python inbound relationships cover bounded static constructor-receiver and
   direct service/callback value-origin patterns. Dynamic or ambiguous flows
   remain partial, so an absent inbound edge is not proof that no caller exists.
-- `manage_index` has no force-unlock or repair path. Explicit `sync` runs as supervised background maintenance while a compatible completed Publication remains readable; `cancel` targets only the exact live sync operation ID. Use `reindex` when current Publication authority is missing, corrupt, partial, or incompatible.
+- `manage_index` has no force-unlock or repair path. Full create/reindex and explicit `sync` use supervised executors; `cancel` targets only the exact live supervised create/reindex/sync operation ID, and the writer lease is retained until executor quiescence is proven. A failed reindex preserves the previous completed Publication. Use `reindex` when current Publication authority is missing, corrupt, partial, or incompatible.
+- Full-index candidate ownership is durably recorded before vector collection creation. A later same-root create/reindex can reclaim an older unreferenced candidate collection, while any collection referenced by a Publication generation remains protected.
 - Provider, model, dimensions, projection, and vector backend are persisted compatibility identities; changing them requires a reindex.
 - Multiple incompatible live Satori runtimes are blocked from mutating the same publication. Mutation ownership is scoped to the backend authority root: each LanceDB state root has its own owner registry, and Milvus runtimes are keyed by endpoint.
 - Rerank context v4 sends the exact question once plus a positive-only answer

@@ -1595,7 +1595,7 @@ npx -y @zokizuan/satori-cli@latest install --runtime voyage --vector-store milvu
           </details>
           <details>
             <summary>Will Satori ask me before routine reindexing?</summary>
-            <div class="details-body"><p>On the managed offline path, rebuild-safe automatic maintenance starts or joins the background reindex without making the user babysit it. Connected/remote, unsafe, unavailable, or failed automatic recovery remains explicit.</p></div>
+            <div class="details-body"><p>On the managed offline path, rebuild-safe automatic maintenance starts or joins the background reindex without making the user babysit it. Transient external or worker failures retry with bounded backoff; deterministic, resource-limited, cancelled, connected/remote, or otherwise unsafe recovery remains explicit.</p></div>
           </details>
           <details>
             <summary>Does Satori send my code to a model API?</summary>

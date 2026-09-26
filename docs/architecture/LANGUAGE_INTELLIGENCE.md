@@ -91,9 +91,11 @@ Go, Java, C#, C++, and Rust semantic project analysis is executed in a sandboxed
    - **Public Satori Promotion:** Controlled by `isLanguageCapabilitySupportedForLanguage(lang, 'callGraphBuild')`. Unpromoted languages can be tested in `qualification` mode without exposing unverified edges in production.
 3. **Single Registry Composition:**
    - A single `SemanticLanguageRegistry` instance is instantiated per runtime composition and threaded through `IndexGenerationWorkflow` $\to$ `buildRelationshipsForRegistry` $\to$ `LanguageResolutionStrategyRegistry` $\to$ `CbmSemanticContributionEngine`.
-4. **Publication Freshness:**
-   - Relationship output is part of the same immutable Publication as search and symbol state. Sync/reindex may reuse bounded analysis work internally, but readers never observe a mixed generation: the replacement Publication becomes current only after its complete navigation state is ready.
-   - TypeScript semantic environment identity includes compiler/config/project inputs such as `tsconfig.json`/`jsconfig.json`, `extends`, path mappings, project references, and relevant package/module controls.
+4. **Publication Freshness and Coverage Truth:**
+   - Relationship output and semantic-provider coverage are part of the same immutable Publication as search and symbol state. Sync/reindex may reuse bounded analysis work internally, but readers never observe mixed-generation claims.
+   - Optional semantic-provider failure is sealed as `degraded` or `unavailable` coverage with no authoritative claims from that failed provider. A searchable Publication may still activate; call-graph capability projection must consume the persisted coverage and must not report `ready` for an unavailable provider.
+   - Source-integrity drift, policy drift, corrupt registry/ownership, vector finalization, and Publication activation remain fail-closed and are not converted into semantic degradation.
+   - TypeScript semantic environment identity includes compiler/config/project inputs such as `tsconfig.json`/`jsconfig.json`, `extends`, path mappings, project references, relevant package/module controls, provider version, and the active semantic resource budget.
 5. **TypeScript Structural Authority:**
    - OXC/Satori remains authoritative for public symbol identity, byte spans, lexical ownership, and the Publication symbol registry. Compiler semantic output is evidence only until it maps to exact canonical caller/target instances.
    - Central admission remains fail-closed: unresolved, ambiguous, non-indexable, or non-canonical evidence does not become a public CALLS edge.

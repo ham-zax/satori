@@ -50,6 +50,7 @@ function makeContext(
         extensions?: string[];
         forceFullHash?: boolean;
         hashConcurrency?: number;
+        additionalObservablePaths?: ReadonlySet<string>;
         previousHashes?: Map<string, string>;
         previousStats?: Map<string, FileStatSignature>;
     } = {},
@@ -62,6 +63,7 @@ function makeContext(
         supportedExtensions: options.extensions ?? ['.ts'],
         forceFullHash: options.forceFullHash ?? true,
         hashConcurrency: options.hashConcurrency ?? 4,
+        additionalObservablePaths: options.additionalObservablePaths,
         previousHashes: options.previousHashes ?? new Map(),
         previousStats: options.previousStats ?? new Map(),
     };
@@ -240,7 +242,10 @@ test('scanSynchronizerState bounds concurrent hashing to hashConcurrency', async
         // With hashConcurrency=1 the sparse anchor is hashed first (sorted order),
         // so target.ts is not opened until the anchor hash finishes. Deleting it
         // during that window must land it in unreadableFiles, never in the results.
-        const scanPromise = scanSynchronizerState(makeContext(rootDir, { hashConcurrency: 1 }));
+        const scanPromise = scanSynchronizerState(makeContext(rootDir, {
+            hashConcurrency: 1,
+            additionalObservablePaths: new Set(['anchor.ts']),
+        }));
         await sleep(25);
         fs.rmSync(path.join(rootDir, 'target.ts'));
 
@@ -259,7 +264,10 @@ test('scanSynchronizerState persists the signature of the bytes it hashed', asyn
 
         // The anchor occupies the single hash worker; rewriting target.ts during
         // that window changes it between the scan-time stat and the hash open.
-        const scanPromise = scanSynchronizerState(makeContext(rootDir, { hashConcurrency: 1 }));
+        const scanPromise = scanSynchronizerState(makeContext(rootDir, {
+            hashConcurrency: 1,
+            additionalObservablePaths: new Set(['anchor.ts']),
+        }));
         await sleep(25);
         fs.writeFileSync(targetPath, 'export const target = 2;\n', 'utf8');
         const output = await scanPromise;
@@ -290,6 +298,7 @@ test('scanSynchronizerState reapplies the index policy to the descriptor it hash
             const scanPromise = scanSynchronizerState(makeContext(rootDir, {
                 hashConcurrency: 1,
                 extensions: ['.ts', '<all-text>'],
+                additionalObservablePaths: new Set(['anchor.ts']),
             }));
             await sleep(25);
             fs.writeFileSync(notesPath, 'x'.repeat(64), 'utf8');

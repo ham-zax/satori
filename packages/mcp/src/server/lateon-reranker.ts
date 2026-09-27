@@ -70,16 +70,25 @@ type QueuedRerank = {
     onExecutionDiagnostics?: (diagnostics: RerankExecutionDiagnostics) => void;
 };
 
-type WorkerState = "loading" | "ready" | "unhealthy" | "closed";
+// "idle": no worker process is resident; the next request starts one.
+type WorkerState = "idle" | "loading" | "ready" | "unhealthy" | "closed";
 
 const MAXIMUM_BOOTSTRAP_ATTEMPTS = 2;
 const LATEON_HARD_OPERATION_TIMEOUT_MS = 300_000;
 const LATEON_MAXIMUM_INTRA_OP_THREADS = 8;
+// The model worker holds a few hundred MB. It starts on first use and is
+// released after this long without rerank activity.
+const LATEON_DEFAULT_IDLE_SHUTDOWN_MS = 2 * 60_000;
+// Requests queue behind one active execution; beyond this the caller gets a
+// not-ready failure and search degrades to unreranked results.
+const LATEON_MAXIMUM_QUEUED_REQUESTS = 16;
 
 export type LateOnRerankerConfig = Readonly<{
     modelDirectory: string;
     profileId?: LateOnRuntimeProfileId;
     workerPath?: string;
+    /** Idle window before the worker process is released. 0 keeps it resident. */
+    idleShutdownMs?: number;
 }>;
 
 function safeIntegerAtLeast(value: unknown, minimum: number, label: string): number {
@@ -186,8 +195,10 @@ export class LateOnReranker implements Reranker {
     private readonly modelDirectory: string;
     private readonly intraOpThreads: number;
     private readonly workerPath: string;
+    private readonly idleShutdownMs: number;
+    private idleShutdownTimer?: NodeJS.Timeout;
     private worker: ChildProcess | null = null;
-    private workerState: WorkerState = "loading";
+    private workerState: WorkerState = "idle";
     private readinessPromise: Promise<void>;
     private resolveReadiness!: () => void;
     private rejectReadiness!: (error: Error) => void;
@@ -221,8 +232,8 @@ export class LateOnReranker implements Reranker {
         this.workerPath = config.workerPath
             ? path.resolve(config.workerPath)
             : fileURLToPath(new URL("./lateon-reranker-worker.js", import.meta.url));
+        this.idleShutdownMs = Math.max(0, config.idleShutdownMs ?? LATEON_DEFAULT_IDLE_SHUTDOWN_MS);
         this.readinessPromise = this.createReadinessPromise();
-        this.startWorker();
     }
 
     getIdentity(): ReturnType<Reranker["getIdentity"]> {
@@ -292,7 +303,61 @@ export class LateOnReranker implements Reranker {
         if (this.closed) {
             throw operationalError("lateon_cancelled", "LateOn reranker is closed.");
         }
+        await this.ensureWorkerStarted();
         await this.readinessPromise;
+        this.scheduleIdleShutdown();
+    }
+
+    private async ensureWorkerStarted(): Promise<void> {
+        this.clearIdleShutdown();
+        if (this.workerState !== "idle") return;
+        if (this.termination) await this.termination;
+        if (this.workerState === "idle" && !this.closed) this.startWorker();
+    }
+
+    private clearIdleShutdown(): void {
+        if (this.idleShutdownTimer) clearTimeout(this.idleShutdownTimer);
+        this.idleShutdownTimer = undefined;
+    }
+
+    private scheduleIdleShutdown(): void {
+        this.clearIdleShutdown();
+        if (this.idleShutdownMs <= 0 || this.closed || this.workerState !== "ready") return;
+        this.idleShutdownTimer = setTimeout(() => {
+            this.idleShutdownTimer = undefined;
+            void this.releaseIdleWorker();
+        }, this.idleShutdownMs);
+        this.idleShutdownTimer.unref();
+    }
+
+    private async releaseIdleWorker(): Promise<void> {
+        if (
+            this.closed
+            || this.active
+            || this.queue.length > 0
+            || this.pending.size > 0
+            || this.workerState !== "ready"
+            || !this.worker
+            || this.termination
+        ) {
+            return;
+        }
+        const worker = this.worker;
+        this.worker = null;
+        this.workerState = "idle";
+        const termination = (async () => {
+            if (worker.exitCode === null && worker.signalCode === null) {
+                const exited = new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+                worker.kill("SIGKILL");
+                await exited;
+            }
+        })();
+        this.termination = termination;
+        try {
+            await termination;
+        } finally {
+            if (this.termination === termination) this.termination = null;
+        }
     }
 
     async rerank(
@@ -329,6 +394,13 @@ export class LateOnReranker implements Reranker {
                 throw operationalError("lateon_cancelled", "LateOn rerank was cancelled.");
             }
         }
+        if (this.active && this.queue.length >= LATEON_MAXIMUM_QUEUED_REQUESTS) {
+            throw operationalError(
+                "lateon_not_ready",
+                `LateOn rerank queue is full (${LATEON_MAXIMUM_QUEUED_REQUESTS} waiting requests).`,
+            );
+        }
+        this.clearIdleShutdown();
 
         const offeredAt = Date.now();
         let submittedRequest!: QueuedRerank;
@@ -471,6 +543,7 @@ export class LateOnReranker implements Reranker {
             this.workerState = "ready";
             this.hasReachedReady = true;
             this.resolveReadiness();
+            if (!this.active && this.queue.length === 0) this.scheduleIdleShutdown();
             return;
         }
         if (response.type === "error" && response.requestId === undefined) {
@@ -520,6 +593,7 @@ export class LateOnReranker implements Reranker {
                 if (this.activeRequest === request) this.activeRequest = null;
                 if (this.activeTask === task) this.activeTask = null;
                 this.startQueuedIfPossible();
+                if (!this.active && this.queue.length === 0) this.scheduleIdleShutdown();
             }
         })();
         this.activeTask = task;
@@ -770,6 +844,7 @@ export class LateOnReranker implements Reranker {
     async close(): Promise<void> {
         if (this.closed) return;
         this.closed = true;
+        this.clearIdleShutdown();
         this.workerState = "closed";
         const cancellation = operationalError("lateon_cancelled", "LateOn reranker is closed.");
         this.rejectReadiness(cancellation);

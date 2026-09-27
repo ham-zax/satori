@@ -37,7 +37,16 @@ export interface PotionEmbeddingConfig {
      * One additional foreground query slot is reserved separately.
      */
     maxPendingItems?: number;
+    /**
+     * The worker process is released after this long without embedding
+     * activity and restarted on the next request. 0 keeps it resident.
+     */
+    idleShutdownMs?: number;
 }
+
+// Semantic search needs Potion often, so it keeps a longer warm window than
+// the reranker before its worker memory is returned to the OS.
+const DEFAULT_IDLE_SHUTDOWN_MS = 5 * 60_000;
 
 interface WorkerResponse {
     id?: unknown;
@@ -59,7 +68,8 @@ interface PendingRequest {
     itemCount: number;
 }
 
-type WorkerState = 'starting' | 'ready' | 'closing' | 'closed' | 'failed';
+// 'idle': the worker was released after inactivity; the next request restarts it.
+type WorkerState = 'starting' | 'ready' | 'idle' | 'closing' | 'closed' | 'failed';
 
 function providerError(options: {
     code: 'EMBEDDING_PROVIDER_ERROR' | 'EMBEDDING_PROVIDER_TIMEOUT' | 'EMBEDDING_PROVIDER_UNAVAILABLE' | 'EMBEDDING_PROVIDER_INVALID_REQUEST';
@@ -285,6 +295,10 @@ export class PotionEmbedding extends Embedding {
     private readonly startupTimeoutMs: number;
     private readonly maxBatchItems: number;
     private readonly maxPendingItems: number;
+    private readonly idleShutdownMs: number;
+    private idleShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+    private idleRelease: Promise<void> | null = null;
+    private restart: Promise<void> | null = null;
     private readonly pending = new Map<string, PendingRequest>();
     private pendingItemsCount = 0;
     private child: ChildProcessWithoutNullStreams | null = null;
@@ -327,6 +341,78 @@ export class PotionEmbedding extends Embedding {
         if (this.maxPendingItems < this.maxBatchItems) {
             throw new Error('Potion worker pending capacity must be no smaller than the maximum batch size.');
         }
+        this.idleShutdownMs = Math.max(0, config.idleShutdownMs ?? DEFAULT_IDLE_SHUTDOWN_MS);
+    }
+
+    private clearIdleShutdown(): void {
+        if (this.idleShutdownTimer) clearTimeout(this.idleShutdownTimer);
+        this.idleShutdownTimer = null;
+    }
+
+    private scheduleIdleShutdown(): void {
+        this.clearIdleShutdown();
+        if (this.idleShutdownMs <= 0 || this.state !== 'ready' || this.pending.size > 0) return;
+        this.idleShutdownTimer = setTimeout(() => {
+            this.idleShutdownTimer = null;
+            this.releaseIdleWorker();
+        }, this.idleShutdownMs);
+        this.idleShutdownTimer.unref?.();
+    }
+
+    private releaseIdleWorker(): void {
+        const child = this.child;
+        if (this.state !== 'ready' || this.pending.size > 0 || !child) return;
+        this.child = null;
+        this.state = 'idle';
+        this.stdoutBuffer = Buffer.alloc(0);
+        this.idleRelease = this.stopChild(child, true).finally(() => {
+            this.idleRelease = null;
+        });
+    }
+
+    private async stopChild(child: ChildProcessWithoutNullStreams, requestShutdown: boolean): Promise<void> {
+        if (requestShutdown) {
+            const shutdownFrame = `${JSON.stringify({
+                op: 'shutdown',
+                id: `potion-${++this.requestSequence}`,
+            })}\n`;
+            child.stdin.end(shutdownFrame);
+        } else {
+            child.kill('SIGKILL');
+        }
+        await new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+                resolve();
+                return;
+            }
+            const timeout = setTimeout(() => {
+                child.kill('SIGKILL');
+                resolve();
+            }, Math.min(this.requestTimeoutMs, 1_000));
+            child.once('exit', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+        });
+    }
+
+    private async ensureStarted(): Promise<void> {
+        this.clearIdleShutdown();
+        if (this.restart) {
+            await this.restart;
+            return;
+        }
+        if (this.state !== 'idle') return;
+        this.restart = (async () => {
+            await this.idleRelease;
+            if (this.state !== 'idle') return;
+            this.state = 'starting';
+            this.startupPromise = null;
+            await this.start();
+        })().finally(() => {
+            this.restart = null;
+        });
+        await this.restart;
     }
 
     private nextRequestId(): string {
@@ -375,17 +461,22 @@ export class PotionEmbedding extends Embedding {
             return this.startupPromise;
         }
         this.child = child;
-        child.stdout.on('data', (chunk: Buffer) => this.handleStdout(chunk));
+        // A worker released for idleness may still flush or exit; only the
+        // current child can affect provider state.
+        child.stdout.on('data', (chunk: Buffer) => {
+            if (this.child === child) this.handleStdout(chunk);
+        });
         // Consume native diagnostics so the pipe cannot block. Their content is
         // intentionally neither retained nor copied into public errors.
         child.stderr.on('data', () => undefined);
         child.stdin.on('error', () => undefined);
-        child.once('error', () => this.failWorker(providerError({
+        child.once('error', () => this.child === child && this.failWorker(providerError({
             code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
             retryable: false,
             message: 'Potion worker failed.',
         })));
         child.once('exit', () => {
+            if (this.child !== child) return;
             if (this.state === 'closing' || this.state === 'closed') {
                 this.finishClosed();
                 return;
@@ -555,6 +646,7 @@ export class PotionEmbedding extends Embedding {
         this.pendingItemsCount = Math.max(0, this.pendingItemsCount - pending.itemCount);
         clearTimeout(pending.timeout);
         pending.resolve(response);
+        if (this.pending.size === 0) this.scheduleIdleShutdown();
     }
 
     private failWorker(error: EmbeddingProviderError): void {
@@ -607,6 +699,7 @@ export class PotionEmbedding extends Embedding {
                 message: 'Potion embedding input exceeds the bounded worker frame.',
             }));
         }
+        this.clearIdleShutdown();
         this.pendingItemsCount += itemCount;
         const response = new Promise<WorkerResponse>((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -653,6 +746,7 @@ export class PotionEmbedding extends Embedding {
                 message: 'Potion embedding input exceeds the bounded worker frame.',
             }));
         }
+        this.clearIdleShutdown();
         this.pendingItemsCount += itemCount;
         const response = new Promise<WorkerResponse>((resolve, reject) => {
             const timeout = setTimeout(() => {
@@ -744,6 +838,7 @@ export class PotionEmbedding extends Embedding {
     }
 
     async embedQuery(text: string): Promise<EmbeddingVector> {
+        await this.ensureStarted();
         return this.validateResponse(await this.request('query', text));
     }
 
@@ -800,6 +895,7 @@ export class PotionEmbedding extends Embedding {
             subbatches.push({ id: currentId, texts: currentTexts, frame: currentFrame });
         }
 
+        await this.ensureStarted();
         const results: EmbeddingVector[] = [];
         for (const subbatch of subbatches) {
             const response = await this.requestBatchFrame(subbatch.id, subbatch.frame, subbatch.texts.length);
@@ -833,6 +929,7 @@ export class PotionEmbedding extends Embedding {
     override async close(): Promise<void> {
         if (this.closePromise) return this.closePromise;
         this.closePromise = (async () => {
+            this.clearIdleShutdown();
             if (this.state === 'closed') return;
             const child = this.child;
             const canRequestShutdown = this.state === 'ready';
@@ -848,32 +945,11 @@ export class PotionEmbedding extends Embedding {
             }
             this.pending.clear();
             if (!child) {
+                await this.idleRelease;
                 this.finishClosed();
                 return;
             }
-            if (canRequestShutdown) {
-                const shutdownFrame = `${JSON.stringify({
-                    op: 'shutdown',
-                    id: `potion-${++this.requestSequence}`,
-                })}\n`;
-                child.stdin.end(shutdownFrame);
-            } else {
-                child.kill('SIGKILL');
-            }
-            await new Promise<void>((resolve) => {
-                if (child.exitCode !== null || child.signalCode !== null) {
-                    resolve();
-                    return;
-                }
-                const timeout = setTimeout(() => {
-                    child.kill('SIGKILL');
-                    resolve();
-                }, Math.min(this.requestTimeoutMs, 1_000));
-                child.once('exit', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                });
-            });
+            await this.stopChild(child, canRequestShutdown);
             this.finishClosed();
         })();
         return this.closePromise;

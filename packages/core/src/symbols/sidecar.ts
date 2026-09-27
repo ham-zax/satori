@@ -24,11 +24,14 @@ export {
 export {
     computeNavigationSourceFilesDigest,
     computeRelationshipManifestHash,
+    readRelationshipAnalysisEvidence,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
 } from './sidecar-reads';
 export type {
     PublicationNavigation,
+    ReadRelationshipAnalysisEvidenceInput,
+    ReadRelationshipAnalysisEvidenceResult,
     ReadRelationshipSidecarInput,
     ReadRelationshipSidecarResult,
     ReadSymbolRegistrySidecarInput,

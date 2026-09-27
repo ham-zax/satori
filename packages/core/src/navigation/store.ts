@@ -1,8 +1,10 @@
 import {
+    readRelationshipAnalysisEvidence,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     resolveOwnerSymbolForChunk,
 } from '../symbols';
+import { PublicationStateCache } from './publication-state-cache';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import type { ResolutionClaim } from '../relationships/resolution';
 import type {
@@ -35,7 +37,6 @@ type NavigationStoreRelationshipsOk = {
     manifestHash: string;
     manifest: RelationshipManifest;
     records: RelationshipRecord[];
-    analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     warnings: string[];
 };
 
@@ -46,6 +47,24 @@ type NavigationStoreRelationshipsNotChecked = {
 };
 
 export type NavigationRegistryState = NavigationStoreRegistryOk | NavigationStoreFailure;
+
+export type NavigationAnalysisEvidenceState =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
+    }
+    | NavigationStoreFailure;
+
+export type NavigationResolutionClaimsState =
+    | {
+        status: 'ok';
+        rootPath: string;
+        manifestHash: string;
+        claims: ResolutionClaim[];
+    }
+    | NavigationStoreFailure;
 export type NavigationRelationshipsState = NavigationStoreRelationshipsOk | NavigationStoreFailure;
 
 export interface NavigationStoreInput {
@@ -193,24 +212,162 @@ function buildFailure(rootPath: string, reason: string, status: 'missing' | 'inc
     };
 }
 
-function relationshipQueryCacheIdentity(input: NavigationRelationshipsQueryInput): string | undefined {
-    if (!input.publicationId || !input.expectedSymbolRegistryManifestHash) {
-        return undefined;
-    }
-    return [
-        input.publicationId,
-        input.expectedSymbolRegistryManifestHash,
-        input.direction || 'both',
-        input.sourceInstanceId || '',
-        input.sourceKey || '',
-        input.targetInstanceId || '',
-        input.targetKey || '',
-        [...(input.types ?? [])].sort(compareStrings).join(','),
-    ].join('\0');
+type RelationshipSelector = Pick<
+    NavigationRelationshipsQueryInput,
+    'sourceInstanceId' | 'sourceKey' | 'targetInstanceId' | 'targetKey' | 'direction' | 'types'
+>;
+
+function hasRelationshipFilter(input: RelationshipSelector): boolean {
+    return Boolean(
+        (input.direction && input.direction !== 'both')
+        || input.sourceInstanceId
+        || input.sourceKey
+        || input.targetInstanceId
+        || input.targetKey
+        || (input.types && input.types.length > 0),
+    );
 }
 
-function relationshipQueryCacheRoot(input: NavigationRelationshipsQueryInput): string {
-    return `${input.publicationId}\0${input.navigationRoot}\0${input.normalizedRootPath}`;
+function selectRelationshipRecords(
+    records: readonly RelationshipRecord[],
+    input: NavigationRelationshipsQueryInput,
+): RelationshipRecord[] {
+    const direction = input.direction || 'both';
+    const hasSelector = Boolean(
+        input.sourceInstanceId
+        || input.sourceKey
+        || input.targetInstanceId
+        || input.targetKey
+    );
+    return records.filter((record) => {
+        if (!matchesType(record, input.types)) {
+            return false;
+        }
+        if (direction === 'callees') {
+            return matchesSourceSelector(record, input);
+        }
+        if (direction === 'callers') {
+            return matchesTargetSelector(record, input);
+        }
+        if (!hasSelector) {
+            return true;
+        }
+        return matchesSourceSelector(record, input) || matchesTargetSelector(record, input);
+    });
+}
+
+// Resolution-claim locator keys. A claim is indexed under every value that
+// getResolutionEvidence can match it by, so the locator selects a superset of
+// the shards that contain matches and the exact match logic still decides.
+function sourceClaimKey(sourceInstanceId: string): string {
+    return `s\0${sourceInstanceId}`;
+}
+
+function symbolIdClaimKey(symbolInstanceId: string): string {
+    return `i\0${symbolInstanceId}`;
+}
+
+function symbolNameClaimKey(qualifiedName: string): string {
+    return `n\0${qualifiedName}`;
+}
+
+function resolutionClaimKeys(claim: ResolutionClaim): string[] {
+    const keys: string[] = [];
+    if (claim.sourceInstanceId) keys.push(sourceClaimKey(claim.sourceInstanceId));
+    if (claim.targetInstanceId) keys.push(symbolIdClaimKey(claim.targetInstanceId));
+    if (claim.targetSymbol) keys.push(symbolNameClaimKey(claim.targetSymbol));
+    for (const candidate of claim.observation.candidates) {
+        if (candidate.symbolInstanceId) keys.push(symbolIdClaimKey(candidate.symbolInstanceId));
+        if (candidate.qualifiedName) keys.push(symbolNameClaimKey(candidate.qualifiedName));
+    }
+    return keys;
+}
+
+function matchResolutionClaim(
+    claim: ResolutionClaim,
+    input: NavigationResolutionEvidenceQueryInput,
+): NavigationResolutionEvidenceMatchKind | undefined {
+    if (input.sourceInstanceId && claim.sourceInstanceId === input.sourceInstanceId) {
+        return 'source_call';
+    }
+    if (
+        (input.symbolInstanceId && claim.targetInstanceId === input.symbolInstanceId)
+        || (input.symbolQualifiedName && claim.targetSymbol === input.symbolQualifiedName)
+    ) {
+        return 'resolved_target';
+    }
+    if (
+        claim.decision !== 'resolved'
+        && claim.observation.candidates.some((candidate) => (
+            (input.symbolInstanceId && candidate.symbolInstanceId === input.symbolInstanceId)
+            || (input.symbolQualifiedName && candidate.qualifiedName === input.symbolQualifiedName)
+        ))
+    ) {
+        return 'candidate_target';
+    }
+    return undefined;
+}
+
+/**
+ * The resident relationship state for one Publication: query edges plus a
+ * compact locator of which files hold resolution claims for a symbol. Bulky
+ * analysis evidence (call sites, claims, flow facts) stays on disk and is read
+ * per file on demand.
+ */
+type LoadedRelationshipState =
+    | NavigationStoreFailure
+    | (NavigationStoreRelationshipsOk & { claimFilesByKey: Map<string, string[]> });
+
+async function readRelationshipState(
+    input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
+): Promise<LoadedRelationshipState> {
+    const claimFilesByKey = new Map<string, string[]>();
+    const result = await readRelationshipSidecar({
+        normalizedRootPath: input.normalizedRootPath,
+        publicationId: input.publicationId,
+        navigationRoot: input.navigationRoot,
+        expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
+        visitAnalysisEvidence: (filePath, evidence) => {
+            for (const claim of evidence.resolutionClaims ?? []) {
+                for (const key of resolutionClaimKeys(claim)) {
+                    const files = claimFilesByKey.get(key);
+                    if (!files) {
+                        claimFilesByKey.set(key, [filePath]);
+                    } else if (files[files.length - 1] !== filePath) {
+                        files.push(filePath);
+                    }
+                }
+            }
+        },
+    });
+    if (result.status !== 'ok') {
+        return buildFailure(
+            result.rootPath,
+            result.reason,
+            result.status === 'corrupt' ? 'incompatible' : result.status,
+        );
+    }
+    return {
+        status: 'ok',
+        rootPath: result.rootPath,
+        manifestHash: result.manifestHash,
+        manifest: result.manifest,
+        records: result.records.sort(compareRelationshipRecords),
+        warnings: result.warnings,
+        claimFilesByKey,
+    };
+}
+
+function publicRelationshipState(state: LoadedRelationshipState): NavigationRelationshipsState {
+    if (state.status !== 'ok') return state;
+    return {
+        status: 'ok',
+        rootPath: state.rootPath,
+        manifestHash: state.manifestHash,
+        manifest: state.manifest,
+        records: state.records,
+        warnings: state.warnings,
+    };
 }
 
 async function readRegistryState(input: NavigationStoreInput): Promise<NavigationRegistryState> {
@@ -232,76 +389,59 @@ async function readRegistryState(input: NavigationStoreInput): Promise<Navigatio
     };
 }
 
-async function readRelationshipState(input: NavigationRelationshipsQueryInput): Promise<NavigationRelationshipsState> {
-    let expectedManifestHash = input.expectedSymbolRegistryManifestHash;
-    if (!expectedManifestHash) {
-        const registryState = await readRegistryState(input);
-        if (registryState.status !== 'ok') {
-            return registryState;
-        }
-        expectedManifestHash = registryState.manifestHash;
-    }
-
-    const result = await readRelationshipSidecar({
-        normalizedRootPath: input.normalizedRootPath,
-        publicationId: input.publicationId,
-        navigationRoot: input.navigationRoot,
-        expectedSymbolRegistryManifestHash: expectedManifestHash,
-    });
-    if (result.status !== 'ok') {
-        return buildFailure(
-            result.rootPath,
-            result.reason,
-            result.status === 'corrupt' ? 'incompatible' : result.status,
-        );
-    }
-
-    const direction = input.direction || 'both';
-    const records = result.records.filter((record) => {
-        if (!matchesType(record, input.types)) {
-            return false;
-        }
-        if (direction === 'callees') {
-            return matchesSourceSelector(record, input);
-        }
-        if (direction === 'callers') {
-            return matchesTargetSelector(record, input);
-        }
-        const hasSelector = Boolean(
-            input.sourceInstanceId
-            || input.sourceKey
-            || input.targetInstanceId
-            || input.targetKey
-        );
-        if (!hasSelector) {
-            return true;
-        }
-        return matchesSourceSelector(record, input) || matchesTargetSelector(record, input);
-    });
-
-    return {
-        status: 'ok',
-        rootPath: result.rootPath,
-        manifestHash: result.manifestHash,
-        manifest: result.manifest,
-        records: [...records].sort(compareRelationshipRecords),
-        analysisByFile: result.analysisByFile,
-        warnings: result.warnings,
-    };
+export interface JsonNavigationStoreOptions {
+    /** Codebase roots whose symbol registry stays resident. */
+    maxRegistryRoots?: number;
+    /** Codebase roots whose relationship graph stays resident. */
+    maxRelationshipRoots?: number;
+    /** Resident state is released after this long without use. 0 disables idle release. */
+    idleMs?: number;
 }
 
+const DEFAULT_MAX_REGISTRY_ROOTS = 4;
+const DEFAULT_MAX_RELATIONSHIP_ROOTS = 2;
+const DEFAULT_NAVIGATION_IDLE_MS = 5 * 60_000;
+// Bounds the transient evidence held while streaming every claim.
+const RESOLUTION_CLAIM_SCAN_FILES_PER_READ = 64;
+
+/**
+ * Sole owner of parsed navigation state in a process. Publication navigation
+ * directories are immutable, so each root keeps one shared registry and one
+ * shared relationship graph for its current Publication; superseded, idle and
+ * least-recently-used roots are released.
+ */
 export class JsonNavigationStore {
-    private readonly relationshipStateByRoot = new Map<string, {
-        identity: string;
-        result: Promise<NavigationRelationshipsState>;
-    }>();
+    private readonly registries: PublicationStateCache<NavigationRegistryState>;
+    private readonly relationships: PublicationStateCache<LoadedRelationshipState>;
+
+    public constructor(options: JsonNavigationStoreOptions = {}) {
+        const idleMs = options.idleMs ?? DEFAULT_NAVIGATION_IDLE_MS;
+        this.registries = new PublicationStateCache({
+            maxRoots: options.maxRegistryRoots ?? DEFAULT_MAX_REGISTRY_ROOTS,
+            idleMs,
+        });
+        this.relationships = new PublicationStateCache({
+            maxRoots: options.maxRelationshipRoots ?? DEFAULT_MAX_RELATIONSHIP_ROOTS,
+            idleMs,
+        });
+    }
+
+    public hasResidentRegistry(input: NavigationStoreInput): boolean {
+        return this.registries.has(input.normalizedRootPath, registryIdentity(input));
+    }
+
+    public hasResidentRelationships(
+        input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
+    ): boolean {
+        return this.relationships.has(input.normalizedRootPath, relationshipIdentity(input));
+    }
 
     public async getManifest(input: NavigationStoreInput): Promise<NavigationRegistryState> {
-        return readRegistryState(input);
+        return this.readRegistry(input);
     }
 
     public async getSymbolsByFile(input: NavigationSymbolsByFileInput): Promise<NavigationSymbolsByFileResult> {
-        const registryState = await readRegistryState(input);
+        const registryState = await this.readRegistry(input);
         if (registryState.status !== 'ok') {
             return registryState;
         }
@@ -312,7 +452,7 @@ export class JsonNavigationStore {
     }
 
     public async getSymbolByInstanceId(input: NavigationSymbolByInstanceIdInput): Promise<NavigationSymbolByInstanceIdResult> {
-        const registryState = await readRegistryState(input);
+        const registryState = await this.readRegistry(input);
         if (registryState.status !== 'ok') {
             return registryState;
         }
@@ -323,7 +463,7 @@ export class JsonNavigationStore {
     }
 
     public async getSymbolCandidatesByKey(input: NavigationSymbolCandidatesByKeyInput): Promise<NavigationSymbolCandidatesByKeyResult> {
-        const registryState = await readRegistryState(input);
+        const registryState = await this.readRegistry(input);
         if (registryState.status !== 'ok') {
             return registryState;
         }
@@ -334,7 +474,7 @@ export class JsonNavigationStore {
     }
 
     public async findOwnerForSpan(input: NavigationOwnerForSpanInput): Promise<NavigationOwnerForSpanResult> {
-        const registryState = await readRegistryState(input);
+        const registryState = await this.readRegistry(input);
         if (registryState.status !== 'ok') {
             return registryState;
         }
@@ -376,65 +516,91 @@ export class JsonNavigationStore {
     }
 
     public async getRelationships(input: NavigationRelationshipsQueryInput): Promise<NavigationRelationshipsState> {
-        const identity = relationshipQueryCacheIdentity(input);
-        if (!identity) {
-            return readRelationshipState(input);
-        }
-        const root = relationshipQueryCacheRoot(input);
-        const cached = this.relationshipStateByRoot.get(root);
-        if (cached?.identity === identity) {
-            return cached.result;
-        }
+        const state = await this.readRelationships(input);
+        if (state.status !== 'ok') return state;
+        const publicState = publicRelationshipState(state);
+        if (publicState.status !== 'ok' || !hasRelationshipFilter(input)) return publicState;
+        return {
+            ...publicState,
+            records: selectRelationshipRecords(publicState.records, input),
+        };
+    }
 
-        // Publication navigation directories are immutable. Cache only reads
-        // bound to one Publication and registry manifest.
-        const result = readRelationshipState(input);
-        this.relationshipStateByRoot.set(root, { identity, result });
-        const resolved = await result;
-        if (
-            resolved.status !== 'ok'
-            && this.relationshipStateByRoot.get(root)?.result === result
-        ) {
-            this.relationshipStateByRoot.delete(root);
+    /**
+     * Reads the analysis evidence of the given files from the Publication's
+     * relationship shards. Not retained: callers hold it only as long as needed.
+     */
+    public async getAnalysisEvidenceForFiles(
+        input: NavigationStoreInput & { expectedSymbolRegistryManifestHash?: string; files: readonly string[] },
+    ): Promise<NavigationAnalysisEvidenceState> {
+        const state = await this.readRelationships(input);
+        if (state.status !== 'ok') return state;
+        return this.readAnalysisEvidence(input, state, input.files.map(normalizeRelativeFilePath));
+    }
+
+    /**
+     * Streams every resolution claim of the Publication. The result is not
+     * retained; per-file evidence other than claims is dropped while reading.
+     */
+    public async getAllResolutionClaims(
+        input: NavigationStoreInput & { expectedSymbolRegistryManifestHash?: string },
+    ): Promise<NavigationResolutionClaimsState> {
+        const state = await this.readRelationships(input);
+        if (state.status !== 'ok') return state;
+        const files = state.manifest.files
+            .filter((file) => file.analysisEvidencePresent)
+            .map((file) => file.path);
+        const claims: ResolutionClaim[] = [];
+        for (let offset = 0; offset < files.length; offset += RESOLUTION_CLAIM_SCAN_FILES_PER_READ) {
+            const evidence = await this.readAnalysisEvidence(
+                input,
+                state,
+                files.slice(offset, offset + RESOLUTION_CLAIM_SCAN_FILES_PER_READ),
+            );
+            if (evidence.status !== 'ok') return evidence;
+            for (const fileEvidence of evidence.analysisByFile.values()) {
+                for (const claim of fileEvidence.resolutionClaims ?? []) claims.push(claim);
+            }
         }
-        return resolved;
+        return {
+            status: 'ok',
+            rootPath: state.rootPath,
+            manifestHash: state.manifestHash,
+            claims,
+        };
     }
 
     public async getResolutionEvidence(
         input: NavigationResolutionEvidenceQueryInput,
     ): Promise<NavigationResolutionEvidenceState> {
-        const relationshipState = await this.getRelationships({
-            normalizedRootPath: input.normalizedRootPath,
-            publicationId: input.publicationId,
-            navigationRoot: input.navigationRoot,
-            expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
-        });
+        const relationshipState = await this.readRelationships(input);
         if (relationshipState.status !== 'ok') return relationshipState;
 
         const sourceFile = input.sourceFile ? normalizeRelativeFilePath(input.sourceFile) : undefined;
-        const matches: NavigationResolutionEvidenceMatch[] = [];
-        const claims = sourceFile
-            ? relationshipState.analysisByFile.get(sourceFile)?.resolutionClaims ?? []
-            : [...relationshipState.analysisByFile.values()].flatMap((evidence) => evidence.resolutionClaims ?? []);
-        for (const claim of claims) {
-            let matchKind: NavigationResolutionEvidenceMatchKind | undefined;
-            if (input.sourceInstanceId && claim.sourceInstanceId === input.sourceInstanceId) {
-                matchKind = 'source_call';
-            } else if (
-                (input.symbolInstanceId && claim.targetInstanceId === input.symbolInstanceId)
-                || (input.symbolQualifiedName && claim.targetSymbol === input.symbolQualifiedName)
-            ) {
-                matchKind = 'resolved_target';
-            } else if (
-                claim.decision !== 'resolved'
-                && claim.observation.candidates.some((candidate) => (
-                    (input.symbolInstanceId && candidate.symbolInstanceId === input.symbolInstanceId)
-                    || (input.symbolQualifiedName && candidate.qualifiedName === input.symbolQualifiedName)
-                ))
-            ) {
-                matchKind = 'candidate_target';
+        let files: string[];
+        if (sourceFile) {
+            files = [sourceFile];
+        } else {
+            const selected = new Set<string>();
+            const keys = [
+                ...(input.sourceInstanceId ? [sourceClaimKey(input.sourceInstanceId)] : []),
+                ...(input.symbolInstanceId ? [symbolIdClaimKey(input.symbolInstanceId)] : []),
+                ...(input.symbolQualifiedName ? [symbolNameClaimKey(input.symbolQualifiedName)] : []),
+            ];
+            for (const key of keys) {
+                for (const file of relationshipState.claimFilesByKey.get(key) ?? []) selected.add(file);
             }
-            if (matchKind) matches.push({ claim, matchKind });
+            files = [...selected];
+        }
+        const evidence = await this.readAnalysisEvidence(input, relationshipState, files);
+        if (evidence.status !== 'ok') return evidence;
+
+        const matches: NavigationResolutionEvidenceMatch[] = [];
+        for (const fileEvidence of evidence.analysisByFile.values()) {
+            for (const claim of fileEvidence.resolutionClaims ?? []) {
+                const matchKind = matchResolutionClaim(claim, input);
+                if (matchKind) matches.push({ claim, matchKind });
+            }
         }
         matches.sort((left, right) => (
             compareStrings(left.claim.sourceFile, right.claim.sourceFile)
@@ -454,7 +620,7 @@ export class JsonNavigationStore {
 
     public async getCompatibilityState(input: NavigationCompatibilityInput): Promise<NavigationCompatibilityState> {
         const rootPath = input.navigationRoot;
-        const registry = await readRegistryState(input);
+        const registry = await this.readRegistry(input);
         const expectedManifestHash = input.expectedSymbolRegistryManifestHash
             || (registry.status === 'ok' ? registry.manifestHash : undefined);
 
@@ -483,4 +649,82 @@ export class JsonNavigationStore {
             relationships,
         };
     }
+
+    private readRegistry(input: NavigationStoreInput): Promise<NavigationRegistryState> {
+        const storeInput: NavigationStoreInput = {
+            normalizedRootPath: input.normalizedRootPath,
+            publicationId: input.publicationId,
+            navigationRoot: input.navigationRoot,
+        };
+        return this.registries.get(
+            input.normalizedRootPath,
+            registryIdentity(input),
+            () => readRegistryState(storeInput),
+            (state) => state.status === 'ok',
+        );
+    }
+
+    private async readRelationships(
+        input: NavigationStoreInput & { expectedSymbolRegistryManifestHash?: string },
+    ): Promise<LoadedRelationshipState> {
+        let expectedSymbolRegistryManifestHash = input.expectedSymbolRegistryManifestHash;
+        if (!expectedSymbolRegistryManifestHash) {
+            const registryState = await this.readRegistry(input);
+            if (registryState.status !== 'ok') return registryState;
+            expectedSymbolRegistryManifestHash = registryState.manifestHash;
+        }
+        const relationshipInput = {
+            normalizedRootPath: input.normalizedRootPath,
+            publicationId: input.publicationId,
+            navigationRoot: input.navigationRoot,
+            expectedSymbolRegistryManifestHash,
+        };
+        return this.relationships.get(
+            input.normalizedRootPath,
+            relationshipIdentity(relationshipInput),
+            () => readRelationshipState(relationshipInput),
+            (state) => state.status === 'ok',
+        );
+    }
+
+    private async readAnalysisEvidence(
+        input: NavigationStoreInput,
+        state: NavigationStoreRelationshipsOk,
+        files: readonly string[],
+    ): Promise<NavigationAnalysisEvidenceState> {
+        if (files.length === 0) {
+            return { status: 'ok', rootPath: state.rootPath, manifestHash: state.manifestHash, analysisByFile: new Map() };
+        }
+        const result = await readRelationshipAnalysisEvidence({
+            normalizedRootPath: input.normalizedRootPath,
+            publicationId: input.publicationId,
+            navigationRoot: input.navigationRoot,
+            expectedSymbolRegistryManifestHash: state.manifest.symbolRegistryManifestHash,
+            manifest: state.manifest,
+            files,
+        });
+        if (result.status !== 'ok') {
+            return buildFailure(
+                result.rootPath,
+                result.reason,
+                result.status === 'corrupt' ? 'incompatible' : result.status,
+            );
+        }
+        return {
+            status: 'ok',
+            rootPath: state.rootPath,
+            manifestHash: state.manifestHash,
+            analysisByFile: result.analysisByFile,
+        };
+    }
+}
+
+function registryIdentity(input: NavigationStoreInput): string {
+    return `${input.publicationId}\0${input.navigationRoot}`;
+}
+
+function relationshipIdentity(
+    input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
+): string {
+    return `${input.publicationId}\0${input.navigationRoot}\0${input.expectedSymbolRegistryManifestHash}`;
 }

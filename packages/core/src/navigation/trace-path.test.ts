@@ -64,7 +64,6 @@ function fixture(symbols: SymbolRecord[], records: RelationshipRecord[], warning
                 manifestHash: 'relationship-hash',
                 manifest: { symbolRegistryManifestHash: 'registry-hash', files: [] },
                 records,
-                analysisByFile: new Map(),
                 warnings,
             };
         },

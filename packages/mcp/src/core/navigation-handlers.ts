@@ -133,6 +133,15 @@ type NavigationHandlersHost = {
         preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
         expectedSymbolRegistryManifestHash: string,
     ): ReturnType<JsonNavigationStore["getCompatibilityState"]>;
+    loadPreparedNavigationAnalysisEvidence(
+        preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
+        expectedSymbolRegistryManifestHash: string,
+        files: readonly string[],
+    ): ReturnType<JsonNavigationStore["getAnalysisEvidenceForFiles"]>;
+    loadPreparedNavigationResolutionClaims(
+        preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,
+        expectedSymbolRegistryManifestHash: string,
+    ): ReturnType<JsonNavigationStore["getAllResolutionClaims"]>;
     stringifyToolJson(value: unknown): string;
 
 
@@ -711,6 +720,26 @@ export class NavigationHandlers {
                 };
             }
 
+            const resolutionClaims = await this.host.loadPreparedNavigationResolutionClaims(
+                leasedRootState,
+                manifest.manifestHash,
+            );
+            if (resolutionClaims.status !== "ok") {
+                return {
+                    content: [{
+                        type: "text",
+                        text: this.host.stringifyToolJson({
+                            status: "not_ready",
+                            reason: resolutionClaims.status === "missing"
+                                ? "missing_relationship_navigation"
+                                : "incompatible_relationship_navigation",
+                            path: leasedRootState.root.path,
+                            message: `Relationship navigation is ${resolutionClaims.status}: ${resolutionClaims.reason}`,
+                        }),
+                    }],
+                };
+            }
+
             let overview;
             try {
                 overview = buildArchitectureOverview({
@@ -718,8 +747,7 @@ export class NavigationHandlers {
                     packageOwnership,
                     symbols: manifest.registry.symbols,
                     relationships: compatibility.relationships.records,
-                    resolutionClaims: [...compatibility.relationships.analysisByFile.values()]
-                        .flatMap((evidence) => evidence.resolutionClaims ?? []),
+                    resolutionClaims: resolutionClaims.claims,
                     scope,
                     limit,
                     ...(subtree ? { subtree } : {}),
@@ -2264,8 +2292,15 @@ export class NavigationHandlers {
                 )
                 : undefined;
             const relationshipState = compatibility?.relationships;
-            if (relationshipState?.status === "ok") {
-                const claims = relationshipState.analysisByFile.get(normalizedFile)?.resolutionClaims ?? [];
+            const fileEvidence = relationshipState?.status === "ok"
+                ? await this.host.loadPreparedNavigationAnalysisEvidence(
+                    trackedRootState,
+                    registryState.manifestHash,
+                    [normalizedFile],
+                )
+                : undefined;
+            if (relationshipState?.status === "ok" && fileEvidence?.status === "ok") {
+                const claims = fileEvidence.analysisByFile.get(normalizedFile)?.resolutionClaims ?? [];
                 projectedPayload = {
                     ...payload,
                     relationshipEvidence: {

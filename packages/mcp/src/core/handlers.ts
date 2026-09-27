@@ -488,6 +488,12 @@ export class ToolHandlers {
             loadPreparedNavigationSymbolsByFile: this.loadPreparedNavigationSymbolsByFile.bind(this),
             loadPreparedNavigationManifest: this.loadPreparedNavigationManifest.bind(this),
             loadPreparedNavigationCompatibility: this.loadPreparedNavigationCompatibility.bind(this),
+            loadPreparedNavigationAnalysisEvidence: (preparedRead, expectedHash, files) => (
+                this.preparedReadCacheOwner.loadPreparedNavigationAnalysisEvidence(preparedRead, expectedHash, files)
+            ),
+            loadPreparedNavigationResolutionClaims: (preparedRead, expectedHash) => (
+                this.preparedReadCacheOwner.loadPreparedNavigationResolutionClaims(preparedRead, expectedHash)
+            ),
             toolResponseBuilders: this.toolResponseBuilders,
             stringifyToolJson: this.stringifyToolJson.bind(this),
             normalizeRelativeFilePath: this.normalizeRelativeFilePath.bind(this),

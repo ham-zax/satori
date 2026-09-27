@@ -146,7 +146,7 @@ class SessionProviderRuntime {
             () => Date.now(),
             shared.reranker,
             undefined,
-            undefined,
+            this.providerRuntime.navigationStore,
             shared.runtimeOwnerGate,
             this.continuationCoordinator,
             {
@@ -309,7 +309,7 @@ export class SharedRuntimeHost {
             () => Date.now(),
             null,
             undefined,
-            undefined,
+            this.providerRuntime.navigationStore,
             this.runtimeOwnerRegistry,
             continuationCoordinator,
             {

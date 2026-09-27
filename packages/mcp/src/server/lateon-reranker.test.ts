@@ -264,7 +264,7 @@ test("LateOn rejects the explicitly selected legacy v1 profile", () => {
     );
 });
 
-test("the first rerank waits for eager worker readiness", async (t) => {
+test("the first rerank starts the worker and waits for readiness", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",
         profileId: LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
@@ -419,11 +419,41 @@ test("LateOn close prevents a loading worker from spawning a bootstrap retry", a
         }),
     });
 
+    const readiness = reranker.waitUntilReady();
+    void readiness.catch(() => undefined);
     await waitForWorkerAttempts(pidLogPath, 1);
     await reranker.close();
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(readWorkerPids(pidLogPath).length, 1);
     assert.equal(reranker.getOperationalState(), "closed");
+});
+
+test("LateOn starts its worker on first use, releases it when idle, and restarts on demand", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-idle-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const pidLogPath = path.join(directory, "worker-pids.txt");
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
+        workerPath: createFakeWorker(t, { pidLogPath }),
+        idleShutdownMs: 50,
+    });
+    t.after(() => reranker.close());
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(readWorkerPids(pidLogPath).length, 0);
+    assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+
+    assert.deepEqual(await reranker.rerank("first", ["document"]), [{ index: 0, relevanceScore: 8 }]);
+    assert.equal(readWorkerPids(pidLogPath).length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(reranker.getOperationalSnapshot().workerAttached, false);
+    assert.equal(reranker.getOperationalState(), "idle");
+
+    assert.deepEqual(await reranker.rerank("second", ["document"]), [{ index: 0, relevanceScore: 8 }]);
+    assert.equal(readWorkerPids(pidLogPath).length, 2);
+    assert.equal(reranker.getOperationalSnapshot().bootstrap.attemptCount, 1);
 });
 
 test("LateOn serializes overlapping reranks through one FIFO queue", async (t) => {
@@ -441,6 +471,22 @@ test("LateOn serializes overlapping reranks through one FIFO queue", async (t) =
     assert.deepEqual(await first, [{ index: 0, relevanceScore: 5 }]);
     assert.deepEqual(await second, [{ index: 0, relevanceScore: 6 }]);
     assert.deepEqual(await third, [{ index: 0, relevanceScore: 5 }]);
+});
+
+test("LateOn rejects requests beyond the bounded wait queue", async (t) => {
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
+        workerPath: createFakeWorker(t),
+    });
+    t.after(() => reranker.close());
+    await reranker.waitUntilReady();
+
+    const active = reranker.rerank("slow:80", ["active"]);
+    const queued = Array.from({ length: 16 }, (_, index) => reranker.rerank(`queued-${index}`, ["queued"]));
+    await assertOperationalReason(reranker.rerank("overflow", ["overflow"]), "lateon_not_ready");
+    await active;
+    await Promise.all(queued);
 });
 
 test("LateOn queued work waits for the active rerank instead of falling back", async (t) => {

@@ -4,6 +4,7 @@ import {
     type ContextConfig,
     EmbeddingVector,
     type EmbeddingIdentity,
+    JsonNavigationStore,
     MilvusVectorDatabase,
     type Reranker,
     VectorDatabase,
@@ -259,6 +260,12 @@ export class ProviderRuntime {
     private readonly activeEmbeddings = new Set<Embedding>();
     private readonly activeRerankers = new Set<Reranker>();
     private readonly detachedMutationCompletions = new Set<Promise<void>>();
+    /**
+     * The single owner of parsed navigation state in this process. Every
+     * runtime and session handler shares it so one Publication is parsed and
+     * held once, however many sessions or runtimes read it.
+     */
+    public readonly navigationStore = new JsonNavigationStore();
 
     constructor(args: {
         config: ContextMcpConfig;
@@ -425,7 +432,7 @@ export class ProviderRuntime {
                 this.now,
                 reranker,
                 undefined,
-                undefined,
+                this.navigationStore,
                 this.runtimeOwnerGate,
                 this.searchContinuationCoordinator,
                 {

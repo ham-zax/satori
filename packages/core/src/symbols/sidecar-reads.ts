@@ -32,8 +32,10 @@ export const SYMBOLS_DIR_NAME = 'symbols';
 export const RELATIONSHIPS_DIR_NAME = 'relationships';
 export const SYMBOL_FILE_CONTRIBUTION_SCHEMA_VERSION = 'symbol_file_contribution_v1';
 
-const SYMBOL_SHARD_READ_CONCURRENCY = 64;
-const RELATIONSHIP_SHARD_READ_CONCURRENCY = 8;
+// Shard reads are batched by bytes as well as count so one oversized shard
+// batch cannot multiply the transient string + parse peak.
+const SHARD_READ_MAX_FILES_PER_BATCH = 64;
+const SHARD_READ_MAX_BYTES_PER_BATCH = 16 * 1024 * 1024;
 
 // Read boundary input/result contracts
 export interface PublicationNavigation {
@@ -72,7 +74,35 @@ export interface ReadRelationshipSidecarInput {
     expectedSymbolRegistryManifestHash: string;
     publicationId: string;
     navigationRoot: string;
+    /**
+     * When supplied, validated analysis evidence is streamed to this visitor
+     * instead of being retained in `analysisByFile` (which is then empty).
+     * Query-side readers use it to keep only compact projections resident.
+     */
+    visitAnalysisEvidence?: (filePath: string, evidence: RelationshipAnalysisEvidence) => void;
 }
+
+export interface ReadRelationshipAnalysisEvidenceInput {
+    normalizedRootPath: string;
+    expectedSymbolRegistryManifestHash: string;
+    publicationId: string;
+    navigationRoot: string;
+    /** The already validated manifest of this immutable Publication. */
+    manifest: RelationshipManifest;
+    files: readonly string[];
+}
+
+export type ReadRelationshipAnalysisEvidenceResult =
+    | {
+        status: 'ok';
+        rootPath: string;
+        analysisByFile: Map<string, RelationshipAnalysisEvidence>;
+    }
+    | {
+        status: 'missing' | 'incompatible' | 'corrupt';
+        rootPath: string;
+        reason: string;
+    };
 
 export type ReadRelationshipSidecarResult =
     | {
@@ -115,8 +145,16 @@ export function fileShardName(filePath: string, fileHash: string): string {
 }
 
 // Shared serialization/hash helpers
+// Canonical form for digests that are recomputed from parsed values. Changing
+// it would invalidate every existing Publication seal, so it stays stable.
 export function serializeJson(value: unknown): string {
     return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+// Byte form for per-file shards. Shard hashes are always taken over the written
+// bytes, so compact shards and older pretty-printed shards both verify.
+export function serializeShardJson(value: unknown): string {
+    return `${JSON.stringify(value)}\n`;
 }
 
 export function hashSerializedJson(value: unknown): string {
@@ -208,6 +246,42 @@ function symbolIndexMatchesManifest(
 
 export async function readJson(filePath: string): Promise<unknown> {
     return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+}
+
+type ShardBatchVisitor<T> = (item: T, serialized: string) => ReadShardVisitResult;
+type ReadShardVisitResult = { status: 'ok' } | { status: 'incompatible'; reason: string };
+
+/**
+ * Reads shards in order, in batches bounded by file count and total bytes, and
+ * hands each serialized shard to `visit` before the next batch is read. Stops at
+ * the first rejected shard.
+ */
+async function visitShardsInByteBudget<T>(
+    readableRoot: string,
+    items: readonly T[],
+    shardPathOf: (item: T) => string,
+    visit: ShardBatchVisitor<T>,
+): Promise<ReadShardVisitResult> {
+    let offset = 0;
+    while (offset < items.length) {
+        const batch: { item: T; filePath: string }[] = [];
+        let batchBytes = 0;
+        while (offset < items.length && batch.length < SHARD_READ_MAX_FILES_PER_BATCH) {
+            const item = items[offset]!;
+            const filePath = path.join(readableRoot, shardPathOf(item));
+            const { size } = await fs.promises.stat(filePath);
+            if (batch.length > 0 && batchBytes + size > SHARD_READ_MAX_BYTES_PER_BATCH) break;
+            batch.push({ item, filePath });
+            batchBytes += size;
+            offset += 1;
+        }
+        const serializedShards = await Promise.all(batch.map((entry) => fs.promises.readFile(entry.filePath, 'utf8')));
+        for (let index = 0; index < batch.length; index += 1) {
+            const result = visit(batch[index]!.item, serializedShards[index]!);
+            if (result.status !== 'ok') return result;
+        }
+    }
+    return { status: 'ok' };
 }
 
 function publicationNavigationPathMatchesIdentity(navigationRoot: string, publicationId: string): boolean {
@@ -305,14 +379,11 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
             };
         }
         const symbols: SymbolRecord[] = [];
-        for (let offset = 0; offset < indexFile.files.length; offset += SYMBOL_SHARD_READ_CONCURRENCY) {
-            const batch = indexFile.files.slice(offset, offset + SYMBOL_SHARD_READ_CONCURRENCY);
-            const serializedShards = await Promise.all(batch.map((file) => (
-                fs.promises.readFile(path.join(readableRoot, file.shardPath), 'utf8')
-            )));
-            for (let index = 0; index < batch.length; index += 1) {
-                const file = batch[index]!;
-                const serializedShard = serializedShards[index]!;
+        const shardResult = await visitShardsInByteBudget(
+            readableRoot,
+            indexFile.files,
+            (file) => file.shardPath,
+            (file, serializedShard): ReadShardVisitResult => {
                 const shard = JSON.parse(serializedShard) as {
                     schemaVersion?: unknown;
                     manifestHash?: unknown;
@@ -330,16 +401,11 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
                     || shard.language !== file.language
                     || !Array.isArray(shardSymbols)
                 ) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `symbol registry shard is invalid for ${file.path}`,
-                    };
+                    return { status: 'incompatible', reason: `symbol registry shard is invalid for ${file.path}` };
                 }
                 if (shardSymbols.length !== file.symbolCount) {
                     return {
                         status: 'incompatible',
-                        rootPath,
                         reason: `symbol registry shard symbol count does not match manifest for ${file.path}`,
                     };
                 }
@@ -349,14 +415,14 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
                     && symbol.fileHash === file.hash
                     && symbol.language === file.language
                 )) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `symbol registry shard record is invalid for ${file.path}`,
-                    };
+                    return { status: 'incompatible', reason: `symbol registry shard record is invalid for ${file.path}` };
                 }
-                symbols.push(...(shardSymbols as SymbolRecord[]));
-            }
+                for (const symbol of shardSymbols as SymbolRecord[]) symbols.push(symbol);
+                return { status: 'ok' };
+            },
+        );
+        if (shardResult.status !== 'ok') {
+            return { status: 'incompatible', rootPath, reason: shardResult.reason };
         }
         const registry = buildSymbolRegistry({ manifest, symbols });
         return {
@@ -452,103 +518,31 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 reason: 'relationship shard set does not exactly match the relationship manifest',
             };
         }
-        for (let offset = 0; offset < manifest.files.length; offset += RELATIONSHIP_SHARD_READ_CONCURRENCY) {
-            const batch = manifest.files.slice(offset, offset + RELATIONSHIP_SHARD_READ_CONCURRENCY);
-            const serializedShards = await Promise.all(batch.map((file) => (
-                fs.promises.readFile(path.join(readableRoot, file.shardPath), 'utf8')
-            )));
-            for (let index = 0; index < batch.length; index += 1) {
-                const file = batch[index]!;
-                const expectedShardPath = path.posix.join(
-                    RELATIONSHIPS_DIR_NAME,
-                    'by-file',
-                    fileShardName(file.path, file.hash),
+        const shardResult = await visitShardsInByteBudget(
+            readableRoot,
+            manifest.files,
+            (file) => file.shardPath,
+            (file, serializedShard) => {
+                const parsed = parseRelationshipShard(
+                    manifest,
+                    file,
+                    serializedShard,
+                    input.expectedSymbolRegistryManifestHash,
                 );
-                if (file.shardPath !== expectedShardPath) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship manifest has a non-deterministic shard path for ${file.path}`,
-                    };
-                }
-                const rawShard = JSON.parse(serializedShards[index]!) as unknown;
-                if (typeof rawShard !== 'object' || rawShard === null || Array.isArray(rawShard)) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship shard is invalid for ${file.path}`,
-                    };
-                }
-                const shard = rawShard as {
-                    schemaVersion?: unknown;
-                    manifestHash?: unknown;
-                    path?: unknown;
-                    hash?: unknown;
-                    relationships?: unknown;
-                    records?: unknown;
-                    analysisEvidence?: unknown;
-                };
-                const contributionIdentityValid = manifest.fileContributionSchemaVersion
-                    === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
-                    ? shard.schemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
-                    : shard.manifestHash === input.expectedSymbolRegistryManifestHash;
-                if (!contributionIdentityValid) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship shard contribution identity does not match manifest for ${file.path}`,
-                    };
-                }
-                if (shard.path !== file.path || shard.hash !== file.hash) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship shard metadata is invalid for ${file.path}`,
-                    };
-                }
-                const shardRecords = Array.isArray(shard.relationships) ? shard.relationships : shard.records;
-                if (!Array.isArray(shardRecords) || shardRecords.length !== file.relationshipCount) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship shard record count is invalid for ${file.path}`,
-                    };
-                }
-                for (const record of shardRecords) {
-                    if (!isRelationshipRecord(record) || record.file !== shard.path) {
-                        return {
-                            status: 'incompatible',
-                            rootPath,
-                            reason: `relationship shard record is invalid for ${file.path}`,
-                        };
+                if (parsed.status !== 'ok') return parsed;
+                for (const record of parsed.records) records.push(record);
+                if (parsed.analysisEvidence !== undefined) {
+                    if (input.visitAnalysisEvidence) {
+                        input.visitAnalysisEvidence(file.path, parsed.analysisEvidence);
+                    } else {
+                        analysisByFile.set(file.path, parsed.analysisEvidence);
                     }
-                    records.push(record);
                 }
-                if ((shard.analysisEvidence !== undefined) !== file.analysisEvidencePresent) {
-                    return {
-                        status: 'incompatible',
-                        rootPath,
-                        reason: `relationship analysis evidence presence does not match manifest for ${file.path}`,
-                    };
-                }
-                if (shard.analysisEvidence !== undefined) {
-                    if (!isRelationshipAnalysisEvidence(shard.analysisEvidence)) {
-                        return {
-                            status: 'incompatible',
-                            rootPath,
-                            reason: `relationship analysis evidence is invalid for ${file.path}`,
-                        };
-                    }
-                    if ((shard.analysisEvidence.resolutionClaims ?? []).some((claim) => claim.sourceFile !== shard.path)) {
-                        return {
-                            status: 'incompatible',
-                            rootPath,
-                            reason: `relationship resolution claim source does not match ${file.path}`,
-                        };
-                    }
-                    analysisByFile.set(shard.path, shard.analysisEvidence);
-                }
-            }
+                return { status: 'ok' };
+            },
+        );
+        if (shardResult.status !== 'ok') {
+            return { status: 'incompatible', rootPath, reason: shardResult.reason };
         }
     } catch (error) {
         return {
@@ -567,4 +561,136 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         analysisByFile,
         warnings: [...new Set(warnings)].sort(compareStrings),
     };
+}
+
+type ParsedRelationshipShard =
+    | {
+        status: 'ok';
+        records: RelationshipRecord[];
+        analysisEvidence?: RelationshipAnalysisEvidence;
+    }
+    | { status: 'incompatible'; reason: string };
+
+function parseRelationshipShard(
+    manifest: RelationshipManifest,
+    file: RelationshipManifest['files'][number],
+    serializedShard: string,
+    expectedSymbolRegistryManifestHash: string,
+): ParsedRelationshipShard {
+    const expectedShardPath = path.posix.join(
+        RELATIONSHIPS_DIR_NAME,
+        'by-file',
+        fileShardName(file.path, file.hash),
+    );
+    if (file.shardPath !== expectedShardPath) {
+        return {
+            status: 'incompatible',
+            reason: `relationship manifest has a non-deterministic shard path for ${file.path}`,
+        };
+    }
+    const rawShard = JSON.parse(serializedShard) as unknown;
+    if (typeof rawShard !== 'object' || rawShard === null || Array.isArray(rawShard)) {
+        return { status: 'incompatible', reason: `relationship shard is invalid for ${file.path}` };
+    }
+    const shard = rawShard as {
+        schemaVersion?: unknown;
+        manifestHash?: unknown;
+        path?: unknown;
+        hash?: unknown;
+        relationships?: unknown;
+        records?: unknown;
+        analysisEvidence?: unknown;
+    };
+    const contributionIdentityValid = manifest.fileContributionSchemaVersion
+        === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
+        ? shard.schemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
+        : shard.manifestHash === expectedSymbolRegistryManifestHash;
+    if (!contributionIdentityValid) {
+        return {
+            status: 'incompatible',
+            reason: `relationship shard contribution identity does not match manifest for ${file.path}`,
+        };
+    }
+    if (shard.path !== file.path || shard.hash !== file.hash) {
+        return { status: 'incompatible', reason: `relationship shard metadata is invalid for ${file.path}` };
+    }
+    const shardRecords = Array.isArray(shard.relationships) ? shard.relationships : shard.records;
+    if (!Array.isArray(shardRecords) || shardRecords.length !== file.relationshipCount) {
+        return { status: 'incompatible', reason: `relationship shard record count is invalid for ${file.path}` };
+    }
+    for (const record of shardRecords) {
+        if (!isRelationshipRecord(record) || record.file !== shard.path) {
+            return { status: 'incompatible', reason: `relationship shard record is invalid for ${file.path}` };
+        }
+    }
+    if ((shard.analysisEvidence !== undefined) !== file.analysisEvidencePresent) {
+        return {
+            status: 'incompatible',
+            reason: `relationship analysis evidence presence does not match manifest for ${file.path}`,
+        };
+    }
+    if (shard.analysisEvidence === undefined) {
+        return { status: 'ok', records: shardRecords as RelationshipRecord[] };
+    }
+    if (!isRelationshipAnalysisEvidence(shard.analysisEvidence)) {
+        return { status: 'incompatible', reason: `relationship analysis evidence is invalid for ${file.path}` };
+    }
+    if ((shard.analysisEvidence.resolutionClaims ?? []).some((claim) => claim.sourceFile !== shard.path)) {
+        return { status: 'incompatible', reason: `relationship resolution claim source does not match ${file.path}` };
+    }
+    return {
+        status: 'ok',
+        records: shardRecords as RelationshipRecord[],
+        analysisEvidence: shard.analysisEvidence,
+    };
+}
+
+/**
+ * Reads analysis evidence for selected files of an already validated,
+ * immutable relationship manifest. Files without evidence are omitted.
+ */
+export async function readRelationshipAnalysisEvidence(
+    input: ReadRelationshipAnalysisEvidenceInput,
+): Promise<ReadRelationshipAnalysisEvidenceResult> {
+    const rootPath = path.resolve(input.navigationRoot);
+    if (!publicationNavigationPathMatchesIdentity(rootPath, input.publicationId)) {
+        return {
+            status: 'incompatible',
+            rootPath,
+            reason: 'Publication navigation path does not match the requested Publication ID',
+        };
+    }
+    const requested = new Set(input.files);
+    const files = input.manifest.files.filter((file) => requested.has(file.path) && file.analysisEvidencePresent);
+    const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
+    try {
+        const shardResult = await visitShardsInByteBudget(
+            rootPath,
+            files,
+            (file) => file.shardPath,
+            (file, serializedShard) => {
+                const parsed = parseRelationshipShard(
+                    input.manifest,
+                    file,
+                    serializedShard,
+                    input.expectedSymbolRegistryManifestHash,
+                );
+                if (parsed.status !== 'ok') return parsed;
+                if (parsed.analysisEvidence !== undefined) analysisByFile.set(file.path, parsed.analysisEvidence);
+                return { status: 'ok' };
+            },
+        );
+        if (shardResult.status !== 'ok') {
+            return { status: 'incompatible', rootPath, reason: shardResult.reason };
+        }
+    } catch (error) {
+        return {
+            status: error instanceof SyntaxError
+                ? 'corrupt'
+                : (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : 'incompatible',
+            rootPath,
+            reason: error instanceof Error ? error.message : String(error),
+        };
+    }
+    return { status: 'ok', rootPath, analysisByFile };
 }

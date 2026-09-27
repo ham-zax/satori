@@ -6,10 +6,6 @@ import type { SearchReadinessDebugHint, SearchReadinessInvalidationReason } from
 import type { TrackedRootReadinessState } from "./tracked-root-readiness.js";
 import { PreparedReadCache } from "./prepared-read-cache.js";
 
-const PREPARED_NAVIGATION_CACHE_MAX_ROOTS = 32;
-const PREPARED_NAVIGATION_CACHE_MAX_FILES_PER_ROOT = 64;
-const PREPARED_NAVIGATION_CACHE_MAX_COMPATIBILITY_RESULTS_PER_ROOT = 8;
-
 type PreparedReadState = Extract<TrackedRootReadinessState, { state: "ready" }>;
 
 export type CachedPreparedReadResult =
@@ -19,15 +15,8 @@ export type CachedPreparedReadResult =
 type NavigationManifestState = Awaited<ReturnType<JsonNavigationStore["getManifest"]>>;
 type NavigationSymbolsByFileState = Awaited<ReturnType<JsonNavigationStore["getSymbolsByFile"]>>;
 type NavigationCompatibilityState = Awaited<ReturnType<JsonNavigationStore["getCompatibilityState"]>>;
-
-// Share cold I/O as well as completed reads. Failed reads are evicted; completion
-// only touches its captured entry, so an old Publication cannot replace a newer one.
-type PreparedNavigationCacheEntry = {
-    publicationId: string;
-    manifest?: Promise<NavigationManifestState>;
-    symbolsByFile: Map<string, Promise<NavigationSymbolsByFileState>>;
-    compatibilityByManifestHash: Map<string, Promise<NavigationCompatibilityState>>;
-};
+type NavigationAnalysisEvidenceState = Awaited<ReturnType<JsonNavigationStore["getAnalysisEvidenceForFiles"]>>;
+type NavigationResolutionClaimsState = Awaited<ReturnType<JsonNavigationStore["getAllResolutionClaims"]>>;
 
 export interface Clock {
     now(): number;
@@ -43,24 +32,8 @@ export interface PreparedReadCacheOwnerDependencies {
     clock: Clock;
 }
 
-function setBoundedCacheEntry<K, V>(
-    cache: Map<K, V>,
-    key: K,
-    value: V,
-    maxEntries: number,
-): void {
-    cache.delete(key);
-    cache.set(key, value);
-    while (cache.size > maxEntries) {
-        const oldestKey = cache.keys().next().value as K | undefined;
-        if (oldestKey === undefined) return;
-        cache.delete(oldestKey);
-    }
-}
-
 export class PreparedReadCacheOwner {
     private readonly preparedReadCache = new PreparedReadCache<PreparedReadState>();
-    private readonly preparedNavigationCache = new Map<string, PreparedNavigationCacheEntry>();
 
     public constructor(private readonly dependencies: PreparedReadCacheOwnerDependencies) {}
 
@@ -69,15 +42,9 @@ export class PreparedReadCacheOwner {
     }
 
     public evictPreparedRead(codebasePath: string): void {
+        // Parsed navigation state is owned by the navigation store, which
+        // replaces a superseded Publication and releases idle roots itself.
         this.preparedReadCache.evict(codebasePath);
-        this.preparedNavigationCache.delete(codebasePath);
-    }
-
-    public getPreparedNavigationIdentity(preparedRead: PreparedReadState): string | null {
-        return preparedRead.navigationStatus === "valid"
-            && preparedRead.publication.publication.navigation !== null
-            ? preparedRead.publication.id
-            : null;
     }
 
     private getPreparedNavigationAddress(preparedRead: PreparedReadState): {
@@ -87,118 +54,50 @@ export class PreparedReadCacheOwner {
         return this.dependencies.getPublicationNavigationAddress(preparedRead.publication);
     }
 
-    private getPreparedNavigationCacheEntry(
-        root: string,
-        publicationId: string,
-    ): PreparedNavigationCacheEntry | undefined {
-        const entry = this.preparedNavigationCache.get(root);
-        if (!entry || entry.publicationId !== publicationId) return undefined;
-        setBoundedCacheEntry(
-            this.preparedNavigationCache,
-            root,
-            entry,
-            PREPARED_NAVIGATION_CACHE_MAX_ROOTS,
-        );
-        return entry;
+    private getPreparedNavigationInput(preparedRead: PreparedReadState): {
+        normalizedRootPath: string;
+        publicationId: string;
+        navigationRoot: string;
+    } | null {
+        const navigation = this.getPreparedNavigationAddress(preparedRead);
+        return navigation
+            ? {
+                normalizedRootPath: preparedRead.root.path,
+                publicationId: navigation.publicationId,
+                navigationRoot: navigation.navigationRoot,
+            }
+            : null;
     }
 
-    private storePreparedNavigationCacheEntry(
-        root: string,
-        publicationId: string,
-        update: (entry: PreparedNavigationCacheEntry) => void,
-    ): void {
-        const existing = this.preparedNavigationCache.get(root);
-        const entry = existing?.publicationId === publicationId
-            ? existing
-            : {
-                publicationId,
-                symbolsByFile: new Map<string, Promise<NavigationSymbolsByFileState>>(),
-                compatibilityByManifestHash: new Map<string, Promise<NavigationCompatibilityState>>(),
-            };
-        update(entry);
-        setBoundedCacheEntry(
-            this.preparedNavigationCache,
-            root,
-            entry,
-            PREPARED_NAVIGATION_CACHE_MAX_ROOTS,
-        );
+    private missingNavigation(root: string) {
+        return {
+            status: "missing" as const,
+            rootPath: root,
+            reason: "Publication navigation is unavailable for the prepared read",
+        };
     }
 
+    // Parsed navigation state is cached, shared and released by the navigation
+    // store; these loaders only bind a prepared read to its Publication.
     public async loadPreparedNavigationManifest(
         preparedRead: PreparedReadState,
         operations?: SearchReadinessDebugHint["operations"],
     ): Promise<NavigationManifestState> {
-        const root = preparedRead.root.path;
-        const publicationId = this.getPreparedNavigationIdentity(preparedRead);
-        const cached = publicationId
-            ? this.getPreparedNavigationCacheEntry(root, publicationId)?.manifest
-            : undefined;
-        if (cached) return cached;
-
-        if (operations) operations.registryLoads += 1;
-        const navigation = this.getPreparedNavigationAddress(preparedRead);
-        if (!navigation) {
-            return {
-                status: "missing",
-                rootPath: root,
-                reason: "Publication navigation is unavailable for the prepared read",
-            };
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) return this.missingNavigation(preparedRead.root.path);
+        if (operations && !this.dependencies.navigationStore.hasResidentRegistry(input)) {
+            operations.registryLoads += 1;
         }
-        const result = this.dependencies.navigationStore.getManifest({
-            normalizedRootPath: root,
-            publicationId: navigation.publicationId,
-            navigationRoot: navigation.navigationRoot,
-        });
-        if (publicationId) {
-            this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
-                entry.manifest = result;
-                const evict = () => { if (entry.manifest === result) delete entry.manifest; };
-                void result.then((value) => { if (value.status !== "ok") evict(); }, evict);
-            });
-        }
-        return result;
+        return this.dependencies.navigationStore.getManifest(input);
     }
 
     public async loadPreparedNavigationSymbolsByFile(
         preparedRead: PreparedReadState,
         file: string,
     ): Promise<NavigationSymbolsByFileState> {
-        const root = preparedRead.root.path;
-        const publicationId = this.getPreparedNavigationIdentity(preparedRead);
-        const cached = publicationId
-            ? this.getPreparedNavigationCacheEntry(root, publicationId)?.symbolsByFile.get(file)
-            : undefined;
-        if (cached) return cached;
-
-        const navigation = this.getPreparedNavigationAddress(preparedRead);
-        if (!navigation) {
-            return {
-                status: "missing",
-                rootPath: root,
-                reason: "Publication navigation is unavailable for the prepared read",
-            };
-        }
-        const result = this.dependencies.navigationStore.getSymbolsByFile({
-            normalizedRootPath: root,
-            publicationId: navigation.publicationId,
-            navigationRoot: navigation.navigationRoot,
-            file,
-        });
-        if (publicationId) {
-            this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
-                setBoundedCacheEntry(
-                    entry.symbolsByFile,
-                    file,
-                    result,
-                    PREPARED_NAVIGATION_CACHE_MAX_FILES_PER_ROOT,
-                );
-                const evict = () => {
-                    if (entry.symbolsByFile.get(file) === result) entry.symbolsByFile.delete(file);
-                };
-                void result.then((value) => { if (value.status !== "ok") evict(); }, evict);
-            });
-        }
-        return result;
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) return this.missingNavigation(preparedRead.root.path);
+        return this.dependencies.navigationStore.getSymbolsByFile({ ...input, file });
     }
 
     public async loadPreparedNavigationCompatibility(
@@ -206,57 +105,58 @@ export class PreparedReadCacheOwner {
         expectedSymbolRegistryManifestHash: string,
         operations?: SearchReadinessDebugHint["operations"],
     ): Promise<NavigationCompatibilityState> {
-        const root = preparedRead.root.path;
-        const publicationId = this.getPreparedNavigationIdentity(preparedRead);
-        const cached = publicationId
-            ? this.getPreparedNavigationCacheEntry(root, publicationId)
-                ?.compatibilityByManifestHash.get(expectedSymbolRegistryManifestHash)
-            : undefined;
-        if (cached) return cached;
-
-        if (operations) operations.navigationValidationRuns += 1;
-        const navigation = this.getPreparedNavigationAddress(preparedRead);
-        if (!navigation) {
-            const missing = {
-                status: "missing" as const,
-                rootPath: root,
-                reason: "Publication navigation is unavailable for the prepared read",
-            };
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) {
+            const missing = this.missingNavigation(preparedRead.root.path);
             return {
-                rootPath: root,
+                rootPath: preparedRead.root.path,
                 registry: missing,
                 relationships: {
                     status: "not_checked" as const,
-                    rootPath: root,
+                    rootPath: preparedRead.root.path,
                     reason: missing.reason,
                 },
             };
         }
-        const result = this.dependencies.navigationStore.getCompatibilityState({
-            normalizedRootPath: root,
-            publicationId: navigation.publicationId,
-            navigationRoot: navigation.navigationRoot,
+        if (
+            operations
+            && !this.dependencies.navigationStore.hasResidentRelationships({
+                ...input,
+                expectedSymbolRegistryManifestHash,
+            })
+        ) {
+            operations.navigationValidationRuns += 1;
+        }
+        return this.dependencies.navigationStore.getCompatibilityState({
+            ...input,
             expectedSymbolRegistryManifestHash,
         });
-        if (publicationId) {
-            this.storePreparedNavigationCacheEntry(root, publicationId, (entry) => {
-                setBoundedCacheEntry(
-                    entry.compatibilityByManifestHash,
-                    expectedSymbolRegistryManifestHash,
-                    result,
-                    PREPARED_NAVIGATION_CACHE_MAX_COMPATIBILITY_RESULTS_PER_ROOT,
-                );
-                const evict = () => {
-                    if (entry.compatibilityByManifestHash.get(expectedSymbolRegistryManifestHash) === result) {
-                        entry.compatibilityByManifestHash.delete(expectedSymbolRegistryManifestHash);
-                    }
-                };
-                void result.then((value) => {
-                    if (value.registry.status !== "ok" || value.relationships.status !== "ok") evict();
-                }, evict);
-            });
-        }
-        return result;
+    }
+
+    public async loadPreparedNavigationAnalysisEvidence(
+        preparedRead: PreparedReadState,
+        expectedSymbolRegistryManifestHash: string,
+        files: readonly string[],
+    ): Promise<NavigationAnalysisEvidenceState> {
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) return this.missingNavigation(preparedRead.root.path);
+        return this.dependencies.navigationStore.getAnalysisEvidenceForFiles({
+            ...input,
+            expectedSymbolRegistryManifestHash,
+            files,
+        });
+    }
+
+    public async loadPreparedNavigationResolutionClaims(
+        preparedRead: PreparedReadState,
+        expectedSymbolRegistryManifestHash: string,
+    ): Promise<NavigationResolutionClaimsState> {
+        const input = this.getPreparedNavigationInput(preparedRead);
+        if (!input) return this.missingNavigation(preparedRead.root.path);
+        return this.dependencies.navigationStore.getAllResolutionClaims({
+            ...input,
+            expectedSymbolRegistryManifestHash,
+        });
     }
 
     public async getCachedPreparedRead(
@@ -296,10 +196,6 @@ export class PreparedReadCacheOwner {
         if (!current || current.id !== state.publication.id) {
             if (!preserveProofAge) this.evictPreparedRead(root);
             return;
-        }
-        const publicationId = this.getPreparedNavigationIdentity(state);
-        if (this.preparedNavigationCache.get(root)?.publicationId !== publicationId) {
-            this.preparedNavigationCache.delete(root);
         }
         this.preparedReadCache.seed(
             root,

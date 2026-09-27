@@ -222,7 +222,6 @@ test("call graph source fallback propagates partial Publication coverage without
             rootPath: "/repo",
             manifest: relationshipManifest,
             records: [],
-            analysisByFile: new Map(),
             warnings: [],
         }),
         getResolutionEvidence: async () => ({
@@ -379,7 +378,6 @@ test("call graph retains exact reference evidence beyond the legacy 100-row disc
             rootPath: "/repo",
             manifest: relationshipManifest,
             records: [],
-            analysisByFile: new Map(),
             warnings: [],
         }),
         getResolutionEvidence: async (input: { sourceInstanceId?: string }) => ({
@@ -550,7 +548,6 @@ test("call graph path scope excludes sibling graph and semantic evidence before 
             manifestHash: "relationship-hash",
             manifest: relationshipManifest,
             records,
-            analysisByFile: new Map(),
             warnings: [],
         }),
         getResolutionEvidence: async (input: { sourceInstanceId?: string }) => ({
@@ -699,7 +696,6 @@ test("call graph path scope filters textual fallback references returned by the 
             manifestHash: "relationship-hash",
             manifest: relationshipManifest,
             records: [],
-            analysisByFile: new Map(),
             warnings: [],
         }),
         getResolutionEvidence: async () => ({

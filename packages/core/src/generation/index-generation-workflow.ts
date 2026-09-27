@@ -173,6 +173,11 @@ type CachedNavigationDeltaState = {
     readonly providerCoverage: readonly SemanticProviderCoverage[];
 };
 
+// Warm incremental navigation state trades RAM (a full registry, graph and
+// analysis evidence) for sync latency. It is released once syncs stop arriving
+// so an idle process does not keep a whole graph resident.
+const NAVIGATION_DELTA_STATE_IDLE_MS = 2 * 60_000;
+
 // ---- Narrow dependency ports ----
 export interface IndexGenerationWorkflowPorts {
     activatePublication(publication: Publication, lease: RootMutationLease): PublicationRef;
@@ -336,10 +341,24 @@ export class IndexGenerationWorkflow {
      * stage -> promote -> delete lifecycle.
      */
     private navigationDeltaState?: CachedNavigationDeltaState;
+    private navigationDeltaStateReleaseTimer?: ReturnType<typeof setTimeout>;
     private readonly preparedNavigationDeltaStates =
         new WeakMap<StagedPublicationNavigation, CachedNavigationDeltaState>();
 
     constructor(private readonly ports: IndexGenerationWorkflowPorts) {}
+
+    private retainNavigationDeltaState(state: CachedNavigationDeltaState | undefined): void {
+        this.navigationDeltaState = state;
+        if (this.navigationDeltaStateReleaseTimer) {
+            clearTimeout(this.navigationDeltaStateReleaseTimer);
+            this.navigationDeltaStateReleaseTimer = undefined;
+        }
+        if (!state) return;
+        this.navigationDeltaStateReleaseTimer = setTimeout(() => {
+            if (this.navigationDeltaState === state) this.retainNavigationDeltaState(undefined);
+        }, NAVIGATION_DELTA_STATE_IDLE_MS);
+        this.navigationDeltaStateReleaseTimer.unref?.();
+    }
 
     public stagePreparedNavigationDelta(
         candidate: StagedPublicationNavigation,
@@ -357,10 +376,10 @@ export class IndexGenerationWorkflow {
             ? resolveNavigationObservationToken()
             : null;
         if (preparedDeltaState && navigationObservationToken) {
-            this.navigationDeltaState = {
+            this.retainNavigationDeltaState({
                 ...preparedDeltaState,
                 navigationObservationToken,
-            };
+            });
         }
         this.preparedNavigationDeltaStates.delete(candidate);
     }
@@ -1471,12 +1490,12 @@ export class IndexGenerationWorkflow {
                         input.canonicalRoot,
                         publicationId,
                     );
-                    this.navigationDeltaState = navigationObservationToken
+                    this.retainNavigationDeltaState(navigationObservationToken
                         ? {
                             ...preparedNavigationState,
                             navigationObservationToken,
                         }
-                        : undefined;
+                        : undefined);
 
                 },
             );
@@ -2117,10 +2136,11 @@ export class IndexGenerationWorkflow {
             && cached.navigationRoot === navigationRoot
             && cached.navigationObservationToken === currentObservation
         ) {
+            this.retainNavigationDeltaState(cached);
             return cached;
         }
         if (cached?.canonicalRoot === canonicalRoot) {
-            this.navigationDeltaState = undefined;
+            this.retainNavigationDeltaState(undefined);
         }
         return undefined;
     }

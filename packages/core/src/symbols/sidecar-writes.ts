@@ -38,9 +38,9 @@ import {
     compareRelationshipRecords,
     compareStrings,
     fileShardName,
-    hashSerializedJson,
     hashSerializedString,
     serializeJson,
+    serializeShardJson,
 } from './sidecar-reads';
 
 const TEMP_ENTRY_PREFIX = '.satori-tmp-';
@@ -229,9 +229,9 @@ async function writeSymbolRegistrySidecarInternal(
                         language: file.language,
                         symbols,
                     };
-                    const shardHash = hashSerializedJson(shard);
-                    shardHashes.set(file.path, shardHash);
-                    await writeJson(targetPath, shard);
+                    const serializedShard = serializeShardJson(shard);
+                    shardHashes.set(file.path, hashSerializedString(serializedShard));
+                    await writeSerializedJson(targetPath, serializedShard);
                 }
             }));
         }
@@ -589,7 +589,7 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                const serializedShard = serializeJson(shard);
+                const serializedShard = serializeShardJson(shard);
                 const shardHash = hashSerializedString(serializedShard);
                 await writeSerializedJson(targetPath, serializedShard);
                 return {

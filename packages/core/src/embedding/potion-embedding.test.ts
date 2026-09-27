@@ -23,6 +23,7 @@ type TestPotionEmbeddingConstructor = new (config: {
     startupTimeoutMs: number;
     maxBatchItems: number;
     maxPendingItems?: number;
+    idleShutdownMs?: number;
 }) => PotionEmbedding;
 
 const TestPotionEmbedding = PotionEmbedding as unknown as TestPotionEmbeddingConstructor;
@@ -127,7 +128,12 @@ lines.on('line', (line) => {
 
 async function createFakeEmbedding(
     t: TestContext,
-    overrides: { requestTimeoutMs?: number; maxBatchItems?: number; maxPendingItems?: number } = {},
+    overrides: {
+        requestTimeoutMs?: number;
+        maxBatchItems?: number;
+        maxPendingItems?: number;
+        idleShutdownMs?: number;
+    } = {},
 ): Promise<PotionEmbedding> {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-potion-worker-'));
     const helperPath = path.join(root, 'fake-worker.cjs');
@@ -141,6 +147,7 @@ async function createFakeEmbedding(
         startupTimeoutMs: 1_000,
         maxBatchItems: overrides.maxBatchItems ?? 4,
         maxPendingItems: overrides.maxPendingItems,
+        idleShutdownMs: overrides.idleShutdownMs,
     });
     await (embedding as unknown as { start(): Promise<void> }).start();
     t.after(async () => {
@@ -208,6 +215,28 @@ test('Potion provider preserves the frozen semantic identity and exact symmetric
         artifactDigest: null,
         normalizationPolicy: 'provider_output_v1',
     });
+});
+
+test('Potion releases an idle worker and restarts it on the next request', async (t) => {
+    const embedding = await createFakeEmbedding(t, { idleShutdownMs: 50 });
+    const internals = embedding as unknown as { child: { pid?: number } | null; state: string };
+    const workerPid = () => internals.child?.pid;
+    const first = await embedding.embedQuery('before idle');
+    const firstPid = workerPid();
+    assert.ok(firstPid);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(internals.state, 'idle');
+    assert.equal(workerPid(), undefined);
+
+    const [second, third] = await Promise.all([
+        embedding.embedQuery('before idle'),
+        embedding.embedDocuments(['after idle']),
+    ]);
+    assert.deepEqual(second, first);
+    assert.equal(third.length, 1);
+    assert.equal(internals.state, 'ready');
+    assert.notEqual(workerPid(), firstPid);
 });
 
 test('Potion provider batches on one bounded worker and preserves input order', async (t) => {

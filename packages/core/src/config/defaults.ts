@@ -66,6 +66,18 @@ export const INDEXABLE_EXACT_FILENAMES: readonly string[] = [...new Set([
         .filter((filename) => !NOT_DEFAULT_INDEXED_FILENAMES.has(filename)),
 ])];
 
+/**
+ * Catalog filenames (go.mod, CMakeLists.txt, kustomization.yaml, ...) belong to
+ * the registry search tier, so an extension set admits them only when it
+ * carries that whole tier (default, all-text); `minimal` keeps the legacy
+ * extensionless names only.
+ */
+export function getIndexableExactFilenames(supportedExtensions: ReadonlySet<string>): readonly string[] {
+    return REGISTRY_SEARCH_EXTENSIONS.every((extension) => supportedExtensions.has(extension.toLowerCase()))
+        ? INDEXABLE_EXACT_FILENAMES
+        : INDEXABLE_EXTENSIONLESS_FILENAMES;
+}
+
 export const MINIMAL_SUPPORTED_EXTENSIONS: readonly string[] = [...new Set([
     ...SOURCE_SUPPORTED_EXTENSIONS,
     ...REGISTRY_SYMBOL_EXTENSIONS,

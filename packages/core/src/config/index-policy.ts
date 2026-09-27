@@ -3,7 +3,7 @@ import * as path from 'path';
 import { TextDecoder } from 'util';
 import {
     ALL_TEXT_INDEX_MARKER,
-    INDEXABLE_EXACT_FILENAMES,
+    getIndexableExactFilenames,
 } from './defaults';
 import {
     detectLanguageFromShebang,
@@ -52,9 +52,9 @@ function getAllTextMaxBytes(): number {
     return parsePositiveInteger(process.env.SATORI_ALL_TEXT_MAX_BYTES, DEFAULT_ALL_TEXT_MAX_BYTES);
 }
 
-function isAllowedExactFilename(relativePath: string): boolean {
+function isAllowedExactFilename(relativePath: string, extensionSet: ReadonlySet<string>): boolean {
     const basename = path.basename(relativePath).toLowerCase();
-    return INDEXABLE_EXACT_FILENAMES.some((filename) => filename.toLowerCase() === basename);
+    return getIndexableExactFilenames(extensionSet).some((filename) => filename.toLowerCase() === basename);
 }
 
 async function isUtf8TextObservationUnderLimit(
@@ -90,6 +90,7 @@ async function hasSearchableShebang(
     if (size < 2 || getLanguageAdapterByExtension(extension)) return false;
     const view = await readProbe();
     if (view[0] !== 0x23 || view[1] !== 0x21) return false;
+    if (!(await isUtf8TextObservationUnderLimit(size, readProbe))) return false;
     const language = detectLanguageFromShebang(view.toString('utf8'));
     return language !== undefined && isLanguageCapabilitySupportedForLanguage(language, 'search');
 }
@@ -128,7 +129,7 @@ export async function isIndexableFileObservationByPolicy(
     if (extension && extensionSet.has(extension)) {
         return true;
     }
-    if (isAllowedExactFilename(relativePath)) {
+    if (isAllowedExactFilename(relativePath, extensionSet)) {
         return true;
     }
     if (await hasSearchableShebang(extension, size, readProbe)) {

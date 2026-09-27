@@ -451,3 +451,30 @@ test('exact live-path recovery rejects substring-only whole-token evidence', asy
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('exact live-path recovery reads unrecognized extensions and admits them by shebang', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-search-live-shebang-'));
+    fs.mkdirSync(path.join(root, 'cgi'), { recursive: true });
+    const support = new SearchQuerySupport({
+        getContextActiveIgnorePatterns: () => [],
+    } as unknown as SearchQuerySupportHost);
+    const run = async (relativePath: string, content: string) => {
+        fs.writeFileSync(path.join(root, relativePath), content, 'utf8');
+        const parsedOperators = parseSearchOperators(`path:${relativePath} auth`);
+        return support.buildLivePathScopedSearchResults({
+            effectiveRoot: root,
+            parsedOperators,
+            queryPlan: buildSearchQueryPlan(parsedOperators.semanticQuery, true),
+            changedFiles: new Set([relativePath]),
+        });
+    };
+
+    try {
+        const script = await run('cgi/report.cgi', '#!/usr/bin/env python3\nauth = True\n');
+        assert.equal(script.length, 1);
+        assert.equal(script[0]?.language, 'python');
+        assert.deepEqual(await run('cgi/notes.cgi', 'auth notes\n'), []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

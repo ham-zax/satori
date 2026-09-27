@@ -189,13 +189,12 @@ export class SearchQuerySupport {
 
     constructor(private readonly host: SearchQuerySupportHost) {}
 
-    // Content decides `.m` and extensionless scripts, so those are read before
-    // their searchability is known; any other path is decided by the registry.
+    // Content decides `.m` and any path the registry does not recognize (index
+    // admission accepts those by shebang), so they are read before their
+    // searchability is known; recognized paths are decided by the registry.
     private mayBeSearchableLanguagePath(relativePath: string): boolean {
         const pathLanguage = pathDeterminedLanguageId(relativePath);
-        if (pathLanguage !== undefined) return isLanguageCapabilitySupportedForLanguage(pathLanguage, 'search');
-        const extension = path.extname(relativePath).toLowerCase();
-        return extension === '' || extension === '.m';
+        return pathLanguage === undefined || isLanguageCapabilitySupportedForLanguage(pathLanguage, 'search');
     }
 
     private matchesLanguageOperator(languages: readonly string[], language: string): boolean {

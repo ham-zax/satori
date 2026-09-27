@@ -37,4 +37,6 @@ test('extensionless scripts with a recognized shebang are admitted by every prof
     const unknown = Buffer.from('#!/usr/bin/env tclsh\n');
     assert.equal(await isIndexableFileObservationByPolicy('bin/tk', unknown.length, ['.ts'], async () => unknown), false);
     assert.equal(await isIndexableFileObservationByPolicy('cgi/report.cgi', script.length, ['.ts'], async () => script), true);
+    const binary = Buffer.concat([Buffer.from('#!/bin/sh\n'), Buffer.from([0, 1, 2, 0xff])]);
+    assert.equal(await isIndexableFileObservationByPolicy('bin/installer', binary.length, ['.ts'], async () => binary), false);
 });

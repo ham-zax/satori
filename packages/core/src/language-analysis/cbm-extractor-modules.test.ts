@@ -22,6 +22,7 @@ interface Manifest {
     emscripten: string;
     glue: { file: string; sha256: string };
     modules: ModuleEntry[];
+    failures: { cbmLanguage: string; reason: string }[];
 }
 interface ExtractorModule {
     HEAPU8: Uint8Array;
@@ -173,8 +174,15 @@ function checkSpans(records: RecordRow[], source: string): void {
         assert.equal(lineAt(record.startByte), record.startLine, `${record.name}: start line`);
         assert.equal(lineAt(record.endByte), record.endLine, `${record.name}: end line`);
         if (record.label !== 'Module') {
-            assert.ok(bytes.subarray(record.startByte, record.endByte).toString('utf8').includes(record.name),
-                `${record.name}: byte span does not contain name`);
+            // CBM composes some names (HCL `variable "greet"` is `variable.greet`)
+            // and spans some definitions from the value, not the binding (R
+            // `greet <- function() 1` spans `function() 1`), so the name's last
+            // segment must appear in the span or on the definition's start line.
+            const segment = record.name.split('.').pop() ?? record.name;
+            const text = bytes.subarray(record.startByte, record.endByte).toString('utf8');
+            const startLine = source.split('\n')[record.startLine - 1] ?? '';
+            assert.ok(text.includes(segment) || startLine.includes(segment),
+                `${record.name}: name is neither in the byte span nor on its start line (${record.label} ${record.startByte}-${record.endByte} in ${JSON.stringify(source)})`);
         }
     }
 }
@@ -185,7 +193,11 @@ test('manifest covers mapped languages outside Satori structural analyzers', () 
     assert.equal(manifest.emscripten, '3.1.64');
     const expected = CBM_LANGUAGE_MAP.filter((row) => row.grammarFactory && row.satoriLanguageId && !existingAnalyzers.has(row.satoriLanguageId))
         .map((row) => row.cbmLanguage).sort();
-    assert.deepEqual(manifest.modules.map((row) => row.cbmLanguage), expected);
+    // Grammars whose compile exceeds the build memory budget are recorded as
+    // failures and stay search-only; together with the modules they cover every row.
+    const failed = manifest.failures.map((row) => row.cbmLanguage);
+    for (const failure of manifest.failures) assert.match(failure.reason, /build memory budget/, failure.cbmLanguage);
+    assert.deepEqual([...manifest.modules.map((row) => row.cbmLanguage), ...failed].sort(), expected);
     assert.equal(createHash('sha256').update(fs.readFileSync(path.join(assetRoot, manifest.glue.file))).digest('hex'), manifest.glue.sha256);
 });
 

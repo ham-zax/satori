@@ -1,7 +1,7 @@
 // CBM parity harness (ticket 05): measures how closely Satori's CBM-definition
 // adapter matches the codebase-memory-mcp binary on the same files.
 //
-//   node --import tsx scripts/language-parity.ts [--languages a,b]
+//   node --import tsx scripts/language-parity.mts [--languages a,b]
 //        [--max-files-per-language N] [--date YYYY-MM-DD] [--no-repos]
 //
 // Corpus: one fixture per grammar from CBM's own test table
@@ -30,7 +30,6 @@ const CORPUS_FILE = path.join(SATORI_ROOT, 'scripts/language-parity-corpus.json'
 const LABELS = ['Class', 'Enum', 'Function', 'Interface', 'Macro', 'Method', 'Struct', 'Trait', 'Type'] as const;
 const PASS_THRESHOLD = 0.95;
 const SAMPLE_LIMIT = 3;
-const LANGUAGES_PER_WORKER = 12;
 
 interface CorpusRepo { readonly repo: string; readonly rev: string }
 interface Root { readonly id: string; readonly dir: string; readonly corpus: CorpusRepo }
@@ -39,7 +38,7 @@ interface Definition { readonly relativePath: string; readonly name: string; rea
 interface LanguageResult {
     files: number; cbmDefinitions: number; satoriDefinitions: number; matched: number;
     recall: number; precision: number; pass: boolean;
-    missing: string[]; extra: string[]; errors: number;
+    missing: string[]; extra: string[]; errors: number; collapsedByCbm: number;
 }
 
 function fail(message: string): never {
@@ -193,13 +192,20 @@ function satoriDefinitions(jobs: readonly FileJob[]): { job: FileJob; definition
     const results: { job: FileJob; definitions: Definition[] | null }[] = [];
     const scratch = fs.mkdtempSync(path.join(WORK_ROOT, 'worker-'));
     try {
-        for (let index = 0; index < languages.length; index += LANGUAGES_PER_WORKER) {
-            const batch = new Set(languages.slice(index, index + LANGUAGES_PER_WORKER));
-            const jobFile = path.join(scratch, `jobs-${index}.json`);
-            const outFile = path.join(scratch, `out-${index}.json`);
-            fs.writeFileSync(jobFile, JSON.stringify(jobs.filter((job) => batch.has(job.language))));
-            run(process.execPath, ['--import', 'tsx', __filename, '--worker', jobFile, outFile], { cwd: SATORI_ROOT, capped: true });
-            results.push(...JSON.parse(fs.readFileSync(outFile, 'utf8')) as typeof results);
+        // One capped worker per language: a module whose WASM memory grows past
+        // the cap fails only its own language (counted as extractor errors).
+        for (const language of languages) {
+            const languageJobs = jobs.filter((job) => job.language === language);
+            const jobFile = path.join(scratch, `jobs-${language}.json`);
+            const outFile = path.join(scratch, `out-${language}.json`);
+            fs.writeFileSync(jobFile, JSON.stringify(languageJobs));
+            try {
+                run(process.execPath, ['--import', 'tsx', __filename, '--worker', jobFile, outFile], { cwd: SATORI_ROOT, capped: true });
+                results.push(...JSON.parse(fs.readFileSync(outFile, 'utf8')) as typeof results);
+            } catch (error) {
+                console.error(`worker for ${language} failed: ${(error as Error).message.split('\n')[0].slice(0, 200)}`);
+                results.push(...languageJobs.map((job) => ({ job, definitions: null })));
+            }
         }
     } finally {
         fs.rmSync(scratch, { recursive: true, force: true });
@@ -242,7 +248,7 @@ async function main(): Promise<void> {
     const resultFor = (language: string) => {
         let result = results.get(language);
         if (!result) {
-            result = { files: 0, cbmDefinitions: 0, satoriDefinitions: 0, matched: 0, recall: 0, precision: 0, pass: false, missing: [], extra: [], errors: 0 };
+            result = { files: 0, cbmDefinitions: 0, satoriDefinitions: 0, matched: 0, recall: 0, precision: 0, pass: false, missing: [], extra: [], errors: 0, collapsedByCbm: 0 };
             results.set(language, result);
         }
         return result;
@@ -265,10 +271,12 @@ async function main(): Promise<void> {
         for (const [language, files] of perLanguage) for (const file of files) languageOf.set(file, language);
 
         const expected = new Map<string, number>();
+        const cbmNames = new Set<string>();
         for (const definition of cbmDefinitions(root)) {
             const language = languageOf.get(definition.relativePath);
             if (!language) continue;
             resultFor(language).cbmDefinitions++;
+            cbmNames.add(`${definition.relativePath}\0${definition.name}`);
             const id = key(root.id, definition);
             expected.set(id, (expected.get(id) ?? 0) + 1);
         }
@@ -288,6 +296,10 @@ async function main(): Promise<void> {
                 if (remaining > 0) {
                     result.matched++;
                     expected.set(id, remaining - 1);
+                } else if (cbmNames.has(`${definition.relativePath}\0${definition.name}`)) {
+                    // CBM's graph keeps one node per qualified name, so overloads
+                    // and multi-clause definitions it extracted collapse there.
+                    result.collapsedByCbm++;
                 } else {
                     result.extra.push(id);
                 }
@@ -303,11 +315,12 @@ async function main(): Promise<void> {
     for (const language of [...results.keys()].sort()) {
         const result = results.get(language)!;
         result.recall = ratio(result.matched, result.cbmDefinitions);
-        result.precision = ratio(result.matched, result.satoriDefinitions);
+        result.precision = ratio(result.matched, result.satoriDefinitions - result.collapsedByCbm);
         result.pass = result.errors === 0 && result.recall >= PASS_THRESHOLD && result.precision >= PASS_THRESHOLD;
         languages[language] = {
             files: result.files, cbmDefinitions: result.cbmDefinitions, satoriDefinitions: result.satoriDefinitions,
             matched: result.matched, recall: result.recall, precision: result.precision, pass: result.pass,
+            ...(result.collapsedByCbm ? { collapsedByCbm: result.collapsedByCbm } : {}),
             ...(result.errors ? { extractorErrors: result.errors } : {}),
             ...(result.missing.length ? { sampleMissing: result.missing.sort().slice(0, SAMPLE_LIMIT) } : {}),
             ...(result.extra.length ? { sampleExtra: result.extra.sort().slice(0, SAMPLE_LIMIT) } : {}),
@@ -340,7 +353,8 @@ async function main(): Promise<void> {
         `# CBM definition parity — ${options.date}`,
         '',
         `CBM ${cbmVersion} (${CBM_LANGUAGE_MAP_COMMIT.slice(0, 8)}) vs Satori ${evidence.satoriCommit.slice(0, 8)}; `
-            + `match key (path, name, start line); pass = recall and precision ≥ ${PASS_THRESHOLD}. `
+            + `match key (path, name, start line); pass = recall and precision ≥ ${PASS_THRESHOLD}, with no extractor errors; `
+            + 'same-name clauses and overloads that CBM\'s graph collapses into one node are excluded from precision (`collapsedByCbm` in the JSON). '
             + `${passing}/${Object.keys(languages).length} languages pass. Raw data: [${options.date}.json](${options.date}.json).`,
         '',
         ...table,

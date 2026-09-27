@@ -239,10 +239,18 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
     parserDeclaredSearchOnlyLanguage({ languageId: 'wgsl', extensions: ['.wgsl'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'wit', extensions: ['.wit'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'wolfram', extensions: ['.wl', '.wls'] }),
-    parserDeclaredSearchOnlyLanguage({ languageId: 'xml', extensions: ['.svg', '.xml', '.xsd', '.xsl'] }),
+    parserDeclaredSearchOnlyLanguage({ languageId: 'xml', extensions: ['.appxmanifest', '.axaml', '.csproj', '.fsproj', '.manifest', '.nuspec', '.plist', '.props', '.resx', '.runsettings', '.slnx', '.svg', '.targets', '.vbproj', '.xaml', '.xcprivacy', '.xml', '.xsd', '.xsl'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'yaml', extensions: ['.yaml', '.yml'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'zig', extensions: ['.zig'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'zsh', extensions: ['.zsh'], filenames: ['.zprofile', '.zshenv', '.zshrc'] }),
+];
+
+const CBM_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
+    searchOnlyLanguage({ languageId: 'arkts', aliases: [], extensions: ['.ets'] }),
+    searchOnlyLanguage({ languageId: 'chialisp', aliases: [], extensions: ['.clib', '.clinc', '.clsp'] }),
+    searchOnlyLanguage({ languageId: 'mojo', aliases: [], extensions: ['.mojo'] }),
+    searchOnlyLanguage({ languageId: 'objectscript-routine', aliases: [], extensions: ['.int', '.mac', '.rtn'] }),
+    searchOnlyLanguage({ languageId: 'plsql', aliases: [], extensions: ['.bdy', '.fnc', '.pck', '.pkb', '.pks', '.plb', '.pls', '.plsql', '.tpb', '.tps', '.trg'] }),
 ];
 
 const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
@@ -265,7 +273,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     directCallsSymbolLanguage({
         languageId: 'csharp',
         aliases: ['cs'],
-        extensions: ['.cs'],
+        extensions: ['.cs', '.cshtml', '.razor'],
         fixtures: {
             navigation: [
                 'fixtures/navigation/csharp-basic-symbols/expected_symbols.json',
@@ -364,7 +372,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     directCallsSymbolLanguage({
         languageId: 'scala',
         aliases: [],
-        extensions: ['.scala'],
+        extensions: ['.sc', '.scala'],
         fixtures: {
             navigation: [
                 'fixtures/navigation/scala-basic-symbols/expected_symbols.json',
@@ -392,6 +400,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
 
 const DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     ...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS,
+    ...CBM_SEARCH_ONLY_DECLARATIONS,
     ...SATORI_DECLARATIONS,
 ].sort((a, b) => a.languageId.localeCompare(b.languageId));
 

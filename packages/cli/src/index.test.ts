@@ -198,6 +198,8 @@ test("runCli defaults to human help and preserves structured help on request", a
     assert.equal(exitCode, 0);
     assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started \(no global install required\):\n {2}npx -y @zokizuan\/satori-cli@latest install/m);
     assert.match(io.read().stdout, /npx -y @zokizuan\/satori-cli@latest install --client codex --install-guidance-hook/);
+    assert.match(io.read().stdout, /Index \/absolute\/path\/to\/repo with Satori/);
+    assert.match(io.read().stdout, /install --runtime offline --reranker none/);
     assert.match(io.read().stdout, /npm install -g @zokizuan\/satori-cli@latest/);
     assert.match(io.read().stdout, /-v, --version\s+Show installed CLI, MCP, and Core versions/);
     assert.match(io.read().stdout, /terminate\s+Stop all running Satori MCP servers/);
@@ -573,7 +575,7 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
-test("runCli install updates config and emits a quiet human summary", async () => {
+test("runCli install reports progress and the first repository action", async () => {
     const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-home-"));
     const io = captureIo();
 
@@ -618,8 +620,9 @@ test("runCli install updates config and emits a quiet human summary", async () =
         assert.match(stdout, /Client: Codex/);
         assert.match(stdout, /Verification: passed \(1 check\)/);
         assert.match(stdout, /Restart Codex to load Satori/);
+        assert.match(stdout, /Then ask your agent: Index \/absolute\/path\/to\/repo with Satori/);
         assert.match(stdout, /Update later with `npx -y @zokizuan\/satori-cli@latest update`/);
-        assert.equal(stderr, "");
+        assert.equal(stderr, "Preparing Satori runtime and model...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
     } finally {

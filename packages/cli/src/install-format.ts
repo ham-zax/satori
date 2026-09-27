@@ -106,6 +106,9 @@ export function formatInstallText(
     }
     const restart = restartInstruction(result);
     if (restart) lines.push("", restart);
+    if (restart && (!postflight || postflight.status === "ok")) {
+        lines.push("Then ask your agent: Index /absolute/path/to/repo with Satori.");
+    }
     if (postflight?.status !== undefined && postflight.status !== "ok") {
         lines.push(`Run \`${satoriCliCommand("doctor --verbose")}\` for diagnostic details.`);
     } else if (result.action === "install" && !result.dryRun) {

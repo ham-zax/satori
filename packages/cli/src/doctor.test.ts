@@ -80,6 +80,7 @@ function assertManagedRuntimeSelectionUnavailable(
         embeddingModel: null,
         embeddingDimension: null,
         rerankerProvider: null,
+        rerankerProfile: null,
         vectorStore: null,
     });
 }
@@ -108,7 +109,7 @@ function runtimeOwner(overrides: Record<string, unknown>): Record<string, unknow
 
 test("runDoctor reports missing default VoyageAI credentials with LanceDB selected", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v20.11.0",
+        nodeVersion: "v22.13.0",
         env: {},
     }));
 
@@ -258,6 +259,7 @@ test("runDoctor does not synthesize runtime values for an unreadable client conf
         embeddingModel: null,
         embeddingDimension: null,
         rerankerProvider: null,
+        rerankerProfile: null,
         vectorStore: null,
     });
     assert.equal(result.checks.some((check) => check.name === "client_runtime_opencode"), false);
@@ -337,6 +339,7 @@ test("runDoctor does not echo invalid categorical values or home-relative model 
         embeddingModel: null,
         embeddingDimension: null,
         rerankerProvider: null,
+        rerankerProfile: null,
         vectorStore: null,
     });
     assert.doesNotMatch(JSON.stringify(configuration), /\/home\/test|~\/private/);
@@ -372,7 +375,7 @@ test("runDoctor includes a privacy-safe summary of local CLI diagnostics", async
 
 test("runDoctor treats whitespace-only provider env as incomplete", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v20.11.0",
+        nodeVersion: "v22.13.0",
         env: {
             VOYAGEAI_API_KEY: "   ",
             VECTOR_STORE_PROVIDER: "Milvus",
@@ -393,7 +396,7 @@ test("runDoctor treats whitespace-only provider env as incomplete", async () => 
 
 test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.0.0",
+        nodeVersion: "v22.13.0",
         env: {
             EMBEDDING_PROVIDER: "Ollama",
             MILVUS_ADDRESS: "localhost:19530",
@@ -411,7 +414,7 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", asy
 
 test("runDoctor proves the selected offline backend, model identity, and network invariant", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.0.0",
+        nodeVersion: "v22.13.0",
         env: {
             HOME: "/tmp/satori-offline-doctor",
             SATORI_RUNTIME_PROFILE: "offline",
@@ -488,6 +491,7 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
             managedLauncherPath: launcherPath,
             inspectManagedClients: () => [managedLauncherClientProof()],
             loadManagedLanceDb: async () => undefined,
+            execFileSyncImpl: () => { throw new Error("npm should not be queried for an installed runtime"); },
         }));
 
         assert.equal(result.status, "ok");
@@ -495,6 +499,7 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
         assert.equal(result.checks.find((check) => check.name === "vector_store_provider")?.message, "OpenCode: Vector store provider: LanceDB.");
         assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "OpenCode: Embedding provider: Ollama.");
         assert.equal(result.checks.find((check) => check.name === "offline_execution_invariant")?.status, "ok");
+        assert.equal(result.checks.find((check) => check.name === "npm_package_access"), undefined);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -551,6 +556,10 @@ test("runDoctor surfaces the installer-bound LateOn activation policy", async ()
         assert.equal(
             result.checks.find((check) => check.name === "reranker_provider")?.status,
             "ok",
+        );
+        assert.equal(
+            result.runtimeConfigurations?.find((configuration) => configuration.client === "opencode")?.rerankerProfile,
+            "lateon_offline_quality_projection_v5_d32_v1",
         );
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -609,7 +618,7 @@ test("runDoctor flags a managed launcher whose LateOn activation policy contradi
 
 test("runDoctor rejects unsupported embedding providers", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.0.0",
+        nodeVersion: "v22.13.0",
         env: {
             EMBEDDING_PROVIDER: "Typo",
             VOYAGEAI_API_KEY: "pa-test",
@@ -632,22 +641,23 @@ test("runDoctor rejects unsupported embedding providers", async () => {
     );
 });
 
-test("runDoctor flags unsupported Node versions", async () => {
-    const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v18.19.0",
-        env: {
-            VOYAGEAI_API_KEY: "pa-test",
-            MILVUS_ADDRESS: "localhost:19530",
-        },
-    }));
-
-    assert.equal(result.status, "error");
-    assert.equal(result.checks.find((check) => check.name === "node_version")?.status, "error");
+test("runDoctor enforces the CLI package's minimum Node version", async () => {
+    for (const [nodeVersion, expectedStatus] of [
+        ["v20.19.0", "error"],
+        ["v22.12.0", "error"],
+        ["v22.13.0", "ok"],
+        ["v24.0.0", "ok"],
+    ] as const) {
+        const result = await runDoctor(baseDoctorOptions({ nodeVersion, env: healthyEnv() }));
+        const check = result.checks.find((entry) => entry.name === "node_version");
+        assert.equal(check?.status, expectedStatus, nodeVersion);
+        assert.match(check?.message || "", /22\.13\.0/);
+    }
 });
 
 test("runDoctor reports Satori package version set and independent-version policy", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v20.11.0",
+        nodeVersion: "v22.13.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
@@ -672,7 +682,7 @@ test("runDoctor reports Satori package version set and independent-version polic
 
 test("runDoctor warns when a package version cannot be resolved", async () => {
     const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v20.11.0",
+        nodeVersion: "v22.13.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
             MILVUS_ADDRESS: "localhost:19530",
@@ -720,7 +730,7 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
         }), "utf8");
 
         const result = await runDoctor(baseDoctorOptions({
-            nodeVersion: "v20.11.0",
+            nodeVersion: "v22.13.0",
             env: {
                 VOYAGEAI_API_KEY: "pa-test",
                 MILVUS_ADDRESS: "localhost:19530",

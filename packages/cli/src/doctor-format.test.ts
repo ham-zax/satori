@@ -64,6 +64,7 @@ test("Doctor renders effective configuration for every supported client as a tab
                 embeddingModel: "potion-code",
                 embeddingDimension: "256",
                 rerankerProvider: "lateon",
+                rerankerProfile: "lateon_offline_quality_projection_v5_d32_v1",
                 vectorStore: "LanceDB",
             },
             {
@@ -75,6 +76,7 @@ test("Doctor renders effective configuration for every supported client as a tab
                 embeddingModel: null,
                 embeddingDimension: null,
                 rerankerProvider: null,
+                rerankerProfile: null,
                 vectorStore: null,
             },
             {
@@ -86,6 +88,7 @@ test("Doctor renders effective configuration for every supported client as a tab
                 embeddingModel: "voyage-code-3",
                 embeddingDimension: "1024",
                 rerankerProvider: "none",
+                rerankerProfile: null,
                 vectorStore: "Milvus",
             },
         ],
@@ -94,7 +97,7 @@ test("Doctor renders effective configuration for every supported client as a tab
     const text = formatDoctorText(result, { verbose: false });
     assert.match(text, /Applied runtime configuration:/);
     assert.match(text, /Client\s+\| Status\s+\| Profile\s+\| Embedding\s+\| Dim\s+\| Reranker\s+\| Storage\s+\| Source/);
-    assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn\s+\| LanceDB\s+\| Managed launcher/);
+    assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn · Code-edge D32\s+\| LanceDB\s+\| Managed launcher/);
     assert.match(text, /Claude Code\s+\| Not configured\s+\| —/);
     assert.match(text, /OpenCode\s+\| Needs repair\s+\| connected\s+\| VoyageAI \/ voyage-code-3\s+\| 1024\s+\| none\s+\| Milvus\s+\| Client config/);
     assert.doesNotMatch(text, /Selected runtime:|Configured runtimes:/);

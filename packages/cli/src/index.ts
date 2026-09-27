@@ -340,6 +340,7 @@ function formatHelpText(): string {
         "Get started (no global install required):",
         `  ${satoriCliCommand("install")}`,
         `  ${satoriCliCommand("doctor")}`,
+        "  Restart your coding agent, then ask: Index /absolute/path/to/repo with Satori.",
         "",
         "Optional persistent command:",
         "  npm install -g @zokizuan/satori-cli@latest",
@@ -356,6 +357,12 @@ function formatHelpText(): string {
         "  uninstall     Remove Satori-managed client configuration (defaults to all supported clients)",
         "  tools list    List the available MCP tools",
         "  tool call     Call an MCP tool from the terminal",
+        "",
+        "Common runtime changes:",
+        `  ${satoriCliCommand("install --runtime offline --reranker none")}  Disable LateOn`,
+        `  ${satoriCliCommand("install --runtime offline --reranker lateon")}  Enable LateOn`,
+        `  ${satoriCliCommand("install --runtime offline --ollama-model <model>")}  Select Ollama embeddings`,
+        "  Restart configured clients after changing the runtime.",
         "",
         "Options:",
         "  -v, --version     Show installed CLI, MCP, and Core versions",
@@ -691,6 +698,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
                 assertAutoClientTargets(parsed.command.client, homeDir, effectiveEnv);
+                if (!wantsJson) writers.writeStderr("Preparing Satori runtime and model...\n");
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
             const result = await executeInstallCommand(parsed.command, {
@@ -713,6 +721,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     : undefined,
             });
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
+                if (!wantsJson) writers.writeStderr("Verifying Satori launcher and client configuration...\n");
                 const postflight = await (options.installPostflightRunner || runInstallPostflight)({
                     installResult: result,
                     homeDir,

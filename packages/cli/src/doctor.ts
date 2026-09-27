@@ -8,8 +8,10 @@ import type { ResolvedOllamaModelIdentity } from "@zokizuan/satori-core";
 import { assertLocalOnlyEndpoint } from "./local-runtime-contract.js";
 import {
     readManagedRuntimeRelease,
+    resolveCliPackageJsonPath,
     resolveManagedPackageSpecifier,
 } from "./managed-package.js";
+import { DEFAULT_LATEON_PROFILE_ID } from "./lateon-model-store.js";
 import {
     inspectManagedClientConfigurations,
     type ManagedClientConfigProof,
@@ -70,6 +72,7 @@ export interface DoctorRuntimeConfiguration {
     embeddingModel: string | null;
     embeddingDimension: string | null;
     rerankerProvider: "none" | "voyage" | "lateon" | null;
+    rerankerProfile: string | null;
     vectorStore: "Milvus" | "LanceDB" | null;
 }
 
@@ -173,9 +176,26 @@ function stableStringify(value: unknown): string {
     return JSON.stringify(value) ?? String(value);
 }
 
-function parseNodeMajor(version: string): number {
-    const match = version.match(/^v?(\d+)/);
-    return match ? Number(match[1]) : 0;
+function minimumNodeVersion(): string {
+    const packageJson = JSON.parse(fs.readFileSync(resolveCliPackageJsonPath(), "utf8")) as {
+        engines?: { node?: string };
+    };
+    const minimum = packageJson.engines?.node?.match(/^>=(\d+\.\d+\.\d+)$/)?.[1];
+    if (!minimum) {
+        throw new Error("CLI package engines.node must specify an exact minimum Node.js version.");
+    }
+    return minimum;
+}
+
+function nodeVersionMeetsMinimum(version: string, minimum: string): boolean {
+    const actual = version.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+    const required = minimum.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    if (!actual || !required) return false;
+    for (let index = 1; index <= 3; index += 1) {
+        const difference = Number(actual[index]) - Number(required[index]);
+        if (difference !== 0) return difference > 0;
+    }
+    return true;
 }
 
 function addCheck(checks: DoctorCheck[], name: string, status: CheckStatus, message: string): void {
@@ -271,6 +291,7 @@ function buildRuntimeConfigurationRows(
         embeddingModel: null,
         embeddingDimension: null,
         rerankerProvider: null,
+        rerankerProfile: null,
         vectorStore: null,
     });
     const sanitizedValue = (value: string): string | null => {
@@ -326,6 +347,10 @@ function buildRuntimeConfigurationRows(
             embeddingModel: sanitizedModelIdentity(selection.embeddingModel),
             embeddingDimension: sanitizedDimension(selection.embeddingDimension),
             rerankerProvider: allowlistedValue(selection.rerankerProvider, DISPLAYED_RERANKER_PROVIDERS),
+            rerankerProfile: selection.rerankerProvider === "lateon"
+                && context.environment.SATORI_LATEON_PROFILE === DEFAULT_LATEON_PROFILE_ID
+                ? DEFAULT_LATEON_PROFILE_ID
+                : null,
             vectorStore: allowlistedValue(selection.vectorStore, DISPLAYED_VECTOR_STORES),
         };
     });
@@ -668,25 +693,27 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         }
     }
 
-    const nodeMajor = parseNodeMajor(nodeVersion);
-    if (nodeMajor >= 20) {
-        addCheck(checks, "node_version", "ok", `Node ${nodeVersion} satisfies >=20.`);
+    const minimum = minimumNodeVersion();
+    if (nodeVersionMeetsMinimum(nodeVersion, minimum)) {
+        addCheck(checks, "node_version", "ok", `Node ${nodeVersion} satisfies >=${minimum}.`);
     } else {
-        addCheck(checks, "node_version", "error", `Node ${nodeVersion} is unsupported. Install Node.js 20 or newer.`);
-        nextSteps.push("Install Node.js 20 or newer.");
+        addCheck(checks, "node_version", "error", `Node ${nodeVersion} is unsupported. Install Node.js ${minimum} or newer.`);
+        nextSteps.push(`Install Node.js ${minimum} or newer.`);
     }
 
-    try {
-        const specifier = resolveManagedPackageSpecifier();
-        execImpl("npm", ["view", specifier, "version", "--json"], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        addCheck(checks, "npm_package_access", "ok", `${specifier} is visible to npm.`);
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        addCheck(checks, "npm_package_access", "warning", `Could not verify npm package access: ${message}`);
-        nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
+    if (!managedLauncherIsUsable) {
+        try {
+            const specifier = resolveManagedPackageSpecifier();
+            execImpl("npm", ["view", specifier, "version", "--json"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+            });
+            addCheck(checks, "npm_package_access", "ok", `${specifier} is visible to npm.`);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            addCheck(checks, "npm_package_access", "warning", `Could not verify npm package access: ${message}`);
+            nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
+        }
     }
 
     const evaluatedRuntimeContexts = appendRuntimeConfigurationChecks(checks, nextSteps, runtimeContexts);

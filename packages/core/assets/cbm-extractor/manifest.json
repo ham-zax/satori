@@ -1,0 +1,1309 @@
+{
+  "schemaVersion": 1,
+  "cbmCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
+  "emscripten": "3.1.64",
+  "glue": {
+    "file": "cbm-extractor.js",
+    "sha256": "a9cfaebe958d93038dbe72eb208821999b82192538a82952fa78ec3af647a572"
+  },
+  "modules": [
+    {
+      "cbmLanguage": "ADA",
+      "satoriLanguageId": "ada",
+      "file": "ada.wasm",
+      "sizeBytes": 572843,
+      "sha256": "874b818e08e29ca82538d5b6e3cf12686fbb23f4dffaa44f7fb8918358fb81a7",
+      "sourceSha256": "5689a01f8d53197445677b8f382f630370ec5f7c3c3080f403768b00c271d946",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "AGDA",
+      "satoriLanguageId": "agda",
+      "file": "agda.wasm",
+      "sizeBytes": 2399569,
+      "sha256": "2188e6c74760c7dacf19d1a90be3d845b3d3a3e81409957b766f2f18b4e5960f",
+      "sourceSha256": "1d4e880706325632131b9bbdf9e292890cde9d25de971688dc5b658615c10b4e",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "APEX",
+      "satoriLanguageId": "apex",
+      "file": "apex.wasm",
+      "sizeBytes": 1202115,
+      "sha256": "15d92ee44ed96e5b488cecb101baeca5957cb2dd7400f83af698664c32021246",
+      "sourceSha256": "4e9456619b04b31afd4ad8b2b8de92d8aaa56817fa9f4cb3192a8bf005505c4c",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ARKTS",
+      "satoriLanguageId": "arkts",
+      "file": "arkts.wasm",
+      "sizeBytes": 1304303,
+      "sha256": "28015264b3c9ebd1d7fe44d433050c2c4fc7cd4f71b802e5642afd456f0419c1",
+      "sourceSha256": "89b5b5d8b5c7ee983137b0112e7ae3127b2fb5772c3863642ebe27cc5a7c945d",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ASSEMBLY",
+      "satoriLanguageId": "assembly",
+      "file": "assembly.wasm",
+      "sizeBytes": 350662,
+      "sha256": "346bfb58d643faff367e5e9f968682fbd56e85085a8c088a463df38713247805",
+      "sourceSha256": "8a41929f6ba8317d946108af05aca030f17e9fba5f35bc123497a8cc5e47cc41",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ASTRO",
+      "satoriLanguageId": "astro",
+      "file": "astro.wasm",
+      "sizeBytes": 352798,
+      "sha256": "99b6f28329d679932d2e14c217cc1897a8e83809ded1c15f108b9cae84fba589",
+      "sourceSha256": "392c6783e61381448add34cd8a20c6190dda295d86cb360316165ffd59a5a37b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "AWK",
+      "satoriLanguageId": "awk",
+      "file": "awk.wasm",
+      "sizeBytes": 810288,
+      "sha256": "58f84759c001035be7eca74e9766a3d4f149827620a397f5601ae9cfe197895e",
+      "sourceSha256": "4405368a44f84c3979fc2676e16b3fd6616400d6f8e7ef688671da1a14638ad2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "BASH",
+      "satoriLanguageId": "bash",
+      "file": "bash.wasm",
+      "sizeBytes": 1568075,
+      "sha256": "7c8c23f43d184ad82e11c9d86213de843a1366a74686b96f17721f2b772f8a58",
+      "sourceSha256": "fdb49f0a85034e53e54acc762e480ad62c4e61a4cf5234485a2245be509135c6",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "BEANCOUNT",
+      "satoriLanguageId": "beancount",
+      "file": "beancount.wasm",
+      "sizeBytes": 440697,
+      "sha256": "6d5bc448639fdcef60c44d49f6ca4121eef63864068a5376f21b768e318d6664",
+      "sourceSha256": "08259f1cdaa494fb2def62a413fb9a31b86b38f0811a6574a96211c5cf9f7114",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "BIBTEX",
+      "satoriLanguageId": "bibtex",
+      "file": "bibtex.wasm",
+      "sizeBytes": 337114,
+      "sha256": "a8f23a0ccef0d82ed638d7baffb4207f5ca6f56e18060795abf6defbc1d52fb0",
+      "sourceSha256": "48328da8fa23f2daef8cb28e42a1c078ec5db69d96c087a2305a9e5180db96e4",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "BICEP",
+      "satoriLanguageId": "bicep",
+      "file": "bicep.wasm",
+      "sizeBytes": 466557,
+      "sha256": "0d126e20e104ea323a55a50df9467eb64e0c3e11b10fc5e1b494bcede881987d",
+      "sourceSha256": "e610c0fae7ae73d4f6a8e860e53155699431cc6ad313d0be43743eb00532a15a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "BITBAKE",
+      "satoriLanguageId": "bitbake",
+      "file": "bitbake.wasm",
+      "sizeBytes": 861161,
+      "sha256": "cdeed1e4914081e337632eff867e951ae7869c7c2295ff13f09f979d10d61aba",
+      "sourceSha256": "27491cc88ec58ee2489ea43f5c291ab0df873b2f0851b23611e3015843595011",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CAIRO",
+      "satoriLanguageId": "cairo",
+      "file": "cairo.wasm",
+      "sizeBytes": 581765,
+      "sha256": "029a782c574520a5153eb4dc9f3ea700069a124c3fef59be1b0eb4550786191c",
+      "sourceSha256": "f8c1a40f6a941948e39fa6fee0e2e094c680866755fb6259307828f444e6ba79",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CAPNP",
+      "satoriLanguageId": "capnp",
+      "file": "capnp.wasm",
+      "sizeBytes": 386702,
+      "sha256": "581f235db74b9b8e6024436989a0ae16f87e6d2a6fd6ad03e21edaa5d2166314",
+      "sourceSha256": "6042184cbc93d90dada7f3633e763041fb40bd2714459adbafab24d525adcf20",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CFML",
+      "satoriLanguageId": "cfml",
+      "file": "cfml.wasm",
+      "sizeBytes": 1604061,
+      "sha256": "63c0c1afe8ea02d8afc42ee4092b802ffd068f9e70e05c1b7c1da56b7afb2f5f",
+      "sourceSha256": "68b939070dbd738344faa0303bc7f7fd49f19f7e4d558800dbe8ffe8bcd47e1f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CFSCRIPT",
+      "satoriLanguageId": "cfscript",
+      "file": "cfscript.wasm",
+      "sizeBytes": 1608199,
+      "sha256": "b5e6b1bd9633f2119815c0b9d18a1409b9424e89a85ee8b2ccbc7c6362151c2d",
+      "sourceSha256": "911aa6354c3eca981b09ebcf9f451813f2b83c731af949afd7b4ac6afec48192",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CHIALISP",
+      "satoriLanguageId": "chialisp",
+      "file": "chialisp.wasm",
+      "sizeBytes": 325344,
+      "sha256": "3fefc9c77820754714e5c2163d47b4adea803a0e0f04835cce0343ef575a40f5",
+      "sourceSha256": "d34b0c87bf384946f8e70cbb56c307cb013699503b16ea577d610994bb8c4669",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CLOJURE",
+      "satoriLanguageId": "clojure",
+      "file": "clojure.wasm",
+      "sizeBytes": 423401,
+      "sha256": "ad8e6446e5b3cea3682f16557d10ad81c3c8a103078f1c6259502dabc77465ab",
+      "sourceSha256": "8183f3c6b6d6db16e3a3cc02d7ddfe4f9b9f3cf1536a73a32a23428fb22ebc65",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "CMAKE",
+      "satoriLanguageId": "cmake",
+      "file": "cmake.wasm",
+      "sizeBytes": 398443,
+      "sha256": "10b91d6aac1c8a9694db13fec94ce12161dbde68b974736b3f30e8977b85f121",
+      "sourceSha256": "666539e5bacaaf73b92c867eaeaa0479d4c518e8387c137a785e37ef8f1be9ba",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "COMMONLISP",
+      "satoriLanguageId": "commonlisp",
+      "file": "commonlisp.wasm",
+      "sizeBytes": 1037249,
+      "sha256": "8da6be0b7dad11acb79042e1aadc1011725ca17ad50075fc1b095e78e8d76695",
+      "sourceSha256": "de661087e4c8d0b3059932ebad0f92d58aa06c689f10f3107db5f463e468d031",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "CRYSTAL",
+      "satoriLanguageId": "crystal",
+      "file": "crystal.wasm",
+      "sizeBytes": 4821505,
+      "sha256": "1b8132cf0d0c2ae24b9f8e416e7a45d45e96eac82a63ebf18970841b0b6b66b0",
+      "sourceSha256": "3194495e41a9ec58a1f06287f51b5aa73608cab99777dbc1436d7c3e2121a22d",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CSS",
+      "satoriLanguageId": "css",
+      "file": "css.wasm",
+      "sizeBytes": 454992,
+      "sha256": "06c2df77564b52d92aea9d0b54925c9bcc0115c5cd557a8e51adcab0a5abf743",
+      "sourceSha256": "582afbf31324275287064e27ecbfcfabdf2f413ab2cc150072398616a86700c6",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "CSV",
+      "satoriLanguageId": "csv",
+      "file": "csv.wasm",
+      "sizeBytes": 328519,
+      "sha256": "76fb491e01496ca460ca8def5ab6b7423f7b62103d63b44186209d68674d5167",
+      "sourceSha256": "671325f01337db2ed5a85980ae367b7c01659bd0c4633281be3aaf5090d9ebf6",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "CUDA",
+      "satoriLanguageId": "cuda",
+      "file": "cuda.wasm",
+      "sizeBytes": 2417322,
+      "sha256": "5ab9cc06e5ed161bf85e146ade767d45f64155d0c400fba7af543bdc87c04685",
+      "sourceSha256": "0fae510b1d051fe50aac2b4cc620fc4a0c7a843f10b85617820d7c70e63d9c4e",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "DART",
+      "satoriLanguageId": "dart",
+      "file": "dart.wasm",
+      "sizeBytes": 1021585,
+      "sha256": "87c48c606b89022a3fabe2637b69f8bca4e59f058894552db03628c32b8cfd9b",
+      "sourceSha256": "2a8eebec8d441a24a1303432b85b92729b2623a79f6317dcef773e6b28c867c9",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "DEVICETREE",
+      "satoriLanguageId": "devicetree",
+      "file": "devicetree.wasm",
+      "sizeBytes": 479703,
+      "sha256": "41a7b6c37f0c0f27f0b83fec8ad63d7943d30a9cf0e3b05b5f05e976d97da3a7",
+      "sourceSha256": "d626a3a4f6d2765d76fed5980bb71b8ccf1f580473c1358d6b644588bfe58640",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "DIFF",
+      "satoriLanguageId": "diff",
+      "file": "diff.wasm",
+      "sizeBytes": 346432,
+      "sha256": "2765eba213adb41c2bed090e1605136fc71cdb75e2610f764b95175dc63810cb",
+      "sourceSha256": "15698085d4a11a3a1302e577f0d3fd799c71783881df6035219cd32a1983a51f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "DLANG",
+      "satoriLanguageId": "dlang",
+      "file": "dlang.wasm",
+      "sizeBytes": 2669427,
+      "sha256": "ce9c11a0ee6257283cd65d8996c0efdacc6104b00307cb91bc8151208fccd26e",
+      "sourceSha256": "8cacc993cf5699670e4df6c9374101adbbec6fc144a2527bbe6f8e5feb7906e2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "DOCKERFILE",
+      "satoriLanguageId": "dockerfile",
+      "file": "dockerfile.wasm",
+      "sizeBytes": 374743,
+      "sha256": "63bf6688a5168c99bca72d0879bc4e2f176a27c6d5944d0ea12da343e93f4881",
+      "sourceSha256": "fa1c4cec57fe5c94880897d9e13b26b161678563698f01947b3ff9e617b6c3d2",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "DOTENV",
+      "satoriLanguageId": "dotenv",
+      "file": "dotenv.wasm",
+      "sizeBytes": 329698,
+      "sha256": "a29055c383da489d540b80ec6c2d86d71d5b146c3dbfb3bf2362578cb64ed60a",
+      "sourceSha256": "400b84159e56681ce52a1bd03609682d0cb3a4ad7f7eb11c87f8fab3085e321f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ELIXIR",
+      "satoriLanguageId": "elixir",
+      "file": "elixir.wasm",
+      "sizeBytes": 1564208,
+      "sha256": "aaf9243dbd26e5e85b334c8ca71e5f3bcffa76effa18b1c766602b6eea2ab996",
+      "sourceSha256": "2374832d7b35adff82bcd352e9d5ba9283cc8cb4a10a8fbcf9a8c2787097e377",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "ELM",
+      "satoriLanguageId": "elm",
+      "file": "elm.wasm",
+      "sizeBytes": 501777,
+      "sha256": "0831193b1d4cf1bb49233b8d415363bb76f0f6637f7a00b135e5cf96202b8760",
+      "sourceSha256": "4ddc4000de0d842aea0ee60e5924aa43ed0568cbb9f925a6540a62da2e8421d7",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "EMACSLISP",
+      "satoriLanguageId": "emacslisp",
+      "file": "emacslisp.wasm",
+      "sizeBytes": 406387,
+      "sha256": "e0368fe1db8276b337e6affad3aefd7ada6e60adc26d05871594b79f6b14f24e",
+      "sourceSha256": "b29c45d47e83dd7af5b60d34e5e174268c1d4e73cb56d246f6b248835bdd6480",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ERLANG",
+      "satoriLanguageId": "erlang",
+      "file": "erlang.wasm",
+      "sizeBytes": 601210,
+      "sha256": "ca922ad2179316a155325f298ad06fb00901cc22c99c639a9ea7c1bfdb59c09e",
+      "sourceSha256": "b0e448af23f58f0797e27bd82de1403c0922a71aacd33036991706c8aef0ffee",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "FENNEL",
+      "satoriLanguageId": "fennel",
+      "file": "fennel.wasm",
+      "sizeBytes": 429875,
+      "sha256": "8a4dd7900cb280fcc32b712e54ab5e489f5d1e5a8aba02ca6ed074c376455b9f",
+      "sourceSha256": "7f4dcc64374b858359b5833aa6eb652131e029ab2599f20221251973e32474aa",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "FISH",
+      "satoriLanguageId": "fish",
+      "file": "fish.wasm",
+      "sizeBytes": 399728,
+      "sha256": "68af498b2ddad00baf69b326e94ace15a3d9d1941e2e9d8117f69f22fcc3dc07",
+      "sourceSha256": "37ee00dce5a9dbe58c171dd122dae3b24e691abaa60bcf8afa76143c251356a2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "FORM",
+      "satoriLanguageId": "form",
+      "file": "form.wasm",
+      "sizeBytes": 393023,
+      "sha256": "6f711ef7a513bb9476683ed95d8fb8164fb128b0e3b2ef2495e0cb6368946662",
+      "sourceSha256": "2ce6615b90afd403fa99d830aa6cf56bb1d9106e477108917d692e39f02e0866",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "FSHARP",
+      "satoriLanguageId": "fsharp",
+      "file": "fsharp.wasm",
+      "sizeBytes": 3580223,
+      "sha256": "be373a41b071f4c07c42eae8c6c8b30c8070038a25e08974eff1c53610effe4a",
+      "sourceSha256": "e5e4a073213c4e5b9477440bd9ba66f92c650150a37333aa3eb76eaee8ec0635",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "FUNC",
+      "satoriLanguageId": "func",
+      "file": "func.wasm",
+      "sizeBytes": 393555,
+      "sha256": "5df809d74fb7c593504f1dd2539fd8f4a3bd4211aa3786daf33e59e0978b83da",
+      "sourceSha256": "8b22cbdb073d7550777fbe53da7c51fd7cbb4c6fcb006c948f74ebcdec677eb9",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GDSCRIPT",
+      "satoriLanguageId": "gdscript",
+      "file": "gdscript.wasm",
+      "sizeBytes": 563852,
+      "sha256": "3ec8428694e08b4d5e585301ea6315867d3f2525e4aa47770c594a702f25ec61",
+      "sourceSha256": "2a5b4b9d38aece89ba386b726a3253def2874ae2f0f06684c2310590a1fc6830",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "GITATTRIBUTES",
+      "satoriLanguageId": "gitattributes",
+      "file": "gitattributes.wasm",
+      "sizeBytes": 343246,
+      "sha256": "6ecc076ad19890bbd2a389168573f78bf8f1f33718c5eded49b8a3f46be2aa3c",
+      "sourceSha256": "d9f2023f894cb72fe7e3d8fb0667ac519de835c7a373d4b7a47f46fd6aaa73b6",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GLEAM",
+      "satoriLanguageId": "gleam",
+      "file": "gleam.wasm",
+      "sizeBytes": 722157,
+      "sha256": "345f905170eb235b86188dc2abfa6ef5e5f5433e4af1145ff7d54f896786e903",
+      "sourceSha256": "d6647a8cc3eb8178e5defd9307a2331c5c12f0dea600012cdb289d8a2cb60cb2",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "GLSL",
+      "satoriLanguageId": "glsl",
+      "file": "glsl.wasm",
+      "sizeBytes": 884301,
+      "sha256": "344ebc9c1a8214191cad7b838e8e7ce1aafc29c552815fbc8b7a4fce722946fb",
+      "sourceSha256": "77102fb2822378ebde52dda81228d3cb3211553e528346ac0fefb77bfaff08fa",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GN",
+      "satoriLanguageId": "gn",
+      "file": "gn.wasm",
+      "sizeBytes": 347955,
+      "sha256": "47c9b258eb3eeaab4c62a51e6507b531cb5e3c2fe83c0cb40a0479957d924837",
+      "sourceSha256": "b28251c623086f3ae20974a646788cf1b1ea7aac0ee758770826c060f404e04c",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GOMOD",
+      "satoriLanguageId": "gomod",
+      "file": "gomod.wasm",
+      "sizeBytes": 343193,
+      "sha256": "e9fb78d7a1c88e1ca45b6e98c4800398959ca9732162ac5b4cde5b894477f461",
+      "sourceSha256": "83f36632154ebc0abed8728a32e1ac27a3c3f843684640bd404fc756c99f0b79",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GOTEMPLATE",
+      "satoriLanguageId": "gotemplate",
+      "file": "gotemplate.wasm",
+      "sizeBytes": 421554,
+      "sha256": "dfeadaa56268bed6f3415bc24413631b6350294832c171924958278c62b57585",
+      "sourceSha256": "77b07f20e41708fcf03163385b29a8114ddf306b3b84ead5c7c4d8f81591933a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "GRAPHQL",
+      "satoriLanguageId": "graphql",
+      "file": "graphql.wasm",
+      "sizeBytes": 378247,
+      "sha256": "5779d40781b25368890e03f1d436943a89b1bd03048bf2d3458743e62ce534da",
+      "sourceSha256": "29d66de1dd4359f4cada429203d3c186564883cf6eaee6fa4871255589f557c4",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "GROOVY",
+      "satoriLanguageId": "groovy",
+      "file": "groovy.wasm",
+      "sizeBytes": 954822,
+      "sha256": "9d4b3b247a272d1b9aa357a8f588b75f01c400cd1df844a8929752996ba1f418",
+      "sourceSha256": "8aff26c41624207a43425067e0cb53d932365c1f522a9cf6d915778696bf321d",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "HARE",
+      "satoriLanguageId": "hare",
+      "file": "hare.wasm",
+      "sizeBytes": 436117,
+      "sha256": "6a147c8de8b13d8d8ff03eea1f81f2aa2631b91e0e2c8c43cc7996937f6599e3",
+      "sourceSha256": "61e55fd331bbb62175d52337fecfd4122745f51e196e9a8576b709dc7031fa8a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "HASKELL",
+      "satoriLanguageId": "haskell",
+      "file": "haskell.wasm",
+      "sizeBytes": 2490422,
+      "sha256": "15f2d219100e7693b7905602e955c0eeec23501663539a4d3d3876ac4289e6d9",
+      "sourceSha256": "3b09b0fc38fa93e5c4b0c45a69ee68f0c4f1120290b6f86ab7eaadb30c250596",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "HCL",
+      "satoriLanguageId": "hcl",
+      "file": "hcl.wasm",
+      "sizeBytes": 426664,
+      "sha256": "c2c91656981646d73381525428a7681d2cd07189b59e216c4bac8439b77834f7",
+      "sourceSha256": "0dfd193df494d82c21c1251ae86f4a33a7604875ec4ce05fc976257cdebdf152",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "HLSL",
+      "satoriLanguageId": "hlsl",
+      "file": "hlsl.wasm",
+      "sizeBytes": 2405691,
+      "sha256": "92f3ab21ea18feaa2521e7f9d070840e17df16a2f8d0c823ef1b2b8a3ec3c360",
+      "sourceSha256": "d59bad39a845fef5e1faa465b613850b4ec7a03ebad3101de073f86cac8c089b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "HTML",
+      "satoriLanguageId": "html",
+      "file": "html.wasm",
+      "sizeBytes": 347779,
+      "sha256": "ebe4b39ba2f899940e96fb9f68244c804aebef328fd90d67abe3bb1f7e9f8cc2",
+      "sourceSha256": "60d415c7077a83cbd4c77554b9dea651d1bf168fe6654380741faa635144954d",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "HYPRLANG",
+      "satoriLanguageId": "hyprlang",
+      "file": "hyprlang.wasm",
+      "sizeBytes": 359512,
+      "sha256": "862c4ed0e4ecbc3bd9085d65d9fefa7d63d507c8b1dbf7b83fc41163e90afd15",
+      "sourceSha256": "f1a55bda85769912d8f46c6b3ed5319c339624966719b5ee1728a9a8f60d4609",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "INI",
+      "satoriLanguageId": "ini",
+      "file": "ini.wasm",
+      "sizeBytes": 327041,
+      "sha256": "7bfe84ee239937a0ede3c596d0dd7e071e88782491b304485442159d0e13e229",
+      "sourceSha256": "ea4e3412bb91291cc41a2f2e8a3ecd9b1f7b151110a7299dff3ec09c928964f0",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "ISPC",
+      "satoriLanguageId": "ispc",
+      "file": "ispc.wasm",
+      "sizeBytes": 1353440,
+      "sha256": "b3ccd4ef915f61c19aa82bbe6a0182bae99407301a9c5860152f72a717ba55e4",
+      "sourceSha256": "39690d543678792ec68299ab66d04e1ae89e1a400da030313a053d6dd378a7fc",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JANET",
+      "satoriLanguageId": "janet",
+      "file": "janet.wasm",
+      "sizeBytes": 340811,
+      "sha256": "fb29900d0c92286151291ed442e45d1e0430958ad531ae69e6c1a2ebaf0ddace",
+      "sourceSha256": "a1ef8e19c50eba4573a648b3678e4ee02648a1fbaaa2515442c2e1ddd3c93ce8",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JINJA2",
+      "satoriLanguageId": "jinja2",
+      "file": "jinja2.wasm",
+      "sizeBytes": 333668,
+      "sha256": "7db0c963b39cf28a507e7e5c8dd620d28097df65501c5f41dd5cf1566e41eeb3",
+      "sourceSha256": "0b92cbfc074cda265350692b57f6ca9f912a8a1666159c8eb4cfaaaae41400e2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JSON",
+      "satoriLanguageId": "json",
+      "file": "json.wasm",
+      "sizeBytes": 328292,
+      "sha256": "ea1474640cfcff105ed624e33dab1711b2375d4047bad82fe5b6965690305caf",
+      "sourceSha256": "e2ab14c806f717784129f244efcec7e5a978b400014b4f228142da6aa3c5e136",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JSON5",
+      "satoriLanguageId": "json5",
+      "file": "json5.wasm",
+      "sizeBytes": 353979,
+      "sha256": "d3b784634a4790cba7b920554ad1d7b3dfcb80974874b49c630e17d504210a7f",
+      "sourceSha256": "620c6676271423f829234bfd1907e3fdef1a1e36bf9f7c4bf8ed69782a688c11",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JSONNET",
+      "satoriLanguageId": "jsonnet",
+      "file": "jsonnet.wasm",
+      "sizeBytes": 387272,
+      "sha256": "b4f5febd1b0bc2693402d79b18a9c9881aeb125534a89d47fa7c2e6cf9576b5c",
+      "sourceSha256": "f732e6fbc1b97656e7279179c9109deb233080cf3016a54f011f2bcfb8c802f3",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "JULIA",
+      "satoriLanguageId": "julia",
+      "file": "julia.wasm",
+      "sizeBytes": 2260364,
+      "sha256": "580d74c553d5e43a00ec48ec753e7cce777a7432a443088c32d7f7d6596d1213",
+      "sourceSha256": "18e3490cd6eee99671f3ed5b2545fa0b0887fd1357c3aceb0adee912f9bf0a73",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "JUST",
+      "satoriLanguageId": "justfile",
+      "file": "just.wasm",
+      "sizeBytes": 365993,
+      "sha256": "38ce5336e885c32bba92a79cc820661b4f9a5e1c1528cd1963805bd4db454fea",
+      "sourceSha256": "30782f746f8138920b41475bb24aa4b894b1167cdc992032265a8308cf900adc",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "KCONFIG",
+      "satoriLanguageId": "kconfig",
+      "file": "kconfig.wasm",
+      "sizeBytes": 377742,
+      "sha256": "2c43c2c2e88396975a41c83b868dcc80ec478aff14c2bf761c6958323cc2e285",
+      "sourceSha256": "480266dc2dbf48a785cd456613bbadaa52c3027c03c135d23827b36da6a1d068",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "KDL",
+      "satoriLanguageId": "kdl",
+      "file": "kdl.wasm",
+      "sizeBytes": 390195,
+      "sha256": "29dbbdbb41e03c829a9174214c1919a6d79395cbd2adee7abca8ef778662fa07",
+      "sourceSha256": "545e6cd4d05f5e97961ac6ea9f753a5cea2cbba76b466ca6220fadca8a9cefbf",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "KOTLIN",
+      "satoriLanguageId": "kotlin",
+      "file": "kotlin.wasm",
+      "sizeBytes": 2930089,
+      "sha256": "6b735b64a112198e4e07a262e699fb2f09cf224030441e129414da0f7eeb987e",
+      "sourceSha256": "b83f526862c46b53194a2860e1f850234b4ea16b91c2da9e3476a6a2e808d1f0",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "KUSTOMIZE",
+      "satoriLanguageId": "kustomize",
+      "file": "kustomize.wasm",
+      "sizeBytes": 484726,
+      "sha256": "d98070d2f2fb2a457610539196c4b24d24d41f7346851e5a60f94a6d46b7a7a0",
+      "sourceSha256": "262f197e9a398ad81f6b2c24229b3bb0e446ba2c7682ac54816a1055a272e826",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "LEAN",
+      "satoriLanguageId": "lean",
+      "file": "lean.wasm",
+      "sizeBytes": 14626402,
+      "sha256": "d07693ba0f04fdd99e387cc03c873fcfb4cb111484b15b6ea58170abafa09778",
+      "sourceSha256": "f101880c0fbd5d1341534ab72726a553561abcdc516956b9bc5f4df9e2467d51",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "LINKERSCRIPT",
+      "satoriLanguageId": "linkerscript",
+      "file": "linkerscript.wasm",
+      "sizeBytes": 405769,
+      "sha256": "260bf69519f8606a624e680325cb6e2ea8647a1717fb015e8c7a6e1291fdfda5",
+      "sourceSha256": "bf1887732ffd27c8f5029ea582ef4c42a535e3ed0657459622fa57ebd3c01f6b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "LIQUID",
+      "satoriLanguageId": "liquid",
+      "file": "liquid.wasm",
+      "sizeBytes": 444675,
+      "sha256": "63f08c31af8888b26f5a3b3f9cdd1da69c1b25cfae4174930fd51b0e2701bdc3",
+      "sourceSha256": "971203986e20209bf50308e1e906e2c2154757b1aceb40552d245cc7e4cdf093",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "LUA",
+      "satoriLanguageId": "lua",
+      "file": "lua.wasm",
+      "sizeBytes": 373786,
+      "sha256": "7ba7ae155910bac32884ef63d90572defb2bb87419b0bf8d3e2bb1b21043f4af",
+      "sourceSha256": "192eb56e4e9e057f8281baea48a5d5f48189892c74e7d663db2ecb2f25935183",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "LUAU",
+      "satoriLanguageId": "luau",
+      "file": "luau.wasm",
+      "sizeBytes": 415333,
+      "sha256": "08378621046dc4911d1ec53e2ed836197e76ba7e8f0e5278bebec4920b116057",
+      "sourceSha256": "3358cc7695ec1617b822679d0ca7fa9b75ae904b6c408f3c15676927a0d482d0",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MAGMA",
+      "satoriLanguageId": "magma",
+      "file": "magma.wasm",
+      "sizeBytes": 406147,
+      "sha256": "07d8d4b7d68a2616dceecfe4fc6fa02745d5200b47a9181c5641da095a0a3fde",
+      "sourceSha256": "010752797ed28e6faf25bf291f050f114512fc07923c77f2550216e6941a282d",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MAKEFILE",
+      "satoriLanguageId": "makefile",
+      "file": "makefile.wasm",
+      "sizeBytes": 476541,
+      "sha256": "2aa9af869695e3eff376eff4cee707535ffd6435dc3f4c32c8ccbf9c487c06f3",
+      "sourceSha256": "7fce374f5c733824d617656071e0a09f26c0eb7c66763917487886af6590a1af",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "MARKDOWN",
+      "satoriLanguageId": "text",
+      "file": "markdown.wasm",
+      "sizeBytes": 653362,
+      "sha256": "64513a081a5482a332e52723190182cfca42689c363741d45fd6dc1d0577c150",
+      "sourceSha256": "c67b8fb56fda60992d0239552de40b6c12d301a81f2081e8b35d8a8e98b2b9c5",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MATLAB",
+      "satoriLanguageId": "matlab",
+      "file": "matlab.wasm",
+      "sizeBytes": 686542,
+      "sha256": "359dc91cc0a59afc78dd46095fb22555315376740cc960dd501ec25883be7d35",
+      "sourceSha256": "38c8b223d86d5e0eb2a04c1c2b649ebec484fcb9d5df9032350203e6b1601de8",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MERMAID",
+      "satoriLanguageId": "mermaid",
+      "file": "mermaid.wasm",
+      "sizeBytes": 522022,
+      "sha256": "3f856af93be47b6a7712b80a7ab1882f5e31dd63558e60d821d3e8cc5a5142e3",
+      "sourceSha256": "488f4780ecb08df4e3cf99901e236692a2ef1069d803940fdbfa9b5ffdb70d1f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MESON",
+      "satoriLanguageId": "meson",
+      "file": "meson.wasm",
+      "sizeBytes": 439644,
+      "sha256": "c844b2d1e86b2186e187a8b3f872db273d75258eba575e1017554809f11615fa",
+      "sourceSha256": "180f4b18bfe813c92b74222bcbcb0926f8d4f993c014e47aa3e7c05ecbbea26a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MOJO",
+      "satoriLanguageId": "mojo",
+      "file": "mojo.wasm",
+      "sizeBytes": 2973195,
+      "sha256": "cc55fc8f851c8ffe96e7fcf763358df14a6458d386c57bead66ba8a5b5681d51",
+      "sourceSha256": "435b9b68b23f811784aaec515f70a0a32aac63b0d01521aa4e8957787516f2d5",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "MOVE",
+      "satoriLanguageId": "move",
+      "file": "move.wasm",
+      "sizeBytes": 414177,
+      "sha256": "b70417ac49fd17b38d69c5b8c0be343e424f912790622b83190d1b59ac23625d",
+      "sourceSha256": "8beb41c52eb2aa0e9c30a5ff06eb7eced885c1bc4bd67ea85babec61efe9fadb",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "NASM",
+      "satoriLanguageId": "nasm",
+      "file": "nasm.wasm",
+      "sizeBytes": 892999,
+      "sha256": "2afe1217988fcbc83b5b4a4cff47fe50bbdff3b4b422afb03db9939f760da085",
+      "sourceSha256": "7ca816bc520c5b9f5dee2f7822f7a92c2b7fa5ef05806b0f0880c887e2c0abd3",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "NICKEL",
+      "satoriLanguageId": "nickel",
+      "file": "nickel.wasm",
+      "sizeBytes": 501323,
+      "sha256": "8e5dc63e2a518d968ec1692a1357ad7d1665fd8f57ed7f6cfb41b109b6ef8d74",
+      "sourceSha256": "46134b43ed41811602fc58607015602b172ac62bd7abedcd57756f1b98119818",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "NIX",
+      "satoriLanguageId": "nix",
+      "file": "nix.wasm",
+      "sizeBytes": 403619,
+      "sha256": "90ba0a390c00c28ad5a14b1aff87132eb8ac32fc1628f5a77b22b6291d3122a3",
+      "sourceSha256": "3b5f15fece85b4e32fe93aade5469e75b9f74035b67a82300c6462e2d6d5a9ea",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "OBJECTSCRIPT_ROUTINE",
+      "satoriLanguageId": "objectscript-routine",
+      "file": "objectscript_routine.wasm",
+      "sizeBytes": 4308772,
+      "sha256": "d9a0716881189f5d0014e20bd3631ea2bb8c371a4e2319bb8a88731726c586e6",
+      "sourceSha256": "01011de4d689dd07a90f11a03ad6b731eca522a2c5cc59c9730cfaa3d63b09a6",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "OCAML",
+      "satoriLanguageId": "ocaml",
+      "file": "ocaml.wasm",
+      "sizeBytes": 4295615,
+      "sha256": "6e7e76ef898e313468f95d3371b535e9920e169fbb317eac61ed13c1da633ffe",
+      "sourceSha256": "c1475c7636515f97eb3da7a40b47e422d4cee878feaf072b285d30720a43f10a",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "ODIN",
+      "satoriLanguageId": "odin",
+      "file": "odin.wasm",
+      "sizeBytes": 1884611,
+      "sha256": "94a95f42ee7fdfe5a3ea65d44f34c6404f822bb890a90dc1141bf9aa9cf861bd",
+      "sourceSha256": "39da073dfe20c36f72fcb0232475191e207c597b94e34a2fa6479bbe47330a63",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PASCAL",
+      "satoriLanguageId": "pascal",
+      "file": "pascal.wasm",
+      "sizeBytes": 758512,
+      "sha256": "b89a4d1bfa8d3fef2da25bdfc377fbfd759af3a63fce0dfa38f7a02d9c4c2cb8",
+      "sourceSha256": "0f4a95c0e51eb2b6b2b34586ed8b8e974c600da399420425cf567a193489a0de",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PERL",
+      "satoriLanguageId": "perl",
+      "file": "perl.wasm",
+      "sizeBytes": 2653959,
+      "sha256": "722b4888b93be93d34319bb9636854cce4842bcf1d598107e39bc57f293efd00",
+      "sourceSha256": "34e45e4566cf956a12839863f281f4fcf9c01f6699f7104f5134ba76881668fd",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "PHP",
+      "satoriLanguageId": "php",
+      "file": "php.wasm",
+      "sizeBytes": 970157,
+      "sha256": "3045c3ee7eca043c808d7a20b9505aa32a9aee8fe102c8782334d74f438b8d5a",
+      "sourceSha256": "0280e9a5d213451123ec6980867323057d076ecf65e3f4faff3d67b7ed0d2734",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "PINE",
+      "satoriLanguageId": "pine",
+      "file": "pine.wasm",
+      "sizeBytes": 515864,
+      "sha256": "4540125e5e6aba8bad245f6b3c4e4bc8fa07dfa4960e4dcde6333422cde38699",
+      "sourceSha256": "3966e3937d6632c3d7d3b5a6d7cc954719c61db72ddbf7039fd6a268265a755f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PKL",
+      "satoriLanguageId": "pkl",
+      "file": "pkl.wasm",
+      "sizeBytes": 513064,
+      "sha256": "8e648bda0f88a327a1a946a2f41d5b137d7ddd2efbe271447d8a8e95c4734eb1",
+      "sourceSha256": "ff7f621b61dda35440c7e0bb6943b62f9ac00a7bc5955bb637f9dd44ae93f1ef",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PO",
+      "satoriLanguageId": "po",
+      "file": "po.wasm",
+      "sizeBytes": 332761,
+      "sha256": "f9c1b05c698b37c3ebced56123fbda152446527662fa2b69f48907ec63ad38c9",
+      "sourceSha256": "197fd16a10e6fbb678c5e414ebff7df2ef568b8b55cdda1324369ace401afc3d",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PONY",
+      "satoriLanguageId": "pony",
+      "file": "pony.wasm",
+      "sizeBytes": 735550,
+      "sha256": "44a02417f7dd332f8d4073e7924b02b05dd322f88e561ea54ec6c0d0bb90f215",
+      "sourceSha256": "a7a41fd5dbddc1d3d7d3552d00900132cfbaca690896f61c4d9b33287588338e",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "POWERSHELL",
+      "satoriLanguageId": "powershell",
+      "file": "powershell.wasm",
+      "sizeBytes": 1043075,
+      "sha256": "8faa2a6f62a52940f4fedadfc945b609ccc97d855ec65cb997033169816c6837",
+      "sourceSha256": "73f3e807ec8454ec6ad1f212a3c5c23869f76c9fe743e9f0313bf297f70fe29e",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "PRISMA",
+      "satoriLanguageId": "prisma",
+      "file": "prisma.wasm",
+      "sizeBytes": 358241,
+      "sha256": "1eba8b72e90a30bef4376cd4f40c10e594ee5d216e05defc59c221a7cd60bb8d",
+      "sourceSha256": "4c4054a9a153107672d5aba02bcb36d6ef6ff398599e2abe85f6fe968d2ff4ed",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PROPERTIES",
+      "satoriLanguageId": "properties",
+      "file": "properties.wasm",
+      "sizeBytes": 332840,
+      "sha256": "c80c233dd357644d97538641faea74a343d0dc7bf0962d689fc5144651bd098e",
+      "sourceSha256": "1c4f48f6bb1db702781ff6acd60474d2d918130059557a079ee789d5afeac986",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PROTOBUF",
+      "satoriLanguageId": "protobuf",
+      "file": "protobuf.wasm",
+      "sizeBytes": 389721,
+      "sha256": "edacda4a3d24fa0ab72e585842848264897779242b0d9edb24e7a0eb9abd9f50",
+      "sourceSha256": "ca632a9dedcebb5b95c7cb4608e87a553a50a1717111262d70da79d8e5d506ca",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "PUPPET",
+      "satoriLanguageId": "puppet",
+      "file": "puppet.wasm",
+      "sizeBytes": 439740,
+      "sha256": "a0181a2db137876b198ccbd1e8e0e010caa543e5d170bee40538de0b61f0bebd",
+      "sourceSha256": "e2bdb9b59d76a674a0cbe36a01f7e33a83bbc0ec668658fe739b21f25160fe07",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "PURESCRIPT",
+      "satoriLanguageId": "purescript",
+      "file": "purescript.wasm",
+      "sizeBytes": 1482571,
+      "sha256": "e1d3cb8651b859183d8774f8180dba80335a802aac2af185a59ec74815c4eeae",
+      "sourceSha256": "9698468daacb6a9bc84f3433a93750241f3f5b09a52433885b1e3740fb14540a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "QML",
+      "satoriLanguageId": "qml",
+      "file": "qml.wasm",
+      "sizeBytes": 1383286,
+      "sha256": "34003fd88328a2aee0d12c0e9ea03eba25f1af0fc14b82d8324ee07340dae055",
+      "sourceSha256": "09fc969293e6a44da90e9554dab529f2420cb9d9f5c6253c71dabda0f1bee3a6",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "R",
+      "satoriLanguageId": "r",
+      "file": "r.wasm",
+      "sizeBytes": 768963,
+      "sha256": "b8ae2351b92e85213145aaa5a41e3c5e82b27f2d3293ab526aad7b7947c2b5c8",
+      "sourceSha256": "16c6e47adecdc7838da581b0392dac3641896ba3374f01c272d053ad0901b293",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "RACKET",
+      "satoriLanguageId": "racket",
+      "file": "racket.wasm",
+      "sizeBytes": 438289,
+      "sha256": "2d2691bf061c61a7300d1053a10635f1bea12725b65ef476664252fb031365b5",
+      "sourceSha256": "9d7ecff6859a8915e5b01f375579a48e284c7ef6556cb5c2dbb5e48c551e3019",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "REGEX",
+      "satoriLanguageId": "regex",
+      "file": "regex.wasm",
+      "sizeBytes": 344060,
+      "sha256": "19b6792d9c9d4d4ef82ca699cf17ac7456101704674dacdd291ae4819a6e2c89",
+      "sourceSha256": "fb2c84f7787a792e6f91799e9ac30cc02ba83d9a5ce1025eaf1ba408848a7d27",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "REQUIREMENTS",
+      "satoriLanguageId": "requirements",
+      "file": "requirements.wasm",
+      "sizeBytes": 354226,
+      "sha256": "51b241b102119a9b7375d41fcf58507e0af8553707d6357e3554a8c591d73708",
+      "sourceSha256": "a4b1bd9ffed2bc8da8b66808cd8f412276b57f3d0daff8d9f9628e74137a14fe",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "RESCRIPT",
+      "satoriLanguageId": "rescript",
+      "file": "rescript.wasm",
+      "sizeBytes": 1059923,
+      "sha256": "7843a47ff4b2e712fbb8ae443708613ab9f9b37e364d8fdbd1e8a1c48393ca8d",
+      "sourceSha256": "6ecd167158705889545571fd0fd137fe43dad791e15b0130d1bbe506cef89c82",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "RON",
+      "satoriLanguageId": "ron",
+      "file": "ron.wasm",
+      "sizeBytes": 359174,
+      "sha256": "16ba49bc05a618ec7d999478c9102fcccd7ea706dc82a4bad7d4d4347499c959",
+      "sourceSha256": "0492c02fd77cc8dd7a060052fde53633e0f8843a124c9eb1bba4355de799a044",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "RST",
+      "satoriLanguageId": "rst",
+      "file": "rst.wasm",
+      "sizeBytes": 378479,
+      "sha256": "9406720ac8ec71891668f7520a7e8a9fb9e1132fe6c15fe1b172192d12915f10",
+      "sourceSha256": "508df881aa4bce80f3b79fe0f0d6fc134030e5925a5e4d36f4c21c1b21fe274b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "RUBY",
+      "satoriLanguageId": "ruby",
+      "file": "ruby.wasm",
+      "sizeBytes": 1907031,
+      "sha256": "4e947a2df57c79e7cf17d1c93436f79111ec6a9de91645fe5f2b7ba08a6cc6b4",
+      "sourceSha256": "2cb40453953e75551ad5176c1a84b6a4ef32099383c972f6efff0a3ef19733f7",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "SCHEME",
+      "satoriLanguageId": "scheme",
+      "file": "scheme.wasm",
+      "sizeBytes": 428020,
+      "sha256": "1d68c6e584de12a6129ee29d921bf300ea254c709c8cdcae05f7f203af35f30a",
+      "sourceSha256": "40b24c2a078f2cafaee2ed43c42dab7d222899465728a30a384aed0ad2e7692e",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SCSS",
+      "satoriLanguageId": "scss",
+      "file": "scss.wasm",
+      "sizeBytes": 452509,
+      "sha256": "314fe2e8f56497b766bfd161e64688ebda7f7dceac7155a942be1f5b54ecb7dd",
+      "sourceSha256": "fbf2e69777d386631e9ad9e251cb2e0645e3692f7cb6b63c09765ca828dd986f",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "SLANG",
+      "satoriLanguageId": "slang",
+      "file": "slang.wasm",
+      "sizeBytes": 2986184,
+      "sha256": "2cbad02502e6b13ef4da998a5d75899c1d20ce9ced16239e2400e05f80ee9ea6",
+      "sourceSha256": "1b7c1cea4f25f211cd169ae4c26e956b0a515913fec9a7d74a23d3f79c57b974",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SMALI",
+      "satoriLanguageId": "smali",
+      "file": "smali.wasm",
+      "sizeBytes": 628569,
+      "sha256": "70baf51f5c8c4bab2d31723a981a12e9d89bcd6c1b5a741d55c3c0dc3c81193b",
+      "sourceSha256": "bb051f61ae3a5910f7bbf4299ad2c23d388e9432f2ed2aef1345b54fc1d519bb",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SMITHY",
+      "satoriLanguageId": "smithy",
+      "file": "smithy.wasm",
+      "sizeBytes": 370453,
+      "sha256": "241f9c2524df7816d7f934c749f594dc49873688feb6853cd8e02f7cb66d7c41",
+      "sourceSha256": "36420966fe5e900889155ceb227c0925505f1a18bfa6265dd6bad6074853bf58",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SOLIDITY",
+      "satoriLanguageId": "solidity",
+      "file": "solidity.wasm",
+      "sizeBytes": 574001,
+      "sha256": "b7c8a50d1b36938075784a97d6d0d9f5afe860f6fc567dafc75ebb38822cbb28",
+      "sourceSha256": "a23d43bdc26c8c7b6f13ed018f25820fd769550e2cbef148781739dd3641882a",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "SOQL",
+      "satoriLanguageId": "soql",
+      "file": "soql.wasm",
+      "sizeBytes": 467591,
+      "sha256": "e3c4788464cdf631c7dad4d3b7cf14beaf2d5e9724adbbb3052502f0d79c9847",
+      "sourceSha256": "45b958e95836c9abc315f8b64d646979590bdabb95b4e392ce470b1df5f4ea69",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SOSL",
+      "satoriLanguageId": "sosl",
+      "file": "sosl.wasm",
+      "sizeBytes": 484676,
+      "sha256": "af566f492c752ddb05ba534778ff35683d5b0cd416d080df964749f062be9553",
+      "sourceSha256": "6020a071eb8ac54e4b8f90e962d07e0d62150e011465cbd0022b0513cb005725",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SQL",
+      "satoriLanguageId": "sql",
+      "file": "sql.wasm",
+      "sizeBytes": 5022625,
+      "sha256": "469e9bd9600fcedf1a4e2a3263fa6a800b80e9d4b850890747a9c9f595e36436",
+      "sourceSha256": "d650fcb72eaea4ce7821f00a1e06d683654990f26696a94862885d823fdd05b7",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "SQUIRREL",
+      "satoriLanguageId": "squirrel",
+      "file": "squirrel.wasm",
+      "sizeBytes": 650202,
+      "sha256": "aa0346d259f1b9389a73d333ffb228e8229c2fadb5416d204bc5bccf1a44e137",
+      "sourceSha256": "9b5c8351d6b711b3543164df6686b68a28d570ae03e4be663f029b77ae3589c4",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SSHCONFIG",
+      "satoriLanguageId": "sshconfig",
+      "file": "sshconfig.wasm",
+      "sizeBytes": 535663,
+      "sha256": "78d1865a46c59850053f0b31aae0a56811f2680da7c5b7c12fb3a592c1692d30",
+      "sourceSha256": "172de808d5e386f5e1acb35c30b693174d171ec1d67f7fd9806089685908ccb2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "STARLARK",
+      "satoriLanguageId": "starlark",
+      "file": "starlark.wasm",
+      "sizeBytes": 632153,
+      "sha256": "b4c2511a49f2c8c2258994777f3394ffa22dcd9a128120b848cd95e1213be422",
+      "sourceSha256": "54c8eaaf897b80699d4d46e9e10afcdf5d4d2c466a213fba16f4fb209df4ec00",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SVELTE",
+      "satoriLanguageId": "svelte",
+      "file": "svelte.wasm",
+      "sizeBytes": 373681,
+      "sha256": "171a4f80b7f6734d4fe523dd5a7cf209a5eb739584620970ceed2034fb9d3f26",
+      "sourceSha256": "04f1e5602c9f4e3f0ab2f60dc7217017800e6f6d7b7d98adbc3f6ce8d043d9e8",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "SWAY",
+      "satoriLanguageId": "sway",
+      "file": "sway.wasm",
+      "sizeBytes": 686691,
+      "sha256": "a86fe3063b61b9a74d58d3ce503200ea9727aaa4893b11cc6da4759d1d907c99",
+      "sourceSha256": "9b98ae3c2e893bb9f798fb3d0a460322100ac210a3877c18f46eca0bd5b392d4",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "SWIFT",
+      "satoriLanguageId": "swift",
+      "file": "swift.wasm",
+      "sizeBytes": 2346707,
+      "sha256": "f28493b4093494496f0335eac3936f59080f6a75cd0234cfd5e55633f691ad3c",
+      "sourceSha256": "61508a9030c418a65adf6e3625a585ed051463eab495b5dd05a38bfe89755409",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "TABLEGEN",
+      "satoriLanguageId": "tablegen",
+      "file": "tablegen.wasm",
+      "sizeBytes": 391855,
+      "sha256": "907fc1e392cd582ee5c49688995f3f77743d0dd5cb1e13e3510167895396e5ac",
+      "sourceSha256": "6e3e6a558530148e241dadcafd817483639d6fbc2e8a62f35f5a94290fc0485f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "TCL",
+      "satoriLanguageId": "tcl",
+      "file": "tcl.wasm",
+      "sizeBytes": 413743,
+      "sha256": "a09fe3af5f41c1f5e47f939c0103689ce18449fd6bcccc906b55c704f717e8db",
+      "sourceSha256": "c61ca3e502e3d44c2eb7994f760cf572f1482aae4485fee574ccf25dfb54c47a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "TEAL",
+      "satoriLanguageId": "teal",
+      "file": "teal.wasm",
+      "sizeBytes": 427788,
+      "sha256": "ed45b5207c09737caf6017dce04b3e703fc2002de23fca8b51884bc3dd13b23c",
+      "sourceSha256": "14c113437f37744169f37915039c3c5a678a79ebc6646181807ec51a8c719e6c",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "TEMPL",
+      "satoriLanguageId": "templ",
+      "file": "templ.wasm",
+      "sizeBytes": 682707,
+      "sha256": "ebaf16ecfd4fe9c0cec70d776865470b848f459e4b243fa342993a03f7ab3af0",
+      "sourceSha256": "37b72e43934ecc4ba487cd9097b0f28f032d086012f3b05d1ddf3081091f261a",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "THRIFT",
+      "satoriLanguageId": "thrift",
+      "file": "thrift.wasm",
+      "sizeBytes": 433280,
+      "sha256": "82eb4ea47a746fadb2953fd4c2d8b7721d434af6b843ca73327cc617f66f389c",
+      "sourceSha256": "d3a399f883f8c4497daa97a5817142010e2af7a644386f1efbcdf538247f9ae2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "TLAPLUS",
+      "satoriLanguageId": "tlaplus",
+      "file": "tlaplus.wasm",
+      "sizeBytes": 2973729,
+      "sha256": "870336967792365f0801ec669f1ab823d70ff5e47d71efaed28b6daa871759af",
+      "sourceSha256": "175be00b1f9f5764ffe7346f4c27d816ff54d9370b644e4f1a7dea556032e752",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "TOML",
+      "satoriLanguageId": "toml",
+      "file": "toml.wasm",
+      "sizeBytes": 348319,
+      "sha256": "fbc0888ccef2cc98fc4f197bea7f4039d0811aa880fd307721a818746728f443",
+      "sourceSha256": "56e9840c7998a0012f9b3710a76610c2155ed7957c3a610965e2ceea33f32aec",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "TYPST",
+      "satoriLanguageId": "typst",
+      "file": "typst.wasm",
+      "sizeBytes": 952583,
+      "sha256": "5fee421992831acc49841f62d1ea65bc2d0e8760bbd2c60abff10b161733907a",
+      "sourceSha256": "401e7b3dec4d57043ab13fee8e36808853265b8dc9fa356f28447876ccf8429b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "VERILOG",
+      "satoriLanguageId": "verilog",
+      "file": "verilog.wasm",
+      "sizeBytes": 12921484,
+      "sha256": "5f3fb0655d3f85d5672c056b30021b6662213f79a43b632b0da22e23c8f74702",
+      "sourceSha256": "bf91d51db368d10aa271f0198c70ac661ab32dc8c51aa372de3537782f1d7a7f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "VHDL",
+      "satoriLanguageId": "vhdl",
+      "file": "vhdl.wasm",
+      "sizeBytes": 1485111,
+      "sha256": "58d253467f993d404301fd66dc897a2ff3ac6513f0a0a332480c0a012e1c8bd1",
+      "sourceSha256": "05215098fd3430458c3e2f85841e8c367d0933e56fd087d32f430e2b852a740f",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "VUE",
+      "satoriLanguageId": "vue",
+      "file": "vue.wasm",
+      "sizeBytes": 357866,
+      "sha256": "b54ab733c143b7b40668dca711c789ab6e567e5714c8275c3a11c2335ebe41cb",
+      "sourceSha256": "9af67547efe068b996cc97050e42c92abc7298f641d74761076acef9451b6263",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "WGSL",
+      "satoriLanguageId": "wgsl",
+      "file": "wgsl.wasm",
+      "sizeBytes": 380685,
+      "sha256": "7185ab61d8afee4c046917fc2523e26bd534ee73d6305199a8adf365991f8973",
+      "sourceSha256": "9e1223016559e811af93a31e3067e56c5437788382c1ad0528b84911fa8474b2",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "WIT",
+      "satoriLanguageId": "wit",
+      "file": "wit.wasm",
+      "sizeBytes": 394794,
+      "sha256": "0e1988993e2cf45ff5fda274a4906ccb8aace792fdd5d26cec71142bebd36101",
+      "sourceSha256": "da9e1cb94fef6a6859ec46624b5d94d7dc5f9009c0c434da3ceceb9218151c71",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "WOLFRAM",
+      "satoriLanguageId": "wolfram",
+      "file": "wolfram.wasm",
+      "sizeBytes": 782964,
+      "sha256": "9853e89c52da8a7472b15a09c028378cc6f3c290c6072f57436a04b7459f67b6",
+      "sourceSha256": "193e1a8c03cdba71466f9501429834d1234519780390c1419dc67c9eb766a098",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "XML",
+      "satoriLanguageId": "xml",
+      "file": "xml.wasm",
+      "sizeBytes": 373268,
+      "sha256": "86ade6b23e879d36f365b3cf164eeddf3101581fdbfcedd58950de537802baa1",
+      "sourceSha256": "461f413e5ceb0a97ffdf026c2955afb68e3815ce6d169e74ce6d9ea35388aa6b",
+      "pack": "extended"
+    },
+    {
+      "cbmLanguage": "YAML",
+      "satoriLanguageId": "yaml",
+      "file": "yaml.wasm",
+      "sizeBytes": 484723,
+      "sha256": "5dd4333e3dac4f7c0f65be209432f18d2bac91ece9b4920b2e6f28e038fa9dfd",
+      "sourceSha256": "68e986409d5be8b1f9582e06598cb7c1d7baff0200098a609cd12ac417b4cf14",
+      "pack": "core"
+    },
+    {
+      "cbmLanguage": "ZIG",
+      "satoriLanguageId": "zig",
+      "file": "zig.wasm",
+      "sizeBytes": 834518,
+      "sha256": "652b28d0c1b0ed3e760bacc95466cac2cabf5674859c35d8a4b9eb509a5ef7d1",
+      "sourceSha256": "5997ee642ea519b68e3e57c14ab5253902dbe85c7d493fcf9971235f88ec6d37",
+      "pack": "core"
+    }
+  ],
+  "failures": [
+    {
+      "cbmLanguage": "COBOL",
+      "satoriLanguageId": "cobol",
+      "sourceSha256": "6b53ff26d06c53baa5223ee420ca4725dfeb89160db735846e532ff6d86fe30a",
+      "reason": "exceeded the 6G build memory budget"
+    },
+    {
+      "cbmLanguage": "FORTRAN",
+      "satoriLanguageId": "fortran",
+      "sourceSha256": "46802a71abd15d8b8efd4270986847078f0bb67e7a1e5ee3b9a411364f5173b2",
+      "reason": "exceeded the 6G build memory budget"
+    },
+    {
+      "cbmLanguage": "LLVM_IR",
+      "satoriLanguageId": "llvm_ir",
+      "sourceSha256": "b4eac9407ad5276ad2176da8d40aecfe6b829f059cf8638acded88d09a1f436c",
+      "reason": "exceeded the 6G build memory budget"
+    },
+    {
+      "cbmLanguage": "PLSQL",
+      "satoriLanguageId": "plsql",
+      "sourceSha256": "f4d2ceaccf1b26b3545217bbc6f3e5fd6ca67e4e14f9301c00c6e504f9bb76b8",
+      "reason": "exceeded the 6G build memory budget"
+    },
+    {
+      "cbmLanguage": "VIMSCRIPT",
+      "satoriLanguageId": "vimscript",
+      "sourceSha256": "3a4819667d7c3e98e928ba9566c83ced70321b297033d075a8049a08b0aa9c1d",
+      "reason": "exceeded the 6G build memory budget"
+    },
+    {
+      "cbmLanguage": "ZSH",
+      "satoriLanguageId": "zsh",
+      "sourceSha256": "654314e913591c9e65d7e985c49e5a72a42674516b24060544a526134604cea7",
+      "reason": "exceeded the 6G build memory budget"
+    }
+  ]
+}

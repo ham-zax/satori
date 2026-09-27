@@ -1,0 +1,1307 @@
+{
+  "cbmVersion": "0.11.0",
+  "cbmCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
+  "extractorManifestSha256": "8058f792f6bd67318eb754e77aea5df2a9b2f2dbfa26daf3815ba24dcf449a5d",
+  "satoriCommit": "67c6e66249ff8ca21a0d884c9f4a19819992e9d5-dirty",
+  "maxFilesPerLanguage": 200,
+  "corpus": [
+    {
+      "repo": "codebase-memory-mcp:tests/test_grammar_regression.c",
+      "rev": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d"
+    },
+    {
+      "repo": "https://github.com/Alamofire/Alamofire.git",
+      "rev": "bda9ed57d72988a3a2ada33d824583541f86eac6"
+    },
+    {
+      "repo": "https://github.com/antirez/sds.git",
+      "rev": "5347739b1581fcba74fd5cab1fc21d2aef317d71"
+    },
+    {
+      "repo": "https://github.com/bats-core/bats-core.git",
+      "rev": "52439ebfac39987dd43e26502aa4aa19f2753d4a"
+    },
+    {
+      "repo": "https://github.com/dart-lang/args.git",
+      "rev": "7a2dfb528768f0a2e5680f711dbfb948f1d6c255"
+    },
+    {
+      "repo": "https://github.com/elixir-plug/plug.git",
+      "rev": "73404f851852a00ffb2014be95d4598900fa77b8"
+    },
+    {
+      "repo": "https://github.com/jgm/doclayout.git",
+      "rev": "6a7890acba8605c925db1d5edba90422a356ef0a"
+    },
+    {
+      "repo": "https://github.com/rxi/lume.git",
+      "rev": "98847e7812cf28d3d64b289b03fad71dc704547d"
+    },
+    {
+      "repo": "https://github.com/sinatra/sinatra.git",
+      "rev": "cb22afd7902b566b6eaba6c4ea89739494a65d12"
+    },
+    {
+      "repo": "https://github.com/slimphp/Slim.git",
+      "rev": "3675bf6baac66b07032575b7bef4200b60b7974b"
+    },
+    {
+      "repo": "https://github.com/square/kotlinpoet.git",
+      "rev": "d43826762d8d1ea8781091499671dc03fd0b205a"
+    },
+    {
+      "repo": "https://github.com/tidyverse/glue.git",
+      "rev": "da9c73f7a3de6a27f3103cb5bb2355820a4c3a6a"
+    }
+  ],
+  "languages": {
+    "ada": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "agda": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "apex": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "arkts": {
+      "files": 1,
+      "cbmDefinitions": 3,
+      "satoriDefinitions": 3,
+      "matched": 3,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "assembly": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "astro": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "awk": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "bash": {
+      "files": 73,
+      "cbmDefinitions": 305,
+      "satoriDefinitions": 316,
+      "matched": 305,
+      "recall": 1,
+      "precision": 0.9871,
+      "pass": true,
+      "collapsedByCbm": 7,
+      "sampleExtra": [
+        "bats-core-bats-core:test/fixtures/suite_setup_teardown/pick_up_toplevel/folder1/setup_suite.bash:1:setup_suite",
+        "bats-core-bats-core:test/fixtures/suite_setup_teardown/pick_up_toplevel/folder1/setup_suite.bash:5:teardown_suite",
+        "bats-core-bats-core:test/fixtures/suite_setup_teardown/pick_up_toplevel/folder2/setup_suite.bash:1:setup_suite"
+      ]
+    },
+    "beancount": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "bibtex": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "bicep": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "bitbake": {
+      "files": 2,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "cairo": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "capnp": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "cfml": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "cfscript": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "chialisp": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "clojure": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "cmake": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "commonlisp": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "crystal": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "css": {
+      "files": 6,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "csv": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "cuda": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "dart": {
+      "files": 26,
+      "cbmDefinitions": 158,
+      "satoriDefinitions": 158,
+      "matched": 158,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "devicetree": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "diff": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "dlang": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "dockerfile": {
+      "files": 3,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "dotenv": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "elixir": {
+      "files": 79,
+      "cbmDefinitions": 662,
+      "satoriDefinitions": 927,
+      "matched": 662,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 265
+    },
+    "elm": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "emacslisp": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "erlang": {
+      "files": 2,
+      "cbmDefinitions": 27,
+      "satoriDefinitions": 42,
+      "matched": 27,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 15
+    },
+    "fennel": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "fish": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "form": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "fsharp": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "func": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gdscript": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gitattributes": {
+      "files": 4,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gleam": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "glsl": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gn": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gomod": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "gotemplate": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "graphql": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "groovy": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "hare": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "haskell": {
+      "files": 9,
+      "cbmDefinitions": 170,
+      "satoriDefinitions": 302,
+      "matched": 170,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 132
+    },
+    "hcl": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "hlsl": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "html": {
+      "files": 201,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "ini": {
+      "files": 2,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "ispc": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "janet": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "jinja2": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "json": {
+      "files": 30,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "json5": {
+      "files": 2,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "jsonnet": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "julia": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "justfile": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "kconfig": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "kdl": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "kotlin": {
+      "files": 132,
+      "cbmDefinitions": 1997,
+      "satoriDefinitions": 2225,
+      "matched": 1997,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 228
+    },
+    "kustomize": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "lean": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "linkerscript": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "liquid": {
+      "files": 3,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "lua": {
+      "files": 4,
+      "cbmDefinitions": 145,
+      "satoriDefinitions": 145,
+      "matched": 145,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "luau": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "magma": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "makefile": {
+      "files": 5,
+      "cbmDefinitions": 15,
+      "satoriDefinitions": 15,
+      "matched": 15,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "matlab": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "mermaid": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "meson": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "mojo": {
+      "files": 1,
+      "cbmDefinitions": 3,
+      "satoriDefinitions": 3,
+      "matched": 3,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "move": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "nickel": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "nix": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "ocaml": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "odin": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "pascal": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "perl": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "php": {
+      "files": 127,
+      "cbmDefinitions": 862,
+      "satoriDefinitions": 862,
+      "matched": 862,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "pine": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "pkl": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "po": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "pony": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "powershell": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "prisma": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "properties": {
+      "files": 6,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "protobuf": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "puppet": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "purescript": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "qml": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "r": {
+      "files": 24,
+      "cbmDefinitions": 56,
+      "satoriDefinitions": 58,
+      "matched": 56,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 2
+    },
+    "racket": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "regex": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "requirements": {
+      "files": 2,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "rescript": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "ron": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "rst": {
+      "files": 11,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "ruby": {
+      "files": 151,
+      "cbmDefinitions": 995,
+      "satoriDefinitions": 1024,
+      "matched": 995,
+      "recall": 1,
+      "precision": 1,
+      "pass": true,
+      "collapsedByCbm": 29
+    },
+    "scheme": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "scss": {
+      "files": 2,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "slang": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "smali": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "smithy": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "solidity": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "soql": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "sosl": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "sql": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "squirrel": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "starlark": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "svelte": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "sway": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "swift": {
+      "files": 102,
+      "cbmDefinitions": 1934,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 0,
+      "precision": 1,
+      "pass": false,
+      "extractorErrors": 102,
+      "sampleMissing": [
+        "Alamofire-Alamofire:Example/Source/AppDelegate.swift:27:AppDelegate",
+        "Alamofire-Alamofire:Example/Source/AppDelegate.swift:35:application",
+        "Alamofire-Alamofire:Example/Source/AppDelegate.swift:47:splitViewController"
+      ]
+    },
+    "tablegen": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "tcl": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "teal": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "templ": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "text": {
+      "files": 598,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "thrift": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "tlaplus": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "toml": {
+      "files": 3,
+      "cbmDefinitions": 4,
+      "satoriDefinitions": 4,
+      "matched": 4,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "typst": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "verilog": {
+      "files": 2,
+      "cbmDefinitions": 3,
+      "satoriDefinitions": 3,
+      "matched": 3,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "vhdl": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "vue": {
+      "files": 1,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "wgsl": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "wit": {
+      "files": 1,
+      "cbmDefinitions": 3,
+      "satoriDefinitions": 3,
+      "matched": 3,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "wolfram": {
+      "files": 1,
+      "cbmDefinitions": 1,
+      "satoriDefinitions": 1,
+      "matched": 1,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "xml": {
+      "files": 23,
+      "cbmDefinitions": 9,
+      "satoriDefinitions": 334,
+      "matched": 9,
+      "recall": 1,
+      "precision": 0.027,
+      "pass": false,
+      "collapsedByCbm": 1,
+      "sampleExtra": [
+        "Alamofire-Alamofire:Alamofire.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist:3:plist",
+        "Alamofire-Alamofire:Alamofire.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist:4:dict",
+        "Alamofire-Alamofire:Alamofire.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist:5:key"
+      ]
+    },
+    "yaml": {
+      "files": 52,
+      "cbmDefinitions": 0,
+      "satoriDefinitions": 0,
+      "matched": 0,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    },
+    "zig": {
+      "files": 1,
+      "cbmDefinitions": 2,
+      "satoriDefinitions": 2,
+      "matched": 2,
+      "recall": 1,
+      "precision": 1,
+      "pass": true
+    }
+  }
+}

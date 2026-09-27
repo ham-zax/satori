@@ -15,7 +15,7 @@ export const SCHEMA_PATH = path.join(ASSETS_DIR, 'semantic-languages.schema.json
 export const JS_PATH = path.join(ASSETS_DIR, 'satori-semantic-engine.js');
 export const WASM_PATH = path.join(ASSETS_DIR, 'satori-semantic-engine.wasm');
 
-export const PINNED_UPSTREAM_COMMIT = 'd150ebe4fc78a9a3f85013d2087a849e5d59eb0f';
+export const PINNED_UPSTREAM_COMMIT = '11b662f9f7fba92012b872dd4fcaef7ee0c1300d';
 export const PINNED_EMSCRIPTEN_VERSION = '3.1.64';
 
 export const COMPILE_UNITS = [
@@ -23,6 +23,7 @@ export const COMPILE_UNITS = [
     'common/scope.c',
     'common/type_rep.c',
     'common/type_registry.c',
+    'minimal-compat/hash_table.c',
     'languages/go/go_lsp.c',
     'languages/go/go_stdlib_data.c',
     'languages/java/java_lsp.c',

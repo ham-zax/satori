@@ -225,4 +225,42 @@ static inline bool cbm_label_is_type_like(const char* label) {
                      strcmp(label, "Class") == 0);
 }
 
+/* Satori shims for CBM foundation APIs used by the vendored resolvers.
+ * Memory classes only feed CBM's accounting, so they map to libc. The cursor
+ * lease always hands out a private cursor, which CBM documents as always
+ * correct (cbm.c: cbm_cursor_acquire); the pool is only an allocation
+ * optimization for its multi-threaded native indexer. */
+#include <stdlib.h>
+
+typedef enum { CBM_MEM_CLASS_OTHER = 0 } cbm_mem_class_t;
+
+static inline void *cbm_calloc(cbm_mem_class_t cls, size_t size) {
+    (void)cls;
+    return calloc(1, size);
+}
+
+static inline void cbm_free(cbm_mem_class_t cls, void *ptr) {
+    (void)cls;
+    free(ptr);
+}
+
+typedef struct {
+    TSTreeCursor *cursor;
+    TSTreeCursor private_cursor;
+    int slot; /* always -1: private */
+} cbm_cursor_lease_t;
+
+static inline TSTreeCursor *cbm_cursor_acquire(cbm_cursor_lease_t *lease, int depth, TSNode node) {
+    (void)depth;
+    lease->private_cursor = ts_tree_cursor_new(node);
+    lease->slot = -1;
+    lease->cursor = &lease->private_cursor;
+    return lease->cursor;
+}
+
+static inline void cbm_cursor_release(cbm_cursor_lease_t *lease) {
+    ts_tree_cursor_delete(&lease->private_cursor);
+    lease->cursor = NULL;
+}
+
 #endif /* CBM_COMPAT_H */

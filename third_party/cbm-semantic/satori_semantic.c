@@ -30,7 +30,7 @@ const TSLanguage *tree_sitter_c(void) {
     return tree_sitter_cpp();
 }
 
-#define SATORI_ENGINE_VERSION_STR "cbm-d150ebe4+satori-multilang-semantic-v1"
+#define SATORI_ENGINE_VERSION_STR "cbm-11b662f9+satori-multilang-semantic-v1"
 
 typedef struct {
     char *path;

@@ -6,7 +6,7 @@ This directory vendors a minimal, self-contained semantic analysis closure extra
 
 | Component | Upstream Repository | Pinned Commit / Version | License |
 |---|---|---|---|
-| CBM Core & Go/Java/C#/C++/Rust Resolvers | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | `d150ebe4fc78a9a3f85013d2087a849e5d59eb0f` | MIT |
+| CBM Core & Go/Java/C#/C++/Rust Resolvers | [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) | `11b662f9f7fba92012b872dd4fcaef7ee0c1300d` (resolvers; grammars, runtime, and stdlib data unchanged since `d150ebe4`) | MIT |
 | Tree-sitter C Runtime | [tree-sitter/tree-sitter](https://github.com/tree-sitter/tree-sitter) | `v0.24.4` (`64f26b5272a2e8c2534cece6e3f4d6d67ddf70dc`) | MIT |
 | Tree-sitter Go Grammar | [tree-sitter/tree-sitter-go](https://github.com/tree-sitter/tree-sitter-go) | `v0.23.4` (`a28f4c274719be1e2aa652eb6bd391c5dd97a3cf`) | MIT |
 | Tree-sitter Java Grammar | [tree-sitter/tree-sitter-java](https://github.com/tree-sitter/tree-sitter-java) | CBM snapshot `e10607b45ff7` | MIT |
@@ -37,6 +37,23 @@ This directory vendors a minimal, self-contained semantic analysis closure extra
 
 5. **Satori Bridge & ABI (`satori_semantic.h`, `satori_semantic.c`)**:
    - Fixed-width 64-byte POD result structures (`SatoriSemanticResultV1`), UTF-8 string table, and memory-safe isolated handle lifecycle.
+
+## Satori Local Patches
+
+Carry these forward on every upstream sync:
+
+- `languages/go/go_lsp.c`: `go_lsp_add_import` returns `false` on allocation
+  failure (header updated to `bool`), and `resolve_import` abstains when one
+  local name is bound to two different packages instead of taking the first.
+  Its CBM `src/foundation/hash_table.h` include points at the
+  `minimal-compat/hash_table.h` shim.
+- `common/arena.c`: block-size bookkeeping and growth fixes.
+- `minimal-compat/hash_table.{c,h}`: string → pointer table with CBM's
+  contract (borrowed keys) for the subset the resolvers use.
+- `minimal-compat/cbm_compat.h`: `cbm_calloc`/`cbm_free` map to libc, and
+  `cbm_cursor_acquire` always returns a private cursor (CBM documents this as
+  always correct; its per-depth pool is a native multi-thread optimization).
+- `cbm.h`, `helpers.h`: trimmed to the declarations the closure needs.
 
 ## License Notices
 

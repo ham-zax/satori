@@ -20,7 +20,7 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.equal(desc.semanticRevision, 'go-v3');
     assert.equal(desc.grammar, 'tree-sitter-go');
     assert.equal(desc.providerId, 'satori-cbm-semantic-go');
-    assert.equal(desc.providerVersion, 'cbm-d150ebe4+satori-go-semantic-v3');
+    assert.equal(desc.providerVersion, 'cbm-11b662f9+satori-go-semantic-v3');
     assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v3');
     assert.equal(
         RELATIONSHIP_BUILDER_VERSION,

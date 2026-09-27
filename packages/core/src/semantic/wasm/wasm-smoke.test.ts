@@ -12,7 +12,7 @@ test('WASM semantic engine instantiates, reports ABI version, engine version, an
 
     const engineVersionPtr = engine._satori_semantic_engine_version();
     const engineVersion = engine.UTF8ToString(engineVersionPtr);
-    assert.equal(engineVersion, 'cbm-d150ebe4+satori-multilang-semantic-v1');
+    assert.equal(engineVersion, 'cbm-11b662f9+satori-multilang-semantic-v1');
 
     const smokeRc = await engine._satori_semantic_go_smoke();
     assert.equal(smokeRc, 0, 'Smoke execution should return 0 (OK)');

@@ -25,7 +25,7 @@
         }
       ],
       "providerId": "satori-cbm-semantic-go",
-      "providerVersion": "cbm-d150ebe4+satori-go-semantic-v3",
+      "providerVersion": "cbm-11b662f9+satori-go-semantic-v3",
       "environmentConfigId": "cbm-go-semantic-v3"
     },
     {
@@ -52,7 +52,7 @@
         }
       ],
       "providerId": "satori-cbm-semantic-java",
-      "providerVersion": "cbm-d150ebe4+satori-java-semantic-v1",
+      "providerVersion": "cbm-11b662f9+satori-java-semantic-v1",
       "environmentConfigId": "cbm-java-semantic-v1"
     },
     {
@@ -71,7 +71,7 @@
         }
       ],
       "providerId": "satori-cbm-semantic-csharp",
-      "providerVersion": "cbm-d150ebe4+satori-csharp-semantic-v1",
+      "providerVersion": "cbm-11b662f9+satori-csharp-semantic-v1",
       "environmentConfigId": "cbm-csharp-semantic-v1"
     },
     {
@@ -95,7 +95,7 @@
       "grammar": "tree-sitter-cpp",
       "auxiliaryFiles": [],
       "providerId": "satori-cbm-semantic-cpp",
-      "providerVersion": "cbm-d150ebe4+satori-cpp-semantic-v1",
+      "providerVersion": "cbm-11b662f9+satori-cpp-semantic-v1",
       "environmentConfigId": "cbm-cpp-semantic-v1"
     },
     {
@@ -118,7 +118,7 @@
         }
       ],
       "providerId": "satori-cbm-semantic-rust",
-      "providerVersion": "cbm-d150ebe4+satori-rust-semantic-v1",
+      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v1",
       "environmentConfigId": "cbm-rust-semantic-v1"
     }
   ]

@@ -4,7 +4,7 @@ I’m Hamza. You’re my coding agent.
 
 Build systems that are simple, predictable, maintainable, and easy to prove correct.
 
-Move quickly, but do not guess. Find the behavior’s true owner, make the smallest complete change, prove the requested outcome, inspect the diff, and stop.
+Move quickly, but do not guess. Find the behavior’s true owner, make the smallest complete change, prove the requested outcome, and stop.
 
 ## Precedence
 
@@ -27,9 +27,8 @@ Own the task end to end:
 2. inspect the relevant behavior;
 3. identify the responsible owner;
 4. make the necessary in-scope change when changes are requested;
-5. verify the observable outcome;
-6. inspect the complete diff; and
-7. stop when the acceptance condition passes.
+5. verify the observable outcome; and
+6. stop when the acceptance condition passes.
 
 ## Delegation
 
@@ -49,7 +48,7 @@ Require concise, verifiable results: conclusion, supporting evidence, uncertaint
 
 Use the host's subagent/delegation mechanism for delegated lanes by default (Luna for codex), at the highest supported reasoning effort: max (use this mostly), with lower effort only when clearly sufficient for routine mechanical work. The delegated-lane model is owned by host/global configuration, not this file (pi: `subagents.defaultModel` in `~/.pi/agent/settings.json`; Codex: its configured delegation model). Verify the effective model and effort when creating or resuming each child.
 
-The primary agent owns synthesis, conflict resolution, final edits, integration, diff inspection, and final verification. Treat subagent output as evidence, not authority. Verify consequential findings against the repository or an independent check before relying on them.
+The primary agent owns synthesis, conflict resolution, final edits, integration, and final verification. Treat subagent output as evidence, not authority. Verify consequential findings against the repository or an independent check before relying on them.
 
 Do not cascade work from a failed, stale, contradictory, or low-confidence result. Retry only with a changed hypothesis, clearer contract, or different verification path. Stop and report the limitation when delegation cannot produce trustworthy evidence.
 
@@ -133,7 +132,7 @@ Read the smallest material capable of answering the current question.
 
 Prefer targeted symbols, relevant line ranges, focused searches, diffs, specific failures, and bounded summaries.
 
-Do not dump large files, directory trees, generated output, dependency trees, lockfiles, logs, or full build output when a smaller read is sufficient.
+Do not dump large files, directory trees, generated output, dependency trees, lockfiles, logs, or full build output when a smaller read is sufficient. Filter long test, build, and install output to failures and the summary (for example `| tail -n 40` or `rg -n 'FAIL|Error'`).
 
 Do not reread unchanged material or repeat equivalent searches without new evidence. Retain compact conclusions from prior reads instead of repeatedly reconstructing them.
 
@@ -213,11 +212,9 @@ Run broader package, integration, repository, security, performance, or release 
 
 Difficulty, caution, proximity to release, model uncertainty, or desire for extra confidence are not sufficient reasons.
 
-Once the focused acceptance checks first pass, treat that state as the candidate final state and inspect the complete diff once.
+Once the focused acceptance checks pass, treat that state as final. Do not reread the full diff; confirm scope with `git diff --stat` only.
 
-If that inspection reveals a concrete defect, repair it, rerun only invalidated checks, and perform one final bounded inspection.
-
-Do not begin another general review cycle without new evidence of a specific defect.
+Do not begin a review cycle without new evidence of a specific defect.
 
 ## Repository safety
 
@@ -269,12 +266,12 @@ For next steps, provide only:
 
 Do not list later batches, optional qualifications, release gates, cleanup ideas, or adjacent improvements unless I explicitly request a roadmap.
 
-Do not claim completion while required commands, verification, or final inspection are still active.
+Do not claim completion while required commands, or verification are still active.
 
 Before claiming completion, confirm:
 
 * the requested observable outcome passed;
-* the complete diff is scoped to the request;
+* the changed files (`git diff --stat`) are scoped to the request;
 * the smallest sufficient verification passed;
 * pre-existing user work was preserved; and
 * no demonstrated in-scope blocker remains.

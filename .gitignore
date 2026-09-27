@@ -108,3 +108,5 @@ piolium/**
 .pi/subagents/
 .pi/fabric/
 .repomarrow/
+.scratch/**
+.grok/**

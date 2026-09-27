@@ -223,3 +223,68 @@ export function getSupportedLanguageAliasesForCapability(capability: LanguageCap
     }
     return Array.from(values).sort((a, b) => a.localeCompare(b));
 }
+
+// Content-aware detection, ported from codebase-memory-mcp's discovery rules.
+// Filename and extension stay authoritative; content only disambiguates `.m`
+// and routes extensionless scripts by their shebang line.
+const CONTENT_PROBE_CHARS = 4096;
+const SHEBANG_INTERPRETERS: Readonly<Record<string, string>> = {
+    sh: 'bash', bash: 'bash', dash: 'bash', ksh: 'bash', zsh: 'zsh',
+    node: 'javascript', nodejs: 'javascript',
+    ruby: 'ruby', perl: 'perl', php: 'php', lua: 'lua',
+};
+const OBJC_MARKERS = ['@interface', '@implementation', '@protocol', '@property', '#import', '@selector', '@encode', '@synthesize', '@dynamic'];
+const MAGMA_END_MARKERS = ['end function;', 'end procedure;', 'end intrinsic;', 'end if;', 'end for;', 'end while;'];
+
+function interpreterLanguage(interpreter: string): string | undefined {
+    const base = interpreter.slice(interpreter.lastIndexOf('/') + 1);
+    if (/^python(\d+(\.\d+)*)?$/.test(base)) return 'python';
+    return SHEBANG_INTERPRETERS[base];
+}
+
+export function detectLanguageFromShebang(content: string): string | undefined {
+    if (!content.startsWith('#!')) return undefined;
+    const newline = content.indexOf('\n');
+    const firstLine = (newline < 0 ? content : content.slice(0, newline)).replace(/\r$/, '');
+    if (firstLine.length > 255 || firstLine.includes('\0')) return undefined;
+    const tokens = firstLine.slice(2).trim().split(/[ \t]+/).filter(Boolean);
+    let interpreter = tokens.shift();
+    if (interpreter && interpreter.slice(interpreter.lastIndexOf('/') + 1) === 'env') {
+        interpreter = tokens.shift();
+        if (interpreter === '-S' || interpreter === '--split-string') interpreter = tokens.shift();
+        if (!interpreter || interpreter.startsWith('-') || interpreter.includes('=')) return undefined;
+    }
+    return interpreter ? interpreterLanguage(interpreter) : undefined;
+}
+
+function disambiguateDotM(head: string): string {
+    if (OBJC_MARKERS.some((marker) => head.includes(marker))) return 'objective-c';
+    if (MAGMA_END_MARKERS.some((marker) => head.includes(marker))) return 'magma';
+    if (/(?:intrinsic|procedure) [A-Za-z]*\(/.test(head)) return 'magma';
+    return 'matlab';
+}
+
+export function detectLanguageId(relativePath: string, content: string, fallback: string = 'text'): string {
+    const basename = String(relativePath || '').trim().split(/[\\/]/).pop() || '';
+    const extension = basename.includes('.') ? `.${basename.split('.').pop()}`.toLowerCase() : '';
+    const head = content.slice(0, CONTENT_PROBE_CHARS);
+    if (extension === '.m' && !getLanguageAdapterByFilename(basename)) return disambiguateDotM(head);
+    const adapter = getLanguageAdapterByFilename(basename) || getLanguageAdapterByExtension(extension);
+    if (adapter) return adapter.id;
+    return detectLanguageFromShebang(head) ?? fallback;
+}
+
+/** The language the path alone decides, or undefined when content decides (`.m`, unrecognized files). */
+export function pathDeterminedLanguageId(relativePath: string): string | undefined {
+    const basename = String(relativePath || '').trim().split(/[\\/]/).pop() || '';
+    const filenameAdapter = getLanguageAdapterByFilename(basename);
+    if (filenameAdapter) return filenameAdapter.id;
+    const extension = basename.includes('.') ? `.${basename.split('.').pop()}`.toLowerCase() : '';
+    if (extension === '.m') return undefined;
+    return getLanguageAdapterByExtension(extension)?.id;
+}
+
+export function isSearchableLanguageSource(relativePath: string, content: string): boolean {
+    const language = detectLanguageId(relativePath, content, '');
+    return language !== '' && isLanguageCapabilitySupportedForLanguage(language, 'search');
+}

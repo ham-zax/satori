@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    detectLanguageId,
+    isSearchableLanguageSource,
+    pathDeterminedLanguageId,
     getLanguageCapabilityDeclaration,
     getLanguageCapabilityDeclarations,
     getLanguageAdapterByFilename,
@@ -178,4 +181,42 @@ test('language registry reports deterministic capability extension and filename 
         assert.ok(searchableFilenames.includes(filename), filename);
     }
     assert.deepEqual(getSupportedFilenamesForCapability('owner'), []);
+});
+
+test('content detection keeps filename and extension authoritative', async () => {
+    assert.equal(detectLanguageId('src/app.py', '#!/usr/bin/env node\n'), 'python');
+    assert.equal(detectLanguageId('Makefile', '#!/bin/bash\n'), 'makefile');
+});
+
+test('content detection routes extensionless scripts by shebang like codebase-memory-mcp', async () => {
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env python3.12\nprint(1)\n'), 'python');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/python3\n'), 'python');
+    assert.equal(detectLanguageId('bin/tool', '#!/bin/sh\n'), 'bash');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env -S node --no-warnings\r\n'), 'javascript');
+    assert.equal(detectLanguageId('bin/tool', '#!/bin/zsh\n'), 'zsh');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env ruby\n'), 'ruby');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env python-wrapper\n'), 'text');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env PYTHON=x python\n'), 'text');
+    assert.equal(detectLanguageId('bin/tool', 'no shebang\n'), 'text');
+    assert.equal(detectLanguageId('bin/tool', '#!/usr/bin/env python\n', 'unknown'), 'python');
+    assert.equal(detectLanguageId('bin/tool', 'plain', 'unknown'), 'unknown');
+});
+
+test('content detection disambiguates .m between Objective-C, Magma, and MATLAB', async () => {
+    assert.equal(detectLanguageId('App/View.m', '#import <UIKit/UIKit.h>\n@implementation View\n@end\n'), 'objective-c');
+    assert.equal(detectLanguageId('alg/f.m', 'intrinsic Foo(x) -> RngIntElt\n  return x;\nend intrinsic;\n'), 'magma');
+    assert.equal(detectLanguageId('alg/g.m', 'procedure Bar(x)\n  print x;\n'), 'magma');
+    assert.equal(detectLanguageId('sci/solve.m', 'function y = solve(x)\n  y = x;\nend\n'), 'matlab');
+    assert.equal(detectLanguageId('sci/empty.m', ''), 'matlab');
+    assert.equal(detectLanguageId('App/View.mm', '@implementation View\n'), 'objective-c');
+});
+
+test('path-determined language defers to content only for .m and unrecognized files', async () => {
+    assert.equal(pathDeterminedLanguageId('src/a.go'), 'go');
+    assert.equal(pathDeterminedLanguageId('Makefile'), 'makefile');
+    assert.equal(pathDeterminedLanguageId('sci/solve.m'), undefined);
+    assert.equal(pathDeterminedLanguageId('bin/tool'), undefined);
+    assert.equal(isSearchableLanguageSource('bin/tool', '#!/usr/bin/env python\n'), true);
+    assert.equal(isSearchableLanguageSource('bin/notes', 'notes\n'), false);
+    assert.equal(isSearchableLanguageSource('src/a.go', ''), true);
 });

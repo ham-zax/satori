@@ -28,3 +28,13 @@ test('explicitly supported source extensions respect the searchable per-file byt
         false,
     );
 });
+
+test('extensionless scripts with a recognized shebang are admitted by every profile', async () => {
+    const script = Buffer.from('#!/usr/bin/env python3\nprint("hi")\n');
+    const plain = Buffer.from('just some notes\n');
+    assert.equal(await isIndexableFileObservationByPolicy('bin/deploy', script.length, ['.ts'], async () => script), true);
+    assert.equal(await isIndexableFileObservationByPolicy('bin/notes', plain.length, ['.ts'], async () => plain), false);
+    const unknown = Buffer.from('#!/usr/bin/env tclsh\n');
+    assert.equal(await isIndexableFileObservationByPolicy('bin/tk', unknown.length, ['.ts'], async () => unknown), false);
+    assert.equal(await isIndexableFileObservationByPolicy('cgi/report.cgi', script.length, ['.ts'], async () => script), true);
+});

@@ -16,7 +16,7 @@ import type {
     LanguageAnalysisPort,
     LanguageAnalysisResult,
 } from '../language-analysis';
-import { getLanguageIdFromFilename } from '../language';
+import { detectLanguageId } from '../language';
 import { buildSearchProjections } from './search-projections';
 import { buildIndexedChunkId } from './indexed-chunk-identity';
 import {
@@ -384,7 +384,7 @@ export class IndexingPipeline {
             throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
         }
         const source = sourceObservation.content;
-        const language = getLanguageIdFromFilename(filePath, 'text');
+        const language = detectLanguageId(filePath, source);
         const analysis = await this.languageAnalyzer.analyze({
             content: source,
             language,

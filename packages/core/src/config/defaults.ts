@@ -1,3 +1,5 @@
+import { getLanguageCapabilityDeclarations } from '../languages/capabilities';
+
 export type IndexProfile = 'default' | 'minimal' | 'all-text';
 
 export const INDEX_PROFILES: readonly IndexProfile[] = ['default', 'minimal', 'all-text'] as const;
@@ -24,6 +26,29 @@ export const INFRA_QUERY_SUPPORTED_EXTENSIONS = [
     '.sql', '.graphql', '.gql', '.tf', '.tfvars',
 ] as const;
 
+// Recognized by the language registry but not indexed by default: bulk data,
+// transient patches, graphics, translation catalogs, and secret-bearing env
+// files add noise (or risk) to semantic search. The `all-text` profile still
+// admits the non-secret ones; env files also stay in DEFAULT_IGNORE_PATTERNS.
+const NOT_DEFAULT_INDEXED_EXTENSIONS: ReadonlySet<string> = new Set([
+    '.csv', '.diff', '.patch', '.svg', '.po', '.pot', '.env',
+]);
+const NOT_DEFAULT_INDEXED_FILENAMES: ReadonlySet<string> = new Set(['.env', '.env.local']);
+
+const SEARCHABLE_DECLARATIONS = getLanguageCapabilityDeclarations()
+    .filter((declaration) => declaration.searchEligibility !== 'none');
+
+// The language registry is the single source of truth for which files are
+// recognized; admission derives from it, as codebase-memory-mcp derives
+// discovery from its language table.
+const REGISTRY_SEARCH_EXTENSIONS = SEARCHABLE_DECLARATIONS
+    .flatMap((declaration) => declaration.extensions)
+    .filter((extension) => !NOT_DEFAULT_INDEXED_EXTENSIONS.has(extension));
+
+const REGISTRY_SYMBOL_EXTENSIONS = SEARCHABLE_DECLARATIONS
+    .filter((declaration) => declaration.symbolExtractionCapability === 'production_ready')
+    .flatMap((declaration) => declaration.extensions);
+
 export const INDEXABLE_EXTENSIONLESS_FILENAMES = [
     'Dockerfile',
     'Makefile',
@@ -34,22 +59,26 @@ export const INDEXABLE_EXTENSIONLESS_FILENAMES = [
     '.dockerignore',
 ] as const;
 
-export const INDEXABLE_EXACT_FILENAMES = [
+export const INDEXABLE_EXACT_FILENAMES: readonly string[] = [...new Set([
     ...INDEXABLE_EXTENSIONLESS_FILENAMES,
-] as const;
+    ...SEARCHABLE_DECLARATIONS
+        .flatMap((declaration) => declaration.filenames ?? [])
+        .filter((filename) => !NOT_DEFAULT_INDEXED_FILENAMES.has(filename)),
+])];
 
-
-export const MINIMAL_SUPPORTED_EXTENSIONS = [
+export const MINIMAL_SUPPORTED_EXTENSIONS: readonly string[] = [...new Set([
     ...SOURCE_SUPPORTED_EXTENSIONS,
+    ...REGISTRY_SYMBOL_EXTENSIONS,
     ...DOC_SUPPORTED_EXTENSIONS,
-] as const;
+])];
 
-export const DEFAULT_SUPPORTED_EXTENSIONS = [
+export const DEFAULT_SUPPORTED_EXTENSIONS: string[] = [...new Set([
     ...MINIMAL_SUPPORTED_EXTENSIONS,
     ...CONFIG_SUPPORTED_EXTENSIONS,
     ...SCRIPT_SUPPORTED_EXTENSIONS,
     ...INFRA_QUERY_SUPPORTED_EXTENSIONS,
-];
+    ...REGISTRY_SEARCH_EXTENSIONS,
+])];
 
 export const ALL_TEXT_SUPPORTED_EXTENSIONS = [
     ...DEFAULT_SUPPORTED_EXTENSIONS,

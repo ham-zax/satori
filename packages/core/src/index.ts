@@ -95,8 +95,11 @@ export {
     SYMBOL_EXTRACTOR_VERSION,
 } from './language-analysis/versions';
 export {
+    detectLanguageId,
     getLanguageIdFromFilename,
     getSupportedExtensionsForCapability,
+    isSearchableLanguageSource,
+    pathDeterminedLanguageId,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
     isLanguageCapabilitySupportedForLanguage,

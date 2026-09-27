@@ -125,8 +125,8 @@ Satori tracks the repository root, index profile, supported file extensions, ign
 
 Profiles let you choose how broad the source corpus should be:
 
-- `default` — source plus useful documentation, configuration, scripts, infrastructure, queries, and known text files;
-- `minimal` — source and documentation text;
+- `default` — every file type in the language catalog, plus useful documentation, configuration, scripts, infrastructure, queries, and known text files (CSV, patches, SVG, gettext catalogs, and `.env` files are left to `all-text`);
+- `minimal` — source, including every navigation language's extensions, and documentation text;
 - `all-text` — the default profile plus additional bounded UTF-8 text files.
 
 Hard-denied secret/dependency/generated categories remain excluded.

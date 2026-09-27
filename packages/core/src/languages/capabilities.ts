@@ -177,8 +177,8 @@ const CMM_DERIVED_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclarati
     parserDeclaredSearchOnlyLanguage({ languageId: 'luau', extensions: ['.luau'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'magma', extensions: ['.mag', '.magma'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'makefile', extensions: ['.mk'], filenames: ['GNUmakefile', 'Makefile', 'makefile'] }),
-    // CMM disambiguates `.m` by source content; Satori keeps `.m` on Objective-C until it has that detector.
-    parserDeclaredSearchOnlyLanguage({ languageId: 'matlab', extensions: ['.matlab', '.mlx'] }),
+    // `.m` defaults to MATLAB like codebase-memory-mcp; detectLanguageId upgrades it to Objective-C or Magma by content.
+    parserDeclaredSearchOnlyLanguage({ languageId: 'matlab', extensions: ['.m', '.matlab', '.mlx'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'mermaid', extensions: ['.mermaid', '.mmd'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'meson', extensions: ['.meson'], filenames: ['meson.build', 'meson.options', 'meson_options.txt'] }),
     parserDeclaredSearchOnlyLanguage({ languageId: 'move', extensions: ['.move'] }),
@@ -338,7 +338,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     parserDeclaredSearchOnlyLanguage({
         languageId: 'objective-c',
         aliases: ['objc', 'objectivec'],
-        extensions: ['.m', '.mm'],
+        extensions: ['.mm'],
     }),
     fullNavigationLanguage({
         languageId: 'python',

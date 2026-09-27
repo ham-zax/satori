@@ -5,9 +5,11 @@ import {
     beginSourceMeasurementObservation,
     compareContractStrings,
     createLanguageAnalysisService,
-    getLanguageIdFromFilename,
-    isLanguageCapabilitySupportedForFilename,
+    detectLanguageId,
+    isLanguageCapabilitySupportedForLanguage,
+    isSearchableLanguageSource,
     openRegularFileInsideRoot,
+    pathDeterminedLanguageId,
     finishSourceMeasurementObservation,
     recordSourceIo,
     recordSourceProcessing,
@@ -187,6 +189,19 @@ export class SearchQuerySupport {
 
     constructor(private readonly host: SearchQuerySupportHost) {}
 
+    // Content decides `.m` and extensionless scripts, so those are read before
+    // their searchability is known; any other path is decided by the registry.
+    private mayBeSearchableLanguagePath(relativePath: string): boolean {
+        const pathLanguage = pathDeterminedLanguageId(relativePath);
+        if (pathLanguage !== undefined) return isLanguageCapabilitySupportedForLanguage(pathLanguage, 'search');
+        const extension = path.extname(relativePath).toLowerCase();
+        return extension === '' || extension === '.m';
+    }
+
+    private matchesLanguageOperator(languages: readonly string[], language: string): boolean {
+        return languages.length === 0 || languages.includes(language.toLowerCase());
+    }
+
     private normalizeSearchPath(relativePath: string): string {
         return this.host.normalizeSearchPath(relativePath);
     }
@@ -345,7 +360,7 @@ export class SearchQuerySupport {
             if (!input.changedFiles.has(normalized)) {
                 continue;
             }
-            if (!isLanguageCapabilitySupportedForFilename(normalized, 'search')) {
+            if (!this.mayBeSearchableLanguagePath(normalized)) {
                 continue;
             }
             if (activeIgnoreMatcher?.(normalized)) {
@@ -374,12 +389,16 @@ export class SearchQuerySupport {
                 await handle?.close().catch(() => undefined);
             }
 
+            if (!isSearchableLanguageSource(normalized, content)) {
+                continue;
+            }
+            const language = detectLanguageId(normalized, content);
             if (lexicalTerms.length > 0 && !this.detectSearchLexicalEvidence(input.queryPlan, {
                 content,
                 relativePath: normalized,
                 startLine: 1,
                 endLine: content.split(/\r?\n/).length,
-                language: getLanguageIdFromFilename(normalized, 'text'),
+                language,
                 score: 1,
             }).hasLexicalEvidence) {
                 continue;
@@ -402,7 +421,7 @@ export class SearchQuerySupport {
                 relativePath: normalized,
                 startLine,
                 endLine,
-                language: getLanguageIdFromFilename(normalized, 'text'),
+                language,
                 score: 1,
                 backendScore: 1,
                 backendScoreKind: 'lexical_rank',
@@ -447,7 +466,7 @@ export class SearchQuerySupport {
             ) {
                 break;
             }
-            if (!isLanguageCapabilitySupportedForFilename(relativePath, "search") || activeIgnoreMatcher?.(relativePath)) {
+            if (!this.mayBeSearchableLanguagePath(relativePath) || activeIgnoreMatcher?.(relativePath)) {
                 continue;
             }
             const logicalPath = path.resolve(canonicalRoot, relativePath);
@@ -476,7 +495,10 @@ export class SearchQuerySupport {
                 await handle?.close().catch(() => undefined);
             }
             bytesRead += stat.size;
-            const language = getLanguageIdFromFilename(relativePath, "text");
+            if (!isSearchableLanguageSource(relativePath, content)) {
+                continue;
+            }
+            const language = detectLanguageId(relativePath, content);
             let chunks: Awaited<ReturnType<typeof analyzer.analyze>>["chunks"] = [];
             const parserStartedAt = performance.now();
             let parserOutcome: "success" | "failed" = "failed";
@@ -782,17 +804,15 @@ export class SearchQuerySupport {
                 break;
             }
             debug.filesConsidered += 1;
-            if (!isLanguageCapabilitySupportedForFilename(relativePath, 'search')) {
+            if (!this.mayBeSearchableLanguagePath(relativePath)) {
                 continue;
             }
             if (!this.shouldIncludeCategoryInScope(input.scope, this.classifyPathCategory(relativePath))) {
                 continue;
             }
-            if (input.parsedOperators.lang.length > 0) {
-                const languageValue = getLanguageIdFromFilename(relativePath, 'text').toLowerCase();
-                if (!input.parsedOperators.lang.includes(languageValue)) {
-                    continue;
-                }
+            const pathLanguage = pathDeterminedLanguageId(relativePath);
+            if (pathLanguage !== undefined && !this.matchesLanguageOperator(input.parsedOperators.lang, pathLanguage)) {
+                continue;
             }
             if (input.parsedOperators.path.length > 0 && !this.pathMatchesAnyPattern(relativePath, input.parsedOperators.path)) {
                 continue;
@@ -832,6 +852,13 @@ export class SearchQuerySupport {
             bytesRead += stat.size;
             debug.filesScanned = filesScanned;
             debug.bytesRead = bytesRead;
+            if (!isSearchableLanguageSource(relativePath, content)) {
+                continue;
+            }
+            const language = detectLanguageId(relativePath, content);
+            if (!this.matchesLanguageOperator(input.parsedOperators.lang, language)) {
+                continue;
+            }
 
             const lowerContent = content.toLowerCase();
             const quickMatch = lexicalTerms.length === 0
@@ -853,7 +880,7 @@ export class SearchQuerySupport {
                     startLine: exactWindowMatch.startLine,
                     endLine: exactWindowMatch.endLine,
                     content: exactWindowMatch.windowContent,
-                    language: getLanguageIdFromFilename(relativePath, 'text'),
+                    language,
                 });
                 continue;
             }
@@ -906,7 +933,7 @@ export class SearchQuerySupport {
                 startLine,
                 endLine,
                 content: windowContent,
-                language: getLanguageIdFromFilename(relativePath, 'text'),
+                language,
             });
         }
 

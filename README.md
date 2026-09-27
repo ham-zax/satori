@@ -483,8 +483,8 @@ profile = "minimal"
 
 | Profile | Includes |
 |---|---|
-| `default` | Source, documentation, config, scripts, infrastructure files, queries, and known extensionless text files. |
-| `minimal` | Source and documentation text. |
+| `default` | Every file type in the [language catalog](#language-support), plus documentation, config, scripts, infrastructure files, queries, and known extensionless files. CSV, patches, SVG, gettext catalogs, and `.env` files are left to `all-text`. |
+| `minimal` | Source (including every navigation language's extensions) and documentation text. |
 | `all-text` | `default` plus additional bounded UTF-8 text files. |
 
 Every profile honors `.satoriignore`, `.gitignore`, and the hard denylist for secrets, dependencies, generated output, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Profiles control what is indexed; `search_codebase` still defaults to implementation-first `scope="runtime"`.
@@ -630,6 +630,8 @@ Structural definition coverage is intentionally language-specific:
 | C# | Namespaces, classes, interfaces, structs, enums, constructors, and methods |
 | C++ | Namespaces, classes, structs, enums, unions, typedefs/types, and callable declarations or definitions |
 | Scala | Packages, classes, traits, objects, enums, types, functions, methods, and named package-level vals, vars, or givens |
+
+Every other language in the catalog is search-only: its files are indexed for semantic search and bounded reads, with no symbols, outline, or call graph. The catalog follows codebase-memory-mcp's extension and filename table (about 140 languages, including Kotlin, PHP, Ruby, Swift, Dart, Elixir, Lua, Haskell, Zig, Vue, Svelte, HTML, CSS, SQL, and Protobuf). Scripts with an unrecognized or missing extension are routed by their shebang (`python`, `node`, `bash`/`sh`, `zsh`, `ruby`, `perl`, `php`, `lua`), and `.m` files are classified as Objective-C, Magma, or MATLAB by content. Other files outside the catalog are skipped under the `default` and `minimal` profiles; `all-text` indexes any bounded UTF-8 file as plain text. `manage_index status` reports each indexed language's effective capabilities.
 
 `.c` and `.h` files currently use the C++ parser for a proven common-C subset; Satori does not claim a native C parser or independent C type system. `CALLS v0` for that routed subset is limited to exact same-translation-unit direct bindings that survive the C++ semantic gate.
 

@@ -5,9 +5,14 @@ import {
     ALL_TEXT_INDEX_MARKER,
     INDEXABLE_EXACT_FILENAMES,
 } from './defaults';
+import {
+    detectLanguageFromShebang,
+    getLanguageAdapterByExtension,
+    isLanguageCapabilitySupportedForLanguage,
+} from '../language/registry';
 
 
-export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v3-source-byte-budget';
+export const INDEX_FILE_ADMISSION_VERSION = 'index-file-admission-v4-catalog-shebang';
 
 export const MAX_INDEXED_SOURCE_FILE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_ALL_TEXT_MAX_BYTES = 1_048_576;
@@ -75,6 +80,20 @@ async function isUtf8TextObservationUnderLimit(
     }
 }
 
+// Scripts whose extension the language registry does not recognize are
+// admitted by their shebang interpreter, as codebase-memory-mcp discovers them.
+async function hasSearchableShebang(
+    extension: string,
+    size: number,
+    readProbe: () => Promise<Buffer>,
+): Promise<boolean> {
+    if (size < 2 || getLanguageAdapterByExtension(extension)) return false;
+    const view = await readProbe();
+    if (view[0] !== 0x23 || view[1] !== 0x21) return false;
+    const language = detectLanguageFromShebang(view.toString('utf8'));
+    return language !== undefined && isLanguageCapabilitySupportedForLanguage(language, 'search');
+}
+
 async function isLikelyGeneratedSingleLineWebAsset(
     relativePath: string,
     size: number,
@@ -110,6 +129,9 @@ export async function isIndexableFileObservationByPolicy(
         return true;
     }
     if (isAllowedExactFilename(relativePath)) {
+        return true;
+    }
+    if (await hasSearchableShebang(extension, size, readProbe)) {
         return true;
     }
     if (!extensionSet.has(ALL_TEXT_INDEX_MARKER)) {

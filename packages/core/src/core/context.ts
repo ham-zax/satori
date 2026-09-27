@@ -58,7 +58,6 @@ import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typ
 
 import { ThreadedWasmSemanticProjectAnalyzer, type SemanticProjectAnalyzer } from '../semantic';
 import {
-    computePublicationPackageOwnershipDigest,
     PACKAGE_OWNERSHIP_SCHEMA_VERSION,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
@@ -1076,12 +1075,6 @@ export class Context {
             const ownership = this.getPublicationPackageOwnership(publication);
             const checkpoint = this.getPublicationSourceCheckpoint(publication);
             if (!ownership || !checkpoint || !publication.publication.packageOwnership) return false;
-            if (
-                computePublicationPackageOwnershipDigest(ownership)
-                !== publication.publication.packageOwnership.digest
-            ) {
-                return false;
-            }
 
             const sourceHashes = new Map(checkpoint.fileHashes);
             const controlPaths = new Set<string>();
@@ -1177,7 +1170,6 @@ export class Context {
             normalizedRootPath: publication.publication.canonicalRoot,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
-            expectedSymbolRegistryManifestHash: registry.manifestHash,
         });
         return relationships.status === 'ok' ? 'valid' : relationships.status;
     }

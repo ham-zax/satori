@@ -12,7 +12,6 @@ import type {
     RelationshipRecord,
     SymbolRecord,
     SymbolRegistryManifest,
-    SymbolRegistryManifestFile,
 } from './contracts';
 import type { SymbolRegistry } from './registry';
 import type { RelationshipAnalysisEvidence } from '../relationships';
@@ -71,7 +70,6 @@ export type ReadSymbolRegistrySidecarResult =
 
 export interface ReadRelationshipSidecarInput {
     normalizedRootPath: string;
-    expectedSymbolRegistryManifestHash: string;
     publicationId: string;
     navigationRoot: string;
     /**
@@ -84,7 +82,6 @@ export interface ReadRelationshipSidecarInput {
 
 export interface ReadRelationshipAnalysisEvidenceInput {
     normalizedRootPath: string;
-    expectedSymbolRegistryManifestHash: string;
     publicationId: string;
     navigationRoot: string;
     /** The already validated manifest of this immutable Publication. */
@@ -144,40 +141,19 @@ export function fileShardName(filePath: string, fileHash: string): string {
     return `${digest}.json`;
 }
 
-// Shared serialization/hash helpers
-// Canonical form for digests that are recomputed from parsed values. Changing
-// it would invalidate every existing Publication seal, so it stays stable.
+// Shared serialization helpers. Small manifests stay readable; bulky per-file
+// shards are written compact.
 export function serializeJson(value: unknown): string {
     return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-// Byte form for per-file shards. Shard hashes are always taken over the written
-// bytes, so compact shards and older pretty-printed shards both verify.
 export function serializeShardJson(value: unknown): string {
     return `${JSON.stringify(value)}\n`;
 }
 
-export function hashSerializedJson(value: unknown): string {
-    return crypto.createHash('sha256').update(serializeJson(value), 'utf8').digest('hex');
-}
-
+// The relationship manifest hash identifies a Publication's relationship graph.
 export function hashSerializedString(serialized: string): string {
     return crypto.createHash('sha256').update(serialized, 'utf8').digest('hex');
-}
-
-// Generation/seal digest helpers
-export function computeNavigationSourceFilesDigest(
-    files: readonly Pick<SymbolRegistryManifestFile, 'path' | 'hash'>[],
-): string {
-    return hashSerializedJson(
-        files
-            .map((file) => ({ path: file.path, hash: file.hash }))
-            .sort((left, right) => compareStrings(left.path, right.path)),
-    );
-}
-
-export function computeRelationshipManifestHash(manifest: RelationshipManifest): string {
-    return hashSerializedJson(manifest);
 }
 
 // Deterministic relationship record ordering
@@ -198,7 +174,6 @@ export function compareRelationshipRecords(a: RelationshipRecord, b: Relationshi
 export function buildSymbolIndex(
     manifest: SymbolRegistryManifest,
     manifestHash: string,
-    shardHashes: ReadonlyMap<string, string>,
 ): SymbolIndexFile {
     return {
         schemaVersion: SYMBOL_INDEX_SCHEMA_VERSION,
@@ -211,37 +186,9 @@ export function buildSymbolIndex(
                 symbolCount: file.symbolCount,
                 definitionStatus: file.definitionStatus,
                 shardPath: path.posix.join(SYMBOLS_DIR_NAME, 'by-file', fileShardName(file.path, file.hash)),
-                shardHash: shardHashes.get(file.path) ?? '',
             }))
             .sort((a, b) => compareStrings(a.path, b.path)),
     };
-}
-
-function symbolIndexMatchesManifest(
-    indexFile: SymbolIndexFile,
-    manifest: SymbolRegistryManifest,
-    manifestHash: string,
-): boolean {
-    const expected = buildSymbolIndex(
-        manifest,
-        manifestHash,
-        new Map(indexFile.files.map((file) => [file.path, file.shardHash])),
-    );
-    if (
-        indexFile.manifestHash !== expected.manifestHash
-        || indexFile.files.length !== expected.files.length
-    ) {
-        return false;
-    }
-    return expected.files.every((file, index) => {
-        const actual = indexFile.files[index];
-        return actual?.path === file.path
-            && actual.hash === file.hash
-            && actual.language === file.language
-            && actual.symbolCount === file.symbolCount
-            && actual.definitionStatus === file.definitionStatus
-            && actual.shardPath === file.shardPath;
-    });
 }
 
 export async function readJson(filePath: string): Promise<unknown> {
@@ -350,13 +297,6 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
             status: 'incompatible',
             rootPath,
             reason: 'symbol registry manifest root does not match requested codebase root',
-        };
-    }
-    if (!symbolIndexMatchesManifest(indexFile, manifest, manifestHash)) {
-        return {
-            status: 'incompatible',
-            rootPath,
-            reason: 'symbol registry index does not exactly match the manifest and deterministic shard layout',
         };
     }
 
@@ -491,14 +431,6 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         };
     }
 
-    if (manifest.symbolRegistryManifestHash !== input.expectedSymbolRegistryManifestHash) {
-        return {
-            status: 'incompatible',
-            rootPath,
-            reason: 'relationship manifest hash does not match symbol registry manifest hash',
-        };
-    }
-
     const records: RelationshipRecord[] = [];
     const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
     const warnings: string[] = [];
@@ -527,7 +459,6 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                     manifest,
                     file,
                     serializedShard,
-                    input.expectedSymbolRegistryManifestHash,
                 );
                 if (parsed.status !== 'ok') return parsed;
                 for (const record of parsed.records) records.push(record);
@@ -575,7 +506,6 @@ function parseRelationshipShard(
     manifest: RelationshipManifest,
     file: RelationshipManifest['files'][number],
     serializedShard: string,
-    expectedSymbolRegistryManifestHash: string,
 ): ParsedRelationshipShard {
     const expectedShardPath = path.posix.join(
         RELATIONSHIPS_DIR_NAME,
@@ -594,18 +524,16 @@ function parseRelationshipShard(
     }
     const shard = rawShard as {
         schemaVersion?: unknown;
-        manifestHash?: unknown;
         path?: unknown;
         hash?: unknown;
         relationships?: unknown;
         records?: unknown;
         analysisEvidence?: unknown;
     };
-    const contributionIdentityValid = manifest.fileContributionSchemaVersion
-        === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
-        ? shard.schemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
-        : shard.manifestHash === expectedSymbolRegistryManifestHash;
-    if (!contributionIdentityValid) {
+    if (
+        manifest.fileContributionSchemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
+        && shard.schemaVersion !== RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
+    ) {
         return {
             status: 'incompatible',
             reason: `relationship shard contribution identity does not match manifest for ${file.path}`,
@@ -673,7 +601,6 @@ export async function readRelationshipAnalysisEvidence(
                     input.manifest,
                     file,
                     serializedShard,
-                    input.expectedSymbolRegistryManifestHash,
                 );
                 if (parsed.status !== 'ok') return parsed;
                 if (parsed.analysisEvidence !== undefined) analysisByFile.set(file.path, parsed.analysisEvidence);

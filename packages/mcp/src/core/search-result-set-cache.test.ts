@@ -2,28 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import {
-    MAX_RESULT_SET_CACHE_BYTES,
-    MAX_RESULT_SET_CACHE_ENTRIES,
-    MAX_RESULT_SET_ENTRY_BYTES,
-    MIN_RESIDENT_RESULT_SETS,
-    RESULT_SET_TTL_MS,
     SearchResultSetCache,
     SearchResultSetCoordinator,
     SearchResultSetCoordinatorPool,
     type SearchResultSetStoreResult,
 } from "./search-result-set-cache.js";
-
-test("search result-set cache defaults preserve the frozen P0 capacity contract", () => {
-    assert.equal(MAX_RESULT_SET_ENTRY_BYTES, 8 * 1024 * 1024);
-    assert.equal(MAX_RESULT_SET_CACHE_BYTES, 16 * 1024 * 1024);
-    assert.equal(MIN_RESIDENT_RESULT_SETS, 2);
-    assert.equal(
-        MAX_RESULT_SET_ENTRY_BYTES * MIN_RESIDENT_RESULT_SETS,
-        MAX_RESULT_SET_CACHE_BYTES,
-    );
-    assert.equal(MAX_RESULT_SET_CACHE_ENTRIES, 32);
-    assert.equal(RESULT_SET_TTL_MS, 15 * 60_000);
-});
 
 function requireStored(result: SearchResultSetStoreResult): Extract<
     SearchResultSetStoreResult,

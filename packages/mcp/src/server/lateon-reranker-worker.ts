@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import * as transformers from "@huggingface/transformers";
 import * as onnxRuntime from "onnxruntime-node";
-import { serializeCanonicalJson } from "../core/canonical-json.js";
 import type {
     LateOnRuntimeProfile,
     LateOnWorkerRequest,
@@ -165,12 +164,6 @@ async function initialize(
     request: Extract<LateOnWorkerRequest, { type: "initialize" }>,
 ): Promise<void> {
     if (runtime) throw new Error("LateOn worker is already initialized.");
-    const computedProfileDigest = crypto.createHash("sha256")
-        .update(serializeCanonicalJson(request.profile), "utf8")
-        .digest("hex");
-    if (computedProfileDigest !== request.profileDigest) {
-        throw new Error("LateOn worker profile digest does not match the initialization contract.");
-    }
     if (request.profile.runtime.transformersJs !== resolvePackageVersion("@huggingface/transformers")) {
         throw new Error("Transformers.js version does not match the LateOn profile.");
     }
@@ -204,7 +197,6 @@ async function initialize(
     send({
         type: "ready",
         modelRevision: request.profile.identity.revision,
-        profileDigest: computedProfileDigest,
         projectionVersion: request.profile.identity.projectionVersion,
         candidateDepth: request.profile.inference.candidateDepth,
     });

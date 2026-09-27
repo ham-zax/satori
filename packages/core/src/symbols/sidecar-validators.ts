@@ -32,7 +32,6 @@ export interface SymbolIndexFileEntry {
     symbolCount: number;
     definitionStatus: SymbolRegistryManifestFile['definitionStatus'];
     shardPath: string;
-    shardHash: string;
 }
 
 export interface SymbolIndexFile {
@@ -109,8 +108,6 @@ export function isSymbolIndexFile(value: unknown): value is SymbolIndexFile {
             && isNonNegativeInteger(file.symbolCount)
             && isStructuralDefinitionStatus(file.definitionStatus)
             && isRepositoryRelativePath(file.shardPath)
-            && typeof file.shardHash === 'string'
-            && /^[a-f0-9]{64}$/.test(file.shardHash)
         ));
 }
 

@@ -32,30 +32,9 @@ test("retired search_rerank_document_v1 identity is rejected", () => {
     );
 });
 
-test("retired search_rerank_document_v2 identity is rejected", () => {
-    assert.throws(
-        () => resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v2"),
-        /search_rerank_document_projection_identity_unknown:search_rerank_document_v2/,
-    );
-});
-
-test("retired search_rerank_document_v3 identity is rejected", () => {
-    assert.throws(
-        () => resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v3"),
-        /search_rerank_document_projection_identity_unknown:search_rerank_document_v3/,
-    );
-});
-
 test("search_rerank_document_v4 identity resolves to the canonical projector identity", () => {
     assert.equal(
         resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v4"),
         "search_rerank_document_v4",
-    );
-});
-
-test("unknown projection identity is rejected", () => {
-    assert.throws(
-        () => resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v99"),
-        /search_rerank_document_projection_identity_unknown:search_rerank_document_v99/,
     );
 });

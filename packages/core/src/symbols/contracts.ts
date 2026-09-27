@@ -163,7 +163,6 @@ export interface RelationshipManifestFile {
     path: string;
     hash: string;
     shardPath: string;
-    shardHash: string;
     relationshipCount: number;
     analysisEvidencePresent: boolean;
 }
@@ -296,7 +295,6 @@ export function isRelationshipManifest(value: unknown): value is RelationshipMan
         && isNonEmptyString(file.hash)
         && isRepositoryRelativePath(file.shardPath)
         && file.shardPath.startsWith('relationships/by-file/')
-        && isNonEmptyString(file.shardHash)
         && isNonNegativeInteger(file.relationshipCount)
         && typeof file.analysisEvidencePresent === 'boolean'
         && !seenPaths.has(file.path)

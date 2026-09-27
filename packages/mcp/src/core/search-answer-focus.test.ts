@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
-import type { SearchAnswerFocus } from "./search-answer-focus.js";
 import { buildSearchQueryPlan } from "./search-query-planning.js";
 
 const cases = [
@@ -46,11 +45,4 @@ test("answer-focus priority prefers documentation over configuration", () => {
     const plan = buildSearchQueryPlan("guide to the configured risk limits", true);
     const resolution = resolveSearchAnswerFocus(plan);
     assert.equal(resolution.focus, "documentation");
-});
-
-test("answer-focus resolution exposes the SearchAnswerFocus union", () => {
-    const focus: SearchAnswerFocus = resolveSearchAnswerFocus(
-        buildSearchQueryPlan("trading risk management", true),
-    ).focus;
-    assert.equal(focus, "neutral");
 });

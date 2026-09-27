@@ -97,7 +97,6 @@ test('relationship manifest validates compatibility anchor', () => {
             path: 'src/app.ts',
             hash: 'file-hash',
             shardPath: 'relationships/by-file/app.json',
-            shardHash: 'shard-hash',
             relationshipCount: 0,
             analysisEvidencePresent: true,
         }],

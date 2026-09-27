@@ -86,8 +86,7 @@ process.on("message", (message) => {
         }
         setTimeout(() => process.send({
             type: "ready",
-            modelRevision: message.profile.identity.revision,
-            profileDigest: options.readinessMismatch ? "0".repeat(64) : message.profileDigest,
+            modelRevision: options.readinessMismatch ? "mismatched-revision" : message.profile.identity.revision,
             projectionVersion: message.profile.identity.projectionVersion,
             candidateDepth: message.profile.inference.candidateDepth,
         }), options.readyDelayMilliseconds || 0);
@@ -252,16 +251,6 @@ test("LateOn identity binds the semantic profile rather than machine-speed setti
     assert.equal(first.getDocumentProjectionVersion(), "search_rerank_document_v4");
     assert.equal(first.getQueryProjectionVersion(), "search_rerank_query_v2");
     assert.equal(first.getIdentity().profile, second.getIdentity().profile);
-});
-
-test("LateOn rejects the explicitly selected legacy v1 profile", () => {
-    assert.throws(
-        () => new LateOnReranker({
-            modelDirectory: "/unused/by/fake-worker",
-            profileId: LATEON_RUNTIME_PROFILE_IDS.legacyD16,
-        }),
-        /LateOn runtime profile 'lateon_projection_v1_d16_legacy' is retired and unsupported/,
-    );
 });
 
 test("the first rerank starts the worker and waits for readiness", async (t) => {

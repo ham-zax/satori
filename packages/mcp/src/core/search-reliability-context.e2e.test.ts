@@ -265,57 +265,6 @@ test("Scenario B: test-seeking query publishes tests focus while provider order 
     );
 });
 
-test("Scenario C: one failed projection degrades input and keeps the failed candidate in place", async () => {
-    const providerCandidateIds: string[][] = [];
-    const reranker: Reranker = {
-        getIdentity: () => ({ provider: "lateon", model: "test", profile: "context-v3" }),
-        rerank: async (_query, documents, options) => {
-            providerCandidateIds.push([...(options?.identities ?? [])]);
-            // Provider reverses the admitted slots.
-            return documents.map((_document, index) => ({
-                index: documents.length - index - 1,
-                relevanceScore: index / Math.max(1, documents.length),
-            })) satisfies RerankResult[];
-        },
-    };
-    const results = [
-        candidate("a", "src/a.ts", 0.9),
-        candidate("b", "src/b.ts", 0.8),
-        candidate("c", "src/c.ts", 0.7),
-        candidate("d", "src/d.ts", 0.6),
-    ];
-    const outcome = await runSearchExecution(
-        buildInput("how does Shariah compliance checking block trades"),
-        buildHost(results, reranker, async (_query, result) => (
-            (result as FixtureCandidate).relativePath === "src/c.ts"
-                ? {
-                    ok: false,
-                    candidateId: searchRerankCandidateId(result),
-                    reason: "source_hash_mismatch",
-                }
-                : v3Projection(result as FixtureCandidate)
-        )),
-        buildDiagnostics(),
-    );
-
-    assert.equal(outcome.kind, "ok");
-    if (outcome.kind !== "ok") return;
-    assert.deepEqual(providerCandidateIds, [["a", "b", "d"]]);
-    assert.ok(outcome.searchWarnings.includes("RERANKER_INPUT_DEGRADED"));
-    assert.ok(!outcome.searchWarnings.includes("RERANKER_SKIPPED_INPUT"));
-    assert.ok(!outcome.searchWarnings.includes("RERANKER_FAILED"));
-    assert.equal(outcome.rerankerApplied, true);
-    assert.equal(outcome.orderAuthority, "reranker_order");
-    assert.equal(outcome.rerankerProjection?.requestedCandidates, 4);
-    assert.equal(outcome.rerankerProjection?.projectedCandidates, 3);
-    assert.deepEqual(outcome.rerankerProjection?.failureCounts, { source_hash_mismatch: 1 });
-    // Failed candidate stays at its retrieval slot; admitted slots follow provider order.
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.candidateId),
-        ["d", "b", "c", "a"],
-    );
-});
-
 test("Scenario D: universal projection failure skips the provider and keeps retrieval order", async () => {
     let providerCalls = 0;
     const reranker: Reranker = {

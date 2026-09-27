@@ -37,9 +37,8 @@ export interface Publication {
         indexedFiles: number;
         totalChunks: number;
     }>;
-    readonly packageOwnership?: null | Readonly<{
-        digest: string;
-    }>;
+    /** Whether this Publication carries a package ownership snapshot (ownership.json). */
+    readonly packageOwnership?: boolean | null;
     readonly navigation: null | Readonly<{
         relativeRoot: 'navigation';
     }>;

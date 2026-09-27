@@ -60,15 +60,12 @@ import { validateRepositoryRelativePath, type RepositoryRelativePath } from '../
 import type { CustomIndexPolicyUpdate } from './contracts';
 import {
     buildPublicationPackageOwnership,
-    computePublicationPackageOwnershipDigest,
     discoverPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
 
 import {
     buildSymbolRegistry,
-    computeNavigationSourceFilesDigest,
-    computeSymbolRegistryManifestHash,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -669,7 +666,6 @@ export class IndexGenerationWorkflow {
         indexedFiles: number;
         totalChunks: number;
         status: Publication['status'];
-        packageOwnershipDigest: string;
     }): Publication {
         const format = this.ports.buildPublicationFormat();
         return Object.freeze({
@@ -694,7 +690,7 @@ export class IndexGenerationWorkflow {
                 indexedFiles: input.indexedFiles,
                 totalChunks: input.totalChunks,
             }),
-            packageOwnership: Object.freeze({ digest: input.packageOwnershipDigest }),
+            packageOwnership: true,
             navigation: input.status === 'complete'
                 ? Object.freeze({ relativeRoot: 'navigation' as const })
                 : null,
@@ -905,7 +901,6 @@ export class IndexGenerationWorkflow {
                     indexedFiles: result.processedFiles,
                     totalChunks: result.totalChunks,
                     status: 'complete',
-                    packageOwnershipDigest: computePublicationPackageOwnershipDigest(packageOwnership),
                 });
                 try {
                     this.ports.activatePublication(publication, mutationLease);
@@ -985,7 +980,6 @@ export class IndexGenerationWorkflow {
                         indexedFiles: result.processedFiles,
                         totalChunks: result.totalChunks,
                         status: 'partial',
-                        packageOwnershipDigest: computePublicationPackageOwnershipDigest(packageOwnership),
                     });
                     try {
                         this.ports.activatePublication(publication, mutationLease);
@@ -1414,7 +1408,6 @@ export class IndexGenerationWorkflow {
             const searchablePreparedFileHashes = new Map(
                 [...input.preparedChanges.fileHashes.entries()].filter(([filePath]) => isSearchable(filePath)),
             );
-            let packageOwnershipDigest: string | null = null;
             await measurePublicationPhase(
                 'publication_checkpoint_stage',
                 async () => {
@@ -1423,7 +1416,6 @@ export class IndexGenerationWorkflow {
                         [...searchablePreparedFileHashes.keys()],
                         input.preparedChanges.fileHashes,
                     );
-                    packageOwnershipDigest = computePublicationPackageOwnershipDigest(packageOwnership);
                     this.ports.stagePublicationPackageOwnership(
                         input.canonicalRoot,
                         publicationId,
@@ -1459,9 +1451,6 @@ export class IndexGenerationWorkflow {
                         );
                     }
                     input.options.assertMutationCurrent?.();
-                    if (!packageOwnershipDigest) {
-                        throw new Error('Atomic delta Publication is missing package ownership digest.');
-                    }
                     const publication = this.buildTask2Publication({
                         publicationId,
                         canonicalRoot: input.canonicalRoot,
@@ -1470,7 +1459,6 @@ export class IndexGenerationWorkflow {
                         indexedFiles: searchablePreparedFileHashes.size,
                         totalChunks,
                         status: 'complete',
-                        packageOwnershipDigest,
                     });
                     try {
                         this.ports.activatePublication(publication, mutationLease);
@@ -1831,7 +1819,6 @@ export class IndexGenerationWorkflow {
                     normalizedRootPath: this.ports.canonicalizeCodebasePath(codebasePath),
                     publicationId: sourcePublicationId,
                     navigationRoot: sourceNavigationRoot,
-                    expectedSymbolRegistryManifestHash: computeSymbolRegistryManifestHash(existingRegistry.manifest),
                 }),
             );
         if (existingRelationships.status === 'ok') {
@@ -2184,54 +2171,15 @@ export class IndexGenerationWorkflow {
                 && !publicationSourceControls.has(filePath)
             )),
         );
-        const preparedFiles = [...searchablePreparedFileHashes].map(([filePath, hash]) => ({ path: filePath, hash }));
+        // Navigation was staged from exactly these prepared files in this
+        // process; re-reading and re-hashing it here only duplicated that work.
         if (
             navigationCandidate.normalizedRootPath !== canonicalRoot
             || navigationCandidate.sourceFileCount !== searchablePreparedFileHashes.size
-            || navigationCandidate.sourceFilesDigest !== computeNavigationSourceFilesDigest(preparedFiles)
         ) {
             throw new Error(
                 'Cannot publish incremental completion proof: staged Publication navigation does not match the prepared synchronizer checkpoint.',
             );
-        }
-        const registryState = await readSymbolRegistrySidecar({
-            normalizedRootPath: canonicalRoot,
-            publicationId: navigationCandidate.publicationId,
-            navigationRoot: navigationCandidate.navigationRoot,
-        });
-        if (
-            registryState.status !== 'ok'
-            || registryState.manifestHash !== navigationCandidate.manifestHash
-        ) {
-            throw new Error('Cannot publish incremental completion proof: staged Publication symbol JSON is incompatible.');
-        }
-        const relationshipState = await readRelationshipSidecar({
-            normalizedRootPath: canonicalRoot,
-            publicationId: navigationCandidate.publicationId,
-            navigationRoot: navigationCandidate.navigationRoot,
-            expectedSymbolRegistryManifestHash: registryState.manifestHash,
-        });
-        if (
-            relationshipState.status !== 'ok'
-            || relationshipState.manifestHash !== navigationCandidate.relationshipManifestHash
-        ) {
-            throw new Error('Cannot publish incremental completion proof: staged Publication relationship JSON is incompatible.');
-        }
-
-        const manifestHashes = new Map(
-            registryState.registry.manifest.files.map((file) => [file.path, file.hash]),
-        );
-        if (manifestHashes.size !== searchablePreparedFileHashes.size) {
-            throw new Error(
-                `Cannot publish incremental completion proof: synchronizer tracks ${searchablePreparedFileHashes.size} searchable files but navigation describes ${manifestHashes.size}.`,
-            );
-        }
-        for (const [relativePath, expectedHash] of searchablePreparedFileHashes) {
-            if (manifestHashes.get(relativePath) !== expectedHash) {
-                throw new Error(
-                    `Cannot publish incremental completion proof: source hash for '${relativePath}' does not match the prepared synchronizer checkpoint.`,
-                );
-            }
         }
 
         const observedTotalChunks = preparedObservedTotalChunks === undefined

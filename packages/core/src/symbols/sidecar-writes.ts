@@ -193,7 +193,6 @@ async function writeSymbolRegistrySidecarInternal(
         await fs.promises.mkdir(rootPath, { recursive: true });
         await fs.promises.mkdir(byFileDir, { recursive: true });
 
-        const shardHashes = new Map<string, string>();
         for (let offset = 0; offset < input.registry.manifest.files.length; offset += SHARD_IO_CONCURRENCY) {
             const batch = input.registry.manifest.files.slice(offset, offset + SHARD_IO_CONCURRENCY);
             await Promise.all(batch.map(async (file) => {
@@ -211,10 +210,8 @@ async function writeSymbolRegistrySidecarInternal(
                     ) {
                         throw new Error(`Reusable symbol contribution is incompatible for '${file.path}'; reindex is required.`);
                     }
-                    // The base Publication is immutable. The shard hash remains
-                    // reuse metadata so unchanged files can be hard-linked without
-                    // serializing the same contribution again; it is not read authority.
-                    shardHashes.set(file.path, source.shardHash);
+                    // The base Publication is immutable, so unchanged files are
+                    // hard-linked instead of serializing the same contribution again.
                     const sharedSize = await linkReusableShard(
                         path.join(reuse.sourceRoot, source.shardPath),
                         targetPath,
@@ -229,13 +226,11 @@ async function writeSymbolRegistrySidecarInternal(
                         language: file.language,
                         symbols,
                     };
-                    const serializedShard = serializeShardJson(shard);
-                    shardHashes.set(file.path, hashSerializedString(serializedShard));
-                    await writeSerializedJson(targetPath, serializedShard);
+                    await writeSerializedJson(targetPath, serializeShardJson(shard));
                 }
             }));
         }
-        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash, shardHashes));
+        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash));
 
         await replaceDirectoryWithRollback(
             symbolsDir,
@@ -566,14 +561,18 @@ async function writeRelationshipSidecarInternal(
                     ) {
                         throw new Error(`Reusable relationship contribution is incompatible for '${filePath}'; reindex is required.`);
                     }
-                    // As with symbol shards, this hash is reuse metadata for an
-                    // immutable base Publication, not an independent authority.
                     const sharedSize = await linkReusableShard(
                         path.join(reuse.sourceRoot, source.shardPath),
                         targetPath,
                     );
                     reuse.sharedFileSizes.set(source.shardPath, sharedSize);
-                    return { ...source };
+                    return {
+                        path: source.path,
+                        hash: source.hash,
+                        shardPath: source.shardPath,
+                        relationshipCount: source.relationshipCount,
+                        analysisEvidencePresent: source.analysisEvidencePresent,
+                    };
                 }
 
                 const records = groupedRelationships.get(filePath) ?? [];
@@ -589,14 +588,11 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                const serializedShard = serializeShardJson(shard);
-                const shardHash = hashSerializedString(serializedShard);
-                await writeSerializedJson(targetPath, serializedShard);
+                await writeSerializedJson(targetPath, serializeShardJson(shard));
                 return {
                     path: filePath,
                     hash: fileHash,
                     shardPath,
-                    shardHash,
                     relationshipCount: records.length,
                     analysisEvidencePresent: analysisEvidence !== undefined,
                 };

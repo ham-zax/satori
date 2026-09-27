@@ -326,7 +326,6 @@ async function readRelationshipState(
         normalizedRootPath: input.normalizedRootPath,
         publicationId: input.publicationId,
         navigationRoot: input.navigationRoot,
-        expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
         visitAnalysisEvidence: (filePath, evidence) => {
             for (const claim of evidence.resolutionClaims ?? []) {
                 for (const key of resolutionClaimKeys(claim)) {
@@ -699,7 +698,6 @@ export class JsonNavigationStore {
             normalizedRootPath: input.normalizedRootPath,
             publicationId: input.publicationId,
             navigationRoot: input.navigationRoot,
-            expectedSymbolRegistryManifestHash: state.manifest.symbolRegistryManifestHash,
             manifest: state.manifest,
             files,
         });

@@ -110,7 +110,6 @@ export type LateOnWorkerRequest =
         type: "initialize";
         modelDirectory: string;
         profile: LateOnRuntimeProfile;
-        profileDigest: string;
         intraOpThreads: number;
     }>
     | Readonly<{
@@ -125,7 +124,6 @@ export type LateOnWorkerResponse =
     | Readonly<{
         type: "ready";
         modelRevision: string;
-        profileDigest: string;
         projectionVersion: LateOnRuntimeProfile["identity"]["projectionVersion"];
         candidateDepth: number;
     }>

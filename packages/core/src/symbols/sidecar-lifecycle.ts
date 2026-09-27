@@ -17,8 +17,6 @@ import {
     RELATIONSHIPS_DIR_NAME,
     SYMBOLS_DIR_NAME,
     compareStrings,
-    computeNavigationSourceFilesDigest,
-    hashSerializedString,
     readJson,
 } from './sidecar-reads';
 import type { WriteSymbolRegistrySidecarResult } from './sidecar-writes';
@@ -79,7 +77,6 @@ export interface StagedPublicationNavigation extends WriteSymbolRegistrySidecarR
     relationshipCount: number;
     relationshipFileShardCount: number;
     sourceFileCount: number;
-    sourceFilesDigest: string;
     physical: {
         logicalBytes: number;
         physicallyWrittenBytes: number;
@@ -200,13 +197,6 @@ function validateRewritePaths(paths: readonly string[], kind: string): Set<strin
     return normalized;
 }
 
-async function verifyReusableShardHash(sourceRoot: string, shardPath: string, expectedHash: string): Promise<void> {
-    const serialized = await fs.promises.readFile(path.join(sourceRoot, shardPath), 'utf8');
-    if (hashSerializedString(serialized) !== expectedHash) {
-        throw new Error(`Atomic navigation delta source shard '${shardPath}' is corrupt; reindex is required.`);
-    }
-}
-
 async function loadPublicationNavigationReuse(
     normalizedRootPath: string,
     input: NonNullable<StagePublicationNavigationInput['deltaReuse']>,
@@ -228,15 +218,9 @@ async function loadPublicationNavigationReuse(
     if (
         !isRelationshipManifest(rawRelationshipManifest)
         || rawRelationshipManifest.fileContributionSchemaVersion !== RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
-        || rawRelationshipManifest.symbolRegistryManifestHash !== rawSymbolIndex.manifestHash
     ) {
         throw new Error('Atomic navigation delta source relationship metadata is incompatible; reindex is required.');
     }
-
-    await Promise.all([
-        ...rawSymbolIndex.files.map((file) => verifyReusableShardHash(sourceRoot, file.shardPath, file.shardHash)),
-        ...rawRelationshipManifest.files.map((file) => verifyReusableShardHash(sourceRoot, file.shardPath, file.shardHash)),
-    ]);
 
     const sharedFileSizes = new Map<string, number>();
     return {
@@ -316,7 +300,6 @@ export async function stagePublicationNavigation(
             relationshipCount: relationshipResult.relationshipCount,
             relationshipFileShardCount: relationshipResult.fileShardCount,
             sourceFileCount: input.registry.manifest.files.length,
-            sourceFilesDigest: computeNavigationSourceFilesDigest(input.registry.manifest.files),
             physical,
         };
         stagedNavigationIdentities.set(candidate, navigationStat);

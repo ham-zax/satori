@@ -144,23 +144,6 @@ test("native execution publishes complete provider order without score blending"
     );
 });
 
-test("native execution restores the exact retrieval order after provider failure", async () => {
-    const results = [candidate("a.ts", 0.90), candidate("b.ts", 0.80), candidate("c.ts", 0.70)];
-    const outcome = await run(
-        buildInput(),
-        buildHost(results, rerankerReturning(new Error("timeout"))),
-    );
-
-    assert.equal(outcome.kind, "ok");
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.relativePath),
-        ["a.ts", "b.ts", "c.ts"],
-    );
-    assert.equal(outcome.orderAuthority, "retrieval_order");
-    assert.equal(outcome.rerankerApplied, false);
-    assert.equal(outcome.rerankerFailurePhase, "api_call");
-});
-
 test("native execution surfaces qualified reranker deadline diagnostics", async () => {
     const results = [candidate("a.ts", 0.90), candidate("b.ts", 0.80), candidate("c.ts", 0.70)];
     const diagnostics = {

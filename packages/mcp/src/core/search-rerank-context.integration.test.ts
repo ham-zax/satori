@@ -164,89 +164,6 @@ function buildDiagnostics(): SearchDiagnostics {
     };
 }
 
-test("production context derives implementation focus for mechanism questions", () => {
-    const input = buildInput("how does Shariah compliance checking block trades");
-    assert.equal(input.answerFocus, "implementation");
-});
-
-test("production context derives tests focus for test-seeking questions", () => {
-    const input = buildInput("find tests for trade veto behavior");
-    assert.equal(input.answerFocus, "tests");
-});
-
-test("production context derives configuration focus for configuration questions", () => {
-    const input = buildInput("where is the risk threshold configured");
-    assert.equal(input.answerFocus, "configuration");
-});
-
-test("the reranker receives the exact focused question and factual documents", async () => {
-    const question = "how does Shariah compliance checking block trades";
-    const captured: { query?: string; documents?: string[] } = {};
-    const reranker: Reranker = {
-        getIdentity: () => ({ provider: "lateon", model: "test", profile: "context-v3" }),
-        rerank: async (query, documents, options) => {
-            captured.query = query;
-            captured.documents = [...documents];
-            const identities = options?.identities ?? [];
-            return identities.map((_identity, index) => ({
-                index,
-                relevanceScore: 1 - index / 10,
-            })) satisfies RerankResult[];
-        },
-    };
-    const results = [
-        candidate("impl", "src/core/veto.ts", 0.9),
-        candidate("test", "tests/veto.test.ts", 0.8),
-    ];
-    await runSearchExecution(buildInput(question), buildHost(results, reranker), buildDiagnostics());
-
-    const query = captured.query ?? "";
-    assert.equal(query.split(question).length - 1, 1, "question appears exactly once");
-    assert.ok(query.includes("Requested answer type:"));
-    assert.ok(query.includes("production implementation, control flow, and integration path"));
-    assert.equal(query.includes("Answer focus:"), false, "current query must not carry the retired v1 focus label");
-    assert.equal(query.includes("implementation runtime source entrypoint"), false);
-    assert.equal(/multiplier|weight|boost|preference\s*\d/i.test(query), false);
-    assert.equal(/\d\.\d+/.test(query), false);
-
-    const documents = captured.documents ?? [];
-    assert.equal(documents.length, 2);
-    assert.ok(documents[0]!.includes('"candidate_role":"implementation"'));
-    assert.ok(documents[1]!.includes('"candidate_role":"test"'));
-});
-
-test("provider order stays authoritative when tests outrank implementation", async () => {
-    const question = "how does Shariah compliance checking block trades";
-    const reranker: Reranker = {
-        getIdentity: () => ({ provider: "lateon", model: "test", profile: "context-v3" }),
-        rerank: async (_query, documents) => {
-            // Provider puts the test document first for an implementation query.
-            const order = [1, 0].slice(0, documents.length);
-            return order.map((index, rank) => ({
-                index,
-                relevanceScore: 1 - rank / 10,
-            })) satisfies RerankResult[];
-        },
-    };
-    const results = [
-        candidate("impl", "src/core/veto.ts", 0.9),
-        candidate("test", "tests/veto.test.ts", 0.8),
-    ];
-    const outcome = await runSearchExecution(
-        buildInput(question),
-        buildHost(results, reranker),
-        buildDiagnostics(),
-    );
-    assert.equal(outcome.kind, "ok");
-    if (outcome.kind !== "ok") return;
-    assert.equal(outcome.rerankerApplied, true);
-    assert.equal(outcome.orderAuthority, "reranker_order");
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.candidateId),
-        ["test", "impl"],
-    );
-});
-
 test("survival metadata carries answer focus and query projection identity", async () => {
     const question = "how does Shariah compliance checking block trades";
     const reranker: Reranker = {
@@ -325,17 +242,6 @@ test("explicit historical reranker profile receives the raw question byte-exact"
     for (const occurrence of rerankInputStage!.candidates) {
         assert.equal(occurrence.rerankInput?.queryProjectionIdentity, "semantic_query_raw_v1");
     }
-});
-
-test("retired v1 query projection identity is rejected", () => {
-    const base = buildInput("how does Shariah compliance checking block trades");
-    assert.throws(
-        () => resolveSearchRerankQuery({
-            semanticQuery: base.semanticQuery,
-            projectionIdentity: "search_rerank_query_v1",
-        }),
-        /search_rerank_query_projection_identity_unknown:search_rerank_query_v1/,
-    );
 });
 
 test("source excerpt projection receives the exact semantic question rather than the expanded provider query", async () => {

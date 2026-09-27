@@ -22,8 +22,6 @@ export {
     isSymbolRecord,
 } from './sidecar-validators';
 export {
-    computeNavigationSourceFilesDigest,
-    computeRelationshipManifestHash,
     readRelationshipAnalysisEvidence,
     readRelationshipSidecar,
     readSymbolRegistrySidecar,

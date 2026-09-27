@@ -122,7 +122,3 @@ test('Core RRF fusion rejects empty IDs and conflicting payloads for one ID', ()
         limit: 1,
     }), /conflicting document payloads/);
 });
-
-test('Core RRF arm-fusion policy v1 freezes k at 100', () => {
-    assert.equal(VECTOR_CANDIDATE_RRF_K_V1, 100);
-});

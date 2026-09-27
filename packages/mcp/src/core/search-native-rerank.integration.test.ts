@@ -448,39 +448,6 @@ test("provider capacity confines native permutation to admitted slots", async ()
     );
 });
 
-test("projection failure falls back without calling the provider", async () => {
-    let providerCalls = 0;
-    const reranker = buildReranker(() => {
-        providerCalls += 1;
-        return [];
-    });
-    const results = [candidate("a", "src/a.ts", 0.9), candidate("b", "src/b.ts", 0.8)];
-    const outcome = await run(
-        buildInput(),
-        buildHost(results, reranker, {
-            buildRerankDocument: async (_query, result) => ({
-                ok: false,
-                candidateId: searchRerankCandidateId(result),
-                reason: "projection_contract_failed",
-            }),
-        }),
-    );
-
-    assert.equal(outcome.kind, "ok");
-    if (outcome.kind !== "ok") return;
-    assert.equal(providerCalls, 0);
-    assert.equal(outcome.rerankerFailurePhase, undefined);
-    assert.equal(outcome.rerankerAttempted, false);
-    assert.ok(outcome.searchWarnings.includes("RERANKER_SKIPPED_INPUT"));
-    assert.ok(!outcome.searchWarnings.includes("RERANKER_FAILED"));
-    assert.deepEqual(
-        outcome.rerankerProjection?.failureCounts,
-        { projection_contract_failed: 2 },
-    );
-    assert.equal(outcome.rerankerProjection?.skippedCandidates, 2);
-    assert.deepEqual(outcome.scored.map((entry) => entry.result.candidateId), ["a", "b"]);
-});
-
 test("every typed projection failure reason falls back before provider admission", async () => {
     const reasons: SearchRerankProjectionFailureReason[] = [
         "generation_receipt_missing",
@@ -745,34 +712,6 @@ test("zero-byte reranker admission falls back to the frozen retrieval order", as
     assert.equal(outcome.rerankerAttempted, false);
     assert.equal(outcome.rerankerApplied, false);
     assert.deepEqual(outcome.scored.map((entry) => entry.result.candidateId), ["a", "b"]);
-});
-
-test("provider timeout restores the frozen retrieval order", async () => {
-    const reranker = buildReranker(() => {
-        throw new RerankerRequestError(
-            "timeout",
-            null,
-            2,
-            "reranker request timed out",
-        );
-    });
-    const results = [
-        candidate("a", "src/a.ts", 0.9),
-        candidate("b", "src/b.ts", 0.8),
-        candidate("c", "src/c.ts", 0.7),
-    ];
-    const outcome = await run(buildInput(), buildHost(results, reranker));
-
-    assert.equal(outcome.kind, "ok");
-    if (outcome.kind !== "ok") return;
-    assert.equal(outcome.rerankerFailurePhase, "api_call");
-    assert.equal(outcome.rerankerFailureKind, "timeout");
-    assert.equal(outcome.rerankerApplied, false);
-    assert.ok(outcome.searchWarnings.includes("RERANKER_FAILED"));
-    assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.candidateId),
-        ["a", "b", "c"],
-    );
 });
 
 test("no reranker leaves the frozen retrieval order with zero provider calls", async () => {

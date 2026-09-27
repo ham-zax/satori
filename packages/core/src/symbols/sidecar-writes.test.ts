@@ -36,7 +36,6 @@ test('relationship sidecar preserves skipped semantic source files in provider c
             normalizedRootPath: root,
             navigationRoot,
             publicationId,
-            expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
         });
         assert.equal(read.status, 'ok');
         assert.deepEqual(read.manifest.providerCoverage[0]?.skippedFiles, [

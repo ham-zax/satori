@@ -88,7 +88,6 @@ async function readNavigation(context: Context, root: string) {
     const relationships = await readRelationshipSidecar({
         normalizedRootPath: root,
         ...navigation,
-        expectedSymbolRegistryManifestHash: registry.manifestHash,
     });
     assert.equal(relationships.status, 'ok');
     if (relationships.status !== 'ok') throw new Error('Missing relationship sidecar');

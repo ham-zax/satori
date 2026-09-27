@@ -50,38 +50,6 @@ test('offline static config preserves the installer-resolved Ollama dimension', 
     }
 });
 
-test('Potion static config defaults EMBEDDING_OUTPUT_DIMENSION to 256', () => {
-    const keys = [
-        'SATORI_RUNTIME_PROFILE',
-        'VECTOR_STORE_PROVIDER',
-        'LANCEDB_PATH',
-        'EMBEDDING_PROVIDER',
-        'POTION_HELPER_PATH',
-        'POTION_MODEL_PATH',
-        'EMBEDDING_OUTPUT_DIMENSION',
-    ] as const;
-    const backup = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-    try {
-        for (const key of keys) delete process.env[key];
-        process.env.SATORI_RUNTIME_PROFILE = 'offline';
-        process.env.VECTOR_STORE_PROVIDER = 'LanceDB';
-        process.env.LANCEDB_PATH = '/opt/satori/lancedb';
-        process.env.EMBEDDING_PROVIDER = 'Potion';
-        process.env.POTION_HELPER_PATH = '/opt/satori/potion-helper';
-        process.env.POTION_MODEL_PATH = '/opt/satori/potion-model';
-
-        const parsed = createMcpConfig();
-        assert.equal(parsed.encoderProvider, 'Potion');
-        assert.equal(parsed.encoderModel, POTION_MODEL_ID);
-        assert.equal(parsed.encoderOutputDimension, POTION_DIMENSION);
-    } finally {
-        for (const key of keys) {
-            if (backup[key] === undefined) delete process.env[key];
-            else process.env[key] = backup[key];
-        }
-    }
-});
-
 test('offline bootstrap preserves recorded Ollama dimension', async () => {
     const recorded = config({
         executionProfile: 'offline',

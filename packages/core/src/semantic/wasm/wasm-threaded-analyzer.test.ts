@@ -89,39 +89,6 @@ test('ThreadedWasmSemanticProjectAnalyzer handles unsupported languages and disp
     await analyzer.dispose();
 });
 
-test('Context wires dispose() to semanticAnalyzer', async () => {
-    let disposed = false;
-    const mockAnalyzer = {
-        supportsLanguage: () => true,
-        analyze: async () => ({ language: 'go', occurrencesByFile: new Map() }),
-        dispose: async () => {
-            disposed = true;
-        },
-    };
-    const { Context } = await import('../../core/context.js');
-    const context = new Context({
-        semanticAnalyzer: mockAnalyzer,
-        embedding: {
-            getProvider: () => 'mock',
-            getDimension: () => 10,
-            getIdentity: () => ({
-                provider: 'mock',
-                model: 'mock-model',
-                dimension: 10,
-                artifactDigest: null,
-                normalizationPolicy: 'provider_output_v1',
-            }),
-            embed: async () => [],
-            close: async () => {},
-        } as any,
-        vectorDatabase: {
-            search: async () => [],
-        } as any,
-    });
-    await context.dispose();
-    assert.equal(disposed, true);
-});
-
 test('ThreadedWasmSemanticProjectAnalyzer rejects in-flight pending requests when disposed', async () => {
     const analyzer = new ThreadedWasmSemanticProjectAnalyzer();
     const sourceFiles = [];

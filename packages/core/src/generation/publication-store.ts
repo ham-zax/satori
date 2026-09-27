@@ -22,7 +22,6 @@ import {
     type PublicationSourceCheckpoint,
 } from '../sync/snapshot-codec';
 import {
-    computePublicationPackageOwnershipDigest,
     parsePublicationPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
@@ -199,11 +198,10 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         || typeof value.vector.totalChunks !== 'number'
         || !Number.isSafeInteger(value.vector.totalChunks)
         || value.vector.totalChunks < 0
-        || (value.packageOwnership !== undefined && value.packageOwnership !== null && (
-            !isRecord(value.packageOwnership)
-            || typeof value.packageOwnership.digest !== 'string'
-            || !/^[a-f0-9]{64}$/.test(value.packageOwnership.digest)
-        ))
+        // Older descriptors recorded ownership as a digest object; any record
+        // still means the ownership snapshot is present.
+        || (value.packageOwnership !== undefined && value.packageOwnership !== null
+            && typeof value.packageOwnership !== 'boolean' && !isRecord(value.packageOwnership))
         || (value.status === 'complete' && (
             !isRecord(value.navigation)
             || value.navigation.relativeRoot !== 'navigation'
@@ -243,7 +241,7 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         }),
         packageOwnership: value.packageOwnership === undefined || value.packageOwnership === null
             ? null
-            : Object.freeze({ digest: value.packageOwnership.digest as string }),
+            : value.packageOwnership !== false,
         navigation: value.navigation === null
             ? null
             : Object.freeze({ relativeRoot: 'navigation' as const }),
@@ -694,16 +692,8 @@ export class PublicationStore {
                 if (!sourceCheckpoint) {
                     throw new Error(`Publication '${validated.id}' is missing source.json.`);
                 }
-                const packageOwnership = this.getPackageOwnership(canonicalRoot, validated.id);
-                if (!packageOwnership) {
+                if (!validated.packageOwnership || !this.getPackageOwnership(canonicalRoot, validated.id)) {
                     throw new Error(`Publication '${validated.id}' is missing ownership.json.`);
-                }
-                if (
-                    !validated.packageOwnership
-                    || computePublicationPackageOwnershipDigest(packageOwnership)
-                        !== validated.packageOwnership.digest
-                ) {
-                    throw new Error(`Publication '${validated.id}' ownership.json does not match its descriptor digest.`);
                 }
 
                 // Make every staged local candidate resource durable before its ID can

@@ -224,7 +224,6 @@ export async function resolveLanguageCapabilityEvidence(input: {
         normalizedRootPath: input.normalizedRootPath,
         publicationId: input.publicationId,
         navigationRoot: input.navigationRoot,
-        expectedSymbolRegistryManifestHash: registry.manifestHash,
     });
     return computeLanguageCapabilityEvidence({
         searchable: input.searchable,

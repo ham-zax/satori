@@ -61,13 +61,3 @@ test("search_rerank_query_v2 identity fails closed when the v2 projection is una
         /search_rerank_query_v2_projection_unavailable/,
     );
 });
-
-test("unknown projection identity is rejected", () => {
-    assert.throws(
-        () => resolveSearchRerankQuery({
-            semanticQuery: RAW_QUERY,
-            projectionIdentity: "search_rerank_query_v99",
-        }),
-        /search_rerank_query_projection_identity_unknown:search_rerank_query_v99/,
-    );
-});

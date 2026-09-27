@@ -166,36 +166,6 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     assert.doesNotMatch(compactEnvelope, /\n\s+"/);
 });
 
-test("runCli install is hard-deprecated to satori-cli (F2 SSOT)", async () => {
-    const io = captureIo();
-    const exitCode = await runCli(["install", "--client", "codex"], {
-        writeStdout: io.writeStdout,
-        writeStderr: io.writeStderr,
-        connectSession: async () => {
-            throw new Error("install must not open an MCP session");
-        },
-    });
-    const { stdout, stderr } = io.read();
-    assert.equal(exitCode, 2);
-    assert.equal(stdout.trim(), "");
-    assert.match(stderr, /Install is owned by @zokizuan\/satori-cli/);
-});
-
-test("runCli uninstall is hard-deprecated to satori-cli (F2 SSOT)", async () => {
-    const io = captureIo();
-    const exitCode = await runCli(["uninstall", "--client", "claude", "--dry-run"], {
-        writeStdout: io.writeStdout,
-        writeStderr: io.writeStderr,
-        connectSession: async () => {
-            throw new Error("uninstall must not open an MCP session");
-        },
-    });
-    const { stdout, stderr } = io.read();
-    assert.equal(exitCode, 2);
-    assert.equal(stdout.trim(), "");
-    assert.match(stderr, /Uninstall is owned by @zokizuan\/satori-cli/);
-});
-
 test("runCli returns the initial manage_index create kickoff response without polling status", async () => {
     const io = captureIo();
 

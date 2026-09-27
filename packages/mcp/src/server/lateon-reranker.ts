@@ -497,7 +497,6 @@ export class LateOnReranker implements Reranker {
             type: "initialize",
             modelDirectory: this.modelDirectory,
             profile: this.profile,
-            profileDigest: this.rawProfileDigest,
             intraOpThreads: this.intraOpThreads,
         } satisfies LateOnWorkerRequest);
     }
@@ -528,7 +527,6 @@ export class LateOnReranker implements Reranker {
         if (response.type === "ready") {
             if (
                 response.modelRevision !== this.profile.identity.revision
-                || response.profileDigest !== this.rawProfileDigest
                 || response.projectionVersion !== this.profile.identity.projectionVersion
                 || response.candidateDepth !== this.profile.inference.candidateDepth
             ) {

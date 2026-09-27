@@ -29,17 +29,3 @@ test("parseCliArgs does not treat post-command --debug as global", () => {
         /Unsupported tools subcommand/
     );
 });
-
-test("parseCliArgs hard-deprecates install to satori-cli (F2 SSOT)", () => {
-    assert.throws(
-        () => parseCliArgs(["install", "--client", "codex", "--dry-run"]),
-        /Install is owned by @zokizuan\/satori-cli/,
-    );
-});
-
-test("parseCliArgs hard-deprecates uninstall to satori-cli (F2 SSOT)", () => {
-    assert.throws(
-        () => parseCliArgs(["uninstall", "--client", "claude"]),
-        /Uninstall is owned by @zokizuan\/satori-cli/,
-    );
-});

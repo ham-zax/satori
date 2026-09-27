@@ -403,7 +403,6 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
             normalizedRootPath: tmpDir,
             publicationId: initialPublicationId,
             navigationRoot: initialNavigationRoot,
-            expectedSymbolRegistryManifestHash: initialCandidate.manifestHash,
         });
         assert.equal(initialRelationships.status, 'ok');
         if (initialRelationships.status !== 'ok') throw new Error('initial relationships missing');
@@ -448,7 +447,6 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
             normalizedRootPath: tmpDir,
             publicationId: deltaPublicationId,
             navigationRoot: deltaNavigationRoot,
-            expectedSymbolRegistryManifestHash: delta.candidate.manifestHash,
         });
         assert.equal(deltaRelationships.status, 'ok');
         if (deltaRelationships.status !== 'ok') throw new Error('delta relationships missing');

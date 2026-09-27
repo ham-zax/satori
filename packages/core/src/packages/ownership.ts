@@ -666,16 +666,6 @@ export function parsePublicationPackageOwnership(
     };
 }
 
-export function computePublicationPackageOwnershipDigest(
-    ownership: PublicationPackageOwnership,
-): string {
-    const validated = parsePublicationPackageOwnership(
-        JSON.stringify(ownership),
-        ownership.canonicalRoot,
-    );
-    return hashBytes(Buffer.from(JSON.stringify(validated), 'utf8'));
-}
-
 export function buildPublicationPackageOwnership(
     canonicalRootInput: string,
     indexedFiles: readonly string[],

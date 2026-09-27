@@ -1,4 +1,5 @@
 import test from "node:test";
+import { parseCliArgs } from "./args.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -54,6 +55,8 @@ function executeInstallCommand(
         preflightDependencies: {
             probeCandidateRuntime: async () => {},
         },
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
+        modelRetryDelaysMs: [],
         lateOnAuthorityLoader: loadAcquisitionAuthority,
         ...options,
     });
@@ -459,6 +462,7 @@ async function runOfflineUpgradeWithProductionPreflight(
         platform: "linux",
         architecture: "x64",
         potionAssetsRoot: POTION_ASSETS_ROOT,
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
         execFileSyncImpl: installRuntimePackageWithPreflightCore(
             "dist/target-runtime.mjs",
             UPGRADE_TARGET.mcpPackageSpecifier,
@@ -1212,6 +1216,7 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
                 lateOnModelPath: path.join(homeDir, "lateon-model"),
                 platform: "linux",
                 architecture: "x64",
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
                 lateOnAuthorityLoader: loadAcquisitionAuthority,
                 execFileSyncImpl: installRuntimePackageStub(
                     "dist/target-runtime.mjs",
@@ -1280,6 +1285,8 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
                 env: {},
                 platform: "linux",
                 architecture: "x64",
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
+                modelRetryDelaysMs: [],
                 lateOnAuthorityLoader: loadAcquisitionAuthority,
                 fetchImpl: (async () => {
                     throw new Error("network down");
@@ -1294,7 +1301,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
                     runtimeEnvironment: Object.freeze({}),
                 }),
             }),
-            /LateOn D32 model preflight failed: network down/,
+            /LateOn D32 model preflight failed: .*network down/,
         );
 
         assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
@@ -1302,7 +1309,8 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
         const modelsLateonDir = path.join(homeDir, ".satori", "models", "lateon");
         if (fs.existsSync(modelsLateonDir)) {
             assert.deepEqual(
-                fs.readdirSync(modelsLateonDir).filter((name) => name.startsWith(".lateon-install-")),
+                // Resumable staging may remain; no unverified model is ever published.
+                fs.readdirSync(modelsLateonDir).filter((name) => !name.startsWith(".")),
                 [],
             );
         }
@@ -1335,6 +1343,7 @@ test("legacy no-provider upgrade defaults to LateOn D32", async () => {
             env: {},
             platform: "linux",
             architecture: "x64",
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             lateOnAuthorityLoader: loadAcquisitionAuthority,
             fetchImpl,
             execFileSyncImpl: installRuntimePackageStub(
@@ -1404,6 +1413,7 @@ test("managed runtime upgrade migrates the previous managed context-v4 default c
             platform: "linux",
             architecture: "x64",
             lateOnModelPath: path.join(homeDir, "lateon-model"),
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             lateOnAuthorityLoader: loadAcquisitionAuthority,
             execFileSyncImpl: installRuntimePackageStub(
                 "dist/target-runtime.mjs",
@@ -1456,6 +1466,7 @@ test("managed runtime upgrade migrates the previous managed context-v4 default c
                 platform: "linux",
                 architecture: "x64",
                 lateOnModelPath: path.join(homeDir, "lateon-model"),
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
                 lateOnAuthorityLoader: loadAcquisitionAuthority,
                 execFileSyncImpl: installRuntimePackageStub(
                     "dist/target-runtime.mjs",
@@ -1504,6 +1515,7 @@ test("managed runtime upgrade migrates the historical context-v3 activation comb
             platform: "linux",
             architecture: "x64",
             lateOnModelPath: path.join(homeDir, "lateon-model"),
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             lateOnAuthorityLoader: loadAcquisitionAuthority,
             execFileSyncImpl: installRuntimePackageStub(
                 "dist/target-runtime.mjs",
@@ -1556,6 +1568,7 @@ test("managed runtime upgrade migrates the historical context-v3 activation comb
                 platform: "linux",
                 architecture: "x64",
                 lateOnModelPath: path.join(homeDir, "lateon-model"),
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
                 lateOnAuthorityLoader: loadAcquisitionAuthority,
                 execFileSyncImpl: installRuntimePackageStub(
                     "dist/target-runtime.mjs",
@@ -2664,6 +2677,32 @@ test("canonical skill is never overwritten unless Satori owns it and is removed 
     });
 });
 
+test("uninstall --purge stops servers and deletes all Satori data; a dry run only lists it", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        const satoriRoot = path.join(homeDir, ".satori");
+        fs.mkdirSync(path.join(satoriRoot, "models", "potion"), { recursive: true });
+
+        const preview = await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: true, purge: true }, { homeDir });
+        assert.deepEqual(preview.purgedPaths, [satoriRoot]);
+        assert.equal(fs.existsSync(satoriRoot), true);
+
+        let terminated = 0;
+        const result = await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: false, purge: true }, {
+            homeDir,
+            terminateRunner: async () => {
+                terminated += 1;
+                return { status: "terminated" } as never;
+            },
+        });
+        assert.equal(terminated, 1);
+        assert.deepEqual(result.purgedPaths, [satoriRoot]);
+        assert.equal(fs.existsSync(satoriRoot), false);
+        assert.equal(readFile(path.join(homeDir, ".codex", "config.toml")).includes("[mcp_servers.satori]"), false);
+    });
+    assert.throws(() => parseCliArgs(["uninstall", "--client", "codex", "--purge"]), /--purge removes Satori for every client/);
+});
+
 test("install preserves direct Claude Satori env values on reinstall", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
@@ -3135,6 +3174,7 @@ test("auto install fails before runtime, model, preflight, or launcher work when
                     runtimeInstallCalls += 1;
                     throw new Error("runtime install must not run");
                 }) as typeof execFileSync,
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
                 lateOnAuthorityLoader: (() => {
                     modelAcquisitionCalls += 1;
                     throw new Error("model acquisition must not run");

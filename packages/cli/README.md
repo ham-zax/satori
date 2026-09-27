@@ -99,7 +99,7 @@ doctor [--verbose] [--json]
 version # aliases: -v, --version
 upgrade # alias: update
 terminate
-uninstall [--client auto|all|codex|claude|opencode] [--dry-run] # defaults to all supported clients
+uninstall [--client auto|all|codex|claude|opencode] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
 tools list
 tool call <toolName> --args-json '<json>'
 tool call <toolName> --args-file <path>
@@ -163,7 +163,7 @@ profile = "minimal"
 
 Do not place provider keys, model names, or backend credentials in `satori.toml`.
 
-Supported runtime paths include bundled Potion + LanceDB, Voyage + LanceDB, explicit loopback Ollama + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
+Supported runtime paths include Potion (model downloaded once from Hugging Face into `~/.satori/models`) + LanceDB, Voyage + LanceDB, explicit loopback Ollama + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
 
 ## Development
 

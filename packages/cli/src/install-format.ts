@@ -101,8 +101,17 @@ export function formatInstallText(
         lines.push("", ...verificationLines(postflight));
     }
 
-    if (result.action === "uninstall" && !result.dryRun) {
-        lines.push("", "Existing indexes and the managed runtime were kept.");
+    if (result.action === "uninstall" && result.purgedPaths) {
+        const verb = result.dryRun ? "Would remove" : "Removed";
+        lines.push("", result.purgedPaths.length > 0
+            ? `${verb} all Satori data (runtime, models, and indexes): ${result.purgedPaths.join(", ")}`
+            : "No Satori data directories were found.");
+    } else if (result.action === "uninstall" && !result.dryRun) {
+        lines.push(
+            "",
+            "Indexes, downloaded models, and the managed runtime were kept.",
+            `Remove everything with \`${satoriCliCommand("uninstall --purge")}\`.`,
+        );
     }
     const restart = restartInstruction(result);
     if (restart) lines.push("", restart);

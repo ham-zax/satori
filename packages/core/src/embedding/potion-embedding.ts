@@ -140,6 +140,9 @@ async function sha256File(filePath: string): Promise<string> {
     return digest.digest('hex');
 }
 
+// Installation owns the managed model cache and repairs it on rerun.
+const POTION_RESTORE_HINT = 'Rerun `npx -y @zokizuan/satori-cli@latest install` to restore it.';
+
 async function assertFileDigest(filePath: string, expected: string, label: string): Promise<void> {
     let actual: string;
     try {
@@ -148,14 +151,14 @@ async function assertFileDigest(filePath: string, expected: string, label: strin
         throw providerError({
             code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
             retryable: false,
-            message: `Pinned Potion ${label} is unavailable.`,
+            message: `Pinned Potion ${label} is unavailable. ${POTION_RESTORE_HINT}`,
         });
     }
     if (actual !== expected) {
         throw providerError({
             code: 'EMBEDDING_PROVIDER_UNAVAILABLE',
             retryable: false,
-            message: `Pinned Potion ${label} failed checksum verification.`,
+            message: `Pinned Potion ${label} failed checksum verification. ${POTION_RESTORE_HINT}`,
         });
     }
 }

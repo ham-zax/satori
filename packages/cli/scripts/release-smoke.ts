@@ -428,6 +428,12 @@ function assertPackedCliHelp(output: string): void {
     }
 }
 
+// The runtime package ships only the Potion helper; installs acquire the model
+// from Hugging Face. The smoke uses the workspace copy of the same pinned files.
+const WORKSPACE_POTION_MODEL_PATH = fileURLToPath(
+    new URL("../../mcp/assets/potion/linux-x64/model/", import.meta.url),
+);
+
 function packedPotionSmokeEnv(
     baseEnv: NodeJS.ProcessEnv,
     packedMcpRoot: string,
@@ -435,18 +441,19 @@ function packedPotionSmokeEnv(
 ): NodeJS.ProcessEnv {
     const assetsRoot = path.join(packedMcpRoot, "assets", "potion", "linux-x64");
     const helperPath = path.join(assetsRoot, "satori-potion");
-    const modelPath = path.join(assetsRoot, "model");
+    const modelPath = WORKSPACE_POTION_MODEL_PATH;
     for (const requiredPath of [
         helperPath,
-        path.join(modelPath, "model.safetensors"),
-        path.join(modelPath, "config.json"),
-        path.join(modelPath, "tokenizer.json"),
+        path.join(assetsRoot, "manifest.json"),
         path.join(assetsRoot, "MODEL_CARD.md"),
         path.join(assetsRoot, "MODEL2VEC_RS_LICENSE"),
     ]) {
         if (!fs.existsSync(requiredPath)) {
             throw new Error(`Packed Potion artifact is missing: ${requiredPath}.`);
         }
+    }
+    if (fs.existsSync(path.join(assetsRoot, "model"))) {
+        throw new Error("Packed MCP runtime must not bundle Potion model files; installs acquire them.");
     }
     return {
         ...baseEnv,
@@ -468,7 +475,7 @@ async function assertPackedPotionExecutionCapability(installRoot: string, packed
     }
     const assetsRoot = path.join(packedMcpRoot, "assets", "potion", "linux-x64");
     const helperPath = path.join(assetsRoot, "satori-potion");
-    const modelPath = path.join(assetsRoot, "model");
+    const modelPath = WORKSPACE_POTION_MODEL_PATH;
 
     const coreEntry = path.join(installRoot, "node_modules", "@zokizuan", "satori-core", "dist", "index.js");
     if (!fs.existsSync(coreEntry)) {

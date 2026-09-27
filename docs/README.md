@@ -27,6 +27,7 @@ A **Publication** is Satori's immutable snapshot of everything it knows about on
 - [`../satori-landing/docs/index.html`](../satori-landing/docs/index.html) — installation, repository profiles, MCP workflows, 11-tool reference, lifecycle states, debugging, and troubleshooting.
 - [`../packages/mcp/README.md`](../packages/mcp/README.md) — package-focused MCP runtime documentation.
 - [`RELEASING.md`](RELEASING.md) — release graph, qualification, npm authentication, publication, and registry verification.
+- [`improvements/`](improvements/README.md) — evaluated but deferred proposals (self-contained distribution, model mirror fallback).
 
 ## Current product contract
 

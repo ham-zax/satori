@@ -8,6 +8,7 @@ import type {
 import {
     assertSupportedPotionPlatform,
     planInstallRuntimeEnvironment,
+    plannedPotionModelDirectory,
     probeManagedRuntimeCandidate,
     runInstallPreflight,
     type InstallPreflightDependencies,
@@ -49,6 +50,7 @@ import {
     resolveOfflineOllamaModel,
     resolveOfflineReranker,
     resolveVerifiedLateOnModel,
+    resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
 import {
     createInstallPlan,
@@ -75,6 +77,8 @@ import {
     acquireManagedRuntimeMutationLock,
 } from "./managed-runtime-store.js";
 import { activateAfterRetiringManagedRuntime } from "./runtime-activation.js";
+import { terminateSatoriServers } from "./terminate.js";
+import { resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
     LATEON_D32_ACTIVATION_POLICY,
@@ -180,11 +184,13 @@ export async function executeInstallCommand(
                         }
                         : {}),
                     potionAssetsRoot,
+                    potionModelPath: plannedPotionModelDirectory(homeDir),
                     platform: options.platform,
                     architecture: options.architecture,
                 }) };
             } else {
                 if (!installedRuntimeCommand) {
+                    options.onInstallProgress?.("runtime");
                     managedRuntimeCandidate = installManagedRuntimeCandidate(
                         homeDir,
                         packageSpecifier,
@@ -201,6 +207,17 @@ export async function executeInstallCommand(
                     installedRuntimeCommand = managedRuntimeCandidate.command;
                     potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot);
                 }
+                const potionModelPath = command.runtime === "offline" && !preservedOllamaModel
+                    ? options.potionModelPath ?? await resolveVerifiedPotionModel(
+                        homeDir,
+                        potionAssetsRoot,
+                        options.fetchImpl,
+                        options.modelProgress,
+                        options.installRetryCommand,
+                        env,
+                        options.modelRetryDelaysMs,
+                    )
+                    : undefined;
                 if (reranker === "lateon") {
                     const runtimePackageRoot = managedRuntimeCandidate?.packageRoot
                         ?? (installedRuntimeCommand.args.length === 1
@@ -215,9 +232,9 @@ export async function executeInstallCommand(
                         requestedLateOnModelPath,
                         options.fetchImpl,
                         options.lateOnAuthorityLoader,
-                        options.lateOnNowImpl,
-                        options.lateOnProgress,
-                        options.lateOnRetryCommand,
+                        options.modelProgress,
+                        options.installRetryCommand,
+                        options.modelRetryDelaysMs,
                     );
                 }
                 const preflightDependencies: InstallPreflightDependencies = {
@@ -241,6 +258,7 @@ export async function executeInstallCommand(
                                 }
                                 : {}),
                             potionAssetsRoot,
+                            potionModelPath,
                             platform: options.platform,
                             architecture: options.architecture,
                         },
@@ -318,6 +336,7 @@ export async function executeInstallCommand(
         throw error;
     }
     try {
+        if (command.kind === "install" && !command.dryRun) options.onInstallProgress?.("configure");
         const result = command.kind === "install" && !command.dryRun
             ? await activateAfterRetiringManagedRuntime({
                 homeDir,
@@ -332,8 +351,41 @@ export async function executeInstallCommand(
                 { ...env, ...preflight?.runtimeEnvironment },
             );
         }
+        if (command.kind === "uninstall" && command.purge) {
+            return { ...result, purgedPaths: await purgeSatoriData(homeDir, env, command.dryRun, options.terminateRunner) };
+        }
         return result;
     } finally {
         releaseRuntimeMutationLock?.();
     }
+}
+
+/**
+ * Removes every Satori-owned local directory: the managed runtime, launcher,
+ * model cache, indexes, and state. Running servers are stopped first so no
+ * process keeps writing into a deleted tree.
+ */
+async function purgeSatoriData(
+    homeDir: string,
+    env: NodeJS.ProcessEnv,
+    dryRun: boolean,
+    terminateRunner: InstallCommandOptions["terminateRunner"],
+): Promise<string[]> {
+    const targets = [...new Set([
+        path.join(homeDir, ".satori"),
+        resolveSatoriStateRoot({ configured: env.SATORI_STATE_ROOT, homeDir }),
+    ])].filter((target) => fs.existsSync(target));
+    if (dryRun || targets.length === 0) return targets;
+    const termination = await (terminateRunner ?? terminateSatoriServers)({ homeDir, env });
+    if (termination.status === "partial") {
+        throw new CliError(
+            "E_TERMINATION_FAILED",
+            "Could not stop every running Satori server; nothing was purged. Close your coding agents and rerun.",
+            1,
+        );
+    }
+    for (const target of targets) {
+        fs.rmSync(target, { recursive: true, force: true });
+    }
+    return targets;
 }

@@ -14,8 +14,8 @@ import type {
 import type { TerminateOptions, TerminateResult } from "./terminate.js";
 import type {
     LateOnAuthorityLoader,
-    LateOnModelProgressReporter,
 } from "./lateon-model-store.js";
+import type { ModelProgressReporter } from "./model-store.js";
 
 export const SATORI_SKILL_NAME = "satori";
 export const MANAGED_RUNTIME_DIR = "mcp-runtime";
@@ -112,6 +112,8 @@ export type InstallCommandInput =
         kind: "uninstall";
         client: InstallClient;
         dryRun: boolean;
+        /** Also stop Satori servers and delete all Satori-owned local data. */
+        purge?: boolean;
     };
 
 export interface InstallCommandOptions {
@@ -124,13 +126,17 @@ export interface InstallCommandOptions {
     preflightDependencies?: InstallPreflightDependencies;
     potionAssetsRoot?: string;
     lateOnModelPath?: string;
+    /** Pre-verified Potion model directory; skips acquisition (tests and explicit paths). */
+    potionModelPath?: string;
     fetchImpl?: typeof fetch;
     /** Structural test seam for LateOn acquisition; the production default binds the frozen digest. */
     lateOnAuthorityLoader?: LateOnAuthorityLoader;
-    /** Test seam for proving LateOn acquisition deadline handling without waiting ten minutes. */
-    lateOnNowImpl?: () => number;
-    lateOnProgress?: LateOnModelProgressReporter;
-    lateOnRetryCommand?: string;
+    modelProgress?: ModelProgressReporter;
+    /** Announces the slow install phases that have no byte-level progress. */
+    onInstallProgress?: (phase: "runtime" | "configure") => void;
+    /** Test seam: backoff before each model download retry. */
+    modelRetryDelaysMs?: readonly number[];
+    installRetryCommand?: string;
     platform?: NodeJS.Platform;
     architecture?: string;
     libc?: "gnu" | "musl";
@@ -165,6 +171,8 @@ export interface InstallCommandResult {
     /** Non-secret runtime values persisted in the managed launcher. */
     runtimeEnvironment?: Readonly<Record<string, string>>;
     results: ClientInstallResult[];
+    /** Directories removed (or, for a dry run, that would be removed) by uninstall --purge. */
+    purgedPaths?: string[];
 }
 
 export interface ManagedRuntimeUpgradeResult {

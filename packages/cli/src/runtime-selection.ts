@@ -7,7 +7,7 @@ import type {
     InstallVectorStore,
 } from "./args.js";
 import { resolveClientTargets } from "./client-targets.js";
-import { selectedConnectedVectorStore } from "./install-preflight.js";
+import { readPotionModelSpec, selectedConnectedVectorStore } from "./install-preflight.js";
 import {
     hasSatoriClientEntry,
     readClientVectorStore,
@@ -26,9 +26,9 @@ import {
     resolveDefaultLateOnModelDirectory,
     verifyLateOnModelDirectory,
     type LateOnAuthorityLoader,
-    type LateOnModelProgressReporter,
     type VerifiedLateOnModel,
 } from "./lateon-model-store.js";
+import { ensureModel, type ModelProgressReporter } from "./model-store.js";
 
 export function historicalManagedLateOnProfile(
     managedEnvironment: Readonly<Record<string, string>>,
@@ -189,9 +189,9 @@ export async function resolveVerifiedLateOnModel(
     requestedModelDirectory: string | undefined,
     fetchImpl: typeof fetch | undefined,
     authorityLoader: LateOnAuthorityLoader | undefined,
-    nowImpl: (() => number) | undefined,
-    onProgress?: LateOnModelProgressReporter,
+    onProgress?: ModelProgressReporter,
     retryCommand?: string,
+    retryDelaysMs?: readonly number[],
 ): Promise<VerifiedLateOnModel> {
     if (!runtimePackageRoot) {
         throw new CliError(
@@ -214,14 +214,40 @@ export async function resolveVerifiedLateOnModel(
             runtimePackageRoot,
             fetchImpl,
             authorityLoader,
-            nowImpl,
             onProgress,
+            retryDelaysMs,
         });
     } catch (error) {
         if (error instanceof CliError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         const retry = retryCommand ? `\nRetry: ${retryCommand}` : "";
         throw new CliError("E_INSTALL_PREFLIGHT", `LateOn D32 model preflight failed: ${message}${retry}`, 1);
+    }
+}
+
+export async function resolveVerifiedPotionModel(
+    homeDir: string,
+    potionAssetsRoot: string,
+    fetchImpl: typeof fetch | undefined,
+    onProgress?: ModelProgressReporter,
+    retryCommand?: string,
+    env?: NodeJS.ProcessEnv,
+    retryDelaysMs?: readonly number[],
+): Promise<string> {
+    try {
+        const { modelDirectory } = await ensureModel({
+            homeDir,
+            spec: readPotionModelSpec(potionAssetsRoot),
+            env,
+            fetchImpl,
+            onProgress,
+            retryDelaysMs,
+        });
+        return modelDirectory;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const retry = retryCommand ? `\nRetry: ${retryCommand}` : "";
+        throw new CliError("E_INSTALL_PREFLIGHT", `Potion embedding model preflight failed: ${message}${retry}`, 1);
     }
 }
 

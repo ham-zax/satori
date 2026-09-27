@@ -1,6 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+    assertSafeModelArtifactPath,
+    ensureModel,
+    resolveModelDirectory,
+    verifyModelDirectory,
+    type ModelProgressReporter,
+    type ModelSpec,
+} from "./model-store.js";
 
 /**
  * Managed D32 profile identity used for planning and migration checks.
@@ -39,8 +47,6 @@ const FROZEN_LATEON_D32_PROFILE_SHA256 =
     "04958f55784968a2a45c1499adc2fcb706dcd23e9813c8e8da7e3f31f43777f6";
 const DEFAULT_LATEON_REPOSITORY = "lightonai/LateOn-Code-edge";
 const DEFAULT_LATEON_REVISION = "07ef20f406c86badca122464808f4cac2f6e4b25";
-
-type FetchLike = typeof fetch;
 
 type LateOnProfileArtifact = Readonly<{
     path: string;
@@ -109,50 +115,17 @@ export type VerifiedLateOnModel = Readonly<{
     runtimeProfileSha256: string;
 }>;
 
-export type LateOnModelProgressEvent =
-    | Readonly<{
-        phase: "checking";
-        modelDirectory: string;
-        totalBytes: number;
-    }>
-    | Readonly<{
-        phase: "downloading";
-        modelDirectory: string;
-        repository: string;
-        totalBytes: number;
-    }>
-    | Readonly<{
-        phase: "progress";
-        artifact: string;
-        artifactBytesDownloaded: number;
-        artifactBytesTotal: number;
-        totalBytesDownloaded: number;
-        totalBytes: number;
-    }>
-    | Readonly<{
-        phase: "verifying";
-        modelDirectory: string;
-        totalBytes: number;
-        source: "cached" | "downloaded";
-    }>
-    | Readonly<{
-        phase: "ready";
-        modelDirectory: string;
-        totalBytes: number;
-        source: "cached" | "downloaded";
-    }>;
-
-export type LateOnModelProgressReporter = (event: LateOnModelProgressEvent) => void;
-
 export type EnsureLateOnModelInput = Readonly<{
     homeDir: string;
     runtimePackageRoot: string;
-    fetchImpl?: FetchLike;
-    onProgress?: LateOnModelProgressReporter;
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    onProgress?: ModelProgressReporter;
     /** Test seam for proving disk failures without depending on the host filesystem. */
     statfsImpl?: (path: string) => { bavail: number; bsize: number };
-    /** Test seam for proving deadline handling without waiting ten minutes. */
-    nowImpl?: () => number;
+    /** Test seams for stalled and retried downloads. */
+    stallTimeoutMs?: number;
+    retryDelaysMs?: readonly number[];
     /** Structural test seam; the production default binds the frozen digest. */
     authorityLoader?: LateOnAuthorityLoader;
     /** Test seam for proving the destination-appears-before-rename race. */
@@ -161,61 +134,6 @@ export type EnsureLateOnModelInput = Readonly<{
 
 function sha256Bytes(bytes: Buffer): string {
     return crypto.createHash("sha256").update(bytes).digest("hex");
-}
-
-function sha256File(filePath: string): string {
-    const digest = crypto.createHash("sha256");
-    const file = fs.openSync(filePath, "r");
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    try {
-        while (true) {
-            const bytesRead = fs.readSync(file, buffer, 0, buffer.length, null);
-            if (bytesRead === 0) break;
-            digest.update(buffer.subarray(0, bytesRead));
-        }
-    } finally {
-        fs.closeSync(file);
-    }
-    return digest.digest("hex");
-}
-
-function pathExists(candidate: string): boolean {
-    try {
-        fs.lstatSync(candidate);
-        return true;
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-        throw error;
-    }
-}
-
-function assertSafeArtifactPath(candidate: unknown): asserts candidate is string {
-    if (typeof candidate !== "string" || candidate.length === 0 || candidate.includes("\0")) {
-        throw new Error("LateOn acquisition manifest contains an empty or null-byte artifact path.");
-    }
-    if (
-        path.isAbsolute(candidate)
-        || path.posix.isAbsolute(candidate)
-        || path.win32.isAbsolute(candidate)
-    ) {
-        throw new Error(`LateOn acquisition manifest contains an absolute artifact path '${candidate}'.`);
-    }
-    const components = candidate.split("/");
-    if (components.some((component) => component.length === 0 || component === "." || component === "..")) {
-        throw new Error(`LateOn acquisition manifest contains an unsafe artifact path '${candidate}'.`);
-    }
-    if (path.posix.normalize(candidate) !== candidate || candidate.includes("\\")) {
-        throw new Error(`LateOn acquisition manifest contains a non-normalized artifact path '${candidate}'.`);
-    }
-    const relative = path.relative("/lateon-model", path.resolve("/lateon-model", candidate));
-    if (
-        relative.length === 0
-        || relative === ".."
-        || relative.startsWith(`..${path.sep}`)
-        || path.isAbsolute(relative)
-    ) {
-        throw new Error(`LateOn acquisition manifest escapes its model directory via '${candidate}'.`);
-    }
 }
 
 function assertSha256(value: unknown, label: string): asserts value is string {
@@ -283,7 +201,7 @@ export function loadAcquisitionAuthority(runtimePackageRoot: string): LateOnAcqu
 
     const profileArtifacts = new Map<string, string>();
     for (const artifact of profile.artifacts) {
-        assertSafeArtifactPath(artifact?.path);
+        assertSafeModelArtifactPath(artifact?.path, "LateOn acquisition manifest");
         assertSha256(artifact?.sha256, `profile artifact '${artifact.path}'`);
         if (profileArtifacts.has(artifact.path)) {
             throw new Error(`LateOn profile contains duplicate artifact path '${artifact.path}'.`);
@@ -294,7 +212,7 @@ export function loadAcquisitionAuthority(runtimePackageRoot: string): LateOnAcqu
     const acquisitionArtifacts: LateOnAcquisitionArtifact[] = [];
     const acquisitionPaths = new Set<string>();
     for (const artifact of manifest.artifacts) {
-        assertSafeArtifactPath(artifact?.path);
+        assertSafeModelArtifactPath(artifact?.path, "LateOn acquisition manifest");
         assertSha256(artifact?.sha256, `acquisition artifact '${artifact.path}'`);
         assertPositiveSafeInteger(artifact?.sizeBytes, `size for '${artifact.path}'`);
         if (acquisitionPaths.has(artifact.path)) {
@@ -378,85 +296,24 @@ export function readLateOnAcquisitionAuthority(runtimePackageRoot: string): Late
     return frozenAcquisitionAuthority(runtimePackageRoot);
 }
 
+function lateOnModelSpec(authority: LateOnAcquisitionAuthority): ModelSpec {
+    return Object.freeze({
+        id: "lateon",
+        label: "LateOn reranker model",
+        repository: authority.repository,
+        revision: authority.revision,
+        artifacts: authority.artifacts,
+    });
+}
+
 export function resolveDefaultLateOnModelDirectory(homeDir: string): string {
-    return path.join(
-        homeDir,
-        ".satori",
-        "models",
-        "lateon",
-        `LateOn-Code-edge@${DEFAULT_LATEON_REVISION}`,
-    );
-}
-
-function corruptionError(modelDirectory: string, detail: string): Error {
-    return new Error(
-        `LateOn model directory '${modelDirectory}' is corrupt: ${detail} `
-        + `Remove ${modelDirectory} and rerun installation, or install with --reranker none.`,
-    );
-}
-
-function isRealPathWithin(rootPath: string, candidatePath: string): boolean {
-    const relative = path.relative(rootPath, candidatePath);
-    return relative.length > 0
-        && relative !== ".."
-        && !relative.startsWith(`..${path.sep}`)
-        && !path.isAbsolute(relative);
-}
-
-function verifyModelDirectory(
-    modelDirectory: string,
-    authority: LateOnAcquisitionAuthority,
-): void {
-    if (!path.isAbsolute(modelDirectory)) {
-        throw corruptionError(modelDirectory, "the configured model path must be absolute");
-    }
-    let modelStat: fs.Stats;
-    try {
-        modelStat = fs.lstatSync(modelDirectory);
-    } catch {
-        throw corruptionError(modelDirectory, "the model directory is missing");
-    }
-    if (!modelStat.isDirectory() || modelStat.isSymbolicLink()) {
-        throw corruptionError(modelDirectory, "the model path must be a real directory");
-    }
-
-    let realModelDirectory: string;
-    try {
-        realModelDirectory = fs.realpathSync(modelDirectory);
-    } catch {
-        throw corruptionError(modelDirectory, "the model directory cannot be canonicalized");
-    }
-    for (const artifact of authority.artifacts) {
-        const artifactPath = path.join(modelDirectory, artifact.path);
-        const components = artifact.path.split("/");
-        let current = modelDirectory;
-        try {
-            for (const component of components.slice(0, -1)) {
-                current = path.join(current, component);
-                const componentStat = fs.lstatSync(current);
-                if (!componentStat.isDirectory() || componentStat.isSymbolicLink()) {
-                    throw new Error(`intermediate component '${component}' is not a real directory`);
-                }
-            }
-            const artifactStat = fs.lstatSync(artifactPath);
-            if (!artifactStat.isFile() || artifactStat.isSymbolicLink()) {
-                throw new Error("artifact is not a regular file");
-            }
-            const realArtifactPath = fs.realpathSync(artifactPath);
-            if (!isRealPathWithin(realModelDirectory, realArtifactPath)) {
-                throw new Error("artifact resolves outside the model directory");
-            }
-            if (
-                artifactStat.size !== artifact.sizeBytes
-                || sha256File(artifactPath) !== artifact.sha256
-            ) {
-                throw new Error("artifact size or checksum verification failed");
-            }
-        } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error);
-            throw corruptionError(modelDirectory, `${artifact.path}: ${detail}`);
-        }
-    }
+    return resolveModelDirectory(homeDir, {
+        id: "lateon",
+        label: "LateOn reranker model",
+        repository: DEFAULT_LATEON_REPOSITORY,
+        revision: DEFAULT_LATEON_REVISION,
+        artifacts: [],
+    });
 }
 
 export function verifyLateOnModelDirectory(input: Readonly<{
@@ -467,7 +324,7 @@ export function verifyLateOnModelDirectory(input: Readonly<{
 }>): VerifiedLateOnModel {
     const authority = (input.authorityLoader ?? frozenAcquisitionAuthority)(input.runtimePackageRoot);
     const modelDirectory = path.resolve(input.modelDirectory);
-    verifyModelDirectory(modelDirectory, authority);
+    verifyModelDirectory(modelDirectory, lateOnModelSpec(authority));
     return Object.freeze({
         modelDirectory,
         profileId: authority.profileId,
@@ -475,293 +332,24 @@ export function verifyLateOnModelDirectory(input: Readonly<{
     });
 }
 
-function assertAvailableDiskSpace(
-    parentDirectory: string,
-    authority: LateOnAcquisitionAuthority,
-    statfsImpl: (path: string) => { bavail: number; bsize: number },
-): void {
-    const stats = statfsImpl(parentDirectory);
-    const availableBytes = stats.bavail * stats.bsize;
-    const requiredBytes = calculateRequiredLateOnFreeBytes(
-        authority.totalExpectedArtifactBytes,
-        authority.diskHeadroomFraction,
-    );
-    if (!Number.isSafeInteger(availableBytes) || availableBytes < requiredBytes) {
-        throw new Error(
-            `Insufficient disk space for the LateOn model closure at '${parentDirectory}': `
-            + `need ${requiredBytes} bytes (artifact total plus ${authority.diskHeadroomFraction * 100}% headroom), `
-            + `available ${Number.isSafeInteger(availableBytes) ? availableBytes : "unknown"} bytes.`,
-        );
-    }
-}
-
-function deadlineError(): Error {
-    return new Error(
-        "LateOn model acquisition exceeded its 10-minute deadline; check the network and rerun installation, or install with --reranker none.",
-    );
-}
-
-async function withDeadline<T>(
-    operation: Promise<T>,
-    deadlineAt: number,
-    abortController: AbortController,
-    now: () => number,
-): Promise<T> {
-    const remaining = deadlineAt - now();
-    if (remaining <= 0) {
-        abortController.abort();
-        throw deadlineError();
-    }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-        return await Promise.race([
-            operation,
-            new Promise<T>((_, reject) => {
-                timer = setTimeout(() => {
-                    abortController.abort();
-                    reject(deadlineError());
-                }, remaining);
-            }),
-        ]);
-    } finally {
-        if (timer !== undefined) clearTimeout(timer);
-    }
-}
-
-async function downloadArtifact(
-    initialUrl: string,
-    destination: string,
-    artifact: LateOnAcquisitionArtifact,
-    authority: LateOnAcquisitionAuthority,
-    fetchImpl: FetchLike,
-    deadlineAt: number,
-    now: () => number,
-    onProgress?: (bytesWritten: number) => void,
-): Promise<void> {
-    let currentUrl = initialUrl;
-    const abortController = new AbortController();
-    let response: Response | undefined;
-    try {
-        for (let redirectCount = 0; ; redirectCount += 1) {
-            const parsedUrl = new URL(currentUrl);
-            if (parsedUrl.protocol !== "https:") {
-                throw new Error("LateOn artifact acquisition requires HTTPS after every redirect.");
-            }
-            response = await withDeadline(
-                Promise.resolve(fetchImpl(currentUrl, {
-                    redirect: "manual",
-                    signal: abortController.signal,
-                })),
-                deadlineAt,
-                abortController,
-                now,
-            );
-            if (response.status >= 300 && response.status < 400) {
-                if (redirectCount >= authority.maximumRedirects) {
-                    throw new Error(`LateOn artifact acquisition exceeded ${authority.maximumRedirects} HTTPS redirects.`);
-                }
-                const location = response.headers.get("location");
-                if (!location) {
-                    throw new Error("LateOn artifact acquisition received a redirect without a Location header.");
-                }
-                const redirectedUrl = new URL(location, currentUrl);
-                if (redirectedUrl.protocol !== "https:") {
-                    throw new Error("LateOn artifact acquisition rejected a non-HTTPS redirect.");
-                }
-                if (response.body) {
-                    await response.body.cancel().catch(() => undefined);
-                }
-                currentUrl = redirectedUrl.href;
-                continue;
-            }
-            if (!response.ok || !response.body) {
-                throw new Error(`LateOn artifact download failed with HTTP ${response.status}.`);
-            }
-            break;
-        }
-
-        const file = fs.openSync(destination, "wx", 0o600);
-        const digest = crypto.createHash("sha256");
-        let bytesWritten = 0;
-        const completedResponse = response;
-        if (!completedResponse?.body) {
-            throw new Error("LateOn artifact download returned no readable body.");
-        }
-        const reader = completedResponse.body.getReader();
-        try {
-            while (true) {
-                const result = await withDeadline(reader.read(), deadlineAt, abortController, now);
-                if (result.done) break;
-                const chunk = Buffer.from(result.value);
-                if (bytesWritten + chunk.length > artifact.sizeBytes) {
-                    throw new Error(
-                        `LateOn artifact '${artifact.path}' exceeded its manifest size of ${artifact.sizeBytes} bytes.`,
-                    );
-                }
-                let offset = 0;
-                while (offset < chunk.length) {
-                    const written = fs.writeSync(file, chunk, offset, chunk.length - offset);
-                    if (written === 0) throw new Error("LateOn artifact download stalled while writing.");
-                    offset += written;
-                }
-                bytesWritten += chunk.length;
-                digest.update(chunk);
-                onProgress?.(bytesWritten);
-            }
-            fs.fsyncSync(file);
-        } finally {
-            fs.closeSync(file);
-            reader.releaseLock();
-        }
-        if (bytesWritten !== artifact.sizeBytes) {
-            throw new Error(
-                `LateOn artifact '${artifact.path}' ended at ${bytesWritten} bytes; expected ${artifact.sizeBytes}.`,
-            );
-        }
-        if (digest.digest("hex") !== artifact.sha256) {
-            throw new Error(`LateOn artifact '${artifact.path}' failed checksum verification.`);
-        }
-    } catch (error) {
-        if (error instanceof Error && error.message.includes("deadline")) throw error;
-        if (error instanceof DOMException && error.name === "AbortError") throw deadlineError();
-        throw error;
-    } finally {
-        if (response?.body) {
-            await response.body.cancel().catch(() => undefined);
-        }
-    }
-}
-
 export async function ensureDefaultLateOnModel(
     input: EnsureLateOnModelInput,
 ): Promise<VerifiedLateOnModel> {
     const authority = (input.authorityLoader ?? frozenAcquisitionAuthority)(input.runtimePackageRoot);
-    const modelDirectory = resolveDefaultLateOnModelDirectory(input.homeDir);
-    input.onProgress?.({
-        phase: "checking",
-        modelDirectory,
-        totalBytes: authority.totalExpectedArtifactBytes,
+    const { modelDirectory } = await ensureModel({
+        homeDir: input.homeDir,
+        spec: lateOnModelSpec(authority),
+        env: input.env,
+        fetchImpl: input.fetchImpl,
+        onProgress: input.onProgress,
+        statfsImpl: input.statfsImpl,
+        stallTimeoutMs: input.stallTimeoutMs,
+        retryDelaysMs: input.retryDelaysMs,
+        renameImpl: input.renameImpl,
     });
-    if (pathExists(modelDirectory)) {
-        input.onProgress?.({
-            phase: "verifying",
-            modelDirectory,
-            totalBytes: authority.totalExpectedArtifactBytes,
-            source: "cached",
-        });
-        verifyModelDirectory(modelDirectory, authority);
-        input.onProgress?.({
-            phase: "ready",
-            modelDirectory,
-            totalBytes: authority.totalExpectedArtifactBytes,
-            source: "cached",
-        });
-        return Object.freeze({
-            modelDirectory,
-            profileId: authority.profileId,
-            runtimeProfileSha256: authority.runtimeProfileSha256,
-        });
-    }
-
-    const parent = path.dirname(modelDirectory);
-    fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-    assertAvailableDiskSpace(
-        parent,
-        authority,
-        input.statfsImpl ?? ((directory) => fs.statfsSync(directory)),
-    );
-    const stagingDirectory = fs.mkdtempSync(path.join(parent, ".lateon-install-"));
-    const now = input.nowImpl ?? Date.now;
-    const deadlineAt = now() + authority.downloadDeadlineMilliseconds;
-    input.onProgress?.({
-        phase: "downloading",
+    return Object.freeze({
         modelDirectory,
-        repository: authority.repository,
-        totalBytes: authority.totalExpectedArtifactBytes,
+        profileId: authority.profileId,
+        runtimeProfileSha256: authority.runtimeProfileSha256,
     });
-    let completedBytes = 0;
-    try {
-        for (const artifact of authority.artifacts) {
-            let destination = stagingDirectory;
-            const components = artifact.path.split("/");
-            for (const component of components) {
-                destination = path.join(destination, component);
-            }
-            const intermediateDirectory = path.dirname(destination);
-            fs.mkdirSync(intermediateDirectory, { recursive: true, mode: 0o700 });
-            for (let componentIndex = 0; componentIndex < components.length - 1; componentIndex += 1) {
-                const component = components[componentIndex];
-                const componentPath = path.join(stagingDirectory, ...components.slice(0, componentIndex + 1));
-                const componentStat = fs.lstatSync(componentPath);
-                if (!componentStat.isDirectory() || componentStat.isSymbolicLink()) {
-                    throw new Error(`LateOn staging component '${component}' is not a real directory.`);
-                }
-            }
-            const encodedPath = artifact.path.split("/").map(encodeURIComponent).join("/");
-            const url = `https://huggingface.co/${authority.repository}/resolve/${authority.revision}/${encodedPath}`;
-            await downloadArtifact(
-                url,
-                destination,
-                artifact,
-                authority,
-                input.fetchImpl ?? fetch,
-                deadlineAt,
-                now,
-                (artifactBytesDownloaded) => input.onProgress?.({
-                    phase: "progress",
-                    artifact: artifact.path,
-                    artifactBytesDownloaded,
-                    artifactBytesTotal: artifact.sizeBytes,
-                    totalBytesDownloaded: completedBytes + artifactBytesDownloaded,
-                    totalBytes: authority.totalExpectedArtifactBytes,
-                }),
-            );
-            completedBytes += artifact.sizeBytes;
-        }
-        input.onProgress?.({
-            phase: "verifying",
-            modelDirectory,
-            totalBytes: authority.totalExpectedArtifactBytes,
-            source: "downloaded",
-        });
-        verifyModelDirectory(stagingDirectory, authority);
-        if (pathExists(modelDirectory)) {
-            verifyModelDirectory(modelDirectory, authority);
-            input.onProgress?.({
-                phase: "ready",
-                modelDirectory,
-                totalBytes: authority.totalExpectedArtifactBytes,
-                source: "downloaded",
-            });
-            return Object.freeze({
-                modelDirectory,
-                profileId: authority.profileId,
-                runtimeProfileSha256: authority.runtimeProfileSha256,
-            });
-        }
-        const rename = input.renameImpl ?? fs.renameSync;
-        try {
-            rename(stagingDirectory, modelDirectory);
-        } catch (error) {
-            if (!pathExists(modelDirectory)) {
-                throw error;
-            }
-            verifyModelDirectory(modelDirectory, authority);
-        }
-        input.onProgress?.({
-            phase: "ready",
-            modelDirectory,
-            totalBytes: authority.totalExpectedArtifactBytes,
-            source: "downloaded",
-        });
-        return Object.freeze({
-            modelDirectory,
-            profileId: authority.profileId,
-            runtimeProfileSha256: authority.runtimeProfileSha256,
-        });
-    } finally {
-        if (pathExists(stagingDirectory)) {
-            fs.rmSync(stagingDirectory, { recursive: true, force: true });
-        }
-    }
 }

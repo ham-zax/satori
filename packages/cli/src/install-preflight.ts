@@ -14,6 +14,7 @@ import {
 } from "./local-runtime-contract.js";
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
+import { assertSafeModelArtifactPath, resolveModelDirectory, type ModelSpec } from "./model-store.js";
 import {
     createCandidateStderrCollector,
     normalizeCandidateStderr,
@@ -40,6 +41,8 @@ export interface InstallPreflightInput {
     lateOnProfileId?: string;
     lateOnActivationPolicy?: string;
     potionAssetsRoot?: string;
+    /** Verified Potion model directory from the managed model cache. */
+    potionModelPath?: string;
     platform?: NodeJS.Platform;
     architecture?: string;
 }
@@ -55,7 +58,7 @@ export interface InstallPreflightDependencies {
         model: string;
         host?: string;
     }) => Promise<Readonly<ResolvedOllamaModelIdentity>>;
-    verifyPotionRuntime?: (assetsRoot: string) => Promise<void>;
+    verifyPotionRuntime?: (assetsRoot: string, modelPath: string) => Promise<void>;
     probeCandidateRuntime?: (input: ManagedRuntimeCandidateProbeInput) => Promise<void>;
 }
 
@@ -96,7 +99,7 @@ interface PotionArtifactManifest {
     schemaVersion: number;
     platform: string;
     architecture: string;
-    model: { identity: string };
+    model: { identity: string; repository: string; revision: string };
     files: Array<{
         path: string;
         bytes: number;
@@ -105,6 +108,9 @@ interface PotionArtifactManifest {
     }>;
 }
 
+// Model files are acquired from Hugging Face into the managed model cache; the
+// runtime package ships only the helper and its notices.
+const POTION_MODEL_ARTIFACT_PREFIX = "model/";
 const REQUIRED_POTION_ARTIFACT_PATHS = new Set([
     "satori-potion",
     "model/config.json",
@@ -114,24 +120,12 @@ const REQUIRED_POTION_ARTIFACT_PATHS = new Set([
     "MODEL2VEC_RS_LICENSE",
 ]);
 
-function potionRuntimePaths(assetsRoot: string): { helperPath: string; modelPath: string } {
-    if (!path.isAbsolute(assetsRoot)) {
-        throw new Error("Potion asset root must be absolute.");
-    }
-    return {
-        helperPath: path.join(assetsRoot, "satori-potion"),
-        modelPath: path.join(assetsRoot, "model"),
-    };
-}
-
 function sha256File(filePath: string): string {
     return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-export async function verifyBundledPotionRuntime(
-    assetsRoot: string,
-    loadCore: () => Promise<PotionRuntimeCoreModule>,
-): Promise<void> {
+/** Reads the runtime's Potion manifest and proves it is the pinned authority. */
+function readPinnedPotionManifest(assetsRoot: string): PotionArtifactManifest {
     if (!path.isAbsolute(assetsRoot)) {
         throw new Error("Potion asset root must be absolute.");
     }
@@ -139,13 +133,12 @@ export async function verifyBundledPotionRuntime(
     let manifest: PotionArtifactManifest;
     try {
         const manifestBytes = fs.readFileSync(manifestPath);
-        const manifestDigest = crypto.createHash("sha256").update(manifestBytes).digest("hex");
-        if (manifestDigest !== POTION_MANIFEST_SHA256) {
+        if (crypto.createHash("sha256").update(manifestBytes).digest("hex") !== POTION_MANIFEST_SHA256) {
             throw new Error("checksum mismatch");
         }
         manifest = JSON.parse(manifestBytes.toString("utf8")) as PotionArtifactManifest;
     } catch {
-        throw new Error(`Bundled Potion manifest is missing, invalid, or untrusted at '${manifestPath}'.`);
+        throw new Error(`Potion manifest is missing, invalid, or untrusted at '${manifestPath}'.`);
     }
     if (
         manifest.schemaVersion !== 1
@@ -154,7 +147,7 @@ export async function verifyBundledPotionRuntime(
         || manifest.model?.identity !== POTION_MODEL_ID
         || !Array.isArray(manifest.files)
     ) {
-        throw new Error("Bundled Potion manifest does not match the pinned runtime authority.");
+        throw new Error("Potion manifest does not match the pinned runtime authority.");
     }
     const manifestedPaths = manifest.files.map((artifact) => artifact.path);
     if (
@@ -162,19 +155,55 @@ export async function verifyBundledPotionRuntime(
         || new Set(manifestedPaths).size !== REQUIRED_POTION_ARTIFACT_PATHS.size
         || manifestedPaths.some((artifactPath) => !REQUIRED_POTION_ARTIFACT_PATHS.has(artifactPath))
     ) {
-        throw new Error("Bundled Potion manifest does not contain the complete pinned artifact closure.");
+        throw new Error("Potion manifest does not contain the complete pinned artifact closure.");
     }
     for (const artifact of manifest.files) {
-        if (
-            typeof artifact.path !== "string"
-            || path.isAbsolute(artifact.path)
-            || artifact.path.split(/[\\/]/).includes("..")
-            || !Number.isSafeInteger(artifact.bytes)
-            || artifact.bytes < 0
-            || !/^[a-f0-9]{64}$/.test(artifact.sha256)
-        ) {
-            throw new Error("Bundled Potion manifest contains an invalid artifact entry.");
+        assertSafeModelArtifactPath(artifact.path, "Potion manifest");
+        if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 0 || !/^[a-f0-9]{64}$/.test(artifact.sha256)) {
+            throw new Error("Potion manifest contains an invalid artifact entry.");
         }
+    }
+    return manifest;
+}
+
+/** The Hugging Face model closure pinned by the runtime's Potion manifest. */
+export function readPotionModelSpec(assetsRoot: string): ModelSpec {
+    const manifest = readPinnedPotionManifest(assetsRoot);
+    return Object.freeze({
+        id: "potion",
+        label: "Potion embedding model",
+        repository: manifest.model.repository,
+        revision: manifest.model.revision,
+        artifacts: Object.freeze(manifest.files
+            .filter((artifact) => artifact.path.startsWith(POTION_MODEL_ARTIFACT_PREFIX))
+            .map((artifact) => Object.freeze({
+                path: artifact.path.slice(POTION_MODEL_ARTIFACT_PREFIX.length),
+                sizeBytes: artifact.bytes,
+                sha256: artifact.sha256,
+            }))),
+    });
+}
+
+/** Where the pinned Potion model lives once acquired; used before the runtime is installed. */
+export function plannedPotionModelDirectory(homeDir: string): string {
+    const separator = POTION_MODEL_ID.lastIndexOf("@");
+    return resolveModelDirectory(homeDir, {
+        id: "potion",
+        label: "Potion embedding model",
+        repository: POTION_MODEL_ID.slice(0, separator),
+        revision: POTION_MODEL_ID.slice(separator + 1),
+        artifacts: [],
+    });
+}
+
+export async function verifyBundledPotionRuntime(
+    assetsRoot: string,
+    modelPath: string,
+    loadCore: () => Promise<PotionRuntimeCoreModule>,
+): Promise<void> {
+    const manifest = readPinnedPotionManifest(assetsRoot);
+    for (const artifact of manifest.files) {
+        if (artifact.path.startsWith(POTION_MODEL_ARTIFACT_PREFIX)) continue;
         const artifactPath = path.join(assetsRoot, artifact.path);
         let stat: fs.Stats;
         try {
@@ -189,7 +218,10 @@ export async function verifyBundledPotionRuntime(
             throw new Error(`Bundled Potion artifact '${artifact.path}' failed checksum verification.`);
         }
     }
-    const { helperPath, modelPath } = potionRuntimePaths(assetsRoot);
+    if (!path.isAbsolute(modelPath)) {
+        throw new Error("Potion model path must be absolute.");
+    }
+    const helperPath = path.join(assetsRoot, "satori-potion");
 
     // Installation/preflight is the single integrity owner: repair the owner
     // execute bit on the checksum-verified helper before runtime validation.
@@ -573,10 +605,14 @@ export function planInstallRuntimeEnvironment(
     const model = input.ollamaModel?.trim();
     if (!model) {
         assertSupportedPotionPlatform(input);
-        if (!input.potionAssetsRoot) {
-            throw new Error("Potion offline installation requires the bundled runtime asset root.");
+        if (!input.potionAssetsRoot || !input.potionModelPath) {
+            throw new Error("Potion offline installation requires the runtime asset root and a verified model path.");
         }
-        const { helperPath, modelPath } = potionRuntimePaths(input.potionAssetsRoot);
+        if (!path.isAbsolute(input.potionAssetsRoot) || !path.isAbsolute(input.potionModelPath)) {
+            throw new Error("Potion asset root and model path must be absolute.");
+        }
+        const helperPath = path.join(input.potionAssetsRoot, "satori-potion");
+        const modelPath = input.potionModelPath;
         return Object.freeze({
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
@@ -624,13 +660,13 @@ export async function runInstallPreflight(
     const model = input.ollamaModel?.trim();
     if (!model) {
         assertSupportedPotionPlatform(input);
-        if (!input.potionAssetsRoot) {
-            throw new Error("Potion offline install preflight requires the bundled runtime asset root.");
+        if (!input.potionAssetsRoot || !input.potionModelPath) {
+            throw new Error("Potion offline install preflight requires the runtime asset root and model path.");
         }
         if (!dependencies.verifyPotionRuntime) {
             throw new Error("Potion preflight requires the staged Satori runtime verifier.");
         }
-        await dependencies.verifyPotionRuntime(input.potionAssetsRoot);
+        await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath);
         return { runtimeEnvironment: proposedEnvironment };
     }
     const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;

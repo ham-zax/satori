@@ -529,7 +529,14 @@ semantics without encoding machine-speed assumptions such as queue wait,
 scoring latency, or a fixed CPU thread count. Model weights are not bundled in
 each versioned MCP runtime. The CLI downloads the roughly 72 MB pinned closure
 once into `~/.satori/models/`, verifies every artifact, and reuses it across
-upgrades. `satori upgrade` migrates previous managed LateOn combinations to the
+upgrades.
+
+The default Potion embedding model (`minishlab/potion-code-16M-v2`, about
+32 MB) is acquired the same way; the runtime package ships only its native
+helper. Model downloads show progress, resume after an interruption, retry
+transient failures, and replace a corrupt cached copy automatically. Set
+`HF_ENDPOINT` to use a Hugging Face mirror. `satori uninstall --purge` removes
+the model cache together with the runtime and indexes. `satori upgrade` migrates previous managed LateOn combinations to the
 v5 default atomically. Disable neural reranking explicitly with:
 
 ```bash

@@ -597,6 +597,7 @@ test("runCli install reports progress and the first repository action", async ()
                 }),
             }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
             installLateOnAuthorityLoader: loadAcquisitionAuthority,
             installPostflightRunner: async ({ homeDir: verifiedHome, writeStderr }) => {
                 assert.equal(verifiedHome, homeDir);
@@ -622,7 +623,7 @@ test("runCli install reports progress and the first repository action", async ()
         assert.match(stdout, /Restart Codex to load Satori/);
         assert.match(stdout, /Then ask your agent: Index \/absolute\/path\/to\/repo with Satori/);
         assert.match(stdout, /Update later with `npx -y @zokizuan\/satori-cli@latest update`/);
-        assert.equal(stderr, "Preparing Satori runtime and model...\nVerifying Satori launcher and client configuration...\n");
+        assert.equal(stderr, "Configuring your coding agents...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
     } finally {
@@ -648,6 +649,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
             env: { HOME: homeDir },
             installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
             installLateOnAuthorityLoader: () => {
                 throw new Error("acquisition unavailable");
             },
@@ -919,6 +921,7 @@ test("runCli install preserves the structured receipt when JSON is requested", a
                 runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "offline" }),
             }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
+            installPotionModelPath: "/tmp/satori-test-potion-model",
             installLateOnAuthorityLoader: loadAcquisitionAuthority,
             installPostflightRunner: async () => ({
                 status: "ok",

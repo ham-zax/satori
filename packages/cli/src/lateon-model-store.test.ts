@@ -95,9 +95,12 @@ async function withLateOnFixture(
     }
 }
 
+/** Files left in resumable staging directories. */
 function stagingLeftovers(homeDir: string): string[] {
     const parent = path.join(homeDir, ".satori", "models", "lateon");
-    return fs.readdirSync(parent).filter((name) => name.startsWith(".lateon-install-"));
+    return fs.readdirSync(parent)
+        .filter((name) => name.endsWith(".partial"))
+        .flatMap((name) => fs.readdirSync(path.join(parent, name), { recursive: true }).map(String));
 }
 
 test("shipped dry-run profile ID equals the frozen shipped profile ID", () => {
@@ -139,13 +142,13 @@ test("LateOn model store downloads the pinned closure once and reuses it", async
             const artifactPath = url.slice(url.lastIndexOf("/") + 1) as keyof typeof artifacts;
             return new Response(artifacts[artifactPath], { status: 200 });
         }) as typeof fetch;
-        const first = await ensureDefaultLateOnModel({
+        const first = await ensureDefaultLateOnModel({ retryDelaysMs: [],
             homeDir,
             runtimePackageRoot,
             fetchImpl,
             authorityLoader: loadAcquisitionAuthority,
         });
-        const second = await ensureDefaultLateOnModel({
+        const second = await ensureDefaultLateOnModel({ retryDelaysMs: [],
             homeDir,
             runtimePackageRoot,
             fetchImpl: (async () => {
@@ -172,15 +175,26 @@ test("LateOn model store downloads the pinned closure once and reuses it", async
     });
 });
 
-test("LateOn model store fails closed for a corrupt cached artifact", async () => {
+test("LateOn model store replaces a corrupt cached copy with a verified download", async () => {
     const artifacts: Record<string, string> = { "model.onnx": "expected", "tokenizer.json": "tokenizer" };
     await withLateOnFixture(artifacts, async ({ homeDir, runtimePackageRoot }) => {
         const modelDirectory = resolveDefaultLateOnModelDirectory(homeDir);
         writeModelDirectory(modelDirectory, { "model.onnx": "corrupt", "tokenizer.json": "tokenizer" });
-        await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
-            /is corrupt: model\.onnx: artifact size or checksum verification failed .*--reranker none\./,
-        );
+        const phases: string[] = [];
+        const fetchImpl = (async (input: string | URL | Request) => {
+            const artifactPath = String(input).slice(String(input).lastIndexOf("/") + 1);
+            return new Response(artifacts[artifactPath] ?? "missing", { status: 200 });
+        }) as typeof fetch;
+        await ensureDefaultLateOnModel({
+            retryDelaysMs: [],
+            homeDir,
+            runtimePackageRoot,
+            fetchImpl,
+            authorityLoader: loadAcquisitionAuthority,
+            onProgress: (event) => phases.push(event.phase),
+        });
+        assert.equal(phases.includes("repairing"), true);
+        assert.equal(fs.readFileSync(path.join(modelDirectory, "model.onnx"), "utf8"), "expected");
     });
 });
 
@@ -196,7 +210,7 @@ test("LateOn model store rejects a profile outside the pinned D32 authority", as
         profile.identity.revision = "f".repeat(40);
         fs.writeFileSync(profilePath, JSON.stringify(profile), "utf8");
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
             /does not contain the pinned LateOn D32 profile/,
         );
     });
@@ -214,7 +228,7 @@ test("LateOn model store rejects an acquisition manifest that does not bind the 
         manifest.runtimeProfileSha256 = "0".repeat(64);
         fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
             /missing or mismatched LateOn acquisition manifest/,
         );
     });
@@ -232,7 +246,7 @@ test("LateOn model store rejects an unsafe artifact path", async () => {
         manifest.artifacts[0].path = "../escaped.onnx";
         fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
             /unsafe artifact path '\.\.\/escaped\.onnx'/,
         );
     });
@@ -242,7 +256,7 @@ test("LateOn model store rejects insufficient disk space before any download", a
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         let fetchCalls = 0;
         await assert.rejects(
-            ensureDefaultLateOnModel({
+            ensureDefaultLateOnModel({ retryDelaysMs: [],
                 homeDir,
                 runtimePackageRoot,
                 statfsImpl: () => ({ bavail: 0, bsize: 4096 }),
@@ -252,28 +266,9 @@ test("LateOn model store rejects insufficient disk space before any download", a
                 }) as typeof fetch,
                 authorityLoader: loadAcquisitionAuthority,
             }),
-            /Insufficient disk space/,
+            /Not enough disk space/,
         );
         assert.equal(fetchCalls, 0);
-    });
-});
-
-test("LateOn model store rejects acquisition that exceeds its deadline", async () => {
-    await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
-        let nowCalls = 0;
-        await assert.rejects(
-            ensureDefaultLateOnModel({
-                homeDir,
-                runtimePackageRoot,
-                nowImpl: () => {
-                    nowCalls += 1;
-                    return nowCalls === 1 ? 0 : 10 * 60 * 1000 + 1;
-                },
-                fetchImpl: (async () => new Promise<Response>(() => {})) as typeof fetch,
-                authorityLoader: loadAcquisitionAuthority,
-            }),
-            /10-minute deadline/,
-        );
     });
 });
 
@@ -292,7 +287,7 @@ test("LateOn model store follows HTTPS redirects within the acquisition policy",
             }
             return new Response("expected", { status: 200 });
         }) as typeof fetch;
-        const result = await ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority });
+        const result = await ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority });
         assert.equal(
             fs.readFileSync(path.join(result.modelDirectory, "model.onnx"), "utf8"),
             "expected",
@@ -311,8 +306,8 @@ test("LateOn model store rejects more than five redirects", async () => {
             headers: { location: "https://cdn.example.test/lateon/model.onnx" },
         })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
-            /exceeded 5 HTTPS redirects/,
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            /too many redirects/,
         );
     });
 });
@@ -324,8 +319,8 @@ test("LateOn model store rejects a non-HTTPS redirect", async () => {
             headers: { location: "http://cdn.example.test/lateon/model.onnx" },
         })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
-            /rejected a non-HTTPS redirect/,
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            /non-HTTPS redirect/,
         );
     });
 });
@@ -334,8 +329,8 @@ test("LateOn model store rejects an artifact body that exceeds its manifest size
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         const fetchImpl = (async () => new Response("x".repeat(100), { status: 200 })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
-            /exceeded its manifest size of 8 bytes/,
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            /exceeded its expected size of 8 bytes/,
         );
     });
 });
@@ -344,7 +339,7 @@ test("LateOn model store rejects a short artifact body", async () => {
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         const fetchImpl = (async () => new Response("short", { status: 200 })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
             /ended at 5 bytes; expected 8/,
         );
     });
@@ -354,17 +349,17 @@ test("LateOn model store rejects an artifact body whose checksum mismatches", as
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         const fetchImpl = (async () => new Response("tampered", { status: 200 })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
             /failed checksum verification/,
         );
     });
 });
 
-test("LateOn model store removes the staging directory after a failed download", async () => {
+test("LateOn model store discards a staged file that fails its checksum", async () => {
     await withLateOnFixture({ "model.onnx": "expected" }, async ({ homeDir, runtimePackageRoot }) => {
         const fetchImpl = (async () => new Response("tampered", { status: 200 })) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
+            ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority }),
             /failed checksum verification/,
         );
         assert.deepEqual(stagingLeftovers(homeDir), []);
@@ -380,7 +375,7 @@ test("LateOn model store verifies and reuses a valid destination that appears du
             const artifactPath = String(input).slice(String(input).lastIndexOf("/") + 1);
             return new Response(artifacts[artifactPath] ?? "missing", { status: 200 });
         }) as typeof fetch;
-        const result = await ensureDefaultLateOnModel({ homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority });
+        const result = await ensureDefaultLateOnModel({ retryDelaysMs: [], homeDir, runtimePackageRoot, fetchImpl, authorityLoader: loadAcquisitionAuthority });
         assert.equal(result.modelDirectory, modelDirectory);
         assert.equal(fs.readFileSync(path.join(modelDirectory, "model.onnx"), "utf8"), "expected");
         assert.deepEqual(stagingLeftovers(homeDir), []);
@@ -405,7 +400,7 @@ test("verifyLateOnModelDirectory rejects a directory missing an artifact", async
         fs.mkdirSync(modelDirectory, { recursive: true });
         assert.throws(
             () => verifyLateOnModelDirectory({ modelDirectory, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
-            /is corrupt: model\.onnx: /,
+            /failed verification: model\.onnx: /,
         );
     });
 });
@@ -420,7 +415,7 @@ test("verifyLateOnModelDirectory rejects an intermediate directory symlink", asy
         fs.symlinkSync(target, path.join(modelDirectory, "nested"));
         assert.throws(
             () => verifyLateOnModelDirectory({ modelDirectory, runtimePackageRoot, authorityLoader: loadAcquisitionAuthority }),
-            /is corrupt: nested\/model\.onnx: intermediate component 'nested' is not a real directory/,
+            /failed verification: nested\/model\.onnx: intermediate component 'nested' is not a real directory/,
         );
     });
 });
@@ -446,7 +441,7 @@ test("production model acquisition binds the exact frozen profile digest", async
         manifest.runtimeProfileSha256 = digest(reserialized);
         fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
         await assert.rejects(
-            ensureDefaultLateOnModel({
+            ensureDefaultLateOnModel({ retryDelaysMs: [],
                 homeDir,
                 runtimePackageRoot,
                 fetchImpl: (async () => new Response("expected", { status: 200 })) as typeof fetch,
@@ -494,7 +489,7 @@ test("LateOn model store reuses a valid destination that appears before the rena
             const artifactPath = String(input).slice(String(input).lastIndexOf("/") + 1);
             return new Response(artifacts[artifactPath] ?? "missing", { status: 200 });
         }) as typeof fetch;
-        const result = await ensureDefaultLateOnModel({
+        const result = await ensureDefaultLateOnModel({ retryDelaysMs: [],
             homeDir,
             runtimePackageRoot,
             fetchImpl,
@@ -523,7 +518,7 @@ test("LateOn model store refuses a corrupt destination that appears before the r
             return new Response(artifacts[artifactPath] ?? "missing", { status: 200 });
         }) as typeof fetch;
         await assert.rejects(
-            ensureDefaultLateOnModel({
+            ensureDefaultLateOnModel({ retryDelaysMs: [],
                 homeDir,
                 runtimePackageRoot,
                 fetchImpl,
@@ -533,9 +528,8 @@ test("LateOn model store refuses a corrupt destination that appears before the r
                     throw new Error("ENOTEMPTY: destination appeared concurrently");
                 },
             }),
-            /is corrupt: model\.onnx: artifact size or checksum verification failed/,
+            /failed verification: model\.onnx: artifact size or checksum verification failed/,
         );
-        assert.deepEqual(stagingLeftovers(homeDir), []);
     });
 });
 

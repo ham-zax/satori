@@ -27,6 +27,7 @@ import {
     resolveOfflineOllamaModel,
     resolveOfflineReranker,
     resolveVerifiedLateOnModel,
+    resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
 import {
     inspectManagedClientConfigurations,
@@ -282,6 +283,17 @@ export async function executeManagedRuntimeUpgrade(
         options.onUpgradeProgress?.("verifying");
         const potionAssetsRoot = options.potionAssetsRoot
             ?? resolvePotionAssetsRoot(installedCandidate.packageRoot);
+        const potionModelPath = selection.runtime === "offline" && !selection.ollamaModel
+            ? options.potionModelPath ?? await resolveVerifiedPotionModel(
+                homeDir,
+                potionAssetsRoot,
+                options.fetchImpl,
+                options.modelProgress,
+                options.installRetryCommand,
+                selection.effectiveEnv,
+                options.modelRetryDelaysMs,
+            )
+            : undefined;
         const lateOnModel = selection.runtime === "offline" && selection.reranker === "lateon"
             ? await resolveVerifiedLateOnModel(
                 homeDir,
@@ -289,9 +301,9 @@ export async function executeManagedRuntimeUpgrade(
                 options.lateOnModelPath ?? selection.lateOnModelPath,
                 options.fetchImpl,
                 options.lateOnAuthorityLoader,
-                options.lateOnNowImpl,
-                options.lateOnProgress,
-                options.lateOnRetryCommand,
+                options.modelProgress,
+                options.installRetryCommand,
+                options.modelRetryDelaysMs,
             )
             : undefined;
         const preflightDependencies: InstallPreflightDependencies = {
@@ -313,6 +325,7 @@ export async function executeManagedRuntimeUpgrade(
                 }
                 : {}),
             potionAssetsRoot,
+            potionModelPath,
             platform: options.platform,
             architecture: options.architecture,
         }, preflightDependencies);

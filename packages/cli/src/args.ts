@@ -40,7 +40,7 @@ export type ParsedCommand =
         ollamaModel?: string;
         reranker?: InstallOfflineReranker;
     }
-    | { kind: "uninstall"; client: InstallClient; dryRun: boolean }
+    | { kind: "uninstall"; client: InstallClient; dryRun: boolean; purge: boolean }
     | { kind: "tools-list" }
     | { kind: "tool-call"; toolName: string; rawArgsMode: RawArgsMode }
     | { kind: "wrapper"; toolName: string; rawArgsMode: RawArgsMode; wrapperArgs: string[] };
@@ -214,6 +214,7 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
 function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
     let client: InstallClient = kind === "install" ? "auto" : "all";
     let dryRun = false;
+    let purge = false;
     let profile: InstallProfile | undefined;
     let runtime: InstallRuntime = "offline";
     let vectorStore: InstallVectorStore | undefined;
@@ -233,6 +234,10 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         }
         if (token === "--dry-run") {
             dryRun = true;
+            continue;
+        }
+        if (kind === "uninstall" && token === "--purge") {
+            purge = true;
             continue;
         }
         if (kind === "install" && token === "--profile") {
@@ -296,7 +301,10 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     }
 
     if (kind !== "install") {
-        return { kind, client, dryRun };
+        if (purge && client !== "all") {
+            throw new CliError("E_USAGE", "--purge removes Satori for every client; omit --client or use --client all.", 2);
+        }
+        return { kind, client, dryRun, purge };
     }
     if (runtime === "offline") {
         return {

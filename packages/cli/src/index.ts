@@ -18,11 +18,8 @@ import {
     type ManagedRuntimeUpgradePhase,
     type ManagedRuntimeUpgradeResult,
 } from "./install.js";
-import type {
-    LateOnAuthorityLoader,
-    LateOnModelProgressEvent,
-    LateOnModelProgressReporter,
-} from "./lateon-model-store.js";
+import type { LateOnAuthorityLoader } from "./lateon-model-store.js";
+import type { ModelProgressEvent, ModelProgressReporter } from "./model-store.js";
 import type {
     InstallPreflightDependencies,
     InstallPreflightInput,
@@ -80,6 +77,8 @@ interface RunCliOptions {
     ) => Promise<InstallPreflightResult>;
     /** Structural test seam for LateOn acquisition; the production default binds the frozen digest. */
     installLateOnAuthorityLoader?: LateOnAuthorityLoader;
+    /** Test seam: a pre-verified Potion model directory, skipping acquisition. */
+    installPotionModelPath?: string;
     doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult | Promise<DoctorResult>;
     versionResolver?: () => DoctorPackageVersion[];
     runtimeStateResolver?: (
@@ -99,8 +98,8 @@ interface RunCliOptions {
             preflightDependencies?: InstallPreflightDependencies;
             preflightRunner?: RunCliOptions["installPreflightRunner"];
             onUpgradeProgress?: (phase: ManagedRuntimeUpgradePhase) => void;
-            lateOnProgress?: LateOnModelProgressReporter;
-            lateOnRetryCommand?: string;
+            modelProgress?: ModelProgressReporter;
+            installRetryCommand?: string;
         },
     ) => Promise<ManagedRuntimeUpgradeResult>;
     globalCliUpgradeRunner?: (input: GlobalCliUpgradeInput) => number | Promise<number>;
@@ -311,7 +310,7 @@ function buildHelpPayload() {
             "version (-v, --version)",
             "upgrade (alias: update)",
             "terminate",
-            "uninstall [--client auto|all|codex|claude|opencode] [--dry-run] (default: all supported clients)",
+            "uninstall [--client auto|all|codex|claude|opencode] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",
@@ -351,7 +350,7 @@ function formatHelpText(): string {
         "  upgrade       Update the CLI and its compatible MCP/Core runtime",
         "  terminate     Stop all running Satori MCP servers",
         "  doctor        Check installation, runtime, and client configuration",
-        "  uninstall     Remove Satori-managed client configuration (defaults to all supported clients)",
+        "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",
         "  tools list    List the available MCP tools",
         "  tool call     Call an MCP tool from the terminal",
         "",
@@ -496,41 +495,46 @@ function formatModelBytes(bytes: number): string {
     return `${(bytes / MEBIBYTE).toFixed(1)} MiB`;
 }
 
-function createLateOnProgressReporter(writers: CliWriters): LateOnModelProgressReporter {
+function createModelProgressReporter(writers: CliWriters): ModelProgressReporter {
     let nextProgressPercent = 10;
-    return (event: LateOnModelProgressEvent) => {
-        if (event.phase === "checking") {
-            writers.writeStderr("LateOn model: checking local cache...\n");
-            return;
-        }
-        if (event.phase === "downloading") {
-            nextProgressPercent = 10;
-            writers.writeStderr(
-                `LateOn model: downloading ${event.repository} from Hugging Face (${formatModelBytes(event.totalBytes)})...\n`,
-            );
-            return;
-        }
-        if (event.phase === "progress") {
-            const percent = Math.min(100, Math.floor((event.totalBytesDownloaded / event.totalBytes) * 100));
-            if (percent < nextProgressPercent && event.totalBytesDownloaded < event.totalBytes) {
+    return (event: ModelProgressEvent) => {
+        const title = event.label.charAt(0).toUpperCase() + event.label.slice(1);
+        switch (event.phase) {
+            case "checking":
+                return;
+            case "repairing":
+                writers.writeStderr(`${title}: cached copy failed verification; downloading it again.\n`);
+                return;
+            case "downloading": {
+                nextProgressPercent = 10;
+                const resumed = event.resumedBytes > 0
+                    ? `, resuming at ${formatModelBytes(event.resumedBytes)}`
+                    : "";
+                writers.writeStderr(
+                    `${title}: downloading ${event.repository} (${formatModelBytes(event.totalBytes)}${resumed})...\n`,
+                );
                 return;
             }
-            const displayPercent = event.totalBytesDownloaded >= event.totalBytes
-                ? 100
-                : Math.floor(percent / 10) * 10;
-            while (nextProgressPercent <= displayPercent) nextProgressPercent += 10;
-            writers.writeStderr(
-                `  ${String(displayPercent).padStart(3)}% · ${formatModelBytes(event.totalBytesDownloaded)} / ${formatModelBytes(event.totalBytes)} · ${event.artifact}\n`,
-            );
-            return;
+            case "progress": {
+                const percent = Math.min(100, Math.floor((event.totalBytesDownloaded / event.totalBytes) * 100));
+                if (percent < nextProgressPercent && event.totalBytesDownloaded < event.totalBytes) return;
+                const displayPercent = event.totalBytesDownloaded >= event.totalBytes ? 100 : Math.floor(percent / 10) * 10;
+                while (nextProgressPercent <= displayPercent) nextProgressPercent += 10;
+                writers.writeStderr(
+                    `  ${String(displayPercent).padStart(3)}% · ${formatModelBytes(event.totalBytesDownloaded)} / ${formatModelBytes(event.totalBytes)}\n`,
+                );
+                return;
+            }
+            case "retrying":
+                writers.writeStderr(`${title}: ${event.reason}; retrying (attempt ${event.attempt + 1})...\n`);
+                return;
+            case "verifying":
+                return;
+            case "ready":
+                writers.writeStderr(
+                    `${title}: ${event.source === "cached" ? "ready" : "downloaded and verified"} (${formatModelBytes(event.totalBytes)}).\n`,
+                );
         }
-        if (event.phase === "verifying") {
-            const label = event.source === "cached" ? "cached model" : "downloaded model";
-            writers.writeStderr(`LateOn model: verifying ${label}...\n`);
-            return;
-        }
-        const label = event.source === "cached" ? "cached and verified" : "downloaded and verified";
-        writers.writeStderr(`LateOn model: ${label} (${formatModelBytes(event.totalBytes)}).\n`);
     };
 }
 
@@ -655,8 +659,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                         writers.writeStderr(`${messages[phase]}\n`);
                     }
                     : undefined,
-                lateOnProgress: showProgress ? createLateOnProgressReporter(writers) : undefined,
-                lateOnRetryCommand: satoriCliCommand("update"),
+                modelProgress: showProgress ? createModelProgressReporter(writers) : undefined,
+                installRetryCommand: satoriCliCommand("update"),
             });
             const delegatedFromCli = effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
                 ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION
@@ -695,7 +699,6 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             let packageSpecifier: string | undefined;
             if (parsed.command.kind === "install" && !parsed.command.dryRun) {
                 assertAutoClientTargets(parsed.command.client, homeDir, effectiveEnv);
-                if (!wantsJson) writers.writeStderr("Preparing Satori runtime and model...\n");
                 packageSpecifier = await (options.installabilityVerifier || verifyManagedPackageInstallability)();
             }
             const result = await executeInstallCommand(parsed.command, {
@@ -706,8 +709,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 preflightDependencies: options.installPreflightDependencies,
                 preflightRunner: options.installPreflightRunner,
                 lateOnAuthorityLoader: options.installLateOnAuthorityLoader,
-                lateOnProgress: wantsJson ? undefined : createLateOnProgressReporter(writers),
-                lateOnRetryCommand: parsed.command.kind === "install" && parsed.command.runtime === "offline"
+                potionModelPath: options.installPotionModelPath,
+                onInstallProgress: wantsJson ? undefined : (phase) => {
+                    writers.writeStderr(phase === "runtime"
+                        ? "Installing the Satori runtime (about 30 seconds on first install)...\n"
+                        : "Configuring your coding agents...\n");
+                },
+                modelProgress: wantsJson ? undefined : createModelProgressReporter(writers),
+                installRetryCommand: parsed.command.kind === "install" && parsed.command.runtime === "offline"
                     ? satoriCliCommand([
                         "install --runtime offline --reranker lateon",
                         `--client ${parsed.command.client}`,

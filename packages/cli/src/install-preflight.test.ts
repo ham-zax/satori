@@ -81,6 +81,8 @@ function executeInstallCommand(
 ) {
     return executeInstallCommandProduction(command, {
         ...options,
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
+        modelRetryDelaysMs: [],
         lateOnAuthorityLoader: options.lateOnAuthorityLoader ?? loadAcquisitionAuthority,
     });
 }
@@ -714,11 +716,12 @@ test("offline install defaults to the integrity- and capability-verified bundled
             homeDir,
             env: {},
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             platform: "linux",
             architecture: "x64",
         }, {
             probeLanceDb: async () => undefined,
-            verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+            verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
         });
 
         assert.deepEqual(result.runtimeEnvironment, {
@@ -732,7 +735,7 @@ test("offline install defaults to the integrity- and capability-verified bundled
             POTION_MODEL_PATH: path.join(POTION_ASSETS_ROOT, "model"),
             POTION_REQUEST_TIMEOUT_MS: "5000",
         });
-        await verifyBundledPotionRuntime(POTION_ASSETS_ROOT, loadWorkspaceCore);
+        await verifyBundledPotionRuntime(POTION_ASSETS_ROOT, path.join(POTION_ASSETS_ROOT, "model"), loadWorkspaceCore);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -751,11 +754,12 @@ test("offline install plan composes Potion embeddings with LateOn D32 reranking"
             lateOnProfileId: LATEON_PROFILE_ID,
             lateOnActivationPolicy: LATEON_ACTIVATION_POLICY,
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             platform: "linux",
             architecture: "x64",
         }, {
             probeLanceDb: async () => undefined,
-            verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+            verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
         });
 
         assert.equal(result.runtimeEnvironment.EMBEDDING_PROVIDER, "Potion");
@@ -781,7 +785,7 @@ test("bundled Potion verification rejects a modified provenance manifest", async
         manifest.helper.rustToolchain = "untrusted-toolchain";
         fs.writeFileSync(path.join(assetsRoot, "manifest.json"), JSON.stringify(manifest), "utf8");
         await assert.rejects(
-            verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+            verifyBundledPotionRuntime(assetsRoot, path.join(assetsRoot, "model"), loadWorkspaceCore),
             /missing, invalid, or untrusted/,
         );
     } finally {
@@ -799,7 +803,7 @@ test("bundled Potion verification rejects missing artifact when manifest is vali
         );
         // Do not create the files or create a truncated artifact
         await assert.rejects(
-            verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+            verifyBundledPotionRuntime(assetsRoot, path.join(assetsRoot, "model"), loadWorkspaceCore),
             /missing|regular file|failed checksum/i,
         );
     } finally {
@@ -821,11 +825,12 @@ test("new offline install persists Potion embeddings and LateOn D32 in the manag
             env: {},
             packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
             preflightDependencies: {
                 probeLanceDb: async () => undefined,
-                verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+                verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
             },
         });
 
@@ -877,10 +882,11 @@ test("offline install persists an explicit reranker opt-out", async () => {
             env: {},
             packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             preflightDependencies: {
                 probeLanceDb: async () => undefined,
-                verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+                verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
             },
         });
 
@@ -1360,11 +1366,12 @@ test("managed D16 + CLI --reranker lateon migrates to D32", async () => {
             env: {},
             packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
             preflightDependencies: {
                 probeLanceDb: async () => undefined,
-                verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+                verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
             },
         });
 
@@ -1400,10 +1407,11 @@ test("managed D16 + CLI --reranker none disables LateOn", async () => {
             env: {},
             packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             preflightDependencies: {
                 probeLanceDb: async () => undefined,
-                verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+                verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
             },
         });
 
@@ -1647,6 +1655,7 @@ test("--reranker none performs zero LateOn fetch calls", async () => {
             env: {},
             packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             fetchImpl: (async () => {
                 fetchCalls += 1;
@@ -1654,7 +1663,7 @@ test("--reranker none performs zero LateOn fetch calls", async () => {
             }) as typeof fetch,
             preflightDependencies: {
                 probeLanceDb: async () => undefined,
-                verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(assetsRoot, loadWorkspaceCore),
+                verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(assetsRoot, modelPath, loadWorkspaceCore),
             },
         });
         assert.equal(fetchCalls, 0);
@@ -1967,7 +1976,8 @@ function assertManagedLateOnSnapshotUnchanged(snapshot: ManagedLateOnSnapshot): 
     if (fs.existsSync(snapshot.modelsLateonDir)) {
         assert.deepEqual(
             fs.readdirSync(snapshot.modelsLateonDir)
-                .filter((name) => name.startsWith(".lateon-install-")),
+                // Resumable staging may remain; no unverified model is ever published.
+                .filter((name) => !name.startsWith(".")),
             [],
         );
     }
@@ -1977,7 +1987,6 @@ function failingOfflineLateOnReinstall(
     homeDir: string,
     failure: {
         fetchImpl?: typeof fetch;
-        lateOnNowImpl?: () => number;
         removeAssets?: "all" | "acquisition";
     },
 ): Promise<unknown> {
@@ -2008,7 +2017,6 @@ function failingOfflineLateOnReinstall(
         architecture: "x64",
         runtimeCommand: fixture.runtimeCommand,
         ...(failure.fetchImpl ? { fetchImpl: failure.fetchImpl } : {}),
-        ...(failure.lateOnNowImpl ? { lateOnNowImpl: failure.lateOnNowImpl } : {}),
     });
 }
 
@@ -2022,7 +2030,7 @@ test("acquisition network failure leaves the managed installation byte-identical
                     throw new Error("network down");
                 }) as typeof fetch,
             }),
-            /LateOn D32 model preflight failed: network down/,
+            /LateOn D32 model preflight failed: .*network down/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2054,7 +2062,7 @@ test("LateOn model acquisition runs while the managed-runtime mutation lock is h
         await started;
         assert.equal(fs.existsSync(mutationLockPath), true);
         releaseAcquisition();
-        await assert.rejects(reinstall, /LateOn D32 model preflight failed: network down/);
+        await assert.rejects(reinstall, /LateOn D32 model preflight failed: .*network down/);
         assert.equal(fs.existsSync(mutationLockPath), false);
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2078,27 +2086,6 @@ test("acquisition checksum failure leaves the managed installation byte-identica
     }
 });
 
-test("acquisition deadline failure leaves the managed installation byte-identical", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-deadline-"));
-    try {
-        const snapshot = seedManagedLateOnInstallation(homeDir);
-        let nowCalls = 0;
-        await assert.rejects(
-            failingOfflineLateOnReinstall(homeDir, {
-                lateOnNowImpl: () => {
-                    nowCalls += 1;
-                    return nowCalls === 1 ? 0 : 10 * 60 * 1000 + 1;
-                },
-                fetchImpl: (async () => new Promise<Response>(() => {})) as typeof fetch,
-            }),
-            /10-minute deadline/,
-        );
-        assertManagedLateOnSnapshotUnchanged(snapshot);
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-});
-
 test("acquisition size overflow leaves the managed installation byte-identical", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-size-"));
     try {
@@ -2107,7 +2094,7 @@ test("acquisition size overflow leaves the managed installation byte-identical",
             failingOfflineLateOnReinstall(homeDir, {
                 fetchImpl: (async () => new Response("x".repeat(100), { status: 200 })) as typeof fetch,
             }),
-            /exceeded its manifest size of 5 bytes/,
+            /exceeded its expected size of 5 bytes/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {

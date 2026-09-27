@@ -350,8 +350,9 @@ export function exactRuntimePreflightDependencies(
 ): Pick<InstallPreflightDependencies, "probeLanceDb" | "verifyPotionRuntime" | "resolveOllamaIdentity"> {
     return {
         probeLanceDb: exactRuntimeLanceDbProbe(runtimeCommand),
-        verifyPotionRuntime: (assetsRoot) => verifyBundledPotionRuntime(
+        verifyPotionRuntime: (assetsRoot, modelPath) => verifyBundledPotionRuntime(
             assetsRoot,
+            modelPath,
             () => loadExactRuntimeCore(runtimeCommand),
         ),
         resolveOllamaIdentity: async (input) => (

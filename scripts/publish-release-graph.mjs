@@ -3,7 +3,7 @@ import os from 'node:os';
 import process from 'node:process';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { RELEASE_ORDER, RELEASE_PACKAGES } from './release-graph.mjs';
+import { RELEASE_ORDER, RELEASE_PACKAGES, readLocalReleaseGraph } from './release-graph.mjs';
 import { createNpmChildEnvironment, REGISTRY_PROBE_STDIO } from './npm-child-process.mjs';
 import { qualifyReleaseCandidate } from './qualify-release-candidate.mjs';
 import {
@@ -290,6 +290,39 @@ export async function publishReleaseGraph(options = {}) {
     canonicalMasterIsAncestorImpl,
   };
   assertSourceAuthority(sourceAuthorityOptions);
+
+  // npm never accepts a version twice, so when every local version is already
+  // on the registry there is nothing to qualify or publish; only verify.
+  const alreadyPublishedImpl = options.alreadyPublishedImpl
+    || (options.qualifyImpl
+      ? null
+      : () => {
+        const graph = readLocalReleaseGraph(cwd);
+        const localVersions = Object.fromEntries(
+          RELEASE_ORDER.map((key) => [key, graph.packages[key].versionString]),
+        );
+        const published = RELEASE_ORDER.every((key) => {
+          try {
+            return viewVersionImpl(RELEASE_PACKAGES[key].name, localVersions[key]) === localVersions[key];
+          } catch {
+            return false;
+          }
+        });
+        return published ? Object.freeze(localVersions) : null;
+      });
+  const publishedVersions = alreadyPublishedImpl?.();
+  if (publishedVersions) {
+    log('All local versions are already published; skipping qualification and verifying the registry.');
+    await verifyReleaseImpl(publishedVersions);
+    log('Release graph verified.');
+    return {
+      published: Object.freeze([]),
+      skipped: Object.freeze([...RELEASE_ORDER]),
+      publishCommandSucceeded: Object.freeze([]),
+      registryVerified: Object.freeze([]),
+    };
+  }
+
   authenticateImpl?.();
   let report = null;
   const publisherTempRoot = fs.mkdtempSync(path.join(options.tempRoot || os.tmpdir(), 'satori-publish-'));

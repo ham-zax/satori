@@ -132,3 +132,46 @@ test('qualification refuses packed-graph drift after verification', async () => 
   );
   assert.equal(graphCalls, 1);
 });
+
+test('a qualified source skips cached checks but always rebuilds and verifies the packed graph', async () => {
+  const executed = [];
+  let recorded = 0;
+  await qualifyReleaseCandidate({
+    progressOptions: quietProgress,
+    gitStatusImpl: () => '',
+    runCommandImpl: (entry) => executed.push(entry.label),
+    checkGraphImpl: () => {
+      executed.push('packed release graph');
+      return { valid: true };
+    },
+    cache: { isQualified: () => true, recordQualified: () => { recorded += 1; } },
+  });
+  assert.deepEqual(executed, [
+    ...RELEASE_QUALIFICATION_COMMANDS.filter((entry) => !entry.cached).map((entry) => entry.label),
+    'packed release graph',
+  ]);
+  assert.ok(executed.includes('clean release build'));
+  assert.equal(recorded, 1);
+});
+
+test('packed smokes run concurrently and a failed qualification is not recorded', async () => {
+  let running = 0;
+  let maxRunning = 0;
+  let recorded = 0;
+  await assert.rejects(qualifyReleaseCandidate({
+    progressOptions: quietProgress,
+    gitStatusImpl: () => '',
+    runCommandImpl: async (entry) => {
+      if (!entry.parallel) return;
+      running += 1;
+      maxRunning = Math.max(maxRunning, running);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      running -= 1;
+      if (entry.label === 'CLI packed smoke') throw new Error('smoke failed');
+    },
+    checkGraphImpl: () => ({ valid: true }),
+    cache: { isQualified: () => false, recordQualified: () => { recorded += 1; } },
+  }), /smoke failed/);
+  assert.equal(maxRunning, 2);
+  assert.equal(recorded, 0);
+});

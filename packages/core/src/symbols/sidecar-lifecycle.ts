@@ -9,10 +9,7 @@ import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { SymbolRegistry } from './registry';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import type { SemanticProviderCoverage } from '../semantic/contracts';
-import {
-    SYMBOL_INDEX_SCHEMA_VERSION,
-    isSymbolIndexFile,
-} from './sidecar-validators';
+import { isSymbolIndexFile } from './sidecar-validators';
 import {
     RELATIONSHIPS_DIR_NAME,
     SYMBOLS_DIR_NAME,
@@ -206,7 +203,7 @@ async function loadPublicationNavigationReuse(
         throw new Error('Atomic navigation delta source path does not belong to the declared base Publication.');
     }
     const rawSymbolIndex = await readJson(path.join(sourceRoot, SYMBOLS_DIR_NAME, 'index.json'));
-    if (!isSymbolIndexFile(rawSymbolIndex) || rawSymbolIndex.schemaVersion !== SYMBOL_INDEX_SCHEMA_VERSION) {
+    if (!isSymbolIndexFile(rawSymbolIndex)) {
         throw new Error('Atomic navigation delta source lacks reusable symbol contributions; reindex is required.');
     }
     const rawManifest = await readJson(path.join(sourceRoot, 'manifest.json')) as { normalizedRootPath?: unknown };

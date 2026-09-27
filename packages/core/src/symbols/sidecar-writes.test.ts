@@ -34,6 +34,7 @@ test('relationship sidecar preserves skipped semantic source files in provider c
         });
         const read = await readRelationshipSidecar({
             normalizedRootPath: root,
+            expectedSymbolRegistryManifestHash: symbolRegistryManifestHash,
             navigationRoot,
             publicationId,
         });

@@ -8,7 +8,9 @@ import {
 export { isRepositoryRelativePath } from '../paths/repository-path';
 
 export const SYMBOL_REGISTRY_SCHEMA_VERSION = 'symbol_registry_v3';
-export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v4';
+export const RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v5';
+// v4 manifests additionally carried per-shard hashes; they are still readable.
+const LEGACY_RELATIONSHIP_MANIFEST_SCHEMA_VERSION = 'relationship_v4';
 export const RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION = 'relationship_file_contribution_v5';
 
 export const SYMBOL_KINDS = [
@@ -150,7 +152,7 @@ export interface RelationshipRecord {
 }
 
 export interface RelationshipManifest {
-    schemaVersion: typeof RELATIONSHIP_MANIFEST_SCHEMA_VERSION;
+    schemaVersion: typeof RELATIONSHIP_MANIFEST_SCHEMA_VERSION | typeof LEGACY_RELATIONSHIP_MANIFEST_SCHEMA_VERSION;
     fileContributionSchemaVersion?: typeof RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION;
     symbolRegistryManifestHash: string;
     relationshipVersion: string;
@@ -277,7 +279,8 @@ function isSemanticProviderCoverage(value: unknown): value is SemanticProviderCo
 
 export function isRelationshipManifest(value: unknown): value is RelationshipManifest {
     if (!(isRecord(value)
-        && value.schemaVersion === RELATIONSHIP_MANIFEST_SCHEMA_VERSION
+        && (value.schemaVersion === RELATIONSHIP_MANIFEST_SCHEMA_VERSION
+            || value.schemaVersion === LEGACY_RELATIONSHIP_MANIFEST_SCHEMA_VERSION)
         && value.fileContributionSchemaVersion === RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION
         && isNonEmptyString(value.symbolRegistryManifestHash)
         && isNonEmptyString(value.relationshipVersion)

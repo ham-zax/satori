@@ -23,7 +23,8 @@ function publicationRef(
     return {
         id,
         publication: {
-            version: 1,
+            version: 2,
+            packageOwnership: false,
             id,
             canonicalRoot: root,
             createdAt: '2026-08-15T00:00:00.000Z',

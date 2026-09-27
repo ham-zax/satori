@@ -12,7 +12,7 @@ import type { ResolvedIndexPolicy } from '../policy/index-policy-runtime-service
 export type PublicationId = string;
 
 export interface Publication {
-    readonly version: 1;
+    readonly version: 2;
     readonly id: PublicationId;
     readonly canonicalRoot: string;
     readonly createdAt: string;
@@ -38,7 +38,7 @@ export interface Publication {
         totalChunks: number;
     }>;
     /** Whether this Publication carries a package ownership snapshot (ownership.json). */
-    readonly packageOwnership?: boolean | null;
+    readonly packageOwnership: boolean;
     readonly navigation: null | Readonly<{
         relativeRoot: 'navigation';
     }>;

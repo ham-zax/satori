@@ -175,7 +175,8 @@ function parseStringArray(value: unknown, field: string): readonly string[] {
 }
 
 function parsePublication(value: unknown, sourcePath: string): Publication {
-    if (!isRecord(value) || value.version !== 1) {
+    // Version 1 recorded package ownership as a digest object (or omitted it).
+    if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
         throw new Error(`Unsupported Publication format at '${sourcePath}'.`);
     }
     if (
@@ -198,10 +199,7 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         || typeof value.vector.totalChunks !== 'number'
         || !Number.isSafeInteger(value.vector.totalChunks)
         || value.vector.totalChunks < 0
-        // Older descriptors recorded ownership as a digest object; any record
-        // still means the ownership snapshot is present.
-        || (value.packageOwnership !== undefined && value.packageOwnership !== null
-            && typeof value.packageOwnership !== 'boolean' && !isRecord(value.packageOwnership))
+        || (value.version === 2 && typeof value.packageOwnership !== 'boolean')
         || (value.status === 'complete' && (
             !isRecord(value.navigation)
             || value.navigation.relativeRoot !== 'navigation'
@@ -212,7 +210,7 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
     }
     assertPublicationId(value.id);
     const publication: Publication = {
-        version: 1,
+        version: 2,
         id: value.id,
         canonicalRoot: value.canonicalRoot,
         createdAt: value.createdAt,
@@ -239,9 +237,9 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
             indexedFiles: Number(value.vector.indexedFiles),
             totalChunks: Number(value.vector.totalChunks),
         }),
-        packageOwnership: value.packageOwnership === undefined || value.packageOwnership === null
-            ? null
-            : value.packageOwnership !== false,
+        packageOwnership: value.version === 2
+            ? value.packageOwnership as boolean
+            : isRecord(value.packageOwnership),
         navigation: value.navigation === null
             ? null
             : Object.freeze({ relativeRoot: 'navigation' as const }),

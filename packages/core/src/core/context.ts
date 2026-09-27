@@ -1168,6 +1168,7 @@ export class Context {
         if (registry.status !== 'ok') return registry.status;
         const relationships = await readRelationshipSidecar({
             normalizedRootPath: publication.publication.canonicalRoot,
+            expectedSymbolRegistryManifestHash: registry.manifestHash,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
         });

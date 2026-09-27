@@ -11,7 +11,8 @@ function publication(root: string): PublicationRef {
     return {
         id: 'publication-1',
         publication: {
-            version: 1,
+            version: 2,
+            packageOwnership: false,
             id: 'publication-1',
             canonicalRoot: root,
             createdAt: '2026-09-22T00:00:00.000Z',

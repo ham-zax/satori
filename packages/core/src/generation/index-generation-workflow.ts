@@ -669,7 +669,7 @@ export class IndexGenerationWorkflow {
     }): Publication {
         const format = this.ports.buildPublicationFormat();
         return Object.freeze({
-            version: 1 as const,
+            version: 2 as const,
             id: input.publicationId,
             canonicalRoot: input.canonicalRoot,
             createdAt: new Date().toISOString(),

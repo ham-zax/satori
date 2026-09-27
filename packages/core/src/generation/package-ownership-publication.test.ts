@@ -345,6 +345,20 @@ test('read admission requires reindex when the package ownership sidecar is miss
             (await fixture.context.getCurrentPublicationForValidation(root)).status,
             'valid',
         );
+
+        // Descriptors written before format v2 recorded ownership as a digest object.
+        const descriptorPath = path.join(resolvePublicationGenerationRoot(root, current.id), 'publication.json');
+        const descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
+        fs.writeFileSync(descriptorPath, JSON.stringify({
+            ...descriptor,
+            version: 1,
+            packageOwnership: { digest: 'legacy-digest' },
+        }));
+        assert.equal(fixture.context.getCurrentPublication(root)?.publication.packageOwnership, true);
+        assert.equal(
+            (await fixture.context.getCurrentPublicationForValidation(root)).status,
+            'valid',
+        );
     } finally {
         await fixture.context.dispose();
         await fixture.database.close();

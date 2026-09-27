@@ -348,7 +348,7 @@ function buildRuntimeConfigurationRows(
             embeddingDimension: sanitizedDimension(selection.embeddingDimension),
             rerankerProvider: allowlistedValue(selection.rerankerProvider, DISPLAYED_RERANKER_PROVIDERS),
             rerankerProfile: selection.rerankerProvider === "lateon"
-                && context.environment.SATORI_LATEON_PROFILE === DEFAULT_LATEON_PROFILE_ID
+                && (context.environment.SATORI_LATEON_PROFILE?.trim() ?? DEFAULT_LATEON_PROFILE_ID) === DEFAULT_LATEON_PROFILE_ID
                 ? DEFAULT_LATEON_PROFILE_ID
                 : null,
             vectorStore: allowlistedValue(selection.vectorStore, DISPLAYED_VECTOR_STORES),

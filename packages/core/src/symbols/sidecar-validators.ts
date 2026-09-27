@@ -23,7 +23,9 @@ import type {
     SymbolRegistryManifestFile,
 } from './contracts';
 
-export const SYMBOL_INDEX_SCHEMA_VERSION = 'symbol_index_v3';
+export const SYMBOL_INDEX_SCHEMA_VERSION = 'symbol_index_v4';
+// v3 indexes additionally carried per-shard hashes; they are still readable.
+const LEGACY_SYMBOL_INDEX_SCHEMA_VERSION = 'symbol_index_v3';
 
 export interface SymbolIndexFileEntry {
     path: string;
@@ -35,7 +37,7 @@ export interface SymbolIndexFileEntry {
 }
 
 export interface SymbolIndexFile {
-    schemaVersion: typeof SYMBOL_INDEX_SCHEMA_VERSION;
+    schemaVersion: typeof SYMBOL_INDEX_SCHEMA_VERSION | typeof LEGACY_SYMBOL_INDEX_SCHEMA_VERSION;
     manifestHash: string;
     files: SymbolIndexFileEntry[];
 }
@@ -97,7 +99,8 @@ export function isSymbolIndexFile(value: unknown): value is SymbolIndexFile {
     if (!isRecord(value)) {
         return false;
     }
-    return value.schemaVersion === SYMBOL_INDEX_SCHEMA_VERSION
+    return (value.schemaVersion === SYMBOL_INDEX_SCHEMA_VERSION
+        || value.schemaVersion === LEGACY_SYMBOL_INDEX_SCHEMA_VERSION)
         && isNonEmptyString(value.manifestHash)
         && Array.isArray(value.files)
         && value.files.every((file) => (

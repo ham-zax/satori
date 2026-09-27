@@ -9,7 +9,8 @@ function prepared(id: string, root = '/repo'): Extract<TrackedRootReadinessState
     const publication: PublicationRef = {
         id,
         publication: {
-            version: 1, id, canonicalRoot: root, createdAt: '2026-09-09T00:00:00Z', status: 'complete',
+            version: 2, id, canonicalRoot: root, createdAt: '2026-09-09T00:00:00Z', status: 'complete',
+            packageOwnership: false,
             policy: {
                 profile: 'default', customExtensions: [], customIgnorePatterns: [], fileBasedIgnorePatterns: [],
                 supportedExtensions: ['.ts'], effectiveIgnorePatterns: [], policyHash: 'policy', controlSignature: 'control',

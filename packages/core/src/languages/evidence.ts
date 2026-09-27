@@ -222,6 +222,7 @@ export async function resolveLanguageCapabilityEvidence(input: {
 
     const relationships = await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
+        expectedSymbolRegistryManifestHash: registry.manifestHash,
         publicationId: input.publicationId,
         navigationRoot: input.navigationRoot,
     });

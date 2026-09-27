@@ -1013,3 +1013,19 @@ test('published-identical graph cleans publisher-owned verification storage', as
   assert.deepEqual(fs.readdirSync(parent), [path.basename(fixture.tempDirectory)]);
   fs.rmSync(parent, { recursive: true, force: true });
 });
+
+test('already-published local versions skip qualification and only verify the registry', async () => {
+  let qualified = false;
+  const options = runnerOptions({
+    qualifyImpl: async () => {
+      qualified = true;
+      throw new Error('qualification must not run');
+    },
+  });
+  options.alreadyPublishedImpl = () => ({ core: '1.0.0', mcp: '1.0.0', cli: '1.0.0' });
+  const result = await publishReleaseGraph(options);
+  assert.equal(qualified, false);
+  assert.deepEqual(options.records.publishCalls, []);
+  assert.deepEqual(options.records.verifyReleaseCalls, [{ core: '1.0.0', mcp: '1.0.0', cli: '1.0.0' }]);
+  assert.deepEqual(result.skipped, ['core', 'mcp', 'cli']);
+});

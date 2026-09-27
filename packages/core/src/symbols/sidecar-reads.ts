@@ -70,6 +70,8 @@ export type ReadSymbolRegistrySidecarResult =
 
 export interface ReadRelationshipSidecarInput {
     normalizedRootPath: string;
+    /** When omitted, the current Publication symbol manifest is read and hashed directly. */
+    expectedSymbolRegistryManifestHash?: string;
     publicationId: string;
     navigationRoot: string;
     /**
@@ -191,6 +193,29 @@ export function buildSymbolIndex(
     };
 }
 
+function symbolIndexMatchesManifest(
+    indexFile: SymbolIndexFile,
+    manifest: SymbolRegistryManifest,
+    manifestHash: string,
+): boolean {
+    const expected = buildSymbolIndex(manifest, manifestHash);
+    if (
+        indexFile.manifestHash !== expected.manifestHash
+        || indexFile.files.length !== expected.files.length
+    ) {
+        return false;
+    }
+    return expected.files.every((file, index) => {
+        const actual = indexFile.files[index];
+        return actual?.path === file.path
+            && actual.hash === file.hash
+            && actual.language === file.language
+            && actual.symbolCount === file.symbolCount
+            && actual.definitionStatus === file.definitionStatus
+            && actual.shardPath === file.shardPath;
+    });
+}
+
 export async function readJson(filePath: string): Promise<unknown> {
     return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
@@ -297,6 +322,13 @@ export async function readSymbolRegistrySidecar(input: ReadSymbolRegistrySidecar
             status: 'incompatible',
             rootPath,
             reason: 'symbol registry manifest root does not match requested codebase root',
+        };
+    }
+    if (!symbolIndexMatchesManifest(indexFile, manifest, manifestHash)) {
+        return {
+            status: 'incompatible',
+            rootPath,
+            reason: 'symbol registry index does not exactly match the manifest and deterministic shard layout',
         };
     }
 
@@ -428,6 +460,34 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
             status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
             rootPath,
             reason: error instanceof Error ? error.message : String(error),
+        };
+    }
+
+    let expectedSymbolRegistryManifestHash = input.expectedSymbolRegistryManifestHash;
+    if (!expectedSymbolRegistryManifestHash) {
+        try {
+            const rawSymbolManifest = await readJson(path.join(readableRoot, 'manifest.json'));
+            if (!isSymbolRegistryManifest(rawSymbolManifest)) {
+                return {
+                    status: 'incompatible',
+                    rootPath,
+                    reason: 'symbol registry manifest is invalid or incompatible',
+                };
+            }
+            expectedSymbolRegistryManifestHash = computeSymbolRegistryManifestHash(rawSymbolManifest);
+        } catch (error) {
+            return {
+                status: error instanceof SyntaxError ? 'corrupt' : 'incompatible',
+                rootPath,
+                reason: error instanceof Error ? error.message : String(error),
+            };
+        }
+    }
+    if (manifest.symbolRegistryManifestHash !== expectedSymbolRegistryManifestHash) {
+        return {
+            status: 'incompatible',
+            rootPath,
+            reason: 'relationship manifest hash does not match symbol registry manifest hash',
         };
     }
 

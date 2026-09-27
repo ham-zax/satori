@@ -324,6 +324,7 @@ async function readRelationshipState(
     const claimFilesByKey = new Map<string, string[]>();
     const result = await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
+        expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
         publicationId: input.publicationId,
         navigationRoot: input.navigationRoot,
         visitAnalysisEvidence: (filePath, evidence) => {

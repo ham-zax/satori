@@ -1,5 +1,7 @@
 import { buildAnalysisChunks } from './chunks';
-import { normalizeLanguageId } from '../language';
+import { isLanguageCapabilitySupportedForLanguage, normalizeLanguageId } from '../language';
+import { analyzeWithCbmDefinitions, supportsCbmDefinitions } from './cbm-definition-adapter';
+import { CbmExtractorUnavailableError } from './cbm-extractor-host';
 import { analyzeWithOxc } from './oxc-adapter';
 import { analyzeWithTreeSitter } from './tree-sitter-adapter';
 import type {
@@ -31,11 +33,17 @@ const BACKEND_BY_LANGUAGE: Readonly<Record<string, AnalysisBackend>> = {
     scala: 'tree_sitter_wasm',
 };
 
+// Languages without a dedicated analyzer use CBM's own definition extractor
+// once their declaration claims symbols (promotion is gated on CBM parity
+// evidence) and the language's extractor module is installed.
 function strategyForLanguage(language: string): LanguageStrategy {
-    const backend = BACKEND_BY_LANGUAGE[normalizeLanguageId(language)];
-    return backend
-        ? { backend, structural: true }
-        : { backend: 'bounded_text', structural: false };
+    const normalized = normalizeLanguageId(language);
+    const backend = BACKEND_BY_LANGUAGE[normalized];
+    if (backend) return { backend, structural: true };
+    if (isLanguageCapabilitySupportedForLanguage(normalized, 'symbols') && supportsCbmDefinitions(normalized)) {
+        return { backend: 'cbm_definitions', structural: true };
+    }
+    return { backend: 'bounded_text', structural: false };
 }
 
 function fallbackResult(
@@ -225,6 +233,31 @@ export function createLanguageAnalysisService(
                         chunkOptions,
                     );
                 }
+                if (strategy.backend === 'cbm_definitions') {
+                    let symbols;
+                    try {
+                        symbols = await analyzeWithCbmDefinitions(normalizedInput);
+                    } catch (error) {
+                        if (!(error instanceof CbmExtractorUnavailableError)) throw error;
+                        return fallbackResult(normalizedInput, strategy.backend, 'recovered', 'parser_unavailable', chunkOptions);
+                    }
+                    return {
+                        backend: strategy.backend,
+                        structuralStatus: 'complete',
+                        symbols,
+                        moduleBindings: [],
+                        callSites: [],
+                        receiverTypeBindings: [],
+                        pythonFlowFacts: [],
+                        chunks: buildAnalysisChunks(
+                            normalizedInput.content,
+                            normalizedInput.relativePath,
+                            normalizedInput.language,
+                            symbols,
+                            chunkOptions,
+                        ),
+                    };
+                }
                 const evidence = strategy.backend === 'oxc'
                     ? analyzeWithOxc(normalizedInput)
                     : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
@@ -274,7 +307,7 @@ export function createLanguageAnalysisService(
             }
         },
         getDescription(): string {
-            return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), bounded text fallback';
+            return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), CBM definition extractors, bounded text fallback';
         },
         getStrategyForLanguage: strategyForLanguage,
     };

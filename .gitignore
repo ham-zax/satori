@@ -86,6 +86,7 @@ evaluation/retrieval_results*
 package-lock.json
 .gitnexus
 .codebase-memory/
+packages/core/assets/cbm-extractor/extended/
 
 # Generated local metrics (regenerate via pnpm benchmark)
 build-benchmark.json

@@ -68,6 +68,9 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "assets/tree-sitter/**",
+    "assets/cbm-extractor/*.js",
+    "assets/cbm-extractor/*.wasm",
+    "assets/cbm-extractor/manifest.json",
     "assets/semantic-engine/**",
     "README.md"
   ],

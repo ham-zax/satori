@@ -20,7 +20,7 @@ export interface CodeChunk {
     };
 }
 
-export type LanguageAnalysisBackend = 'oxc' | 'tree_sitter_wasm' | 'bounded_text';
+export type LanguageAnalysisBackend = 'oxc' | 'tree_sitter_wasm' | 'cbm_definitions' | 'bounded_text';
 export type StructuralStatus = 'complete' | 'recovered' | 'unsupported';
 export type StructuralReason =
     | 'syntax_error'

@@ -36,6 +36,9 @@ const ROOT_MODULE_CONTROL_FILES = [
     'bun.lockb',
 ] as const;
 const DEFAULT_MAX_SESSIONS = 4;
+// Warm LanguageServices make back-to-back syncs cheap but hold hundreds of MB;
+// release them once syncs stop.
+const DEFAULT_SESSION_IDLE_RELEASE_MS = 2 * 60_000;
 export const DEFAULT_MAX_TYPESCRIPT_SEMANTIC_SOURCE_FILE_BYTES = 4 * 1024 * 1024;
 export const DEFAULT_MAX_TYPESCRIPT_SEMANTIC_PROJECT_BYTES = 64 * 1024 * 1024;
 
@@ -573,11 +576,14 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     private snapshots = new Map<string, ProjectSnapshot>();
     private fileToProject = new Map<string, string>();
     private useCounter = 0;
+    private activeAnalyses = 0;
+    private idleReleaseTimer?: ReturnType<typeof setTimeout>;
 
     constructor(
         private readonly maxSessions: number = DEFAULT_MAX_SESSIONS,
         private readonly resourceBudget: TypeScriptSemanticResourceBudget =
             DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET,
+        private readonly idleReleaseMs: number = DEFAULT_SESSION_IDLE_RELEASE_MS,
     ) {
         if (!Number.isInteger(maxSessions) || maxSessions < 1) {
             throw new Error('TypeScript semantic session cache bound must be a positive integer.');
@@ -615,6 +621,25 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     async analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        clearTimeout(this.idleReleaseTimer);
+        this.activeAnalyses += 1;
+        try {
+            return await this.analyzeProjects(input);
+        } finally {
+            this.activeAnalyses -= 1;
+            this.scheduleIdleRelease();
+        }
+    }
+
+    private scheduleIdleRelease(): void {
+        if (this.activeAnalyses > 0 || this.idleReleaseMs <= 0 || this.sessions.size === 0) return;
+        this.idleReleaseTimer = setTimeout(() => {
+            if (this.activeAnalyses === 0) this.clearSessionState();
+        }, this.idleReleaseMs);
+        this.idleReleaseTimer.unref?.();
+    }
+
+    private async analyzeProjects(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
         if (!this.supportsLanguage(input.language)) {
             throw new Error(`Unsupported resolution language '${input.language}'.`);
         }
@@ -909,6 +934,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     async dispose(): Promise<void> {
+        clearTimeout(this.idleReleaseTimer);
         this.clearSessionState();
     }
 

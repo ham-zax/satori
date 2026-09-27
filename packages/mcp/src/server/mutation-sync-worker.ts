@@ -66,6 +66,7 @@ async function main(): Promise<void> {
     assertNotCancelled();
 
     const mutationRuntime = new RootMutationRuntime();
+    let result: Readonly<Record<string, unknown>> | undefined;
     await mutationRuntime.runBoundExecutor(
         input.path,
         "sync",
@@ -120,6 +121,10 @@ async function main(): Promise<void> {
                     },
                 });
                 assertNotCancelled();
+                result = {
+                    mode: decision.mode,
+                    ...(decision.stats ? { stats: decision.stats } : {}),
+                };
 
                 switch (decision.mode) {
                     case "ignore_reload_failed":
@@ -142,7 +147,7 @@ async function main(): Promise<void> {
         },
         { signal: workerRuntime.signal },
     );
-    workerRuntime.complete();
+    workerRuntime.complete(result);
 }
 
 const heartbeat = setInterval(() => workerRuntime.heartbeat(), 15_000);

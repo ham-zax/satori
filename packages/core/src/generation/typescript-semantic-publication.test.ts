@@ -783,3 +783,26 @@ test('TypeScript LanguageService sessions obey the configured LRU bound and disp
     }
     assert.equal(analyzer.getSessionStats().active, 0);
 });
+
+test('TypeScript LanguageService sessions are released once analysis goes idle', async () => {
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(2, undefined, 20);
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/a.ts': 'export function a(): number { return 1; }\n',
+    }, analyzer);
+    const analyze = analyzer.analyze.bind(analyzer);
+    let activeAfterAnalysis = 0;
+    analyzer.analyze = async (input) => {
+        const evidence = await analyze(input);
+        activeAfterAnalysis = analyzer.getSessionStats().active;
+        return evidence;
+    };
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        assert.equal(activeAfterAnalysis, 1);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        assert.equal(analyzer.getSessionStats().active, 0);
+    } finally {
+        await fixture.close();
+    }
+});

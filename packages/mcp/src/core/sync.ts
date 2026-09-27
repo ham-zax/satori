@@ -13,6 +13,7 @@ import {
     RootMutationRuntime,
     type MutationOperationPhase,
     type RootMutationActivity,
+    type RootMutationExecution,
     type RootMutationOperation,
 } from "@zokizuan/satori-core/integration";
 import {
@@ -34,7 +35,21 @@ interface SyncManagerOptions {
     ) => Promise<void> | void;
     mutationRuntime: RootMutationRuntime;
     onLifecycleActivityChanged?: () => void;
+    /**
+     * Runs the incremental sync for a held lease in a disposable process, so
+     * sync memory is returned to the OS instead of staying in the host.
+     * Omitted, the sync runs in-process.
+     */
+    runSyncInWorker?: (codebasePath: string, execution: RootMutationExecution) => Promise<SyncWorkerResult>;
 }
+
+/** Outcome a sync worker reports for the sync it ran. */
+export type SyncWorkerResult = Readonly<{
+    terminalPhase?: 'completed' | 'blocked';
+    terminalProgress?: number;
+    mode?: string;
+    stats?: Readonly<{ added: number; removed: number; modified: number }>;
+}>;
 
 export type FreshnessDecisionMode =
     | 'synced'
@@ -382,6 +397,7 @@ export class SyncManager {
     private readonly onSyncCompleted?: SyncManagerOptions['onSyncCompleted'];
     private readonly mutationRuntime: RootMutationRuntime;
     private readonly onLifecycleActivityChanged?: () => void;
+    private readonly runSyncInWorker?: SyncManagerOptions['runSyncInWorker'];
 
     constructor(context: Context, options: SyncManagerOptions) {
         this.context = context;
@@ -390,6 +406,7 @@ export class SyncManager {
         this.onSyncCompleted = options.onSyncCompleted;
         this.mutationRuntime = options.mutationRuntime;
         this.onLifecycleActivityChanged = options.onLifecycleActivityChanged;
+        this.runSyncInWorker = options.runSyncInWorker;
         this.sourceObservationState = new SourceObservationState({
             assertMutationCurrent: (root) => this.mutationRuntime.assertCurrent(root),
             hasCurrentWatcherCapture: (root, capture) => this.hasCurrentWatcherCapture(root, capture),
@@ -1517,7 +1534,11 @@ export class SyncManager {
         }
 
         try {
-            return await this.mutationRuntime.run(codebasePath, 'sync', async () => {
+            return await this.mutationRuntime.run(codebasePath, 'sync', async (execution) => {
+                // Ignore-rule reconciliation runs its sync inside its own lease; keep that in-process.
+                if (this.runSyncInWorker && !this.activeIgnoreReconciles.has(this.normalizeReconcileKey(codebasePath))) {
+                    return await this.syncInWorker(codebasePath, execution, this.runSyncInWorker);
+                }
                 let lastOperation = this.getLiveOperation(codebasePath);
                 try {
                     let pathMissing = false;
@@ -1651,6 +1672,59 @@ export class SyncManager {
             }
             throw error;
         }
+    }
+
+    private async syncInWorker(
+        codebasePath: string,
+        execution: RootMutationExecution,
+        runSyncInWorker: NonNullable<SyncManagerOptions['runSyncInWorker']>,
+    ): Promise<SyncExecutionOutcome> {
+        let result: SyncWorkerResult;
+        try {
+            result = await runSyncInWorker(codebasePath, execution);
+        } catch (error) {
+            console.error(`[SYNC] Failed to sync '${codebasePath}':`, error);
+            let lastOperation = this.getLiveOperation(codebasePath);
+            if (this.mutationRuntime.isCurrent(codebasePath) && lastOperation?.id === execution.id) {
+                try {
+                    lastOperation = this.publishOperationPhase(codebasePath, 'failed', { error: errorMessage(error) });
+                } catch {
+                    // Keep the last live state this operation owned.
+                }
+            }
+            throw new SyncOperationError(errorMessage(error), lastOperation, { cause: error });
+        }
+        this.mutationRuntime.assertCurrent(codebasePath);
+
+        if (result.mode === 'skipped_missing_path') {
+            const operation = this.publishOperationPhase(codebasePath, 'completed', { progress: 100 });
+            await this.unwatchCodebase(codebasePath);
+            return { mode: 'skipped_missing_path', operation };
+        }
+        if (result.terminalPhase === 'blocked') {
+            return {
+                mode: 'skipped_requires_reindex',
+                operation: this.publishOperationPhase(codebasePath, 'blocked'),
+            };
+        }
+
+        this.lastSyncTimes.set(codebasePath, this.now());
+        const stats: SyncStats = {
+            added: result.stats?.added ?? 0,
+            removed: result.stats?.removed ?? 0,
+            modified: result.stats?.modified ?? 0,
+            changedFiles: [],
+        };
+        if (this.onSyncCompleted) {
+            const assertMutationCurrent = () => this.mutationRuntime.assertCurrent(codebasePath);
+            await this.onSyncCompleted(codebasePath, stats, assertMutationCurrent);
+            assertMutationCurrent();
+        }
+        const operation = this.publishOperationPhase(codebasePath, 'completed', { progress: 100 });
+        if (stats.added > 0 || stats.removed > 0 || stats.modified > 0) {
+            console.log(`[SYNC] ✅ Sync Result for '${codebasePath}': +${stats.added}, -${stats.removed}, ~${stats.modified}`);
+        }
+        return { mode: 'synced', stats, operation };
     }
 
     public async handleSyncIndex(): Promise<void> {

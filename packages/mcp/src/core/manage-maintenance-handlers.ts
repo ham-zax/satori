@@ -1,5 +1,4 @@
 import * as fs from "fs";
-import { fileURLToPath } from "node:url";
 import {
     COLLECTION_LIMIT_MESSAGE,
     RemoteCollectionDeletePendingError,
@@ -29,10 +28,8 @@ import {
     type VectorBackendDiagnostic,
 } from "./backend-diagnostics.js";
 import { requireAbsoluteFilesystemPath } from "../utils.js";
-import {
-    MutationWorkerCancelledError,
-    spawnSupervisedMutationWorker,
-} from "../server/mutation-worker-supervisor.js";
+import { MutationWorkerCancelledError } from "../server/mutation-worker-supervisor.js";
+import { startSupervisedSyncWorker, TERMINAL_OPERATION_PHASES } from "../server/supervised-sync-worker.js";
 import type {
     ManageIndexAction,
     ManageIndexReason,
@@ -202,21 +199,6 @@ function formatActiveMutationStatusLine(activity: RootMutationActivity): string 
 }
 
 // Sync emits real progress per changed file and after measured Publication phases.
-// This is a quiet-window deadline, not a total-runtime ceiling; heartbeats do not reset it.
-const SYNC_NO_PROGRESS_TIMEOUT_MS = 30 * 60 * 1000;
-const TERMINAL_OPERATION_PHASES = new Set<MutationOperationPhase>([
-    "completed",
-    "failed",
-    "blocked",
-    "cancelled",
-]);
-
-function resolveMutationSyncWorkerPath(): string {
-    const built = fileURLToPath(new URL("../server/mutation-sync-worker.js", import.meta.url));
-    if (fs.existsSync(built)) return built;
-    return fileURLToPath(new URL("../server/mutation-sync-worker.ts", import.meta.url));
-}
-
 function pendingSyncProjection(
     operation: RootMutationOperation | undefined,
     activity: RootMutationActivity | undefined,
@@ -825,66 +807,11 @@ export class ManageMaintenanceHandlers {
                 "sync",
                 async (execution: RootMutationExecution) => {
                     execution.update("preflight", { progress: 0 });
-                    let requestedTerminalPhase: "completed" | "blocked" | undefined;
-                    let requestedTerminalProgress: number | undefined;
-                    let boundActivity: RootMutationActivity | undefined;
-                    const worker = spawnSupervisedMutationWorker({
-                        operationId: execution.id,
-                        workerPath: resolveMutationSyncWorkerPath(),
-                        workerArgs: [JSON.stringify({ path: absolutePath })],
-                        signal: execution.signal,
-                        noProgressTimeoutMs: SYNC_NO_PROGRESS_TIMEOUT_MS,
-                        onHeartbeat: () => {
-                            const operation = this.host.mutationRuntime.getCurrentOperation(absolutePath);
-                            if (
-                                operation?.id === execution.id
-                                && !TERMINAL_OPERATION_PHASES.has(operation.phase)
-                            ) {
-                                execution.heartbeat();
-                            }
-                        },
-                        onProgress: (progress) => {
-                            if (progress.phase && TERMINAL_OPERATION_PHASES.has(progress.phase)) {
-                                if (progress.phase === "completed" || progress.phase === "blocked") {
-                                    requestedTerminalPhase = progress.phase;
-                                    requestedTerminalProgress = progress.progress;
-                                }
-                                return;
-                            }
-                            const operation = this.host.mutationRuntime.getCurrentOperation(absolutePath);
-                            if (
-                                !operation
-                                || operation.id !== execution.id
-                                || operation.phase === "cancelling"
-                                || TERMINAL_OPERATION_PHASES.has(operation.phase)
-                            ) {
-                                return;
-                            }
-                            execution.update(
-                                progress.phase ?? operation.phase,
-                                progress.progress !== undefined ? { progress: progress.progress } : {},
-                            );
-                        },
-                        onNoProgress: () => {
-                            this.host.mutationRuntime.requestCancellation(
-                                execution.id,
-                                "sync_no_progress_timeout",
-                            );
-                        },
+                    const worker = await startSupervisedSyncWorker({
+                        codebasePath: absolutePath,
+                        execution,
+                        mutationRuntime: this.host.mutationRuntime,
                     });
-
-                    try {
-                        await worker.ready;
-                        if (execution.signal.aborted) {
-                            throw execution.signal.reason ?? new Error("Sync cancelled before executor binding.");
-                        }
-                        boundActivity = execution.bindExecutor(worker.executor);
-                        worker.start();
-                    } catch (error) {
-                        worker.requestCancellation("sync_startup_failed");
-                        await worker.completion.catch(() => undefined);
-                        throw error;
-                    }
 
                     const operation = this.host.mutationRuntime.getCurrentOperation(absolutePath);
                     const publication = {
@@ -911,7 +838,7 @@ export class ManageMaintenanceHandlers {
                             },
                             ...(operation ? { operation } : {}),
                             publication,
-                            pendingSync: pendingSyncProjection(operation, boundActivity),
+                            pendingSync: pendingSyncProjection(operation, worker.boundActivity),
                         },
                     );
 
@@ -919,7 +846,7 @@ export class ManageMaintenanceHandlers {
                         response,
                         completion: (async () => {
                             try {
-                                await worker.completion;
+                                const { terminalPhase, terminalProgress } = await worker.completion;
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
 
                                 await this.host.collectPublicationGarbageAfterSync(absolutePath);
@@ -932,10 +859,10 @@ export class ManageMaintenanceHandlers {
                                     && !TERMINAL_OPERATION_PHASES.has(currentOperation.phase)
                                 ) {
                                     execution.update(
-                                        requestedTerminalPhase ?? "completed",
-                                        requestedTerminalProgress !== undefined
-                                            ? { progress: requestedTerminalProgress }
-                                            : requestedTerminalPhase === "blocked"
+                                        terminalPhase ?? "completed",
+                                        terminalProgress !== undefined
+                                            ? { progress: terminalProgress }
+                                            : terminalPhase === "blocked"
                                                 ? {}
                                                 : { progress: 100 },
                                     );

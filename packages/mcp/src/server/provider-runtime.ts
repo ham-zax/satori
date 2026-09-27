@@ -25,6 +25,7 @@ import {
 } from "../core/index-maintenance-coordinator.js";
 import {
     RootMutationRuntime,
+    type RootMutationExecution,
     type SharedPublicationRuntime,
 } from "@zokizuan/satori-core/integration";
 import { SyncManager } from "../core/sync.js";
@@ -42,6 +43,7 @@ import {
 } from "../core/session-workspace-policy.js";
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 import { LateOnReranker } from "./lateon-reranker.js";
+import { startSupervisedSyncWorker } from "./supervised-sync-worker.js";
 import type { LateOnRuntimeProfileId } from "./lateon-reranker-protocol.js";
 
 /**
@@ -416,6 +418,19 @@ export class ProviderRuntime {
                 onSyncCompleted: this.createSyncCompletionHook(context),
                 mutationRuntime: this.mutationRuntime,
                 onLifecycleActivityChanged: this.onLifecycleActivityChanged,
+                // The long-lived host syncs in a disposable worker so sync memory
+                // leaves with it; workers need Linux process-group containment.
+                ...(this.startSyncLifecycle && process.platform === "linux"
+                    ? {
+                        runSyncInWorker: async (codebasePath: string, execution: RootMutationExecution) => (
+                            await startSupervisedSyncWorker({
+                                codebasePath,
+                                execution,
+                                mutationRuntime: this.mutationRuntime,
+                            })
+                        ).completion,
+                    }
+                    : {}),
             });
             reranker = this.createReranker(bootstrap);
             if (reranker) {

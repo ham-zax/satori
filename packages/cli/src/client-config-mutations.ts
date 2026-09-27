@@ -25,26 +25,7 @@ export const CODEX_GUIDANCE_HOOK_START = "# >>> satori-cli managed codex guidanc
 export const CODEX_GUIDANCE_HOOK_END = "# <<< satori-cli managed codex guidance hook end <<<";
 export const INSTRUCTIONS_BLOCK_START = "<!-- satori-mcp:start -->";
 export const INSTRUCTIONS_BLOCK_END = "<!-- satori-mcp:end -->";
-const CODEX_GUIDANCE_HOOK_MESSAGE = "Satori MCP is available for hybrid repository intelligence. Prefer search_codebase for unfamiliar behavior, ownership, or related implementation; use architecture_overview for repository-wide areas, trace_path for bounded persisted relationship paths, and find_references for ranking-independent exact textual occurrences. Use the usual/native workflow for known paths, exact literals, or small local edits. Follow recommendedNextAction and verify important call_graph or trace_path inbound evidence.";
 const CODEX_GUIDANCE_HOOK_MATCHER = "startup|resume|clear|compact";
-const CODEX_GUIDANCE_HOOK_TIMEOUT_SECONDS = 5;
-const CODEX_GUIDANCE_HOOK_SCRIPT = [
-    `msg=${JSON.stringify(CODEX_GUIDANCE_HOOK_MESSAGE)}`,
-    'key=$(printf "%s" "$PWD" | sed "s#[^A-Za-z0-9_.-]#_#g" | cut -c1-120)',
-    'uid=$(id -u 2>/dev/null || printf "user")',
-    'dir="${XDG_RUNTIME_DIR:-/tmp}/satori-codex-guidance.${uid}"',
-    'mkdir -p "$dir" 2>/dev/null || true',
-    'chmod 700 "$dir" 2>/dev/null || true',
-    'stamp="$dir/${key:-global}"',
-    'now=$(date +%s)',
-    'last=$(cat "$stamp" 2>/dev/null || printf "0")',
-    'case "$last" in *[!0-9]*|"") last=0;; esac',
-    'if [ $((now - last)) -lt 10 ]; then exit 0; fi',
-    'umask 077',
-    'printf "%s" "$now" > "$stamp" 2>/dev/null || true',
-    'printf "%s\\n" "$msg"',
-].join("; ");
-const CODEX_GUIDANCE_HOOK_COMMAND = `sh -lc '${CODEX_GUIDANCE_HOOK_SCRIPT}'`;
 export interface CompanionMutation {
     companion: CompanionTarget;
     changed: boolean;
@@ -379,17 +360,6 @@ export function parseJsonObject(filePath: string): Record<string, unknown> {
     return parsed as Record<string, unknown>;
 }
 
-export function buildCodexGuidanceHookEntry(): Record<string, unknown> {
-    return {
-        matcher: CODEX_GUIDANCE_HOOK_MATCHER,
-        hooks: [{
-            type: "command",
-            command: CODEX_GUIDANCE_HOOK_COMMAND,
-            timeout: CODEX_GUIDANCE_HOOK_TIMEOUT_SECONDS,
-        }],
-    };
-}
-
 export function codexSessionStartHooks(document: Record<string, unknown>, filePath: string): {
     hooks: Record<string, unknown>;
     entries: unknown[];
@@ -414,44 +384,6 @@ export function isManagedCodexGuidanceHook(value: unknown): boolean {
     return hook?.type === "command"
         && typeof hook.command === "string"
         && hook.command.includes("satori-codex-guidance.");
-}
-
-export function hasManagedCodexGuidanceHook(filePath: string): boolean {
-    const current = readTextIfExists(filePath);
-    if (!current?.includes("satori-codex-guidance.")) {
-        return false;
-    }
-    const document = parseJsonObject(filePath);
-    return codexSessionStartHooks(document, filePath).entries.some(isManagedCodexGuidanceHook);
-}
-
-export function prepareCodexGuidanceHookInstall(filePath: string): FileMutation {
-    const currentFile = readTextIfExists(filePath);
-    const document = parseJsonObject(filePath);
-    const { hooks, entries } = codexSessionStartHooks(document, filePath);
-    const canonical = buildCodexGuidanceHookEntry();
-    const managed = entries.filter(isManagedCodexGuidanceHook);
-    if (managed.length === 1 && JSON.stringify(managed[0]) === JSON.stringify(canonical)) {
-        return { changed: false, apply: () => {} };
-    }
-    const nextDocument = {
-        ...document,
-        hooks: {
-            ...hooks,
-            SessionStart: [...entries.filter((entry) => !isManagedCodexGuidanceHook(entry)), canonical],
-        },
-    };
-    const next = `${JSON.stringify(nextDocument, null, 2)}\n`;
-    return {
-        changed: next !== currentFile,
-        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
-        apply: () => {
-            assertFileContentUnchanged(filePath, currentFile);
-            ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next, { encoding: "utf8", mode: 0o600 });
-            fs.chmodSync(filePath, 0o600);
-        },
-    };
 }
 
 export function prepareCodexGuidanceHookRemoval(filePath: string): FileMutation {
@@ -711,6 +643,108 @@ export function prepareOpenCodeUninstall(filePath: string): FileMutation {
     return mutateJsonc(filePath, current, ["mcp", "satori"], undefined);
 }
 
+const SATORI_SKILL_SOURCE_URL = new URL("../assets/skills/satori/SKILL.md", import.meta.url);
+const SATORI_SKILL_OWNERSHIP_MARKER = "satori-managed-skill";
+
+function unchangedMutation(): FileMutation {
+    return { changed: false, apply: () => {} };
+}
+
+function lstatIfExists(filePath: string): fs.Stats | undefined {
+    try {
+        return fs.lstatSync(filePath);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+    }
+}
+
+export function readSatoriSkillSource(): string {
+    return fs.readFileSync(SATORI_SKILL_SOURCE_URL, "utf8");
+}
+
+/** Writes the canonical skill copy; refuses to replace a skill Satori did not write. */
+export function prepareSkillInstall(skillDir: string, source: string = readSatoriSkillSource()): FileMutation {
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const dirStats = lstatIfExists(skillDir);
+    if (dirStats && !dirStats.isDirectory()) {
+        throw new CliError("E_USAGE", `Refusing to replace ${skillDir}: it is not a Satori-managed skill directory.`, 2);
+    }
+    const current = readTextIfExists(skillFile);
+    if (current !== null && !current.includes(SATORI_SKILL_OWNERSHIP_MARKER)) {
+        throw new CliError("E_USAGE", `Refusing to overwrite unmanaged skill at ${skillFile}. Move it aside and rerun install.`, 2);
+    }
+    if (current === source) {
+        return unchangedMutation();
+    }
+    return {
+        changed: true,
+        assertUnchanged: () => assertFileContentUnchanged(skillFile, current),
+        apply: () => {
+            fs.mkdirSync(skillDir, { recursive: true });
+            fs.writeFileSync(skillFile, source, "utf8");
+        },
+    };
+}
+
+export function prepareSkillRemoval(skillDir: string): FileMutation {
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const current = readTextIfExists(skillFile);
+    if (!lstatIfExists(skillDir)?.isDirectory() || !current?.includes(SATORI_SKILL_OWNERSHIP_MARKER)) {
+        return unchangedMutation();
+    }
+    return {
+        changed: true,
+        assertUnchanged: () => assertFileContentUnchanged(skillFile, current),
+        apply: () => {
+            fs.rmSync(skillFile, { force: true });
+            if (fs.readdirSync(skillDir).length === 0) {
+                fs.rmdirSync(skillDir);
+            }
+        },
+    };
+}
+
+function linkPointsTo(linkPath: string, target: string): boolean {
+    return path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === path.resolve(target);
+}
+
+/**
+ * Links an agent's own skills directory to the canonical skill. A real
+ * directory at the link path is a copy written by an earlier Satori installer
+ * and is replaced; any other symlink or file is left to the user.
+ */
+export function prepareSkillLinkInstall(linkPath: string, target: string): FileMutation {
+    const stats = lstatIfExists(linkPath);
+    if (stats?.isSymbolicLink() && linkPointsTo(linkPath, target)) {
+        return unchangedMutation();
+    }
+    if (stats && !stats.isDirectory()) {
+        throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori.`, 2);
+    }
+    return {
+        changed: true,
+        apply: () => {
+            if (stats) {
+                fs.rmSync(linkPath, { recursive: true, force: true });
+            }
+            fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+            // "junction" lets Windows link directories without elevation; POSIX ignores it.
+            fs.symlinkSync(target, linkPath, "junction");
+        },
+    };
+}
+
+export function prepareSkillLinkRemoval(linkPath: string, target: string): FileMutation {
+    const stats = lstatIfExists(linkPath);
+    if (stats?.isSymbolicLink()) {
+        return linkPointsTo(linkPath, target)
+            ? { changed: true, apply: () => fs.unlinkSync(linkPath) }
+            : unchangedMutation();
+    }
+    return stats?.isDirectory() ? prepareLegacySkillRemoval(linkPath) : unchangedMutation();
+}
+
 export function prepareLegacySkillRemoval(skillPath: string): FileMutation {
     const changed = fs.existsSync(skillPath);
     return {
@@ -719,44 +753,6 @@ export function prepareLegacySkillRemoval(skillPath: string): FileMutation {
             if (changed) {
                 fs.rmSync(skillPath, { recursive: true, force: true });
             }
-        },
-    };
-}
-
-export function buildManagedInstructionsBlock(instructions: string): string {
-    return [
-        INSTRUCTIONS_BLOCK_START,
-        instructions.trim(),
-        INSTRUCTIONS_BLOCK_END,
-        "",
-    ].join("\n");
-}
-
-export function prepareInstructionsInstall(filePath: string, instructions: string): FileMutation {
-    const currentFile = readTextIfExists(filePath);
-    const current = currentFile ?? "";
-    const block = buildManagedInstructionsBlock(instructions);
-    let next = current;
-    if (current.includes(INSTRUCTIONS_BLOCK_START) && current.includes(INSTRUCTIONS_BLOCK_END)) {
-        next = current.replace(
-            new RegExp(`${escapeRegExp(INSTRUCTIONS_BLOCK_START)}[\\s\\S]*?${escapeRegExp(INSTRUCTIONS_BLOCK_END)}\\n?`, "m"),
-            block
-        );
-    } else if (current.trim().length === 0) {
-        next = block;
-    } else {
-        next = `${normalizeTrailingNewline(current)}\n${block}`;
-    }
-
-    return {
-        changed: next !== current,
-        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
-        apply: () => {
-            if (next === current) {
-                return;
-            }
-            ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next, "utf8");
         },
     };
 }
@@ -787,21 +783,30 @@ export function prepareInstructionsRemoval(filePath: string): FileMutation {
 export function prepareCompanionMutation(
     companion: CompanionTarget,
     command: InstallCommandInput,
-    installGuidanceHook: boolean,
+    removeSharedSkill: boolean,
 ): CompanionMutation {
+    const install = command.kind === "install";
     let mutation: FileMutation;
-    if (companion.kind === "legacy-skill") {
-        mutation = prepareLegacySkillRemoval(companion.path);
-    } else if (companion.kind === "instructions") {
-        mutation = command.kind === "install"
-            ? prepareInstructionsInstall(companion.path, companion.instructions)
-            : prepareInstructionsRemoval(companion.path);
-    } else {
-        mutation = command.kind === "uninstall"
-            ? prepareCodexGuidanceHookRemoval(companion.path)
-            : installGuidanceHook
-            ? prepareCodexGuidanceHookInstall(companion.path)
-            : { changed: false, apply: () => {} };
+    switch (companion.kind) {
+        case "skill":
+            mutation = install
+                ? prepareSkillInstall(companion.path)
+                : removeSharedSkill ? prepareSkillRemoval(companion.path) : unchangedMutation();
+            break;
+        case "skill-link":
+            mutation = install
+                ? prepareSkillLinkInstall(companion.path, companion.target)
+                : prepareSkillLinkRemoval(companion.path, companion.target);
+            break;
+        case "legacy-skill":
+            mutation = prepareLegacySkillRemoval(companion.path);
+            break;
+        case "legacy-instructions":
+            mutation = prepareInstructionsRemoval(companion.path);
+            break;
+        case "legacy-guidance-hook":
+            mutation = prepareCodexGuidanceHookRemoval(companion.path);
+            break;
     }
     return {
         companion,
@@ -839,19 +844,9 @@ export function prepareMutation(
     command: InstallCommandInput,
     runtimeCommand: ManagedRuntimeCommand,
 ): PreparedMutation {
-    const legacyGuidanceHook = target.client === "codex"
-        && (readTextIfExists(target.configPath)?.includes(CODEX_GUIDANCE_HOOK_START) ?? false);
-    const guidanceHookTarget = target.companions.find((companion) => companion.kind === "guidance-hook");
-    const installGuidanceHook = command.kind === "install"
-        && target.client === "codex"
-        && (
-            command.installGuidanceHook === true
-            || legacyGuidanceHook
-            || (guidanceHookTarget ? hasManagedCodexGuidanceHook(guidanceHookTarget.path) : false)
-        );
     const configMutation = prepareConfigMutation(target, command, runtimeCommand);
     const companionMutations = target.companions.map((companion) => (
-        prepareCompanionMutation(companion, command, installGuidanceHook)
+        prepareCompanionMutation(companion, command, command.client === "all")
     ));
 
     return {

@@ -730,10 +730,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
             <pre><code>npx -y @zokizuan/satori-cli@latest install --client codex</code></pre>
             <p>
               Writes the Satori MCP entry to <code>~/.codex/config.toml</code>
-              and a managed guidance block to
-              <code>~/.codex/AGENTS.md</code>. Add
-              <code>--install-guidance-hook</code> only when you also want an
-              opt-in session reminder in <code>~/.codex/hooks.json</code>.
+              and the shared skill to <code>~/.agents/skills/satori</code>,
+              which Codex loads natively.
             </p>
           </div>
           <div class="panel">
@@ -741,7 +739,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
             <pre><code>npx -y @zokizuan/satori-cli@latest install --client claude</code></pre>
             <p>
               Writes the Satori MCP entry to
-              <code>~/.claude.json</code>.
+              <code>~/.claude.json</code> and links
+              <code>~/.claude/skills/satori</code> to the shared skill.
             </p>
           </div>
           <div class="panel">
@@ -749,9 +748,8 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
             <pre><code>npx -y @zokizuan/satori-cli@latest install --client opencode</code></pre>
             <p>
               Writes the Satori MCP entry to
-              <code>~/.config/opencode/opencode.json</code> and a managed
-              guidance block to
-              <code>~/.config/opencode/AGENTS.md</code>.
+              <code>~/.config/opencode/opencode.json</code>; OpenCode loads
+              the shared skill natively.
             </p>
           </div>
         </div>
@@ -883,11 +881,10 @@ npx -y @zokizuan/satori-cli@latest doctor</code></pre>
             <h3>Managed Files</h3>
             <ul>
               <li>Codex config: <code>~/.codex/config.toml</code>.</li>
-              <li>Codex guidance: <code>~/.codex/AGENTS.md</code>.</li>
-              <li>Optional Codex hook: <code>~/.codex/hooks.json</code>.</li>
+              <li>Shared skill: <code>~/.agents/skills/satori</code>.</li>
               <li>Claude config: <code>~/.claude.json</code>.</li>
               <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
-              <li>OpenCode instructions: <code>~/.config/opencode/AGENTS.md</code>.</li>
+              <li>Claude skill link: <code>~/.claude/skills/satori</code>.</li>
             </ul>
             <p>
               The installer refuses to overwrite unmanaged Satori entries. If

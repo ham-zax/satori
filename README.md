@@ -161,12 +161,19 @@ clients; use `--client auto` to limit cleanup to currently detected clients.
 Run `satori` without arguments at any time for human-readable help.
 Use `satori -v` to print the installed CLI, MCP runtime, and Core versions.
 
-Codex receives global Satori guidance by default. To also install the optional
-Codex session-start reminder:
+Agents receive Satori guidance in two native ways, with nothing injected per
+tool call:
 
-```bash
-satori install --client codex --install-guidance-hook
-```
+- the Satori MCP server sends short tool guidance once per session through the
+  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively;
+- one canonical `satori` skill is installed at `~/.agents/skills/satori`. Codex
+  and OpenCode load it directly; Claude Code gets a link to it at
+  `~/.claude/skills/satori`.
+
+Install adds nothing to `AGENTS.md` or hook files. It removes Satori blocks and the
+Codex guidance hook left by earlier versions, and never overwrites a skill it
+did not write. `satori uninstall` removes the shared skill only when it targets
+all clients (the default).
 
 Restart your coding agent and tell it:
 

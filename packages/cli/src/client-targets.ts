@@ -4,8 +4,7 @@ import path from "node:path";
 import { CliError } from "./errors.js";
 import { satoriCliCommand } from "./cli-command.js";
 import {
-    LEGACY_SKILL_DIR_NAME,
-    SATORI_AGENT_INSTRUCTIONS,
+    SATORI_SKILL_NAME,
     type ClientName,
     type ClientTarget,
 } from "./install-contracts.js";
@@ -39,44 +38,48 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
     const opencodeConfigPath = resolveConfiguredPath(env.OPENCODE_CONFIG, homeDir)
         ?? path.join(opencodeGlobalConfigDir, "opencode.json");
 
+    // One canonical skill in the cross-agent skills directory. Codex and
+    // OpenCode load it natively; Claude Code only scans its own directory, so
+    // it receives a link to the same copy.
+    const canonicalSkillPath = resolveCanonicalSkillPath(homeDir);
+    const skill = { kind: "skill", path: canonicalSkillPath } as const;
+
     return [
         {
             client: "codex",
             configPath: path.join(codexHome, "config.toml"),
             companions: [
-                {
-                    kind: "legacy-skill",
-                    path: path.join(codexHome, "skills", LEGACY_SKILL_DIR_NAME),
-                },
-                {
-                    kind: "instructions",
-                    path: path.join(codexHome, "AGENTS.md"),
-                    instructions: SATORI_AGENT_INSTRUCTIONS,
-                },
-                {
-                    kind: "guidance-hook",
-                    path: path.join(codexHome, "hooks.json"),
-                },
+                skill,
+                { kind: "legacy-skill", path: path.join(codexHome, "skills", SATORI_SKILL_NAME) },
+                { kind: "legacy-instructions", path: path.join(codexHome, "AGENTS.md") },
+                { kind: "legacy-guidance-hook", path: path.join(codexHome, "hooks.json") },
             ],
         },
         {
             client: "claude",
             configPath: path.join(claudeUserRoot, ".claude.json"),
-            companions: [{
-                kind: "legacy-skill",
-                path: path.join(claudeConfigDir, "skills", LEGACY_SKILL_DIR_NAME),
-            }],
+            companions: [
+                skill,
+                {
+                    kind: "skill-link",
+                    path: path.join(claudeConfigDir, "skills", SATORI_SKILL_NAME),
+                    target: canonicalSkillPath,
+                },
+            ],
         },
         {
             client: "opencode",
             configPath: opencodeConfigPath,
-            companions: [{
-                kind: "instructions",
-                path: path.join(opencodeGlobalConfigDir, "AGENTS.md"),
-                instructions: SATORI_AGENT_INSTRUCTIONS,
-            }],
+            companions: [
+                skill,
+                { kind: "legacy-instructions", path: path.join(opencodeGlobalConfigDir, "AGENTS.md") },
+            ],
         },
     ];
+}
+
+export function resolveCanonicalSkillPath(homeDir: string): string {
+    return path.join(homeDir, ".agents", "skills", SATORI_SKILL_NAME);
 }
 
 function isExecutable(filePath: string): boolean {
@@ -121,10 +124,8 @@ function isClientDetected(target: ClientTarget, homeDir: string, env: NodeJS.Pro
             return configuredPathExists(path.dirname(target.configPath), homeDir, true)
                 || executableExists("codex", homeDir, env);
         case "claude": {
-            const skill = target.companions.find((companion) => companion.kind === "legacy-skill");
-            const configDir = skill && skill.kind === "legacy-skill"
-                ? path.dirname(path.dirname(skill.path))
-                : undefined;
+            const link = target.companions.find((companion) => companion.kind === "skill-link");
+            const configDir = link ? path.dirname(path.dirname(link.path)) : undefined;
             return configuredPathExists(configDir, homeDir, true)
                 || configuredPathExists(target.configPath, homeDir, false)
                 || executableExists("claude", homeDir, env);

@@ -17,7 +17,7 @@ import type {
     LateOnModelProgressReporter,
 } from "./lateon-model-store.js";
 
-export const LEGACY_SKILL_DIR_NAME = "satori";
+export const SATORI_SKILL_NAME = "satori";
 export const MANAGED_RUNTIME_DIR = "mcp-runtime";
 export const MANAGED_BIN_DIR = "bin";
 export const MANAGED_LAUNCHER_FILE = "satori-mcp.js";
@@ -78,26 +78,6 @@ export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "POTION_REQUEST_TIMEOUT_MS",
 ] as const;
 
-export const SATORI_AGENT_INSTRUCTIONS = `# Satori MCP
-
-Satori is a repository code-intelligence layer for coding agents. Use it for unfamiliar behavior, ownership, symbols, configuration, related implementation, or index readiness. Prefer the usual/native workflow when the exact path or literal is already known or the edit is small and local.
-
-## Priority Order
-1. \`search_codebase\` — run hybrid repository search and follow \`recommendedNextAction\`
-2. \`architecture_overview\` — inspect repository-wide areas, cross-area boundaries, and hotspots
-3. \`continue_search\` — reveal more from the same frozen ranking when returned
-4. \`read_file\` / \`file_outline\` — inspect exact source or indexed structure
-5. \`call_graph\` / \`trace_path\` — inspect conservative relationship context or one bounded persisted path for exact published symbols
-6. \`find_references\` — scan validated published source for ranking-independent exact textual occurrences
-7. \`list_codebases\` / \`manage_index status\` — inspect index readiness and capabilities
-
-## Boundaries
-- Read \`warnings[].action\` and follow structured remediation.
-- Treat \`call_graph\` as navigation evidence, not complete blast-radius proof; verify important inbound impact.
-- Treat \`trace_path\` as bounded persisted-path evidence; truncation or no returned path is not global proof that no path exists.
-- Treat \`find_references\` as textual occurrence evidence, not semantic CALLS proof.
-`;
-
 export type ExecFileSyncLike = typeof execFileSync;
 
 export type ClientName = Exclude<InstallClient, "auto" | "all">;
@@ -113,7 +93,6 @@ type InstallCommandBase = {
     kind: "install";
     client: InstallClient;
     dryRun: boolean;
-    installGuidanceHook?: boolean;
     profile?: InstallProfile;
 };
 
@@ -166,11 +145,9 @@ export interface InstallCommandOptions {
 export interface ClientInstallResult {
     client: ClientName;
     configPath: string;
-    instructionsPath?: string;
-    guidanceHookPath?: string;
+    skillPath?: string;
     configChanged: boolean;
-    instructionsChanged: boolean;
-    guidanceHookChanged: boolean;
+    skillChanged: boolean;
     status: "updated" | "unchanged";
     dryRun: boolean;
 }
@@ -208,10 +185,19 @@ export interface ClientTarget {
     companions: CompanionTarget[];
 }
 
+/**
+ * Satori guidance reaches agents through the MCP server's session-start
+ * `instructions` and one canonical skill. `skill` is the shared copy that
+ * agents load natively; `skill-link` adapts an agent that only reads its own
+ * skills directory. `legacy-*` companions exist only to remove output written
+ * by earlier installers.
+ */
 export type CompanionTarget =
+    | { kind: "skill"; path: string }
+    | { kind: "skill-link"; path: string; target: string }
     | { kind: "legacy-skill"; path: string }
-    | { kind: "instructions"; path: string; instructions: string }
-    | { kind: "guidance-hook"; path: string };
+    | { kind: "legacy-instructions"; path: string }
+    | { kind: "legacy-guidance-hook"; path: string };
 
 export interface ManagedClientConfigProof {
     client: ClientName;

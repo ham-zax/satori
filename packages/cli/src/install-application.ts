@@ -437,6 +437,7 @@ export function applyInstallPlan(
                 },
             });
         }
+        const plannedCompanionPaths = new Set<string>();
         for (const mutation of prepared) {
             plannedSteps.push({
                 description: `${mutation.target.client} client configuration at ${mutation.target.configPath}`,
@@ -447,6 +448,10 @@ export function applyInstallPlan(
                 },
             });
             for (const companion of mutation.companionMutations) {
+                // Clients share the canonical skill; apply each path once.
+                const companionKey = `${companion.companion.kind}:${companion.companion.path}`;
+                if (plannedCompanionPaths.has(companionKey)) continue;
+                plannedCompanionPaths.add(companionKey);
                 plannedSteps.push({
                     description: `${mutation.target.client} ${companion.companion.kind} at ${companion.companion.path}`,
                     changed: companion.changed,
@@ -504,11 +509,12 @@ export function applyInstallPlan(
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,
-            instructionsPath: mutation.target.companions.find((companion) => companion.kind === "instructions")?.path,
-            guidanceHookPath: mutation.target.companions.find((companion) => companion.kind === "guidance-hook")?.path,
+            skillPath: mutation.target.companions.find((companion) => companion.kind === "skill-link")?.path
+                ?? mutation.target.companions.find((companion) => companion.kind === "skill")?.path,
             configChanged: mutation.configChanged,
-            instructionsChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "instructions" && entry.changed),
-            guidanceHookChanged: mutation.companionMutations.some((entry) => entry.companion.kind === "guidance-hook" && entry.changed),
+            skillChanged: mutation.companionMutations.some((entry) => (
+                (entry.companion.kind === "skill" || entry.companion.kind === "skill-link") && entry.changed
+            )),
             status: mutation.configChanged || mutation.companionMutations.some((entry) => entry.changed) || launcherMutation.changed || profileMutation.changed ? "updated" : "unchanged",
             dryRun: command.dryRun,
         })),

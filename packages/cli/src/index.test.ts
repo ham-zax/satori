@@ -197,7 +197,7 @@ test("runCli defaults to human help and preserves structured help on request", a
 
     assert.equal(exitCode, 0);
     assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started \(no global install required\):\n {2}npx -y @zokizuan\/satori-cli@latest install/m);
-    assert.match(io.read().stdout, /npx -y @zokizuan\/satori-cli@latest install --client codex --install-guidance-hook/);
+    assert.doesNotMatch(io.read().stdout, /--install-guidance-hook/);
     assert.match(io.read().stdout, /Index \/absolute\/path\/to\/repo with Satori/);
     assert.match(io.read().stdout, /install --runtime offline --reranker none/);
     assert.match(io.read().stdout, /npm install -g @zokizuan\/satori-cli@latest/);
@@ -642,7 +642,6 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
             "--reranker", "lateon",
             "--client", "codex",
             "--profile", "minimal",
-            "--install-guidance-hook",
         ], {
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
@@ -658,7 +657,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
         assert.match(io.read().stderr, /LateOn D32 model preflight failed: acquisition unavailable/);
         assert.match(
             io.read().stderr,
-            /Retry: npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal --install-guidance-hook/,
+            /Retry: npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal$/m,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });

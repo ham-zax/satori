@@ -69,7 +69,8 @@
     "dist/**/*.js",
     "dist/**/*.mjs",
     "dist/**/*.d.ts",
-    "README.md"
+    "README.md",
+    "assets/skills/**/SKILL.md"
   ],
   "repository": {
     "type": "git",

@@ -25,7 +25,6 @@ export type ParsedCommand =
         kind: "install";
         client: InstallClient;
         dryRun: boolean;
-        installGuidanceHook: boolean;
         profile?: InstallProfile;
         runtime: "voyage";
         vectorStore?: InstallVectorStore;
@@ -35,7 +34,6 @@ export type ParsedCommand =
         kind: "install";
         client: InstallClient;
         dryRun: boolean;
-        installGuidanceHook: boolean;
         profile?: InstallProfile;
         runtime: "offline";
         vectorStore?: "LanceDB";
@@ -216,7 +214,6 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
 function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
     let client: InstallClient = kind === "install" ? "auto" : "all";
     let dryRun = false;
-    let installGuidanceHook = false;
     let profile: InstallProfile | undefined;
     let runtime: InstallRuntime = "offline";
     let vectorStore: InstallVectorStore | undefined;
@@ -236,10 +233,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         }
         if (token === "--dry-run") {
             dryRun = true;
-            continue;
-        }
-        if (kind === "install" && token === "--install-guidance-hook") {
-            installGuidanceHook = true;
             continue;
         }
         if (kind === "install" && token === "--profile") {
@@ -310,7 +303,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             kind,
             client,
             dryRun,
-            installGuidanceHook,
             profile,
             runtime,
             vectorStore: vectorStore === "LanceDB" ? "LanceDB" : undefined,
@@ -318,7 +310,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             ...(reranker ? { reranker } : {}),
         };
     }
-    return { kind, client, dryRun, installGuidanceHook, profile, runtime, vectorStore };
+    return { kind, client, dryRun, profile, runtime, vectorStore };
 }
 
 export function parseCliArgs(argv: string[]): ParsedCliInput {

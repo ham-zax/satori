@@ -140,14 +140,8 @@ test("parseCliArgs supports install profile selection", () => {
     assert.equal(parsed.command.profile, "minimal");
 });
 
-test("parseCliArgs supports opt-in Codex guidance hook install flag", () => {
-    const parsed = parseCliArgs(["install", "--client", "codex", "--install-guidance-hook"]);
-    assert.equal(parsed.command.kind, "install");
-    if (parsed.command.kind !== "install") {
-        assert.fail("Expected install command parsing");
-    }
-    assert.equal(parsed.command.client, "codex");
-    assert.equal(parsed.command.installGuidanceHook, true);
+test("parseCliArgs rejects the retired Codex guidance hook flag", () => {
+    assert.throws(() => parseCliArgs(["install", "--client", "codex", "--install-guidance-hook"]));
 });
 
 test("parseCliArgs rejects unsupported install profiles", () => {

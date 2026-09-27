@@ -307,7 +307,7 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] [--install-guidance-hook] (default: auto-detect supported clients; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
+            "install [--client auto|all|codex|claude|opencode] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect supported clients; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
             "version (-v, --version)",
             "upgrade (alias: update)",
             "terminate",
@@ -344,9 +344,6 @@ function formatHelpText(): string {
         "",
         "Optional persistent command:",
         "  npm install -g @zokizuan/satori-cli@latest",
-        "",
-        "Optional Codex startup reminder:",
-        `  ${satoriCliCommand("install --client codex --install-guidance-hook")}`,
         "",
         "Commands:",
         "  install       Install Satori for detected clients; use --client all to force all supported clients",
@@ -716,7 +713,6 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                         `--client ${parsed.command.client}`,
                         ...(parsed.command.ollamaModel ? [`--ollama-model ${parsed.command.ollamaModel}`] : []),
                         ...(parsed.command.profile ? [`--profile ${parsed.command.profile}`] : []),
-                        ...(parsed.command.installGuidanceHook ? ["--install-guidance-hook"] : []),
                     ].join(" "))
                     : undefined,
             });

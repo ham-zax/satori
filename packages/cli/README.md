@@ -94,7 +94,6 @@ install [--client auto|all|codex|claude|opencode]
         [--reranker lateon|none]
         [--profile default|minimal|all-text]
         [--dry-run]
-        [--install-guidance-hook]
 
 doctor [--verbose] [--json]
 version # aliases: -v, --version
@@ -107,12 +106,19 @@ tool call <toolName> --args-file <path>
 <toolName> [schema-driven flags]
 ```
 
-Codex receives one managed Satori block in `~/.codex/AGENTS.md` by default.
-The block recommends Satori for semantic ownership and freshness-aware
-discovery, and the usual/native workflow for known paths, exact literals, and
-small local edits. `--install-guidance-hook` additionally writes one opt-in
-`SessionStart` reminder to `~/.codex/hooks.json`; it preserves unrelated hook
-entries and may require Codex's one-time hook trust review.
+Agents receive Satori guidance in two native ways, with nothing injected per
+tool call:
+
+- the Satori MCP server sends short tool guidance once per session through the
+  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively;
+- one canonical `satori` skill is installed at `~/.agents/skills/satori`. Codex
+  and OpenCode load it directly; Claude Code gets a link to it at
+  `~/.claude/skills/satori`.
+
+Install adds nothing to `AGENTS.md` or hook files. It removes Satori blocks and the
+Codex guidance hook left by earlier versions, and never overwrites a skill it
+did not write. `satori uninstall` removes the shared skill only when it targets
+all clients (the default).
 
 Global flags must precede the command token:
 

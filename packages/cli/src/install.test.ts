@@ -210,29 +210,6 @@ async function assertLauncherReapsChild(
     }
 }
 
-function extractCodexGuidanceCommand(content: string): string {
-    const document = JSON.parse(content) as {
-        hooks?: { SessionStart?: Array<{ hooks?: Array<{ command?: string }> }> };
-    };
-    const command = document.hooks?.SessionStart
-        ?.flatMap((entry) => entry.hooks ?? [])
-        .map((hook) => hook.command)
-        .find((value): value is string => typeof value === "string" && value.includes("satori-codex-guidance."));
-    assert.ok(command, "expected managed Codex guidance hook command");
-    return command;
-}
-
-function runGuidanceCommand(command: string, cwd: string, runtimeDir: string): string {
-    return execFileSync("sh", ["-c", command], {
-        cwd,
-        env: {
-            ...process.env,
-            XDG_RUNTIME_DIR: runtimeDir,
-        },
-        encoding: "utf8",
-    });
-}
-
 function installRuntimePackageStub(
     relativeEntry: string,
     expectedSpecifier = EXPECTED_PACKAGE_SPECIFIER,
@@ -513,7 +490,7 @@ test("managed Ollama upgrade uses the staged Core identity resolver", async () =
     });
 });
 
-test("install writes managed Codex config and concise global guidance without skills", async () => {
+test("install writes managed Codex config and the canonical Satori skill without AGENTS guidance", async () => {
     await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -529,10 +506,8 @@ test("install writes managed Codex config and concise global guidance without sk
         assert.equal(result.results.length, 1);
         assert.equal(result.results[0]?.client, "codex");
         assert.equal(result.results[0]?.status, "updated");
-        assert.equal(result.results[0]?.instructionsChanged, true);
-        assert.equal(result.results[0]?.guidanceHookChanged, false);
-        assert.equal(result.results[0]?.guidanceHookPath, path.join(homeDir, ".codex", "hooks.json"));
-        assert.equal(result.results[0]?.instructionsPath, path.join(homeDir, ".codex", "AGENTS.md"));
+        assert.equal(result.results[0]?.skillChanged, true);
+        assert.equal(result.results[0]?.skillPath, path.join(homeDir, ".agents", "skills", "satori"));
         const content = readFile(codexConfigPath);
         assert.equal(content.includes("[mcp_servers.satori]"), true);
         assert.equal(content.includes(`command = "${process.execPath.replace(/\\/g, "\\\\")}"`), true);
@@ -558,17 +533,10 @@ test("install writes managed Codex config and concise global guidance without sk
         assert.equal(launcher.includes("node_modules"), true);
         assert.equal(launcher.includes("dist/index.js"), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori")), false);
-        const codexInstructions = readFile(path.join(homeDir, ".codex", "AGENTS.md"));
-        assert.equal(codexInstructions.includes("<!-- satori-mcp:start -->"), true);
-        assert.equal(codexInstructions.includes("Satori is a repository code-intelligence layer for coding agents"), true);
-        assert.equal(codexInstructions.includes("usual/native workflow"), true);
-        assert.equal(codexInstructions.includes("## Priority Order"), true);
-        assert.equal(codexInstructions.includes("Ask before `create`, `reindex`, or `clear`"), false);
-        assert.equal(codexInstructions.includes("recommendedNextAction"), true);
-        assert.equal(codexInstructions.includes("warnings[].action"), true);
-        assert.equal(codexInstructions.includes("Treat `call_graph` as navigation evidence, not complete blast-radius proof"), true);
-        assert.equal(codexInstructions.includes("`grep`"), false);
-        assert.equal(codexInstructions.includes("`glob`"), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "AGENTS.md")), false);
+        const skill = readFile(path.join(homeDir, ".agents", "skills", "satori", "SKILL.md"));
+        assert.equal(skill.startsWith("---\nname: satori\n"), true);
+        assert.equal(skill.includes("satori-managed-skill"), true);
     });
 });
 
@@ -2287,13 +2255,13 @@ test("CLI package exposes the primary and compatibility commands", () => {
     });
 });
 
-test("published packages contain no Satori skill assets", () => {
+test("CLI package ships the one canonical Satori skill", () => {
     const cliPackage = JSON.parse(
         fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
     ) as { files?: string[] };
-    assert.equal(cliPackage.files?.some((entry) => entry.includes("skills")), false);
-    assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "assets", "skills", "satori")), false);
-    assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "..", "mcp", "assets", "skills", "satori")), false);
+    assert.equal(cliPackage.files?.includes("assets/skills/**/SKILL.md"), true);
+    assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), true);
+    assert.equal(fs.existsSync(path.join(PACKAGE_ROOT, "..", "mcp", "assets", "skills")), false);
 });
 
 test("install is idempotent for managed Codex config", async () => {
@@ -2313,12 +2281,12 @@ test("install is idempotent for managed Codex config", async () => {
         }, installOptions(homeDir));
 
         assert.equal(second.results[0]?.configChanged, false);
-        assert.equal(second.results[0]?.instructionsChanged, false);
+        assert.equal(second.results[0]?.skillChanged, false);
         assert.equal(second.results[0]?.status, "unchanged");
     });
 });
 
-test("install replaces only the managed Codex AGENTS block and preserves user content", async () => {
+test("install removes the legacy Codex AGENTS block and preserves user content", async () => {
     await withTempHome(async (homeDir) => {
         const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
         fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
@@ -2344,13 +2312,12 @@ test("install replaces only the managed Codex AGENTS block and preserves user co
         }, installOptions(homeDir));
 
         const content = readFile(agentsPath);
-        assert.equal(result.results[0]?.instructionsChanged, true);
+        assert.equal(result.results[0]?.status, "updated");
         assert.equal(content.includes("Keep this introduction."), true);
         assert.equal(content.includes("Keep this footer."), true);
         assert.equal(content.includes("old exact-only guidance"), false);
-        assert.equal(content.includes("Satori is a repository code-intelligence layer for coding agents"), true);
-        assert.equal(content.match(/<!-- satori-mcp:start -->/g)?.length, 1);
-        assert.equal(content.match(/<!-- satori-mcp:end -->/g)?.length, 1);
+        assert.equal(content.includes("satori-mcp:start"), false);
+        assert.equal(content.includes("satori-mcp:end"), false);
     });
 });
 
@@ -2437,74 +2404,7 @@ test("install preserves user-owned Codex env values outside the managed block", 
     });
 });
 
-test("install adds the opt-in Codex guidance hook to hooks.json and preserves user hooks", async () => {
-    await withTempHome(async (homeDir) => {
-        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
-        const hooksPath = path.join(homeDir, ".codex", "hooks.json");
-        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
-        fs.writeFileSync(codexConfigPath, 'model = "gpt-5"\n', "utf8");
-        fs.writeFileSync(hooksPath, JSON.stringify({
-            hooks: {
-                SessionStart: [{
-                    matcher: "startup",
-                    hooks: [{ type: "command", command: 'echo "user hook"', timeout: 3 }],
-                }],
-            },
-        }, null, 2), "utf8");
-
-        const result = await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-            installGuidanceHook: true,
-        }, installOptions(homeDir));
-
-        const content = readFile(codexConfigPath);
-        const hooks = readFile(hooksPath);
-        assert.equal(result.results[0]?.guidanceHookPath, hooksPath);
-        assert.equal(result.results[0]?.guidanceHookChanged, true);
-        assert.equal(content.includes("[[hooks.SessionStart]]"), false);
-        assert.equal(content.includes("satori-codex-guidance"), false);
-        assert.equal(hooks.includes("Satori MCP is available"), true);
-        assert.equal(hooks.includes("usual/native workflow"), true);
-        assert.equal(hooks.includes("satori-codex-guidance"), true);
-        assert.equal(hooks.includes('echo \\"user hook\\"'), true);
-        assert.equal(extractCodexGuidanceCommand(hooks).startsWith("sh -lc "), true);
-        assert.equal(fs.statSync(hooksPath).mode & 0o777, 0o600);
-    });
-});
-
-test("managed Codex guidance hook command suppresses duplicate prints per working directory", async () => {
-    await withTempHome(async (homeDir) => {
-        const runtimeDir = path.join(homeDir, "runtime");
-        const repoA = path.join(homeDir, "repo-a");
-        const repoB = path.join(homeDir, "repo-b");
-        fs.mkdirSync(runtimeDir, { recursive: true });
-        fs.mkdirSync(repoA, { recursive: true });
-        fs.mkdirSync(repoB, { recursive: true });
-
-        await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-            installGuidanceHook: true,
-        }, installOptions(homeDir));
-
-        const command = extractCodexGuidanceCommand(readFile(path.join(homeDir, ".codex", "hooks.json")));
-        assert.match(runGuidanceCommand(command, repoA, runtimeDir), /Satori MCP is available/);
-        assert.equal(runGuidanceCommand(command, repoA, runtimeDir), "");
-        assert.match(runGuidanceCommand(command, repoB, runtimeDir), /Satori MCP is available/);
-
-        const uid = execFileSync("id", ["-u"], { encoding: "utf8" }).trim();
-        const stampDir = path.join(runtimeDir, `satori-codex-guidance.${uid}`);
-        assert.equal(fs.statSync(stampDir).isDirectory(), true);
-        assert.equal(fs.statSync(stampDir).mode & 0o777, 0o700);
-    });
-});
-
-test("install migrates a legacy inline Codex guidance hook to hooks.json", async () => {
+test("install removes a legacy inline Codex guidance hook without adding hooks.json", async () => {
     await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -2532,15 +2432,13 @@ test("install migrates a legacy inline Codex guidance hook to hooks.json", async
         }, installOptions(homeDir));
 
         const content = readFile(codexConfigPath);
-        const hooks = readFile(path.join(homeDir, ".codex", "hooks.json"));
         assert.equal(content.includes("old satori guidance"), false);
         assert.equal(content.includes("satori-cli managed codex guidance hook start"), false);
-        assert.equal(hooks.includes("Satori MCP is available"), true);
-        assert.equal(hooks.includes("satori-codex-guidance"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "hooks.json")), false);
     });
 });
 
-test("install refreshes an existing managed hooks.json entry without duplicating it", async () => {
+test("install removes a legacy managed hooks.json entry", async () => {
     await withTempHome(async (homeDir) => {
         const hooksPath = path.join(homeDir, ".codex", "hooks.json");
         fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
@@ -2565,10 +2463,9 @@ test("install refreshes an existing managed hooks.json entry without duplicating
         }, installOptions(homeDir));
 
         const content = readFile(hooksPath);
-        assert.equal(result.results[0]?.guidanceHookChanged, true);
-        assert.equal(content.includes("echo old"), false);
-        assert.equal(content.match(/satori-codex-guidance\./g)?.length, 1);
-        assert.equal(content.includes('"timeout": 5'), true);
+        assert.equal(result.results[0]?.status, "updated");
+        assert.equal(content.includes("satori-codex-guidance"), false);
+        assert.equal(JSON.parse(content).hooks, undefined);
     });
 });
 
@@ -2613,7 +2510,7 @@ test("uninstall removes an existing managed Codex block and legacy skill", async
 
         const content = readFile(codexConfigPath);
         const instructions = readFile(agentsPath);
-        assert.equal(result.results[0]?.instructionsChanged, true);
+        assert.equal(result.results[0]?.status, "updated");
         assert.equal(content.includes("[mcp_servers.satori]"), false);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), false);
         assert.equal(fs.existsSync(path.dirname(skillPath)), false);
@@ -2622,22 +2519,24 @@ test("uninstall removes an existing managed Codex block and legacy skill", async
     });
 });
 
-test("uninstall removes managed Codex guidance hook and preserves user hooks", async () => {
+test("uninstall removes a legacy Codex guidance hook and preserves user hooks", async () => {
     await withTempHome(async (homeDir) => {
-        await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-            installGuidanceHook: true,
-        }, installOptions(homeDir));
         const hooksPath = path.join(homeDir, ".codex", "hooks.json");
-        const document = JSON.parse(readFile(hooksPath));
-        document.hooks.SessionStart.push({
-            matcher: "startup",
-            hooks: [{ type: "command", command: 'echo "user hook"', timeout: 3 }],
-        });
-        fs.writeFileSync(hooksPath, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+        fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+        fs.writeFileSync(hooksPath, `${JSON.stringify({
+            hooks: {
+                SessionStart: [
+                    {
+                        matcher: "startup|resume|clear|compact",
+                        hooks: [{ type: "command", command: "sh -lc 'dir=/tmp/satori-codex-guidance.1; echo old'", timeout: 5 }],
+                    },
+                    {
+                        matcher: "startup",
+                        hooks: [{ type: "command", command: 'echo "user hook"', timeout: 3 }],
+                    },
+                ],
+            },
+        }, null, 2)}\n`, "utf8");
 
         const result = await executeInstallCommand({
             kind: "uninstall",
@@ -2646,7 +2545,7 @@ test("uninstall removes managed Codex guidance hook and preserves user hooks", a
         }, { homeDir });
 
         const content = readFile(hooksPath);
-        assert.equal(result.results[0]?.guidanceHookChanged, true);
+        assert.equal(result.results[0]?.status, "updated");
         assert.equal(content.includes("satori-codex-guidance"), false);
         assert.equal(content.includes('echo \\"user hook\\"'), true);
     });
@@ -2681,7 +2580,7 @@ test("install refuses to overwrite unmanaged Codex Satori sections", async () =>
     });
 });
 
-test("install removes the legacy Satori skill while preserving unrelated Claude state", async () => {
+test("install replaces the legacy Claude skill copy with a link to the canonical skill", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         const skillsDir = path.join(homeDir, ".claude", "skills");
@@ -2720,7 +2619,10 @@ test("install removes the legacy Satori skill while preserving unrelated Claude 
         // Omit unset provider keys so empty ${VAR:-} defaults cannot override host env with "".
         assert.equal(installed.mcpServers.satori.env, undefined);
         assert.equal(Object.prototype.hasOwnProperty.call(installed.mcpServers.satori, "timeout"), false);
-        assert.equal(fs.existsSync(path.join(skillsDir, "satori")), false);
+        const canonicalSkill = path.join(homeDir, ".agents", "skills", "satori");
+        assert.equal(fs.lstatSync(path.join(skillsDir, "satori")).isSymbolicLink(), true);
+        assert.equal(fs.realpathSync(path.join(skillsDir, "satori")), fs.realpathSync(canonicalSkill));
+        assert.equal(readFile(path.join(skillsDir, "satori", "SKILL.md")).includes("satori-managed-skill"), true);
         assert.equal(fs.existsSync(path.join(skillsDir, "custom-skill", "SKILL.md")), true);
 
         const uninstall = await executeInstallCommand({
@@ -2735,6 +2637,30 @@ test("install removes the legacy Satori skill while preserving unrelated Claude 
         assert.equal(removed.mcpServers.existing.command, "npx");
         assert.equal(fs.existsSync(path.join(skillsDir, "custom-skill", "SKILL.md")), true);
         assert.equal(fs.existsSync(path.join(skillsDir, "satori")), false);
+        // A single-client uninstall keeps the shared copy other agents may load.
+        assert.equal(fs.existsSync(path.join(canonicalSkill, "SKILL.md")), true);
+    });
+});
+
+test("canonical skill is never overwritten unless Satori owns it and is removed by a full uninstall", async () => {
+    await withTempHome(async (homeDir) => {
+        const skillFile = path.join(homeDir, ".agents", "skills", "satori", "SKILL.md");
+        fs.mkdirSync(path.dirname(skillFile), { recursive: true });
+        fs.writeFileSync(skillFile, "# my own satori notes\n", "utf8");
+
+        await assert.rejects(
+            executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+            /Refusing to overwrite unmanaged skill/,
+        );
+        assert.equal(readFile(skillFile), "# my own satori notes\n");
+
+        fs.rmSync(skillFile);
+        await executeInstallCommand({ kind: "install", client: "all", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        assert.equal(readFile(skillFile).includes("satori-managed-skill"), true);
+
+        await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: false }, { homeDir });
+        assert.equal(fs.existsSync(path.dirname(skillFile)), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori")), false);
     });
 });
 
@@ -2858,7 +2784,7 @@ test("uninstall refuses to remove unmanaged Claude Satori entries", async () => 
     });
 });
 
-test("install writes OpenCode JSONC config and AGENTS instructions", async () => {
+test("install writes OpenCode JSONC config and the canonical skill", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -2885,8 +2811,8 @@ test("install writes OpenCode JSONC config and AGENTS instructions", async () =>
 
         assert.equal(result.results.length, 1);
         assert.equal(result.results[0]?.client, "opencode");
-        assert.equal(result.results[0]?.instructionsChanged, true);
-        assert.equal(result.results[0]?.instructionsPath, path.join(homeDir, ".config", "opencode", "AGENTS.md"));
+        assert.equal(result.results[0]?.skillChanged, true);
+        assert.equal(result.results[0]?.skillPath, path.join(homeDir, ".agents", "skills", "satori"));
         const content = readFile(configPath);
         assert.equal(content.includes("// keep this comment"), true);
         assert.equal(content.includes("\"existing\""), true);
@@ -2900,11 +2826,8 @@ test("install writes OpenCode JSONC config and AGENTS instructions", async () =>
         assert.equal(content.includes("\"MILVUS_ADDRESS\": \"{env:MILVUS_ADDRESS}\""), true);
         assert.equal(content.includes("node_modules"), false);
 
-        const instructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
-        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), true);
-        assert.equal(instructions.includes("search_codebase"), true);
-        assert.equal(instructions.includes("usual/native workflow"), true);
-        assert.equal(instructions.includes("Ask before `create`, `reindex`, or `clear`"), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "AGENTS.md")), false);
+        assert.equal(fs.existsSync(path.join(homeDir, ".agents", "skills", "satori", "SKILL.md")), true);
     });
 });
 
@@ -2980,13 +2903,9 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(codexConfig.includes("node_modules"), false);
         assert.equal(codexConfig.includes("dist/index.js"), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "skills", "satori")), false);
-        const codexInstructions = readFile(path.join(homeDir, ".codex", "AGENTS.md"));
-        assert.equal(codexInstructions.includes("<!-- satori-mcp:start -->"), true);
-        assert.equal(codexInstructions.includes("Satori is a repository code-intelligence layer for coding agents"), true);
-        assert.equal(codexInstructions.includes("recommendedNextAction"), true);
-        assert.equal(codexInstructions.includes("warnings[].action"), true);
-        assert.equal(codexInstructions.includes("usual/native workflow"), true);
-        assert.equal(codexInstructions.includes("Treat `call_graph` as navigation evidence, not complete blast-radius proof"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "AGENTS.md")), false);
+        const canonicalSkill = path.join(homeDir, ".agents", "skills", "satori");
+        assert.equal(readFile(path.join(canonicalSkill, "SKILL.md")).includes("satori-managed-skill"), true);
 
         const claudeConfig = JSON.parse(readFile(path.join(homeDir, ".claude.json")));
         assert.equal(claudeConfig.mcpServers.satori.type, "stdio");
@@ -2995,7 +2914,7 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(claudeConfig.mcpServers.satori.env, undefined);
         assert.equal(Object.prototype.hasOwnProperty.call(claudeConfig.mcpServers.satori, "timeout"), false);
         assert.equal(JSON.stringify(claudeConfig.mcpServers.satori).includes("node_modules"), false);
-        assert.equal(fs.existsSync(path.join(homeDir, ".claude", "skills", "satori")), false);
+        assert.equal(fs.realpathSync(path.join(homeDir, ".claude", "skills", "satori")), fs.realpathSync(canonicalSkill));
 
         const opencodeConfig = JSON.parse(readFile(path.join(homeDir, ".config", "opencode", "opencode.json")));
         assert.equal(opencodeConfig.mcp.satori.enabled, true);
@@ -3005,13 +2924,7 @@ test("install all smoke writes launcher-backed config for every supported client
         assert.equal(opencodeConfig.mcp.satori.environment.EMBEDDING_OUTPUT_DIMENSION, undefined);
         assert.equal(opencodeConfig.mcp.satori.environment.MILVUS_ADDRESS, "{env:MILVUS_ADDRESS}");
         assert.equal(JSON.stringify(opencodeConfig.mcp.satori).includes("node_modules"), false);
-        const opencodeInstructions = readFile(path.join(homeDir, ".config", "opencode", "AGENTS.md"));
-        assert.equal(opencodeInstructions.includes("<!-- satori-mcp:start -->"), true);
-        assert.equal(opencodeInstructions.includes("search_codebase"), true);
-        assert.equal(opencodeInstructions.includes("recommendedNextAction"), true);
-        assert.equal(opencodeInstructions.includes("warnings[].action"), true);
-        assert.equal(opencodeInstructions.includes("usual/native workflow"), true);
-        assert.equal(opencodeInstructions.includes("Treat `call_graph` as navigation evidence, not complete blast-radius proof"), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "AGENTS.md")), false);
     });
 });
 
@@ -3127,7 +3040,7 @@ test("auto client selection honors documented client config roots", async () => 
     });
 });
 
-test("OpenCode keeps global instructions separate from custom configuration paths", async () => {
+test("OpenCode custom configuration paths receive no instruction files", async () => {
     await withTempHome(async (homeDir) => {
         const globalConfigDir = path.join(homeDir, ".config", "opencode");
         const customConfig = path.join(homeDir, "profiles", "opencode.json");
@@ -3146,7 +3059,7 @@ test("OpenCode keeps global instructions separate from custom configuration path
 
         assert.deepEqual(result.results.map((entry) => entry.client), ["opencode"]);
         assert.equal(fs.existsSync(customConfig), true);
-        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), true);
+        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), false);
         assert.equal(fs.existsSync(path.join(path.dirname(customConfig), "AGENTS.md")), false);
     });
 
@@ -3167,7 +3080,7 @@ test("OpenCode keeps global instructions separate from custom configuration path
 
         assert.deepEqual(result.results.map((entry) => entry.client), ["opencode"]);
         assert.equal(fs.existsSync(path.join(globalConfigDir, "opencode.json")), true);
-        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), true);
+        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), false);
         assert.equal(fs.existsSync(path.join(customConfigDir, "opencode.json")), false);
         assert.equal(fs.existsSync(path.join(customConfigDir, "AGENTS.md")), false);
     });
@@ -3197,7 +3110,7 @@ test("OpenCode keeps global instructions separate from custom configuration path
         assert.deepEqual(result.results.map((entry) => entry.client), ["opencode"]);
         assert.equal(fs.existsSync(customConfig), true);
         assert.equal(fs.existsSync(path.join(globalConfigDir, "opencode.json")), false);
-        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), true);
+        assert.equal(fs.existsSync(path.join(globalConfigDir, "AGENTS.md")), false);
         assert.equal(fs.existsSync(path.join(customConfigDir, "AGENTS.md")), false);
     });
 });
@@ -3414,7 +3327,7 @@ test("install --profile updates existing repo config and preserves unrelated TOM
     });
 });
 
-test("uninstall removes managed OpenCode config and instruction block only", async () => {
+test("uninstall removes managed OpenCode config and legacy instruction block only", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         const instructionsPath = path.join(homeDir, ".config", "opencode", "AGENTS.md");
@@ -3426,7 +3339,7 @@ test("uninstall removes managed OpenCode config and instruction block only", asy
             runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
-        fs.writeFileSync(instructionsPath, `${readFile(instructionsPath)}\n# User Notes\n`, "utf8");
+        fs.writeFileSync(instructionsPath, "<!-- satori-mcp:start -->\n# Legacy Satori\n<!-- satori-mcp:end -->\n\n# User Notes\n", "utf8");
 
         await executeInstallCommand({
             kind: "uninstall",
@@ -3610,7 +3523,7 @@ test("application failure reports completed and unattempted mutation paths", asy
                 assert.equal(message.includes(`managed launcher at ${launcherPath(homeDir)}`), true);
                 assert.equal(message.includes(`repository profile at ${path.join(repoDir, "satori.toml")}`), true);
                 assert.equal(message.includes(`while applying codex client configuration at ${path.join(homeDir, ".codex", "config.toml")}`), true);
-                assert.match(message, /Not yet applied: codex instructions at/);
+                assert.match(message, /Not yet applied: codex skill at/);
                 assert.match(message, /correct the error and rerun the same command/);
                 return true;
             },

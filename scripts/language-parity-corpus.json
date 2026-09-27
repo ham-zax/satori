@@ -1,0 +1,13 @@
+[
+  { "repo": "https://github.com/Alamofire/Alamofire.git", "rev": "bda9ed57d72988a3a2ada33d824583541f86eac6" },
+  { "repo": "https://github.com/antirez/sds.git", "rev": "5347739b1581fcba74fd5cab1fc21d2aef317d71" },
+  { "repo": "https://github.com/bats-core/bats-core.git", "rev": "52439ebfac39987dd43e26502aa4aa19f2753d4a" },
+  { "repo": "https://github.com/dart-lang/args.git", "rev": "7a2dfb528768f0a2e5680f711dbfb948f1d6c255" },
+  { "repo": "https://github.com/elixir-plug/plug.git", "rev": "73404f851852a00ffb2014be95d4598900fa77b8" },
+  { "repo": "https://github.com/jgm/doclayout.git", "rev": "6a7890acba8605c925db1d5edba90422a356ef0a" },
+  { "repo": "https://github.com/rxi/lume.git", "rev": "98847e7812cf28d3d64b289b03fad71dc704547d" },
+  { "repo": "https://github.com/sinatra/sinatra.git", "rev": "cb22afd7902b566b6eaba6c4ea89739494a65d12" },
+  { "repo": "https://github.com/slimphp/Slim.git", "rev": "3675bf6baac66b07032575b7bef4200b60b7974b" },
+  { "repo": "https://github.com/square/kotlinpoet.git", "rev": "d43826762d8d1ea8781091499671dc03fd0b205a" },
+  { "repo": "https://github.com/tidyverse/glue.git", "rev": "da9c73f7a3de6a27f3103cb5bb2355820a4c3a6a" }
+]

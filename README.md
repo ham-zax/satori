@@ -118,6 +118,19 @@ The default Linux x64 / WSL2 path runs Potion embeddings, BM25, LateOn reranking
 
 Compatible Codex, Claude Code, OpenCode, and subagent sessions can attach to one private local Satori host instead of starting one heavy provider/index stack per session.
 
+## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/architecture/satori-architecture.dark.png">
+  <img alt="Satori architecture: agent queries flow through MCP tools into candidate search (Potion vectors + BM25), reciprocal rank fusion, LateOn reranking, and owner-symbol grouping over one pinned LanceDB index version; background workers scan changed files, build the next index, and publish it atomically." src="./docs/architecture/satori-architecture.light.png">
+</picture>
+
+- **Search path (read-only):** dense and BM25 candidates merge through reciprocal rank fusion, LateOn rescores a bounded top set, and matching chunks resolve to their owning symbols.
+- **Index version:** one complete snapshot of vectors, symbols, and call edges. Each request stays pinned to one version; a new version goes live only when complete.
+- **Background indexing:** supervised workers hash only changed files and build the next version off the request path.
+
+Interactive diagram: [`docs/architecture/satori-architecture.html`](./docs/architecture/satori-architecture.html) (source: [`satori.architecture.json`](./docs/architecture/satori.architecture.json), rendered with Archify).
+
 ## Documentation
 
 - [`docs/PRODUCT_GUIDE.md`](./docs/PRODUCT_GUIDE.md) — how to think about Satori and use it for repository learning, debugging, refactors, local models, and multi-agent work.

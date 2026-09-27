@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Satori Architecture",
+    "output": "satori-architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "search-path",
+        "label": "Search path",
+        "focus": [
+          "agents",
+          "mcp",
+          "retrieval",
+          "fusion",
+          "rerank",
+          "owners",
+          "index"
+        ],
+        "note": "A query reads one pinned index version, then is fused, reranked, and grouped by owning symbol."
+      },
+      {
+        "id": "index-path",
+        "label": "Indexing path",
+        "focus": [
+          "mcp",
+          "scan",
+          "build",
+          "index",
+          "repo"
+        ],
+        "note": "Changed files are rebuilt into a complete new index version that replaces the current one atomically."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "agents",
+      "type": "external",
+      "label": "Coding agent",
+      "sublabel": "Codex · Claude · OpenCode",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "frontend",
+      "label": "MCP tools",
+      "sublabel": "search · outline · calls",
+      "pos": [
+        230,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "retrieval",
+      "type": "backend",
+      "label": "Candidate search",
+      "sublabel": "Potion vectors + BM25",
+      "pos": [
+        420,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "fusion",
+      "type": "backend",
+      "label": "Rank fusion",
+      "sublabel": "reciprocal rank (RRF)",
+      "pos": [
+        610,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "rerank",
+      "type": "backend",
+      "label": "LateOn reranker",
+      "sublabel": "rescores top hits",
+      "pos": [
+        800,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "owners",
+      "type": "backend",
+      "label": "Owner grouping",
+      "sublabel": "chunks → symbols",
+      "pos": [
+        990,
+        120
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "Current index",
+      "sublabel": "LanceDB version",
+      "tag": "atomic swap",
+      "pos": [
+        420,
+        300
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "repo",
+      "type": "external",
+      "label": "Repository",
+      "sublabel": "local source",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "scan",
+      "type": "backend",
+      "label": "Change scan",
+      "sublabel": "stat, hash, Merkle",
+      "pos": [
+        230,
+        480
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "build",
+      "type": "backend",
+      "label": "Build next index",
+      "sublabel": "AST chunks · embeds",
+      "pos": [
+        420,
+        480
+      ],
+      "size": [
+        140,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Search path (read-only)",
+      "wraps": [
+        "retrieval",
+        "fusion",
+        "rerank",
+        "owners"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Indexing (background workers)",
+      "wraps": [
+        "scan",
+        "build"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "agent-query",
+      "from": "agents",
+      "to": "mcp",
+      "label": "query",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tools-search",
+      "from": "mcp",
+      "to": "retrieval",
+      "variant": "emphasis"
+    },
+    {
+      "id": "retrieval-fusion",
+      "from": "retrieval",
+      "to": "fusion",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fusion-rerank",
+      "from": "fusion",
+      "to": "rerank",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rerank-owners",
+      "from": "rerank",
+      "to": "owners",
+      "variant": "emphasis"
+    },
+    {
+      "id": "index-read",
+      "from": "index",
+      "to": "retrieval",
+      "label": "pinned read",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "tools-sync",
+      "from": "mcp",
+      "to": "scan",
+      "label": "sync / reindex",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "scan-repo",
+      "from": "scan",
+      "to": "repo",
+      "label": "read"
+    },
+    {
+      "id": "scan-build",
+      "from": "scan",
+      "to": "build",
+      "label": "changed"
+    },
+    {
+      "id": "build-publish",
+      "from": "build",
+      "to": "index",
+      "label": "publish",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Search",
+      "items": [
+        "Dense + BM25 hits merged by RRF",
+        "LateOn rescores a bounded top set",
+        "Results grouped under owning symbols"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Index version",
+      "items": [
+        "One complete snapshot: vectors, symbols, call edges",
+        "Each request stays pinned to one version",
+        "A new version goes live only when complete"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Background indexing",
+      "items": [
+        "Scan hashes only changed files",
+        "Runs in supervised workers, off the request path",
+        "One shared runtime serves all local agents"
+      ]
+    }
+  ]
+}

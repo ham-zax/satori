@@ -3,13 +3,12 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CBM_LANGUAGE_MAP, CBM_LANGUAGE_MAP_COMMIT } from './cbm-language-map';
+import { CBM_LANGUAGE_MAP, CBM_LANGUAGE_MAP_COMMIT, SATORI_EXTENSION_SPLITS } from './cbm-language-map';
 import { getLanguageCapabilityDeclarations } from './capabilities';
 
 const repoRoot = fs.existsSync(path.join(process.cwd(), 'packages/core/src/languages/capabilities.ts'))
     ? process.cwd()
     : path.resolve(process.cwd(), '../..');
-const generatedFile = path.join(repoRoot, 'packages/core/src/languages/cbm-language-map.ts');
 const cbmRoot = process.env.CBM_CHECKOUT ?? '/home/hamza/repo/codebase-memory-mcp';
 
 test('every mapped Satori language exists in the registry', () => {
@@ -27,7 +26,9 @@ test('every registry language sharing a CBM grammar route is mapped', () => {
         const filenames = new Set((declaration.filenames ?? []).map((filename) => filename.toLowerCase()));
         for (const entry of CBM_LANGUAGE_MAP) {
             if (entry.grammarFactory === null) continue;
-            if (entry.extensions.some((extension) => extensions.has(extension.toLowerCase())) ||
+            const routedExtensions = entry.extensions.filter((extension) =>
+                SATORI_EXTENSION_SPLITS[extension.toLowerCase()] !== declaration.languageId);
+            if (routedExtensions.some((extension) => extensions.has(extension.toLowerCase())) ||
                 entry.filenames.some((filename) => filenames.has(filename.toLowerCase()))) {
                 assert.equal(entry.satoriLanguageId, declaration.languageId,
                     `${entry.cbmLanguage} has a grammar route through ${declaration.languageId}`);
@@ -63,18 +64,15 @@ test('CBM-only extensions and shared host extensions map to their registry owner
     }
 });
 
-test('generator reproduces byte-identical output', (context) => {
-    if (!fs.existsSync(path.join(cbmRoot, 'src/discover/language.c'))) {
-        context.skip(`CBM checkout unavailable: ${cbmRoot}`);
+test('generated map is current for its pinned CBM commit', (context) => {
+    const head = spawnSync('git', ['-C', cbmRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+    if (head.status !== 0 || head.stdout.trim() !== CBM_LANGUAGE_MAP_COMMIT) {
+        context.skip(`CBM checkout at ${cbmRoot} is not at the pinned commit ${CBM_LANGUAGE_MAP_COMMIT}`);
         return;
     }
-    const expected = fs.readFileSync(generatedFile);
-    for (let run = 0; run < 2; run++) {
-        const result = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/sync-cbm-language-map.mjs'), cbmRoot], {
-            cwd: repoRoot,
-            encoding: 'utf8',
-        });
-        assert.equal(result.status, 0, result.stderr);
-        assert.deepEqual(fs.readFileSync(generatedFile), expected, `generator run ${run + 1} changed the output`);
-    }
+    const result = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/sync-cbm-language-map.mjs'), '--check', cbmRoot], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
 });

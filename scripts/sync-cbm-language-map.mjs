@@ -5,8 +5,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
+// Extensions CBM routes through a language that Satori deliberately owns
+// elsewhere. Razor (.razor/.cshtml) is markup with embedded C#: CBM only
+// text-scans it for @page routes, while Satori's C# analyzer would parse the
+// markup as C# and degrade C# navigation evidence, so Satori keeps Razor as
+// its own search-only language. Any other cross-owner conflict still fails.
+const SATORI_EXTENSION_SPLITS = new Map([
+    ['.cshtml', 'razor'],
+    ['.razor', 'razor'],
+]);
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cbmRoot = path.resolve(process.argv[2] ?? '/home/hamza/repo/codebase-memory-mcp');
+// Usage: node scripts/sync-cbm-language-map.mjs [--check] [<path-to-codebase-memory-mcp>]
+// --check renders without writing and exits 1 when the committed file differs.
+const args = process.argv.slice(2);
+const checkOnly = args.includes('--check');
+const cbmRoot = path.resolve(args.find((arg) => arg !== '--check') ?? '/home/hamza/repo/codebase-memory-mcp');
 const outputPath = path.join(repoRoot, 'packages/core/src/languages/cbm-language-map.ts');
 const commit = execFileSync('git', ['-C', cbmRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`CBM language map: invalid CBM commit ${commit}`);
@@ -121,11 +135,17 @@ function makeMap(catalog, declarations) {
         }
     }
 
+    for (const [extension, owner] of SATORI_EXTENSION_SPLITS) {
+        if (byExtension.get(extension) !== owner) fail(`split ${extension} must be owned by Satori language ${owner}`);
+    }
+
     return sorted(catalog.names.keys()).map((cbmLanguage) => {
         const extensions = sorted(catalog.extensions.get(cbmLanguage) ?? []);
         const filenames = sorted(catalog.filenames.get(cbmLanguage) ?? []);
         const matches = new Set([
-            ...extensions.map((extension) => byExtension.get(extension.toLowerCase())),
+            ...extensions
+                .filter((extension) => !SATORI_EXTENSION_SPLITS.has(extension.toLowerCase()))
+                .map((extension) => byExtension.get(extension.toLowerCase())),
             ...filenames.map((filename) => byFilename.get(filename.toLowerCase())),
         ].filter(Boolean));
         if (matches.size > 1) fail(`conflicting Satori matches for ${cbmLanguage}: ${sorted(matches).join(', ')}`);
@@ -147,6 +167,9 @@ function render(commit, rows) {
         `\n` +
         `export const CBM_LANGUAGE_MAP_COMMIT = '${commit}';\n` +
         `\n` +
+        `/** Extensions CBM routes through another language that Satori deliberately owns itself. */\n` +
+        `export const SATORI_EXTENSION_SPLITS: Readonly<Record<string, string>> = Object.freeze(${JSON.stringify(Object.fromEntries(SATORI_EXTENSION_SPLITS))});\n` +
+        `\n` +
         `export interface CbmLanguageMapEntry {\n` +
         `    readonly cbmLanguage: string;\n` +
         `    readonly cbmName: string;\n` +
@@ -164,5 +187,13 @@ function render(commit, rows) {
 }
 
 const output = render(commit, makeMap(readCbmCatalog(), await readSatoriDeclarations()));
-writeFileSync(outputPath, output);
-console.log(`Wrote ${path.relative(repoRoot, outputPath)} from CBM ${commit}`);
+if (checkOnly) {
+    if (readFileSync(outputPath, 'utf8') !== output) {
+        console.error(`${path.relative(repoRoot, outputPath)} is stale for CBM ${commit}; rerun without --check`);
+        process.exit(1);
+    }
+    console.log(`${path.relative(repoRoot, outputPath)} is current for CBM ${commit}`);
+} else {
+    writeFileSync(outputPath, output);
+    console.log(`Wrote ${path.relative(repoRoot, outputPath)} from CBM ${commit}`);
+}

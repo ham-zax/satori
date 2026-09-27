@@ -250,6 +250,8 @@ const CBM_SEARCH_ONLY_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     searchOnlyLanguage({ languageId: 'chialisp', aliases: [], extensions: ['.clib', '.clinc', '.clsp'] }),
     searchOnlyLanguage({ languageId: 'mojo', aliases: [], extensions: ['.mojo'] }),
     searchOnlyLanguage({ languageId: 'objectscript-routine', aliases: [], extensions: ['.int', '.mac', '.rtn'] }),
+    // CBM routes Razor through C# for @page route scanning only; see SATORI_EXTENSION_SPLITS.
+    searchOnlyLanguage({ languageId: 'razor', aliases: [], extensions: ['.cshtml', '.razor'] }),
     searchOnlyLanguage({ languageId: 'plsql', aliases: [], extensions: ['.bdy', '.fnc', '.pck', '.pkb', '.pks', '.plb', '.pls', '.plsql', '.tpb', '.tps', '.trg'] }),
 ];
 
@@ -273,7 +275,7 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     directCallsSymbolLanguage({
         languageId: 'csharp',
         aliases: ['cs'],
-        extensions: ['.cs', '.cshtml', '.razor'],
+        extensions: ['.cs'],
         fixtures: {
             navigation: [
                 'fixtures/navigation/csharp-basic-symbols/expected_symbols.json',

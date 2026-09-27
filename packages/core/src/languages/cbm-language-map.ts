@@ -3,6 +3,9 @@
 
 export const CBM_LANGUAGE_MAP_COMMIT = '11b662f9f7fba92012b872dd4fcaef7ee0c1300d';
 
+/** Extensions CBM routes through another language that Satori deliberately owns itself. */
+export const SATORI_EXTENSION_SPLITS: Readonly<Record<string, string>> = Object.freeze({".cshtml":"razor",".razor":"razor"});
+
 export interface CbmLanguageMapEntry {
     readonly cbmLanguage: string;
     readonly cbmName: string;

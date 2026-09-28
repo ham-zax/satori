@@ -34,6 +34,32 @@ function parseArgs(argv) {
     return options;
 }
 
+/** RSS of a process and all its descendants, in MB. */
+function treeRssMb(rootPid) {
+    const table = new Map();
+    for (const entry of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(entry)) continue;
+        try {
+            const status = fs.readFileSync(`/proc/${entry}/status`, 'utf8');
+            table.set(Number(entry), {
+                ppid: Number(/^PPid:\s+(\d+)/m.exec(status)?.[1]),
+                rssKb: Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1] ?? 0),
+            });
+        } catch { /* exited */ }
+    }
+    let totalKb = 0;
+    const stack = [rootPid];
+    const seen = new Set();
+    while (stack.length) {
+        const pid = stack.pop();
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        totalKb += table.get(pid)?.rssKb ?? 0;
+        for (const [child, info] of table) if (info.ppid === pid) stack.push(child);
+    }
+    return totalKb / 1024;
+}
+
 function fail(message) {
     console.error(message);
     process.exit(2);
@@ -137,10 +163,13 @@ async function main() {
         await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'index-probe', version: '1' } });
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
 
+        let peakRssMb = 0;
+        const rssTimer = setInterval(() => { peakRssMb = Math.max(peakRssMb, treeRssMb(child.pid)); }, 200);
         const indexStarted = performance.now();
         await tool('manage_index', { action: 'create', path: options.repo });
         const operation = await waitForGeneration();
-        console.log(`index wall ${Math.round(performance.now() - indexStarted)} ms`);
+        clearInterval(rssTimer);
+        console.log(`index wall ${Math.round(performance.now() - indexStarted)} ms, peak tree RSS ${Math.round(peakRssMb)} MB`);
 
         if (options.edit) {
             const file = path.join(options.repo, options.edit);

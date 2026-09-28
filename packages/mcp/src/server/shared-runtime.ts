@@ -244,15 +244,6 @@ export class SharedRuntimeHost {
         this.publicationRuntime = createSharedPublicationRuntime(this.mutationRuntime, {
             stateRoot: config.stateRoot,
         });
-        this.localContext = createLocalOnlyContext(
-            config,
-            this.mutationRuntime,
-            this.publicationRuntime,
-        );
-        this.localSyncManager = new SyncManager(this.localContext, {
-            watchEnabled: this.watchSyncEnabled,
-            mutationRuntime: this.mutationRuntime,
-        });
         this.providerRuntime = new ProviderRuntime({
             config,
             runtimeFingerprint,
@@ -268,6 +259,16 @@ export class SharedRuntimeHost {
                 this.searchContinuationPool,
             ),
             onLifecycleActivityChanged: () => this.notifyActivityChanged(),
+        });
+        this.localContext = createLocalOnlyContext(
+            config,
+            this.mutationRuntime,
+            this.publicationRuntime,
+            this.providerRuntime.navigationStore,
+        );
+        this.localSyncManager = new SyncManager(this.localContext, {
+            watchEnabled: this.watchSyncEnabled,
+            mutationRuntime: this.mutationRuntime,
         });
 
     }

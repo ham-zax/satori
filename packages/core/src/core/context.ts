@@ -30,10 +30,7 @@ import {
     loadSatoriRepoConfig,
     SatoriRepoConfig,
 } from '../config/repo-config';
-import {
-    readRelationshipSidecar,
-    readSymbolRegistrySidecar,
-} from '../symbols';
+import { JsonNavigationStore } from '../navigation/store';
 
 import type {
     SymbolRecord,
@@ -263,6 +260,7 @@ export interface ContextConfig {
     resolutionAnalyzer?: ResolutionProjectAnalyzer;
     rootMutationRuntime?: RootMutationRuntime;
     publicationRuntime?: SharedPublicationRuntime;
+    navigationStore?: JsonNavigationStore;
 }
 
 export type PublicationValidationEvidence =
@@ -323,6 +321,7 @@ export class Context {
     private readonly indexPolicyRuntimeService: IndexPolicyRuntimeService;
     private readonly rootMutationRuntime: RootMutationRuntime;
     private readonly publicationStore: PublicationStore;
+    private readonly navigationStore: JsonNavigationStore;
     private readonly synchronizerRegistry = new SynchronizerRegistry({
         canonicalizeCodebasePath: (codebasePath) => this.canonicalizeCodebasePath(codebasePath),
         getCurrentPublicationSourceCheckpoint: (codebasePath) => (
@@ -346,6 +345,7 @@ export class Context {
     private vectorStoreProvider: VectorStoreProviderIdentity;
 
     constructor(config: ContextConfig = {}) {
+        this.navigationStore = config.navigationStore ?? new JsonNavigationStore();
 
         // Initialize services
         if (config.embedding) {
@@ -1104,7 +1104,7 @@ export class Context {
             if (publication.publication.status === 'complete') {
                 const navigation = this.getPublicationNavigationAddress(publication);
                 if (!navigation) return false;
-                const registry = await readSymbolRegistrySidecar({
+                const registry = await this.navigationStore.getManifest({
                     normalizedRootPath: publication.publication.canonicalRoot,
                     publicationId: navigation.publicationId,
                     navigationRoot: navigation.navigationRoot,
@@ -1160,19 +1160,19 @@ export class Context {
         if (!publication.publication.navigation) return 'not_bound';
         const navigation = this.getPublicationNavigationAddress(publication);
         if (!navigation) return 'missing';
-        const registry = await readSymbolRegistrySidecar({
+        const registry = await this.navigationStore.getManifest({
             normalizedRootPath: publication.publication.canonicalRoot,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
         });
-        if (registry.status !== 'ok') return registry.status;
-        const relationships = await readRelationshipSidecar({
+        if (registry.status !== 'ok') return registry.sourceStatus ?? registry.status;
+        const relationships = await this.navigationStore.getRelationships({
             normalizedRootPath: publication.publication.canonicalRoot,
             expectedSymbolRegistryManifestHash: registry.manifestHash,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
         });
-        return relationships.status === 'ok' ? 'valid' : relationships.status;
+        return relationships.status === 'ok' ? 'valid' : relationships.sourceStatus ?? relationships.status;
     }
 
     public async getCurrentPublicationCollectionName(codebasePath: string): Promise<string | null> {

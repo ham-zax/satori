@@ -20,6 +20,8 @@ type NavigationStoreFailure = {
     status: 'missing' | 'incompatible';
     rootPath: string;
     reason: string;
+    /** Preserve the sidecar reader's corruption status for publication validation. */
+    sourceStatus?: 'corrupt';
 };
 
 type NavigationStoreRegistryOk = {
@@ -204,11 +206,17 @@ function matchesTargetSelector(record: RelationshipRecord, input: NavigationRela
     return Boolean(input.targetInstanceId || input.targetKey);
 }
 
-function buildFailure(rootPath: string, reason: string, status: 'missing' | 'incompatible'): NavigationStoreFailure {
+function buildFailure(
+    rootPath: string,
+    reason: string,
+    status: 'missing' | 'incompatible',
+    sourceStatus?: 'corrupt',
+): NavigationStoreFailure {
     return {
         status,
         rootPath,
         reason,
+        ...(sourceStatus ? { sourceStatus } : {}),
     };
 }
 
@@ -345,6 +353,7 @@ async function readRelationshipState(
             result.rootPath,
             result.reason,
             result.status === 'corrupt' ? 'incompatible' : result.status,
+            result.status === 'corrupt' ? 'corrupt' : undefined,
         );
     }
     return {
@@ -377,6 +386,7 @@ async function readRegistryState(input: NavigationStoreInput): Promise<Navigatio
             result.rootPath,
             result.reason,
             result.status === 'corrupt' ? 'incompatible' : result.status,
+            result.status === 'corrupt' ? 'corrupt' : undefined,
         );
     }
     return {

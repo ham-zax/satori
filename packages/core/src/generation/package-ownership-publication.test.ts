@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Context } from '../core/context';
+import { JsonNavigationStore } from '../navigation/store';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { resolvePublicationGenerationRoot } from './publication-store';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
@@ -38,11 +39,12 @@ function writeFile(root: string, relativePath: string, contents: string): void {
     fs.writeFileSync(absolutePath, contents);
 }
 
-function createContext(databasePath: string) {
+function createContext(databasePath: string, navigationStore?: JsonNavigationStore) {
     const database = new LanceDbVectorDatabase({ databasePath });
     const context = new Context({
         embedding: new FixtureEmbedding(),
         vectorDatabase: database,
+        ...(navigationStore ? { navigationStore } : {}),
         semanticAnalyzer: {
             supportsLanguage: () => false,
             analyze: async (input) => ({
@@ -53,6 +55,58 @@ function createContext(databasePath: string) {
     });
     return { database, context };
 }
+
+test('warm publication admission reuses parsed navigation across validation reads', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-admission-'));
+    const root = path.join(tempRoot, 'repo');
+    writeFile(root, 'main.py', 'def main():\n    return 1\n');
+    const navigationStore = new JsonNavigationStore();
+    const fixture = createContext(path.join(tempRoot, 'vectors'), navigationStore);
+    try {
+        await fixture.context.indexCodebase(root);
+        const publication = fixture.context.getCurrentPublication(root);
+        assert.ok(publication);
+        assert.equal(await fixture.context.getPublicationNavigationStatus(publication), 'valid');
+        const navigationRoot = fixture.context.getPublicationNavigationAddress(publication)?.navigationRoot;
+        assert.ok(navigationRoot);
+
+        const originalReadFile = fs.promises.readFile;
+        const navigationReads: string[] = [];
+        Object.defineProperty(fs.promises, 'readFile', {
+            configurable: true,
+            value: (...args: unknown[]) => {
+                if (String(args[0]).startsWith(navigationRoot)) navigationReads.push(String(args[0]));
+                return Reflect.apply(originalReadFile, fs.promises, args);
+            },
+        });
+        try {
+            assert.equal(await fixture.context.isPublicationReadAdmitted(publication), true);
+            assert.equal(await fixture.context.getPublicationNavigationStatus(publication), 'valid');
+            assert.equal(await fixture.context.isPublicationReadAdmitted(publication), true);
+            assert.equal(navigationReads.length, 0);
+        } finally {
+            Object.defineProperty(fs.promises, 'readFile', { configurable: true, value: originalReadFile });
+        }
+
+        const relationshipManifestPath = path.join(navigationRoot, 'relationships', 'manifest.json');
+        const originalManifest = fs.readFileSync(relationshipManifestPath, 'utf8');
+        fs.writeFileSync(relationshipManifestPath, '{ malformed');
+        const coldFixture = createContext(path.join(tempRoot, 'vectors'), new JsonNavigationStore());
+        try {
+            const coldPublication = coldFixture.context.getCurrentPublication(root);
+            assert.ok(coldPublication);
+            assert.equal(await coldFixture.context.getPublicationNavigationStatus(coldPublication), 'corrupt');
+        } finally {
+            await coldFixture.context.dispose();
+            await coldFixture.database.close();
+            fs.writeFileSync(relationshipManifestPath, originalManifest);
+        }
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
 
 function ownerFor(
     ownership: NonNullable<ReturnType<Context['getPublicationPackageOwnership']>>,

@@ -208,6 +208,7 @@ export function createLocalOnlyContext(
     config: ContextMcpConfig,
     mutationRuntime?: RootMutationRuntime,
     publicationRuntime?: SharedPublicationRuntime,
+    navigationStore?: JsonNavigationStore,
 ): Context {
     return new Context({
         embedding: new MetadataOnlyEmbedding(
@@ -220,6 +221,7 @@ export function createLocalOnlyContext(
         vectorStoreProvider: config.vectorStoreProvider,
         ...(mutationRuntime ? { rootMutationRuntime: mutationRuntime } : {}),
         ...(publicationRuntime ? { publicationRuntime } : {}),
+        ...(navigationStore ? { navigationStore } : {}),
     });
 }
 
@@ -411,6 +413,7 @@ export class ProviderRuntime {
                 vectorDatabase,
                 vectorStoreProvider: this.config.vectorStoreProvider,
                 rootMutationRuntime: this.mutationRuntime,
+                navigationStore: this.navigationStore,
                 ...(this.publicationRuntime ? { publicationRuntime: this.publicationRuntime } : {}),
             } satisfies ContextConfig);
             const syncManager = new SyncManager(context, {

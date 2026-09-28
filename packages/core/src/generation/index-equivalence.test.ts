@@ -6,7 +6,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Context } from '../core/context';
+import { IndexingPipeline } from '../core/indexing-pipeline';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
+import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typescript-semantic-analyzer';
+import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
 import { readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
 
@@ -46,11 +49,48 @@ class RecordingEmbedding extends Embedding {
 
 type Files = Readonly<Record<string, string>>;
 
-type ToggleSetting = Readonly<Record<'SATORI_ANALYSIS_WORKERS', string>>;
+type ToggleSetting = Readonly<{
+    env: Readonly<Record<'SATORI_ANALYSIS_WORKERS', string>>;
+    /**
+     * The execution order before the payload overlap and the resolution worker:
+     * the file loop returns only after embedding and vector writes settle, and
+     * TypeScript resolution runs in-process. Installed by prototype patches.
+     */
+    serialInProcess?: true;
+}>;
 
-/** In-process analysis is the baseline; the worker pool must publish the same. */
-const BASELINE: ToggleSetting = { SATORI_ANALYSIS_WORKERS: '0' };
-const SETTINGS: readonly ToggleSetting[] = [BASELINE, { SATORI_ANALYSIS_WORKERS: '2' }];
+/** In-process, serial execution is the baseline; every other setting must publish the same. */
+const BASELINE: ToggleSetting = { env: { SATORI_ANALYSIS_WORKERS: '0' }, serialInProcess: true };
+const SETTINGS: readonly ToggleSetting[] = [
+    BASELINE,
+    { env: { SATORI_ANALYSIS_WORKERS: '0' } },
+    { env: { SATORI_ANALYSIS_WORKERS: '2' } },
+];
+
+async function withSetting<T>(setting: ToggleSetting, run: () => Promise<T>): Promise<T> {
+    if (!setting.serialInProcess) return withEnv(setting.env, run);
+    const pipeline = IndexingPipeline.prototype;
+    const originalProcessFileList = pipeline.processFileList;
+    pipeline.processFileList = async function (...args) {
+        const processed = await originalProcessFileList.apply(this, args);
+        await processed.payloadSettled;
+        return processed;
+    };
+    const lazy = LazyTypeScriptSemanticProjectAnalyzer.prototype as unknown as {
+        loadAnalyzer(this: { analyzerPromise?: Promise<unknown>; maxSessions: number }): Promise<unknown>;
+    };
+    const originalLoadAnalyzer = lazy.loadAnalyzer;
+    lazy.loadAnalyzer = function () {
+        this.analyzerPromise ??= Promise.resolve(new TypeScriptSemanticProjectAnalyzer(this.maxSessions));
+        return this.analyzerPromise;
+    };
+    try {
+        return await withEnv(setting.env, run);
+    } finally {
+        pipeline.processFileList = originalProcessFileList;
+        lazy.loadAnalyzer = originalLoadAnalyzer;
+    }
+}
 
 function writeTree(root: string, files: Files): void {
     for (const [relativePath, source] of Object.entries(files)) {
@@ -143,7 +183,7 @@ async function withContext<T>(
 }
 
 async function fullIndexSnapshot(tempRoot: string, root: string, setting: ToggleSetting) {
-    return withEnv(setting, () => withContext(tempRoot, async (context, database, embedding) => {
+    return withSetting(setting, () => withContext(tempRoot, async (context, database, embedding) => {
         await context.indexCodebase(root);
         return {
             publication: await snapshotPublication(context, database, root),
@@ -153,7 +193,10 @@ async function fullIndexSnapshot(tempRoot: string, root: string, setting: Toggle
 }
 
 function describeSetting(setting: ToggleSetting): string {
-    return Object.entries(setting).map(([name, value]) => `${name}=${value}`).join(' ');
+    return [
+        ...Object.entries(setting.env).map(([name, value]) => `${name}=${value}`),
+        setting.serialInProcess ? 'serial in-process' : 'overlap + resolution worker',
+    ].join(' ');
 }
 
 function firstDifference(expected: string, actual: string): string {
@@ -273,7 +316,7 @@ test('sync after scripted edits publishes the same state as a full index of the 
     writeTree(root, { ...POLYGLOT, ...tsMonorepo(['lib']) });
     try {
         for (const setting of [BASELINE, SETTINGS[SETTINGS.length - 1]]) {
-            await withEnv(setting, () => withContext(tempRoot, async (context, database) => {
+            await withSetting(setting, () => withContext(tempRoot, async (context, database) => {
                 await context.indexCodebase(root);
                 for (const [description, edit] of SCRIPTED_EDITS) {
                     edit(root);

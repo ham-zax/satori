@@ -354,3 +354,29 @@ test("current-source selector records a rejected outcome after consuming an inva
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test("current-source validation matches symbols from a CBM-extracted language", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-source-kotlin-"));
+    const relativeFile = "src/Registry.kt";
+    const source = "package shop\n\nclass Registry {\n    fun add(item: String) { println(item) }\n}\n\nfun total(): Int = 1\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+    try {
+        const analysis = await createLanguageAnalysisService().analyze({ content: source, language: "kotlin", relativePath: relativeFile });
+        assert.equal(analysis.backend, "cbm_definitions");
+        const persisted = buildSymbolRecordsForFile({
+            relativePath: relativeFile,
+            language: "kotlin",
+            content: source,
+            fileHash: crypto.createHash("sha256").update(source).digest("hex"),
+            extractorVersion: "test-extractor-v1",
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        }).filter((symbol) => symbol.kind !== "file");
+        assert.deepEqual(persisted.map((symbol) => symbol.qualifiedName), ["Registry", "Registry.add", "total"]);
+        const results = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: persisted });
+        assert.deepEqual(results.map((result) => result.match), ["matched", "matched", "matched"]);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

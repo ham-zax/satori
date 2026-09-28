@@ -78,6 +78,14 @@ Go, Java, C#, C++, and Rust semantic project analysis is executed in a sandboxed
 * **String Table Offsets:** All strings cross the WASM/TS boundary as 32-bit byte offsets into a contiguous UTF-8 buffer, eliminating dynamic string allocation overhead.
 * **Dynamic Memory & Resource Budgets:** Linear memory growth is bounded (up to 1 GiB), session handles are capped at 64, aggregate source bytes at 100 MiB, auxiliary bytes at 10 MiB, and total input at 110 MiB with deterministic error codes.
 
+### Tier 4: CBM Definition Extractors (symbol-only languages)
+Languages without a Satori analyzer get symbols from codebase-memory-mcp's own definition extractor, compiled per language (extractor + that language's grammar) into one WebAssembly module each (`third_party/cbm-extractor/`, `scripts/build-cbm-extractors.mjs`, `packages/core/assets/cbm-extractor/manifest.json`):
+
+* **Routing:** `LanguageAnalysisService` selects the `cbm_definitions` backend only when the language has no Satori analyzer, its declaration claims symbols, and the manifest lists a module. A listed but missing module recovers as `parser_unavailable` (searchable text, no symbols).
+* **Promotion is evidence-gated:** `CBM_SYMBOL_LANGUAGE_IDS` in `languages/capabilities.ts` lists core-pack languages that pass `scripts/language-parity.mts` against the CBM binary (recall and precision ≥ 0.95, at least one matched definition, no extractor errors); a test recomputes the list from `docs/evidence/language-parity/`. Extended-pack languages are promoted once their modules ship.
+* **Identity:** Names, labels, and spans are CBM's. The driver strips CBM's file-module prefix (`cbm_fqn_module_source_lang`), so qualified names are symbol-relative, and byte spans come from a scripted patch on `CBMDefinition`. Only Function, Method, Class, Interface, Struct, Enum, Trait, Type, and Macro become Satori symbols.
+* **Memory:** Modules load lazily, one instance per language. V8's optimizing Wasm tier compiles each loaded module once on background threads (up to ~350 MB transient for large grammars, freed afterwards); tests run with `--liftoff-only` because many modules load at once there.
+
 ---
 
 ## 3. Critical Invariants

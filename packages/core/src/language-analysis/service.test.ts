@@ -1411,3 +1411,29 @@ test('unsupported languages use bounded search-only fallback', async () => {
     assert.deepEqual(result.symbols, []);
     assert.ok(result.chunks.length > 0);
 });
+
+test('languages promoted by CBM parity evidence analyze through CBM definition extractors', async () => {
+    const analyzer = createLanguageAnalysisService();
+    assert.deepEqual(analyzer.getStrategyForLanguage('kotlin'), { backend: 'cbm_definitions', structural: true });
+    assert.equal(analyzer.getStrategyForLanguage('swift').backend, 'bounded_text');
+
+    const content = 'package shop\n\nclass Registry {\n    fun add(item: String) { println(item) }\n}\n\nfun total(): Int = 1\n';
+    const analysis = await analyzer.analyze({ content, relativePath: 'src/Registry.kt', language: 'kotlin' });
+    assert.equal(analysis.backend, 'cbm_definitions');
+    assert.equal(analysis.structuralStatus, 'complete');
+    assert.deepEqual(analysis.symbols.map((symbol) => [symbol.kind, symbol.qualifiedName, symbol.parentQualifiedNamePath]), [
+        ['class', 'Registry', []],
+        ['method', 'Registry.add', ['Registry']],
+        ['function', 'total', []],
+    ]);
+    const records = buildSymbolRecordsForFile({
+        relativePath: 'src/Registry.kt',
+        language: 'kotlin',
+        content,
+        fileHash: 'kotlin-hash',
+        extractorVersion: 'test-extractor-v1',
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+    assert.deepEqual(records.filter((record) => record.kind !== 'file').map((record) => record.qualifiedName), ['Registry', 'Registry.add', 'total']);
+});

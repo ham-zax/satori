@@ -59,7 +59,8 @@ test('language registry routes modern module and systems extensions through qual
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'search'), true);
-    assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'owner'), false);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'owner'), true);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.swift', 'owner'), false);
 });
 
 test('language capability tiers expose promoted calls without promoting unrelated graph surfaces', () => {
@@ -83,11 +84,15 @@ test('language capability tiers expose promoted calls without promoting unrelate
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
-    for (const language of ['php', 'ruby', 'kotlin', 'swift']) {
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), false, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), false, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), false, language);
+    // PHP, Ruby, and Kotlin are symbol-only through CBM parity evidence; Swift is not.
+    for (const language of ['php', 'ruby', 'kotlin']) {
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
+        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
+    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'symbols'), false);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'owner'), false);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
 
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraph'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraphBuild'), true);
@@ -114,29 +119,32 @@ test('declared parser catalog entries do not claim executable AST splitter suppo
     for (const language of ['zig', 'solidity', 'gleam', 'kotlin', 'ruby', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'astSplitter'), false, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
     }
+    // CBM-promoted languages outline through extracted symbols, not an AST splitter.
+    assert.equal(isLanguageCapabilitySupportedForLanguage('kotlin', 'fileOutline'), true);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
 
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'astSplitter'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'astSplitter'), true);
 });
 
-test('language registry routes special filenames as search-only artifacts', () => {
-    const expected: Array<[string, string]> = [
-        ['Dockerfile', 'dockerfile'],
-        ['services/api/Dockerfile', 'dockerfile'],
-        ['Makefile', 'makefile'],
-        ['CMakeLists.txt', 'cmake'],
-        ['justfile', 'justfile'],
-        ['Justfile', 'justfile'],
+test('language registry routes special filenames to their languages without call graphs', () => {
+    // Makefile and CMake are symbol-only through CBM parity evidence; Dockerfile and justfile stay search-only.
+    const expected: Array<[string, string, boolean]> = [
+        ['Dockerfile', 'dockerfile', false],
+        ['services/api/Dockerfile', 'dockerfile', false],
+        ['Makefile', 'makefile', true],
+        ['CMakeLists.txt', 'cmake', true],
+        ['justfile', 'justfile', false],
+        ['Justfile', 'justfile', false],
     ];
 
-    for (const [filename, language] of expected) {
+    for (const [filename, language, owner] of expected) {
         assert.equal(getLanguageIdFromFilename(filename), language, filename);
         assert.equal(getLanguageAdapterByFilename(filename)?.id, language, filename);
         assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'search'), true, filename);
-        assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'owner'), false, filename);
+        assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'owner'), owner, filename);
         assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'callGraph'), false, filename);
     }
 });
@@ -180,7 +188,7 @@ test('language registry reports deterministic capability extension and filename 
     ]) {
         assert.ok(searchableFilenames.includes(filename), filename);
     }
-    assert.deepEqual(getSupportedFilenamesForCapability('owner'), []);
+    assert.deepEqual(getSupportedFilenamesForCapability('owner'), ['CMakeLists.txt', 'GNUmakefile', 'Makefile', 'makefile']);
 });
 
 test('content detection keeps filename and extension authoritative', async () => {

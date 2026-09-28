@@ -400,9 +400,41 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     }),
 ];
 
+// Languages whose symbols come from codebase-memory-mcp's own definition
+// extractor (language-analysis/cbm-definition-adapter.ts). A language is listed
+// only when its extractor module ships in the core pack and it passes the
+// parity gate in CBM_PARITY_EVIDENCE (recall and precision >= 0.95, at least
+// one matched definition, no extractor errors); capabilities.test.ts
+// recomputes this list from that evidence and the extractor manifest.
+export const CBM_PARITY_EVIDENCE = 'docs/evidence/language-parity/2026-09-27.json';
+export const CBM_SYMBOL_LANGUAGE_IDS: readonly string[] = [
+    'bash', 'clojure', 'cmake', 'commonlisp', 'dart', 'elixir', 'elm', 'erlang', 'fsharp', 'gdscript',
+    'gleam', 'graphql', 'groovy', 'haskell', 'hcl', 'julia', 'kotlin', 'lua', 'makefile', 'ocaml',
+    'perl', 'php', 'powershell', 'protobuf', 'r', 'ruby', 'solidity', 'toml', 'zig',
+];
+const CBM_SYMBOL_LANGUAGES: ReadonlySet<string> = new Set(CBM_SYMBOL_LANGUAGE_IDS);
+
+function cbmSymbolLanguage(searchOnly: LanguageCapabilityDeclaration): LanguageCapabilityDeclaration {
+    return declaration({
+        ...searchOnly,
+        // Symbols come from CBM's extractor; chunking stays bounded text, so the
+        // parser is not claimed as an executable AST splitter.
+        symbolExtractionCapability: PRODUCTION_READY,
+        ownerExtractionCapability: PRODUCTION_READY,
+        publicClaim: 'symbol_only',
+        fixtures: {
+            navigation: [CBM_PARITY_EVIDENCE],
+            symbols: ['packages/core/src/language-analysis/service.test.ts'],
+            ownerMetadata: ['packages/core/src/language-analysis/cbm-definition-adapter.test.ts'],
+            fileOutline: ['packages/mcp/src/core/current-source-symbols.test.ts'],
+            readFileOpenSymbol: ['packages/mcp/src/core/current-source-symbols.test.ts'],
+        },
+    });
+}
+
 const DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
-    ...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS,
-    ...CBM_SEARCH_ONLY_DECLARATIONS,
+    ...[...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS, ...CBM_SEARCH_ONLY_DECLARATIONS].map((item) =>
+        CBM_SYMBOL_LANGUAGES.has(item.languageId) ? cbmSymbolLanguage(item) : item),
     ...SATORI_DECLARATIONS,
 ].sort((a, b) => a.languageId.localeCompare(b.languageId));
 

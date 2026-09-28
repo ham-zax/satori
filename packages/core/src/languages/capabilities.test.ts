@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+    CBM_PARITY_EVIDENCE,
+    CBM_SYMBOL_LANGUAGE_IDS,
     getLanguageCapabilityDeclaration,
     getLanguageCapabilityDeclarations,
     getLanguageCapabilityTierCounts,
@@ -205,7 +207,7 @@ test('production_ready calls require relationship fixtures unless explicitly gra
     }
 });
 
-test('CMM-derived broad catalog stays tiered instead of becoming symbol or graph support', () => {
+test('CMM-derived broad catalog stays tiered: symbol support only where CBM parity evidence backs it', () => {
     const declarations = getLanguageCapabilityDeclarations();
     const routedLanguages = declarations.filter((declaration) =>
         declaration.extensions.length > 0 || (declaration.filenames?.length || 0) > 0
@@ -220,10 +222,11 @@ test('CMM-derived broad catalog stays tiered instead of becoming symbol or graph
 
     assert.ok(routedLanguages.length > 140, 'broad catalog should expose recognized/routed languages');
     assert.ok(parserCoveredLanguages.length > 140, 'broad catalog should expose parser-declared languages');
-    assert.deepEqual(symbolOnlyLanguages, []);
+    assert.deepEqual(symbolOnlyLanguages, [...CBM_SYMBOL_LANGUAGE_IDS].sort());
     assert.deepEqual(callGraphLanguages, ['cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'rust', 'scala', 'typescript']);
 
-    for (const language of ['zig', 'solidity', 'gleam', 'kotlin', 'ruby', 'swift']) {
+    // Swift fails the parity gate; XML definitions are markup; Odin passes but ships in the extended pack.
+    for (const language of ['swift', 'xml', 'odin']) {
         const declaration = getLanguageCapabilityDeclaration(language);
         assert.equal(declaration?.searchEligibility, 'production_ready', language);
         assert.equal(declaration?.parserCapability, 'declared', language);
@@ -258,7 +261,7 @@ test('tiered catalog counts are computed from the Satori matrix', () => {
         declarations.filter((declaration) => declaration.callsCapability === 'production_ready').length
     );
     assert.ok(counts.recognizedRoutedLanguages > counts.symbolOnlyLanguages);
-    assert.equal(counts.symbolOnlyLanguages, 0);
+    assert.equal(counts.symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.length);
     assert.ok(counts.callGraphLanguages > 0);
 });
 
@@ -268,4 +271,22 @@ test('legacy imports facade remains separate from relationship-sidecar TS/JS imp
 
     assert.equal(typescript?.importExportCapability, 'none');
     assert.equal(javascript?.importExportCapability, 'none');
+});
+
+test('CBM symbol languages are exactly the core-pack languages that pass the parity evidence', () => {
+    const evidence = JSON.parse(fs.readFileSync(resolveRepoPath(CBM_PARITY_EVIDENCE), 'utf8')) as {
+        languages: Record<string, { pass: boolean; matched: number; extractorErrors?: number }>;
+    };
+    const manifest = JSON.parse(fs.readFileSync(resolveRepoPath('packages/core/assets/cbm-extractor/manifest.json'), 'utf8')) as {
+        modules: { satoriLanguageId: string; pack: 'core' | 'extended' }[];
+    };
+    const corePack = new Set(manifest.modules.filter((entry) => entry.pack === 'core').map((entry) => entry.satoriLanguageId));
+    const passing = Object.entries(evidence.languages)
+        .filter(([language, row]) => corePack.has(language) && row.pass && row.matched > 0 && !row.extractorErrors)
+        .map(([language]) => language)
+        .sort();
+    assert.deepEqual([...CBM_SYMBOL_LANGUAGE_IDS].sort(), passing);
+    for (const language of CBM_SYMBOL_LANGUAGE_IDS) {
+        assert.equal(getLanguageCapabilityDeclaration(language)?.publicClaim, 'symbol_only', language);
+    }
 });

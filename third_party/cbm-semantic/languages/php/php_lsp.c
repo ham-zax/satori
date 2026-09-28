@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #define PHP_EVAL_MAX_DEPTH 32
@@ -1591,6 +1592,32 @@ static void process_catch(PHPLSPContext *ctx, TSNode node) {
 
 /* ── call resolution ────────────────────────────────────────────── */
 
+/* Satori patch: PHP function names and `use function` aliases are
+ * case-insensitive, but registry lookups are exact. Before binding an
+ * unqualified call to the global function, make sure no `use function` alias
+ * and no function in the current namespace matches in another case; either
+ * would win in PHP. */
+static bool php_function_name_shadowed_ci(PHPLSPContext *ctx, const char *name) {
+    for (int i = 0; i < ctx->use_count; i++) {
+        if ((int)ctx->use_kinds[i] == CBM_PHP_USE_FUNCTION && ctx->use_local_names[i] &&
+            strcasecmp(ctx->use_local_names[i], name) == 0) {
+            return true;
+        }
+    }
+    const char *ns = ctx->current_namespace_qn;
+    if (!ns || !ns[0] || !ctx->registry) return false;
+    size_t ns_len = strlen(ns);
+    for (int i = 0; i < ctx->registry->func_count; i++) {
+        const CBMRegisteredFunc *f = &ctx->registry->funcs[i];
+        if (f->receiver_type || !f->qualified_name) continue;
+        if (strncasecmp(f->qualified_name, ns, ns_len) == 0 && f->qualified_name[ns_len] == '.' &&
+            strcasecmp(f->qualified_name + ns_len + 1, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void resolve_function_call(PHPLSPContext *ctx, TSNode call, CBMResolvedKind kind) {
     TSNode fn = ts_node_child_by_field_name(call, "function", 8);
     if (ts_node_is_null(fn))
@@ -1648,7 +1675,8 @@ static void resolve_function_call(PHPLSPContext *ctx, TSNode call, CBMResolvedKi
     {
         const CBMRegisteredFunc *global = cbm_registry_lookup_func(ctx->registry, name);
         if (global && !global->receiver_type && global->qualified_name &&
-            strcmp(global->qualified_name, name) == 0) {
+            strcmp(global->qualified_name, name) == 0 &&
+            !php_function_name_shadowed_ci(ctx, name)) {
             emit_resolved_kind(ctx, global->qualified_name, "php_function_global", 0.95f, kind);
             return;
         }
@@ -1778,6 +1806,13 @@ static void resolve_static_call(PHPLSPContext *ctx, TSNode call, CBMResolvedKind
 
     const CBMRegisteredFunc *f = php_lookup_method(ctx, class_qn, method_name);
     if (f) {
+        /* Satori patch: php_lookup_method falls back to a short-name class
+         * scan and to inherited methods. Only a method declared on exactly the
+         * class the source named keeps php_static_resolved. */
+        if (strcmp(strategy, "php_static_resolved") == 0 &&
+            (!f->receiver_type || strcmp(f->receiver_type, class_qn) != 0)) {
+            strategy = "php_static_indirect";
+        }
         emit_resolved_kind(ctx, f->qualified_name, strategy, 0.95f, kind);
         return;
     }

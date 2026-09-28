@@ -66,7 +66,13 @@ Carry these forward on every upstream sync:
   import. Its CBM `src/foundation/hash_table.h` include points at the shim.
 - `languages/php/php_lsp.c`: before the any-namespace short-name fallback,
   an unqualified call first tries the exact global function (`\name`,
-  PHP's own fallback) and emits it as `php_function_global`.
+  PHP's own fallback) and emits it as `php_function_global`, unless a `use
+  function` alias or a current-namespace function matches case-insensitively
+  (PHP function names are case-insensitive; registry lookups are not).
+- `languages/php/php_lsp.c`: `resolve_static_call` keeps `php_static_resolved`
+  only when the method is declared on exactly the named class; a method found
+  through the short-name class fallback or inheritance becomes
+  `php_static_indirect`, which Satori does not admit.
 - Stdlib data files include their resolver header by local name.
 
 ## License Notices

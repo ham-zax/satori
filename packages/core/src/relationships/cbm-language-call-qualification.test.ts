@@ -510,7 +510,16 @@ test('PHP qualification admits namespace, use-imported static, and global calls 
     ], composer));
     assert.equal(staticCall.length, 1);
     assert.equal(staticCall[0]?.proof.strategy, 'direct_call');
+    assert.equal(staticCall[0]?.targetProvenance?.file, 'src/Demo/Util.php');
     assert.equal(staticCall[0]?.targetProvenance?.name, 'make');
+
+    // Without the import, `Util` means App\Util, which does not exist; CBM's
+    // short-name class fallback must not turn Demo\Util into direct proof.
+    const unimportedClass = allOccurrences(await analyze('php', [
+        { path: 'src/Demo/Util.php', source: '<?php\nnamespace Demo;\n\nclass Util {\n    public static function make(): int {\n        return 1;\n    }\n}\n' },
+        { path: 'src/App/Main.php', source: '<?php\nnamespace App;\n\nfunction run(): int {\n    return Util::make();\n}\n' },
+    ], composer));
+    assert.equal(unimportedClass.some((occurrence) => occurrence.proof.strategy === 'direct_call'), false);
 
     const global = allOccurrences(await analyze('php', [
         { path: 'src/util.php', source: '<?php\nfunction help() {\n    return 1;\n}\n' },
@@ -518,6 +527,18 @@ test('PHP qualification admits namespace, use-imported static, and global calls 
     ], composer));
     assert.equal(global.length, 1);
     assert.equal(global[0]?.proof.strategy, 'direct_call');
+    assert.equal(global[0]?.targetProvenance?.file, 'src/util.php');
+
+    // PHP function names are case-insensitive: inside namespace Demo, help()
+    // calls Demo\HELP(), so the global help() must not be claimed.
+    const shadowed = allOccurrences(await analyze('php', [
+        { path: 'src/util.php', source: '<?php\nfunction help() {\n    return 1;\n}\n' },
+        { path: 'src/Demo/Upper.php', source: '<?php\nnamespace Demo;\n\nfunction HELP() {\n    return 2;\n}\n' },
+        { path: 'src/Demo/Main.php', source: '<?php\nnamespace Demo;\n\nfunction run() {\n    return help();\n}\n' },
+    ], composer));
+    assert.equal(shadowed.some((occurrence) => (
+        occurrence.proof.strategy === 'direct_call' && occurrence.targetProvenance?.file === 'src/util.php'
+    )), false);
 
     // `help()` in namespace Other is neither Other\help nor a global function;
     // CBM's any-namespace short-name match must never become direct proof.

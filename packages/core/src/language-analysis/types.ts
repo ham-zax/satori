@@ -159,6 +159,11 @@ export interface LanguageAnalysisPort {
     readonly concurrency?: number;
     /** Releases background workers, when the implementation has any. */
     dispose?(): Promise<void>;
+    /**
+     * Returns idle background workers' memory now instead of after an idle
+     * delay; later analyze calls start workers again.
+     */
+    releaseIdleWorkers?(): void;
     getDescription(): string;
     getStrategyForLanguage(language: string): {
         backend: LanguageAnalysisBackend;

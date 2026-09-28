@@ -721,6 +721,9 @@ export class IndexingPipeline {
             }
 
         }
+        // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
+        // for the pool here); free them before navigation starts its own workers.
+        this.languageAnalyzer.releaseIdleWorkers?.();
 
         if (chunkBuffer.length > 0) {
             const searchType = isHybrid ? 'hybrid' : 'regular';

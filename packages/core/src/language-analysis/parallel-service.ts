@@ -133,6 +133,12 @@ export function createParallelLanguageAnalysisService(
                 } satisfies AnalysisWorkerRequest);
             });
         },
+        releaseIdleWorkers(): void {
+            if (pendingCount() > 0) return;
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = undefined;
+            releaseAll();
+        },
         async dispose(): Promise<void> {
             disposed = true;
             if (idleTimer) clearTimeout(idleTimer);

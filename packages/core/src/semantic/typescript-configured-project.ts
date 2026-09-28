@@ -230,7 +230,7 @@ export class TypeScriptLanguageServiceSession {
         }
         this.project = next;
         this.sourceBudget?.reset();
-        this.languageService.dispose();
+        this.disposeLanguageService();
         this.languageService = this.createLanguageService();
         return true;
     }
@@ -267,7 +267,22 @@ export class TypeScriptLanguageServiceSession {
     }
 
     dispose(): void {
-        this.languageService.dispose();
+        this.disposeLanguageService();
+    }
+
+    /**
+     * TypeScript can list one declaration output twice in a Program (seen with
+     * a project referenced both directly and through another reference), and
+     * LanguageService.dispose then releases it twice and throws. The document
+     * registry is private to this session, so nothing outlives the failed
+     * release; dropping the service frees the rest.
+     */
+    private disposeLanguageService(): void {
+        try {
+            this.languageService.dispose();
+        } catch {
+            // See above: only this session's private registry is affected.
+        }
     }
 
     private createLanguageService(): ts.LanguageService {

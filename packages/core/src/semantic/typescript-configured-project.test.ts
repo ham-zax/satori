@@ -308,3 +308,15 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('disposing a session survives TypeScript releasing a duplicated declaration output twice', () => {
+    // This repository's CLI project reproduces the TypeScript double release:
+    // it references core directly and through mcp.
+    const cliConfig = path.resolve(__dirname, '../../../cli/tsconfig.json');
+    const session = new TypeScriptLanguageServiceSession(cliConfig);
+    const outputs = session.getProgram().getSourceFiles()
+        .map((sourceFile) => sourceFile.fileName)
+        .filter((filePath, index, all) => all.indexOf(filePath) !== index);
+    assert.ok(outputs.length > 0, 'expected the duplicated declaration output this test guards');
+    assert.doesNotThrow(() => session.dispose());
+});

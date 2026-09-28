@@ -55,15 +55,12 @@ test('SemanticLanguageRegistry matches auxiliary files per language correctly', 
     assert.equal(matchesCargo[0].role, 'manifest');
     assert.equal(matchesCargo[0].language, 'rust');
 
+    // Maven and Gradle build both JVM languages, so their manifests scope Java and Kotlin alike.
     const matchesPom = defaultSemanticLanguageRegistry.matchAuxiliaries('service/pom.xml');
-    assert.equal(matchesPom.length, 1);
-    assert.equal(matchesPom[0].role, 'manifest');
-    assert.equal(matchesPom[0].language, 'java');
+    assert.deepEqual(matchesPom.map((match) => [match.language, match.role]).sort(), [['java', 'manifest'], ['kotlin', 'manifest']]);
 
     const matchesGradle = defaultSemanticLanguageRegistry.matchAuxiliaries('service/build.gradle.kts');
-    assert.equal(matchesGradle.length, 1);
-    assert.equal(matchesGradle[0].role, 'manifest');
-    assert.equal(matchesGradle[0].language, 'java');
+    assert.deepEqual(matchesGradle.map((match) => [match.language, match.role]).sort(), [['java', 'manifest'], ['kotlin', 'manifest']]);
 
     const matchesCsproj = defaultSemanticLanguageRegistry.matchAuxiliaries('service/Demo.csproj');
     assert.equal(matchesCsproj.length, 1);

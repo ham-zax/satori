@@ -120,6 +120,53 @@
       "providerId": "satori-cbm-semantic-rust",
       "providerVersion": "cbm-11b662f9+satori-rust-semantic-v1",
       "environmentConfigId": "cbm-rust-semantic-v1"
+    },
+    {
+      "language": "kotlin",
+      "canonicalLanguage": "kotlin",
+      "extensions": [
+        ".kt",
+        ".kts"
+      ],
+      "strategy": "cbm_semantic",
+      "semanticRevision": "kotlin-v1",
+      "grammar": "tree-sitter-kotlin",
+      "auxiliaryFiles": [
+        {
+          "pattern": "**/build.gradle.kts",
+          "role": "manifest"
+        },
+        {
+          "pattern": "**/build.gradle",
+          "role": "manifest"
+        },
+        {
+          "pattern": "**/pom.xml",
+          "role": "manifest"
+        }
+      ],
+      "providerId": "satori-cbm-semantic-kotlin",
+      "providerVersion": "cbm-11b662f9+satori-kotlin-semantic-v1",
+      "environmentConfigId": "cbm-kotlin-semantic-v1"
+    },
+    {
+      "language": "php",
+      "canonicalLanguage": "php",
+      "extensions": [
+        ".php"
+      ],
+      "strategy": "cbm_semantic",
+      "semanticRevision": "php-v1",
+      "grammar": "tree-sitter-php",
+      "auxiliaryFiles": [
+        {
+          "pattern": "**/composer.json",
+          "role": "manifest"
+        }
+      ],
+      "providerId": "satori-cbm-semantic-php",
+      "providerVersion": "cbm-11b662f9+satori-php-semantic-v1",
+      "environmentConfigId": "cbm-php-semantic-v1"
     }
   ]
 }

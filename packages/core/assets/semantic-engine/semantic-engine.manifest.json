@@ -2,10 +2,10 @@
   "abiVersion": 1,
   "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "622396bf97e67d05fa6084c4e40ca3daec4c3647ec2a359593a6b26f3ad4f00e",
-  "buildRecipeDigest": "0a5a636eb4e0951e02a26da7ff400f4ba8012f4ea844f70d7220f09c8859c661",
+  "semanticSourceDigest": "af086d2cd6b57cfb6cf5ae7f477df4474f2f5a70685ccd162763e0587d89942d",
+  "buildRecipeDigest": "a1d48fca147ea824a72320bf4e4b1a3e3f0554f5ffd22083fd53255fc222bcf3",
   "jsSha256": "88060c0d3d92e71dbd4ebb10723113c452aada9c5e37a8793f7fc9a91373ec64",
-  "wasmSha256": "6c23efb8669ecce6d7bf8f8223e0b9af71ebd1fdaa1af1460d698781d5575dbe",
+  "wasmSha256": "470ec678e2ddc4dd6ee3aef5a940bdab1f670c1981453c1de55dc545d0be1431",
   "languages": {
     "go": {
       "semanticRevision": "go-v3",
@@ -26,6 +26,14 @@
     "rust": {
       "semanticRevision": "rust-v1",
       "grammar": "tree-sitter-rust"
+    },
+    "kotlin": {
+      "semanticRevision": "kotlin-v1",
+      "grammar": "tree-sitter-kotlin"
+    },
+    "php": {
+      "semanticRevision": "php-v1",
+      "grammar": "tree-sitter-php"
     }
   }
 }

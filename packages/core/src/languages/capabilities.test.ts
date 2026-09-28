@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
     CBM_PARITY_EVIDENCE,
+    CBM_CALLS_LANGUAGE_IDS,
     CBM_SYMBOL_LANGUAGE_IDS,
     getLanguageCapabilityDeclaration,
     getLanguageCapabilityDeclarations,
@@ -222,8 +223,8 @@ test('CMM-derived broad catalog stays tiered: symbol support only where CBM pari
 
     assert.ok(routedLanguages.length > 140, 'broad catalog should expose recognized/routed languages');
     assert.ok(parserCoveredLanguages.length > 140, 'broad catalog should expose parser-declared languages');
-    assert.deepEqual(symbolOnlyLanguages, [...CBM_SYMBOL_LANGUAGE_IDS].sort());
-    assert.deepEqual(callGraphLanguages, ['cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'rust', 'scala', 'typescript']);
+    assert.deepEqual(symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.filter((id) => !CBM_CALLS_LANGUAGE_IDS.includes(id)).sort());
+    assert.deepEqual(callGraphLanguages, ['cpp', 'csharp', 'go', 'java', 'javascript', 'kotlin', 'php', 'python', 'rust', 'scala', 'typescript']);
 
     // Swift fails the parity gate; XML definitions are markup; YAML has no definitions.
     for (const language of ['swift', 'xml', 'yaml']) {
@@ -261,7 +262,7 @@ test('tiered catalog counts are computed from the Satori matrix', () => {
         declarations.filter((declaration) => declaration.callsCapability === 'production_ready').length
     );
     assert.ok(counts.recognizedRoutedLanguages > counts.symbolOnlyLanguages);
-    assert.equal(counts.symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.length);
+    assert.equal(counts.symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.length - CBM_CALLS_LANGUAGE_IDS.length);
     assert.ok(counts.callGraphLanguages > 0);
 });
 
@@ -287,6 +288,8 @@ test('CBM symbol languages are exactly the manifest languages that pass the pari
         .sort();
     assert.deepEqual([...CBM_SYMBOL_LANGUAGE_IDS].sort(), passing);
     for (const language of CBM_SYMBOL_LANGUAGE_IDS) {
-        assert.equal(getLanguageCapabilityDeclaration(language)?.publicClaim, 'symbol_only', language);
+        const expected = CBM_CALLS_LANGUAGE_IDS.includes(language) ? 'calls_v0' : 'symbol_only';
+        assert.equal(getLanguageCapabilityDeclaration(language)?.publicClaim, expected, language);
     }
+    assert.ok(CBM_CALLS_LANGUAGE_IDS.every((language) => CBM_SYMBOL_LANGUAGE_IDS.includes(language)));
 });

@@ -192,6 +192,35 @@ typedef struct {
     int cap;
 } CBMDefArray;
 
+/* Only the per-file Kotlin builtin-node injection uses this; Satori drives the
+ * resolvers through their process_file entry points and never reads defs. */
+static inline void cbm_defs_push(CBMDefArray *arr, CBMArena *a, CBMDefinition def) {
+    if (!arr || !a) return;
+    if (arr->count >= arr->cap) {
+        int new_cap = arr->cap == 0 ? 16 : arr->cap * 2;
+        CBMDefinition *items = (CBMDefinition *)cbm_arena_alloc(a, (size_t)new_cap * sizeof(CBMDefinition));
+        if (!items) return;
+        if (arr->items && arr->count > 0) {
+            memcpy(items, arr->items, (size_t)arr->count * sizeof(CBMDefinition));
+        }
+        arr->items = items;
+        arr->cap = new_cap;
+    }
+    arr->items[arr->count++] = def;
+}
+
+static inline void *cbm_memmem(const void *haystack, size_t haystack_len, const void *needle,
+                               size_t needle_len) {
+    if (needle_len == 0) return (void *)haystack;
+    if (needle_len > haystack_len) return NULL;
+    const char *h = (const char *)haystack;
+    size_t last = haystack_len - needle_len;
+    for (size_t i = 0; i <= last; i++) {
+        if (memcmp(h + i, needle, needle_len) == 0) return (void *)(h + i);
+    }
+    return NULL;
+}
+
 typedef struct {
     const char *local_name;
     const char *module_path;

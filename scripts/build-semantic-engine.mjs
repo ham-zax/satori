@@ -135,6 +135,14 @@ async function build() {
                     semanticRevision: 'rust-v1',
                     grammar: 'tree-sitter-rust',
                 },
+                kotlin: {
+                    semanticRevision: 'kotlin-v1',
+                    grammar: 'tree-sitter-kotlin',
+                },
+                php: {
+                    semanticRevision: 'php-v1',
+                    grammar: 'tree-sitter-php',
+                },
             },
         };
 

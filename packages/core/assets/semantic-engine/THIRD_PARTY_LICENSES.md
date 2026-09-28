@@ -102,6 +102,8 @@ The semantic engine also bundles generated parser/scanner code from these MIT-li
 - Tree-sitter C# — https://github.com/tree-sitter/tree-sitter-c-sharp — snapshot `88366631d598` — Copyright (c) 2014-2023 Max Brunsfeld, Damien Guard, Amaan Qureshi, and contributors.
 - Tree-sitter C++ — https://github.com/tree-sitter/tree-sitter-cpp — snapshot `8b5b49eb196b` — Copyright (c) 2014 Max Brunsfeld.
 - Tree-sitter Rust — https://github.com/tree-sitter/tree-sitter-rust — snapshot `77a3747266f4` — Copyright (c) 2017 Maxim Sokolov.
+- Tree-sitter Kotlin — https://github.com/fwcd/tree-sitter-kotlin — snapshot `93bfeee1555d` — Copyright (c) 2019 fwcd.
+- Tree-sitter PHP — https://github.com/tree-sitter/tree-sitter-php — snapshot `3f2465c217d0` — Copyright (c) 2017 Josh Vera, GitHub; Copyright (c) 2019 Max Brunsfeld, Amaan Qureshi, Christian Frøystad, Caleb White.
 
 Each grammar is distributed under the MIT License:
 

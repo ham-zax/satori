@@ -439,13 +439,32 @@ function cbmSymbolLanguage(searchOnly: LanguageCapabilityDeclaration): LanguageC
     });
 }
 
+// CBM-symbol languages whose calls the semantic engine also resolves (exact
+// static bindings only; receiver dispatch abstains).
+export const CBM_CALLS_LANGUAGE_IDS: readonly string[] = ['kotlin', 'php'];
+const CBM_CALLS_LANGUAGES: ReadonlySet<string> = new Set(CBM_CALLS_LANGUAGE_IDS);
+
+function cbmCallsLanguage(searchOnly: LanguageCapabilityDeclaration): LanguageCapabilityDeclaration {
+    const symbols = cbmSymbolLanguage(searchOnly);
+    return declaration({
+        ...symbols,
+        callsCapability: PRODUCTION_READY,
+        publicClaim: 'calls_v0',
+        fixtures: {
+            ...symbols.fixtures,
+            calls: ['packages/core/src/relationships/cbm-language-call-qualification.test.ts'],
+        },
+    });
+}
+
 const DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
     ...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS,
     ...CBM_SEARCH_ONLY_DECLARATIONS,
     ...SATORI_DECLARATIONS,
-].map((item) => item.publicClaim === 'search_only' && CBM_SYMBOL_LANGUAGES.has(item.languageId)
-    ? cbmSymbolLanguage(item)
-    : item).sort((a, b) => a.languageId.localeCompare(b.languageId));
+].map((item) => {
+    if (item.publicClaim !== 'search_only' || !CBM_SYMBOL_LANGUAGES.has(item.languageId)) return item;
+    return CBM_CALLS_LANGUAGES.has(item.languageId) ? cbmCallsLanguage(item) : cbmSymbolLanguage(item);
+}).sort((a, b) => a.languageId.localeCompare(b.languageId));
 
 const DECLARATION_BY_KEY = new Map<string, LanguageCapabilityDeclaration>();
 

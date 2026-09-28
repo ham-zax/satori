@@ -37,6 +37,10 @@ export const COMPILE_UNITS = [
     'languages/rust/rust_cargo.c',
     'languages/rust/rust_stdlib_data.c',
     'languages/rust/rust_crates_seed.c',
+    'languages/kotlin/kotlin_lsp.c',
+    'languages/kotlin/kotlin_stdlib_data.c',
+    'languages/php/php_lsp.c',
+    'languages/php/php_stdlib_data.c',
     'tree_sitter/lib.c',
     'grammars/tree-sitter-go/parser.c',
     'grammars/tree-sitter-java/parser.c',
@@ -46,6 +50,10 @@ export const COMPILE_UNITS = [
     'grammars/tree-sitter-cpp/scanner.c',
     'grammars/tree-sitter-rust/parser.c',
     'grammars/tree-sitter-rust/scanner.c',
+    'grammars/tree-sitter-kotlin/parser.c',
+    'grammars/tree-sitter-kotlin/scanner.c',
+    'grammars/tree-sitter-php/parser.c',
+    'grammars/tree-sitter-php/scanner.c',
     'satori_semantic.c',
 ];
 
@@ -58,6 +66,8 @@ export const INCLUDE_DIRS = [
     'languages/csharp',
     'languages/cpp',
     'languages/rust',
+    'languages/kotlin',
+    'languages/php',
     'tree_sitter',
 ];
 

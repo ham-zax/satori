@@ -6,6 +6,9 @@
 #include "common/lsp_node_iter.h"
 #include "languages/go/go_lsp.h"
 #include "languages/java/java_lsp.h"
+#include "languages/kotlin/kotlin_lsp.h"
+#include "languages/php/php_lsp.h"
+#include "hash_table.h"
 #include "languages/csharp/cs_lsp.h"
 #include "languages/cpp/c_lsp.h"
 #include "languages/rust/rust_lsp.h"
@@ -22,6 +25,8 @@ extern const TSLanguage *tree_sitter_java(void);
 extern const TSLanguage *tree_sitter_c_sharp(void);
 extern const TSLanguage *tree_sitter_cpp(void);
 extern const TSLanguage *tree_sitter_rust(void);
+extern const TSLanguage *tree_sitter_kotlin(void);
+extern const TSLanguage *tree_sitter_php_only(void);
 
 /* Satori deliberately routes .c through the C++ analyzer. Upstream c_lsp.c
  * still references its dormant C-mode parser branch, so satisfy that link
@@ -30,7 +35,7 @@ const TSLanguage *tree_sitter_c(void) {
     return tree_sitter_cpp();
 }
 
-#define SATORI_ENGINE_VERSION_STR "cbm-11b662f9+satori-multilang-semantic-v1"
+#define SATORI_ENGINE_VERSION_STR "cbm-11b662f9+satori-multilang-semantic-v2"
 
 typedef struct {
     char *path;
@@ -194,7 +199,9 @@ int satori_semantic_create(const char *language, uint32_t language_len, SatoriSe
             || (language_len == 4 && memcmp(language, "java", 4) == 0)
             || (language_len == 3 && memcmp(language, "cpp", 3) == 0)
             || (language_len == 4 && memcmp(language, "rust", 4) == 0)
-            || (language_len == 6 && memcmp(language, "csharp", 6) == 0));
+            || (language_len == 6 && memcmp(language, "csharp", 6) == 0)
+            || (language_len == 6 && memcmp(language, "kotlin", 6) == 0)
+            || (language_len == 3 && memcmp(language, "php", 3) == 0));
     if (!supported_language) {
         set_global_error("Unsupported semantic language");
         return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
@@ -407,6 +414,35 @@ static uint8_t map_strategy_for_language(const char *language, const char *strat
             strcmp(strategy, "lsp_base_dispatch") == 0 ||
             strcmp(strategy, "lsp_virtual_dispatch") == 0 ||
             strcmp(strategy, "lsp_smart_ptr_dispatch") == 0) {
+            return SATORI_STRATEGY_TYPE_DISPATCH;
+        }
+    }
+    if (strcmp(language, "kotlin") == 0) {
+        /* Registry-proven bare calls (package, import, or default package)
+         * and members of an `object`/companion singleton. Constructors,
+         * extensions, and every receiver-typed call stay out of direct proof. */
+        if (strcmp(strategy, "lsp_kt_top_level") == 0 ||
+            strcmp(strategy, "lsp_kt_static") == 0) {
+            return SATORI_STRATEGY_DIRECT_CALL;
+        }
+        if (strcmp(strategy, "lsp_kt_method") == 0 || strcmp(strategy, "lsp_kt_this") == 0 ||
+            strcmp(strategy, "lsp_kt_super") == 0 || strcmp(strategy, "lsp_kt_extension") == 0 ||
+            strcmp(strategy, "lsp_kt_lambda_it") == 0 || strcmp(strategy, "lsp_kt_safe") == 0) {
+            return SATORI_STRATEGY_TYPE_DISPATCH;
+        }
+    }
+    if (strcmp(language, "php") == 0) {
+        /* `use function`, current-namespace, and exact global functions, and
+         * `Class::method()` with an explicitly named class. `self::`,
+         * `static::` (late static binding), and `parent::` are dispatch, and
+         * the any-namespace short-name fallback is never proof. */
+        if (strcmp(strategy, "php_function_namespaced") == 0 ||
+            strcmp(strategy, "php_function_global") == 0 ||
+            strcmp(strategy, "php_static_resolved") == 0) {
+            return SATORI_STRATEGY_DIRECT_CALL;
+        }
+        if (strcmp(strategy, "php_self_static") == 0 || strcmp(strategy, "php_method_typed") == 0 ||
+            strcmp(strategy, "php_method_inherited") == 0) {
             return SATORI_STRATEGY_TYPE_DISPATCH;
         }
     }
@@ -1548,6 +1584,406 @@ cleanup:
     return status;
 }
 
+/* ── Kotlin and PHP ──────────────────────────────────────────────────
+ *
+ * Both follow the Java shape: parse every file, register the project's
+ * definitions under package/namespace-qualified names, run CBM's resolver on
+ * each file, and keep only callees that name exactly one registered
+ * definition. Unlike Java, each file gets a fresh registry in a scratch arena:
+ * the Kotlin walker adds the current file's own types to the registry it is
+ * given, so a shared registry would make results depend on file order. */
+
+typedef struct {
+    const char *normalized_path;
+    const char *source_dir;
+    const char *scope_qn; /* Kotlin package or dotted PHP namespace; "" when absent */
+    const char *authority_root;
+    bool eligible;
+} SatoriScopedSourceMeta;
+
+static int scoped_meta_init(SatoriSession *s, const SatoriSourceFile *sf, SatoriScopedSourceMeta *meta) {
+    meta->normalized_path = go_normalize_relative_path(&s->arena, sf->path);
+    meta->source_dir = meta->normalized_path ? go_dirname(&s->arena, meta->normalized_path) : NULL;
+    if (!meta->normalized_path || !meta->source_dir) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    meta->authority_root = find_nearest_manifest_root(&s->arena, s->auxiliaries, s->aux_count,
+                                                      meta->normalized_path);
+    if (!meta->authority_root) meta->authority_root = meta->source_dir;
+    return SATORI_SEMANTIC_OK;
+}
+
+/* Copies node text keeping only identifier characters and dots, so
+ * `com . example` and `App\Util` both normalize (backslash becomes a dot). */
+static const char *scoped_name_text(CBMArena *arena, TSNode node, const char *source) {
+    char *text = cbm_node_text(arena, node, source);
+    if (!text) return NULL;
+    char *out = text;
+    for (const char *p = text; *p; p++) {
+        if (*p == '\\') {
+            *out++ = '.';
+        } else if (*p == '.' || *p == '_' || (unsigned char)*p >= 0x80 ||
+                   (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')) {
+            *out++ = *p;
+        }
+    }
+    *out = '\0';
+    return text;
+}
+
+static TSNode first_named_child_of_kind(TSNode node, const char *kind) {
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (strcmp(ts_node_type(child), kind) == 0) return child;
+    }
+    TSNode null_node;
+    memset(&null_node, 0, sizeof(null_node));
+    return null_node;
+}
+
+static bool node_has_token(TSNode node, const char *token) {
+    uint32_t count = ts_node_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_child(node, i);
+        if (!ts_node_is_named(child) && strcmp(ts_node_type(child), token) == 0) return true;
+    }
+    return false;
+}
+
+static const char *scoped_join(CBMArena *arena, const char *prefix, const char *name) {
+    return prefix && prefix[0] ? cbm_arena_sprintf(arena, "%s.%s", prefix, name) : cbm_arena_strdup(arena, name);
+}
+
+typedef struct {
+    CBMArena *arena;
+    SatoriLspDefArray *defs;
+    SatoriDefLocArray *def_locs;
+    const char *source;
+    const SatoriSourceFile *file;
+    const SatoriScopedSourceMeta *meta;
+    CBMLanguage lang;
+} SatoriScopedDefSink;
+
+static int scoped_push_type(SatoriScopedDefSink *sink, TSNode node, const char *qn, const char *name,
+                            const char *label) {
+    CBMLSPDef def;
+    memset(&def, 0, sizeof(def));
+    def.qualified_name = qn;
+    def.short_name = name;
+    def.label = label;
+    def.def_module_qn = sink->meta->scope_qn;
+    def.is_interface = strcmp(label, "Interface") == 0;
+    def.lang = sink->lang;
+    def.namespace_name = sink->meta->scope_qn;
+    int status = lsp_defs_push(sink->defs, def);
+    if (status != SATORI_SEMANTIC_OK) return status;
+    return def_locs_add_with_authority(sink->def_locs, qn, sink->file->path, sink->file->path_len,
+                                       ts_node_start_byte(node), ts_node_end_byte(node),
+                                       sink->meta->scope_qn,
+                                       sink->meta->scope_qn[0] ? sink->meta->scope_qn : NULL,
+                                       SATORI_TARGET_NONE, sink->meta->authority_root);
+}
+
+static int scoped_push_callable(SatoriScopedDefSink *sink, TSNode node, const char *qn, const char *name,
+                                const char *owner_qn, int param_count) {
+    const char **params = unknown_signature_params(sink->arena, param_count);
+    if (param_count > 0 && !params) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    CBMLSPDef def;
+    memset(&def, 0, sizeof(def));
+    def.qualified_name = qn;
+    def.short_name = name;
+    def.label = owner_qn ? "Method" : "Function";
+    def.receiver_type = owner_qn;
+    def.def_module_qn = sink->meta->scope_qn;
+    def.signature_param_types = params;
+    def.signature_param_count = param_count;
+    def.lang = sink->lang;
+    def.namespace_name = sink->meta->scope_qn;
+    int status = lsp_defs_push(sink->defs, def);
+    if (status != SATORI_SEMANTIC_OK) return status;
+    return def_locs_add_with_authority(sink->def_locs, qn, sink->file->path, sink->file->path_len,
+                                       ts_node_start_byte(node), ts_node_end_byte(node),
+                                       sink->meta->scope_qn,
+                                       sink->meta->scope_qn[0] ? sink->meta->scope_qn : NULL,
+                                       owner_qn ? SATORI_TARGET_METHOD : SATORI_TARGET_FUNCTION,
+                                       sink->meta->authority_root);
+}
+
+/* Registers classes, objects, companions, and member/top-level functions under
+ * the names kotlin_lsp builds for them: <package>.<Outer>.<Inner>,
+ * <Class>.Companion, <owner>.<fun>. Extension functions are skipped, so calls
+ * to them stay unresolved. */
+static int kotlin_collect_definitions(SatoriScopedDefSink *sink, TSNode container, const char *owner_qn) {
+    uint32_t count = ts_node_named_child_count(container);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(container, i);
+        const char *kind = ts_node_type(child);
+        bool is_class = strcmp(kind, "class_declaration") == 0;
+        bool is_object = strcmp(kind, "object_declaration") == 0;
+        bool is_companion = strcmp(kind, "companion_object") == 0;
+        int status = SATORI_SEMANTIC_OK;
+        if (is_class || is_object || is_companion) {
+            if (is_companion && !owner_qn) continue;
+            TSNode name_node = first_named_child_of_kind(child, "type_identifier");
+            const char *name = ts_node_is_null(name_node)
+                ? (is_companion ? "Companion" : NULL)
+                : scoped_name_text(sink->arena, name_node, sink->source);
+            if (!name || !name[0]) continue;
+            const char *qn = scoped_join(sink->arena, owner_qn ? owner_qn : sink->meta->scope_qn, name);
+            if (!qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+            TSNode body = first_named_child_of_kind(child, "class_body");
+            if (ts_node_is_null(body)) body = first_named_child_of_kind(child, "enum_class_body");
+            const char *label = "Class";
+            if (is_class && node_has_token(child, "interface")) label = "Interface";
+            else if (is_class && !ts_node_is_null(body) && strcmp(ts_node_type(body), "enum_class_body") == 0) label = "Enum";
+            status = scoped_push_type(sink, child, qn, name, label);
+            if (status == SATORI_SEMANTIC_OK && !ts_node_is_null(body)) {
+                status = kotlin_collect_definitions(sink, body, qn);
+            }
+        } else if (strcmp(kind, "function_declaration") == 0) {
+            if (!ts_node_is_null(ts_node_child_by_field_name(child, "receiver", 8))) continue;
+            TSNode name_node = first_named_child_of_kind(child, "simple_identifier");
+            if (ts_node_is_null(name_node)) continue;
+            const char *name = scoped_name_text(sink->arena, name_node, sink->source);
+            if (!name || !name[0]) continue;
+            const char *qn = scoped_join(sink->arena, owner_qn ? owner_qn : sink->meta->scope_qn, name);
+            if (!qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+            TSNode params = first_named_child_of_kind(child, "function_value_parameters");
+            int param_count = ts_node_is_null(params) ? 0 : (int)ts_node_named_child_count(params);
+            status = scoped_push_callable(sink, child, qn, name, owner_qn, param_count);
+        }
+        if (status != SATORI_SEMANTIC_OK) return status;
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
+static const char *kotlin_package_name(CBMArena *arena, TSNode root, const char *source) {
+    TSNode header = first_named_child_of_kind(root, "package_header");
+    if (ts_node_is_null(header)) return "";
+    TSNode identifier = first_named_child_of_kind(header, "identifier");
+    return ts_node_is_null(identifier) ? "" : scoped_name_text(arena, identifier, source);
+}
+
+/* A file is eligible when it has exactly one top-level namespace in the
+ * statement form (`namespace App\Util;`). Block namespaces and several
+ * namespaces per file would give one file more than one scope. */
+static bool php_namespace_name(CBMArena *arena, TSNode root, const char *source, const char **out) {
+    *out = "";
+    int namespace_count = 0;
+    uint32_t count = ts_node_named_child_count(root);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(root, i);
+        if (strcmp(ts_node_type(child), "namespace_definition") != 0) continue;
+        if (++namespace_count > 1) return false;
+        if (!ts_node_is_null(ts_node_child_by_field_name(child, "body", 4))) return false;
+        TSNode name = ts_node_child_by_field_name(child, "name", 4);
+        if (ts_node_is_null(name)) return false;
+        *out = scoped_name_text(arena, name, source);
+        if (!*out) return false;
+    }
+    return true;
+}
+
+static bool php_is_type_declaration(const char *kind, const char **label) {
+    if (strcmp(kind, "class_declaration") == 0) *label = "Class";
+    else if (strcmp(kind, "interface_declaration") == 0) *label = "Interface";
+    else if (strcmp(kind, "trait_declaration") == 0) *label = "Trait";
+    else if (strcmp(kind, "enum_declaration") == 0) *label = "Enum";
+    else return false;
+    return true;
+}
+
+static int php_collect_definitions(SatoriScopedDefSink *sink, TSNode root) {
+    uint32_t count = ts_node_named_child_count(root);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(root, i);
+        const char *kind = ts_node_type(child);
+        const char *label = NULL;
+        int status = SATORI_SEMANTIC_OK;
+        TSNode name_node = ts_node_child_by_field_name(child, "name", 4);
+        if (ts_node_is_null(name_node)) continue;
+        const char *name = scoped_name_text(sink->arena, name_node, sink->source);
+        if (!name || !name[0]) continue;
+        const char *qn = scoped_join(sink->arena, sink->meta->scope_qn, name);
+        if (!qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        if (strcmp(kind, "function_definition") == 0) {
+            TSNode params = ts_node_child_by_field_name(child, "parameters", 10);
+            int param_count = ts_node_is_null(params) ? 0 : (int)ts_node_named_child_count(params);
+            status = scoped_push_callable(sink, child, qn, name, NULL, param_count);
+        } else if (php_is_type_declaration(kind, &label)) {
+            status = scoped_push_type(sink, child, qn, name, label);
+            TSNode body = ts_node_child_by_field_name(child, "body", 4);
+            uint32_t member_count = ts_node_is_null(body) ? 0 : ts_node_named_child_count(body);
+            for (uint32_t m = 0; status == SATORI_SEMANTIC_OK && m < member_count; m++) {
+                TSNode member = ts_node_named_child(body, m);
+                if (strcmp(ts_node_type(member), "method_declaration") != 0) continue;
+                TSNode member_name = ts_node_child_by_field_name(member, "name", 4);
+                if (ts_node_is_null(member_name)) continue;
+                const char *method = scoped_name_text(sink->arena, member_name, sink->source);
+                if (!method || !method[0]) continue;
+                const char *method_qn = scoped_join(sink->arena, qn, method);
+                if (!method_qn) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                TSNode params = ts_node_child_by_field_name(member, "parameters", 10);
+                int param_count = ts_node_is_null(params) ? 0 : (int)ts_node_named_child_count(params);
+                status = scoped_push_callable(sink, member, method_qn, method, qn, param_count);
+            }
+        }
+        if (status != SATORI_SEMANTIC_OK) return status;
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
+static int resolved_call_compare(const void *left, const void *right) {
+    const CBMResolvedCall *a = (const CBMResolvedCall *)left;
+    const CBMResolvedCall *b = (const CBMResolvedCall *)right;
+    if (a->site_start_byte != b->site_start_byte) return a->site_start_byte < b->site_start_byte ? -1 : 1;
+    if (a->site_end_byte != b->site_end_byte) return a->site_end_byte < b->site_end_byte ? -1 : 1;
+    int callee = strcmp(a->callee_qn ? a->callee_qn : "", b->callee_qn ? b->callee_qn : "");
+    if (callee != 0) return callee;
+    return strcmp(a->strategy ? a->strategy : "", b->strategy ? b->strategy : "");
+}
+
+/* The Kotlin walker evaluates some call expressions twice and emits the same
+ * resolution each time; keep one record per site, callee, and strategy. */
+static void dedupe_resolved_calls(CBMResolvedCallArray *calls) {
+    if (!calls || calls->count < 2) return;
+    qsort(calls->items, (size_t)calls->count, sizeof(CBMResolvedCall), resolved_call_compare);
+    int kept = 1;
+    for (int i = 1; i < calls->count; i++) {
+        if (resolved_call_compare(&calls->items[kept - 1], &calls->items[i]) != 0) {
+            calls->items[kept++] = calls->items[i];
+        }
+    }
+    calls->count = kept;
+}
+
+typedef enum { SATORI_SCOPED_KOTLIN, SATORI_SCOPED_PHP } SatoriScopedLanguage;
+
+static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage language) {
+    const bool kotlin = language == SATORI_SCOPED_KOTLIN;
+    int status = SATORI_SEMANTIC_OK;
+    TSParser *parser = NULL;
+    TSTree **trees = NULL;
+    SatoriScopedSourceMeta *meta = NULL;
+    SatoriLspDefArray defs;
+    SatoriDefLocArray def_locs;
+    memset(&defs, 0, sizeof(defs));
+    memset(&def_locs, 0, sizeof(def_locs));
+
+    parser = ts_parser_new();
+    if (!parser || !ts_parser_set_language(parser, kotlin ? tree_sitter_kotlin() : tree_sitter_php_only())) {
+        set_session_error(s, kotlin ? "Failed to configure Kotlin Tree-sitter parser"
+                                    : "Failed to configure PHP Tree-sitter parser");
+        status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+        goto cleanup;
+    }
+    trees = (TSTree **)calloc(s->source_count, sizeof(TSTree *));
+    meta = (SatoriScopedSourceMeta *)calloc(s->source_count, sizeof(SatoriScopedSourceMeta));
+    if (!trees || !meta) {
+        set_session_error(s, "Out of memory allocating semantic project state");
+        status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        goto cleanup;
+    }
+
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        const SatoriSourceFile *sf = &s->sources[i];
+        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        if (!trees[i]) {
+            set_session_error(s, "Tree-sitter parser failed to parse source file");
+            status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+            goto cleanup;
+        }
+        status = scoped_meta_init(s, sf, &meta[i]);
+        if (status != SATORI_SEMANTIC_OK) {
+            set_session_error(s, "Out of memory deriving source identity");
+            goto cleanup;
+        }
+        TSNode root = ts_tree_root_node(trees[i]);
+        meta[i].eligible = !ts_node_has_error(root);
+        if (kotlin) {
+            meta[i].scope_qn = kotlin_package_name(&s->arena, root, sf->source);
+        } else if (!php_namespace_name(&s->arena, root, sf->source, &meta[i].scope_qn)) {
+            meta[i].eligible = false;
+        }
+        if (!meta[i].scope_qn) {
+            set_session_error(s, "Out of memory deriving source scope");
+            status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+        if (!meta[i].eligible) continue;
+        SatoriScopedDefSink sink = {
+            .arena = &s->arena, .defs = &defs, .def_locs = &def_locs, .source = sf->source,
+            .file = sf, .meta = &meta[i], .lang = kotlin ? CBM_LANG_KOTLIN : CBM_LANG_PHP,
+        };
+        status = kotlin ? kotlin_collect_definitions(&sink, root, NULL) : php_collect_definitions(&sink, root);
+        if (status != SATORI_SEMANTIC_OK) {
+            set_session_error(s, status == SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED
+                ? "Resource limit exceeded while extracting definitions"
+                : "Out of memory extracting definitions");
+            goto cleanup;
+        }
+    }
+
+    {
+    uint64_t total_call_sites = 0;
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        if (!meta[i].eligible) continue;
+        CBMArena file_arena;
+        cbm_arena_init(&file_arena);
+        CBMTypeRegistry registry;
+        cbm_registry_init(&registry, &file_arena);
+        CBMResolvedCallArray resolved;
+        memset(&resolved, 0, sizeof(resolved));
+        TSNode root = ts_tree_root_node(trees[i]);
+        if (kotlin) {
+            cbm_kotlin_stdlib_register(&registry, &file_arena);
+            struct CBMHashTable *field_map = NULL;
+            cbm_kotlin_register_lsp_defs(&file_arena, &registry, defs.items, (int)defs.count, &field_map);
+            cbm_registry_finalize(&registry);
+            KotlinLSPContext ctx;
+            kotlin_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
+                            &registry, meta[i].scope_qn, meta[i].scope_qn, "", NULL, &resolved);
+            kotlin_lsp_process_file(&ctx, root);
+            cbm_ht_free(field_map);
+        } else {
+            cbm_php_stdlib_register(&registry, &file_arena);
+            cbm_php_register_lsp_defs(&file_arena, &file_arena, &registry, defs.items, (int)defs.count);
+            cbm_registry_finalize(&registry);
+            PHPLSPContext ctx;
+            php_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
+                         &registry, meta[i].scope_qn, &resolved);
+            php_lsp_process_file(&ctx, root);
+        }
+        if (resolved.count < 0 || (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
+            cbm_arena_destroy(&file_arena);
+            set_session_error(s, "Resource limit exceeded: max call sites exceeded");
+            status = SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
+            goto cleanup;
+        }
+        dedupe_resolved_calls(&resolved);
+        total_call_sites += (uint64_t)resolved.count;
+        /* Copies every string it keeps into the session string table, so the
+         * per-file arena can go right after. */
+        status = append_semantic_results(s, &s->sources[i], meta[i].scope_qn, meta[i].authority_root,
+                                         &resolved, &def_locs);
+        cbm_arena_destroy(&file_arena);
+        if (status != SATORI_SEMANTIC_OK) goto cleanup;
+    }
+    }
+
+cleanup:
+    if (trees) {
+        for (uint32_t i = 0; i < s->source_count; i++) {
+            if (trees[i]) ts_tree_delete(trees[i]);
+        }
+    }
+    free(trees);
+    free(meta);
+    free(defs.items);
+    free(def_locs.items);
+    if (parser) ts_parser_delete(parser);
+    return status;
+}
+
 typedef struct {
     const char *normalized_path;
     const char *source_dir;
@@ -2574,6 +3010,12 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
     }
     if (strcmp(s->language, "rust") == 0) {
         return resolve_rust_project(s);
+    }
+    if (strcmp(s->language, "kotlin") == 0) {
+        return resolve_scoped_project(s, SATORI_SCOPED_KOTLIN);
+    }
+    if (strcmp(s->language, "php") == 0) {
+        return resolve_scoped_project(s, SATORI_SCOPED_PHP);
     }
 
     int status = SATORI_SEMANTIC_OK;

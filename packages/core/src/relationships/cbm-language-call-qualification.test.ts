@@ -8,6 +8,8 @@ import {
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     type SymbolRecord,
 } from '../symbols';
+import { createLanguageAnalysisService } from '../language-analysis/service';
+import { buildSymbolRecordsForFile } from '../symbols';
 import { buildRelationshipsForRegistry } from './builder';
 
 interface SourceInput {
@@ -24,7 +26,7 @@ interface AuxiliaryInput {
 interface SymbolInput {
     readonly file: string;
     readonly source: string;
-    readonly language: 'java' | 'csharp' | 'cpp' | 'rust';
+    readonly language: 'java' | 'csharp' | 'cpp' | 'rust' | 'kotlin' | 'php';
     readonly name: string;
     readonly marker: string;
     readonly kind: 'function' | 'method';
@@ -416,4 +418,165 @@ test('Rust test-only direct calls remain unadmitted while ordinary direct calls 
         occurrence.decision === 'resolved'
         && occurrence.proof.strategy === 'direct_call'
     )), true);
+});
+
+function allOccurrences(evidence: { readonly occurrencesByFile: ReadonlyMap<string, readonly { readonly proof: { readonly strategy: string }; readonly decision: string; readonly targetProvenance?: { readonly file?: string; readonly name?: string } }[]> }) {
+    return [...evidence.occurrencesByFile.values()].flat();
+}
+
+test('Kotlin qualification admits package, import, and companion calls and abstains on receivers and unimported names', async () => {
+    const gradle = [{ path: 'build.gradle.kts', role: 'manifest', source: '' }];
+    const utilSource = 'package demo\n\nfun help(): Int {\n    return 1\n}\n';
+    const mainSource = 'package demo\n\nfun run(): Int {\n    return help()\n}\n';
+    const sources = [
+        { path: 'src/demo/Util.kt', source: utilSource },
+        { path: 'src/demo/Main.kt', source: mainSource },
+    ];
+    const symbols = [
+        symbol({
+            file: 'src/demo/Util.kt', source: utilSource, language: 'kotlin', name: 'help',
+            marker: 'fun help()', kind: 'function', qualifiedName: 'help',
+        }),
+        symbol({
+            file: 'src/demo/Main.kt', source: mainSource, language: 'kotlin', name: 'run',
+            marker: 'fun run()', kind: 'function', qualifiedName: 'run',
+        }),
+    ];
+    const { evidence, records } = await qualify('kotlin', sources, symbols, gradle);
+    assert.equal(calls(records).length, 1);
+    const [same] = allOccurrences(evidence);
+    assert.equal(same?.proof.strategy, 'direct_call');
+    assert.equal(same?.decision, 'resolved');
+    assert.equal(same?.targetProvenance?.file, 'src/demo/Util.kt');
+
+    const imported = allOccurrences(await analyze('kotlin', [
+        { path: 'src/demo/Util.kt', source: utilSource },
+        { path: 'src/app/Main.kt', source: 'package app\n\nimport demo.help\n\nfun run(): Int {\n    return help()\n}\n' },
+    ], gradle));
+    assert.equal(imported.length, 1);
+    assert.equal(imported[0]?.proof.strategy, 'direct_call');
+    assert.equal(imported[0]?.targetProvenance?.file, 'src/demo/Util.kt');
+
+    // Another package without an import cannot see `help`; CBM's sole-definer
+    // fallback would bind it anyway, and Satori removes that fallback.
+    const unimported = await analyze('kotlin', [
+        { path: 'src/demo/Util.kt', source: utilSource },
+        { path: 'src/app/Main.kt', source: 'package app\n\nfun run(): Int {\n    return help()\n}\n' },
+    ], gradle);
+    assert.equal(allOccurrences(unimported).length, 0);
+
+    const companion = allOccurrences(await analyze('kotlin', [
+        { path: 'src/demo/Util.kt', source: 'package demo\n\nclass Util {\n    companion object {\n        fun make(): Int {\n            return 1\n        }\n    }\n}\n' },
+        { path: 'src/demo/Main.kt', source: 'package demo\n\nfun run(): Int {\n    return Util.make()\n}\n' },
+    ], gradle));
+    assert.equal(companion.length, 1);
+    assert.equal(companion[0]?.proof.strategy, 'direct_call');
+    assert.equal(companion[0]?.targetProvenance?.name, 'make');
+
+    const receiver = allOccurrences(await analyze('kotlin', [{
+        path: 'src/demo/S.kt',
+        source: 'package demo\n\nclass S {\n    fun help(): Int {\n        return 1\n    }\n\n    fun run(): Int {\n        return help()\n    }\n}\n',
+    }], gradle));
+    assert.deepEqual(receiver.map((occurrence) => occurrence.proof.strategy), ['type_dispatch']);
+});
+
+test('PHP qualification admits namespace, use-imported static, and global calls and abstains on receivers and short-name guesses', async () => {
+    const composer = [{ path: 'composer.json', role: 'manifest', source: '{}' }];
+    const utilSource = '<?php\nnamespace Demo;\n\nfunction help(): int {\n    return 1;\n}\n';
+    const mainSource = '<?php\nnamespace Demo;\n\nfunction run(): int {\n    return help();\n}\n';
+    const sources = [
+        { path: 'src/Util.php', source: utilSource },
+        { path: 'src/Main.php', source: mainSource },
+    ];
+    const symbols = [
+        symbol({
+            file: 'src/Util.php', source: utilSource, language: 'php', name: 'help',
+            marker: 'function help()', kind: 'function', qualifiedName: 'Demo.help', parentQualifiedNamePath: ['Demo'],
+        }),
+        symbol({
+            file: 'src/Main.php', source: mainSource, language: 'php', name: 'run',
+            marker: 'function run()', kind: 'function', qualifiedName: 'Demo.run', parentQualifiedNamePath: ['Demo'],
+        }),
+    ];
+    const { evidence, records } = await qualify('php', sources, symbols, composer);
+    assert.equal(calls(records).length, 1);
+    const [namespaced] = allOccurrences(evidence);
+    assert.equal(namespaced?.proof.strategy, 'direct_call');
+    assert.equal(namespaced?.targetProvenance?.file, 'src/Util.php');
+
+    const staticCall = allOccurrences(await analyze('php', [
+        { path: 'src/Demo/Util.php', source: '<?php\nnamespace Demo;\n\nclass Util {\n    public static function make(): int {\n        return 1;\n    }\n}\n' },
+        { path: 'src/App/Main.php', source: '<?php\nnamespace App;\n\nuse Demo\\Util;\n\nfunction run(): int {\n    return Util::make();\n}\n' },
+    ], composer));
+    assert.equal(staticCall.length, 1);
+    assert.equal(staticCall[0]?.proof.strategy, 'direct_call');
+    assert.equal(staticCall[0]?.targetProvenance?.name, 'make');
+
+    const global = allOccurrences(await analyze('php', [
+        { path: 'src/util.php', source: '<?php\nfunction help() {\n    return 1;\n}\n' },
+        { path: 'src/main.php', source: '<?php\nfunction run() {\n    return help();\n}\n' },
+    ], composer));
+    assert.equal(global.length, 1);
+    assert.equal(global[0]?.proof.strategy, 'direct_call');
+
+    // `help()` in namespace Other is neither Other\help nor a global function;
+    // CBM's any-namespace short-name match must never become direct proof.
+    const guessed = allOccurrences(await analyze('php', [
+        { path: 'src/Util.php', source: utilSource },
+        { path: 'src/Main.php', source: '<?php\nnamespace Other;\n\nfunction run(): int {\n    return help();\n}\n' },
+    ], composer));
+    assert.equal(guessed.some((occurrence) => occurrence.proof.strategy === 'direct_call'), false);
+
+    const receiver = allOccurrences(await analyze('php', [{
+        path: 'src/S.php',
+        source: '<?php\nnamespace Demo;\n\nclass S {\n    public function help(): int {\n        return 1;\n    }\n\n    public function run(): int {\n        return $this->help() + self::help();\n    }\n}\n',
+    }], composer));
+    assert.equal(receiver.length, 2);
+    assert.equal(receiver.every((occurrence) => occurrence.proof.strategy === 'type_dispatch'), true);
+});
+
+async function promotedCalls(
+    language: 'kotlin' | 'php',
+    sources: readonly SourceInput[],
+    auxiliaries: readonly AuxiliaryInput[],
+) {
+    const service = createLanguageAnalysisService();
+    const symbols: SymbolRecord[] = [];
+    for (const source of sources) {
+        const analysis = await service.analyze({ content: source.source, relativePath: source.path, language });
+        assert.equal(analysis.backend, 'cbm_definitions');
+        symbols.push(...buildSymbolRecordsForFile({
+            relativePath: source.path,
+            language,
+            content: source.source,
+            fileHash: `hash-${source.path}`,
+            extractorVersion: 'cbm-language-qualification',
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        }));
+    }
+    const records = buildRelationshipsForRegistry({
+        registry: createRegistry(language, sources, symbols),
+        analysisByFile: new Map(sources.map((source) => [
+            source.path,
+            { moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [] },
+        ])),
+        semanticEvidenceByLanguage: new Map([[language, await analyze(language, sources, auxiliaries)]]),
+    });
+    const label = new Map(symbols.map((entry) => [entry.symbolKey, `${entry.file}#${entry.qualifiedName}`]));
+    return records
+        .filter((record) => record.type === 'CALLS')
+        .map((record) => [label.get(record.sourceKey), record.targetKey && label.get(record.targetKey)]);
+}
+
+test('promoted Kotlin and PHP calls bind CBM extractor symbols without qualification mode', async () => {
+    assert.deepEqual(await promotedCalls('kotlin', [
+        { path: 'src/demo/Util.kt', source: 'package demo\n\nobject Tools {\n    fun noop() {}\n}\n\nfun help(): Int {\n    return 1\n}\n' },
+        { path: 'src/app/Main.kt', source: 'package app\n\nimport demo.help\n\nclass Main {\n    fun run(): Int {\n        return help()\n    }\n}\n' },
+    ], [{ path: 'build.gradle.kts', role: 'manifest', source: '' }]), [['src/app/Main.kt#Main.run', 'src/demo/Util.kt#help']]);
+
+    assert.deepEqual(await promotedCalls('php', [
+        { path: 'src/Demo/Util.php', source: '<?php\nnamespace Demo;\n\nclass Util {\n    public static function make(): int {\n        return 1;\n    }\n}\n' },
+        { path: 'src/App/Main.php', source: '<?php\nnamespace App;\n\nuse Demo\\Util;\n\nfunction run(): int {\n    return Util::make();\n}\n' },
+    ], [{ path: 'composer.json', role: 'manifest', source: '{}' }]), [['src/App/Main.php#run', 'src/Demo/Util.php#Util.make']]);
 });

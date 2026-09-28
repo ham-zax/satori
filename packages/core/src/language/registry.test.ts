@@ -64,14 +64,14 @@ test('language registry routes modern module and systems extensions through qual
 });
 
 test('language capability tiers expose promoted calls without promoting unrelated graph surfaces', () => {
-    for (const language of ['php', 'ruby', 'kotlin', 'swift']) {
+    for (const language of ['ruby', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
     }
-    for (const language of ['rust', 'java', 'csharp', 'cpp', 'scala']) {
+    for (const language of ['rust', 'java', 'csharp', 'cpp', 'scala', 'kotlin', 'php']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), true, language);
@@ -84,7 +84,7 @@ test('language capability tiers expose promoted calls without promoting unrelate
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
-    // PHP, Ruby, and Kotlin are symbol-only through CBM parity evidence; Swift is not.
+    // PHP, Ruby, and Kotlin get symbols through CBM parity evidence (PHP and Kotlin also calls); Swift does not.
     for (const language of ['php', 'ruby', 'kotlin']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
@@ -116,12 +116,14 @@ test('language registry exposes search-only frontend/style containers until extr
 });
 
 test('declared parser catalog entries do not claim executable AST splitter support', () => {
-    for (const language of ['zig', 'solidity', 'gleam', 'kotlin', 'ruby', 'swift']) {
+    for (const language of ['zig', 'solidity', 'gleam', 'ruby', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'astSplitter'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
     }
-    // CBM-promoted languages outline through extracted symbols, not an AST splitter.
+    // CBM-promoted languages outline through extracted symbols, not an AST splitter,
+    // even where the semantic engine also resolves their calls.
+    assert.equal(isLanguageCapabilitySupportedForLanguage('kotlin', 'astSplitter'), false);
     assert.equal(isLanguageCapabilitySupportedForLanguage('kotlin', 'fileOutline'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
 

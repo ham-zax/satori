@@ -28,9 +28,23 @@
           "scan",
           "build",
           "index",
-          "repo"
+          "repo",
+          "analysis"
         ],
         "note": "Changed files are rebuilt into a complete new index version that replaces the current one atomically."
+      },
+      {
+        "id": "language-path",
+        "label": "Language analysis",
+        "focus": [
+          "scan",
+          "build",
+          "analysis",
+          "extractors",
+          "hf",
+          "index"
+        ],
+        "note": "Each file routes to one backend per language; CBM extractor modules add symbols for 89 more languages."
       }
     ]
   },
@@ -123,7 +137,7 @@
       "id": "index",
       "type": "database",
       "label": "Current index",
-      "sublabel": "LanceDB version",
+      "sublabel": "LanceDB + symbols",
       "tag": "atomic swap",
       "pos": [
         420,
@@ -152,7 +166,7 @@
       "id": "scan",
       "type": "backend",
       "label": "Change scan",
-      "sublabel": "stat, hash, Merkle",
+      "sublabel": "admission, hash",
       "pos": [
         230,
         480
@@ -166,7 +180,7 @@
       "id": "build",
       "type": "backend",
       "label": "Build next index",
-      "sublabel": "AST chunks · embeds",
+      "sublabel": "chunks · embeds",
       "pos": [
         420,
         480
@@ -175,9 +189,70 @@
         140,
         64
       ]
+    },
+    {
+      "id": "analysis",
+      "type": "backend",
+      "label": "Language analysis",
+      "sublabel": "per-language backend",
+      "pos": [
+        610,
+        480
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "extractors",
+      "type": "backend",
+      "label": "CBM extractors",
+      "sublabel": "140 WASM modules",
+      "tag": "symbol_only",
+      "pos": [
+        800,
+        480
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "hf",
+      "type": "cloud",
+      "label": "Hugging Face",
+      "sublabel": "models · CBM pack",
+      "tag": "install-time",
+      "pos": [
+        990,
+        300
+      ],
+      "size": [
+        140,
+        64
+      ]
     }
   ],
   "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Satori runtime (local, shared by all agents)",
+      "wraps": [
+        "mcp",
+        "retrieval",
+        "fusion",
+        "rerank",
+        "owners",
+        "index",
+        "scan",
+        "build",
+        "analysis",
+        "extractors"
+      ],
+      "pad": 28
+    },
     {
       "kind": "region",
       "label": "Search path (read-only)",
@@ -193,7 +268,9 @@
       "label": "Indexing (background workers)",
       "wraps": [
         "scan",
-        "build"
+        "build",
+        "analysis",
+        "extractors"
       ]
     }
   ],
@@ -266,6 +343,31 @@
       "label": "publish",
       "fromSide": "top",
       "toSide": "bottom"
+    },
+    {
+      "id": "build-analysis",
+      "from": "build",
+      "to": "analysis",
+      "label": "per file"
+    },
+    {
+      "id": "analysis-extractors",
+      "from": "analysis",
+      "to": "extractors"
+    },
+    {
+      "id": "hf-extractors",
+      "from": "hf",
+      "to": "extractors",
+      "label": "extended pack",
+      "variant": "dashed"
+    },
+    {
+      "id": "hf-rerank",
+      "from": "hf",
+      "to": "rerank",
+      "label": "models",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -282,7 +384,7 @@
       "dot": "amber",
       "title": "Index version",
       "items": [
-        "One complete snapshot: vectors, symbols, call edges",
+        "One complete snapshot: vectors, symbols, call edges, file outlines",
         "Each request stays pinned to one version",
         "A new version goes live only when complete"
       ]
@@ -294,6 +396,16 @@
         "Scan hashes only changed files",
         "Runs in supervised workers, off the request path",
         "One shared runtime serves all local agents"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Language coverage",
+      "items": [
+        "~160 languages admitted for search by extension, filename, or shebang",
+        "Tree-sitter + CBM semantic engines give calls for core languages",
+        "CBM extractors add symbols for 89 more (39 in npm, 101 from Hugging Face)",
+        "Missing module → file degrades to search-only, reported in status"
       ]
     }
   ]

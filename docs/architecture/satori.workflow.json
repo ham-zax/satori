@@ -1,0 +1,272 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Satori Lifecycle",
+    "output": "satori-workflow.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "first-run",
+        "label": "Install to first search",
+        "focus": [
+          "fetch",
+          "register",
+          "admit",
+          "analyze",
+          "embed",
+          "publish",
+          "query"
+        ],
+        "note": "Install fetches verified assets once; the first index publishes a complete version that search then reads."
+      },
+      {
+        "id": "sync-loop",
+        "label": "Background sync",
+        "focus": [
+          "watch",
+          "admit",
+          "analyze",
+          "embed",
+          "publish"
+        ],
+        "note": "Changed files re-enter the same pipeline; the new version replaces the live one only when complete."
+      },
+      {
+        "id": "degraded-paths",
+        "label": "Failure and degradation",
+        "focus": [
+          "analyze",
+          "degraded",
+          "embed",
+          "keep_live",
+          "query"
+        ],
+        "note": "A missing language module degrades one file to search-only; a failed build leaves the live version serving."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "install",
+      "label": "satori install (CLI)"
+    },
+    {
+      "id": "sync",
+      "label": "Change detection"
+    },
+    {
+      "id": "index",
+      "label": "Indexing worker"
+    },
+    {
+      "id": "search",
+      "label": "MCP search request"
+    },
+    {
+      "id": "exceptions",
+      "label": "Degradation + recovery",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "setup",
+      "label": "Install",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "build",
+      "label": "Build next version",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "serve",
+      "label": "Serve",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "fetch",
+    "register",
+    "admit",
+    "analyze",
+    "embed",
+    "publish",
+    "query"
+  ],
+  "nodes": [
+    {
+      "id": "fetch",
+      "lane": "install",
+      "col": 0,
+      "type": "cloud",
+      "label": "Fetch assets",
+      "sublabel": "Potion · LateOn · CBM",
+      "tag": "sha256 verified"
+    },
+    {
+      "id": "register",
+      "lane": "install",
+      "col": 1,
+      "type": "frontend",
+      "label": "Register",
+      "sublabel": "agent configs"
+    },
+    {
+      "id": "watch",
+      "lane": "sync",
+      "col": 1,
+      "type": "messagebus",
+      "label": "File change",
+      "sublabel": "stat + hash"
+    },
+    {
+      "id": "admit",
+      "lane": "index",
+      "col": 2,
+      "type": "security",
+      "label": "Admit files",
+      "sublabel": "catalog · shebang"
+    },
+    {
+      "id": "analyze",
+      "lane": "index",
+      "col": 3,
+      "type": "backend",
+      "label": "Analyze",
+      "sublabel": "per-language",
+      "tag": "tree-sitter · CBM"
+    },
+    {
+      "id": "embed",
+      "lane": "index",
+      "col": 4,
+      "type": "backend",
+      "label": "Chunk + embed",
+      "sublabel": "symbols · vectors"
+    },
+    {
+      "id": "publish",
+      "lane": "index",
+      "col": 5,
+      "type": "database",
+      "label": "Publish",
+      "sublabel": "new version",
+      "tag": "atomic swap"
+    },
+    {
+      "id": "query",
+      "lane": "search",
+      "col": 5,
+      "type": "frontend",
+      "label": "Search",
+      "sublabel": "RRF · LateOn",
+      "tag": "pinned read"
+    },
+    {
+      "id": "degraded",
+      "lane": "exceptions",
+      "col": 3,
+      "type": "security",
+      "label": "Search-only",
+      "sublabel": "module missing"
+    },
+    {
+      "id": "keep_live",
+      "lane": "exceptions",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Keep live",
+      "sublabel": "build failed"
+    }
+  ],
+  "edges": [
+    {
+      "from": "fetch",
+      "to": "register"
+    },
+    {
+      "from": "register",
+      "to": "admit",
+      "label": "first index",
+      "variant": "emphasis"
+    },
+    {
+      "from": "watch",
+      "to": "admit",
+      "label": "changed",
+      "variant": "dashed"
+    },
+    {
+      "from": "admit",
+      "to": "analyze",
+      "variant": "emphasis"
+    },
+    {
+      "from": "analyze",
+      "to": "embed",
+      "variant": "emphasis"
+    },
+    {
+      "from": "embed",
+      "to": "publish",
+      "variant": "emphasis"
+    },
+    {
+      "from": "publish",
+      "to": "query",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "analyze",
+      "to": "degraded",
+      "label": "no module",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "from": "embed",
+      "to": "keep_live",
+      "label": "fails",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Happy path",
+      "items": [
+        "Install verifies every model and extractor file by sha256",
+        "Each file routes to one analysis backend for its language",
+        "A version goes live only when it is complete"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fail closed",
+      "items": [
+        "Missing extractor module: file stays searchable, status reports degraded",
+        "Failed build: the previous version keeps serving",
+        "Offline install warns and continues"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Search",
+      "items": [
+        "Potion vectors + BM25, merged by reciprocal rank",
+        "LateOn rescores a bounded top set",
+        "Each request reads one pinned version"
+      ]
+    }
+  ]
+}

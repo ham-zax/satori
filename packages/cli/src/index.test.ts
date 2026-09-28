@@ -598,6 +598,7 @@ test("runCli install reports progress and the first repository action", async ()
             }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
             installLateOnAuthorityLoader: loadAcquisitionAuthority,
             installPostflightRunner: async ({ homeDir: verifiedHome, writeStderr }) => {
                 assert.equal(verifiedHome, homeDir);
@@ -650,6 +651,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
             installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
             installLateOnAuthorityLoader: () => {
                 throw new Error("acquisition unavailable");
             },
@@ -922,6 +924,7 @@ test("runCli install preserves the structured receipt when JSON is requested", a
             }),
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             installPotionModelPath: "/tmp/satori-test-potion-model",
+            installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
             installLateOnAuthorityLoader: loadAcquisitionAuthority,
             installPostflightRunner: async () => ({
                 status: "ok",

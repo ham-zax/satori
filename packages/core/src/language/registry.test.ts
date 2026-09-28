@@ -130,14 +130,14 @@ test('declared parser catalog entries do not claim executable AST splitter suppo
 });
 
 test('language registry routes special filenames to their languages without call graphs', () => {
-    // Makefile and CMake are symbol-only through CBM parity evidence; Dockerfile and justfile stay search-only.
+    // Makefile, CMake, and justfile are symbol-only through CBM parity evidence; Dockerfile stays search-only.
     const expected: Array<[string, string, boolean]> = [
         ['Dockerfile', 'dockerfile', false],
         ['services/api/Dockerfile', 'dockerfile', false],
         ['Makefile', 'makefile', true],
         ['CMakeLists.txt', 'cmake', true],
-        ['justfile', 'justfile', false],
-        ['Justfile', 'justfile', false],
+        ['justfile', 'justfile', true],
+        ['Justfile', 'justfile', true],
     ];
 
     for (const [filename, language, owner] of expected) {
@@ -188,7 +188,11 @@ test('language registry reports deterministic capability extension and filename 
     ]) {
         assert.ok(searchableFilenames.includes(filename), filename);
     }
-    assert.deepEqual(getSupportedFilenamesForCapability('owner'), ['CMakeLists.txt', 'GNUmakefile', 'Makefile', 'makefile']);
+    assert.deepEqual(getSupportedFilenamesForCapability('owner'), [
+        '.justfile', 'BUILD', 'BUILD.bazel', 'CMakeLists.txt', 'GNUmakefile', 'Justfile', 'Kconfig', 'Makefile',
+        'WORKSPACE', 'WORKSPACE.bazel', 'justfile', 'makefile',
+    ]);
+    assert.ok(!getSupportedFilenamesForCapability('owner').includes('Dockerfile'));
 });
 
 test('content detection keeps filename and extension authoritative', async () => {

@@ -402,15 +402,22 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
 
 // Languages whose symbols come from codebase-memory-mcp's own definition
 // extractor (language-analysis/cbm-definition-adapter.ts). A language is listed
-// only when its extractor module ships in the core pack and it passes the
-// parity gate in CBM_PARITY_EVIDENCE (recall and precision >= 0.95, at least
-// one matched definition, no extractor errors); capabilities.test.ts
-// recomputes this list from that evidence and the extractor manifest.
+// only when the extractor manifest has its module and it passes the parity gate
+// in CBM_PARITY_EVIDENCE (recall and precision >= 0.95, at least one matched
+// definition, no extractor errors); capabilities.test.ts recomputes this list
+// from that evidence and the manifest. Extended-pack modules arrive with
+// `satori install`; without them those languages degrade to searchable text.
 export const CBM_PARITY_EVIDENCE = 'docs/evidence/language-parity/2026-09-27.json';
 export const CBM_SYMBOL_LANGUAGE_IDS: readonly string[] = [
-    'bash', 'clojure', 'cmake', 'commonlisp', 'dart', 'elixir', 'elm', 'erlang', 'fsharp', 'gdscript',
-    'gleam', 'graphql', 'groovy', 'haskell', 'hcl', 'julia', 'kotlin', 'lua', 'makefile', 'ocaml',
-    'perl', 'php', 'powershell', 'protobuf', 'r', 'ruby', 'solidity', 'toml', 'zig',
+    'ada', 'agda', 'apex', 'arkts', 'assembly', 'awk', 'bash', 'cairo', 'capnp', 'cfml', 'cfscript',
+    'chialisp', 'clojure', 'cmake', 'commonlisp', 'crystal', 'cuda', 'dart', 'dlang', 'elixir', 'elm',
+    'emacslisp', 'erlang', 'fennel', 'fish', 'fsharp', 'func', 'gdscript', 'gleam', 'glsl', 'graphql',
+    'groovy', 'hare', 'haskell', 'hcl', 'hlsl', 'ini', 'ispc', 'janet', 'julia', 'justfile', 'kconfig',
+    'kotlin', 'lean', 'lua', 'luau', 'magma', 'makefile', 'matlab', 'mojo', 'move', 'ocaml', 'odin',
+    'pascal', 'perl', 'php', 'pine', 'pony', 'powershell', 'prisma', 'protobuf', 'puppet',
+    'purescript', 'qml', 'r', 'racket', 'rescript', 'ruby', 'scheme', 'slang', 'smali', 'smithy',
+    'solidity', 'squirrel', 'starlark', 'sway', 'tablegen', 'tcl', 'teal', 'templ', 'thrift',
+    'tlaplus', 'toml', 'verilog', 'vhdl', 'wgsl', 'wit', 'wolfram', 'zig',
 ];
 const CBM_SYMBOL_LANGUAGES: ReadonlySet<string> = new Set(CBM_SYMBOL_LANGUAGE_IDS);
 
@@ -433,10 +440,12 @@ function cbmSymbolLanguage(searchOnly: LanguageCapabilityDeclaration): LanguageC
 }
 
 const DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
-    ...[...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS, ...CBM_SEARCH_ONLY_DECLARATIONS].map((item) =>
-        CBM_SYMBOL_LANGUAGES.has(item.languageId) ? cbmSymbolLanguage(item) : item),
+    ...CMM_DERIVED_SEARCH_ONLY_DECLARATIONS,
+    ...CBM_SEARCH_ONLY_DECLARATIONS,
     ...SATORI_DECLARATIONS,
-].sort((a, b) => a.languageId.localeCompare(b.languageId));
+].map((item) => item.publicClaim === 'search_only' && CBM_SYMBOL_LANGUAGES.has(item.languageId)
+    ? cbmSymbolLanguage(item)
+    : item).sort((a, b) => a.languageId.localeCompare(b.languageId));
 
 const DECLARATION_BY_KEY = new Map<string, LanguageCapabilityDeclaration>();
 

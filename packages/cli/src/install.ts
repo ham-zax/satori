@@ -52,6 +52,7 @@ import {
     resolveVerifiedLateOnModel,
     resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
+import { plannedCbmExtendedDirectory, resolveCbmExtendedPath } from "./cbm-extractor-store.js";
 import {
     createInstallPlan,
     resolveDefaultPackageSpecifier,
@@ -185,6 +186,7 @@ export async function executeInstallCommand(
                         : {}),
                     potionAssetsRoot,
                     potionModelPath: plannedPotionModelDirectory(homeDir),
+                    cbmExtendedPath: plannedCbmExtendedDirectory(homeDir),
                     platform: options.platform,
                     architecture: options.architecture,
                 }) };
@@ -237,6 +239,15 @@ export async function executeInstallCommand(
                         options.modelRetryDelaysMs,
                     );
                 }
+                const cbmExtendedPath = await resolveCbmExtendedPath({
+                    homeDir,
+                    runtimePackageRoot: managedRuntimeCandidate?.packageRoot
+                        ?? (installedRuntimeCommand.args.length === 1
+                            ? readContainingPackageIdentity(installedRuntimeCommand.args[0], "@zokizuan/satori-mcp")?.packageRoot
+                            : undefined),
+                    env,
+                    options,
+                });
                 const preflightDependencies: InstallPreflightDependencies = {
                     ...managedRuntimePreflightDependencies(homeDir, installedRuntimeCommand),
                     ...options.preflightDependencies,
@@ -259,6 +270,7 @@ export async function executeInstallCommand(
                                 : {}),
                             potionAssetsRoot,
                             potionModelPath,
+                            cbmExtendedPath,
                             platform: options.platform,
                             architecture: options.architecture,
                         },

@@ -225,8 +225,8 @@ test('CMM-derived broad catalog stays tiered: symbol support only where CBM pari
     assert.deepEqual(symbolOnlyLanguages, [...CBM_SYMBOL_LANGUAGE_IDS].sort());
     assert.deepEqual(callGraphLanguages, ['cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'rust', 'scala', 'typescript']);
 
-    // Swift fails the parity gate; XML definitions are markup; Odin passes but ships in the extended pack.
-    for (const language of ['swift', 'xml', 'odin']) {
+    // Swift fails the parity gate; XML definitions are markup; YAML has no definitions.
+    for (const language of ['swift', 'xml', 'yaml']) {
         const declaration = getLanguageCapabilityDeclaration(language);
         assert.equal(declaration?.searchEligibility, 'production_ready', language);
         assert.equal(declaration?.parserCapability, 'declared', language);
@@ -273,16 +273,16 @@ test('legacy imports facade remains separate from relationship-sidecar TS/JS imp
     assert.equal(javascript?.importExportCapability, 'none');
 });
 
-test('CBM symbol languages are exactly the core-pack languages that pass the parity evidence', () => {
+test('CBM symbol languages are exactly the manifest languages that pass the parity evidence', () => {
     const evidence = JSON.parse(fs.readFileSync(resolveRepoPath(CBM_PARITY_EVIDENCE), 'utf8')) as {
         languages: Record<string, { pass: boolean; matched: number; extractorErrors?: number }>;
     };
     const manifest = JSON.parse(fs.readFileSync(resolveRepoPath('packages/core/assets/cbm-extractor/manifest.json'), 'utf8')) as {
         modules: { satoriLanguageId: string; pack: 'core' | 'extended' }[];
     };
-    const corePack = new Set(manifest.modules.filter((entry) => entry.pack === 'core').map((entry) => entry.satoriLanguageId));
+    const withModule = new Set(manifest.modules.map((entry) => entry.satoriLanguageId));
     const passing = Object.entries(evidence.languages)
-        .filter(([language, row]) => corePack.has(language) && row.pass && row.matched > 0 && !row.extractorErrors)
+        .filter(([language, row]) => withModule.has(language) && row.pass && row.matched > 0 && !row.extractorErrors)
         .map(([language]) => language)
         .sort();
     assert.deepEqual([...CBM_SYMBOL_LANGUAGE_IDS].sort(), passing);

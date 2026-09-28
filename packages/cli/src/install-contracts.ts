@@ -45,6 +45,7 @@ export const SATORI_RUNTIME_ENV_VARS = [
     "POTION_HELPER_PATH",
     "POTION_MODEL_PATH",
     "POTION_REQUEST_TIMEOUT_MS",
+    "SATORI_CBM_EXTENDED_DIR",
     "MILVUS_ADDRESS",
     "MILVUS_TOKEN",
     "READ_FILE_MAX_LINES",
@@ -76,6 +77,7 @@ export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "POTION_HELPER_PATH",
     "POTION_MODEL_PATH",
     "POTION_REQUEST_TIMEOUT_MS",
+    "SATORI_CBM_EXTENDED_DIR",
 ] as const;
 
 export type ExecFileSyncLike = typeof execFileSync;
@@ -128,6 +130,10 @@ export interface InstallCommandOptions {
     lateOnModelPath?: string;
     /** Pre-verified Potion model directory; skips acquisition (tests and explicit paths). */
     potionModelPath?: string;
+    /** Pre-verified extended CBM extractor pack; skips acquisition (tests and explicit paths). */
+    cbmExtendedPath?: string;
+    /** Non-fatal install problems, e.g. an unavailable extended language pack. */
+    onInstallWarning?: (message: string) => void;
     fetchImpl?: typeof fetch;
     /** Structural test seam for LateOn acquisition; the production default binds the frozen digest. */
     lateOnAuthorityLoader?: LateOnAuthorityLoader;

@@ -79,6 +79,8 @@ interface RunCliOptions {
     installLateOnAuthorityLoader?: LateOnAuthorityLoader;
     /** Test seam: a pre-verified Potion model directory, skipping acquisition. */
     installPotionModelPath?: string;
+    /** Test seam: a pre-verified extended CBM extractor pack directory, skipping acquisition. */
+    installCbmExtendedPath?: string;
     doctorRunner?: (options: { env: NodeJS.ProcessEnv }) => DoctorResult | Promise<DoctorResult>;
     versionResolver?: () => DoctorPackageVersion[];
     runtimeStateResolver?: (
@@ -710,6 +712,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 preflightRunner: options.installPreflightRunner,
                 lateOnAuthorityLoader: options.installLateOnAuthorityLoader,
                 potionModelPath: options.installPotionModelPath,
+                cbmExtendedPath: options.installCbmExtendedPath,
+                onInstallWarning: (message) => writers.writeStderr(`Warning: ${message}\n`),
                 onInstallProgress: wantsJson ? undefined : (phase) => {
                     writers.writeStderr(phase === "runtime"
                         ? "Installing the Satori runtime (about 30 seconds on first install)...\n"

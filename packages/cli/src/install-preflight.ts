@@ -43,6 +43,8 @@ export interface InstallPreflightInput {
     potionAssetsRoot?: string;
     /** Verified Potion model directory from the managed model cache. */
     potionModelPath?: string;
+    /** Verified extended CBM extractor pack; absent when acquisition failed or was skipped. */
+    cbmExtendedPath?: string;
     platform?: NodeJS.Platform;
     architecture?: string;
 }
@@ -560,6 +562,17 @@ export function selectedConnectedVectorStore(input: InstallPreflightInput): Inst
 }
 
 export function planInstallRuntimeEnvironment(
+    input: InstallPreflightInput,
+): Readonly<Record<string, string>> {
+    const environment = planProviderRuntimeEnvironment(input);
+    if (!input.cbmExtendedPath) return environment;
+    if (!path.isAbsolute(input.cbmExtendedPath)) {
+        throw new Error("CBM extended pack path must be absolute.");
+    }
+    return Object.freeze({ ...environment, SATORI_CBM_EXTENDED_DIR: input.cbmExtendedPath });
+}
+
+function planProviderRuntimeEnvironment(
     input: InstallPreflightInput,
 ): Readonly<Record<string, string>> {
     if (input.runtime === "voyage") {

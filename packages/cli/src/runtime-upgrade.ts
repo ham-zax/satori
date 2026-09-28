@@ -29,6 +29,7 @@ import {
     resolveVerifiedLateOnModel,
     resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
+import { resolveCbmExtendedPath } from "./cbm-extractor-store.js";
 import {
     inspectManagedClientConfigurations,
     runtimeEnvironmentWithManagedFallbacks,
@@ -306,6 +307,12 @@ export async function executeManagedRuntimeUpgrade(
                 options.modelRetryDelaysMs,
             )
             : undefined;
+        const cbmExtendedPath = await resolveCbmExtendedPath({
+            homeDir,
+            runtimePackageRoot: installedCandidate.packageRoot,
+            env: selection.effectiveEnv,
+            options,
+        });
         const preflightDependencies: InstallPreflightDependencies = {
             ...exactRuntimePreflightDependencies(installedCandidate.command),
             ...options.preflightDependencies,
@@ -326,6 +333,7 @@ export async function executeManagedRuntimeUpgrade(
                 : {}),
             potionAssetsRoot,
             potionModelPath,
+            cbmExtendedPath,
             platform: options.platform,
             architecture: options.architecture,
         }, preflightDependencies);

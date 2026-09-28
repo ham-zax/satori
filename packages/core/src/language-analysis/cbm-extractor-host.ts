@@ -55,7 +55,14 @@ class CbmExtractorHost {
     private readonly moduleByLanguage = new Map<string, CbmExtractorManifestModule>();
     private readonly instances = new Map<string, Promise<ExtractorInstance>>();
 
-    constructor(private readonly assetRoot: string) {}
+    // Core modules ship beside the manifest; the extended pack is downloaded by
+    // `satori install` and handed to the runtime as SATORI_CBM_EXTENDED_DIR
+    // (source checkouts keep it under <assetRoot>/extended).
+    private readonly extendedRoot: string;
+
+    constructor(private readonly assetRoot: string) {
+        this.extendedRoot = process.env.SATORI_CBM_EXTENDED_DIR?.trim() || path.join(assetRoot, 'extended');
+    }
 
     private loadManifest(): CbmExtractorManifest | null {
         if (this.manifest !== undefined) return this.manifest;
@@ -79,7 +86,7 @@ class CbmExtractorHost {
     }
 
     private modulePath(entry: CbmExtractorManifestModule): string {
-        return path.join(this.assetRoot, entry.pack === 'core' ? '' : 'extended', entry.file);
+        return path.join(entry.pack === 'core' ? this.assetRoot : this.extendedRoot, entry.file);
     }
 
     /** True when the manifest lists a module; a missing file surfaces at load as CbmExtractorUnavailableError. */

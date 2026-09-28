@@ -229,7 +229,7 @@ test('configured TypeScript project records and resolves a representative projec
     }
 });
 
-test('the fast TS6305 decision agrees with the checker for indirect references, bare require calls, and NodeNext conditions', () => {
+test('the fast TS6305 decision agrees with the checker for indirect references, bare require calls, NodeNext conditions, and references without declarations', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-reference-graph-'));
     const compilerOptions = {
         composite: true,
@@ -304,6 +304,18 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         const nodeNext = decide(esmConfig);
         assert.equal(nodeNext.reportsTs6305, false);
         assert.notEqual(nodeNext.fast, false);
+
+        // A referenced project that emits no declarations: the checker still
+        // expects its declaration output and reports TS6305 without it.
+        const plainOptions = { outDir: 'dist', rootDir: 'src', module: 'commonjs', target: 'ES2022', types: [] };
+        writeJson(path.join(root, 'plain/tsconfig.json'), { compilerOptions: plainOptions, include: ['src'] });
+        write(path.join(root, 'plain/src/p.ts'), 'export const p = 1;\n');
+        const plainConfig = path.join(root, 'plain-app/tsconfig.json');
+        writeJson(plainConfig, { compilerOptions, include: ['src'], references: [{ path: '../plain' }] });
+        write(path.join(root, 'plain-app/src/a.ts'), 'import { p } from "../../plain/src/p";\nexport const a = p;\n');
+        const plain = decide(plainConfig);
+        assert.equal(plain.reportsTs6305, true);
+        assert.notEqual(plain.fast, true);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

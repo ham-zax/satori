@@ -762,6 +762,10 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
         return ignoreCase ? normalized.toLowerCase() : normalized;
     };
     const missingOutputSources = new Set<string>();
+    // A referenced project that emits no declarations still gets TS6305 when
+    // the output the compiler expects is missing; that path is the compiler's
+    // to compute, so such a reference never proves readiness.
+    let unprovenReference = false;
     // The checker redirects imports into every project of the reference graph,
     // not only direct references, so walk it transitively.
     const references = [...(program.getResolvedProjectReferences() ?? [])];
@@ -776,12 +780,14 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
             if (sourceFile.endsWith('.d.ts') || sourceFile.endsWith('.json')) continue;
             const declarationOutput = ts.getOutputFileNames(reference.commandLine, sourceFile, ignoreCase)
                 .find((output) => output.endsWith('.d.ts') || output.endsWith('.d.mts') || output.endsWith('.d.cts'));
-            if (declarationOutput && !ts.sys.fileExists(declarationOutput)) {
+            if (!declarationOutput) {
+                unprovenReference = true;
+            } else if (!ts.sys.fileExists(declarationOutput)) {
                 missingOutputSources.add(key(sourceFile));
             }
         }
     }
-    if (missingOutputSources.size === 0) return true;
+    if (missingOutputSources.size === 0 && !unprovenReference) return true;
 
     const options = program.getCompilerOptions();
     const cache = ts.createModuleResolutionCache(program.getCurrentDirectory(), (name) => (ignoreCase ? name.toLowerCase() : name), options);

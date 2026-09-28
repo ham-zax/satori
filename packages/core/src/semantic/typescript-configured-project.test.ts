@@ -228,3 +228,83 @@ test('configured TypeScript project records and resolves a representative projec
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('the fast TS6305 decision agrees with the checker for indirect references, bare require calls, and NodeNext conditions', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-reference-graph-'));
+    const compilerOptions = {
+        composite: true,
+        outDir: 'dist',
+        rootDir: 'src',
+        module: 'commonjs',
+        target: 'ES2022',
+        types: [],
+    };
+    const decide = (config: string) => {
+        const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, {
+            ...ts.sys,
+            onUnRecoverableConfigFileDiagnostic: () => undefined,
+        });
+        assert.ok(parsed);
+        const program = ts.createProgram({
+            rootNames: parsed.fileNames,
+            options: parsed.options,
+            projectReferences: parsed.projectReferences,
+        });
+        const reportsTs6305 = program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
+        return { fast: unbuiltReferenceImport(program, parsed.fileNames), reportsTs6305 };
+    };
+    try {
+        writeJson(path.join(root, 'core/tsconfig.json'), { compilerOptions, include: ['src'] });
+        write(path.join(root, 'core/src/c.ts'), 'export const c = 1;\n');
+        writeJson(path.join(root, 'lib/tsconfig.json'), {
+            compilerOptions,
+            include: ['src'],
+            references: [{ path: '../core' }],
+        });
+        write(path.join(root, 'lib/src/l.ts'), 'export const l = 2;\n');
+        write(path.join(root, 'lib/dist/l.d.ts'), 'export declare const l = 2;\n');
+
+        // app references lib, lib references core; only core is unbuilt.
+        const indirectConfig = path.join(root, 'app/tsconfig.json');
+        writeJson(indirectConfig, { compilerOptions, include: ['src'], references: [{ path: '../lib' }] });
+        write(path.join(root, 'app/src/a.ts'), 'import { c } from "../../core/src/c";\nexport const a = c;\n');
+        const indirect = decide(indirectConfig);
+        assert.equal(indirect.reportsTs6305, true);
+        assert.notEqual(indirect.fast, true);
+
+        // A bare require() in a TypeScript file is not a module import.
+        const requireConfig = path.join(root, 'req/tsconfig.json');
+        writeJson(requireConfig, { compilerOptions, include: ['src'], references: [{ path: '../core' }] });
+        write(
+            path.join(root, 'req/src/r.ts'),
+            'declare const require: (id: string) => unknown;\nexport const r = require("../../core/src/c");\n',
+        );
+        const bareRequire = decide(requireConfig);
+        assert.equal(bareRequire.reportsTs6305, false);
+        assert.notEqual(bareRequire.fast, false);
+
+        // NodeNext: the import condition reaches a built entry, the require
+        // condition an unbuilt one. Only the import condition applies here.
+        const nodeNextOptions = { ...compilerOptions, module: 'NodeNext', moduleResolution: 'NodeNext' };
+        writeJson(path.join(root, 'dual/tsconfig.json'), { compilerOptions: nodeNextOptions, include: ['src'] });
+        writeJson(path.join(root, 'dual/package.json'), {
+            name: 'dual',
+            type: 'module',
+            exports: { '.': { import: './src/esm.ts', require: './src/cjs.ts' } },
+        });
+        write(path.join(root, 'dual/src/esm.ts'), 'export const esm = 1;\n');
+        write(path.join(root, 'dual/src/cjs.ts'), 'export const cjs = 1;\n');
+        write(path.join(root, 'dual/dist/esm.d.ts'), 'export declare const esm = 1;\n');
+        const esmConfig = path.join(root, 'esm-app/tsconfig.json');
+        writeJson(esmConfig, { compilerOptions: nodeNextOptions, include: ['src'], references: [{ path: '../dual' }] });
+        writeJson(path.join(root, 'esm-app/package.json'), { name: 'esm-app', type: 'module' });
+        fs.mkdirSync(path.join(root, 'esm-app/node_modules'), { recursive: true });
+        fs.symlinkSync(path.join(root, 'dual'), path.join(root, 'esm-app/node_modules/dual'), 'dir');
+        write(path.join(root, 'esm-app/src/a.ts'), 'import { esm } from "dual";\nexport const a = esm;\n');
+        const nodeNext = decide(esmConfig);
+        assert.equal(nodeNext.reportsTs6305, false);
+        assert.notEqual(nodeNext.fast, false);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

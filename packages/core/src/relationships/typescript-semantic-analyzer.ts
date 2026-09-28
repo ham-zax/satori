@@ -574,6 +574,50 @@ function diagnosticIdentity(errors: readonly ts.Diagnostic[]): readonly number[]
 
 
 /**
+ * Module specifiers of a file's import sites. Missing a site only makes the
+ * TS6305 decision fall back to diagnostics; a site that is not an import (a
+ * bare require() in a TypeScript file) would make it wrong, so none is added.
+ */
+function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLike[] {
+    const specifiers: ts.StringLiteralLike[] = [];
+    const javaScript = /\.[cm]?jsx?$/i.test(sourceFile.fileName);
+    const visit = (node: ts.Node): void => {
+        if (
+            (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+            && node.moduleSpecifier
+            && ts.isStringLiteralLike(node.moduleSpecifier)
+        ) {
+            specifiers.push(node.moduleSpecifier);
+        } else if (
+            ts.isImportEqualsDeclaration(node)
+            && ts.isExternalModuleReference(node.moduleReference)
+            && ts.isStringLiteralLike(node.moduleReference.expression)
+        ) {
+            specifiers.push(node.moduleReference.expression);
+        } else if (
+            ts.isCallExpression(node)
+            && node.arguments.length > 0
+            && ts.isStringLiteralLike(node.arguments[0])
+            && (
+                node.expression.kind === ts.SyntaxKind.ImportKeyword
+                || (javaScript && ts.isIdentifier(node.expression) && node.expression.text === 'require')
+            )
+        ) {
+            specifiers.push(node.arguments[0]);
+        } else if (
+            ts.isImportTypeNode(node)
+            && ts.isLiteralTypeNode(node.argument)
+            && ts.isStringLiteralLike(node.argument.literal)
+        ) {
+            specifiers.push(node.argument.literal);
+        }
+        ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    return specifiers;
+}
+
+/**
  * Decides, without type-checking every file, whether a project with references
  * would report TS6305 ("Output file has not been built from source file"): the
  * checker reports it when an import resolves to a referenced project's source
@@ -591,8 +635,16 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
         return ignoreCase ? normalized.toLowerCase() : normalized;
     };
     const missingOutputSources = new Set<string>();
-    for (const reference of program.getResolvedProjectReferences() ?? []) {
+    // The checker redirects imports into every project of the reference graph,
+    // not only direct references, so walk it transitively.
+    const references = [...(program.getResolvedProjectReferences() ?? [])];
+    const visitedConfigs = new Set<string>();
+    while (references.length > 0) {
+        const reference = references.pop();
         if (!reference) return undefined;
+        if (visitedConfigs.has(key(reference.sourceFile.fileName))) continue;
+        visitedConfigs.add(key(reference.sourceFile.fileName));
+        references.push(...(reference.references ?? []));
         for (const sourceFile of reference.commandLine.fileNames) {
             if (sourceFile.endsWith('.d.ts') || sourceFile.endsWith('.json')) continue;
             const declarationOutput = ts.getOutputFileNames(reference.commandLine, sourceFile, ignoreCase)
@@ -609,8 +661,18 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
     for (const projectFile of projectFiles) {
         const sourceFile = program.getSourceFile(projectFile);
         if (!sourceFile || sourceFile.isDeclarationFile) continue;
-        for (const imported of ts.preProcessFile(sourceFile.text, true, true).importedFiles) {
-            const resolved = ts.resolveModuleName(imported.fileName, sourceFile.fileName, options, ts.sys, cache).resolvedModule;
+        for (const specifier of moduleSpecifiers(sourceFile)) {
+            // Resolve in the mode the program uses for this import site (import
+            // vs require conditions under Node16/NodeNext).
+            const resolved = ts.resolveModuleName(
+                specifier.text,
+                sourceFile.fileName,
+                options,
+                ts.sys,
+                cache,
+                undefined,
+                program.getModeForUsageLocation(sourceFile, specifier),
+            ).resolvedModule;
             if (resolved && missingOutputSources.has(key(resolved.resolvedFileName))) return false;
         }
     }

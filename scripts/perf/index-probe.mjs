@@ -159,12 +159,13 @@ async function main() {
         }
     };
 
+    let rssTimer;
     try {
         await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'index-probe', version: '1' } });
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
 
         let peakRssMb = 0;
-        const rssTimer = setInterval(() => { peakRssMb = Math.max(peakRssMb, treeRssMb(child.pid)); }, 200);
+        rssTimer = setInterval(() => { peakRssMb = Math.max(peakRssMb, treeRssMb(child.pid)); }, 200);
         const indexStarted = performance.now();
         await tool('manage_index', { action: 'create', path: options.repo });
         const operation = await waitForGeneration();
@@ -185,6 +186,7 @@ async function main() {
             }
         }
     } finally {
+        clearInterval(rssTimer);
         child.stdin.end();
         await new Promise((resolve) => child.once('close', resolve));
         log.end();

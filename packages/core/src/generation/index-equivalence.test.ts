@@ -81,11 +81,12 @@ async function withSetting<T>(setting: ToggleSetting, run: () => Promise<T>): Pr
     };
     const originalLoadAnalyzer = lazy.loadAnalyzer;
     lazy.loadAnalyzer = function () {
+        // One unsharded analyzer: the worker path shards projects across threads.
         this.analyzerPromise ??= Promise.resolve(new TypeScriptSemanticProjectAnalyzer(
             this.maxSessions,
             undefined,
             undefined,
-            this.stateDirectory,
+            { stateDirectory: this.stateDirectory },
         ));
         return this.analyzerPromise;
     };

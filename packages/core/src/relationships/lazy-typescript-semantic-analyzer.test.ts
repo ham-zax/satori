@@ -10,9 +10,12 @@ test('the TypeScript resolution worker is replaced after it dies', { timeout: 30
         const before = await analyzer.getProviderMetadata('typescript');
         assert.ok(before?.providerId);
 
-        const inner = await (analyzer as unknown as { analyzerPromise: Promise<{ worker?: Worker }> }).analyzerPromise;
-        assert.ok(inner.worker, 'expected the worker-backed analyzer');
-        await inner.worker.terminate();
+        const inner = await (analyzer as unknown as {
+            analyzerPromise: Promise<{ shards: readonly { worker?: Worker }[] }>;
+        }).analyzerPromise;
+        const worker = inner.shards[0]?.worker;
+        assert.ok(worker, 'expected the worker-backed analyzer');
+        await worker.terminate();
 
         assert.deepEqual(await analyzer.getProviderMetadata('typescript'), before);
     } finally {

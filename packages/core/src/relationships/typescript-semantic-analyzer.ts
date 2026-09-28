@@ -25,6 +25,7 @@ import type {
     ResolutionProjectInput,
 } from './resolution';
 import { buildTypeScriptResolutionClaims } from './typescript-resolution';
+import type { TypeScriptResourceFailureRank, TypeScriptShardEvidence } from './typescript-resolution-shards';
 import { perfTrace } from '../utils/perf-trace';
 
 const TYPESCRIPT_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
@@ -805,6 +806,40 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
     return undefined;
 }
 
+export interface TypeScriptSemanticAnalyzerOptions {
+    /**
+     * Where each root's last state is kept, so a delta in a new process (the
+     * sync worker is one per operation) does not re-analyze every file.
+     */
+    readonly stateDirectory?: string;
+    /**
+     * Analyze only the projects this shard owns; other shards analyze the rest
+     * and their evidence is merged (see typescript-resolution-shards).
+     */
+    readonly shard?: Readonly<{ index: number; count: number }>;
+}
+
+/**
+ * Largest projects first, each to the least-loaded shard. Deterministic for a
+ * given plan set, so every shard derives the same assignment.
+ */
+function assignProjectShards(plans: readonly ProjectPlan[], count: number): Map<string, number> {
+    const loads = new Array<number>(count).fill(0);
+    const owner = new Map<string, number>();
+    const bySize = [...plans].sort((left, right) => (
+        right.relativeFiles.length - left.relativeFiles.length || left.key.localeCompare(right.key)
+    ));
+    for (const plan of bySize) {
+        let target = 0;
+        for (let index = 1; index < count; index += 1) {
+            if (loads[index] < loads[target]) target = index;
+        }
+        owner.set(plan.key, target);
+        loads[target] += plan.relativeFiles.length;
+    }
+    return owner;
+}
+
 export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private readonly sessions = new Map<string, CachedSession>();
     private readonly rootStates = new Map<string, RootResolutionState>();
@@ -817,11 +852,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         private readonly resourceBudget: TypeScriptSemanticResourceBudget =
             DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET,
         private readonly idleReleaseMs: number = DEFAULT_SESSION_IDLE_RELEASE_MS,
-        /**
-         * Where each root's last state is kept, so a delta in a new process (the
-         * sync worker is one per operation) does not re-analyze every file.
-         */
-        private readonly stateDirectory?: string,
+        private readonly options: TypeScriptSemanticAnalyzerOptions = {},
     ) {
         if (!Number.isInteger(maxSessions) || maxSessions < 1) {
             throw new Error('TypeScript semantic session cache bound must be a positive integer.');
@@ -859,6 +890,11 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     async analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        return (await this.analyzeShard(input)).evidence;
+    }
+
+    /** `analyze`, plus where a resource-limit failure was met, for merging shards. */
+    async analyzeShard(input: ResolutionProjectInput): Promise<TypeScriptShardEvidence> {
         clearTimeout(this.idleReleaseTimer);
         this.activeAnalyses += 1;
         try {
@@ -877,7 +913,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         this.idleReleaseTimer.unref?.();
     }
 
-    private async analyzeProjects(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+    private async analyzeProjects(input: ResolutionProjectInput): Promise<TypeScriptShardEvidence> {
         if (!this.supportsLanguage(input.language)) {
             throw new Error(`Unsupported resolution language '${input.language}'.`);
         }
@@ -888,7 +924,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             .sort();
 
         if (typeScriptFiles.length === 0) {
-            return {
+            return { evidence: {
                 language: 'typescript',
                 providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
                 providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
@@ -905,19 +941,26 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     sourceFileCount: 0,
                     analyzedSourceFileCount: 0,
                 },
-            };
+            } };
         }
 
         const plans = this.discoverPlans(rootPath, typeScriptFiles);
+        const shard = this.options.shard;
+        const shardOwner = shard ? assignProjectShards(plans, shard.count) : undefined;
+        const owns = (plan: ProjectPlan) => !shard || shardOwner!.get(plan.key) === shard.index;
+        const planIndex = new Map(plans.map((plan, index) => [plan.key, index]));
         const currentFileToProject = new Map<string, string>();
         for (const plan of plans) {
             for (const file of plan.relativeFiles) currentFileToProject.set(file, plan.key);
         }
         const sourceControlFiles = [...new Set(plans.flatMap((plan) => plan.controlFiles))].sort();
         const evidenceEnvironmentConfigId = projectSetEnvironmentConfigId(plans, this.resourceBudget);
-        const resourceLimitEvidence = (failureMessage: string): ResolutionProjectEvidence => {
+        const resourceLimitEvidence = (
+            failureMessage: string,
+            resourceFailure: TypeScriptResourceFailureRank,
+        ): TypeScriptShardEvidence => {
             this.clearSessionState();
-            return {
+            return { resourceFailure, evidence: {
                 language: 'typescript',
                 providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
                 providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
@@ -936,11 +979,11 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     failureReason: 'resource_limit',
                     failureMessage,
                 },
-            };
+            } };
         };
         const rootResourceFailure = compilerRootResourceFailure(plans, this.resourceBudget);
         if (rootResourceFailure) {
-            return resourceLimitEvidence(rootResourceFailure);
+            return resourceLimitEvidence(rootResourceFailure, [0, 0]);
         }
 
         const changedFiles = input.changedFiles
@@ -996,8 +1039,23 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         for (const plan of plans) {
-            const previous = previousState?.snapshots.get(plan.key);
             const currentFiles = new Set(plan.relativeFiles);
+            if (!owns(plan)) {
+                // Another shard analyzes this project; keep only what reference
+                // propagation needs next time.
+                currentSnapshots.set(plan.key, {
+                    environmentConfigId: plan.environmentConfigId,
+                    files: currentFiles,
+                    reverseDependencies: new Map(),
+                    projectGlobalSourceFiles: new Set(),
+                    referencedProjectKeys: new Set(plan.referencedProjectKeys),
+                    unresolvedImports: false,
+                });
+                continue;
+            }
+            // A snapshot without readiness was kept for another shard's project.
+            const kept = previousState?.snapshots.get(plan.key);
+            const previous = kept?.referenceAuthorityReady === undefined ? undefined : kept;
             const environmentChanged = referenceInvalidated.has(plan.key);
 
             // Changed files the previous analysis of this project depended on:
@@ -1053,7 +1111,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             }
             const updateResourceFailure = session.getResourceLimitFailure();
             if (updateResourceFailure) {
-                return resourceLimitEvidence(updateResourceFailure);
+                return resourceLimitEvidence(updateResourceFailure, [1, planIndex.get(plan.key)!]);
             }
 
             const programStartedAt = performance.now();
@@ -1061,7 +1119,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             perfTrace('typescript.program', performance.now() - programStartedAt, { project: plan.key, files: plan.relativeFiles.length });
             const programResourceFailure = session.getResourceLimitFailure();
             if (programResourceFailure) {
-                return resourceLimitEvidence(programResourceFailure);
+                return resourceLimitEvidence(programResourceFailure, [1, planIndex.get(plan.key)!]);
             }
             let referenceAuthorityReady = true;
             if (plan.referencedProjectKeys.length > 0) {
@@ -1076,7 +1134,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 });
                 const diagnosticResourceFailure = session.getResourceLimitFailure();
                 if (diagnosticResourceFailure) {
-                    return resourceLimitEvidence(diagnosticResourceFailure);
+                    return resourceLimitEvidence(diagnosticResourceFailure, [1, planIndex.get(plan.key)!]);
                 }
             }
             projectReferenceAuthorityReady.set(plan.key, referenceAuthorityReady);
@@ -1120,7 +1178,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         // change in it affects the whole project, not only the changed files.
         for (const plan of plans) {
             const snapshot = currentSnapshots.get(plan.key);
-            if (!snapshot) continue;
+            if (!snapshot || !owns(plan)) continue;
             const ready = projectReferenceAuthorityReady.get(plan.key) ?? true;
             const previousReady = previousState?.snapshots.get(plan.key)?.referenceAuthorityReady;
             if (previousReady !== undefined && previousReady !== ready) {
@@ -1130,7 +1188,10 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         }
 
         const unavailableSourceFiles = new Set<string>();
+        let ownedSourceFileCount = 0;
         for (const plan of plans) {
+            if (!owns(plan)) continue;
+            ownedSourceFileCount += plan.relativeFiles.length;
             if (plan.configErrors.length > 0 || projectReferenceAuthorityReady.get(plan.key) === false) {
                 for (const file of plan.relativeFiles) unavailableSourceFiles.add(file);
             }
@@ -1140,6 +1201,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const affectedSourceFiles = new Set<string>();
 
         for (const plan of plans) {
+            if (!owns(plan)) continue;
             const affected = affectedByProject.get(plan.key) ?? new Set<string>();
             for (const file of affected) {
                 if (manifestByPath.has(file)) affectedSourceFiles.add(file);
@@ -1160,12 +1222,12 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             const activeSession = this.sessions.get(plan.key)!.session;
             const activeResourceFailure = activeSession.getResourceLimitFailure();
             if (activeResourceFailure) {
-                return resourceLimitEvidence(activeResourceFailure);
+                return resourceLimitEvidence(activeResourceFailure, [2, planIndex.get(plan.key)!]);
             }
             const program = activeSession.getProgram();
             const activeProgramResourceFailure = activeSession.getResourceLimitFailure();
             if (activeProgramResourceFailure) {
-                return resourceLimitEvidence(activeProgramResourceFailure);
+                return resourceLimitEvidence(activeProgramResourceFailure, [2, planIndex.get(plan.key)!]);
             }
 
             if (plan.configErrors.length > 0 || projectReferenceAuthorityReady.get(plan.key) === false) {
@@ -1210,7 +1272,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         this.rootStates.set(rootPath, state);
         this.persistRootState(rootPath, state);
 
-        return {
+        // Unsharded, every TypeScript file belongs to one of the plans.
+        const sourceFileCount = shard ? ownedSourceFileCount : typeScriptFiles.length;
+        return { evidence: {
             language: 'typescript',
             providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,
             providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
@@ -1225,16 +1289,16 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 environmentConfigId: evidenceEnvironmentConfigId,
                 status: unavailableSourceFiles.size === 0
                     ? 'complete'
-                    : unavailableSourceFiles.size === typeScriptFiles.length
+                    : unavailableSourceFiles.size === sourceFileCount
                         ? 'unavailable'
                         : 'degraded',
-                sourceFileCount: typeScriptFiles.length,
+                sourceFileCount,
                 analyzedSourceFileCount: Math.max(
                     0,
-                    typeScriptFiles.length - unavailableSourceFiles.size,
+                    sourceFileCount - unavailableSourceFiles.size,
                 ),
             },
-        };
+        } };
     }
 
     getSessionStats(): { readonly active: number; readonly max: number; readonly keys: readonly string[] } {
@@ -1269,7 +1333,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const digest = registryDigest(previousRegistry);
         const inMemory = this.rootStates.get(rootPath);
         if (inMemory?.registryDigest === digest) return inMemory;
-        if (!this.stateDirectory) return undefined;
+        if (!this.options.stateDirectory) return undefined;
         let text: string;
         try {
             text = fs.readFileSync(this.rootStatePath(rootPath), 'utf8');
@@ -1282,11 +1346,11 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
 
     /** Best effort: a missing or unreadable state only costs a full analysis. */
     private persistRootState(rootPath: string, state: RootResolutionState): void {
-        if (!this.stateDirectory) return;
+        if (!this.options.stateDirectory) return;
         const target = this.rootStatePath(rootPath);
         const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
         try {
-            fs.mkdirSync(this.stateDirectory, { recursive: true });
+            fs.mkdirSync(this.options.stateDirectory, { recursive: true });
             fs.writeFileSync(temporary, serializeRootState(rootPath, state));
             fs.renameSync(temporary, target);
         } catch (error) {
@@ -1296,7 +1360,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     private rootStatePath(rootPath: string): string {
-        return path.join(this.stateDirectory!, `${createHash('sha256').update(rootPath).digest('hex')}.json`);
+        const shard = this.options.shard;
+        const suffix = shard ? `.shard-${shard.index}-of-${shard.count}` : '';
+        return path.join(this.options.stateDirectory!, `${createHash('sha256').update(rootPath).digest('hex')}${suffix}.json`);
     }
 
     private releaseSession(key: string): void {

@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { Worker } from 'node:worker_threads';
 import { filterWorkerExecArgv, resolveWorkerScriptPath } from '../utils/worker-threads';
 import type {
@@ -9,6 +10,10 @@ import type {
     TypeScriptResolutionWorkerRequest,
     TypeScriptResolutionWorkerResponse,
 } from './typescript-resolution-worker-runner';
+import { mergeTypeScriptShardEvidence, type TypeScriptShardEvidence } from './typescript-resolution-shards';
+
+/** TypeScript projects are analyzed on this many worker threads at most. */
+const MAX_TYPESCRIPT_RESOLUTION_SHARDS = 3;
 
 type SourceControlInput = {
     readonly rootPath: string;
@@ -29,7 +34,7 @@ type WorkerRequestBody =
  * fails its pending requests; the next request starts a fresh one, which is
  * the same cold state as a new process.
  */
-class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
+class WorkerTypeScriptResolutionAnalyzer {
     private worker: Worker | undefined;
     private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
     private nextId = 1;
@@ -38,14 +43,11 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     constructor(
         private readonly maxSessions: number,
         private readonly stateDirectory: string | undefined,
+        private readonly shard: Readonly<{ index: number; count: number }> | undefined,
     ) {}
 
-    supportsLanguage(language: string): boolean {
-        return language.trim().toLowerCase() === 'typescript';
-    }
-
-    analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
-        return this.request({ method: 'analyze', input }) as Promise<ResolutionProjectEvidence>;
+    analyzeShard(input: ResolutionProjectInput): Promise<TypeScriptShardEvidence> {
+        return this.request({ method: 'analyze', input }) as Promise<TypeScriptShardEvidence>;
     }
 
     getProviderMetadata(language: string) {
@@ -70,7 +72,7 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     private startWorker(): Worker {
         const worker = new Worker(resolveWorkerScriptPath(__filename, 'typescript-resolution-worker-runner'), {
             execArgv: filterWorkerExecArgv(),
-            workerData: { maxSessions: this.maxSessions, stateDirectory: this.stateDirectory },
+            workerData: { maxSessions: this.maxSessions, stateDirectory: this.stateDirectory, shard: this.shard },
         });
         worker.unref();
         worker.on('message', (response: TypeScriptResolutionWorkerResponse) => {
@@ -123,6 +125,54 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     }
 }
 
+/**
+ * Splits TypeScript projects across worker threads (the analyzer's `shard`
+ * option) and merges their evidence into what one analyzer returns. Metadata
+ * requests go to the first shard only.
+ */
+class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
+    readonly shards: readonly WorkerTypeScriptResolutionAnalyzer[];
+
+    constructor(maxSessions: number, stateDirectory: string | undefined, count: number) {
+        this.shards = Array.from({ length: count }, (_, index) => new WorkerTypeScriptResolutionAnalyzer(
+            count === 1 ? maxSessions : Math.max(2, Math.ceil(maxSessions / count)),
+            stateDirectory,
+            count === 1 ? undefined : { index, count },
+        ));
+    }
+
+    supportsLanguage(language: string): boolean {
+        return language.trim().toLowerCase() === 'typescript';
+    }
+
+    async analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        // Wait for every shard, even after one fails, so no worker is still
+        // analyzing when this returns.
+        const settled = await Promise.allSettled(this.shards.map((shard) => shard.analyzeShard(input)));
+        const failed = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        return mergeTypeScriptShardEvidence(settled.map((result) => (
+            (result as PromiseFulfilledResult<TypeScriptShardEvidence>).value
+        )));
+    }
+
+    getProviderMetadata(language: string) {
+        return this.shards[0].getProviderMetadata(language);
+    }
+
+    getSourceControlFiles(input: SourceControlInput): Promise<readonly string[]> {
+        return this.shards[0].getSourceControlFiles(input);
+    }
+
+    async dispose(): Promise<void> {
+        await Promise.all(this.shards.map((shard) => shard.dispose()));
+    }
+}
+
+function resolutionShardCount(): number {
+    return Math.max(1, Math.min(MAX_TYPESCRIPT_RESOLUTION_SHARDS, os.availableParallelism() - 1));
+}
+
 export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private analyzerPromise?: Promise<ResolutionProjectAnalyzer>;
 
@@ -130,6 +180,7 @@ export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectA
     constructor(
         private readonly maxSessions = 4,
         private readonly stateDirectory?: string,
+        private readonly shardCount = resolutionShardCount(),
     ) {}
 
     supportsLanguage(language: string): boolean {
@@ -159,7 +210,11 @@ export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectA
     }
 
     private loadAnalyzer(): Promise<ResolutionProjectAnalyzer> {
-        this.analyzerPromise ??= Promise.resolve(new WorkerTypeScriptResolutionAnalyzer(this.maxSessions, this.stateDirectory));
+        this.analyzerPromise ??= Promise.resolve(new ShardedTypeScriptResolutionAnalyzer(
+            this.maxSessions,
+            this.stateDirectory,
+            this.shardCount,
+        ));
         return this.analyzerPromise;
     }
 }

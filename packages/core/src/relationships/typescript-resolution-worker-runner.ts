@@ -12,15 +12,22 @@ export type TypeScriptResolutionWorkerResponse =
     | { id: number; ok: false; error: string };
 
 // One analyzer per worker keeps its TypeScript sessions and snapshots across calls.
-const options = workerData as { maxSessions: number; stateDirectory?: string };
-const analyzer = new TypeScriptSemanticProjectAnalyzer(options.maxSessions, undefined, undefined, options.stateDirectory);
+const options = workerData as {
+    maxSessions: number;
+    stateDirectory?: string;
+    shard?: { index: number; count: number };
+};
+const analyzer = new TypeScriptSemanticProjectAnalyzer(options.maxSessions, undefined, undefined, {
+    stateDirectory: options.stateDirectory,
+    shard: options.shard,
+});
 
 if (parentPort) {
     const port = parentPort;
     port.on('message', async (request: TypeScriptResolutionWorkerRequest) => {
         try {
             const value = request.method === 'analyze'
-                ? await analyzer.analyze(request.input)
+                ? await analyzer.analyzeShard(request.input)
                 : request.method === 'getProviderMetadata'
                     ? await analyzer.getProviderMetadata?.(request.language)
                     : await analyzer.getSourceControlFiles?.(request.input);

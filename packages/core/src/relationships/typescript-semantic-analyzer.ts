@@ -181,10 +181,11 @@ function parseRootState(text: string, rootPath: string): RootResolutionState | u
         const snapshots = new Map<string, ProjectSnapshot>();
         for (const [key, value] of pairs(raw.snapshots)) {
             const snapshot = value as Record<string, unknown>;
+            // Readiness is absent for projects another shard analyzes.
             if (
                 typeof key !== 'string'
                 || typeof snapshot.environmentConfigId !== 'string'
-                || typeof snapshot.referenceAuthorityReady !== 'boolean'
+                || (snapshot.referenceAuthorityReady !== undefined && typeof snapshot.referenceAuthorityReady !== 'boolean')
                 || typeof snapshot.unresolvedImports !== 'boolean'
             ) {
                 return undefined;
@@ -197,7 +198,9 @@ function parseRootState(text: string, rootPath: string): RootResolutionState | u
                 ))),
                 projectGlobalSourceFiles: new Set(strings(snapshot.projectGlobalSourceFiles)),
                 referencedProjectKeys: new Set(strings(snapshot.referencedProjectKeys)),
-                referenceAuthorityReady: snapshot.referenceAuthorityReady,
+                ...(snapshot.referenceAuthorityReady === undefined
+                    ? {}
+                    : { referenceAuthorityReady: snapshot.referenceAuthorityReady as boolean }),
                 unresolvedImports: snapshot.unresolvedImports,
             });
         }

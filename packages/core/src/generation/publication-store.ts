@@ -679,11 +679,11 @@ export class PublicationStore {
                     this.writeDurableFile(descriptorPath, `${JSON.stringify(validated, null, 2)}\n`);
                 }
 
-                if (validated.navigation !== null) {
-                    const navigationRoot = path.join(generationRoot, validated.navigation.relativeRoot);
-                    if (!fs.statSync(navigationRoot).isDirectory()) {
-                        throw new Error(`Publication '${validated.id}' navigation resource is not a directory.`);
-                    }
+                const navigationRoot = validated.navigation === null
+                    ? undefined
+                    : path.join(generationRoot, validated.navigation.relativeRoot);
+                if (navigationRoot !== undefined && !fs.statSync(navigationRoot).isDirectory()) {
+                    throw new Error(`Publication '${validated.id}' navigation resource is not a directory.`);
                 }
 
                 const sourceCheckpoint = this.getSourceCheckpoint(canonicalRoot, validated.id);
@@ -696,7 +696,7 @@ export class PublicationStore {
 
                 // Make every staged local candidate resource durable before its ID can
                 // become reachable from current.json.
-                this.fsyncTree(generationRoot);
+                this.fsyncTree(generationRoot, navigationRoot);
                 this.fsyncDirectory(generationsRoot);
                 this.fsyncDirectory(publicationRoot);
                 this.fsyncDirectory(this.publicationsRoot);
@@ -1226,17 +1226,25 @@ export class PublicationStore {
         }
     }
 
-    private fsyncTree(rootPath: string): void {
+    /**
+     * Validates the candidate tree and fsyncs its directories and files. Files
+     * under `stagedDurableRoot` are skipped: navigation staging already made
+     * them durable (written shards are fsynced, shared shards are hard links to
+     * durable files), and fsyncing a freshly linked inode commits the journal
+     * once per file. Directories are always synced, which makes each link durable.
+     */
+    private fsyncTree(rootPath: string, stagedDurableRoot?: string, syncFiles = true): void {
         for (const entry of fs.readdirSync(rootPath, { withFileTypes: true })) {
             const childPath = path.join(rootPath, entry.name);
             if (entry.isSymbolicLink()) {
                 throw new Error(`Publication candidate contains unsupported symbolic link '${childPath}'.`);
             }
             if (entry.isDirectory()) {
-                this.fsyncTree(childPath);
+                this.fsyncTree(childPath, stagedDurableRoot, syncFiles && childPath !== stagedDurableRoot);
                 continue;
             }
             if (entry.isFile()) {
+                if (!syncFiles) continue;
                 const descriptor = fs.openSync(childPath, 'r');
                 try {
                     fs.fsyncSync(descriptor);

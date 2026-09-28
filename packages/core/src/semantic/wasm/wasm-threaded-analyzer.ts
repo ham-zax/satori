@@ -41,20 +41,84 @@ function filterWorkerExecArgv(): string[] {
     return result;
 }
 
+/** WebAssembly memory never shrinks, so an idle worker is released to return it to the OS. */
+export const DEFAULT_SEMANTIC_WORKER_IDLE_RELEASE_MS = 30_000;
+/** Bounds one language batch; a stuck resolver would otherwise stall indexing forever. */
+export const DEFAULT_SEMANTIC_REQUEST_TIMEOUT_MS = 10 * 60_000;
+
+export interface ThreadedSemanticAnalyzerOptions {
+    readonly idleReleaseMs?: number;
+    readonly requestTimeoutMs?: number;
+}
+
+interface PendingSemanticRequest {
+    readonly worker: Worker;
+    readonly timer: NodeJS.Timeout;
+    readonly resolve: (val: SemanticProjectEvidence) => void;
+    readonly reject: (err: Error) => void;
+}
+
 export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
     private worker: Worker | null = null;
     private disposed = false;
     private nextRequestId = 1;
-    private readonly pendingRequests = new Map<number, {
-        resolve: (val: SemanticProjectEvidence) => void;
-        reject: (err: Error) => void;
-    }>();
+    private idleTimer: NodeJS.Timeout | null = null;
+    private readonly pendingRequests = new Map<number, PendingSemanticRequest>();
     private readonly fallbackAnalyzer: WasmSemanticProjectAnalyzer;
+    private readonly idleReleaseMs: number;
+    private readonly requestTimeoutMs: number;
 
     constructor(
         private readonly languageRegistry: SemanticLanguageRegistry = defaultSemanticLanguageRegistry,
+        options: ThreadedSemanticAnalyzerOptions = {},
     ) {
         this.fallbackAnalyzer = new WasmSemanticProjectAnalyzer(undefined, languageRegistry);
+        this.idleReleaseMs = options.idleReleaseMs ?? DEFAULT_SEMANTIC_WORKER_IDLE_RELEASE_MS;
+        this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_SEMANTIC_REQUEST_TIMEOUT_MS;
+    }
+
+    /** Settles one request: clears its deadline and, once nothing is pending, arms the idle release. */
+    private takePending(id: number): PendingSemanticRequest | undefined {
+        const pending = this.pendingRequests.get(id);
+        if (!pending) return undefined;
+        this.pendingRequests.delete(id);
+        clearTimeout(pending.timer);
+        this.scheduleIdleRelease();
+        return pending;
+    }
+
+    private rejectPendingFor(worker: Worker, error: Error): void {
+        for (const [id, pending] of this.pendingRequests) {
+            if (pending.worker !== worker) continue;
+            this.pendingRequests.delete(id);
+            clearTimeout(pending.timer);
+            pending.reject(error);
+        }
+    }
+
+    private scheduleIdleRelease(): void {
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+        if (this.pendingRequests.size > 0 || !this.worker || this.disposed) return;
+        this.idleTimer = setTimeout(() => {
+            this.idleTimer = null;
+            if (this.pendingRequests.size === 0) this.releaseWorker();
+        }, this.idleReleaseMs);
+        this.idleTimer.unref();
+    }
+
+    /** Stops the current worker; the next analyze() starts a fresh one. */
+    private releaseWorker(error?: Error): void {
+        const worker = this.worker;
+        if (!worker) return;
+        this.worker = null;
+        if (error) this.rejectPendingFor(worker, error);
+        void worker.terminate();
+    }
+
+    /** True while a worker (and its WebAssembly memory) is alive. */
+    hasLiveWorker(): boolean {
+        return this.worker !== null;
     }
 
     supportsLanguage(language: string): boolean {
@@ -73,9 +137,8 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             this.worker = worker;
 
             worker.on('message', (response: WasmWorkerResponse) => {
-                const pending = this.pendingRequests.get(response.id);
+                const pending = this.takePending(response.id);
                 if (!pending) return;
-                this.pendingRequests.delete(response.id);
                 if (response.success) {
                     const occurrencesByFile = new Map<string, SemanticResolvedOccurrence[]>(
                         response.evidence.occurrencesEntries,
@@ -92,20 +155,16 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             });
 
             worker.on('error', (err) => {
-                for (const [, req] of this.pendingRequests) {
-                    req.reject(err);
-                }
-                this.pendingRequests.clear();
+                this.rejectPendingFor(worker, err);
             });
 
             worker.on('exit', (code) => {
-                if (code !== 0) {
-                    const exitError = new Error(`CBM Semantic Worker stopped unexpectedly with exit code ${code}`);
-                    for (const [, req] of this.pendingRequests) {
-                        req.reject(exitError);
-                    }
-                    this.pendingRequests.clear();
-                }
+                // Only this worker's requests: a released worker may exit after
+                // its replacement has taken new requests.
+                this.rejectPendingFor(
+                    worker,
+                    new Error(`CBM Semantic Worker stopped unexpectedly with exit code ${code}`),
+                );
                 if (this.worker === worker) {
                     this.worker = null;
                 }
@@ -127,10 +186,22 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
 
         const id = this.nextRequestId++;
         const worker = this.getOrCreateWorker();
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+        }
         const request: WasmWorkerRequest = { id, input };
 
         return new Promise<SemanticProjectEvidence>((resolve, reject) => {
-            this.pendingRequests.set(id, { resolve, reject });
+            const timer = setTimeout(() => {
+                if (!this.pendingRequests.has(id)) return;
+                // The worker is stuck in this request; stopping it is the only way out.
+                this.releaseWorker(new Error(
+                    `Semantic analysis for '${input.language}' timed out after ${this.requestTimeoutMs} ms`,
+                ));
+            }, this.requestTimeoutMs);
+            timer.unref();
+            this.pendingRequests.set(id, { worker, timer, resolve, reject });
             worker.postMessage(request);
         });
     }
@@ -138,11 +209,14 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
     async dispose(): Promise<void> {
         if (this.disposed) return;
         this.disposed = true;
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        this.idleTimer = null;
 
         const worker = this.worker;
         this.worker = null;
 
         for (const [, req] of this.pendingRequests) {
+            clearTimeout(req.timer);
             req.reject(new Error('Semantic analyzer disposed while request was pending'));
         }
         this.pendingRequests.clear();

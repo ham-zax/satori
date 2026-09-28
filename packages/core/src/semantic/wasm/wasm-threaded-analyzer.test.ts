@@ -184,3 +184,42 @@ test('Context memoizes dispose and calls underlying analyzer dispose exactly onc
 
     assert.equal(disposeCount, 1);
 });
+
+const SMALL_GO_PROJECT = {
+    language: 'go',
+    auxiliaryFiles: [],
+    sourceFiles: [{
+        path: 'main.go',
+        source: 'package main\nfunc Helper() {}\nfunc Caller() { Helper() }\n',
+        sourceHash: 'small-source',
+    }],
+};
+
+test('ThreadedWasmSemanticProjectAnalyzer releases an idle worker and starts a new one on demand', async () => {
+    const analyzer = new ThreadedWasmSemanticProjectAnalyzer(undefined, { idleReleaseMs: 20 });
+    try {
+        const first = await analyzer.analyze(SMALL_GO_PROJECT);
+        assert.ok((first.occurrencesByFile.get('main.go')?.length ?? 0) > 0);
+        assert.equal(analyzer.hasLiveWorker(), true);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        assert.equal(analyzer.hasLiveWorker(), false, 'idle worker must be released');
+
+        const second = await analyzer.analyze(SMALL_GO_PROJECT);
+        assert.deepEqual(
+            [...second.occurrencesByFile.entries()],
+            [...first.occurrencesByFile.entries()],
+        );
+    } finally {
+        await analyzer.dispose();
+    }
+});
+
+test('ThreadedWasmSemanticProjectAnalyzer rejects a request past its deadline and stops the stuck worker', async () => {
+    const analyzer = new ThreadedWasmSemanticProjectAnalyzer(undefined, { requestTimeoutMs: 1 });
+    try {
+        await assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), /timed out after 1 ms/);
+        assert.equal(analyzer.hasLiveWorker(), false);
+    } finally {
+        await analyzer.dispose();
+    }
+});

@@ -131,3 +131,33 @@ test("HF_ENDPOINT selects a mirror and must use https", async () => {
         );
     });
 });
+
+test("ensureModel downloads several artifacts at once when concurrency is raised", async () => {
+    await withHome(async (homeDir) => {
+        const files = Array.from({ length: 5 }, (_, index) => ({ path: `m${index}.wasm`, body: Buffer.from(`module-${index}`) }));
+        const pack: ModelSpec = {
+            id: "pack",
+            label: "Test pack",
+            repository: "example/pack",
+            revision: "0123456789abcdef0123456789abcdef01234567",
+            artifacts: files.map((file) => ({
+                path: file.path,
+                sizeBytes: file.body.length,
+                sha256: crypto.createHash("sha256").update(file.body).digest("hex"),
+            })),
+        };
+        let active = 0;
+        let peak = 0;
+        const fetchImpl = (async (url: string | URL) => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            active -= 1;
+            const body = files.find((file) => String(url).endsWith(`/${file.path}`))!.body;
+            return new Response(body, { status: 200, headers: { "content-length": String(body.length) } });
+        }) as typeof fetch;
+        const { modelDirectory } = await ensureModel({ homeDir, spec: pack, fetchImpl, concurrency: 3, retryDelaysMs: [] });
+        assert.equal(peak, 3);
+        for (const file of files) assert.deepEqual(fs.readFileSync(path.join(modelDirectory, file.path)), file.body);
+    });
+});

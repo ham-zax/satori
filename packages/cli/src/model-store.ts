@@ -87,6 +87,12 @@ export type EnsureModelInput = Readonly<{
     stallTimeoutMs?: number;
     /** Delay before each retry; its length is the retry count. */
     retryDelaysMs?: readonly number[];
+    /**
+     * Artifacts downloaded at once (default 1). Packs of many small files set
+     * this higher: each request pays a redirect and time-to-first-byte that
+     * dominates when files are small.
+     */
+    concurrency?: number;
     /** Test seam for the destination-appears-before-rename race. */
     renameImpl?: (from: string, to: string) => void;
 }>;
@@ -464,7 +470,9 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
     const stallTimeoutMs = input.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
     const retryDelays = input.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     let completedBytes = 0;
-    for (const artifact of spec.artifacts) {
+    const inFlightBytes = new Map<string, number>();
+    const inFlightTotal = () => [...inFlightBytes.values()].reduce((total, bytes) => total + bytes, 0);
+    const acquireArtifact = async (artifact: ModelArtifact): Promise<void> => {
         const destination = stagedPath(artifact);
         fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
         for (let attempt = 0; ; attempt += 1) {
@@ -476,15 +484,18 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
                         artifact,
                         fetchImpl,
                         stallTimeoutMs,
-                        (artifactBytes) => report({
-                            phase: "progress",
-                            label: spec.label,
-                            artifact: artifact.path,
-                            artifactBytesDownloaded: artifactBytes,
-                            artifactBytesTotal: artifact.sizeBytes,
-                            totalBytesDownloaded: completedBytes + artifactBytes,
-                            totalBytes,
-                        }),
+                        (artifactBytes) => {
+                            inFlightBytes.set(artifact.path, artifactBytes);
+                            report({
+                                phase: "progress",
+                                label: spec.label,
+                                artifact: artifact.path,
+                                artifactBytesDownloaded: artifactBytes,
+                                artifactBytesTotal: artifact.sizeBytes,
+                                totalBytesDownloaded: completedBytes + inFlightTotal(),
+                                totalBytes,
+                            });
+                        },
                     );
                 }
                 if (sha256File(destination) !== artifact.sha256) {
@@ -493,6 +504,7 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
                 }
                 break;
             } catch (error) {
+                inFlightBytes.delete(artifact.path);
                 const { failure, retryable } = classifyFailure(error);
                 if (failure.reason === "integrity") fs.rmSync(destination, { force: true });
                 if (!retryable || attempt >= retryDelays.length) {
@@ -502,8 +514,27 @@ export async function ensureModel(input: EnsureModelInput): Promise<EnsuredModel
                 await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
             }
         }
+        inFlightBytes.delete(artifact.path);
         completedBytes += artifact.sizeBytes;
-    }
+    };
+    // A bounded worker pool; after the first failure no worker starts another
+    // artifact, and partial files stay staged for the next attempt to resume.
+    const queue = [...spec.artifacts];
+    let failed = false;
+    const worker = async (): Promise<void> => {
+        for (let artifact = queue.shift(); artifact && !failed; artifact = queue.shift()) {
+            try {
+                await acquireArtifact(artifact);
+            } catch (error) {
+                failed = true;
+                throw error;
+            }
+        }
+    };
+    const workers = Math.max(1, Math.min(input.concurrency ?? 1, spec.artifacts.length));
+    const results = await Promise.allSettled(Array.from({ length: workers }, worker));
+    const rejection = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (rejection) throw rejection.reason;
 
     report({ phase: "verifying", label: spec.label, modelDirectory, totalBytes, source: "downloaded" });
     verifyModelDirectory(staging, spec);

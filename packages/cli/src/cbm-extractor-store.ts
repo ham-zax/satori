@@ -80,6 +80,8 @@ export async function acquireCbmExtendedPack(input: {
             fetchImpl: input.fetchImpl,
             onProgress: input.onProgress,
             retryDelaysMs: input.retryDelaysMs,
+            // ~100 small modules: parallel requests hide per-request latency.
+            concurrency: 8,
         });
         return { directory: modelDirectory };
     } catch (error) {

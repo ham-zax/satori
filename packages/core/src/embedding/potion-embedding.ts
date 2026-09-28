@@ -19,7 +19,7 @@ export const POTION_MAX_TIMEOUT_MS = 300_000;
 const MAX_WORKER_FRAME_BYTES = 1_048_576;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5_000;
-const DEFAULT_MAX_BATCH_ITEMS = 32;
+const DEFAULT_MAX_BATCH_ITEMS = 64;
 const MAX_BATCH_ITEMS = 64;
 const MAX_PENDING_ITEMS = 256;
 const FOREGROUND_QUERY_RESERVE_ITEMS = 1;
@@ -855,48 +855,43 @@ export class PotionEmbedding extends Embedding {
             });
         }
 
-        const NATIVE_SUBBATCH_LIMIT = 32;
+        // One native frame per sub-batch, bounded by items and by exact frame
+        // bytes. Frame size is additive: an empty frame plus each JSON-encoded
+        // text plus one comma between texts, so it is summed, not re-serialized.
+        const NATIVE_SUBBATCH_LIMIT = MAX_BATCH_ITEMS;
         type PlannedSubbatch = { id: string; texts: string[]; frame: string };
         const subbatches: PlannedSubbatch[] = [];
         let currentTexts: string[] = [];
         let currentId = this.nextRequestId();
-        let currentFrame = '';
+        let currentBytes = 0;
+        const emptyFrameBytes = (id: string) => Buffer.byteLength(serializeBatchRequest(id, []), 'utf8');
+        const closeSubbatch = () => {
+            subbatches.push({ id: currentId, texts: currentTexts, frame: serializeBatchRequest(currentId, currentTexts) });
+        };
 
         for (const text of texts) {
-            const singleFrame = serializeBatchRequest(currentId, [text]);
-            if (Buffer.byteLength(singleFrame, 'utf8') > MAX_WORKER_FRAME_BYTES) {
+            const textBytes = Buffer.byteLength(JSON.stringify(text), 'utf8');
+            if (emptyFrameBytes(currentId) + textBytes > MAX_WORKER_FRAME_BYTES) {
                 throw providerError({
                     code: 'EMBEDDING_PROVIDER_INVALID_REQUEST',
                     retryable: false,
                     message: 'Potion embedding input exceeds the bounded worker frame.',
                 });
             }
-
-            if (currentTexts.length >= NATIVE_SUBBATCH_LIMIT) {
-                subbatches.push({ id: currentId, texts: currentTexts, frame: currentFrame });
+            if (
+                currentTexts.length >= NATIVE_SUBBATCH_LIMIT
+                || (currentTexts.length > 0 && currentBytes + 1 + textBytes > MAX_WORKER_FRAME_BYTES)
+            ) {
+                closeSubbatch();
                 currentId = this.nextRequestId();
-                currentTexts = [text];
-                currentFrame = serializeBatchRequest(currentId, currentTexts);
-            } else if (currentTexts.length > 0) {
-                const candidateTexts = [...currentTexts, text];
-                const candidateFrame = serializeBatchRequest(currentId, candidateTexts);
-                if (Buffer.byteLength(candidateFrame, 'utf8') > MAX_WORKER_FRAME_BYTES) {
-                    subbatches.push({ id: currentId, texts: currentTexts, frame: currentFrame });
-                    currentId = this.nextRequestId();
-                    currentTexts = [text];
-                    currentFrame = serializeBatchRequest(currentId, currentTexts);
-                } else {
-                    currentTexts = candidateTexts;
-                    currentFrame = candidateFrame;
-                }
-            } else {
-                currentTexts = [text];
-                currentFrame = serializeBatchRequest(currentId, currentTexts);
+                currentTexts = [];
             }
+            currentBytes = currentTexts.length === 0
+                ? emptyFrameBytes(currentId) + textBytes
+                : currentBytes + 1 + textBytes;
+            currentTexts.push(text);
         }
-        if (currentTexts.length > 0) {
-            subbatches.push({ id: currentId, texts: currentTexts, frame: currentFrame });
-        }
+        if (currentTexts.length > 0) closeSubbatch();
 
         await this.ensureStarted();
         const results: EmbeddingVector[] = [];

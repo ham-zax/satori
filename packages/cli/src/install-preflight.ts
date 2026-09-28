@@ -28,7 +28,7 @@ import type {
 const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
-const POTION_MANIFEST_SHA256 = "3a60d94511aa3344adc29abfb82f88ed302542b3c49534c6f163c1ec9e44cf34";
+const POTION_MANIFEST_SHA256 = "bad8260921b46eb781d104b16c9f7faa0fc4405ef55652d636df1370307a0eb9";
 
 export interface InstallPreflightInput {
     runtime: InstallRuntime;

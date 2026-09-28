@@ -11,7 +11,7 @@
   },
   "helper": {
     "sourceRepository": "satori/experiments/potion-l0-l1",
-    "sourceRevision": "2b8ac198baee7dae43c292b999782a3af030e099",
+    "sourceRevision": "62de5798460944660b43798e8398b99d63ffc916",
     "model2vecRsRevision": "6f51c7afe2436bcb76fc467bad54eaa94f8db30d",
     "rustToolchain": "1.97.1",
     "features": [
@@ -27,8 +27,8 @@
   "files": [
     {
       "path": "satori-potion",
-      "bytes": 4227240,
-      "sha256": "4a70aade643a14ef3b98fb95f1a02e723f9d48945ca6a62cbddd0e5ff7ebf027",
+      "bytes": 4260256,
+      "sha256": "d81e75a556af2d04a6d7d6db188b72fb6e3594838490d8c8c2447788709de9cb",
       "executable": true
     },
     {

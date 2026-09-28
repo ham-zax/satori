@@ -591,9 +591,9 @@ test('Potion batch packing correctly handles pathological escaping and near-limi
 
 test('Potion batch subbatches and concurrent queries reserve unique request IDs without collision', async (t) => {
     const embedding = await createFakeEmbedding(t, { maxBatchItems: 64 });
-    // 33 items splits into 2 native subbatches (limit 32): batch 1 has 32 items, batch 2 has 1 item.
+    // Three ~400 KB items exceed one 1 MiB native frame, so they split into 2 subbatches.
     // batch 1 has a delayed first item so it stays in-flight while we issue a concurrent query.
-    const batchTexts = ['__delay_50ms__item0', ...Array.from({ length: 32 }, (_, i) => `item${i + 1}`)];
+    const batchTexts = ['__delay_50ms__' + 'a'.repeat(400_000), 'b'.repeat(400_000), 'c'.repeat(400_000)];
 
     const batchPromise = embedding.embedDocuments(batchTexts);
     // Allow batchPromise to execute synchronous subbatch ID planning and dispatch batch 1:
@@ -603,7 +603,7 @@ test('Potion batch subbatches and concurrent queries reserve unique request IDs 
     const queryPromise = embedding.embedQuery('concurrent query');
 
     const [batchDocs, queryDoc] = await Promise.all([batchPromise, queryPromise]);
-    assert.equal(batchDocs.length, 33);
+    assert.equal(batchDocs.length, 3);
     assert.equal(queryDoc.vector.length, POTION_DIMENSION);
     assert.ok(queryDoc.vector.every(Number.isFinite));
     for (const doc of batchDocs) {

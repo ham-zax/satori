@@ -565,7 +565,9 @@ export function planInstallRuntimeEnvironment(
     input: InstallPreflightInput,
 ): Readonly<Record<string, string>> {
     const environment = planProviderRuntimeEnvironment(input);
-    if (!input.cbmExtendedPath) return environment;
+    // Always set: the launcher merges over the inherited environment, so leaving
+    // it unset would let a stale inherited path load an unverified pack.
+    if (!input.cbmExtendedPath) return Object.freeze({ ...environment, SATORI_CBM_EXTENDED_DIR: "" });
     if (!path.isAbsolute(input.cbmExtendedPath)) {
         throw new Error("CBM extended pack path must be absolute.");
     }

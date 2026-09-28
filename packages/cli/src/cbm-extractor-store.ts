@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
+    assertSafeModelArtifactPath,
     ensureModel,
     resolveModelDirectory,
     type ModelProgressReporter,
@@ -38,6 +39,7 @@ export function readCbmExtendedPackSpec(runtimePackageRoot: string): ModelSpec {
             if (typeof entry.file !== "string" || typeof entry.sha256 !== "string" || !Number.isSafeInteger(entry.sizeBytes)) {
                 throw new Error("CBM extractor manifest has a malformed extended module entry.");
             }
+            assertSafeModelArtifactPath(entry.file, "CBM extractor manifest");
             return Object.freeze({ path: entry.file, sizeBytes: entry.sizeBytes as number, sha256: entry.sha256 });
         });
     return Object.freeze({

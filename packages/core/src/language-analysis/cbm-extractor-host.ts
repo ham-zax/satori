@@ -61,7 +61,7 @@ class CbmExtractorHost {
     private readonly extendedRoot: string;
 
     constructor(private readonly assetRoot: string) {
-        this.extendedRoot = process.env.SATORI_CBM_EXTENDED_DIR?.trim() || path.join(assetRoot, 'extended');
+        this.extendedRoot = resolveExtendedRoot(assetRoot);
     }
 
     private loadManifest(): CbmExtractorManifest | null {
@@ -159,6 +159,19 @@ function parseRecords(output: string): CbmDefinitionRecord[] {
         records.push({ label, name, qualifiedName, parentClass, startLine, endLine, startByte, endByte });
     }
     return records;
+}
+
+function resolveExtendedRoot(assetRoot: string): string {
+    return process.env.SATORI_CBM_EXTENDED_DIR?.trim() || path.join(assetRoot, 'extended');
+}
+
+/**
+ * Part of the analysis identity: an index built while the extended pack was
+ * absent holds those languages as search-only, so acquiring the pack later
+ * must invalidate it.
+ */
+export function cbmExtendedPackIdentity(assetRoot: string = DEFAULT_ASSET_ROOT): string {
+    return fs.existsSync(resolveExtendedRoot(assetRoot)) ? 'cbm-extended-present' : 'cbm-extended-absent';
 }
 
 const hosts = new Map<string, CbmExtractorHost>();

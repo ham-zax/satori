@@ -591,6 +591,7 @@ test("Voyage install preflight proves and pins the default LanceDB and Voyage id
         assert.deepEqual(probedPaths, [path.join(homeDir, ".satori", "vector", "lancedb")]);
         assert.deepEqual(result.runtimeEnvironment, {
             SATORI_RUNTIME_PROFILE: "connected",
+            SATORI_CBM_EXTENDED_DIR: "",
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
             EMBEDDING_PROVIDER: "VoyageAI",
@@ -623,6 +624,7 @@ test("connected Milvus selection skips LanceDB and ignores irrelevant LanceDB pa
     assert.equal(lanceDbProbeCalls, 0);
     assert.deepEqual(result.runtimeEnvironment, {
         SATORI_RUNTIME_PROFILE: "connected",
+        SATORI_CBM_EXTENDED_DIR: "",
         VECTOR_STORE_PROVIDER: "Milvus",
         EMBEDDING_PROVIDER: "VoyageAI",
         EMBEDDING_MODEL: "voyage-code-3",
@@ -662,6 +664,7 @@ test("managed connected launcher pins the Milvus backend that passed preflight",
         assert.equal(lanceDbProbeCalls, 0);
         assert.deepEqual(launcherEnvironment, {
             SATORI_RUNTIME_PROFILE: "connected",
+            SATORI_CBM_EXTENDED_DIR: "",
             VECTOR_STORE_PROVIDER: "Milvus",
             EMBEDDING_PROVIDER: "VoyageAI",
             EMBEDDING_MODEL: "voyage-code-3",
@@ -726,6 +729,7 @@ test("offline install defaults to the integrity- and capability-verified bundled
 
         assert.deepEqual(result.runtimeEnvironment, {
             SATORI_RUNTIME_PROFILE: "offline",
+            SATORI_CBM_EXTENDED_DIR: "",
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
             EMBEDDING_PROVIDER: "Potion",

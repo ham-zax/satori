@@ -46,6 +46,8 @@ import { compareContractStrings } from '../utils/compare-contract-strings';
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
+/** Embedding text queued ahead of the embedder before the file loop waits for it. */
+const MAX_QUEUED_EMBEDDING_TEXT_BYTES = 64 * 1024 * 1024;
 const INDEX_CHUNK_LIMIT = 450_000;
 export const MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION = 512 * 1024 * 1024;
 
@@ -105,7 +107,14 @@ export type ProcessedFileList = Readonly<{
     symbolManifestFiles: SymbolRegistryManifestFile[];
     analysisByFile: Map<string, RelationshipAnalysisEvidence>;
     sourceFiles: readonly IndexedSourceFileObservation[];
+    /** Embedding and vector-write metrics; final once payloadSettled resolves. */
     performance: IndexingPipelineMetrics;
+    /**
+     * Resolves when every chunk is embedded and written, rejects with the first
+     * payload failure. Analysis results above are complete when this is returned,
+     * so callers may do navigation work while the payload drains.
+     */
+    payloadSettled: Promise<void>;
 }>;
 
 export type ExpectedChunksAndSymbols = Readonly<{
@@ -502,12 +511,17 @@ export class IndexingPipeline {
         const describeError = (error: unknown): string => (
             error instanceof Error ? error.message : String(error)
         );
-        const flushChunkBuffer = async (failureContext: string): Promise<void> => {
-            if (chunkBuffer.length === 0) return;
+        // Embedding and vector writes run as one ordered background chain so the
+        // file loop (and the caller's navigation work) is not held behind them.
+        // Queued embedding text is bounded; the loop waits when it is exceeded.
+        let payloadChain: Promise<void> = Promise.resolve();
+        let payloadError: Error | undefined;
+        let queuedPayloadBytes = 0;
+        const persistChunks = async (chunks: PendingIndexedChunk[], failureContext: string): Promise<void> => {
             const searchType = isHybrid ? 'hybrid' : 'regular';
             try {
                 const documents = await this.processChunkBuffer(
-                    chunkBuffer,
+                    chunks,
                     input.collectionName,
                     performance,
                 );
@@ -541,10 +555,34 @@ export class IndexingPipeline {
                 throw new Error(
                     `Failed to persist ${failureContext} for ${searchType}: ${describeError(error)}`,
                 );
-            } finally {
-                chunkBuffer = [];
-                chunkBufferEstimatedTokens = 0;
             }
+        };
+        const flushChunkBuffer = async (failureContext: string): Promise<void> => {
+            if (payloadError) throw payloadError;
+            if (chunkBuffer.length === 0) return;
+            const chunks = chunkBuffer;
+            const chunkBytes = chunks.reduce((sum, entry) => sum + entry.projections.embeddingText.length, 0);
+            chunkBuffer = [];
+            chunkBufferEstimatedTokens = 0;
+            queuedPayloadBytes += chunkBytes;
+            payloadChain = payloadChain.then(async () => {
+                try {
+                    if (!payloadError) await persistChunks(chunks, failureContext);
+                } catch (error) {
+                    payloadError ??= error instanceof Error ? error : new Error(String(error));
+                } finally {
+                    queuedPayloadBytes -= chunkBytes;
+                }
+            });
+            if (queuedPayloadBytes > MAX_QUEUED_EMBEDDING_TEXT_BYTES) await payloadChain;
+            if (payloadError) throw payloadError;
+        };
+
+        // A failed index must not return while embedding or vector writes are
+        // still running: callers clean up the candidate collection on failure.
+        const stopPayload = async (error: unknown): Promise<void> => {
+            payloadError ??= error instanceof Error ? error : new Error(String(error));
+            await payloadChain;
         };
 
         // Files are read and analyzed ahead of consumption, up to twice the
@@ -678,6 +716,7 @@ export class IndexingPipeline {
                 console.error(
                     `[Context] ❌ Failed to index file ${filePath}: ${describeError(error)}`,
                 );
+                await stopPayload(error);
                 throw error;
             }
 
@@ -690,20 +729,28 @@ export class IndexingPipeline {
             );
             await flushChunkBuffer('final chunk batch');
         }
-        if (pendingVectorWrites.length > 0) {
-            const batch = pendingVectorWrites.splice(0, pendingVectorWrites.length);
-            await this.flushVectorWriteBuffer(
-                input.collectionName,
-                batch,
-                input.assertMutationCurrent,
-                performance,
-            );
-        }
         if (!limitReached && sourceFiles.length !== processedFiles) {
-            throw new Error(
+            const error = new Error(
                 `Completed full index source coverage is inconsistent: ${processedFiles} processed files but ${sourceFiles.length} source observations.`,
             );
+            await stopPayload(error);
+            throw error;
         }
+        const payloadSettled = payloadChain.then(async () => {
+            if (payloadError) throw payloadError;
+            if (pendingVectorWrites.length > 0) {
+                const batch = pendingVectorWrites.splice(0, pendingVectorWrites.length);
+                await this.flushVectorWriteBuffer(
+                    input.collectionName,
+                    batch,
+                    input.assertMutationCurrent,
+                    performance,
+                );
+            }
+        });
+        // Observed by the caller; this only prevents an unhandled rejection if
+        // the caller fails first and never awaits it.
+        payloadSettled.catch(() => undefined);
         return {
             processedFiles,
             totalChunks,
@@ -713,6 +760,7 @@ export class IndexingPipeline {
             analysisByFile,
             sourceFiles,
             performance,
+            payloadSettled,
         };
     }
 

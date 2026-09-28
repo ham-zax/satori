@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Context } from '../core/context';
+import { IndexingPipeline } from '../core/indexing-pipeline';
 import { JsonNavigationStore } from '../navigation/store';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { resolvePublicationGenerationRoot } from './publication-store';
@@ -453,6 +454,177 @@ test('a Publication from the previous index format is rejected as requiring rein
     } finally {
         await fixture.context.dispose();
         await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+class FailingEmbedding extends FixtureEmbedding {
+    private calls = 0;
+    override async embedDocuments(texts: string[]) {
+        this.calls += 1;
+        if (this.calls === 2) {
+            // Fail while the caller has moved on to navigation work.
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            throw new Error('fixture embedding failure');
+        }
+        return super.embedDocuments(texts);
+    }
+}
+
+test('an embedding failure while navigation runs fails the index without publishing', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-payload-failure-'));
+    const root = path.join(tempRoot, 'repo');
+    for (let index = 0; index < 40; index++) {
+        writeFile(root, `src/file${index}.py`, `def f${index}():\n    return ${index}\n`);
+    }
+    const database = new LanceDbVectorDatabase({ databasePath: path.join(tempRoot, 'vectors') });
+    const context = new Context({
+        embedding: new FailingEmbedding(),
+        vectorDatabase: database,
+        semanticAnalyzer: {
+            supportsLanguage: () => false,
+            analyze: async (input) => ({ language: input.language, occurrencesByFile: new Map() }),
+        },
+    });
+    const previousBatchSize = process.env.EMBEDDING_BATCH_SIZE;
+    process.env.EMBEDDING_BATCH_SIZE = '4';
+    try {
+        await assert.rejects(context.indexCodebase(root), /fixture embedding failure/);
+        assert.equal(context.getCurrentPublication(root) ?? null, null);
+    } finally {
+        if (previousBatchSize === undefined) delete process.env.EMBEDDING_BATCH_SIZE;
+        else process.env.EMBEDDING_BATCH_SIZE = previousBatchSize;
+        await context.dispose();
+        await database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+class GatedEmbedding extends FixtureEmbedding {
+    inFlight = 0;
+    private gate: Promise<void> | undefined;
+    private releaseGate: () => void = () => undefined;
+
+    block() { this.gate = new Promise((resolve) => { this.releaseGate = resolve; }); }
+    release() { this.releaseGate(); }
+
+    override getBatchPolicy() {
+        return { preferredMaxItems: 4, hardMaxItems: 4, hardTokenLimit: 200 };
+    }
+
+    override async embedDocuments(texts: string[]) {
+        this.inFlight += 1;
+        try {
+            await this.gate;
+            return await super.embedDocuments(texts);
+        } finally {
+            this.inFlight -= 1;
+        }
+    }
+}
+
+/**
+ * Blocks embeddings until the file loop has failed, and records how many were
+ * in flight when processFileList settled. The gate opens on the next
+ * macrotask, after every microtask of the failing call has run, so a pipeline
+ * that rejects without draining is observed with work in flight.
+ */
+function observeFailedFileLoop(embedding: GatedEmbedding) {
+    embedding.block();
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+        if (String(args[0]).includes('Failed to index file')) setImmediate(() => embedding.release());
+        originalConsoleError(...args);
+    };
+    const originalProcessFileList = IndexingPipeline.prototype.processFileList;
+    const observed: { inFlightWhenSettled?: number } = {};
+    IndexingPipeline.prototype.processFileList = function (...args) {
+        return originalProcessFileList.apply(this, args).finally(() => {
+            observed.inFlightWhenSettled = embedding.inFlight;
+        });
+    };
+    return {
+        observed,
+        restore() {
+            IndexingPipeline.prototype.processFileList = originalProcessFileList;
+            console.error = originalConsoleError;
+            embedding.release();
+        },
+    };
+}
+
+function writeSmallPythonFiles(root: string, prefix: string, count: number): void {
+    for (let index = 0; index < count; index++) {
+        writeFile(root, `src/${prefix}${index}.py`, `def ${prefix}${index}():\n    return ${index}\n`);
+    }
+}
+
+// Sorted last; its single chunk exceeds the provider hard token limit.
+function writeOversizedPythonFile(root: string): void {
+    writeFile(root, 'src/zz_large.py', `def big():\n    return "${'x'.repeat(1500)}"\n`);
+}
+
+function createGatedContext(tempRoot: string) {
+    const embedding = new GatedEmbedding();
+    const database = new LanceDbVectorDatabase({ databasePath: path.join(tempRoot, 'vectors') });
+    const context = new Context({
+        embedding,
+        vectorDatabase: database,
+        semanticAnalyzer: {
+            supportsLanguage: () => false,
+            analyze: async (input) => ({ language: input.language, occurrencesByFile: new Map() }),
+        },
+    });
+    return { embedding, database, context };
+}
+
+test('a file failure while embedding is in flight fails the index only after the payload stops', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-loop-failure-'));
+    const root = path.join(tempRoot, 'repo');
+    writeSmallPythonFiles(root, 'file', 8);
+    writeOversizedPythonFile(root);
+    const { embedding, database, context } = createGatedContext(tempRoot);
+    const failure = observeFailedFileLoop(embedding);
+    try {
+        await assert.rejects(context.indexCodebase(root), /exceeding the provider hard limit/);
+        assert.equal(failure.observed.inFlightWhenSettled, 0);
+        assert.equal(context.getCurrentPublication(root) ?? null, null);
+    } finally {
+        failure.restore();
+        await context.dispose();
+        await database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('a file failure while delta embedding is in flight fails the sync only after the payload stops', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-delta-failure-'));
+    const root = path.join(tempRoot, 'repo');
+    writeSmallPythonFiles(root, 'file', 8);
+    const { embedding, database, context } = createGatedContext(tempRoot);
+    let failure: ReturnType<typeof observeFailedFileLoop> | undefined;
+    try {
+        await context.indexCodebase(root);
+        const published = context.getCurrentPublication(root);
+        assert.ok(published);
+
+        writeSmallPythonFiles(root, 'added', 8);
+        writeOversizedPythonFile(root);
+        let forks = 0;
+        const forkCollection = database.forkCollection.bind(database);
+        database.forkCollection = async (...args) => {
+            forks += 1;
+            return forkCollection(...args);
+        };
+        failure = observeFailedFileLoop(embedding);
+        await assert.rejects(context.reindexByChange(root), /exceeding the provider hard limit/);
+        assert.equal(forks, 1, 'expected the atomic delta path');
+        assert.equal(failure.observed.inFlightWhenSettled, 0);
+        assert.deepEqual(context.getCurrentPublication(root), published);
+    } finally {
+        failure?.restore();
+        await context.dispose();
+        await database.close();
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });

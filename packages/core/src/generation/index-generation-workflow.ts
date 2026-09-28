@@ -785,6 +785,7 @@ export class IndexGenerationWorkflow {
         let publicationStatus: 'staged' | 'activated' = 'staged';
         let result!: ProcessedFileList;
         let synchronizer: FileSynchronizer | undefined;
+        let payloadDrain: Promise<void> | undefined;
         try {
             const payloadStartedAt = Date.now();
             result = await this.ports.processFileList(
@@ -806,11 +807,18 @@ export class IndexGenerationWorkflow {
                 options.assertMutationCurrent,
                 indexPolicy,
             );
-            payloadPipelineMs = Date.now() - payloadStartedAt;
-
-            const finalizeStartedAt = Date.now();
-            await this.finalizePreparedCollection(writeCollectionName, options.assertMutationCurrent);
-            finalizeCollectionMs = Date.now() - finalizeStartedAt;
+            // Analysis is complete here; embedding and vector writes may still be
+            // draining. Navigation below needs only the analysis, so it runs
+            // while the payload finishes. Every publication step waits for it.
+            const processed = result;
+            payloadDrain = (async () => {
+                await processed.payloadSettled;
+                payloadPipelineMs = Date.now() - payloadStartedAt;
+                const finalizeStartedAt = Date.now();
+                await this.finalizePreparedCollection(writeCollectionName, options.assertMutationCurrent);
+                finalizeCollectionMs = Date.now() - finalizeStartedAt;
+            })();
+            payloadDrain.catch(() => undefined);
 
             console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
@@ -868,6 +876,7 @@ export class IndexGenerationWorkflow {
                     result.sourceFiles,
                 );
                 navigationMs = Date.now() - navigationStartedAt;
+                await payloadDrain;
                 const packageOwnership = buildPublicationPackageOwnership(
                     canonicalRoot,
                     result.sourceFiles.map((source) => source.path),
@@ -940,6 +949,7 @@ export class IndexGenerationWorkflow {
                 );
                 publicationMs = Date.now() - publicationStartedAt;
             } else {
+                await payloadDrain;
                 console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
                 if (!options.deferPartialPublication) {
                     synchronizer = new FileSynchronizer(
@@ -1028,6 +1038,8 @@ export class IndexGenerationWorkflow {
                 }
             }
         } catch (error) {
+            // Never clean up while embedding or vector writes are still in flight.
+            await payloadDrain?.catch(() => undefined);
             if (
                 error instanceof PublicationActivationError
                 && error.ref.id === publicationId
@@ -1339,7 +1351,10 @@ export class IndexGenerationWorkflow {
                             },
                             candidateCollectionName,
                             input.options.assertMutationCurrent,
-                        )
+                        ).then(async (processed) => {
+                            await processed.payloadSettled;
+                            return processed;
+                        })
                         : {
                             processedFiles: 0,
                             totalChunks: 0,

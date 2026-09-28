@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,6 +56,8 @@ interface ProgramSession {
     getProgram(): ts.Program;
     getResourceLimitFailure(): string | undefined;
     updateFile(fileName: string, source: string): void;
+    /** Makes the next Program re-read `fileName` from disk. */
+    invalidateFile(fileName: string): void;
     dispose(): void;
 }
 
@@ -83,7 +85,21 @@ interface ProjectSnapshot {
     readonly referencedProjectKeys: ReadonlySet<string>;
     /** Effective reference authority; when false every project file is unavailable. */
     readonly referenceAuthorityReady?: boolean;
+    /** Some import did not resolve, so an added file can change what it resolves to. */
+    readonly unresolvedImports: boolean;
 }
+
+/**
+ * What one analysis of a root leaves for the next delta. It is valid only as
+ * the base of a delta from the exact registry it was computed for.
+ */
+interface RootResolutionState {
+    readonly registryDigest: string;
+    readonly snapshots: ReadonlyMap<string, ProjectSnapshot>;
+    readonly fileToProject: ReadonlyMap<string, string>;
+}
+
+const ROOT_RESOLUTION_STATE_FORMAT = 1;
 
 interface CachedSession {
     readonly key: string;
@@ -113,6 +129,81 @@ function relativeInsideRoot(rootPath: string, absolutePath: string): string | un
 
 function stableHash(value: unknown): string {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function registryDigest(registry: ResolutionProjectInput['registry']): string {
+    return stableHash(registry.manifest.files.map((file) => `${normalizeRelative(file.path)}\0${file.hash}`).sort());
+}
+
+function serializeRootState(rootPath: string, state: RootResolutionState): string {
+    return JSON.stringify({
+        format: ROOT_RESOLUTION_STATE_FORMAT,
+        providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
+        compilerVersion: ts.version,
+        rootPath,
+        registryDigest: state.registryDigest,
+        fileToProject: [...state.fileToProject],
+        snapshots: [...state.snapshots].map(([key, snapshot]) => [key, {
+            environmentConfigId: snapshot.environmentConfigId,
+            files: [...snapshot.files],
+            reverseDependencies: [...snapshot.reverseDependencies].map(([target, dependents]) => [target, [...dependents]]),
+            projectGlobalSourceFiles: [...snapshot.projectGlobalSourceFiles],
+            referencedProjectKeys: [...snapshot.referencedProjectKeys],
+            referenceAuthorityReady: snapshot.referenceAuthorityReady,
+            unresolvedImports: snapshot.unresolvedImports,
+        }]),
+    });
+}
+
+/** Parses persisted state; anything unexpected yields undefined (a full analysis). */
+function parseRootState(text: string, rootPath: string): RootResolutionState | undefined {
+    const strings = (value: unknown): string[] => {
+        if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) throw new Error('shape');
+        return value;
+    };
+    const pairs = (value: unknown): unknown[][] => {
+        if (!Array.isArray(value) || !value.every((entry) => Array.isArray(entry) && entry.length === 2)) throw new Error('shape');
+        return value;
+    };
+    try {
+        const raw = JSON.parse(text) as Record<string, unknown>;
+        if (
+            raw.format !== ROOT_RESOLUTION_STATE_FORMAT
+            || raw.providerVersion !== TYPESCRIPT_COMPILER_PROVIDER_VERSION
+            || raw.compilerVersion !== ts.version
+            || raw.rootPath !== rootPath
+            || typeof raw.registryDigest !== 'string'
+        ) {
+            return undefined;
+        }
+        const fileToProject = new Map(pairs(raw.fileToProject).map(([file, key]) => strings([file, key]) as [string, string]));
+        const snapshots = new Map<string, ProjectSnapshot>();
+        for (const [key, value] of pairs(raw.snapshots)) {
+            const snapshot = value as Record<string, unknown>;
+            if (
+                typeof key !== 'string'
+                || typeof snapshot.environmentConfigId !== 'string'
+                || typeof snapshot.referenceAuthorityReady !== 'boolean'
+                || typeof snapshot.unresolvedImports !== 'boolean'
+            ) {
+                return undefined;
+            }
+            snapshots.set(key, {
+                environmentConfigId: snapshot.environmentConfigId,
+                files: new Set(strings(snapshot.files)),
+                reverseDependencies: new Map(pairs(snapshot.reverseDependencies).map(([target, dependents]) => (
+                    [strings([target])[0], new Set(strings(dependents))]
+                ))),
+                projectGlobalSourceFiles: new Set(strings(snapshot.projectGlobalSourceFiles)),
+                referencedProjectKeys: new Set(strings(snapshot.referencedProjectKeys)),
+                referenceAuthorityReady: snapshot.referenceAuthorityReady,
+                unresolvedImports: snapshot.unresolvedImports,
+            });
+        }
+        return { registryDigest: raw.registryDigest, snapshots, fileToProject };
+    } catch {
+        return undefined;
+    }
 }
 
 function fileContentHash(filePath: string): string {
@@ -444,6 +535,12 @@ class InferredLanguageServiceSession implements ProgramSession {
         this.versions.set(normalized, (this.versions.get(normalized) ?? 0) + 1);
     }
 
+    invalidateFile(fileName: string): void {
+        const normalized = normalizeAbsolute(fileName);
+        this.overrides.delete(normalized);
+        this.versions.set(normalized, (this.versions.get(normalized) ?? 0) + 1);
+    }
+
     dispose(): void {
         this.languageService.dispose();
     }
@@ -489,14 +586,33 @@ function transitiveDependents(
     return affected;
 }
 
+/**
+ * Import edges from this project's files, keyed by the imported file. Targets
+ * include indexed files outside the project (a relative import into another
+ * project's source), since a change there can change the importer's claims.
+ */
 function buildReverseDependencies(
     program: ts.Program,
     plan: ProjectPlan,
-): Map<string, Set<string>> {
+    manifestPaths: ReadonlySet<string>,
+): { reverse: Map<string, Set<string>>; unresolvedImports: boolean } {
     const relativeByAbsolute = new Map(
         plan.absoluteFiles.map((absolute, index) => [normalizeAbsolute(absolute), plan.relativeFiles[index]]),
     );
+    const targetOf = (absolute: string): string | undefined => {
+        const normalized = normalizeAbsolute(absolute);
+        const own = relativeByAbsolute.get(normalized);
+        if (own) return own;
+        const relative = relativeInsideRoot(plan.rootPath, normalized);
+        return relative && manifestPaths.has(relative) ? relative : undefined;
+    };
     const reverse = new Map<string, Set<string>>();
+    const addEdge = (targetRelative: string, sourceRelative: string) => {
+        const dependents = reverse.get(targetRelative) ?? new Set<string>();
+        dependents.add(sourceRelative);
+        reverse.set(targetRelative, dependents);
+    };
+    let unresolvedImports = false;
     for (let index = 0; index < plan.absoluteFiles.length; index += 1) {
         const sourceAbsolute = normalizeAbsolute(plan.absoluteFiles[index]);
         const sourceRelative = plan.relativeFiles[index];
@@ -510,23 +626,21 @@ function buildReverseDependencies(
                 plan.options,
                 ts.sys,
             ).resolvedModule?.resolvedFileName;
-            if (!resolved) continue;
-            const targetRelative = relativeByAbsolute.get(normalizeAbsolute(resolved));
-            if (!targetRelative) continue;
-            const dependents = reverse.get(targetRelative) ?? new Set<string>();
-            dependents.add(sourceRelative);
-            reverse.set(targetRelative, dependents);
+            if (!resolved) {
+                unresolvedImports = true;
+                continue;
+            }
+            const targetRelative = targetOf(resolved);
+            if (targetRelative) addEdge(targetRelative, sourceRelative);
         }
         for (const referenced of preprocessed.referencedFiles) {
             const targetAbsolute = normalizeAbsolute(path.resolve(path.dirname(sourceAbsolute), referenced.fileName));
-            const targetRelative = relativeByAbsolute.get(targetAbsolute);
-            if (!targetRelative) continue;
-            const dependents = reverse.get(targetRelative) ?? new Set<string>();
-            dependents.add(sourceRelative);
-            reverse.set(targetRelative, dependents);
+            if (!sourceFileForProgram(program, targetAbsolute)) unresolvedImports = true;
+            const targetRelative = targetOf(targetAbsolute);
+            if (targetRelative) addEdge(targetRelative, sourceRelative);
         }
     }
-    return reverse;
+    return { reverse, unresolvedImports };
 }
 
 function sourceCanAffectProjectGlobals(sourceFile: ts.SourceFile): boolean {
@@ -559,13 +673,23 @@ function sourceCanAffectProjectGlobals(sourceFile: ts.SourceFile): boolean {
     return hasGlobalAugmentation;
 }
 
-function projectGlobalSourceFiles(program: ts.Program, plan: ProjectPlan): Set<string> {
+/** Files in the Program, this project's or other indexed ones, that can declare globals. */
+function projectGlobalSourceFiles(
+    program: ts.Program,
+    plan: ProjectPlan,
+    manifestPaths: ReadonlySet<string>,
+): Set<string> {
     const globalFiles = new Set<string>();
     for (let index = 0; index < plan.absoluteFiles.length; index += 1) {
         const sourceFile = sourceFileForProgram(program, plan.absoluteFiles[index]);
         if (sourceFile && sourceCanAffectProjectGlobals(sourceFile)) {
             globalFiles.add(plan.relativeFiles[index]);
         }
+    }
+    for (const sourceFile of program.getSourceFiles()) {
+        const relative = relativeInsideRoot(plan.rootPath, normalizeAbsolute(sourceFile.fileName));
+        if (!relative || globalFiles.has(relative) || !manifestPaths.has(relative)) continue;
+        if (sourceCanAffectProjectGlobals(sourceFile)) globalFiles.add(relative);
     }
     return globalFiles;
 }
@@ -683,8 +807,7 @@ export function unbuiltReferenceImport(program: ts.Program, projectFiles: readon
 
 export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private readonly sessions = new Map<string, CachedSession>();
-    private snapshots = new Map<string, ProjectSnapshot>();
-    private fileToProject = new Map<string, string>();
+    private readonly rootStates = new Map<string, RootResolutionState>();
     private useCounter = 0;
     private activeAnalyses = 0;
     private idleReleaseTimer?: ReturnType<typeof setTimeout>;
@@ -694,6 +817,11 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         private readonly resourceBudget: TypeScriptSemanticResourceBudget =
             DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET,
         private readonly idleReleaseMs: number = DEFAULT_SESSION_IDLE_RELEASE_MS,
+        /**
+         * Where each root's last state is kept, so a delta in a new process (the
+         * sync worker is one per operation) does not re-analyze every file.
+         */
+        private readonly stateDirectory?: string,
     ) {
         if (!Number.isInteger(maxSessions) || maxSessions < 1) {
             throw new Error('TypeScript semantic session cache bound must be a positive integer.');
@@ -818,24 +946,99 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const changedFiles = input.changedFiles
             ? new Set([...input.changedFiles].map(normalizeRelative))
             : undefined;
+        const previousState = changedFiles ? this.previousRootState(rootPath, input.previousRegistry) : undefined;
+        const manifestPaths = new Set(input.registry.manifest.files.map((file) => normalizeRelative(file.path)));
+        const previousManifestPaths = new Set(
+            input.previousRegistry?.manifest.files.map((file) => normalizeRelative(file.path)) ?? [],
+        );
+        const filesAdded = changedFiles !== undefined
+            && [...changedFiles].some((file) => !previousManifestPaths.has(file));
         const affectedByProject = new Map<string, Set<string>>();
         const currentSnapshots = new Map<string, ProjectSnapshot>();
         const projectReferenceAuthorityReady = new Map<string, boolean>();
-        const projectAuthorityChanged = new Set<string>();
         const projectEnvironmentChanged = new Set<string>();
         const claimsByFile = new Map<string, readonly import('./resolution').ResolutionClaim[]>();
 
+        // Without a validated base, a warm session may hold files that changed
+        // since it last analyzed; start this root's sessions fresh.
+        if (!previousState) {
+            for (const plan of plans) this.releaseSession(plan.key);
+        }
+
         for (const plan of plans) {
-            const previous = this.snapshots.get(plan.key);
-            const currentFiles = new Set(plan.relativeFiles);
-            const membershipChanged = !previous
-                || previous.files.size !== currentFiles.size
-                || [...currentFiles].some((file) => !previous.files.has(file));
-            const environmentChanged = !previous
-                || previous.environmentConfigId !== plan.environmentConfigId;
-            if (membershipChanged || environmentChanged) {
-                projectAuthorityChanged.add(plan.key);
+            const previous = previousState?.snapshots.get(plan.key);
+            if (
+                !previous
+                || previous.environmentConfigId !== plan.environmentConfigId
+                || previous.files.size !== plan.relativeFiles.length
+                || plan.relativeFiles.some((file) => !previous.files.has(file))
+            ) {
                 projectEnvironmentChanged.add(plan.key);
+            }
+        }
+
+        // A referenced project's configuration, membership, or outputs can change
+        // how dependents resolve it (and whether they are ready) without a changed
+        // import. Rebuild those dependents whole. A source edit alone reaches
+        // dependents only through their Programs, which see the referenced
+        // outputs, or through the import edges below.
+        const referenceInvalidated = new Set(projectEnvironmentChanged);
+        let expanded = true;
+        while (expanded) {
+            expanded = false;
+            for (const plan of plans) {
+                if (referenceInvalidated.has(plan.key)) continue;
+                if (plan.referencedProjectKeys.some((key) => referenceInvalidated.has(key))) {
+                    referenceInvalidated.add(plan.key);
+                    expanded = true;
+                }
+            }
+        }
+
+        for (const plan of plans) {
+            const previous = previousState?.snapshots.get(plan.key);
+            const currentFiles = new Set(plan.relativeFiles);
+            const environmentChanged = referenceInvalidated.has(plan.key);
+
+            // Changed files the previous analysis of this project depended on:
+            // its own, and indexed files elsewhere that it imported or took globals from.
+            const directlyChanged = new Set<string>();
+            if (changedFiles) {
+                for (const changed of changedFiles) {
+                    if (
+                        currentFileToProject.get(changed) === plan.key
+                        || previousState?.fileToProject.get(changed) === plan.key
+                        || previous?.reverseDependencies.has(changed)
+                        || previous?.projectGlobalSourceFiles.has(changed)
+                    ) {
+                        directlyChanged.add(changed);
+                    }
+                }
+            }
+
+            const existingSession = this.sessions.get(plan.key);
+            if (changedFiles && existingSession?.environmentConfigId === plan.environmentConfigId) {
+                for (const changed of changedFiles) {
+                    if (!currentFiles.has(changed)) {
+                        existingSession.session.invalidateFile(normalizeAbsolute(path.join(rootPath, changed)));
+                    }
+                }
+            }
+
+            // Nothing this project's claims depend on changed: keep its snapshot
+            // and skip its Program. An added file can satisfy an import that did
+            // not resolve before, which the snapshot cannot rule out.
+            if (
+                changedFiles
+                && previous?.referenceAuthorityReady !== undefined
+                && !environmentChanged
+                && directlyChanged.size === 0
+                && !(filesAdded && previous.unresolvedImports)
+            ) {
+                currentSnapshots.set(plan.key, previous);
+                projectReferenceAuthorityReady.set(plan.key, previous.referenceAuthorityReady);
+                affectedByProject.set(plan.key, new Set());
+                continue;
             }
 
             const session = this.getOrCreateSession(plan);
@@ -877,28 +1080,26 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 }
             }
             projectReferenceAuthorityReady.set(plan.key, referenceAuthorityReady);
-            const reverseDependencies = buildReverseDependencies(program, plan);
-            const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan);
+            const dependencies = buildReverseDependencies(program, plan, manifestPaths);
+            const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan, manifestPaths);
             currentSnapshots.set(plan.key, {
                 environmentConfigId: plan.environmentConfigId,
                 files: currentFiles,
-                reverseDependencies,
+                reverseDependencies: dependencies.reverse,
                 projectGlobalSourceFiles: currentProjectGlobalFiles,
                 referencedProjectKeys: new Set(plan.referencedProjectKeys),
+                unresolvedImports: dependencies.unresolvedImports,
             });
-
-            const directlyChanged = new Set<string>();
             if (changedFiles) {
                 for (const changed of changedFiles) {
-                    if (currentFileToProject.get(changed) === plan.key || this.fileToProject.get(changed) === plan.key) {
+                    if (dependencies.reverse.has(changed) || currentProjectGlobalFiles.has(changed)) {
                         directlyChanged.add(changed);
                     }
                 }
             }
-            if (directlyChanged.size > 0) projectAuthorityChanged.add(plan.key);
 
             let affected: Set<string>;
-            if (!changedFiles || !previous || membershipChanged || environmentChanged) {
+            if (!changedFiles || !previous || environmentChanged) {
                 affected = new Set(plan.relativeFiles);
             } else if ([...directlyChanged].some((file) => (
                 currentProjectGlobalFiles.has(file)
@@ -906,41 +1107,13 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             ))) {
                 affected = new Set(plan.relativeFiles);
             } else {
-                affected = transitiveDependents(
+                const dependents = transitiveDependents(
                     [...directlyChanged],
-                    unionReverseDependencies(previous.reverseDependencies, reverseDependencies),
+                    unionReverseDependencies(previous.reverseDependencies, dependencies.reverse),
                 );
+                affected = new Set([...dependents].filter((file) => currentFiles.has(file)));
             }
             affectedByProject.set(plan.key, affected);
-        }
-
-        // A referenced project's source/config/output authority can affect dependents
-        // without a direct source import. Rebuild those dependent projects conservatively.
-        const referenceInvalidatedProjects = new Set<string>();
-        let expanded = true;
-        while (expanded) {
-            expanded = false;
-            for (const plan of plans) {
-                if (referenceInvalidatedProjects.has(plan.key)) continue;
-                if (plan.referencedProjectKeys.some((key) => projectAuthorityChanged.has(key))) {
-                    referenceInvalidatedProjects.add(plan.key);
-                    projectAuthorityChanged.add(plan.key);
-                    affectedByProject.set(plan.key, new Set(plan.relativeFiles));
-                    expanded = true;
-                }
-            }
-        }
-
-        // If referenced source authority changed but no referenced output/control identity
-        // changed for this project, declarations may be stale. Fail closed until the
-        // observable project-reference boundary changes and the Program can prove readiness.
-        for (const plan of plans) {
-            if (
-                plan.referencedProjectKeys.some((key) => projectAuthorityChanged.has(key))
-                && !projectEnvironmentChanged.has(plan.key)
-            ) {
-                projectReferenceAuthorityReady.set(plan.key, false);
-            }
         }
 
         // Readiness decides whether every file of a project is available, so a
@@ -949,7 +1122,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             const snapshot = currentSnapshots.get(plan.key);
             if (!snapshot) continue;
             const ready = projectReferenceAuthorityReady.get(plan.key) ?? true;
-            const previousReady = this.snapshots.get(plan.key)?.referenceAuthorityReady;
+            const previousReady = previousState?.snapshots.get(plan.key)?.referenceAuthorityReady;
             if (previousReady !== undefined && previousReady !== ready) {
                 affectedByProject.set(plan.key, new Set(plan.relativeFiles));
             }
@@ -1029,8 +1202,13 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             }
         }
 
-        this.snapshots = currentSnapshots;
-        this.fileToProject = currentFileToProject;
+        const state: RootResolutionState = {
+            registryDigest: registryDigest(input.registry),
+            snapshots: currentSnapshots,
+            fileToProject: currentFileToProject,
+        };
+        this.rootStates.set(rootPath, state);
+        this.persistRootState(rootPath, state);
 
         return {
             language: 'typescript',
@@ -1075,8 +1253,57 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     private clearSessionState(): void {
         for (const cached of this.sessions.values()) cached.session.dispose();
         this.sessions.clear();
-        this.snapshots.clear();
-        this.fileToProject.clear();
+        this.rootStates.clear();
+    }
+
+    /**
+     * The state of the analysis that produced `previousRegistry`, from memory
+     * or disk. A state from any other registry (a failed publication, an older
+     * index) is not a valid delta base and yields a full analysis.
+     */
+    private previousRootState(
+        rootPath: string,
+        previousRegistry: ResolutionProjectInput['previousRegistry'],
+    ): RootResolutionState | undefined {
+        if (!previousRegistry) return undefined;
+        const digest = registryDigest(previousRegistry);
+        const inMemory = this.rootStates.get(rootPath);
+        if (inMemory?.registryDigest === digest) return inMemory;
+        if (!this.stateDirectory) return undefined;
+        let text: string;
+        try {
+            text = fs.readFileSync(this.rootStatePath(rootPath), 'utf8');
+        } catch {
+            return undefined;
+        }
+        const persisted = parseRootState(text, rootPath);
+        return persisted?.registryDigest === digest ? persisted : undefined;
+    }
+
+    /** Best effort: a missing or unreadable state only costs a full analysis. */
+    private persistRootState(rootPath: string, state: RootResolutionState): void {
+        if (!this.stateDirectory) return;
+        const target = this.rootStatePath(rootPath);
+        const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+        try {
+            fs.mkdirSync(this.stateDirectory, { recursive: true });
+            fs.writeFileSync(temporary, serializeRootState(rootPath, state));
+            fs.renameSync(temporary, target);
+        } catch (error) {
+            fs.rmSync(temporary, { force: true });
+            console.warn(`[TypeScriptResolution] Could not persist resolution state for '${rootPath}': ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    private rootStatePath(rootPath: string): string {
+        return path.join(this.stateDirectory!, `${createHash('sha256').update(rootPath).digest('hex')}.json`);
+    }
+
+    private releaseSession(key: string): void {
+        const cached = this.sessions.get(key);
+        if (!cached) return;
+        cached.session.dispose();
+        this.sessions.delete(key);
     }
 
     private discoverPlans(rootPath: string, relativeFiles: readonly string[]): ProjectPlan[] {

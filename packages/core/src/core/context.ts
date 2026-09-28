@@ -61,6 +61,8 @@ import {
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { resolveSatoriStateRoot } from '../config/runtime-state-root';
 import * as crypto from 'crypto';
 import ignore from 'ignore';
 import {
@@ -453,7 +455,13 @@ export class Context {
         });
 
         const semanticAnalyzer = config.semanticAnalyzer ?? new ThreadedWasmSemanticProjectAnalyzer();
-        const resolutionAnalyzer = config.resolutionAnalyzer ?? new LazyTypeScriptSemanticProjectAnalyzer();
+        const resolutionAnalyzer = config.resolutionAnalyzer ?? new LazyTypeScriptSemanticProjectAnalyzer(
+            undefined,
+            path.join(
+                resolveSatoriStateRoot({ configured: process.env.SATORI_STATE_ROOT, homeDir: os.homedir() }),
+                'typescript-resolution',
+            ),
+        );
         this.semanticAnalyzer = semanticAnalyzer;
         this.resolutionAnalyzer = resolutionAnalyzer;
 

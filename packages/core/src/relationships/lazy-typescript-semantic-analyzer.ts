@@ -35,7 +35,10 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     private nextId = 1;
     private disposed = false;
 
-    constructor(private readonly maxSessions: number) {}
+    constructor(
+        private readonly maxSessions: number,
+        private readonly stateDirectory: string | undefined,
+    ) {}
 
     supportsLanguage(language: string): boolean {
         return language.trim().toLowerCase() === 'typescript';
@@ -67,7 +70,7 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     private startWorker(): Worker {
         const worker = new Worker(resolveWorkerScriptPath(__filename, 'typescript-resolution-worker-runner'), {
             execArgv: filterWorkerExecArgv(),
-            workerData: { maxSessions: this.maxSessions },
+            workerData: { maxSessions: this.maxSessions, stateDirectory: this.stateDirectory },
         });
         worker.unref();
         worker.on('message', (response: TypeScriptResolutionWorkerResponse) => {
@@ -123,7 +126,11 @@ class WorkerTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
 export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private analyzerPromise?: Promise<ResolutionProjectAnalyzer>;
 
-    constructor(private readonly maxSessions = 4) {}
+    /** `stateDirectory` keeps each root's resolution state across processes. */
+    constructor(
+        private readonly maxSessions = 4,
+        private readonly stateDirectory?: string,
+    ) {}
 
     supportsLanguage(language: string): boolean {
         return language.trim().toLowerCase() === 'typescript';
@@ -152,7 +159,7 @@ export class LazyTypeScriptSemanticProjectAnalyzer implements ResolutionProjectA
     }
 
     private loadAnalyzer(): Promise<ResolutionProjectAnalyzer> {
-        this.analyzerPromise ??= Promise.resolve(new WorkerTypeScriptResolutionAnalyzer(this.maxSessions));
+        this.analyzerPromise ??= Promise.resolve(new WorkerTypeScriptResolutionAnalyzer(this.maxSessions, this.stateDirectory));
         return this.analyzerPromise;
     }
 }

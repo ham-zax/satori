@@ -216,6 +216,13 @@ export class TypeScriptLanguageServiceSession {
         this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
     }
 
+    /** Makes the next Program re-read `fileName` from disk. */
+    invalidateFile(fileName: string): void {
+        const absoluteFileName = normalizedPath(fileName);
+        this.overrides.delete(absoluteFileName);
+        this.fileVersions.set(absoluteFileName, (this.fileVersions.get(absoluteFileName) ?? 0) + 1);
+    }
+
     clearFileOverride(fileName: string): void {
         const absoluteFileName = normalizedPath(fileName);
         if (this.overrides.delete(absoluteFileName)) {

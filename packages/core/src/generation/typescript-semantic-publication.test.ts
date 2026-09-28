@@ -672,7 +672,7 @@ export function run(): string {
     }
 });
 
-test('project-reference source changes fail closed until output/control authority changes', async () => {
+test('project-reference source changes re-resolve dependents against the built outputs, as a full index does', async () => {
     const analyzer = new CapturingTypeScriptSemanticProjectAnalyzer();
     const sharedCompilerOptions = {
         target: 'ES2022',
@@ -720,7 +720,9 @@ export function useShared(): string {
         assert.equal(sourceDelta.changedFiles.includes('lib/src/index.ts'), true);
         assert.ok(analyzer.lastEvidence);
         assert.equal(analyzer.lastEvidence.affectedSourceFiles?.has('app/src/main.ts'), true);
-        assert.deepEqual(analyzer.lastEvidence.claimsByFile.get('app/src/main.ts'), []);
+        // The dependent resolves through lib's declaration output, which a full
+        // index of this tree would also read; the equivalence harness checks it.
+        assert.equal((analyzer.lastEvidence.claimsByFile.get('app/src/main.ts')?.length ?? 0) > 0, true);
 
         emitConfiguredProject(libConfigPath);
         const outputDelta = await fixture.context.reindexByChange(fixture.root);

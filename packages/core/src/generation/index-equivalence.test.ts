@@ -77,11 +77,16 @@ async function withSetting<T>(setting: ToggleSetting, run: () => Promise<T>): Pr
         return processed;
     };
     const lazy = LazyTypeScriptSemanticProjectAnalyzer.prototype as unknown as {
-        loadAnalyzer(this: { analyzerPromise?: Promise<unknown>; maxSessions: number }): Promise<unknown>;
+        loadAnalyzer(this: { analyzerPromise?: Promise<unknown>; maxSessions: number; stateDirectory?: string }): Promise<unknown>;
     };
     const originalLoadAnalyzer = lazy.loadAnalyzer;
     lazy.loadAnalyzer = function () {
-        this.analyzerPromise ??= Promise.resolve(new TypeScriptSemanticProjectAnalyzer(this.maxSessions));
+        this.analyzerPromise ??= Promise.resolve(new TypeScriptSemanticProjectAnalyzer(
+            this.maxSessions,
+            undefined,
+            undefined,
+            this.stateDirectory,
+        ));
         return this.analyzerPromise;
     };
     try {
@@ -168,11 +173,10 @@ async function snapshotPublication(context: Context, database: LanceDbVectorData
 async function withContext<T>(
     tempRoot: string,
     run: (context: Context, database: LanceDbVectorDatabase, embedding: RecordingEmbedding) => Promise<T>,
+    databasePath = fs.mkdtempSync(path.join(tempRoot, 'vectors-')),
 ): Promise<T> {
     const embedding = new RecordingEmbedding();
-    const database = new LanceDbVectorDatabase({
-        databasePath: fs.mkdtempSync(path.join(tempRoot, 'vectors-')),
-    });
+    const database = new LanceDbVectorDatabase({ databasePath });
     const context = new Context({ embedding, vectorDatabase: database });
     try {
         return await run(context, database, embedding);
@@ -310,41 +314,116 @@ const SCRIPTED_EDITS: ReadonlyArray<readonly [string, Edit]> = [
     })],
 ];
 
-test('sync after scripted edits publishes the same state as a full index of the edited tree', { timeout: 300_000 }, async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-equivalence-sync-'));
+/**
+ * TypeScript edits whose effect crosses a project boundary: through a project
+ * reference, through a relative import without one, and through globals.
+ */
+function tsCrossProject(): Files {
+    return {
+        ...tsMonorepo(['core', 'lib']),
+        // Imports another project's source without a project reference.
+        'packages/tool/tsconfig.json': JSON.stringify({
+            compilerOptions: { module: 'commonjs', target: 'ES2022', strict: true, types: [] },
+            include: ['src'],
+        }),
+        'packages/tool/src/tool.ts': 'import { coreValue } from "../../core/src/core";\n\nexport function toolValue(): number {\n    return coreValue() * 3;\n}\n',
+        // A script file: its declarations are global to the project.
+        'packages/tool/src/globals.ts': 'function globalHelper(): number {\n    return 7;\n}\n',
+        'packages/tool/src/use-global.ts': 'export function useGlobal(): number {\n    return globalHelper();\n}\n',
+    };
+}
+
+const TS_CROSS_PROJECT_EDITS: ReadonlyArray<readonly [string, Edit]> = [
+    ['edit a referenced project source while its output is built', (root) => writeTree(root, {
+        'packages/lib/src/lib.ts': '// lib header\nimport { coreValue } from "../../core/src/core";\n\nexport function libValue(): number {\n    return coreValue() + 2;\n}\n',
+    })],
+    ['shift a symbol imported across projects without a reference', (root) => writeTree(root, {
+        'packages/core/src/core.ts': '// moved\n// down\nexport function coreValue(): number {\n    return 1;\n}\n',
+    })],
+    ['rename a global', (root) => writeTree(root, {
+        'packages/tool/src/globals.ts': 'function renamedHelper(): number {\n    return 7;\n}\n',
+    })],
+    ['rebuild a referenced output', (root) => writeTree(root, {
+        'packages/lib/dist/lib.d.ts': 'export declare function libValue(): number;\nexport declare const libVersion: string;\n',
+    })],
+    ['remove a referenced output', (root) => fs.rmSync(path.join(root, 'packages/core/dist/core.d.ts'))],
+    ['delete an imported file', (root) => fs.rmSync(path.join(root, 'packages/core/src/core.ts'))],
+];
+
+/**
+ * Indexes `initial`, applies each edit, syncs, and requires the synced
+ * publication to equal a full index of the edited tree. `cold` syncs through a
+ * fresh Context each time, as the per-operation sync worker process does, so
+ * nothing but persisted state carries over between syncs.
+ */
+async function assertSyncMatchesFullIndex(
+    name: string,
+    initial: Files,
+    edits: ReadonlyArray<readonly [string, Edit]>,
+    cold: boolean,
+): Promise<void> {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-equivalence-sync-${name}-`));
     const root = path.join(tempRoot, 'repo');
-    writeTree(root, { ...POLYGLOT, ...tsMonorepo(['lib']) });
     try {
         for (const setting of [BASELINE, SETTINGS[SETTINGS.length - 1]]) {
-            await withSetting(setting, () => withContext(tempRoot, async (context, database) => {
-                await context.indexCodebase(root);
-                for (const [description, edit] of SCRIPTED_EDITS) {
-                    edit(root);
-                    await context.reindexByChange(root);
-                    const synced = await snapshotPublication(context, database, root);
-                    // Same path (identities hash absolute paths), separate state
-                    // root, so the full index does not replace the synced publication.
-                    const full = await withEnv(
-                        { SATORI_STATE_ROOT: fs.mkdtempSync(path.join(tempRoot, 'full-state-')) },
-                        () => withContext(tempRoot, async (fullContext, fullDatabase) => {
-                            await fullContext.indexCodebase(root);
-                            return snapshotPublication(fullContext, fullDatabase, root);
-                        }),
-                    );
-                    if (process.env.EQUIVALENCE_DUMP && synced !== full) {
-                        fs.writeFileSync(path.join(process.env.EQUIVALENCE_DUMP, 'synced.json'), synced);
-                        fs.writeFileSync(path.join(process.env.EQUIVALENCE_DUMP, 'full.json'), full);
-                    }
-                    assert.ok(
-                        synced === full,
-                        `sync after "${description}" with ${describeSetting(setting)} differs from a full index: ${firstDifference(full, synced)}`,
-                    );
+            writeTree(root, initial);
+            const databasePath = fs.mkdtempSync(path.join(tempRoot, 'vectors-'));
+            const open = <T>(run: (context: Context, database: LanceDbVectorDatabase) => Promise<T>) => (
+                withContext(tempRoot, run, databasePath)
+            );
+            const assertMatchesFullIndex = async (description: string, synced: string) => {
+                // Same path (identities hash absolute paths), separate state
+                // root, so the full index does not replace the synced publication.
+                const full = await withEnv(
+                    { SATORI_STATE_ROOT: fs.mkdtempSync(path.join(tempRoot, 'full-state-')) },
+                    () => withContext(tempRoot, async (fullContext, fullDatabase) => {
+                        await fullContext.indexCodebase(root);
+                        return snapshotPublication(fullContext, fullDatabase, root);
+                    }),
+                );
+                if (process.env.EQUIVALENCE_DUMP && synced !== full) {
+                    fs.writeFileSync(path.join(process.env.EQUIVALENCE_DUMP, 'synced.json'), synced);
+                    fs.writeFileSync(path.join(process.env.EQUIVALENCE_DUMP, 'full.json'), full);
                 }
-            }));
+                assert.ok(
+                    synced === full,
+                    `${cold ? 'cold' : 'warm'} sync after "${description}" with ${describeSetting(setting)} differs from a full index: ${firstDifference(full, synced)}`,
+                );
+            };
+            await withSetting(setting, async () => {
+                if (cold) {
+                    await open((context) => context.indexCodebase(root));
+                    for (const [description, edit] of edits) {
+                        edit(root);
+                        await assertMatchesFullIndex(description, await open(async (context, database) => {
+                            await context.reindexByChange(root);
+                            return snapshotPublication(context, database, root);
+                        }));
+                    }
+                    return;
+                }
+                await open(async (context, database) => {
+                    await context.indexCodebase(root);
+                    for (const [description, edit] of edits) {
+                        edit(root);
+                        await context.reindexByChange(root);
+                        await assertMatchesFullIndex(description, await snapshotPublication(context, database, root));
+                    }
+                });
+            });
             fs.rmSync(root, { recursive: true, force: true });
-            writeTree(root, { ...POLYGLOT, ...tsMonorepo(['lib']) });
         }
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-});
+}
+
+for (const cold of [false, true]) {
+    const mode = cold ? 'cold' : 'warm';
+    test(`${mode} sync after scripted edits publishes the same state as a full index of the edited tree`, { timeout: 300_000 }, async () => {
+        await assertSyncMatchesFullIndex(`scripted-${mode}`, { ...POLYGLOT, ...tsMonorepo(['lib']) }, SCRIPTED_EDITS, cold);
+    });
+    test(`${mode} sync after cross-project TypeScript edits publishes the same state as a full index`, { timeout: 300_000 }, async () => {
+        await assertSyncMatchesFullIndex(`typescript-${mode}`, tsCrossProject(), TS_CROSS_PROJECT_EDITS, cold);
+    });
+}

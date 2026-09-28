@@ -12,7 +12,8 @@ export type TypeScriptResolutionWorkerResponse =
     | { id: number; ok: false; error: string };
 
 // One analyzer per worker keeps its TypeScript sessions and snapshots across calls.
-const analyzer = new TypeScriptSemanticProjectAnalyzer((workerData as { maxSessions: number }).maxSessions);
+const options = workerData as { maxSessions: number; stateDirectory?: string };
+const analyzer = new TypeScriptSemanticProjectAnalyzer(options.maxSessions, undefined, undefined, options.stateDirectory);
 
 if (parentPort) {
     const port = parentPort;

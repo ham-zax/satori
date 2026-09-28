@@ -270,6 +270,19 @@ for (const fixture of [
         assert.ok(crossProjectCall);
         assert.equal(crossProjectCall.decision, 'unresolved');
         assert.equal(crossProjectCall.targetProvenance, undefined);
+
+        // The same qualified name in a sibling project must not make the
+        // caller's own definition ambiguous.
+        const targetA = crossProjectSources[0]!.path;
+        const targetB = targetA.replace('project-a/', 'project-b/');
+        const sharedNameEvidence = await analyze(fixture.language, [
+            { path: targetA, source: fixture.targetSource },
+            { path: targetB, source: fixture.targetSource },
+            crossProjectSources[1]!,
+        ], crossProjectAuxiliaries);
+        const sharedNameCall = [...sharedNameEvidence.occurrencesByFile.values()].flat()[0];
+        assert.equal(sharedNameCall?.decision, 'resolved');
+        assert.equal(sharedNameCall?.targetProvenance?.file, targetB);
     });
 }
 

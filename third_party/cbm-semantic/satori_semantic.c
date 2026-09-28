@@ -479,6 +479,7 @@ typedef struct {
     SatoriDefLoc *items;
     uint32_t count;
     uint32_t cap;
+    bool sorted; /* by qualified_name, maintained lazily by def_locs_find_unique */
 } SatoriDefLocArray;
 
 typedef enum {
@@ -512,6 +513,7 @@ static int def_locs_add(SatoriDefLocArray *arr, const char *qn, const char *path
     arr->items[arr->count].authority_root = NULL;
     arr->items[arr->count].target_kind = target_kind;
     arr->count++;
+    arr->sorted = false;
     return SATORI_SEMANTIC_OK;
 }
 
@@ -527,13 +529,46 @@ static int def_locs_add_with_authority(SatoriDefLocArray *arr, const char *qn, c
     return status;
 }
 
-static SatoriDefLookupState def_locs_find_unique(const SatoriDefLocArray *arr, const char *qn,
+static int nullable_strcmp(const char *a, const char *b) {
+    if (a == b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    return strcmp(a, b);
+}
+
+static int def_loc_compare(const void *left, const void *right) {
+    const SatoriDefLoc *a = (const SatoriDefLoc *)left;
+    const SatoriDefLoc *b = (const SatoriDefLoc *)right;
+    int order = nullable_strcmp(a->qualified_name, b->qualified_name);
+    if (order == 0) order = nullable_strcmp(a->authority_root, b->authority_root);
+    if (order == 0) order = nullable_strcmp(a->file_path, b->file_path);
+    if (order == 0 && a->start_byte != b->start_byte) order = a->start_byte < b->start_byte ? -1 : 1;
+    return order;
+}
+
+/* Finds the one definition named `qn`. With an authority root, only
+ * definitions in that root count, so the same name in another project of the
+ * batch neither resolves nor makes a local target ambiguous. Sorted once by
+ * name on first lookup (and again after any add), then binary-searched:
+ * O(log n) per call instead of a scan over every definition. */
+static SatoriDefLookupState def_locs_find_unique(SatoriDefLocArray *arr, const char *qn,
+                                                  const char *authority_root,
                                                   const SatoriDefLoc **out) {
     if (out) *out = NULL;
-    if (!arr || !qn) return SATORI_DEF_LOOKUP_NONE;
+    if (!arr || !qn || arr->count == 0) return SATORI_DEF_LOOKUP_NONE;
+    if (!arr->sorted) {
+        qsort(arr->items, arr->count, sizeof(SatoriDefLoc), def_loc_compare);
+        arr->sorted = true;
+    }
+    uint32_t lo = 0, hi = arr->count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (nullable_strcmp(arr->items[mid].qualified_name, qn) < 0) lo = mid + 1;
+        else hi = mid;
+    }
     const SatoriDefLoc *match = NULL;
-    for (uint32_t i = 0; i < arr->count; i++) {
-        if (!arr->items[i].qualified_name || strcmp(arr->items[i].qualified_name, qn) != 0) continue;
+    for (uint32_t i = lo; i < arr->count && nullable_strcmp(arr->items[i].qualified_name, qn) == 0; i++) {
+        if (authority_root && nullable_strcmp(arr->items[i].authority_root, authority_root) != 0) continue;
         if (match) return SATORI_DEF_LOOKUP_AMBIGUOUS;
         match = &arr->items[i];
     }
@@ -1360,7 +1395,7 @@ static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *sou
                                    const char *source_scope_qn,
                                    const char *source_authority_root,
                                    const CBMResolvedCallArray *resolved_calls,
-                                   const SatoriDefLocArray *def_locs) {
+                                   SatoriDefLocArray *def_locs) {
     if (!s || !source || !resolved_calls || !def_locs) return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
     if (resolved_calls->count < 0 ||
         (uint64_t)resolved_calls->count > SATORI_MAX_CALL_SITES) {
@@ -1409,13 +1444,8 @@ static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *sou
         dst->confidence = rc->confidence;
 
         const SatoriDefLoc *target = NULL;
-        SatoriDefLookupState lookup = def_locs_find_unique(def_locs, rc->callee_qn, &target);
+        SatoriDefLookupState lookup = def_locs_find_unique(def_locs, rc->callee_qn, source_authority_root, &target);
         if (lookup == SATORI_DEF_LOOKUP_UNIQUE && target) {
-            if (source_authority_root &&
-                (!target->authority_root || strcmp(source_authority_root, target->authority_root) != 0)) {
-                dst->decision = (uint8_t)SATORI_DECISION_UNRESOLVED;
-                continue;
-            }
             /* Raw C++ cross-file registry lookup does not by itself prove that a
              * declaration is visible in this translation unit. Until include /
              * build visibility is modeled, fail closed on cross-TU targets. */
@@ -3252,7 +3282,7 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
 
                 const SatoriDefLoc *dl = NULL;
                 SatoriDefLookupState lookup = rc->callee_qn
-                    ? def_locs_find_unique(&def_locs, rc->callee_qn, &dl)
+                    ? def_locs_find_unique(&def_locs, rc->callee_qn, NULL, &dl)
                     : SATORI_DEF_LOOKUP_NONE;
                 if (lookup == SATORI_DEF_LOOKUP_UNIQUE) {
                     const char *target_name = rc->callee_qn;

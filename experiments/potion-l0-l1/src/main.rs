@@ -69,6 +69,17 @@ fn require_argument_count(arguments: &[String], expected: usize) -> Result<()> {
     Ok(())
 }
 
+/// Worker protocol frame: compact JSON written with one syscall. Stdout is
+/// line-buffered, so pretty output flushed once per vector element.
+fn write_frame(value: &impl Serialize) -> Result<()> {
+    let mut frame = serde_json::to_vec(value).context("failed to serialize output")?;
+    frame.push(b'\n');
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    output.write_all(&frame).context("failed to write output")?;
+    output.flush().context("failed to flush output")
+}
+
 fn write_json(value: &impl Serialize) -> Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -138,7 +149,7 @@ fn run_worker(model_dir: PathBuf, block_network: bool) -> Result<()> {
     let model = StrictPotionModel::load(&model_dir, DEFAULT_RETAINED_TOKEN_LIMIT)?;
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    write_json(&serde_json::json!({
+    write_frame(&serde_json::json!({
         "ready": true,
         "modelLoadedOnce": true,
         "retainedTokenLimit": DEFAULT_RETAINED_TOKEN_LIMIT,
@@ -160,7 +171,7 @@ fn run_worker(model_dir: PathBuf, block_network: bool) -> Result<()> {
         }
         if line.len() > MAX_WORKER_FRAME_BYTES || !line.ends_with(b"\n") {
             drain_to_newline(&mut input)?;
-            write_json(&WorkerResponse {
+            write_frame(&WorkerResponse {
                 id: String::new(),
                 ok: false,
                 retained_token_count: None,
@@ -173,7 +184,7 @@ fn run_worker(model_dir: PathBuf, block_network: bool) -> Result<()> {
         let request: WorkerRequest = match serde_json::from_slice(&line) {
             Ok(request) => request,
             Err(_) => {
-                write_json(&WorkerResponse {
+                write_frame(&WorkerResponse {
                     id: String::new(),
                     ok: false,
                     retained_token_count: None,
@@ -251,8 +262,8 @@ fn run_worker(model_dir: PathBuf, block_network: bool) -> Result<()> {
             },
         }));
         match handled {
-            Ok(response) => write_json(&response)?,
-            Err(_) => write_json(&WorkerResponse {
+            Ok(response) => write_frame(&response)?,
+            Err(_) => write_frame(&WorkerResponse {
                 id: request_id_after_panic(&line),
                 ok: false,
                 retained_token_count: None,

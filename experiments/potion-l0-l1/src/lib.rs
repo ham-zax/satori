@@ -176,7 +176,11 @@ impl StrictPotionModel {
             .tokenizer
             .encode(text, false)
             .map_err(|_| StrictEncodeError::TokenizationFailed)?;
-        let mut retained = encoding.get_ids().to_vec();
+        self.retain_known(encoding.get_ids())
+    }
+
+    fn retain_known(&self, ids: &[u32]) -> std::result::Result<Vec<u32>, StrictEncodeError> {
+        let mut retained = ids.to_vec();
         if let Some(unknown) = self.unknown_token_id {
             retained.retain(|token_id| *token_id != unknown);
         }
@@ -223,14 +227,44 @@ impl StrictPotionModel {
         })
     }
 
+    /// Retained token counts for a batch, tokenized once with the same fast,
+    /// parallel batch path the model uses (ids are identical; only offsets are
+    /// skipped). A batch tokenizer failure falls back to the per-text path so the
+    /// first failing text and its error are unchanged.
+    fn retained_token_counts(
+        &self,
+        texts: &[String],
+    ) -> std::result::Result<Vec<usize>, StrictEncodeError> {
+        let per_text = || {
+            texts
+                .iter()
+                .map(|text| self.retained_token_ids(text).map(|tokens| tokens.len()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+        };
+        let encodings = match self
+            .tokenizer
+            .encode_batch_fast(texts.iter().map(|text| text.as_str()).collect::<Vec<_>>(), false)
+        {
+            Ok(encodings) if encodings.len() == texts.len() => encodings,
+            _ => return per_text(),
+        };
+        texts
+            .iter()
+            .zip(encodings.iter())
+            .map(|(text, encoding)| {
+                if text.trim().is_empty() {
+                    return Err(StrictEncodeError::EmptyInput);
+                }
+                self.retain_known(encoding.get_ids()).map(|tokens| tokens.len())
+            })
+            .collect()
+    }
+
     pub fn encode_batch(
         &self,
         texts: &[String],
     ) -> std::result::Result<Vec<StrictEncoding>, StrictEncodeError> {
-        let retained_counts = texts
-            .iter()
-            .map(|text| self.retained_token_ids(text).map(|tokens| tokens.len()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let retained_counts = self.retained_token_counts(texts)?;
         let vectors = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.model.encode_with_args(texts, None, texts.len().max(1))
         }))

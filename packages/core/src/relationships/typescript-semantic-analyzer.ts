@@ -81,6 +81,8 @@ interface ProjectSnapshot {
     readonly reverseDependencies: ReadonlyMap<string, ReadonlySet<string>>;
     readonly projectGlobalSourceFiles: ReadonlySet<string>;
     readonly referencedProjectKeys: ReadonlySet<string>;
+    /** Effective reference authority; when false every project file is unavailable. */
+    readonly referenceAuthorityReady?: boolean;
 }
 
 interface CachedSession {
@@ -939,6 +941,19 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             ) {
                 projectReferenceAuthorityReady.set(plan.key, false);
             }
+        }
+
+        // Readiness decides whether every file of a project is available, so a
+        // change in it affects the whole project, not only the changed files.
+        for (const plan of plans) {
+            const snapshot = currentSnapshots.get(plan.key);
+            if (!snapshot) continue;
+            const ready = projectReferenceAuthorityReady.get(plan.key) ?? true;
+            const previousReady = this.snapshots.get(plan.key)?.referenceAuthorityReady;
+            if (previousReady !== undefined && previousReady !== ready) {
+                affectedByProject.set(plan.key, new Set(plan.relativeFiles));
+            }
+            currentSnapshots.set(plan.key, { ...snapshot, referenceAuthorityReady: ready });
         }
 
         const unavailableSourceFiles = new Set<string>();

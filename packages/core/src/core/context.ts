@@ -37,7 +37,7 @@ import type {
     SymbolRegistryManifestFile,
 } from '../symbols';
 import {
-    createLanguageAnalysisService,
+    createParallelLanguageAnalysisService,
     LANGUAGE_PARSER_VERSION,
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
@@ -317,6 +317,7 @@ export class Context {
     private embeddingIdentity: Readonly<EmbeddingIdentity>;
     private vectorDatabase: VectorDatabase;
     private readonly languageAnalyzer: LanguageAnalysisPort;
+    private readonly ownsLanguageAnalyzer: boolean;
     private supportedExtensions: string[];
     private readonly indexPolicyRuntimeService: IndexPolicyRuntimeService;
     private readonly rootMutationRuntime: RootMutationRuntime;
@@ -386,7 +387,8 @@ export class Context {
                 mutationCoordinator: getRootMutationCoordinator(this.rootMutationRuntime),
             });
 
-        this.languageAnalyzer = config.languageAnalyzer || createLanguageAnalysisService({
+        this.ownsLanguageAnalyzer = !config.languageAnalyzer;
+        this.languageAnalyzer = config.languageAnalyzer || createParallelLanguageAnalysisService({
             chunkSize: 2500,
             chunkOverlap: 300,
         });
@@ -1872,6 +1874,7 @@ export class Context {
             this.disposePromise = Promise.all([
                 Promise.resolve(this.semanticAnalyzer?.dispose?.()),
                 Promise.resolve(this.resolutionAnalyzer?.dispose?.()),
+                Promise.resolve(this.ownsLanguageAnalyzer ? this.languageAnalyzer.dispose?.() : undefined),
             ]).then(() => undefined);
         }
         return this.disposePromise;

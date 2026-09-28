@@ -10,6 +10,7 @@ import {
     TypeScriptLanguageServiceSession,
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
+import { unbuiltReferenceImport } from '../relationships/typescript-semantic-analyzer';
 
 function write(fileName: string, content: string): void {
     fs.mkdirSync(path.dirname(fileName), { recursive: true });
@@ -183,6 +184,8 @@ test('configured TypeScript project records and resolves a representative projec
             assert.equal(unbuiltSession.configuredFiles.includes(excluded.replace(/\\/g, '/')), false);
             const diagnostics = unbuiltSession.getProgram().getSemanticDiagnostics();
             assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [6305]);
+            // The fast TS6305 decision agrees with the checker without type-checking.
+            assert.equal(unbuiltReferenceImport(unbuiltSession.getProgram(), [appSource]), false);
             const aliasDefinition = unbuiltSession.getDefinitionAtPosition(
                 appSource,
                 appText.indexOf('Shared().run'),
@@ -213,6 +216,7 @@ test('configured TypeScript project records and resolves a representative projec
         const builtSession = new TypeScriptLanguageServiceSession(appConfig);
         try {
             assert.equal(builtSession.getProgram().getSemanticDiagnostics().length, 0);
+            assert.equal(unbuiltReferenceImport(builtSession.getProgram(), [appSource]), true);
             assert.equal(
                 definitionFile(builtSession, appSource, appText, 'Shared().run'),
                 path.join(root, 'lib/dist/index.d.ts').replace(/\\/g, '/'),

@@ -155,6 +155,10 @@ export type LanguageAnalysisResult = LanguageAnalysisEvidence & (
 
 export interface LanguageAnalysisPort {
     analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult>;
+    /** How many analyze calls can usefully run at once (absent: 1). */
+    readonly concurrency?: number;
+    /** Releases background workers, when the implementation has any. */
+    dispose?(): Promise<void>;
     getDescription(): string;
     getStrategyForLanguage(language: string): {
         backend: LanguageAnalysisBackend;

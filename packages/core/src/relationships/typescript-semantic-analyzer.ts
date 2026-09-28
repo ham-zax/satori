@@ -571,6 +571,51 @@ function diagnosticIdentity(errors: readonly ts.Diagnostic[]): readonly number[]
     return errors.map((error) => error.code).sort((left, right) => left - right);
 }
 
+
+/**
+ * Decides, without type-checking every file, whether a project with references
+ * would report TS6305 ("Output file has not been built from source file"): the
+ * checker reports it when an import resolves to a referenced project's source
+ * file whose declaration output is missing.
+ *
+ * Returns `true` (authority ready) when every referenced source has its
+ * declaration output, so TS6305 is impossible; `false` when one of the
+ * project's own files imports a referenced source whose output is missing;
+ * `undefined` when neither is certain and the caller must use diagnostics.
+ */
+export function unbuiltReferenceImport(program: ts.Program, projectFiles: readonly string[]): boolean | undefined {
+    const ignoreCase = !ts.sys.useCaseSensitiveFileNames;
+    const key = (fileName: string) => {
+        const normalized = path.resolve(fileName);
+        return ignoreCase ? normalized.toLowerCase() : normalized;
+    };
+    const missingOutputSources = new Set<string>();
+    for (const reference of program.getResolvedProjectReferences() ?? []) {
+        if (!reference) return undefined;
+        for (const sourceFile of reference.commandLine.fileNames) {
+            if (sourceFile.endsWith('.d.ts') || sourceFile.endsWith('.json')) continue;
+            const declarationOutput = ts.getOutputFileNames(reference.commandLine, sourceFile, ignoreCase)
+                .find((output) => output.endsWith('.d.ts') || output.endsWith('.d.mts') || output.endsWith('.d.cts'));
+            if (declarationOutput && !ts.sys.fileExists(declarationOutput)) {
+                missingOutputSources.add(key(sourceFile));
+            }
+        }
+    }
+    if (missingOutputSources.size === 0) return true;
+
+    const options = program.getCompilerOptions();
+    const cache = ts.createModuleResolutionCache(program.getCurrentDirectory(), (name) => (ignoreCase ? name.toLowerCase() : name), options);
+    for (const projectFile of projectFiles) {
+        const sourceFile = program.getSourceFile(projectFile);
+        if (!sourceFile || sourceFile.isDeclarationFile) continue;
+        for (const imported of ts.preProcessFile(sourceFile.text, true, true).importedFiles) {
+            const resolved = ts.resolveModuleName(imported.fileName, sourceFile.fileName, options, ts.sys, cache).resolvedModule;
+            if (resolved && missingOutputSources.has(key(resolved.resolvedFileName))) return false;
+        }
+    }
+    return undefined;
+}
+
 export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnalyzer {
     private readonly sessions = new Map<string, CachedSession>();
     private snapshots = new Map<string, ProjectSnapshot>();
@@ -748,16 +793,16 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (programResourceFailure) {
                 return resourceLimitEvidence(programResourceFailure);
             }
-            const semanticDiagnostics = program.getSemanticDiagnostics();
-            const diagnosticResourceFailure = session.getResourceLimitFailure();
-            if (diagnosticResourceFailure) {
-                return resourceLimitEvidence(diagnosticResourceFailure);
+            let referenceAuthorityReady = true;
+            if (plan.referencedProjectKeys.length > 0) {
+                referenceAuthorityReady = unbuiltReferenceImport(program, plan.absoluteFiles)
+                    ?? !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
+                const diagnosticResourceFailure = session.getResourceLimitFailure();
+                if (diagnosticResourceFailure) {
+                    return resourceLimitEvidence(diagnosticResourceFailure);
+                }
             }
-            projectReferenceAuthorityReady.set(
-                plan.key,
-                plan.referencedProjectKeys.length === 0
-                    || !semanticDiagnostics.some((diagnostic) => diagnostic.code === 6305),
-            );
+            projectReferenceAuthorityReady.set(plan.key, referenceAuthorityReady);
             const reverseDependencies = buildReverseDependencies(program, plan);
             const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan);
             currentSnapshots.set(plan.key, {

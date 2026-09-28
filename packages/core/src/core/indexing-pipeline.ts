@@ -547,15 +547,36 @@ export class IndexingPipeline {
             }
         };
 
+        // Files are read and analyzed ahead of consumption, up to twice the
+        // analyzer's concurrency, and consumed in path order: output is the same
+        // as analyzing one file at a time.
+        const analysisWindow = Math.max(1, this.languageAnalyzer.concurrency ?? 1) * 2;
+        const pendingAnalyses = new Map<number, Promise<AnalyzedIndexedFile | null>>();
+        let nextAnalysisIndex = 0;
+        const scheduleAnalyses = (consumingIndex: number) => {
+            while (
+                nextAnalysisIndex < input.filePaths.length
+                && nextAnalysisIndex < consumingIndex + analysisWindow
+            ) {
+                const analysis = this.analyzeIndexedFile(
+                    input.filePaths[nextAnalysisIndex],
+                    input.codebasePath,
+                    input.indexPolicy,
+                );
+                // Observed when consumed; an early stop leaves later ones unread.
+                analysis.catch(() => undefined);
+                pendingAnalyses.set(nextAnalysisIndex, analysis);
+                nextAnalysisIndex++;
+            }
+        };
+
         for (let fileIndex = 0; fileIndex < input.filePaths.length; fileIndex++) {
             const filePath = input.filePaths[fileIndex];
             try {
                 const analysisStartedAt = Date.now();
-                const analyzed = await this.analyzeIndexedFile(
-                    filePath,
-                    input.codebasePath,
-                    input.indexPolicy,
-                );
+                scheduleAnalyses(fileIndex);
+                const analyzed = await pendingAnalyses.get(fileIndex)!;
+                pendingAnalyses.delete(fileIndex);
                 if (analyzed === null) continue;
                 if (
                     indexedSourceBytes + analyzed.sourceStat.size

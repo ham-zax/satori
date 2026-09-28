@@ -1,5 +1,6 @@
 export * from './types';
 export * from './service';
+export * from './parallel-service';
 export * from './versions';
 export {
     GO_STRUCTURAL_ANALYSIS_VERSION,

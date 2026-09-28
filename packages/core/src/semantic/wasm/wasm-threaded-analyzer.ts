@@ -1,6 +1,4 @@
 import { Worker } from 'node:worker_threads';
-import fs from 'node:fs';
-import path from 'node:path';
 import type { SemanticProjectAnalyzer } from '../analyzer-port';
 import type {
     SemanticProjectEvidence,
@@ -10,36 +8,7 @@ import type {
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../descriptor';
 import { WasmSemanticProjectAnalyzer } from './wasm-analyzer';
 import type { WasmWorkerRequest, WasmWorkerResponse } from './wasm-worker-runner';
-
-function resolveWorkerScriptPath(): string {
-    const isTs = __filename.endsWith('.ts') || !fs.existsSync(path.resolve(__dirname, './wasm-worker-runner.js'));
-    const candidateTs = path.resolve(__dirname, './wasm-worker-runner.ts');
-    const candidateJs = path.resolve(__dirname, './wasm-worker-runner.js');
-    if (isTs && fs.existsSync(candidateTs)) {
-        return candidateTs;
-    }
-    if (fs.existsSync(candidateJs)) {
-        return candidateJs;
-    }
-    return candidateTs;
-}
-
-function filterWorkerExecArgv(): string[] {
-    const validPrefixes = ['--import', '--loader', '--experimental-loader', '--require', '-r'];
-    const result: string[] = [];
-    for (let i = 0; i < process.execArgv.length; i++) {
-        const arg = process.execArgv[i];
-        if (validPrefixes.some((prefix) => arg === prefix || arg.startsWith(prefix + '='))) {
-            result.push(arg);
-            if (arg === '--import' || arg === '--loader' || arg === '--experimental-loader' || arg === '--require' || arg === '-r') {
-                if (i + 1 < process.execArgv.length && !process.execArgv[i + 1].startsWith('-')) {
-                    result.push(process.execArgv[++i]);
-                }
-            }
-        }
-    }
-    return result;
-}
+import { filterWorkerExecArgv, resolveWorkerScriptPath } from '../../utils/worker-threads';
 
 /** WebAssembly memory never shrinks, so an idle worker is released to return it to the OS. */
 export const DEFAULT_SEMANTIC_WORKER_IDLE_RELEASE_MS = 30_000;
@@ -130,7 +99,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             throw new Error('Semantic analyzer has been disposed');
         }
         if (!this.worker) {
-            const scriptPath = resolveWorkerScriptPath();
+            const scriptPath = resolveWorkerScriptPath(__filename, 'wasm-worker-runner');
             const worker = new Worker(scriptPath, {
                 execArgv: filterWorkerExecArgv(),
             });

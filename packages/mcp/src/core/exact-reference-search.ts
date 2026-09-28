@@ -5,6 +5,7 @@ import {
 } from "./navigation-path-scope.js";
 
 export const EXACT_REFERENCE_EVIDENCE_CLASS = "published_source_text" as const;
+const EXACT_REFERENCE_READ_CONCURRENCY = 16;
 
 export type ExactReferenceOccurrenceKind = "declaration" | "member" | "identifier";
 
@@ -184,9 +185,24 @@ export async function findExactPublishedSourceReferences(input: {
     const identifierPart = "\\p{ID_Continue}$\\u200C\\u200D";
     const matcher = new RegExp("(^|[^" + identifierPart + "])(" + escaped + ")(?=$|[^" + identifierPart + "])", "gu");
 
+    // Authorized reads are syscall-bound, so a bounded window of them runs
+    // ahead while results are still consumed in path order.
+    const pendingReads: Promise<ExactReferenceSourceRead>[] = [];
+    let nextReadIndex = 0;
+    const fillReadWindow = () => {
+        while (nextReadIndex < eligibleEntries.length && pendingReads.length < EXACT_REFERENCE_READ_CONCURRENCY) {
+            const read = input.readPublishedSource(eligibleEntries[nextReadIndex++]!.path);
+            // Observed when awaited in order; this only prevents an unhandled
+            // rejection for reads left in flight when an earlier one throws.
+            read.catch(() => undefined);
+            pendingReads.push(read);
+        }
+    };
+
     for (const entry of eligibleEntries) {
         const file = entry.path;
-        const source = await input.readPublishedSource(file);
+        fillReadWindow();
+        const source = await pendingReads.shift()!;
         if (source.status === "skipped") {
             reasons.push({
                 code: source.code,

@@ -199,3 +199,31 @@ test("Unicode identifier continuations do not create false exact references", as
     assert.deepEqual(result.references.map((reference) => reference.span.startLine), [1]);
     assert.equal(result.references[0]?.matchedText, "foo");
 });
+
+test("exact reference reads overlap but results keep path order", async () => {
+    const nav = registry();
+    const target = nav.symbolsByInstanceId.get("target")!;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order = ["src/caller.ts", "src/ignored/caller.ts", "src/target.ts"];
+    const result = await findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        limit: 10,
+        readPublishedSource: async (file) => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            // Earlier paths finish last.
+            await new Promise((resolve) => setTimeout(resolve, (order.length - order.indexOf(file)) * 5));
+            inFlight -= 1;
+            return { status: "ok", text: sources.get(file)! };
+        },
+    });
+
+    assert.equal(maxInFlight, 3);
+    assert.deepEqual(result.references.map((reference) => [reference.file, reference.occurrenceKind]), [
+        ["src/caller.ts", "member"],
+        ["src/ignored/caller.ts", "member"],
+        ["src/target.ts", "declaration"],
+    ]);
+});

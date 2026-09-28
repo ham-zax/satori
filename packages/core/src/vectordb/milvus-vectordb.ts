@@ -1,14 +1,4 @@
-import {
-    MilvusClient,
-    DataType,
-    MetricType,
-    FunctionType,
-    LoadState,
-    hybridtsToUnixtime,
-    type QueryReq,
-    type RowData,
-    type SearchSimpleReq,
-} from '@zilliz/milvus2-sdk-node';
+import type * as MilvusSdk from '@zilliz/milvus2-sdk-node';
 import {
     IndexedVectorDocument,
     DenseCandidateRequest,
@@ -34,6 +24,13 @@ import { ClusterManager } from './zilliz-utils';
 import { deleteCollectionWithVerification } from './remote-delete';
 import { buildMilvusIdInFilter, serializeMilvusFilter } from './filters';
 import { envManager } from '../utils/env-manager';
+
+let loadedMilvusSdk: typeof MilvusSdk | undefined;
+/** The SDK pulls in the gRPC stack (~250 ms); load it only when a Milvus backend is used. */
+function milvusSdk(): typeof MilvusSdk {
+    loadedMilvusSdk ??= require('@zilliz/milvus2-sdk-node') as typeof MilvusSdk;
+    return loadedMilvusSdk;
+}
 
 type MilvusCollectionListPayload = {
     data?: Array<{ name?: unknown; timestamp?: unknown }>;
@@ -68,7 +65,7 @@ const MILVUS_WRITE_RETRY_DELAY_MS = 250;
 const MILVUS_WRITE_ATTEMPT_SAMPLE_LIMIT = 4_096;
 
 type MilvusWriteBatch = {
-    data: RowData[];
+    data: MilvusSdk.RowData[];
     serializedBytes: number;
     flushReason: Exclude<VectorWriteFlushReason, 'retry'>;
 };
@@ -117,12 +114,12 @@ function resolveWriteBatchPolicy(): { maxRows: number; maxBytes: number | null }
 }
 
 function splitMilvusWriteBatches(
-    data: RowData[],
+    data: MilvusSdk.RowData[],
     maxRows: number,
     maxBytes: number | null,
 ): MilvusWriteBatch[] {
     const batches: MilvusWriteBatch[] = [];
-    let batch: RowData[] = [];
+    let batch: MilvusSdk.RowData[] = [];
     let batchBytes = 2; // JSON array brackets.
 
     const flush = (flushReason: MilvusWriteBatch['flushReason']): void => {
@@ -311,8 +308,8 @@ export interface MilvusConfig {
 
 export class MilvusVectorDatabase implements VectorDatabase {
     protected config: MilvusConfig;
-    private client: MilvusClient | null = null;
-    private writeClient: MilvusClient | null = null;
+    private client: MilvusSdk.MilvusClient | null = null;
+    private writeClient: MilvusSdk.MilvusClient | null = null;
     protected initializationPromise: Promise<void>;
     private resolvedAddress: string | null = null;
     private resolvedFromToken: boolean = false;
@@ -348,7 +345,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
     private async initializeClient(address: string): Promise<void> {
         const milvusConfig = this.config as MilvusConfig;
         console.log('🔌 Connecting to vector database at: ', address);
-        this.client = new MilvusClient({
+        this.client = new (milvusSdk().MilvusClient)({
             address: address,
             username: milvusConfig.username,
             password: milvusConfig.password,
@@ -357,12 +354,12 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    private createWriteClient(): MilvusClient {
+    private createWriteClient(): MilvusSdk.MilvusClient {
         if (!this.resolvedAddress) {
             throw new Error('Cannot initialize Milvus write client before resolving the database address.');
         }
         const milvusConfig = this.config as MilvusConfig;
-        return new MilvusClient({
+        return new (milvusSdk().MilvusClient)({
             address: this.resolvedAddress,
             username: milvusConfig.username,
             password: milvusConfig.password,
@@ -376,7 +373,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
         });
     }
 
-    private async discardWriteClient(client: MilvusClient): Promise<void> {
+    private async discardWriteClient(client: MilvusSdk.MilvusClient): Promise<void> {
         if (this.writeClient !== client) {
             return;
         }
@@ -390,7 +387,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
     private async upsertDocuments(
         collectionName: string,
-        data: RowData[],
+        data: MilvusSdk.RowData[],
     ): Promise<void> {
         await this.ensureInitialized();
         const maxRows = this.writeBatchMaxRows ?? DEFAULT_MILVUS_WRITE_MAX_ROWS;
@@ -509,7 +506,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 collection_name: collectionName
             });
 
-            if (result.state !== LoadState.LoadStateLoaded) {
+            if (result.state !== milvusSdk().LoadState.LoadStateLoaded) {
                 console.log(`[MilvusDB] 🔄 Loading collection '${collectionName}' to memory...`);
                 await this.client.loadCollection({
                     collection_name: collectionName,
@@ -638,48 +635,48 @@ export class MilvusVectorDatabase implements VectorDatabase {
             {
                 name: 'id',
                 description: 'Document ID',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 512,
                 is_primary_key: true,
             },
             {
                 name: 'vector',
                 description: 'Embedding vector',
-                data_type: DataType.FloatVector,
+                data_type: milvusSdk().DataType.FloatVector,
                 dim: dimension,
             },
             {
                 name: 'content',
                 description: 'Document content',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 65535,
             },
             {
                 name: 'relativePath',
                 description: 'Relative path to the codebase',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 1024,
             },
             {
                 name: 'startLine',
                 description: 'Start line number of the chunk',
-                data_type: DataType.Int64,
+                data_type: milvusSdk().DataType.Int64,
             },
             {
                 name: 'endLine',
                 description: 'End line number of the chunk',
-                data_type: DataType.Int64,
+                data_type: milvusSdk().DataType.Int64,
             },
             {
                 name: 'fileExtension',
                 description: 'File extension',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 32,
             },
             {
                 name: 'metadata',
                 description: 'Additional document metadata as JSON string',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 65535,
             },
         ];
@@ -702,7 +699,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             field_name: 'vector',
             index_name: 'vector_index',
             index_type: 'AUTOINDEX',
-            metric_type: MetricType.COSINE,
+            metric_type: milvusSdk().MetricType.COSINE,
         };
 
         console.log(`[MilvusDB] 🔧 Creating index for field 'vector' in collection '${collectionName}'...`);
@@ -771,7 +768,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
 
                     if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== '') {
                         try {
-                            const unixSeconds = Number(hybridtsToUnixtime(String(rawTimestamp)));
+                            const unixSeconds = Number(milvusSdk().hybridtsToUnixtime(String(rawTimestamp)));
                             if (Number.isFinite(unixSeconds) && unixSeconds > 0) {
                                 createdAt = new Date(unixSeconds * 1000).toISOString();
                             }
@@ -826,7 +823,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
         console.log('Inserting documents into collection:', collectionName);
         // The legacy Milvus schema retains source content for result round-trips
         // and server BM25. Dense vectors already encode the supplied projection.
-        const data = documents.map(({ document }) => encodeMilvusSearchableDocument(document) as RowData);
+        const data = documents.map(({ document }) => encodeMilvusSearchableDocument(document) as MilvusSdk.RowData);
 
         await this.upsertDocuments(collectionName, data);
     }
@@ -839,7 +836,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             throw new Error('MilvusClient is not initialized after ensureInitialized().');
         }
 
-        const searchParams: SearchSimpleReq = {
+        const searchParams: MilvusSdk.SearchSimpleReq = {
             collection_name: collectionName,
             data: [[...request.vector]],
             limit: request.limit,
@@ -903,7 +900,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
         }
 
         try {
-            const queryParams: QueryReq = {
+            const queryParams: MilvusSdk.QueryReq = {
                 collection_name: collectionName,
                 filter: filter,
                 output_fields: outputFields,
@@ -961,54 +958,54 @@ export class MilvusVectorDatabase implements VectorDatabase {
             {
                 name: 'id',
                 description: 'Document ID',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 512,
                 is_primary_key: true,
             },
             {
                 name: 'content',
                 description: 'Full text content for BM25 and storage',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 65535,
                 enable_analyzer: true,
             },
             {
                 name: 'vector',
                 description: 'Dense vector embedding',
-                data_type: DataType.FloatVector,
+                data_type: milvusSdk().DataType.FloatVector,
                 dim: dimension,
             },
             {
                 name: 'sparse_vector',
                 description: 'Sparse vector embedding from BM25',
-                data_type: DataType.SparseFloatVector,
+                data_type: milvusSdk().DataType.SparseFloatVector,
             },
             {
                 name: 'relativePath',
                 description: 'Relative path to the codebase',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 1024,
             },
             {
                 name: 'startLine',
                 description: 'Start line number of the chunk',
-                data_type: DataType.Int64,
+                data_type: milvusSdk().DataType.Int64,
             },
             {
                 name: 'endLine',
                 description: 'End line number of the chunk',
-                data_type: DataType.Int64,
+                data_type: milvusSdk().DataType.Int64,
             },
             {
                 name: 'fileExtension',
                 description: 'File extension',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 32,
             },
             {
                 name: 'metadata',
                 description: 'Additional document metadata as JSON string',
-                data_type: DataType.VarChar,
+                data_type: milvusSdk().DataType.VarChar,
                 max_length: 65535,
             },
         ];
@@ -1018,7 +1015,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             {
                 name: "content_bm25_emb",
                 description: "content bm25 function",
-                type: FunctionType.BM25,
+                type: milvusSdk().FunctionType.BM25,
                 input_field_names: ["content"],
                 output_field_names: ["sparse_vector"],
                 params: {},
@@ -1060,7 +1057,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             field_name: 'vector',
             index_name: 'vector_index',
             index_type: 'AUTOINDEX',
-            metric_type: MetricType.COSINE,
+            metric_type: milvusSdk().MetricType.COSINE,
         };
         console.log(`[MilvusDB] 🔧 Creating dense vector index for field 'vector' in collection '${collectionName}'...`);
         await this.client.createIndex(denseIndexParams);
@@ -1074,7 +1071,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             field_name: 'sparse_vector',
             index_name: 'sparse_vector_index',
             index_type: 'SPARSE_INVERTED_INDEX',
-            metric_type: MetricType.BM25,
+            metric_type: milvusSdk().MetricType.BM25,
         };
         console.log(`[MilvusDB] 🔧 Creating sparse vector index for field 'sparse_vector' in collection '${collectionName}'...`);
 
@@ -1106,7 +1103,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
             throw new Error('MilvusClient is not initialized after ensureInitialized().');
         }
 
-        const searchParams: SearchSimpleReq = {
+        const searchParams: MilvusSdk.SearchSimpleReq = {
             collection_name: collectionName,
             data: [request.query],
             anns_field: 'sparse_vector',
@@ -1145,13 +1142,13 @@ export class MilvusVectorDatabase implements VectorDatabase {
             fields: [
                 {
                     name: 'id',
-                    data_type: DataType.VarChar,
+                    data_type: milvusSdk().DataType.VarChar,
                     max_length: 512,
                     is_primary_key: true,
                 },
                 {
                     name: 'vector',
-                    data_type: DataType.FloatVector,
+                    data_type: milvusSdk().DataType.FloatVector,
                     dim: 128,
                 }
             ]

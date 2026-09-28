@@ -355,6 +355,20 @@ The same frozen 30 positive retrieval tasks were queried against compatible Poti
 
 Potion is a useful local first stage, not a claim of Voyage parity. The comparison found weaker Java and configuration/runtime retrieval for Potion. The paired latency observations are descriptive rather than a repeated cross-provider performance qualification.
 
+### Satori versus codebase-memory-mcp
+
+Five pinned repositories, two sequential runs each, measured with `scripts/bench-vs-cbm.mjs` against codebase-memory-mcp 0.11.0 on the same machine (Satori `52b59d76`, offline Potion + LanceDB + LateOn). Ranges are the two runs; 20 unique called functions per repository.
+
+| Repository | Index (Satori / CBM) | Symbol lookup p50 | Callers p50 | One-file edit (Satori sync / CBM reindex) |
+|---|---:|---:|---:|---:|
+| satori (TypeScript) | 76–77 s / 20 s | 39–50 / 31 ms | 46–61 / 21 ms | 20–27 s / 13 s |
+| trufflehog (Go) | 67–71 s / 9–10 s | 59–65 / 19 ms | 64–69 / 16 ms | 15–16 s / 23–27 s |
+| ripgrep (Rust) | 9.3–9.4 s / 2.7–4.6 s | 14–16 / 13 ms | 141–147 / 12 ms | 2.2 s / 2.1–2.6 s |
+| kotlinpoet (Kotlin) | 7.8–8.1 s / 2.6–2.7 s | 18–19 / 13 ms | 181–183 / 12 ms | 2.6–3.1 s / 2.2 s |
+| fastapi-template (Python + TS) | 6.5 s / 2.1–2.2 s | 16 / 12 ms | 206–207 / 12 ms | 3.8–4.0 s / 2.0 s |
+
+Satori found a same-name definition in the defining file for 80–100% of lookups, and its file outlines covered 76–100% of CBM's definitions in 30 sampled files per repository. Satori indexes slower because it also builds embeddings, a vector index, and publication proofs; CBM builds a graph only. Satori's peak RSS during indexing was 1.2–3.1 GB (whole process tree) versus 0.1–2.2 GB for CBM's shared daemon. Satori's index timings agreed within 10% across runs; CBM's shared-daemon timings and Satori's edit sync on two repositories did not, so treat those as indicative. Raw results: [`docs/evidence/benchmarks/2026-09-28-final.json`](./docs/evidence/benchmarks/2026-09-28-final.json).
+
 ### Token-efficient retrieval
 
 Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. The product is designed to cut repository-discovery token waste dramatically by routing exact symbols and compact source windows instead of whole-file dumps.

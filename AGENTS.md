@@ -216,6 +216,16 @@ Once the focused acceptance checks pass, treat that state as final. Do not rerea
 
 Do not begin a review cycle without new evidence of a specific defect.
 
+### Changes that claim unchanged behavior
+
+Optimizations, refactors, fast paths, caches, and concurrency changes promise the same observable results. For these, existing tests are not evidence when they never exercised the changed paths; the rule above about preserving unchanged behavior through existing tests does not apply.
+
+* Make equivalence a test, not a claim. List the inputs the new code branches on, build a small fixture for each, and assert that new and old produce the same published output. Convenient real repositories rarely exercise the changed branches.
+* A fast path returns "unsure" and falls back to the slow path unless it is provably correct. Do not re-implement a library or compiler rule and let the copy give definite answers; test the fast path against the slow path over the fixture set.
+* Code that starts background work (promise chains, workers, queues) must not return or throw while that work is in flight unless ownership is explicitly handed off. Check every `return` and `throw` path, including failures unrelated to the new work.
+* Write failure-path tests before the fix, using deterministic fault injection rather than sleeps or timing. Assert the real invariant (for example, cleanup completed and nothing published), and confirm the test fails on the broken code.
+* One change at a time: equivalence test, then measurement, then commit. Measure with medians of at least three runs, including peak memory, and record machine load.
+
 ## Repository safety
 
 Inspect repository status before editing.

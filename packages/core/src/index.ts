@@ -254,6 +254,7 @@ export {
 export {
     envManager,
 } from './utils/env-manager';
+export { isPerfTraceEnabled, perfSpan, perfTrace } from './utils/perf-trace';
 export {
     MilvusVectorDatabase,
 } from './vectordb/milvus-vectordb';

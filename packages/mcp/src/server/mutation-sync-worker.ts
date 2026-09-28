@@ -1,4 +1,5 @@
 import { RootMutationRuntime, type MutationOperationPhase } from "@zokizuan/satori-core/integration";
+import { perfTrace } from "@zokizuan/satori-core";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { createMcpConfig, resolveMcpRuntimeBootstrap } from "../config.js";
 import { ProviderRuntime } from "./provider-runtime.js";
@@ -116,7 +117,8 @@ async function main(): Promise<void> {
                             5 + Math.round(Math.max(0, Math.min(100, progress.percentage)) * 0.7),
                         );
                     },
-                    onPhaseTiming: (phase) => {
+                    onPhaseTiming: (phase, durationMs) => {
+                        perfTrace(`sync.${phase}`, durationMs);
                         publishRealProgress(phaseForTiming(phase));
                     },
                 });

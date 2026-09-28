@@ -25,6 +25,7 @@ import type {
     ResolutionProjectInput,
 } from './resolution';
 import { buildTypeScriptResolutionClaims } from './typescript-resolution';
+import { perfTrace } from '../utils/perf-trace';
 
 const TYPESCRIPT_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
 const ROOT_MODULE_CONTROL_FILES = [
@@ -788,15 +789,24 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 return resourceLimitEvidence(updateResourceFailure);
             }
 
+            const programStartedAt = performance.now();
             const program = session.getProgram();
+            perfTrace('typescript.program', performance.now() - programStartedAt, { project: plan.key, files: plan.relativeFiles.length });
             const programResourceFailure = session.getResourceLimitFailure();
             if (programResourceFailure) {
                 return resourceLimitEvidence(programResourceFailure);
             }
             let referenceAuthorityReady = true;
             if (plan.referencedProjectKeys.length > 0) {
-                referenceAuthorityReady = unbuiltReferenceImport(program, plan.absoluteFiles)
+                const referenceStartedAt = performance.now();
+                const fastDecision = unbuiltReferenceImport(program, plan.absoluteFiles);
+                referenceAuthorityReady = fastDecision
                     ?? !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
+                perfTrace('typescript.reference_authority', performance.now() - referenceStartedAt, {
+                    project: plan.key,
+                    decision: fastDecision === undefined ? 'diagnostics' : 'fast',
+                    ready: referenceAuthorityReady,
+                });
                 const diagnosticResourceFailure = session.getResourceLimitFailure();
                 if (diagnosticResourceFailure) {
                     return resourceLimitEvidence(diagnosticResourceFailure);
@@ -922,6 +932,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 if (!sourceFile) continue;
                 programSources.push({ projectPath: relativeFile, sourceFile });
             }
+            const claimsStartedAt = performance.now();
             const evidence = analyzeTypeScriptProgram(program, programSources, {
                 sourceFiles: new Set([...affected].filter((file) => manifestByPath.has(file))),
             });
@@ -934,6 +945,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 occurrencesByFile: evidence.occurrencesByFile,
                 sourceFiles: affected,
             });
+            perfTrace('typescript.claims', performance.now() - claimsStartedAt, { project: plan.key, files: affected.size });
             for (const file of affected) {
                 if (!manifestByPath.has(file)) continue;
                 claimsByFile.set(file, projectClaims.get(file) ?? []);

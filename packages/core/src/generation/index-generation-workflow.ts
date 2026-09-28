@@ -23,6 +23,7 @@ import type {
     ResolutionProjectAnalyzer,
     ResolutionProjectEvidence,
 } from '../relationships';
+import { perfSpan, perfTrace } from '../utils/perf-trace';
 import { buildRelationshipDelta, buildRelationshipsForRegistry } from '../relationships';
 import type {
     SemanticAuxiliaryFile,
@@ -502,11 +503,11 @@ export class IndexGenerationWorkflow {
                     throw new Error(`Semantic provider metadata is unavailable for '${language}'.`);
                 }
                 try {
-                    const evidence = await this.ports.semanticAnalyzer.analyze({
+                    const evidence = await perfSpan('navigation.semantic', () => this.ports.semanticAnalyzer!.analyze({
                         language,
                         sourceFiles,
                         auxiliaryFiles,
-                    });
+                    }), { language: language, files: sourceFiles.length });
                     semanticEvidenceByLanguage.set(language, evidence);
                     const coverage = evidence.coverage ?? {
                         language,
@@ -547,11 +548,11 @@ export class IndexGenerationWorkflow {
                 if (!this.ports.resolutionAnalyzer.supportsLanguage(language)) continue;
                 const sourceFileCount = manifestFiles.filter((file) => file.language === language).length;
                 try {
-                    const evidence = await this.ports.resolutionAnalyzer.analyze({
+                    const evidence = await perfSpan('navigation.resolution', () => this.ports.resolutionAnalyzer!.analyze({
                         rootPath: canonicalRoot,
                         language,
                         registry,
-                    });
+                    }), { language, files: sourceFileCount });
                     resolutionEvidenceByLanguage.set(language, evidence);
                     const coverage = evidence.coverage ?? {
                         language,
@@ -603,23 +604,23 @@ export class IndexGenerationWorkflow {
             }
         }
 
-        const relationshipRecords = buildRelationshipsForRegistry({
+        const relationshipRecords = await perfSpan('navigation.relationships', () => buildRelationshipsForRegistry({
             registry,
             analysisByFile,
             semanticRegistry: this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry,
             semanticEvidenceByLanguage,
             resolutionEvidenceByLanguage,
-        });
+        }));
 
         assertMutationCurrent?.();
-        const result = await stagePublicationNavigation({
+        const result = await perfSpan('navigation.stage', () => stagePublicationNavigation({
             publicationId,
             navigationRoot,
             registry,
             records: relationshipRecords,
             analysisByFile,
             providerCoverage: [...providerCoverageByKey.values()],
-        });
+        }));
         this.stagePreparedNavigationDelta(result, {
             canonicalRoot,
             publicationId,
@@ -1096,6 +1097,19 @@ export class IndexGenerationWorkflow {
             logicalVectorWriteRequests: 0,
             logicalVectorWriteDurationMs: 0,
         };
+        for (const [phase, ms] of Object.entries({
+            prepareCollection: prepareCollectionMs,
+            scanFiles: scanFilesMs,
+            payloadPipeline: payloadPipelineMs,
+            analysisWait: pipelinePerformance.analysisMs,
+            embedding: pipelinePerformance.logicalEmbeddingDurationMs,
+            vectorWrites: pipelinePerformance.logicalVectorWriteDurationMs,
+            finalizeCollection: finalizeCollectionMs,
+            navigation: navigationMs,
+            publication: publicationMs,
+        })) {
+            perfTrace(`index.${phase}`, ms, { files: result.processedFiles, chunks: result.totalChunks });
+        }
         // This single bounded record intentionally contains counts and timings,
         // never source text, paths, provider credentials, or request payloads.
         console.log(`[Context] 📊 Indexing performance: ${JSON.stringify({
@@ -1922,11 +1936,11 @@ export class IndexGenerationWorkflow {
                         throw new Error(`Semantic provider metadata is unavailable for '${lang}'.`);
                     }
                     try {
-                        const evidence = await this.ports.semanticAnalyzer.analyze({
+                        const evidence = await perfSpan('navigation.semantic', () => this.ports.semanticAnalyzer!.analyze({
                             language: lang,
                             sourceFiles,
                             auxiliaryFiles,
-                        });
+                        }), { language: lang, files: sourceFiles.length });
                         semanticEvidenceByLanguage.set(lang, evidence);
                         const coverage = evidence.coverage ?? {
                             language: lang,
@@ -1969,13 +1983,13 @@ export class IndexGenerationWorkflow {
                         .filter((file) => file.language === language)
                         .map((file) => file.path);
                     try {
-                        const evidence = await this.ports.resolutionAnalyzer.analyze({
+                        const evidence = await perfSpan('navigation.resolution', () => this.ports.resolutionAnalyzer!.analyze({
                             rootPath: this.ports.canonicalizeCodebasePath(codebasePath),
                             language,
                             registry,
                             previousRegistry: existingRegistry,
                             changedFiles: replacedPaths,
-                        });
+                        }), { language, files: languageFiles.length });
                         resolutionEvidenceByLanguage.set(language, evidence);
                         const coverage = evidence.coverage ?? {
                             language,

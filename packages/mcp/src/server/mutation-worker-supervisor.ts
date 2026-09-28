@@ -7,6 +7,10 @@ const MUTATION_PARENT_PID_ENV = "SATORI_MUTATION_PARENT_PID";
 const DEFAULT_CANCEL_GRACE_MS = 5_000;
 const PROCESS_GROUP_POLL_MS = 25;
 const PARENT_WATCHDOG_MS = 1_000;
+// Index and sync write and fsync thousands of navigation shards through
+// libuv's threadpool; its default of 4 threads queues that I/O behind all other
+// pool work. A value set in the environment wins.
+const MUTATION_WORKER_THREADPOOL_SIZE = "16";
 const MAX_COMPLETION_RESULT_BYTES = 64 * 1024;
 const MUTATION_OPERATION_PHASES = new Set<MutationOperationPhase>([
     "accepted",
@@ -266,6 +270,7 @@ export function spawnSupervisedMutationWorker(
     const worker = fork(options.workerPath, [...(options.workerArgs ?? [])], {
         cwd: options.cwd,
         env: {
+            UV_THREADPOOL_SIZE: MUTATION_WORKER_THREADPOOL_SIZE,
             ...process.env,
             ...options.env,
             [MUTATION_OPERATION_ID_ENV]: options.operationId,

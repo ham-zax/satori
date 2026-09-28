@@ -108,10 +108,22 @@ async function isLikelyGeneratedSingleLineWebAsset(
     return !view.includes(0x0a) && !view.includes(0x0d);
 }
 
+/**
+ * A Set is taken as already normalized (callers that scan many files build it
+ * once); an array is normalized per call.
+ */
+export type SupportedExtensionsInput = readonly string[] | ReadonlySet<string>;
+
+function toExtensionSet(supportedExtensions: SupportedExtensionsInput): ReadonlySet<string> {
+    return supportedExtensions instanceof Set
+        ? supportedExtensions
+        : new Set(normalizeSupportedExtensions(supportedExtensions as readonly string[]));
+}
+
 export async function isIndexableFileObservationByPolicy(
     relativePath: string,
     size: number,
-    supportedExtensions: string[],
+    supportedExtensions: SupportedExtensionsInput,
     readProbe: () => Promise<Buffer>,
 ): Promise<boolean> {
     // Auxiliary inputs belong to source observation, never searchable documents.
@@ -122,8 +134,7 @@ export async function isIndexableFileObservationByPolicy(
     if (size > MAX_INDEXED_SOURCE_FILE_BYTES) return false;
     if (await isLikelyGeneratedSingleLineWebAsset(relativePath, size, readProbe)) return false;
 
-    const normalizedExtensions = normalizeSupportedExtensions(supportedExtensions);
-    const extensionSet = new Set(normalizedExtensions);
+    const extensionSet = toExtensionSet(supportedExtensions);
     const extension = path.extname(relativePath).toLowerCase();
 
     if (extension && extensionSet.has(extension)) {
@@ -146,7 +157,7 @@ export async function isIndexableFileByPolicy(
     relativePath: string,
     absolutePath: string,
     size: number,
-    supportedExtensions: string[]
+    supportedExtensions: SupportedExtensionsInput,
 ): Promise<boolean> {
     let handle: fsp.FileHandle | undefined;
     try {
@@ -183,7 +194,7 @@ export function isSemanticAuxiliaryFilename(relativePath: string): boolean {
 export async function isObservableFileObservationByPolicy(
     relativePath: string,
     size: number,
-    supportedExtensions: string[],
+    supportedExtensions: SupportedExtensionsInput,
     readProbe: () => Promise<Buffer>,
 ): Promise<boolean> {
     if (isSemanticAuxiliaryFilename(relativePath)) {
@@ -196,7 +207,7 @@ export async function isObservableFileByPolicy(
     relativePath: string,
     absolutePath: string,
     size: number,
-    supportedExtensions: string[],
+    supportedExtensions: SupportedExtensionsInput,
 ): Promise<boolean> {
     if (isSemanticAuxiliaryFilename(relativePath)) {
         return true;

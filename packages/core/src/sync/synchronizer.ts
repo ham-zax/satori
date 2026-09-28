@@ -242,7 +242,7 @@ export class FileSynchronizer {
         return {
             rootDir: this.rootDir,
             ignoreMatcher: this.ignoreMatcher,
-            supportedExtensions: [...this.supportedExtensions],
+            supportedExtensions: this.supportedExtensions,
             additionalObservablePaths: this.additionalObservablePaths,
             excludedPaths,
             forceFullHash,

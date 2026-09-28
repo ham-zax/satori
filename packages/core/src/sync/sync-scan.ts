@@ -8,6 +8,7 @@ import { canonicalizeRepositoryRelativePath } from '../paths/repository-path';
 import {
     isObservableFileByPolicy,
     isObservableFileObservationByPolicy,
+    type SupportedExtensionsInput,
 } from '../config/index-policy';
 import {
     openDirectoryInsideRoot,
@@ -28,7 +29,8 @@ export type FileStatSignature = SnapshotFileStatSignature;
 export interface SynchronizerScanContext {
     rootDir: string;
     ignoreMatcher: ReturnType<typeof ignore>;
-    supportedExtensions: readonly string[];
+    /** Normalized once by the synchronizer; see SupportedExtensionsInput. */
+    supportedExtensions: SupportedExtensionsInput;
     additionalObservablePaths?: ReadonlySet<string>;
     excludedPaths?: ReadonlySet<string>;
     forceFullHash: boolean;
@@ -156,7 +158,7 @@ async function isSupportedFile(
         relativePath,
         absolutePath,
         size,
-        [...context.supportedExtensions]
+        context.supportedExtensions,
     );
 }
 
@@ -186,7 +188,7 @@ async function hashFileBytes(
             || await isObservableFileObservationByPolicy(
             relativePath,
             before.size,
-            [...context.supportedExtensions],
+            context.supportedExtensions,
             async () => {
                 const buffer = Buffer.alloc(Math.min(before.size, 8192));
                 const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);

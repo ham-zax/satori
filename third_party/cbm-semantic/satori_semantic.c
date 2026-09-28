@@ -57,6 +57,11 @@ typedef struct {
     char *data;
     uint32_t len;
     uint32_t cap;
+    /* Open-addressing index over interned strings: entry offset + 1, 0 = empty.
+     * A linear scan of `data` per intern was quadratic in project size. */
+    uint32_t *index;
+    uint32_t index_cap;
+    uint32_t index_count;
 } SatoriStringTable;
 
 typedef struct {
@@ -117,6 +122,40 @@ static SatoriSession *find_session(SatoriSemanticHandle handle) {
     return NULL;
 }
 
+static uint32_t str_table_hash(const char *str, uint32_t len) {
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < len; i++) {
+        h ^= (unsigned char)str[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void str_table_reset(SatoriStringTable *st) {
+    free(st->data);
+    free(st->index);
+    memset(st, 0, sizeof(*st));
+}
+
+/* Doubles the index; entries are the NUL-terminated strings already in data. */
+static bool str_table_grow_index(SatoriStringTable *st) {
+    uint32_t new_cap = st->index_cap == 0 ? 1024 : st->index_cap * 2;
+    uint32_t *new_index = (uint32_t *)calloc(new_cap, sizeof(uint32_t));
+    if (!new_index) return false;
+    for (uint32_t i = 0; i < st->index_cap; i++) {
+        uint32_t entry = st->index[i];
+        if (!entry) continue;
+        const char *str = st->data + entry - 1;
+        uint32_t slot = str_table_hash(str, (uint32_t)strlen(str)) & (new_cap - 1);
+        while (new_index[slot]) slot = (slot + 1) & (new_cap - 1);
+        new_index[slot] = entry;
+    }
+    free(st->index);
+    st->index = new_index;
+    st->index_cap = new_cap;
+    return true;
+}
+
 static bool str_table_intern_checked(SatoriStringTable *st, const char *str, uint32_t len, uint32_t *out_offset, uint32_t *out_len) {
     if (!out_offset || !out_len) return false;
     if (!str || len == 0) {
@@ -125,15 +164,20 @@ static bool str_table_intern_checked(SatoriStringTable *st, const char *str, uin
         return true;
     }
 
-    /* Check if already present */
-    if (st->data && st->len > 0) {
-        for (uint32_t i = 0; i + len <= st->len; i++) {
-            if (memcmp(st->data + i, str, len) == 0 && (i + len == st->len || st->data[i + len] == '\0')) {
-                *out_offset = i;
-                *out_len = len;
-                return true;
-            }
+    if ((st->index_count + 1) * 10 > st->index_cap * 7 && !str_table_grow_index(st)) {
+        *out_offset = 0;
+        *out_len = 0;
+        return false;
+    }
+    uint32_t slot = str_table_hash(str, len) & (st->index_cap - 1);
+    while (st->index[slot]) {
+        uint32_t offset = st->index[slot] - 1;
+        if (offset + len < st->len && st->data[offset + len] == '\0' && memcmp(st->data + offset, str, len) == 0) {
+            *out_offset = offset;
+            *out_len = len;
+            return true;
         }
+        slot = (slot + 1) & (st->index_cap - 1);
     }
 
     /* Append to string table */
@@ -160,6 +204,8 @@ static bool str_table_intern_checked(SatoriStringTable *st, const char *str, uin
     memcpy(st->data + offset, str, len);
     st->data[offset + len] = '\0';
     st->len += len + 1;
+    st->index[slot] = offset + 1;
+    st->index_count++;
     *out_offset = offset;
     *out_len = len;
     return true;
@@ -3018,10 +3064,7 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
     s->result_count = 0;
     s->result_cap = 0;
 
-    free(s->str_table.data);
-    s->str_table.data = NULL;
-    s->str_table.len = 0;
-    s->str_table.cap = 0;
+    str_table_reset(&s->str_table);
 
     cbm_arena_destroy(&s->arena);
     cbm_arena_init(&s->arena);
@@ -3440,7 +3483,7 @@ void satori_semantic_destroy(SatoriSemanticHandle handle) {
     free(s->auxiliaries);
 
     free(s->results);
-    free(s->str_table.data);
+    str_table_reset(&s->str_table);
     cbm_arena_destroy(&s->arena);
 
     memset(s, 0, sizeof(SatoriSession));

@@ -313,6 +313,7 @@ if (RUN_LIVE_SERVER_SMOKE) {
                 EMBEDDING_PROVIDER: "Ollama",
                 EMBEDDING_MODEL: "nomic-embed-text",
                 OLLAMA_HOST: "http://127.0.0.1:11434",
+                VECTOR_STORE_PROVIDER: "Milvus",
                 MILVUS_ADDRESS: "localhost:19530",
                 MCP_ENABLE_WATCHER: "false",
                 // Force default guard behavior in test regardless of parent env.
@@ -346,6 +347,7 @@ if (RUN_LIVE_SERVER_SMOKE) {
                 EMBEDDING_PROVIDER: "Ollama",
                 EMBEDDING_MODEL: "nomic-embed-text",
                 OLLAMA_HOST: "http://127.0.0.1:11434",
+                VECTOR_STORE_PROVIDER: "Milvus",
                 MILVUS_ADDRESS: "localhost:19530",
                 MCP_ENABLE_WATCHER: "false",
                 SATORI_CLI_STDOUT_GUARD: "",

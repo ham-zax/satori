@@ -330,7 +330,7 @@ export async function executeInstallCommand(
                 "LANCEDB_PATH",
                 "OLLAMA_HOST",
                 "EMBEDDING_PROVIDER",
-                "OLLAMA_MODEL",
+                "EMBEDDING_MODEL",
                 "SATORI_RERANKER_PROVIDER",
                 "SATORI_LATEON_MODEL_PATH",
                 "SATORI_LATEON_PROFILE",

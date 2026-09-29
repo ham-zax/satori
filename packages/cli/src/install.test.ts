@@ -456,7 +456,7 @@ async function runOfflineUpgradeWithProductionPreflight(
         VECTOR_STORE_PROVIDER: "LanceDB",
         EMBEDDING_PROVIDER: embeddingProvider,
         SATORI_RERANKER_PROVIDER: "none",
-        ...(embeddingProvider === "Ollama" ? { OLLAMA_MODEL: "nomic-embed-text" } : {}),
+        ...(embeddingProvider === "Ollama" ? { EMBEDDING_MODEL: "nomic-embed-text" } : {}),
     });
 
     const result = await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
@@ -493,7 +493,7 @@ test("managed Ollama upgrade uses the staged Core identity resolver", async () =
     await withTempHome(async (homeDir) => {
         const environment = await runOfflineUpgradeWithProductionPreflight(homeDir, "Ollama");
         assert.equal(environment.EMBEDDING_PROVIDER, "Ollama");
-        assert.equal(environment.OLLAMA_MODEL, "nomic-embed-text:latest");
+        assert.equal(environment.EMBEDDING_MODEL, "nomic-embed-text:latest");
     });
 });
 
@@ -1157,7 +1157,7 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: "/managed/ollama-lance",
                 EMBEDDING_PROVIDER: "Ollama",
-                OLLAMA_MODEL: "nomic-embed-text",
+                EMBEDDING_MODEL: "nomic-embed-text",
                 OLLAMA_HOST: "http://127.0.0.1:11434",
             },
             inheritedEnvironment: {},
@@ -2047,13 +2047,12 @@ test("managed MCP package exposes a single satori bin for npx package execution"
     });
 });
 
-test("CLI package exposes the primary and compatibility commands", () => {
+test("CLI package exposes the satori command", () => {
     const cliPackage = JSON.parse(
         fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
     ) as { bin?: Record<string, string> };
     assert.deepEqual(cliPackage.bin, {
         satori: "dist/index.js",
-        "satori-cli": "dist/index.js",
     });
 });
 

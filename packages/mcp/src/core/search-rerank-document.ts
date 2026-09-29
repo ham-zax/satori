@@ -40,7 +40,6 @@ import {
 
 export const SEARCH_RERANK_DOCUMENT_POLICY = Object.freeze({
     id: "search_rerank_document_v4",
-    previousVersion: "search_rerank_document_v3",
     maximumUtf8Bytes: 4_000,
     serialization: "canonical_json_utf8",
     serializedKeyOrder: "lexicographic_recursive_canonical_json_v1",

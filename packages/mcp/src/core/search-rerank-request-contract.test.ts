@@ -36,7 +36,6 @@ test("request contract fixtures bind focus, query, role, and document projection
         fixtures.answerFocusResolution["how does Shariah compliance checking block trades"],
         "implementation",
     );
-    assert.ok(fixtures.queryProjectionV1.implementation?.includes("Answer focus: implementation"));
     assert.equal(
         fixtures.queryProjectionV2.implementation,
         [
@@ -58,7 +57,7 @@ test("request contract fixtures bind focus, query, role, and document projection
         [...SEARCH_CANDIDATE_ROLES].sort(),
         "every runtime candidate role must be behaviorally bound",
     );
-    assert.ok(fixtures.documentProjectionV3.includes('"candidate_role":"implementation"'));
+    assert.ok(fixtures.documentProjectionV4.includes('"candidate_role":"implementation"'));
     assert.ok(
         fixtures.documentProjectionV4.includes(
             '"structural_context":{"direct_callees":[],"direct_callers":[],"supporting_tests":[]}',
@@ -68,7 +67,7 @@ test("request contract fixtures bind focus, query, role, and document projection
     assert.ok(fixtures.documentProjectionV4Structural.includes('"TradingCore.__init__"'));
     assert.ok(fixtures.documentProjectionV4Structural.includes('"relation":"test_support"'));
     assert.ok(fixtures.documentProjectionV4SourceFirst.includes('validate_order_for_exact_question'));
-    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("search_rerank_document_v3"));
+    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("search_rerank_document_v4"));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("bounded_source_selection_v2"));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("source_before_references_v1"));
     assert.equal(
@@ -131,13 +130,13 @@ test("any fixture behavior change moves the request contract digest", () => {
     const baseline = buildSearchRerankRequestContractFixtures();
     const mutatedQuery = {
         ...baseline,
-        queryProjectionV1: { ...baseline.queryProjectionV1, implementation: `${baseline.queryProjectionV1.implementation}\nextra` },
+        queryProjectionV2: { ...baseline.queryProjectionV2, implementation: `${baseline.queryProjectionV2.implementation}\nextra` },
     };
     const mutatedRole = {
         ...baseline,
         candidateRoleClassification: { ...baseline.candidateRoleClassification, "tests/veto.test.ts|typescript": "implementation" },
     };
-    const mutatedDocument = { ...baseline, documentProjectionV3: `${baseline.documentProjectionV3}x` };
+    const mutatedDocument = { ...baseline, documentProjectionV4: `${baseline.documentProjectionV4}x` };
     const mutatedV4Structural = {
         ...baseline,
         documentProjectionV4Structural: `${baseline.documentProjectionV4Structural}x`,

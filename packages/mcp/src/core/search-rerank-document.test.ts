@@ -41,7 +41,6 @@ function ref(relation: SearchRerankStructuralReference["relation"], index: numbe
 
 test("canonical policy carries the frozen v4 contract identity", () => {
     assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v4");
-    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.previousVersion, "search_rerank_document_v3");
 });
 
 test("canonical projection carries the answer-packet shape with bounded structural context", () => {

@@ -702,7 +702,7 @@ test("offline install preflight records resolved local model identity", async ()
 
         assert.equal(result.runtimeEnvironment.SATORI_RUNTIME_PROFILE, "offline");
         assert.equal(result.runtimeEnvironment.EMBEDDING_PROVIDER, "Ollama");
-        assert.equal(result.runtimeEnvironment.OLLAMA_MODEL, "nomic-embed-text:latest");
+        assert.equal(result.runtimeEnvironment.EMBEDDING_MODEL, "nomic-embed-text:latest");
         assert.equal(result.runtimeEnvironment.OLLAMA_MODEL_DIGEST, DIGEST);
         assert.equal(result.runtimeEnvironment.EMBEDDING_OUTPUT_DIMENSION, "768");
         assert.equal(result.ollamaIdentity?.dimension, 768);
@@ -1177,7 +1177,7 @@ test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"L
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: databasePath,
             EMBEDDING_PROVIDER: "Ollama",
-            OLLAMA_MODEL: "nomic-embed-text:latest",
+            EMBEDDING_MODEL: "nomic-embed-text:latest",
             OLLAMA_MODEL_DIGEST: DIGEST,
             EMBEDDING_OUTPUT_DIMENSION: "768",
             OLLAMA_HOST: ollamaHost,
@@ -1237,7 +1237,7 @@ test("offline reinstall without a model preserves an existing managed Ollama sel
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Ollama",
-            OLLAMA_MODEL: "nomic-embed-text:latest",
+            EMBEDDING_MODEL: "nomic-embed-text:latest",
             OLLAMA_MODEL_DIGEST: DIGEST,
             EMBEDDING_OUTPUT_DIMENSION: "768",
             OLLAMA_HOST: "http://localhost:11434",
@@ -1263,7 +1263,7 @@ test("offline reinstall without a model preserves an existing managed Ollama sel
                         SATORI_RUNTIME_PROFILE: "offline",
                         VECTOR_STORE_PROVIDER: "LanceDB",
                         EMBEDDING_PROVIDER: "Ollama",
-                        OLLAMA_MODEL: input.ollamaModel || "",
+                        EMBEDDING_MODEL: input.ollamaModel || "",
                         OLLAMA_MODEL_DIGEST: DIGEST,
                     }),
                 };
@@ -1485,7 +1485,7 @@ test("Linux x64 with implicit Ollama defaults to LateOn D32", async () => {
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Ollama",
-            OLLAMA_MODEL: "nomic-embed-text:latest",
+            EMBEDDING_MODEL: "nomic-embed-text:latest",
             OLLAMA_MODEL_DIGEST: DIGEST,
             EMBEDDING_OUTPUT_DIMENSION: "768",
             OLLAMA_HOST: "http://localhost:11434",
@@ -1508,7 +1508,7 @@ test("Linux x64 with implicit Ollama defaults to LateOn D32", async () => {
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
             "lateon_offline_quality_projection_v5_d32_v1",
         );
-        assert.equal(result.runtimeEnvironment?.OLLAMA_MODEL, "nomic-embed-text:latest");
+        assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, "nomic-embed-text:latest");
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1525,7 +1525,7 @@ test("non-Linux-x64 with implicit Ollama defaults to no reranker", async () => {
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Ollama",
-            OLLAMA_MODEL: "nomic-embed-text:latest",
+            EMBEDDING_MODEL: "nomic-embed-text:latest",
             OLLAMA_MODEL_DIGEST: DIGEST,
             EMBEDDING_OUTPUT_DIMENSION: "768",
             OLLAMA_HOST: "http://localhost:11434",
@@ -1545,7 +1545,7 @@ test("non-Linux-x64 with implicit Ollama defaults to no reranker", async () => {
         });
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "none");
         assert.equal(result.runtimeEnvironment?.SATORI_LATEON_PROFILE, undefined);
-        assert.equal(result.runtimeEnvironment?.OLLAMA_MODEL, "nomic-embed-text:latest");
+        assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, "nomic-embed-text:latest");
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1913,7 +1913,7 @@ test("successful offline install persists its non-secret identity in the shared 
                     SATORI_RUNTIME_PROFILE: "offline",
                     VECTOR_STORE_PROVIDER: "LanceDB",
                     EMBEDDING_PROVIDER: "Ollama",
-                    OLLAMA_MODEL: "nomic-embed-text:latest",
+                    EMBEDDING_MODEL: "nomic-embed-text:latest",
                     OLLAMA_MODEL_DIGEST: DIGEST,
                 }),
             }),

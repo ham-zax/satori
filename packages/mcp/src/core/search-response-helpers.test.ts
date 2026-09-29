@@ -11,7 +11,6 @@ import {
     buildSearchGroupRecommendedAction,
     buildSearchWarningDetails,
     buildTopRecommendedSearchAction,
-    roundSearchScore,
     truncateSearchUtf8,
 } from "./search-response-helpers.js";
 import type { SearchGroupResult } from "./search-types.js";
@@ -96,7 +95,6 @@ function baseGroup(partial: Partial<SearchGroupResult> = {}): SearchGroupResult 
         displayLabel: "class ToolHandlers",
         language: "typescript",
         symbolKind: "class",
-        score: 0.9,
         quality: { owner: "high", semantic: "medium" },
         evidenceSpan: { startLine: 100, endLine: 140 },
         preview: "class ToolHandlers",
@@ -253,12 +251,11 @@ test("group previews contain source evidence without repeating the display label
     );
 });
 
-test("UTF-8 truncation and score serialization are deterministic", () => {
+test("UTF-8 truncation is deterministic", () => {
     const truncated = truncateSearchUtf8("alpha-你好-omega", 13);
     assert.ok(Buffer.byteLength(truncated, "utf8") <= 13);
     assert.equal(truncated.endsWith("..."), true);
     assert.equal(truncated.includes("�"), false);
-    assert.equal(roundSearchScore(0.123456789), 0.123457);
 });
 
 test("buildInboundVerificationSearchQuery uses exact symbol names and rejects unsafe paths", () => {

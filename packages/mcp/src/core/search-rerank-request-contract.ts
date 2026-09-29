@@ -20,17 +20,6 @@ import {
     SEARCH_RERANK_DOCUMENT_POLICY,
     buildSearchRerankDocument,
 } from "./search-rerank-document.js";
-const SEARCH_RERANK_DOCUMENT_V3_POLICY_EVIDENCE = Object.freeze({
-    id: "search_rerank_document_v3",
-    previousVersion: "search_rerank_document_v2",
-    maximumUtf8Bytes: 4_000,
-    serialization: "canonical_json_utf8",
-    serializedKeyOrder: "lexicographic_recursive_canonical_json_v1",
-    addedField: "candidate_role",
-});
-
-const SEARCH_RERANK_DOCUMENT_V3_CONTRACT_EVIDENCE =
-    "{\"candidate_role\":\"implementation\",\"canonical_symbol_label\":\"validate_order\",\"documentation_excerpt\":\"\",\"language\":\"typescript\",\"query_relevant_source_excerpt\":\"function validate_order(order) {\\n    return check_shariah_compliance(order);\\n}\",\"repository_relative_path\":\"src/core/veto.ts\",\"required_owner_siblings\":[],\"signature_or_declaration\":\"function validate_order(order) {\",\"symbol_kind\":\"function\"}";
 import { resolveSearchRerankDocumentProjectionIdentity } from "./search-rerank-document-routing.js";
 import { buildSearchRerankQuery } from "./search-rerank-query.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
@@ -83,10 +72,8 @@ export interface SearchRerankRequestIdentityV1 {
 
 export type SearchRerankRequestContractFixtures = Readonly<{
     answerFocusResolution: Record<string, string>;
-    queryProjectionV1: Record<string, string>;
     queryProjectionV2: Record<string, string>;
     candidateRoleClassification: Record<string, string>;
-    documentProjectionV3: string;
     documentProjectionV4: string;
     documentProjectionV4Structural: string;
     documentProjectionV4SourceFirst: string;
@@ -398,14 +385,12 @@ function buildPartialProjectionBehaviorFixture() {
 
 export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestContractFixtures {
     const answerFocusResolution: Record<string, string> = {};
-    const queryProjectionV1: Record<string, string> = {};
     const queryProjectionV2: Record<string, string> = {};
     for (const [focus, question] of Object.entries(FOCUS_FIXTURE_QUESTIONS)) {
         const parsedOperators = parseSearchOperators(question);
         const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
         answerFocusResolution[question] = resolveSearchAnswerFocus(queryPlan).focus;
         const answerFocus = focus as SearchAnswerFocus;
-        queryProjectionV1[focus] = SEARCH_RERANK_QUERY_V1_CONTRACT_EVIDENCE[answerFocus];
         queryProjectionV2[focus] = buildSearchRerankQuery({
             semanticQuery: question,
             answerFocus,
@@ -414,10 +399,8 @@ export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestC
     const candidateRoleClassification = buildCandidateRoleClassificationFixture();
     return {
         answerFocusResolution,
-        queryProjectionV1,
         queryProjectionV2,
         candidateRoleClassification,
-        documentProjectionV3: SEARCH_RERANK_DOCUMENT_V3_CONTRACT_EVIDENCE,
         documentProjectionV4: buildSearchRerankDocument(DOCUMENT_PROJECTION_FIXTURE).text,
         documentProjectionV4Structural: buildSearchRerankDocument(
             DOCUMENT_PROJECTION_STRUCTURAL_FIXTURE,
@@ -427,7 +410,6 @@ export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestC
         ).text,
         sourceSelectionPolicyIdentity: serializeCanonicalJson({
             boundedSourceSelection: BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
-            sourceSelection: SEARCH_RERANK_DOCUMENT_V3_POLICY_EVIDENCE,
             answerPacketBudget: SEARCH_RERANK_DOCUMENT_POLICY,
         }),
         canonicalJsonIdentity: serializeCanonicalJson({ b: 1, a: [2, { d: "x", c: null }] }),
@@ -454,69 +436,6 @@ export function buildSearchRerankRequestContractManifest(): SearchRerankRequestC
         fixtures,
     };
 }
-
-/**
- * Inert historical contract evidence (Phase 9.2D): the frozen request contract
- * serializes the retired v1 query projection. Production routing never
- * executes this data; it exists only to keep `contractSha256` byte-stable.
- * The bytes are frozen literals, not regenerated from any executable builder.
- */
-const SEARCH_RERANK_QUERY_V1_CONTRACT_EVIDENCE: Record<SearchAnswerFocus, string> = {
-    implementation: [
-        "Question:",
-        "how does Shariah compliance checking block trades",
-        "",
-        "Answer focus: implementation",
-        "",
-        "Guidance:",
-        "Rank the production mechanism and its integration path first. Tests and documentation are supporting evidence unless they are the clearest direct answer.",
-    ].join("\n"),
-    tests: [
-        "Question:",
-        "find tests for trade veto behavior",
-        "",
-        "Answer focus: tests",
-        "",
-        "Guidance:",
-        "Rank tests that directly prove the requested behavior first. Production code may be supporting context.",
-    ].join("\n"),
-    documentation: [
-        "Question:",
-        "what do the docs say about order validation",
-        "",
-        "Answer focus: documentation",
-        "",
-        "Guidance:",
-        "Rank documentation that directly explains the requested topic first. Code may be supporting context.",
-    ].join("\n"),
-    configuration: [
-        "Question:",
-        "where is the risk threshold configured",
-        "",
-        "Answer focus: configuration",
-        "",
-        "Guidance:",
-        "Rank active configuration declarations and the code that loads or applies them first.",
-    ].join("\n"),
-    references: [
-        "Question:",
-        "who calls validate_order",
-        "",
-        "Answer focus: references",
-        "",
-        "Guidance:",
-        "Rank direct callers, callees, references, and integration sites that answer the relationship question first.",
-    ].join("\n"),
-    neutral: [
-        "Question:",
-        "order validation overview",
-        "",
-        "Answer focus: neutral",
-        "",
-        "Guidance:",
-        "Rank the candidate that most directly answers the question. Candidate role is evidence, not a fixed preference.",
-    ].join("\n"),
-};
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -554,13 +473,11 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
         "answerFocusResolution",
         "candidateRoleClassification",
         "canonicalJsonIdentity",
-        "documentProjectionV3",
         "documentProjectionV4",
         "documentProjectionV4SourceFirst",
         "documentProjectionV4Structural",
         "partialProjectionBehavior",
         "partialProjectionSemantics",
-        "queryProjectionV1",
         "queryProjectionV2",
         "sourceSelectionPolicyIdentity",
         "structuralContext",
@@ -606,9 +523,6 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
     ) {
         throw new Error("Rerank request contract partial-projection behavior drifted from runtime owners.");
     }
-    if (typeof fixturesRecord.documentProjectionV3 !== "string") {
-        throw new Error("Rerank request contract document projection fixture must be a string.");
-    }
     if (typeof fixturesRecord.documentProjectionV4 !== "string") {
         throw new Error("Rerank request contract document projection v4 fixture must be a string.");
     }
@@ -642,16 +556,11 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
                 fixturesRecord.answerFocusResolution,
                 "fixtures.answerFocusResolution",
             ),
-            queryProjectionV1: requireStringRecord(
-                fixturesRecord.queryProjectionV1,
-                "fixtures.queryProjectionV1",
-            ),
             queryProjectionV2: requireStringRecord(
                 fixturesRecord.queryProjectionV2,
                 "fixtures.queryProjectionV2",
             ),
             candidateRoleClassification,
-            documentProjectionV3: fixturesRecord.documentProjectionV3,
             documentProjectionV4: fixturesRecord.documentProjectionV4,
             documentProjectionV4Structural: fixturesRecord.documentProjectionV4Structural,
             documentProjectionV4SourceFirst: fixturesRecord.documentProjectionV4SourceFirst,

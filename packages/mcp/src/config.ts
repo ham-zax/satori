@@ -92,28 +92,27 @@ export interface IndexFingerprint {
     embeddingModel: string;
     embeddingDimension: number;
     embeddingArtifactDigest?: string | null;
-    embeddingNormalizationPolicy?: string;
+    embeddingNormalizationPolicy: string;
     vectorStoreProvider: VectorStoreProvider;
     schemaVersion: 'dense_v3' | 'hybrid_v3';
-    parserVersion?: string;
-    extractorVersion?: string;
-    relationshipVersion?: string;
-    embeddingProjectionVersion?: string;
-    lexicalProjectionVersion?: string;
+    parserVersion: string;
+    extractorVersion: string;
+    relationshipVersion: string;
+    embeddingProjectionVersion: string;
+    lexicalProjectionVersion: string;
 }
 
 export function summarizeIndexFingerprint(fingerprint: IndexFingerprint): string {
-    const summarizeIdentity = (identity: string | undefined): string => identity
-        ? crypto.createHash('sha256').update(identity, 'utf8').digest('hex').slice(0, 12)
-        : 'legacy';
+    const summarizeIdentity = (identity: string): string =>
+        crypto.createHash('sha256').update(identity, 'utf8').digest('hex').slice(0, 12);
     return [
         fingerprint.embeddingProvider,
         fingerprint.embeddingModel,
         fingerprint.embeddingDimension,
         fingerprint.vectorStoreProvider,
         fingerprint.schemaVersion,
-        `artifact=${summarizeIdentity(fingerprint.embeddingArtifactDigest ?? undefined)}`,
-        `normalization=${fingerprint.embeddingNormalizationPolicy || 'legacy'}`,
+        `artifact=${fingerprint.embeddingArtifactDigest ? summarizeIdentity(fingerprint.embeddingArtifactDigest) : 'none'}`,
+        `normalization=${fingerprint.embeddingNormalizationPolicy}`,
         `parser=${summarizeIdentity(fingerprint.parserVersion)}`,
         `extractor=${summarizeIdentity(fingerprint.extractorVersion)}`,
         `relationship=${summarizeIdentity(fingerprint.relationshipVersion)}`,
@@ -142,7 +141,6 @@ export interface ContextMcpConfig {
     geminiKey?: string;
     geminiEndpoint?: string;
     // Ollama configuration
-    ollamaEncoderModel?: string;
     ollamaModelDigest?: string;
     ollamaEndpoint?: string;
     // Installer-managed Potion configuration.
@@ -218,21 +216,17 @@ export function getDefaultModelForProvider(provider: string): string {
     }
 }
 
-// Helper function to get embedding model with provider-specific environment variable priority
+// Helper function to get the configured embedding model for a provider
 export function getEmbeddingModelForProvider(provider: string): string {
     switch (provider) {
-        case 'Ollama': {
-            // For Ollama, prioritize OLLAMA_MODEL over EMBEDDING_MODEL for backward compatibility
-            const ollamaEncoderModel = envManager.get('OLLAMA_MODEL') || envManager.get('EMBEDDING_MODEL') || getDefaultModelForProvider(provider);
-            return ollamaEncoderModel;
-        }
         case 'Potion':
             return POTION_MODEL_ID;
+        case 'Ollama':
         case 'OpenAI':
         case 'VoyageAI':
         case 'Gemini':
         default: {
-            // For all other providers, use EMBEDDING_MODEL or default
+            // EMBEDDING_MODEL is the single model variable for every provider.
             const selectedModel = envManager.get('EMBEDDING_MODEL') || getDefaultModelForProvider(provider);
             return selectedModel;
         }
@@ -380,7 +374,7 @@ export async function resolveMcpRuntimeBootstrap(
 
     const resolveIdentity = dependencies.resolveOllamaIdentity ?? resolveOllamaModelIdentity;
     const identity = await resolveIdentity({
-        model: config.ollamaEncoderModel || config.encoderModel,
+        model: config.encoderModel,
         host,
     });
     const recordedDigest = config.ollamaModelDigest
@@ -413,6 +407,9 @@ export function assertRemovedRuntimeEnvUnset(read: (name: string) => string | un
     if (read('SATORI_RERANK_APPLICATION_MODE') !== undefined) {
         throw new Error('SATORI_RERANK_APPLICATION_MODE has been removed; unset it.');
     }
+    if (read('OLLAMA_MODEL') !== undefined) {
+        throw new Error('OLLAMA_MODEL has been removed; set EMBEDDING_MODEL instead and unset OLLAMA_MODEL.');
+    }
 }
 
 export function createMcpConfig(): ContextMcpConfig {
@@ -423,9 +420,12 @@ export function createMcpConfig(): ContextMcpConfig {
     const defaultReadFileMaxBytes = 8 * 1024 * 1024;
     const readFileMaxBytesMin = 65_536;
     const readFileMaxBytesMax = 67_108_864;
+    const configuredVectorStoreProvider = envManager.get('VECTOR_STORE_PROVIDER');
+    if (!configuredVectorStoreProvider && envManager.get('MILVUS_ADDRESS')) {
+        throw new Error('MILVUS_ADDRESS no longer selects Milvus; set VECTOR_STORE_PROVIDER=Milvus explicitly.');
+    }
     const vectorStore = resolveVectorStoreConfig({
-        provider: envManager.get('VECTOR_STORE_PROVIDER')
-            || (envManager.get('MILVUS_ADDRESS') ? 'Milvus' : 'LanceDB'),
+        provider: configuredVectorStoreProvider || 'LanceDB',
         lanceDbPath: envManager.get('LANCEDB_PATH'),
         homeDir: os.homedir(),
     });
@@ -620,7 +620,6 @@ export function createMcpConfig(): ContextMcpConfig {
         geminiKey: envManager.get('GEMINI_API_KEY'),
         geminiEndpoint: envManager.get('GEMINI_BASE_URL'),
         // Ollama configuration
-        ollamaEncoderModel: envManager.get('OLLAMA_MODEL'),
         ollamaModelDigest: envManager.get('OLLAMA_MODEL_DIGEST'),
         ollamaEndpoint: envManager.get('OLLAMA_HOST'),
         // The installer pins these paths to its integrity- and capability-verified runtime bundle.
@@ -715,7 +714,7 @@ Environment Variables:
 
   Embedding Provider Configuration:
   EMBEDDING_PROVIDER      Embedding provider: OpenAI, VoyageAI, Gemini, Ollama (default: VoyageAI)
-  EMBEDDING_MODEL         Embedding model name (works for all providers)
+  EMBEDDING_MODEL         Embedding model name (works for all providers, including Ollama)
 
   Provider-specific API Keys:
   OPENAI_API_KEY          OpenAI API key (required for OpenAI provider)
@@ -726,10 +725,9 @@ Environment Variables:
 
   Ollama Configuration:
   OLLAMA_HOST             Ollama server host (default: http://127.0.0.1:11434)
-  OLLAMA_MODEL            Ollama model name (alternative to EMBEDDING_MODEL for Ollama)
 
   Vector Database Configuration:
-  VECTOR_STORE_PROVIDER   Vector store: LanceDB or Milvus (default: LanceDB; legacy MILVUS_ADDRESS selects Milvus)
+  VECTOR_STORE_PROVIDER   Vector store: LanceDB or Milvus (default: LanceDB; MILVUS_ADDRESS requires VECTOR_STORE_PROVIDER=Milvus)
   MILVUS_ADDRESS          Milvus address (required for index/search/clear tool calls)
   MILVUS_TOKEN            Milvus token (optional, used for authenticated endpoints)
   LANCEDB_PATH            Absolute LanceDB directory (default: ~/.satori/vector/lancedb)
@@ -750,15 +748,15 @@ Examples:
   npx -y @satori-code/cli@latest install --client all
 
   # Start MCP server with OpenAI and explicit Milvus address
-  OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 satori
+  OPENAI_API_KEY=sk-xxx VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=localhost:19530 satori
 
   # Start MCP server with VoyageAI and specific model
-  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-code-3 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
+  EMBEDDING_PROVIDER=VoyageAI VOYAGEAI_API_KEY=pa-xxx EMBEDDING_MODEL=voyage-code-3 VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
   # Start MCP server with Gemini and specific model
-  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
+  EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
   # Start MCP server with Ollama and specific model
-  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text MILVUS_ADDRESS=localhost:19530 satori
+  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=localhost:19530 satori
         `);
 }

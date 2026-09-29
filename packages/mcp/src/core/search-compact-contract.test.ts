@@ -60,7 +60,6 @@ function makeGroup(index: number, options: {
         displayLabel: options.displayLabel ?? `function result${index}()`,
         language: "typescript",
         symbolKind: "function",
-        score: 0.987654321 - index / 10_000,
         quality: { owner: symbolId ? "high" : "low", semantic: "medium" },
         preview: options.preview ?? `function result${index}()\nreturn ${index};`,
         navigation: graph === "ready"

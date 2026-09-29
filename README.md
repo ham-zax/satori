@@ -628,10 +628,9 @@ LateOn is query-time ranking evidence only. It does not control candidate
 eligibility, source freshness, publication authority, or baseline search
 availability.
 
-Search result `score` fields retain bounded retrieval evidence for diagnostics
-and compatibility; they are not the final relevance order. Consumers should
-preserve the returned sequence, or request `includeResultIndex` when they need
-an explicit authoritative rank.
+Grouped search results carry no `score`; the returned sequence is the final
+relevance order. Request `includeResultIndex` when an explicit authoritative
+rank is needed.
 
 ## Language Support
 

@@ -17,8 +17,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "satori": "dist/index.js",
-    "satori-cli": "dist/index.js"
+    "satori": "dist/index.js"
   },
   "scripts": {
     "build": "pnpm clean && tsc --build && pnpm fix:bin-perms && node -e \"require('fs').copyFileSync('src/managed-launcher-script.mjs','dist/managed-launcher-script.mjs')\"",

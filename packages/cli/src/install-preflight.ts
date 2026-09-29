@@ -558,7 +558,10 @@ export function selectedConnectedVectorStore(input: InstallPreflightInput): Inst
     if (configured !== undefined && configured !== "Milvus" && configured !== "LanceDB") {
         throw new Error("VECTOR_STORE_PROVIDER must be Milvus or LanceDB.");
     }
-    return configured || (input.env.MILVUS_ADDRESS?.trim() ? "Milvus" : "LanceDB");
+    if (!configured && input.env.MILVUS_ADDRESS?.trim()) {
+        throw new Error("MILVUS_ADDRESS no longer selects Milvus; pass --vector-store milvus or set VECTOR_STORE_PROVIDER=Milvus.");
+    }
+    return configured || "LanceDB";
 }
 
 export function planInstallRuntimeEnvironment(
@@ -648,7 +651,7 @@ function planProviderRuntimeEnvironment(
         VECTOR_STORE_PROVIDER: "LanceDB",
         LANCEDB_PATH: resolveLanceDbPath(input.homeDir, input.env),
         EMBEDDING_PROVIDER: "Ollama",
-        OLLAMA_MODEL: model,
+        EMBEDDING_MODEL: model,
         OLLAMA_HOST: host,
         ...lateOnEnvironment,
     });
@@ -696,7 +699,7 @@ export async function runInstallPreflight(
     return {
         runtimeEnvironment: Object.freeze({
             ...proposedEnvironment,
-            OLLAMA_MODEL: identity.resolvedModel,
+            EMBEDDING_MODEL: identity.resolvedModel,
             OLLAMA_MODEL_DIGEST: identity.artifactDigest,
             EMBEDDING_OUTPUT_DIMENSION: String(identity.dimension),
         }),

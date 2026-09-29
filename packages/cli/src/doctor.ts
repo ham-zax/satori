@@ -756,9 +756,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         let ollamaIdentityFailed = false;
         if (provider === "Ollama") {
             const host = context.environment.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
-            const model = context.environment.OLLAMA_MODEL?.trim()
-                || context.environment.EMBEDDING_MODEL?.trim()
-                || "nomic-embed-text";
+            const model = context.environment.EMBEDDING_MODEL?.trim() || "nomic-embed-text";
             try {
                 if ((context.environment.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
                     assertLocalOnlyEndpoint(host, "OLLAMA_HOST");

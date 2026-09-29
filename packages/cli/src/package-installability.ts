@@ -121,31 +121,29 @@ export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {
 
     const tarballPath = path.join(smokePackDir, tarballName);
     try {
-        for (const commandName of ["satori", "satori-cli"]) {
-            const output = execImpl(
-                "npm",
-                ["exec", "--yes", "--package", tarballPath, "--", commandName, "--format", "json", "--help"],
-                {
-                    cwd: smokeExecDir,
-                    encoding: "utf8",
-                    env: {
-                        ...process.env,
-                        npm_config_package_lock: "false",
-                    },
-                    stdio: ["ignore", "pipe", "pipe"],
+        const output = execImpl(
+            "npm",
+            ["exec", "--yes", "--package", tarballPath, "--", "satori", "--format", "json", "--help"],
+            {
+                cwd: smokeExecDir,
+                encoding: "utf8",
+                env: {
+                    ...process.env,
+                    npm_config_package_lock: "false",
                 },
-            );
-            const help = JSON.parse(output) as { usage?: unknown };
-            if (help.usage !== "satori <command>") {
-                throw new Error(`${commandName} did not expose Satori CLI help.`);
-            }
+                stdio: ["ignore", "pipe", "pipe"],
+            },
+        );
+        const help = JSON.parse(output) as { usage?: unknown };
+        if (help.usage !== "satori <command>") {
+            throw new Error("satori did not expose Satori CLI help.");
         }
     } catch (error) {
         const output = npmOutput(error);
         const pkg = readPackageJson(packageJsonPath);
         throw new CliError(
             "E_USAGE",
-            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not expose CLI help through the primary and compatibility commands. ${output}`,
+            `Release smoke failed for ${pkg.name}@${pkg.version}. The packed tarball did not expose CLI help through the satori command. ${output}`,
             2
         );
     } finally {

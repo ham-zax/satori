@@ -365,7 +365,6 @@ export function buildExactRegistryGroupResult(input: {
         displayLabel: displaySymbolLabel,
         language: registrySymbol.language,
         symbolKind: registrySymbol.kind,
-        score: 1,
         quality: {
             owner: buildOwnerQuality({
                 registrySymbol,
@@ -447,8 +446,7 @@ export function buildGroupedSymbolSearchResult(input: {
     authoritativeRank?: number;
     orderAuthority?: SearchOrderAuthority;
 }): SearchGroupResult | undefined {
-    const symbolScore = input.representative.fusionScore ?? input.representative.finalScore;
-    if (!Number.isFinite(symbolScore)) {
+    if (!Number.isFinite(input.representative.fusionScore ?? input.representative.finalScore)) {
         return undefined;
     }
     const repairedRegistrySymbol = input.registrySymbolRepair?.validated
@@ -555,7 +553,6 @@ export function buildGroupedSymbolSearchResult(input: {
         displayLabel: repSymbolLabel,
         language: input.representative.result.language || "unknown",
         ...(symbolKind ? { symbolKind } : {}),
-        score: symbolScore,
         quality: {
             owner: buildOwnerQuality({
                 registrySymbol,

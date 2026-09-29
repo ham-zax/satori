@@ -267,7 +267,6 @@ export function appendGroupedCandidateStage(
             endLine: group.target.span.endLine,
             language: group.language,
             rank: groupIndex + 1,
-            score: group.score,
             groupReplay: {
                 displayLabel: group.displayLabel,
                 symbolKind: group.symbolKind ?? null,

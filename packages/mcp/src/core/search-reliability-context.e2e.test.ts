@@ -358,6 +358,12 @@ const LANCEDB_FINGERPRINT: IndexFingerprint = {
     embeddingDimension: 256,
     vectorStoreProvider: "LanceDB",
     schemaVersion: "hybrid_v3",
+    embeddingNormalizationPolicy: "test_normalization_v1",
+    parserVersion: "test_parser_v1",
+    extractorVersion: "test_extractor_v1",
+    relationshipVersion: "test_relationship_v1",
+    embeddingProjectionVersion: "test_embedding_projection_v1",
+    lexicalProjectionVersion: "test_lexical_projection_v1",
 };
 
 function ownerIdentity(satoriVersion: string, lanceDbPath: string) {

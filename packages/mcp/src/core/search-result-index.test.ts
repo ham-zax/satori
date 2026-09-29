@@ -30,7 +30,6 @@ function groupedResult(input: {
             },
         displayLabel: input.displayLabel ?? `result ${input.index}`,
         language: "typescript",
-        score: 1 - input.index / 1_000,
         quality: {
             owner: input.owner ?? "low",
             semantic: input.semantic ?? "low",

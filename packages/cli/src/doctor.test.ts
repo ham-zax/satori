@@ -88,6 +88,7 @@ function assertManagedRuntimeSelectionUnavailable(
 function healthyEnv(): NodeJS.ProcessEnv {
     return {
         VOYAGEAI_API_KEY: "pa-test",
+        VECTOR_STORE_PROVIDER: "Milvus",
         MILVUS_ADDRESS: "localhost:19530",
     };
 }
@@ -410,6 +411,7 @@ test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", asy
         nodeVersion: "v22.13.0",
         env: {
             EMBEDDING_PROVIDER: "Ollama",
+            VECTOR_STORE_PROVIDER: "Milvus",
             MILVUS_ADDRESS: "localhost:19530",
         },
     }));
@@ -431,7 +433,7 @@ test("runDoctor proves the selected offline backend, model identity, and network
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Ollama",
-            OLLAMA_MODEL: "nomic-embed-text:latest",
+            EMBEDDING_MODEL: "nomic-embed-text:latest",
             OLLAMA_MODEL_DIGEST: "a".repeat(64),
             OLLAMA_HOST: "http://127.0.0.1:11434",
             VOYAGEAI_API_KEY: "retained-but-disabled",
@@ -487,7 +489,7 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: path.join(tempDir, "lancedb"),
                 EMBEDDING_PROVIDER: "Ollama",
-                OLLAMA_MODEL: "nomic-embed-text:latest",
+                EMBEDDING_MODEL: "nomic-embed-text:latest",
                 OLLAMA_MODEL_DIGEST: "a".repeat(64),
                 OLLAMA_HOST: "http://127.0.0.1:11434",
             },
@@ -497,6 +499,7 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
             env: {
                 HOME: tempDir,
                 VOYAGEAI_API_KEY: "retained-but-disabled",
+                VECTOR_STORE_PROVIDER: "Milvus",
                 MILVUS_ADDRESS: "stale-cloud-endpoint",
             },
             managedLauncherPath: launcherPath,
@@ -633,6 +636,7 @@ test("runDoctor rejects unsupported embedding providers", async () => {
         env: {
             EMBEDDING_PROVIDER: "Typo",
             VOYAGEAI_API_KEY: "pa-test",
+            VECTOR_STORE_PROVIDER: "Milvus",
             MILVUS_ADDRESS: "localhost:19530",
         },
     }));
@@ -671,6 +675,7 @@ test("runDoctor reports Satori package version set and independent-version polic
         nodeVersion: "v22.13.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
+            VECTOR_STORE_PROVIDER: "Milvus",
             MILVUS_ADDRESS: "localhost:19530",
         },
     }));
@@ -696,6 +701,7 @@ test("runDoctor warns when a package version cannot be resolved", async () => {
         nodeVersion: "v22.13.0",
         env: {
             VOYAGEAI_API_KEY: "pa-test",
+            VECTOR_STORE_PROVIDER: "Milvus",
             MILVUS_ADDRESS: "localhost:19530",
         },
         resolvePackageVersions: () => [
@@ -744,6 +750,7 @@ test("runDoctor errors when multiple live Satori MCP package versions are regist
             nodeVersion: "v22.13.0",
             env: {
                 VOYAGEAI_API_KEY: "pa-test",
+                VECTOR_STORE_PROVIDER: "Milvus",
                 MILVUS_ADDRESS: "localhost:19530",
             },
             runtimeOwnersPath: ownersPath,

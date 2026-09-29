@@ -24,7 +24,6 @@ import {
     buildSearchWarningDetails,
     buildTopRecommendedRawSearchAction,
     buildTopRecommendedSearchAction,
-    roundSearchScore,
 } from "./search-response-helpers.js";
 
 export type SearchResponseCommonInput = {
@@ -179,7 +178,6 @@ export function projectGroupedResultV2(result: SearchGroupResult): SearchGrouped
         ...(result.symbolKind !== undefined
             ? { symbolKind: result.symbolKind }
             : {}),
-        score: roundSearchScore(result.score),
         quality: {
             owner: result.quality.owner,
             semantic: result.quality.semantic,

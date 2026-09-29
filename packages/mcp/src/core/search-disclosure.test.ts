@@ -19,7 +19,6 @@ function result(index: number, preview = `result ${index}`): SearchGroupResult {
         },
         displayLabel: `file src/result-${index}.ts:${index + 1}`,
         language: "typescript",
-        score: 1 - index / 100,
         quality: { owner: "low", semantic: "medium" },
         preview,
         navigation: { graph: "unsupported_language" },
@@ -50,7 +49,6 @@ function buildEnvelope(
             target: entry.target,
             displayLabel: entry.displayLabel,
             language: entry.language,
-            score: entry.score,
             quality: entry.quality,
             preview: entry.preview,
             navigation: { graph: "unsupported_language" },
@@ -139,7 +137,6 @@ test("grouped disclosure distinguishes the caller limit from the initial page bu
     });
 
     assert.equal(projection.results.length, 2);
-    assert.equal(projection.results.every((entry) => Number.isFinite(entry.score)), true);
     assert.deepEqual(projection.envelope.disclosure, {
         policyVersion: "search_disclosure_v1",
         availableGroupCount: 3,

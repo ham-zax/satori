@@ -63,6 +63,7 @@ const PROVIDER_ENV_KEYS = [
     "SATORI_LATEON_REQUEST_DEADLINE_MS",
     "SATORI_LATEON_INTRA_OP_THREADS",
     "GEMINI_API_KEY",
+    "VECTOR_STORE_PROVIDER",
     "MILVUS_ADDRESS",
     "MILVUS_TOKEN",
 ];
@@ -304,6 +305,7 @@ test("configured provider env does not instantiate embedding or Milvus during st
     await withProviderEnvSession({
         EMBEDDING_PROVIDER: "VoyageAI",
         VOYAGEAI_API_KEY: "pa-test",
+        VECTOR_STORE_PROVIDER: "Milvus",
         MILVUS_ADDRESS: "localhost:19530",
     }, async ({ session, logs }) => {
         const response = await session.request("tools/list");

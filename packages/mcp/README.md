@@ -152,7 +152,7 @@ In a fresh two-task OpenCode comparison where both arms answered correctly, Sato
 
 <!-- TOOLS_END -->
 
-`read_file` accepts `open_symbol: {"symbolId":"…"}` with an absolute file `path`;
+`read_file` accepts `open_symbol: {"contractVersion":2,"symbolId":"…"}` with an absolute file `path`;
 mode defaults to `plain` and context to `definition`. Preserve `codebaseRoot`
 from search recommendations when publications overlap.
 

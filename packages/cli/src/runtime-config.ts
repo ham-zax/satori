@@ -34,11 +34,7 @@ function selectedExecutionProfile(env: NodeJS.ProcessEnv): string {
 }
 
 export function selectedVectorStore(env: NodeJS.ProcessEnv): string {
-    const configured = env.VECTOR_STORE_PROVIDER?.trim();
-    if (configured) return configured;
-    // Existing connected installations commonly supplied only MILVUS_ADDRESS.
-    // Preserve that identity while making LanceDB the no-configuration default.
-    return env.MILVUS_ADDRESS?.trim() ? "Milvus" : "LanceDB";
+    return env.VECTOR_STORE_PROVIDER?.trim() || "LanceDB";
 }
 
 function selectedProvider(env: NodeJS.ProcessEnv): string {
@@ -63,9 +59,6 @@ function defaultModelForProvider(provider: string): string {
 }
 
 function selectedModel(env: NodeJS.ProcessEnv, provider: string): string {
-    if (provider === "Ollama") {
-        return env.OLLAMA_MODEL?.trim() || env.EMBEDDING_MODEL?.trim() || defaultModelForProvider(provider);
-    }
     return env.EMBEDDING_MODEL?.trim() || defaultModelForProvider(provider);
 }
 
@@ -135,6 +128,23 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
             status: "error",
             message: `Unsupported vector store provider: ${vectorStore}. Use Milvus or LanceDB.`,
             nextStep: "Set VECTOR_STORE_PROVIDER to Milvus or LanceDB.",
+        }];
+    }
+
+    if (env.OLLAMA_MODEL !== undefined) {
+        return [{
+            name: "embedding_model",
+            status: "error",
+            message: "OLLAMA_MODEL has been removed.",
+            nextStep: "Set EMBEDDING_MODEL and unset OLLAMA_MODEL.",
+        }];
+    }
+    if (!env.VECTOR_STORE_PROVIDER?.trim() && env.MILVUS_ADDRESS?.trim()) {
+        return [{
+            name: "vector_store_provider",
+            status: "error",
+            message: "MILVUS_ADDRESS no longer selects Milvus.",
+            nextStep: "Set VECTOR_STORE_PROVIDER=Milvus.",
         }];
     }
 

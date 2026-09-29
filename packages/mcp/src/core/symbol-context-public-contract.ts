@@ -161,7 +161,7 @@ function flattenZodIssues(issues: readonly z.ZodIssue[]): z.ZodIssue[] {
  * commits the whole object to exact-symbol validation; every actionable
  * violation — unsupported version, conflicting identity or operations,
  * inner shape errors — is reported at a stable field path in one response.
- * Omitted version and operation default to v2 definition context.
+ * contractVersion is required; an omitted operation defaults to v2 definition context.
  * Objects without any exact-symbol marker are direct spans and remain
  * exempt from the exact-symbol contract.
  */
@@ -175,7 +175,7 @@ export const openSymbolRequestSchema = z.object({
     endLine: z.number().int().positive().optional(),
 }).strict().superRefine((value, ctx) => {
     if (hasExactSymbolMarker(value)) {
-        if (value.contractVersion !== undefined && value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
+        if (value.contractVersion !== SYMBOL_CONTEXT_FORMAT_VERSION) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
                 path: ["contractVersion"],
@@ -264,7 +264,6 @@ export const openSymbolRequestSchema = z.object({
     }
 }).transform(value => hasExactSymbolMarker(value) ? {
     ...value,
-    contractVersion: value.contractVersion ?? SYMBOL_CONTEXT_FORMAT_VERSION,
     ...(value.context === undefined && value.continuation === undefined
         ? { context: { preset: "definition" as const } } : {}),
 } : value);

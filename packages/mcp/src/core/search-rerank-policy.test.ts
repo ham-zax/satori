@@ -296,7 +296,7 @@ test("advertised provider and global capacities report the binding admission own
     assert.equal(globallyBound.budgetReason, "global_limit");
 });
 
-test("missing or invalid provider capacity preserves legacy adaptive admission", () => {
+test("missing or invalid provider capacity preserves default adaptive admission", () => {
     const candidates = Array.from({ length: 30 }, (_, index) => candidate({
         id: `candidate-${index}`,
         ownerInstanceId: `owner-${index}`,

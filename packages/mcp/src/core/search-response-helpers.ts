@@ -401,10 +401,6 @@ export function boundSearchEvidenceSpan(span: SearchSpan): SearchSpan {
     };
 }
 
-export function roundSearchScore(score: number): number {
-    return Number(score.toFixed(6));
-}
-
 function resolveSearchTargetAbsolutePath(
     codebaseRoot: string,
     relativeFile: string,

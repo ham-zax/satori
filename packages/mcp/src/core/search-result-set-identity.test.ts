@@ -42,7 +42,6 @@ function input(): SearchRankedSetBindingInput {
             displayLabel: "owner",
             language: "typescript",
             symbolKind: "function",
-            score: 0.75,
             quality: { owner: "high", semantic: "high" },
             evidenceChunks: 2,
             preview: "export function owner() {}",
@@ -67,7 +66,6 @@ function input(): SearchRankedSetBindingInput {
             },
             displayLabel: "src/helper.ts",
             language: "typescript",
-            score: 0.5,
             quality: { owner: "low", semantic: "medium" },
             preview: "export const helper = true;",
             navigation: { graph: "missing_symbol" },
@@ -112,10 +110,6 @@ test("ranked-set digest binds every pageable group field and complete order", ()
     const variants = [
         withMutation((value) => {
             value.orderedResults[0]!.target.file = "src/other.ts";
-            return value;
-        }),
-        withMutation((value) => {
-            value.orderedResults[0]!.score = 0.74;
             return value;
         }),
         withMutation((value) => {

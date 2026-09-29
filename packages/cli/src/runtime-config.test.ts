@@ -12,6 +12,17 @@ test("retired reranker application mode fails clearly during CLI configuration c
     }]);
 });
 
+test("static runtime config rejects the removed OLLAMA_MODEL alias and implicit Milvus selection", () => {
+    assert.deepEqual(
+        evaluateStaticRuntimeConfig({ EMBEDDING_PROVIDER: "Ollama", OLLAMA_MODEL: "nomic-embed-text" }).map((check) => [check.name, check.status, check.nextStep]),
+        [["embedding_model", "error", "Set EMBEDDING_MODEL and unset OLLAMA_MODEL."]],
+    );
+    assert.deepEqual(
+        evaluateStaticRuntimeConfig({ VOYAGEAI_API_KEY: "pa-test", MILVUS_ADDRESS: "localhost:19530" }).map((check) => [check.name, check.status, check.nextStep]),
+        [["vector_store_provider", "error", "Set VECTOR_STORE_PROVIDER=Milvus."]],
+    );
+});
+
 test("static runtime config rejects unsupported providers without unrelated key guidance", () => {
     const checks = evaluateStaticRuntimeConfig({ EMBEDDING_PROVIDER: "Unknown" });
 
@@ -25,6 +36,7 @@ test("static runtime config rejects dimensions the runtime would ignore", () => 
         EMBEDDING_PROVIDER: "OpenAI",
         EMBEDDING_OUTPUT_DIMENSION: "1024",
         OPENAI_API_KEY: "sk-test",
+        VECTOR_STORE_PROVIDER: "Milvus",
         MILVUS_ADDRESS: "localhost:19530",
     });
 
@@ -38,7 +50,7 @@ test("static runtime config accepts an installer-resolved Ollama dimension", () 
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
         EMBEDDING_PROVIDER: "Ollama",
-        OLLAMA_MODEL: "nomic-embed-text:latest",
+        EMBEDDING_MODEL: "nomic-embed-text:latest",
         OLLAMA_MODEL_DIGEST: "a".repeat(64),
         EMBEDDING_OUTPUT_DIMENSION: "768",
     });
@@ -84,6 +96,7 @@ test("static runtime config rejects an unbound LateOn selection", () => {
         SATORI_RERANKER_PROVIDER: "lateon",
         SATORI_LATEON_MODEL_PATH: "relative/model",
         VOYAGEAI_API_KEY: "test",
+        VECTOR_STORE_PROVIDER: "Milvus",
         MILVUS_ADDRESS: "localhost:19530",
     });
 
@@ -227,7 +240,8 @@ test("static runtime config rejects a changed Potion model identity", () => {
 test("static runtime config reports a complete Ollama and local Milvus setup", () => {
     const checks = evaluateStaticRuntimeConfig({
         EMBEDDING_PROVIDER: "Ollama",
-        OLLAMA_MODEL: "nomic-embed-text",
+        EMBEDDING_MODEL: "nomic-embed-text",
+        VECTOR_STORE_PROVIDER: "Milvus",
         MILVUS_ADDRESS: "localhost:19530",
     });
 
@@ -240,7 +254,7 @@ test("static runtime config enforces the explicit offline policy and recorded mo
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
         EMBEDDING_PROVIDER: "Ollama",
-        OLLAMA_MODEL: "nomic-embed-text:latest",
+        EMBEDDING_MODEL: "nomic-embed-text:latest",
         OLLAMA_MODEL_DIGEST: "a".repeat(64),
         VOYAGEAI_API_KEY: "retained-but-unreachable",
     });

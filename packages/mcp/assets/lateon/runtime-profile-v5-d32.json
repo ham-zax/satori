@@ -9,7 +9,7 @@
     "projectionVersion": "search_rerank_document_v4",
     "projectionSha256": "f7cee836ca9dac7ae02eaa8384cccb8d51114c66027536366223f59264c2c5b4",
     "queryProjectionVersion": "search_rerank_query_v2",
-    "requestContractSha256": "f4e8ec82841f0496a592246008fc7bd05e61a66b4d482ef74b11db0e3fa3dd5d"
+    "requestContractSha256": "8a9446037885a539199079e158c7e03493bedb1b07cc48e774b3c506c1f1fa01"
   },
   "artifacts": [
     {

@@ -200,12 +200,6 @@ export interface SearchGroupedResultV2 {
     displayLabel: string;
     language: string;
     symbolKind?: string;
-    /**
-     * Retrieval evidence retained for compatibility and diagnostics. It is
-     * not an authoritative relevance score; consumers must preserve the
-     * response sequence (or use resultIndex.rank) instead of sorting by it.
-     */
-    score: number;
     quality: {
         owner: "high" | "medium" | "low";
         semantic: SearchCapabilityConfidence;

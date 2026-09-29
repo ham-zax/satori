@@ -112,7 +112,7 @@ test("install postflight validates the installed profile over stale ambient prov
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
                 EMBEDDING_PROVIDER: "Ollama",
-                OLLAMA_MODEL: "nomic-embed-text:latest",
+                EMBEDDING_MODEL: "nomic-embed-text:latest",
                 OLLAMA_MODEL_DIGEST: "a".repeat(64),
                 EMBEDDING_OUTPUT_DIMENSION: "768",
                 OLLAMA_HOST: "http://127.0.0.1:11434",

@@ -195,11 +195,8 @@ function installAndVerifyPackedReleaseClosure(
     requireDependency(packedMcp, "@satori-code/core", coreVersion, "Packed MCP");
 
     const cliEntryRelative = packedCli.bin?.satori;
-    if (
-        typeof cliEntryRelative !== "string"
-        || packedCli.bin?.["satori-cli"] !== cliEntryRelative
-    ) {
-        throw new Error("Packed CLI must expose matching 'satori' and 'satori-cli' binaries.");
+    if (typeof cliEntryRelative !== "string" || Object.keys(packedCli.bin ?? {}).join() !== "satori") {
+        throw new Error("Packed CLI must expose exactly the 'satori' binary.");
     }
     const cliEntry = path.resolve(cliRoot, cliEntryRelative);
     const mcpEntry = path.resolve(
@@ -391,7 +388,7 @@ function assertPackedCliLateOnAcquisition(packedCliRoot: string): void {
     }
     const storeSource = fs.readFileSync(storePath, "utf8");
     const policyMissing = !storeSource.includes("lateon_context_v5_d32_owner_default_v1");
-    const frozenDigestMissing = !storeSource.includes("04958f55784968a2a45c1499adc2fcb706dcd23e9813c8e8da7e3f31f43777f6");
+    const frozenDigestMissing = !storeSource.includes("2957cec1aabc1790e6c58d9e02ae2829cbda9b9ae3b176e9a22363b3fbf688f4");
     const installSource = fs.readFileSync(installPath, "utf8");
     const resolutionMissing = !installSource.includes("resolveVerifiedLateOnModel");
     if (policyMissing || frozenDigestMissing || resolutionMissing) {

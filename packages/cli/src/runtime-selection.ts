@@ -234,12 +234,12 @@ export function resolveOfflineOllamaModel(
         );
     }
     const preservedOllamaModel = managedProvider === "Ollama"
-        ? managedEnvironment.OLLAMA_MODEL
+        ? managedEnvironment.EMBEDDING_MODEL
         : undefined;
     if (managedProvider === "Ollama" && !preservedOllamaModel) {
         throw new CliError(
             "E_USAGE",
-            "Existing managed Ollama installation has no OLLAMA_MODEL. Re-run with an explicit --ollama-model.",
+            "Existing managed Ollama installation has no EMBEDDING_MODEL. Re-run with an explicit --ollama-model.",
             2,
         );
     }

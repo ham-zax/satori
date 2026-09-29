@@ -21,14 +21,10 @@ function candidate(input: Partial<{
         passesMatchedMust: input.must ?? false,
         exactLexicalMatch: input.exact ?? false,
         exactMatchPinned: false,
-        legacyPathMultiplier: 2.5,
-        changedFilesMultiplier: 9,
-        agentFitMultiplier: 7,
-        lexicalScore: 100,
     };
 }
 
-test("orders by deterministic retrieval evidence and ignores legacy relevance metadata", () => {
+test("orders by fusion score", () => {
     const candidates = [
         candidate({ path: "tests/search.test.ts", score: 0.4, label: "test" }),
         candidate({ path: "src/search.ts", score: 0.8, label: "implementation" }),

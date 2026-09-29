@@ -22,7 +22,7 @@ test('offline static config preserves the installer-resolved Ollama dimension', 
         'VECTOR_STORE_PROVIDER',
         'LANCEDB_PATH',
         'EMBEDDING_PROVIDER',
-        'OLLAMA_MODEL',
+        'EMBEDDING_MODEL',
         'OLLAMA_MODEL_DIGEST',
         'OLLAMA_HOST',
         'EMBEDDING_OUTPUT_DIMENSION',
@@ -34,7 +34,7 @@ test('offline static config preserves the installer-resolved Ollama dimension', 
         process.env.VECTOR_STORE_PROVIDER = 'LanceDB';
         process.env.LANCEDB_PATH = '/opt/satori/lancedb';
         process.env.EMBEDDING_PROVIDER = 'Ollama';
-        process.env.OLLAMA_MODEL = 'nomic-embed-text';
+        process.env.EMBEDDING_MODEL = 'nomic-embed-text';
         process.env.OLLAMA_MODEL_DIGEST = 'a'.repeat(64);
         process.env.OLLAMA_HOST = 'http://127.0.0.1:11434';
         process.env.EMBEDDING_OUTPUT_DIMENSION = '768';
@@ -56,7 +56,6 @@ test('offline bootstrap preserves recorded Ollama dimension', async () => {
         networkPolicy: { kind: 'local-only' },
         encoderProvider: 'Ollama',
         encoderModel: 'nomic-embed-text',
-        ollamaEncoderModel: 'nomic-embed-text',
         ollamaModelDigest: DIGEST,
         ollamaEndpoint: 'http://127.0.0.1:11434',
         encoderOutputDimension: 768,
@@ -105,6 +104,46 @@ test('retired reranker application mode fails clearly before MCP configuration i
             () => createMcpConfig(),
             /SATORI_RERANK_APPLICATION_MODE has been removed/,
         );
+    } finally {
+        for (const key of keys) {
+            const value = previous[key];
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    }
+});
+
+test('removed OLLAMA_MODEL alias and implicit MILVUS_ADDRESS provider selection fail with the single fix', () => {
+    const keys = [
+        'SATORI_RUNTIME_PROFILE',
+        'VECTOR_STORE_PROVIDER',
+        'MILVUS_ADDRESS',
+        'LANCEDB_PATH',
+        'EMBEDDING_PROVIDER',
+        'EMBEDDING_MODEL',
+        'OLLAMA_MODEL',
+    ] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+        for (const key of keys) delete process.env[key];
+        Object.assign(process.env, {
+            VECTOR_STORE_PROVIDER: 'LanceDB',
+            LANCEDB_PATH: '/tmp/satori-removed-env',
+            EMBEDDING_PROVIDER: 'Ollama',
+            OLLAMA_MODEL: 'nomic-embed-text',
+        });
+        assert.throws(createMcpConfig, /OLLAMA_MODEL has been removed; set EMBEDDING_MODEL/);
+
+        delete process.env.OLLAMA_MODEL;
+        process.env.EMBEDDING_MODEL = 'nomic-embed-text:latest';
+        assert.equal(createMcpConfig().encoderModel, 'nomic-embed-text:latest');
+
+        delete process.env.VECTOR_STORE_PROVIDER;
+        process.env.MILVUS_ADDRESS = 'localhost:19530';
+        assert.throws(createMcpConfig, /MILVUS_ADDRESS no longer selects Milvus; set VECTOR_STORE_PROVIDER=Milvus/);
+
+        process.env.VECTOR_STORE_PROVIDER = 'Milvus';
+        assert.equal(createMcpConfig().vectorStoreProvider, 'Milvus');
     } finally {
         for (const key of keys) {
             const value = previous[key];
@@ -383,7 +422,6 @@ test('offline bootstrap resolves model digest and dimension before fingerprintin
         networkPolicy: { kind: 'local-only' },
         encoderProvider: 'Ollama',
         encoderModel: 'nomic-embed-text',
-        ollamaEncoderModel: 'nomic-embed-text',
         ollamaModelDigest: DIGEST,
         ollamaEndpoint: 'http://127.0.0.1:11434',
     }), {
@@ -417,7 +455,6 @@ test('offline postflight bootstrap uses the preflight-recorded identity without 
         encoderProvider: 'Ollama',
         encoderModel: 'nomic-embed-text:latest',
         encoderOutputDimension: 768,
-        ollamaEncoderModel: 'nomic-embed-text:latest',
         ollamaModelDigest: DIGEST,
         ollamaEndpoint: 'http://127.0.0.1:11434',
     }), {
@@ -491,7 +528,6 @@ test('offline bootstrap accepts a canonical sha256-prefixed recorded digest', as
         networkPolicy: { kind: 'local-only' },
         encoderProvider: 'Ollama',
         encoderModel: 'nomic-embed-text',
-        ollamaEncoderModel: 'nomic-embed-text',
         ollamaModelDigest: `sha256:${digest}`,
         ollamaEndpoint: 'http://127.0.0.1:11434',
     }), {

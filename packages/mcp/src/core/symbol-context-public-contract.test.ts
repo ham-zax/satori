@@ -83,8 +83,7 @@ test("exact-symbol unit validation flattens continuation union sub-issues", () =
 test("exact and direct-span schemas implement every frozen discrimination vector", () => {
     for (const fixture of phase0Contract.wireContract.schemaCases) {
         const parsed = openSymbolRequestSchema.safeParse(fixture.openSymbol);
-        // The current wire contract defaults a version omitted by legacy callers.
-        assert.equal(parsed.success, fixture.id === "missing-version" || fixture.acceptedVariant !== null, fixture.id);
+        assert.equal(parsed.success, fixture.acceptedVariant !== null, fixture.id);
         if (fixture.acceptedVariant === "exact_symbol_v2") {
             assert.equal(exactSymbolOpenRequestSchema.safeParse(fixture.openSymbol).success, true, fixture.id);
         }

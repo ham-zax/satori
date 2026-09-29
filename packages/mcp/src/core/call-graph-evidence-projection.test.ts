@@ -118,6 +118,9 @@ function payload(publicationId = "publication-1"): CallGraphResponseEnvelope {
                 calleeText: "other.request",
             }],
             gapsTruncated: false,
+            conflictingCandidateCount: 0,
+            conflictingCandidates: [],
+            conflictingCandidatesTruncated: false,
         }],
         navigationAuthority: {
             publicationId,
@@ -151,6 +154,7 @@ test("call graph defaults to summary-only evidence", () => {
         sourceReferenceCount: 1,
         testReferenceCount: 1,
         constructGapCount: 2,
+        candidateConflictCount: 0,
         edgeArgumentEdgeCount: 1,
         availableKinds: [
             "exact_references",
@@ -323,4 +327,33 @@ test("call graph pages construct gaps and edge arguments without duplicating the
         args: ["largeExpression()", "anotherExpression()"],
     });
     assert.equal(args.edges[0]?.args, undefined);
+});
+
+test("call graph keeps candidate disagreement visible in summary and pages its details", () => {
+    const input = payload();
+    input.constructCoverage = [{
+        ...input.constructCoverage![0]!,
+        conflictingCandidateCount: 1,
+        conflictingCandidates: [{
+            file: "src/caller.ts",
+            span: { startLine: 10, endLine: 10, startByte: 100, endByte: 110, startColumn: 0, endColumn: 10 },
+            providerId: "fixture",
+            providerVersion: "v1",
+            candidateInstanceIds: ["candidate-a"],
+            publishedTargetInstanceIds: ["target-b"],
+        }],
+    }];
+
+    const summary = projectCallGraphEvidence(input);
+    assert.equal(summary.evidenceSummary?.candidateConflictCount, 1);
+    assert.ok(summary.evidenceSummary?.availableKinds.includes("candidate_conflicts"));
+    assert.deepEqual(summary.constructCoverage?.[0]?.conflictingCandidates, []);
+
+    const page = projectCallGraphEvidence(input, { kind: "candidate_conflicts", limit: 1 });
+    assert.equal(page.evidencePage?.availableCount, 1);
+    assert.equal(page.evidencePage?.returnedCount, 1);
+    assert.equal(page.evidencePage?.kind, "candidate_conflicts");
+    if (page.evidencePage?.kind === "candidate_conflicts") {
+        assert.equal(page.evidencePage.items[0]?.construct, "typed_member_call");
+    }
 });

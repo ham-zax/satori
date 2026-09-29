@@ -83,6 +83,65 @@ test('pnpm workspace ownership uses manifest identity and the nearest nested pac
     }
 });
 
+test('mixed Node and nested Cargo workspaces assign crate files to Rust packages', () => {
+    const fixture = createRepo();
+    try {
+        writeFile(fixture.root, 'package.json', JSON.stringify({ name: 'root' }));
+        writeFile(fixture.root, 'engine/Cargo.toml', "[workspace]\nmembers = ['crates/*']\n");
+        writeFile(fixture.root, 'engine/crates/api/Cargo.toml', '[package]\nname = "api"\n');
+        writeFile(fixture.root, 'engine/crates/worker/Cargo.toml', '[package]\nname = "worker"\n');
+        writeFile(fixture.root, 'engine/crates/api/src/lib.rs', 'pub fn api() {}\n');
+        writeFile(fixture.root, 'engine/crates/worker/src/lib.rs', 'pub fn work() {}\n');
+        writeFile(fixture.root, 'src/index.ts', 'export const root = 1;\n');
+
+        const discovered = discoverPackageOwnership(fixture.root);
+        assert.deepEqual(discovered.cargoWorkspaces, [{
+            kind: 'cargo', root: 'engine', manifestPath: 'engine/Cargo.toml', patterns: ['crates/*'],
+        }]);
+        assert.deepEqual(discovered.packages.map(({ ecosystem, root, name }) => ({ ecosystem, root, name })), [
+            { ecosystem: 'node', root: '', name: 'root' },
+            { ecosystem: 'rust', root: 'engine/crates/api', name: 'api' },
+            { ecosystem: 'rust', root: 'engine/crates/worker', name: 'worker' },
+        ]);
+        const ownership = buildPublicationPackageOwnership(fixture.root, [
+            'src/index.ts', 'engine/crates/api/src/lib.rs', 'engine/crates/worker/src/lib.rs',
+        ], new Map(discovered.controlFiles));
+        assert.equal(ownership.schemaVersion, 'package_ownership_v2');
+        assert.equal(ownerByFile(ownership.files).get('src/index.ts'), '');
+        assert.equal(ownerByFile(ownership.files).get('engine/crates/api/src/lib.rs'), 'engine/crates/api');
+        assert.equal(ownerByFile(ownership.files).get('engine/crates/worker/src/lib.rs'), 'engine/crates/worker');
+        assert.deepEqual(ownership.cargoWorkspaces, discovered.cargoWorkspaces);
+        assert.ok(ownership.controlFiles.some(([path]) => path === 'engine/Cargo.toml'));
+
+        const observedWithoutWorkerManifest = new Map(discovered.controlFiles.filter(([path]) => (
+            path !== 'engine/crates/worker/Cargo.toml'
+        )));
+        const scopedOwnership = buildPublicationPackageOwnership(
+            fixture.root, ['engine/crates/api/src/lib.rs'], observedWithoutWorkerManifest,
+        );
+        assert.equal(scopedOwnership.packages.some((pkg) => pkg.root === 'engine/crates/worker'), false);
+        assert.equal(scopedOwnership.controlFiles.some(([path]) => path === 'engine/crates/worker/Cargo.toml'), false);
+    } finally {
+        fixture.cleanup();
+    }
+});
+
+test('a same-root Node and Cargo package keeps the established Node file owner', () => {
+    const fixture = createRepo();
+    try {
+        writeFile(fixture.root, 'package.json', JSON.stringify({ name: 'root-node' }));
+        writeFile(fixture.root, 'Cargo.toml', '[package]\nname = "root-rust"\n');
+        const discovered = discoverPackageOwnership(fixture.root);
+        assert.deepEqual(discovered.packages.map((pkg) => pkg.name), ['root-node']);
+        const ownership = buildPublicationPackageOwnership(
+            fixture.root, ['src/lib.rs'], new Map(discovered.controlFiles),
+        );
+        assert.equal(ownership.files[0]?.packageRoot, '');
+    } finally {
+        fixture.cleanup();
+    }
+});
+
 test('manifest-free repositories keep explicit no-owner file semantics', () => {
     const fixture = createRepo();
     try {
@@ -150,6 +209,7 @@ test('Satori pnpm workspace discovers the root, core, mcp, and cli packages', ()
     assert.equal(packageNamesByRoot.get('packages/core'), '@zokizuan/satori-core');
     assert.equal(packageNamesByRoot.get('packages/mcp'), '@zokizuan/satori-mcp');
     assert.equal(packageNamesByRoot.get('packages/cli'), '@zokizuan/satori-cli');
+    assert.equal(packageNamesByRoot.get('experiments/potion-l0-l1'), 'satori-potion-l0-l1');
     assert.equal(packageNamesByRoot.has('satori-landing'), false);
     assert.equal(discovered.controlFiles.some(([filePath]) => filePath === 'package.json'), true);
 

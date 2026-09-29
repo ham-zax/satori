@@ -1177,6 +1177,7 @@ export type CallGraphEvidenceKind =
     | "source_references"
     | "test_references"
     | "construct_gaps"
+    | "candidate_conflicts"
     | "edge_arguments";
 
 export interface CallGraphEvidenceSummaryResult {
@@ -1204,6 +1205,7 @@ export interface CallGraphEvidenceSummaryResult {
     sourceReferenceCount: number;
     testReferenceCount: number;
     constructGapCount: number;
+    candidateConflictCount: number;
     edgeArgumentEdgeCount: number;
     availableKinds: CallGraphEvidenceKind[];
 }
@@ -1211,6 +1213,11 @@ export interface CallGraphEvidenceSummaryResult {
 export interface CallGraphConstructGapPageItem {
     construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
     gap: import("@zokizuan/satori-core").ResolutionConstructCoverageGap;
+}
+
+export interface CallGraphCandidateConflictPageItem {
+    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+    conflict: import("@zokizuan/satori-core").ResolutionConstructCandidateConflict;
 }
 
 export interface CallGraphEdgeArgumentsPageItem {
@@ -1242,6 +1249,10 @@ export type CallGraphEvidencePageResult =
     | (CallGraphEvidencePageBase & {
         kind: "construct_gaps";
         items: CallGraphConstructGapPageItem[];
+    })
+    | (CallGraphEvidencePageBase & {
+        kind: "candidate_conflicts";
+        items: CallGraphCandidateConflictPageItem[];
     })
     | (CallGraphEvidencePageBase & {
         kind: "edge_arguments";

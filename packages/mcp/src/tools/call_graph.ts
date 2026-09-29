@@ -37,6 +37,7 @@ export const callGraphInputSchema = z.object({
             'source_references',
             'test_references',
             'construct_gaps',
+            'candidate_conflicts',
             'edge_arguments',
         ]).describe('One evidence class to disclose in a bounded page. Omit evidence for the default summary-only response.'),
         cursor: z.string().min(1).max(1024).optional().describe('Publication- and requested-path-scope-bound continuation returned by a previous call_graph evidence page.'),

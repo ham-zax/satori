@@ -141,6 +141,37 @@ test("architecture overview reports bounded cross-area fan-in and fan-out", () =
     assert.equal(result.fanOutRule, "cross_area_outgoing_calls_and_imports");
 });
 
+test("package architecture exposes a nested Cargo workspace and Rust crate", () => {
+    const rust = sym("rust", "engine/crates/api/src/lib.rs");
+    const ownership: PublicationPackageOwnership = {
+        schemaVersion: "package_ownership_v2",
+        canonicalRoot: "/repo",
+        workspace: null,
+        cargoWorkspaces: [{
+            kind: "cargo", root: "engine", manifestPath: "engine/Cargo.toml", patterns: ["crates/*"],
+        }],
+        packages: [{
+            ecosystem: "rust", root: "engine/crates/api", manifestPath: "engine/crates/api/Cargo.toml",
+            name: "api", workspaceMember: true,
+        }],
+        files: [{ path: rust.file, packageRoot: "engine/crates/api" }],
+        controlFiles: [],
+    };
+    const result = buildArchitectureOverview({
+        manifest: { files: [{ path: rust.file }] } as SymbolRegistryManifest,
+        packageOwnership: ownership,
+        symbols: [rust],
+        relationships: [],
+        scope: "all",
+        limit: 10,
+    });
+    assert.deepEqual(result.packageArchitecture.cargoWorkspaces, [{
+        root: "engine", manifestPath: "engine/Cargo.toml",
+    }]);
+    assert.equal(result.packageArchitecture.packages[0]?.ecosystem, "rust");
+    assert.equal(result.packageArchitecture.packages[0]?.packageRoot, "engine/crates/api");
+});
+
 test("architecture overview does not reconcile scoped claims with out-of-scope call evidence", () => {
     const a = sym("a", "packages/a/src/a.ts");
     const b = sym("b", "packages/b/src/b.ts");

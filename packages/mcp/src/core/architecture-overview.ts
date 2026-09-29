@@ -73,7 +73,7 @@ export interface ArchitectureOverviewHotspot {
 export interface ArchitectureOverviewPackage {
     packageRoot: string;
     name: string | null;
-    ecosystem: "node";
+    ecosystem: "node" | "rust";
     workspaceMember: boolean;
     fileCount: number;
     symbolCount: number;
@@ -112,6 +112,7 @@ export interface ArchitectureOverviewPackageArchitecture {
         kind: "pnpm" | "package_json";
         manifestPath: string;
     } | null;
+    cargoWorkspaces: Array<{ root: string; manifestPath: string }>;
     coverage: {
         totalPersistedPackageCount: number;
         includedPackageCount: number;
@@ -793,6 +794,10 @@ export function buildArchitectureOverview(input: {
                 manifestPath: input.packageOwnership.workspace.manifestPath,
             }
             : null,
+        cargoWorkspaces: (input.packageOwnership.cargoWorkspaces ?? []).map((workspace) => ({
+            root: workspace.root,
+            manifestPath: workspace.manifestPath,
+        })),
         coverage: {
             totalPersistedPackageCount: input.packageOwnership.packages.length,
             includedPackageCount: allPackages.length,

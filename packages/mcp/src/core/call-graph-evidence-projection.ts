@@ -40,6 +40,7 @@ function isEvidenceKind(value: unknown): value is CallGraphEvidenceKind {
         || value === "source_references"
         || value === "test_references"
         || value === "construct_gaps"
+        || value === "candidate_conflicts"
         || value === "edge_arguments";
 }
 
@@ -156,6 +157,8 @@ function evidenceSummary(payload: CallGraphResponseEnvelope): CallGraphEvidenceS
     )).length;
     const constructGapCount = (payload.constructCoverage ?? [])
         .reduce((total, coverage) => total + coverage.gapCount, 0);
+    const candidateConflictCount = (payload.constructCoverage ?? [])
+        .reduce((total, coverage) => total + coverage.conflictingCandidateCount, 0);
     const edgeArgumentEdgeCount = payload.edges.filter((edge) => (edge.args?.length ?? 0) > 0).length;
     const availableKinds: CallGraphEvidenceKind[] = [];
     if (exactReferenceCount > 0) availableKinds.push("exact_references");
@@ -164,6 +167,7 @@ function evidenceSummary(payload: CallGraphResponseEnvelope): CallGraphEvidenceS
     if ((payload.constructCoverage ?? []).some((coverage) => coverage.gapSpans.length > 0)) {
         availableKinds.push("construct_gaps");
     }
+    if (candidateConflictCount > 0) availableKinds.push("candidate_conflicts");
     if (edgeArgumentEdgeCount > 0) availableKinds.push("edge_arguments");
 
     return {
@@ -180,6 +184,7 @@ function evidenceSummary(payload: CallGraphResponseEnvelope): CallGraphEvidenceS
         sourceReferenceCount,
         testReferenceCount,
         constructGapCount,
+        candidateConflictCount,
         edgeArgumentEdgeCount,
         availableKinds,
     };
@@ -201,6 +206,13 @@ function materializedItems(
                 coverage.gapSpans.map((gap) => ({
                     construct: coverage.construct,
                     gap,
+                }))
+            ));
+        case "candidate_conflicts":
+            return (payload.constructCoverage ?? []).flatMap((coverage) => (
+                coverage.conflictingCandidates.map((conflict) => ({
+                    construct: coverage.construct,
+                    conflict,
                 }))
             ));
         case "edge_arguments":
@@ -235,6 +247,9 @@ function summarizePayload(
                     ...coverage,
                     gapSpans: [],
                     gapsTruncated: coverage.gapsTruncated || coverage.gapCount > 0,
+                    conflictingCandidates: [],
+                    conflictingCandidatesTruncated: coverage.conflictingCandidatesTruncated
+                        || coverage.conflictingCandidateCount > 0,
                 })),
             }
             : {}),

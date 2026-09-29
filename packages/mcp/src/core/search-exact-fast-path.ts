@@ -1,4 +1,4 @@
-import type { SymbolRegistry } from "@zokizuan/satori-core";
+import { perfSpan, type SymbolRegistry } from "@zokizuan/satori-core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,
@@ -379,7 +379,7 @@ export async function runExactRegistryFastPath(
         relationshipPassUsed = true;
     }
 
-    const exactMatches = await Promise.all(resultSymbols.map(async (symbol) => {
+    const exactMatches = await perfSpan('search.exact_source_preview', () => Promise.all(resultSymbols.map(async (symbol) => {
         const sourceEvidence = publicationOnlyStaleRead
             ? undefined
             : (symbol.symbolInstanceId === exactRegistrySymbol.symbolInstanceId
@@ -398,7 +398,7 @@ export async function runExactRegistryFastPath(
                 ? ""
                 : buildSearchGroupPreview(symbol.label, sourceContent, input.previewMaxBytes),
         };
-    }));
+    })));
     const exactPassesUsed = relationshipPassUsed
         ? ["exact_registry", "relationships"]
         : ["exact_registry"];
@@ -549,7 +549,7 @@ export async function runExactRegistryFastPath(
                 ? { phaseTimingsMs: input.phaseTimings, readiness: input.readiness, ...(changedCode ? { changedCode } : {}) }
                 : undefined;
 
-    const finalized = buildExactRegistryHitEnvelope({
+    const finalized = await perfSpan('search.exact_envelope', () => buildExactRegistryHitEnvelope({
         actionIntent: input.queryPlan,
         codebaseRoot: input.effectiveRoot,
         absolutePath: input.absolutePath,
@@ -586,7 +586,7 @@ export async function runExactRegistryFastPath(
             input.parsedOperators,
         ),
         buildGeneratedArtifactsVerificationHint: (results) => host.buildGeneratedArtifactsVerificationHint(input.effectiveRoot, results),
-    });
+    }));
 
     if (!finalized) {
         return {

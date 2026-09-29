@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { validateRepositoryRelativePath } from '../paths/repository-path';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 
-export const PACKAGE_OWNERSHIP_SCHEMA_VERSION = 'package_ownership_v1';
+export const PACKAGE_OWNERSHIP_SCHEMA_VERSION = 'package_ownership_v2';
+const LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION = 'package_ownership_v1';
 
 export type PackageWorkspaceKind = 'pnpm' | 'package_json';
 
@@ -16,8 +17,15 @@ export interface PackageWorkspaceRecord {
     readonly patterns: readonly string[];
 }
 
+export interface CargoWorkspaceRecord {
+    readonly kind: 'cargo';
+    readonly root: string;
+    readonly manifestPath: string;
+    readonly patterns: readonly string[];
+}
+
 export interface PackageOwnershipPackage {
-    readonly ecosystem: 'node';
+    readonly ecosystem: 'node' | 'rust';
     readonly root: string;
     readonly manifestPath: string;
     readonly name: string | null;
@@ -30,9 +38,10 @@ export interface PackageFileOwnership {
 }
 
 export interface PublicationPackageOwnership {
-    readonly schemaVersion: typeof PACKAGE_OWNERSHIP_SCHEMA_VERSION;
+    readonly schemaVersion: typeof PACKAGE_OWNERSHIP_SCHEMA_VERSION | typeof LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION;
     readonly canonicalRoot: string;
     readonly workspace: PackageWorkspaceRecord | null;
+    readonly cargoWorkspaces?: readonly CargoWorkspaceRecord[];
     readonly packages: readonly PackageOwnershipPackage[];
     readonly files: readonly PackageFileOwnership[];
     readonly controlFiles: readonly (readonly [string, string])[];
@@ -40,6 +49,7 @@ export interface PublicationPackageOwnership {
 
 export interface DiscoveredPackageOwnership {
     readonly workspace: PackageWorkspaceRecord | null;
+    readonly cargoWorkspaces: readonly CargoWorkspaceRecord[];
     readonly packages: readonly PackageOwnershipPackage[];
     readonly controlFiles: readonly (readonly [string, string])[];
 }
@@ -49,6 +59,7 @@ type NativeGlobSync = (
     options: {
         cwd: string;
         withFileTypes?: false;
+        exclude?: string[];
     },
 ) => string[];
 
@@ -365,9 +376,9 @@ function comparePackageRecords(
         || compareContractStrings(left.manifestPath, right.manifestPath);
 }
 
-export function discoverPackageOwnership(
+function discoverNodePackageOwnership(
     canonicalRootInput: string,
-): DiscoveredPackageOwnership {
+): Omit<DiscoveredPackageOwnership, 'cargoWorkspaces'> {
     const canonicalRoot = canonicalizeRoot(canonicalRootInput);
     const controls = new Map<string, string>();
     const packages: PackageOwnershipPackage[] = [];
@@ -449,6 +460,163 @@ export function discoverPackageOwnership(
     };
 }
 
+function tomlField(source: string, section: string, field: string): string | undefined {
+    let currentSection = '';
+    let collecting = false;
+    let value = '';
+    for (const line of source.split(/\r?\n/)) {
+        const stripped = stripYamlComment(line).trim();
+        const heading = /^\[([^\]]+)\]$/.exec(stripped);
+        if (heading) {
+            currentSection = heading[1]!.trim();
+            collecting = false;
+            continue;
+        }
+        if (collecting) {
+            value += stripped;
+            if (stripped.includes(']')) return value;
+            continue;
+        }
+        if (currentSection !== section) continue;
+        const assignment = /^([A-Za-z_][A-Za-z_0-9-]*)\s*=\s*(.*)$/.exec(stripped);
+        if (!assignment || assignment[1] !== field) continue;
+        value = assignment[2]!;
+        if (!value.startsWith('[') || value.includes(']')) return value;
+        collecting = true;
+    }
+    return value || undefined;
+}
+
+function parseCargoString(raw: string, controlPath: string): string {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
+        return trimmed.slice(1, -1);
+    }
+    try {
+        const value: unknown = JSON.parse(trimmed);
+        if (typeof value === 'string') return value;
+    } catch {
+        // Unsupported TOML syntax is reported below rather than guessed.
+    }
+    throw new Error(`Unsupported Cargo manifest string in '${controlPath}'.`);
+}
+
+function parseCargoStringList(raw: string | undefined, controlPath: string): string[] {
+    if (raw === undefined) return [];
+    const value = raw.trim();
+    if (!value.startsWith('[') || !value.endsWith(']')) {
+        throw new Error(`Unsupported Cargo workspace members in '${controlPath}'.`);
+    }
+    const stringPattern = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+    const entries = value.slice(1, -1).match(stringPattern) ?? [];
+    const residue = value.slice(1, -1).replace(stringPattern, '').replace(/,/g, '').trim();
+    if (residue) throw new Error(`Unsupported Cargo workspace members in '${controlPath}'.`);
+    return entries.map((entry) => normalizeWorkspacePattern(parseCargoString(entry, controlPath)));
+}
+
+function discoverCargoOwnership(canonicalRoot: string): {
+    cargoWorkspaces: CargoWorkspaceRecord[];
+    packages: PackageOwnershipPackage[];
+    controlFiles: Array<readonly [string, string]>;
+} {
+    const manifestPaths = nativeGlobSync()('**/Cargo.toml', {
+        cwd: canonicalRoot,
+        withFileTypes: false,
+        exclude: ['**/node_modules/**', '**/.git/**', '**/target/**'],
+    }).map((candidate) => normalizeRelativePath(candidate)).sort(compareContractStrings);
+    const manifests = new Map<string, { source: string; hash: string }>();
+    for (const manifestPath of manifestPaths) {
+        const read = readControlFile(canonicalRoot, manifestPath);
+        if (read) manifests.set(manifestPath, { source: read.bytes.toString('utf8'), hash: read.hash });
+    }
+    const cargoWorkspaces: CargoWorkspaceRecord[] = [];
+    const packages: PackageOwnershipPackage[] = [];
+    const controls = new Map<string, string>();
+    for (const [manifestPath, manifest] of manifests) {
+        if (!/^\s*\[workspace\]\s*$/m.test(manifest.source)) continue;
+        const root = packageRootForManifest(manifestPath);
+        const patterns = parseCargoStringList(tomlField(manifest.source, 'workspace', 'members'), manifestPath);
+        const excluded = parseCargoStringList(tomlField(manifest.source, 'workspace', 'exclude'), manifestPath);
+        cargoWorkspaces.push({ kind: 'cargo', root, manifestPath, patterns });
+        controls.set(manifestPath, manifest.hash);
+        const members = new Set<string>();
+        for (const pattern of patterns) {
+            for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
+                cwd: path.join(canonicalRoot, root),
+                withFileTypes: false,
+            })) {
+                members.add(normalizeRelativePath(path.posix.join(root, found)));
+            }
+        }
+        for (const pattern of excluded) {
+            for (const found of nativeGlobSync()(pattern + '/Cargo.toml', {
+                cwd: path.join(canonicalRoot, root),
+                withFileTypes: false,
+            })) {
+                members.delete(normalizeRelativePath(path.posix.join(root, found)));
+            }
+        }
+        if (tomlField(manifest.source, 'package', 'name') !== undefined) members.add(manifestPath);
+        for (const memberPath of [...members].sort(compareContractStrings)) {
+            const member = manifests.get(memberPath);
+            if (!member) continue;
+            const rawName = tomlField(member.source, 'package', 'name');
+            if (!rawName) continue;
+            packages.push({
+                ecosystem: 'rust',
+                root: packageRootForManifest(memberPath),
+                manifestPath: memberPath,
+                name: parseCargoString(rawName, memberPath),
+                workspaceMember: memberPath !== manifestPath,
+            });
+            controls.set(memberPath, member.hash);
+        }
+    }
+    for (const [manifestPath, manifest] of manifests) {
+        if (controls.has(manifestPath)) continue;
+        const rawName = tomlField(manifest.source, 'package', 'name');
+        if (!rawName) continue;
+        packages.push({
+            ecosystem: 'rust',
+            root: packageRootForManifest(manifestPath),
+            manifestPath,
+            name: parseCargoString(rawName, manifestPath),
+            workspaceMember: false,
+        });
+        controls.set(manifestPath, manifest.hash);
+    }
+    return {
+        cargoWorkspaces: cargoWorkspaces.sort((a, b) => compareContractStrings(a.root, b.root)),
+        packages: packages.sort(comparePackageRecords),
+        controlFiles: [...controls].sort(([a], [b]) => compareContractStrings(a, b)),
+    };
+}
+
+export function discoverPackageOwnership(canonicalRootInput: string): DiscoveredPackageOwnership {
+    const canonicalRoot = canonicalizeRoot(canonicalRootInput);
+    const node = discoverNodePackageOwnership(canonicalRoot);
+    const cargo = discoverCargoOwnership(canonicalRoot);
+    // The published file owner is keyed by package root. Keep the established
+    // Node owner where both ecosystems declare a package at the same root.
+    const nodeRoots = new Set(node.packages.map((pkg) => pkg.root));
+    const cargoPackages = cargo.packages.filter((pkg) => !nodeRoots.has(pkg.root));
+    const cargoControlPaths = new Set([
+        ...cargo.cargoWorkspaces.map((workspace) => workspace.manifestPath),
+        ...cargoPackages.map((pkg) => pkg.manifestPath),
+    ]);
+    const packages = [...node.packages, ...cargoPackages].sort(comparePackageRecords);
+    return {
+        workspace: node.workspace,
+        cargoWorkspaces: cargo.cargoWorkspaces,
+        packages,
+        controlFiles: [...new Map([
+            ...node.controlFiles,
+            ...cargo.controlFiles.filter(([controlPath]) => cargoControlPaths.has(controlPath)),
+        ])]
+            .sort(([a], [b]) => compareContractStrings(a, b)),
+    };
+}
+
 function nearestPackageRoot(
     packages: readonly PackageOwnershipPackage[],
     filePath: string,
@@ -499,17 +667,49 @@ export function parsePublicationPackageOwnership(
     const parsed: unknown = JSON.parse(data);
     if (
         !isRecord(parsed)
-        || !hasExactKeys(
-            parsed,
-            ['schemaVersion', 'canonicalRoot', 'workspace', 'packages', 'files', 'controlFiles'],
-        )
-        || parsed.schemaVersion !== PACKAGE_OWNERSHIP_SCHEMA_VERSION
+        || (parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION
+            ? !hasExactKeys(parsed, ['schemaVersion', 'canonicalRoot', 'workspace', 'cargoWorkspaces', 'packages', 'files', 'controlFiles'])
+            : !hasExactKeys(parsed, ['schemaVersion', 'canonicalRoot', 'workspace', 'packages', 'files', 'controlFiles']))
+        || (parsed.schemaVersion !== PACKAGE_OWNERSHIP_SCHEMA_VERSION
+            && parsed.schemaVersion !== LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION)
         || parsed.canonicalRoot !== expectedCanonicalRoot
         || !Array.isArray(parsed.packages)
         || !Array.isArray(parsed.files)
         || !Array.isArray(parsed.controlFiles)
     ) {
         throw new Error('Invalid or unsupported Publication package ownership snapshot.');
+    }
+
+    const cargoWorkspaces: CargoWorkspaceRecord[] = [];
+    if (parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION) {
+        if (!Array.isArray(parsed.cargoWorkspaces)) {
+            throw new Error('Invalid Publication Cargo workspaces.');
+        }
+        const seenCargoRoots = new Set<string>();
+        for (const entry of parsed.cargoWorkspaces) {
+            if (!isRecord(entry)
+                || !hasExactKeys(entry, ['kind', 'root', 'manifestPath', 'patterns'])
+                || entry.kind !== 'cargo'
+                || typeof entry.manifestPath !== 'string'
+                || !Array.isArray(entry.patterns)
+                || entry.patterns.some((pattern) => typeof pattern !== 'string')) {
+                throw new Error('Invalid Publication Cargo workspace record.');
+            }
+            const root = validatePackageRoot(entry.root);
+            if (root === null || seenCargoRoots.has(root)) {
+                throw new Error('Invalid or duplicate Publication Cargo workspace root.');
+            }
+            const manifestPath = normalizeRelativePath(entry.manifestPath);
+            if (manifestPath !== (root ? root + '/Cargo.toml' : 'Cargo.toml')) {
+                throw new Error('Publication Cargo workspace manifest path does not match its root.');
+            }
+            seenCargoRoots.add(root);
+            cargoWorkspaces.push({
+                kind: 'cargo', root, manifestPath,
+                patterns: entry.patterns.map((pattern) => normalizeWorkspacePattern(String(pattern))),
+            });
+        }
+        cargoWorkspaces.sort((a, b) => compareContractStrings(a.root, b.root));
     }
 
     let workspace: PackageWorkspaceRecord | null = null;
@@ -546,7 +746,7 @@ export function parsePublicationPackageOwnership(
         if (
             !isRecord(entry)
             || !hasExactKeys(entry, ['ecosystem', 'root', 'manifestPath', 'name', 'workspaceMember'])
-            || entry.ecosystem !== 'node'
+            || (entry.ecosystem !== 'node' && entry.ecosystem !== 'rust')
             || typeof entry.manifestPath !== 'string'
             || (entry.name !== null && typeof entry.name !== 'string')
             || typeof entry.workspaceMember !== 'boolean'
@@ -561,7 +761,8 @@ export function parsePublicationPackageOwnership(
         packageRoots.add(root);
 
         const manifestPath = normalizeRelativePath(entry.manifestPath);
-        const expectedManifestPath = root === '' ? 'package.json' : root + '/package.json';
+        const manifestName = entry.ecosystem === 'rust' ? 'Cargo.toml' : 'package.json';
+        const expectedManifestPath = root === '' ? manifestName : root + '/' + manifestName;
         if (manifestPath !== expectedManifestPath) {
             throw new Error('Publication package manifest path does not match its package root.');
         }
@@ -573,12 +774,20 @@ export function parsePublicationPackageOwnership(
         if (root === '' && entry.workspaceMember) {
             throw new Error('Publication workspace root package cannot be marked as a workspace member.');
         }
-        if (root !== '' && (!workspace || !entry.workspaceMember)) {
+        if (entry.ecosystem === 'node' && root !== '' && (!workspace || !entry.workspaceMember)) {
             throw new Error('Publication child package must be a workspace member.');
+        }
+        if (entry.ecosystem === 'rust') {
+            const owningWorkspace = cargoWorkspaces.find((candidate) => (
+                candidate.root === '' || root === candidate.root || root.startsWith(candidate.root + '/')
+            ));
+            if (entry.workspaceMember && (!owningWorkspace || root === owningWorkspace.root)) {
+                throw new Error('Publication Rust package workspace membership is invalid.');
+            }
         }
 
         return {
-            ecosystem: 'node' as const,
+            ecosystem: entry.ecosystem as 'node' | 'rust',
             root,
             manifestPath,
             name,
@@ -648,6 +857,7 @@ export function parsePublicationPackageOwnership(
 
     const expectedControlPaths = new Set<string>();
     if (workspace) expectedControlPaths.add(workspace.manifestPath);
+    for (const cargoWorkspace of cargoWorkspaces) expectedControlPaths.add(cargoWorkspace.manifestPath);
     for (const pkg of packages) expectedControlPaths.add(pkg.manifestPath);
     if (
         seenControls.size !== expectedControlPaths.size
@@ -657,9 +867,10 @@ export function parsePublicationPackageOwnership(
     }
 
     return {
-        schemaVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+        schemaVersion: parsed.schemaVersion as PublicationPackageOwnership['schemaVersion'],
         canonicalRoot: expectedCanonicalRoot,
         workspace,
+        ...(parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION ? { cargoWorkspaces } : {}),
         packages,
         files,
         controlFiles,
@@ -674,7 +885,26 @@ export function buildPublicationPackageOwnership(
     const canonicalRoot = canonicalizeRoot(canonicalRootInput);
     const discovered = discoverPackageOwnership(canonicalRoot);
 
-    for (const [controlPath, observedHash] of discovered.controlFiles) {
+    const cargoWorkspaces = discovered.cargoWorkspaces.filter((workspace) => (
+        observedFileHashes.has(workspace.manifestPath)
+    ));
+    const packages = discovered.packages.flatMap((pkg): PackageOwnershipPackage[] => {
+        if (pkg.ecosystem === 'node') return [pkg];
+        if (!observedFileHashes.has(pkg.manifestPath)) return [];
+        const memberWorkspaceObserved = cargoWorkspaces.some((workspace) => (
+            workspace.root === '' || pkg.root.startsWith(workspace.root + '/')
+        ));
+        return [{ ...pkg, workspaceMember: pkg.workspaceMember && memberWorkspaceObserved }];
+    });
+    const requiredControls = new Set([
+        ...discovered.controlFiles
+            .filter(([controlPath]) => path.posix.basename(controlPath) !== 'Cargo.toml')
+            .map(([controlPath]) => controlPath),
+        ...cargoWorkspaces.map((workspace) => workspace.manifestPath),
+        ...packages.map((pkg) => pkg.manifestPath),
+    ]);
+    const controlFiles = discovered.controlFiles.filter(([controlPath]) => requiredControls.has(controlPath));
+    for (const [controlPath, observedHash] of controlFiles) {
         if (observedFileHashes.get(controlPath) !== observedHash) {
             throw new Error(
                 "Package ownership control '" + controlPath
@@ -687,16 +917,17 @@ export function buildPublicationPackageOwnership(
         .sort(compareContractStrings)
         .map((filePath) => ({
             path: filePath,
-            packageRoot: nearestPackageRoot(discovered.packages, filePath),
+            packageRoot: nearestPackageRoot(packages, filePath),
         }));
 
     const snapshot: PublicationPackageOwnership = {
         schemaVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
         canonicalRoot,
         workspace: discovered.workspace,
-        packages: discovered.packages,
+        cargoWorkspaces,
+        packages,
         files,
-        controlFiles: discovered.controlFiles,
+        controlFiles,
     };
     return parsePublicationPackageOwnership(JSON.stringify(snapshot), canonicalRoot);
 }

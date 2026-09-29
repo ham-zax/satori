@@ -84,6 +84,62 @@ test('construct coverage reconciles an unresolved semantic claim with an authori
     assert.equal(coverage.unresolvedCount, 0);
     assert.equal(coverage.gapCount, 0);
     assert.deepEqual(coverage.gapSpans, []);
+    assert.equal(coverage.conflictingCandidateCount, 0);
+});
+
+test('construct coverage reports a candidate mismatch without discarding the proved edge', () => {
+    const claim = unresolvedClaim({
+        observation: {
+            ...unresolvedClaim().observation,
+            candidates: [{
+                file: 'src/candidate.ts',
+                span: callSpan,
+                name: 'pump',
+                symbolInstanceId: 'candidate-a',
+            }],
+        },
+    });
+    const relationship = {
+        sourceKey: 'caller-key',
+        sourceInstanceId: 'caller-id',
+        targetKey: 'target-b',
+        targetInstanceId: 'target-b',
+        type: 'CALLS',
+        file: 'src/client.ts',
+        span: callSpan,
+        confidence: 'low',
+        resolutionAuthority: 'direct_binding',
+    } as RelationshipRecord;
+
+    const [coverage] = summarizeResolutionConstructCoverage([claim], { relationships: [relationship] });
+    assert.ok(coverage);
+    assert.equal(coverage.status, 'ready');
+    assert.equal(coverage.resolvedCount, 1);
+    assert.equal(coverage.gapCount, 0);
+    assert.equal(coverage.conflictingCandidateCount, 1);
+    assert.deepEqual(coverage.conflictingCandidates, [{
+        file: 'src/client.ts',
+        span: callSpan,
+        providerId: 'fixture-provider',
+        providerVersion: 'fixture-v1',
+        candidateInstanceIds: ['candidate-a'],
+        publishedTargetInstanceIds: ['target-b'],
+    }]);
+
+    const [agreed] = summarizeResolutionConstructCoverage([claim], {
+        relationships: [{ ...relationship, targetInstanceId: 'candidate-a' }],
+    });
+    assert.equal(agreed?.conflictingCandidateCount, 0);
+
+    const [incomplete] = summarizeResolutionConstructCoverage([unresolvedClaim({
+        observation: {
+            ...claim.observation,
+            candidates: [...claim.observation.candidates, {
+                file: 'src/unknown.ts', span: callSpan, name: 'pump',
+            }],
+        },
+    })], { relationships: [relationship] });
+    assert.equal(incomplete?.conflictingCandidateCount, 0);
 });
 
 test('publication-backed resolved coverage requires the authoritative target at the exact site', () => {

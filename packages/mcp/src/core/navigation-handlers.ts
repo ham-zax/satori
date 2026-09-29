@@ -6,6 +6,7 @@ import {
     analyzePythonSymbolStructure,
     getSupportedExtensionsForCapability,
     JsonNavigationStore,
+    isProofBackedAuthoritativeCall,
     summarizeResolutionConstructCoverage,
     traceRelationshipPath,
     type PublicationLease,
@@ -565,6 +566,9 @@ export class NavigationHandlers {
                         confidence: edge.confidence,
                         ...(edge.strategy ? { strategy: edge.strategy } : {}),
                         ...(edge.resolutionAuthority ? { resolutionAuthority: edge.resolutionAuthority } : {}),
+                        ...(edge.type === 'CALLS' ? {
+                            targetProofBacked: isProofBackedAuthoritativeCall(edge),
+                        } : {}),
                     })),
                 },
                 coverage: result.coverage,

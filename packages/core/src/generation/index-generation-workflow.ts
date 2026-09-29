@@ -1762,7 +1762,9 @@ export class IndexGenerationWorkflow {
     }
 
     private collectPackageOwnershipSourceControls(codebasePath: string): string[] {
-        return discoverPackageOwnership(codebasePath).controlFiles.map(([filePath]) => filePath);
+        return discoverPackageOwnership(codebasePath).controlFiles
+            .map(([filePath]) => filePath)
+            .filter((filePath) => path.posix.basename(filePath) !== 'Cargo.toml');
     }
 
     private mergePublicationSourceControls(

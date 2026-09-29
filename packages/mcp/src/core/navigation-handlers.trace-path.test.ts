@@ -54,7 +54,7 @@ test('trace_path binds scope and both navigation reads to the exact admitted lea
                         { symbolInstanceId: 'target-id', label: 'Target', kind: 'function', file: 'packages/foo/dst.ts', language: 'typescript', span: { startLine: 4, endLine: 6 } },
                     ] as SymbolRecord[],
                     edges: [
-                        { sourceInstanceId: 'source-id', targetInstanceId: 'middle-id', type: 'CALLS', file: 'packages/foo/src.ts', span: { startLine: 2, endLine: 2 }, confidence: 'high' },
+                        { sourceInstanceId: 'source-id', targetInstanceId: 'middle-id', type: 'CALLS', file: 'packages/foo/src.ts', span: { startLine: 2, endLine: 2 }, confidence: 'low', resolutionAuthority: 'direct_binding' },
                         { sourceInstanceId: 'middle-id', targetInstanceId: 'target-id', type: 'EXPORTS', file: 'packages/foo/mid.ts', span: { startLine: 3, endLine: 3 }, confidence: 'medium' },
                     ] as RelationshipRecord[],
                 },
@@ -82,6 +82,10 @@ test('trace_path binds scope and both navigation reads to the exact admitted lea
         'packages/foo/src.ts', 'packages/foo/mid.ts', 'packages/foo/dst.ts',
     ]);
     assert.deepEqual(payload.shortestPath.edges.map((edge: { kind: string }) => edge.kind), ['CALLS', 'EXPORTS']);
+    assert.equal(payload.shortestPath.edges[0].confidence, 'low');
+    assert.equal(payload.shortestPath.edges[0].resolutionAuthority, 'direct_binding');
+    assert.equal(payload.shortestPath.edges[0].targetProofBacked, true);
+    assert.equal(payload.shortestPath.edges[1].targetProofBacked, undefined);
     assert.deepEqual(payload.shortestPath.edges[1].site, {
         file: 'packages/foo/mid.ts', span: { startLine: 3, endLine: 3 },
     });

@@ -4,6 +4,7 @@ import {
     type PublicationLease,
     type PublicationRef,
     JsonNavigationStore,
+    perfSpan,
     type Reranker,
 } from "@zokizuan/satori-core";
 import type { SemanticSearchCandidateTraceOptions, SemanticSearchExecutionResult, SemanticSearchRequest, SemanticSearchResult } from "@zokizuan/satori-core";
@@ -764,14 +765,16 @@ export class SearchRequestCoordinator {
         args: ToolArgs,
         sourceDriftRetryCount: 0 | 1 = 0,
     ): Promise<SearchToolTextResponse> {
-        const request = this.validateSearchRequest(args);
-        if ('content' in request) return request;
-        for (const retryCount of [0, 1] as const) {
-            if (retryCount < sourceDriftRetryCount) continue;
-            const response = await this.executeSearchAttempt(request, retryCount);
-            if (response) return response;
-        }
-        throw new Error('Search exhausted its source-drift retry without a response.');
+        return perfSpan('search.coordinator_total', async () => {
+            const request = this.validateSearchRequest(args);
+            if ('content' in request) return request;
+            for (const retryCount of [0, 1] as const) {
+                if (retryCount < sourceDriftRetryCount) continue;
+                const response = await this.executeSearchAttempt(request, retryCount);
+                if (response) return response;
+            }
+            throw new Error('Search exhausted its source-drift retry without a response.');
+        });
     }
 
     private validateSearchRequest(args: ToolArgs): SearchToolTextResponse | ValidatedSearchRequest {
@@ -1510,17 +1513,24 @@ export class SearchRequestCoordinator {
                         exactFastPath.finalized.kind === "ok"
                         && exactEnvelope.resultMode === "grouped"
                     ) {
-                        exactEnvelope = attachSearchResultSet(
-                            exactEnvelope,
-                            exactFastPath.finalized.resultSet,
+                        const groupedEnvelope = exactEnvelope;
+                        const resultSet = exactFastPath.finalized.resultSet;
+                        exactEnvelope = await perfSpan('search.exact_result_set', () => attachSearchResultSet(
+                            groupedEnvelope,
+                            resultSet,
                             false,
                             "retrieval_order",
-                        );
+                        ));
                     }
-                    await this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot);
+                    await perfSpan('search.exact_watcher_touch', () => (
+                        this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot)
+                    ));
                     this.preparedRead.seedPreparedRead(preparedReadState, preservePreparedProofAge);
+                    const serialized = await perfSpan('search.exact_serialize', () => (
+                        this.hints.stringifyToolJson(exactEnvelope)
+                    ));
                     return {
-                        content: [{ type: "text", text: this.hints.stringifyToolJson(exactEnvelope) }],
+                        content: [{ type: "text", text: serialized }],
                         ...(exactFastPath.finalized.kind === "page_too_large" ? { isError: true } : {}),
                         meta: {
                             searchDiagnostics: {

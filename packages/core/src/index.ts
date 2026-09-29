@@ -154,6 +154,7 @@ export type {
     PackageOwnershipPackage,
     PackageWorkspaceKind,
     PackageWorkspaceRecord,
+    CargoWorkspaceRecord,
     PublicationPackageOwnership,
 } from './packages/ownership';
 export {
@@ -172,6 +173,7 @@ export {
 export type {
     ResolutionConstructCoverage,
     ResolutionConstructCoverageGap,
+    ResolutionConstructCandidateConflict,
     ResolutionConstructCoverageStatus,
 } from './relationships/resolution-coverage';
 export {

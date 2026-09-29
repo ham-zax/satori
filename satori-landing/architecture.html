@@ -1115,7 +1115,7 @@
               <g transform="translate(300, 130)">
                 <rect width="200" height="70" rx="8" fill="rgba(255, 255, 255, 0.05)" stroke="rgba(255, 255, 255, 0.2)" stroke-width="1" stroke-dasharray="4 4" />
                 <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Tool Registry</text>
-                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(9 MCP Tools)</text>
+                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(11 MCP Tools)</text>
               </g>
 
               <!-- MCP Runtime -->
@@ -1213,7 +1213,7 @@
           </article>
           <article class="card">
             <h3><code>@satori-code/cli</code></h3>
-            <p>Installs managed client config, Codex/OpenCode AGENTS guidance, and optional Codex session reminders. A real directory at a Satori skill-link path is refused and left in place.</p>
+            <p>Installs the managed runtime and launcher, marked client config, and the canonical <code>satori</code> skill. It never edits <code>AGENTS.md</code> or hook files, and a real directory at a Satori skill-link path is refused and left in place.</p>
           </article>
         </div>
       </section>
@@ -1272,7 +1272,7 @@
           <article class="card">
             <h3>Harness formats stay behind CLI</h3>
             <p>
-              Codex, Claude, and OpenCode config differences live in the
+              Codex, Claude, OpenCode, and Antigravity config differences live in the
               installer and its tests, not in user-maintained snippets.
             </p>
           </article>
@@ -1568,7 +1568,8 @@
               <code
                 >{ embeddingProvider, embeddingModel, embeddingDimension,
                 vectorStoreProvider, schemaVersion, parserVersion,
-                extractorVersion, relationshipVersion
+                extractorVersion, relationshipVersion,
+                embeddingProjectionVersion, lexicalProjectionVersion
                 }</code
               >
             </p>
@@ -1605,9 +1606,10 @@
           <article class="card">
             <h3>Deterministic Ranking</h3>
             <p>
-              Search ordering is stable: score descending, file path ascending,
-              start line ascending, symbol label ascending, then symbol id
-              ascending.
+              Search ordering is deterministic: fused retrieval score first, with a
+              stable candidate identity breaking ties. When LateOn runs, its order
+              is final. Grouped results carry no score; the returned sequence is
+              the ranking.
             </p>
           </article>
           <article class="card">
@@ -1625,7 +1627,9 @@
               ship production symbols plus <code>CALLS v0</code>. The backend is
               language-specific: OXC/Satori syntactic for JS/TS, Python-native
               Satori resolution, CBM semantic resolution for Go/Java/C#/C++/Rust,
-              and Satori syntactic direct-call resolution for Scala.
+              and Satori syntactic direct-call resolution for Scala. Kotlin and
+              PHP add conservative CALLS v0 over symbols from codebase-memory-mcp's
+              definition extractors.
             </p>
           </article>
           <article class="card">

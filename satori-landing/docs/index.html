@@ -720,7 +720,8 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <code>npx -y @satori-code/cli@latest install</code>, then
             <code>npx -y @satori-code/cli@latest doctor</code>.
             No global install is required. The installer auto-detects supported
-            clients; use <code>--client all</code> only to force all three.
+            Codex, Claude Code, and OpenCode; Antigravity (<code>agy</code>) is
+            opt-in, and <code>--client all</code> configures every supported client.
             Restart the MCP client after install.
           </p>
         </div>
@@ -750,6 +751,15 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               Writes the Satori MCP entry to
               <code>~/.config/opencode/opencode.json</code>; OpenCode loads
               the shared skill natively.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Antigravity</h3>
+            <pre><code>npx -y @satori-code/cli@latest install --client agy</code></pre>
+            <p>
+              Opt-in. Writes the Satori MCP entry to
+              <code>~/.gemini/config/mcp_config.json</code> and links
+              <code>~/.gemini/skills/satori</code> to the shared skill.
             </p>
           </div>
         </div>
@@ -885,6 +895,8 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               <li>Claude config: <code>~/.claude.json</code>.</li>
               <li>OpenCode config: <code>~/.config/opencode/opencode.json</code>.</li>
               <li>Claude skill link: <code>~/.claude/skills/satori</code>.</li>
+              <li>Antigravity config: <code>~/.gemini/config/mcp_config.json</code>.</li>
+              <li>Antigravity skill link: <code>~/.gemini/skills/satori</code>.</li>
             </ul>
             <p>
               The installer refuses to overwrite unmanaged Satori entries. If
@@ -1004,8 +1016,11 @@ MILVUS_ADDRESS=your-milvus-endpoint \
 MILVUS_TOKEN=your-optional-token \
 npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</code></pre>
             <p>
-              Uses Voyage Code 3 embeddings with Milvus or Zilliz. Milvus is
-              not accepted with the offline runtime.
+              Uses Voyage Code 3 embeddings with Milvus or Zilliz Cloud
+              (<code>MILVUS_TOKEN</code> is the Zilliz API key). The installer sets
+              <code>VECTOR_STORE_PROVIDER=Milvus</code>; a hand-configured MCP
+              server must set it too, because <code>MILVUS_ADDRESS</code> alone
+              does not select Milvus. Milvus is not accepted with the offline runtime.
             </p>
           </div>
         </div>
@@ -1213,6 +1228,9 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
               C++ admits exact same-translation-unit direct calls and rejects unproved cross-translation-unit or conditional
               preprocessor cases; Rust requires Cargo package ownership and rejects
               receiver dispatch plus unmodeled <code>cfg</code>-dependent sources.
+              Kotlin and PHP take their symbols from codebase-memory-mcp's
+              definition extractors and add conservative <code>CALLS v0</code>;
+              receiver dispatch abstains in both.
             </p>
           </div>
           <div class="panel">
@@ -1439,8 +1457,8 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
               <code>incompatible_symbol_registry</code>,
               <code>incompatible_relationship_navigation</code>, watcher state,
               and Publication navigation readiness explain why the tool chose a
-              lifecycle state. Incompatible or unsupported pre-clean-break
-              index state requires a fresh index or reindex.
+              lifecycle state. An index written by an older Satori release is
+              reported as <code>requires_reindex</code> and is never migrated.
             </p>
           </div>
           <div class="panel">

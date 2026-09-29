@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="../logo.svg" />
-    <title>Satori Docs | Natural-Language Code Intelligence, Tools, and Operations</title>
+    <link rel="icon" type="image/svg+xml" href="../logo.svg?v=2026-09-29" />
+    <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=2026-09-29" />
+    <title>Satori Docs | Semantic Code Search for Coding Agents: Setup and Tools</title>
     <meta
       name="description"
       content="Learn Satori from natural-language repository questions to exact source: install the local-first runtime, understand Publications, use real coding workflows, and reference the 11 MCP tools and lifecycle operations."
@@ -17,11 +18,17 @@
     <meta property="og:type" content="article" />
     <meta property="og:url" content="https://satori.hamza.my.id/docs/" />
     <meta property="og:site_name" content="Satori" />
-    <meta property="og:image" content="https://satori.hamza.my.id/og-image.svg" />
+    <meta property="og:image" content="https://satori.hamza.my.id/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
+    <meta property="og:locale" content="en_US" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Satori Docs | Repository Intelligence from First Query to Operations" />
     <meta name="twitter:description" content="A learning path for Satori: quickstart, repository intelligence concepts, practical workflows, tools, maintenance, and architecture." />
-    <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.svg" />
+    <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.png" />
+    <meta name="twitter:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -57,10 +64,10 @@
         --bg: #030303;
         --panel: rgba(10, 10, 10, 0.76);
         --fg: #ffffff;
-        --muted: rgba(255, 255, 255, 0.62);
-        --line: rgba(255, 255, 255, 0.14);
-        --accent: #dfff00;
-        --accent-dim: rgba(223, 255, 0, 0.12);
+        --muted: rgba(237, 234, 227, 0.62);
+        --line: rgba(237, 234, 227, 0.14);
+        --accent: #e5553b;
+        --accent-dim: rgba(229, 85, 59, 0.12);
         --sans: "Inter", sans-serif;
         --serif: "Cormorant Garamond", serif;
         --mono: "JetBrains Mono", monospace;
@@ -105,9 +112,9 @@
         overflow: hidden;
         opacity: 0.22;
         background:
-          radial-gradient(circle at 20% 30%, rgba(180, 142, 255, 0.06) 0%, transparent 45%),
-          radial-gradient(circle at 80% 70%, rgba(92, 200, 255, 0.04) 0%, transparent 45%),
-          radial-gradient(circle at 50% 50%, rgba(223, 255, 0, 0.03) 0%, transparent 50%);
+          radial-gradient(circle at 20% 30%, rgba(201, 193, 178, 0.06) 0%, transparent 45%),
+          radial-gradient(circle at 80% 70%, rgba(201, 193, 178, 0.04) 0%, transparent 45%),
+          radial-gradient(circle at 50% 50%, rgba(229, 85, 59, 0.03) 0%, transparent 50%);
         filter: blur(60px);
         animation: ambient-pulse 12s ease-in-out infinite alternate;
       }
@@ -124,8 +131,8 @@
         z-index: -2;
         opacity: 0.5;
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+          linear-gradient(rgba(237, 234, 227, 0.025) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(237, 234, 227, 0.025) 1px, transparent 1px);
         background-size: 4rem 4rem;
         mask-image: linear-gradient(to bottom, #000 0%, transparent 86%);
       }
@@ -190,7 +197,7 @@
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(237, 234, 227, 0.1);
         padding: 0.5rem 1rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
@@ -237,7 +244,7 @@
       }
       .nav-links a:hover {
         color: var(--accent);
-        border-color: rgba(255,255,255,0.1);
+        border-color: rgba(237, 234, 227,0.1);
       }
       .nav-links a.cta-contact {
         color: #050510;
@@ -278,8 +285,8 @@
       .hero {
         margin-top: 2rem;
         padding: 5rem 2rem 3rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        border-top: 1px solid rgba(237, 234, 227, 0.12);
         background: linear-gradient(160deg, rgba(20, 20, 24, 0.5) 0%, rgba(5, 5, 8, 0.7) 100%);
         backdrop-filter: blur(12px);
       }
@@ -301,7 +308,7 @@
         line-height: 0.86;
         letter-spacing: -0.03em;
         margin-bottom: 1.5rem;
-        background: linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0.7) 100%);
+        background: linear-gradient(180deg, #ffffff 0%, rgba(237, 234, 227,0.7) 100%);
         -webkit-background-clip: text;
         background-clip: text;
         -webkit-text-fill-color: transparent;
@@ -337,18 +344,18 @@
         color: var(--fg);
         font-family: var(--mono);
         font-size: 0.9em;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(237, 234, 227, 0.06);
+        border: 1px solid rgba(237, 234, 227, 0.08);
         padding: 0.08rem 0.28rem;
       }
 
       pre {
         overflow-x: auto;
-        color: rgba(255, 255, 255, 0.88);
+        color: rgba(237, 234, 227, 0.88);
         font-family: var(--mono);
         font-size: 0.82rem;
         line-height: 1.55;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(237, 234, 227, 0.06);
         background: rgba(0, 0, 0, 0.42);
         padding: 1rem;
         margin-top: 1rem;
@@ -362,7 +369,7 @@
 
       .hero-copy {
         font-size: 1.12rem;
-        color: rgba(255, 255, 255, 0.72);
+        color: rgba(237, 234, 227, 0.72);
         line-height: 1.6;
       }
 
@@ -377,14 +384,14 @@
         display: inline-flex;
         align-items: center;
         min-height: 44px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(237, 234, 227, 0.1);
         padding: 0.5rem 0.85rem;
         font-family: var(--mono);
         font-size: 0.72rem;
         letter-spacing: 0.1em;
         text-transform: uppercase;
-        background: rgba(255, 255, 255, 0.025);
-        color: rgba(255, 255, 255, 0.65);
+        background: rgba(237, 234, 227, 0.025);
+        color: rgba(237, 234, 227, 0.65);
         transition: all 0.2s;
       }
       .quick-links a:hover {
@@ -396,27 +403,27 @@
       .section {
         margin-top: 1rem;
         padding: 4rem 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-left: 2px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.015) 0%, rgba(0,0,0,0.2) 100%);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        border-left: 2px solid rgba(237, 234, 227, 0.06);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.015) 0%, rgba(0,0,0,0.2) 100%);
         backdrop-filter: blur(8px);
         transition: border-left-color 0.3s ease, border-color 0.3s ease;
       }
 
       .section:hover {
-        border-color: rgba(255, 255, 255, 0.1);
+        border-color: rgba(237, 234, 227, 0.1);
         border-left-color: var(--accent);
       }
 
       /* 3-accent system */
-      .section:nth-of-type(2) { --accent: #5cc8ff; --accent-dim: rgba(92, 200, 255, 0.12); }
-      .section:nth-of-type(3) { --accent: #dfff00; --accent-dim: rgba(223, 255, 0, 0.12); }
-      .section:nth-of-type(4) { --accent: #5cc8ff; --accent-dim: rgba(92, 200, 255, 0.12); }
-      .section:nth-of-type(5) { --accent: #b48eff; --accent-dim: rgba(180, 142, 255, 0.12); }
+      .section:nth-of-type(2) { --accent: #c9c1b2; --accent-dim: rgba(201, 193, 178, 0.12); }
+      .section:nth-of-type(3) { --accent: #e5553b; --accent-dim: rgba(229, 85, 59, 0.12); }
+      .section:nth-of-type(4) { --accent: #c9c1b2; --accent-dim: rgba(201, 193, 178, 0.12); }
+      .section:nth-of-type(5) { --accent: #c9c1b2; --accent-dim: rgba(201, 193, 178, 0.12); }
 
       .lede {
         margin-bottom: 2rem;
-        color: rgba(255, 255, 255, 0.72);
+        color: rgba(237, 234, 227, 0.72);
         font-size: 1.08rem;
         line-height: 1.6;
       }
@@ -435,8 +442,8 @@
       }
 
       .panel {
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.02) 0%, rgba(0,0,0,0.15) 100%);
         padding: 1.75rem;
         position: relative;
         overflow: hidden;
@@ -457,8 +464,8 @@
       }
 
       .panel:hover {
-        border-color: rgba(255, 255, 255, 0.12);
-        background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(0,0,0,0.2) 100%);
+        border-color: rgba(237, 234, 227, 0.12);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.035) 0%, rgba(0,0,0,0.2) 100%);
       }
 
       .panel:hover::before {
@@ -468,7 +475,7 @@
       .panel p,
       .panel li {
         font-size: 0.94rem;
-        color: rgba(255, 255, 255, 0.62);
+        color: rgba(237, 234, 227, 0.62);
         line-height: 1.65;
       }
 
@@ -491,13 +498,13 @@
         display: grid;
         grid-template-columns: 8.5rem 1fr;
         gap: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.02) 0%, rgba(0,0,0,0.15) 100%);
         padding: 1rem;
         transition: border-color 0.25s;
       }
 
-      .step:hover { border-color: rgba(255, 255, 255, 0.12); }
+      .step:hover { border-color: rgba(237, 234, 227, 0.12); }
 
       .step strong {
         color: var(--accent);
@@ -512,7 +519,7 @@
         margin-top: 1.5rem;
         border-left: 2px solid var(--accent);
         padding: 1rem 1.2rem;
-        background: rgba(255, 255, 255, 0.025);
+        background: rgba(237, 234, 227, 0.025);
       }
 
       .code-list {
@@ -528,7 +535,7 @@
 
       .footer {
         margin-top: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(237, 234, 227, 0.06);
         background: var(--bg);
         padding: 2.5rem 2rem;
         display: grid;
@@ -556,14 +563,14 @@
       .footer-col a {
         display: block;
         padding: 0.3rem 0;
-        color: rgba(255,255,255,0.65);
+        color: rgba(237, 234, 227,0.65);
         transition: color 0.2s;
       }
       .footer-col a:hover { color: var(--accent); }
       .footer-col p { line-height: 1.55; }
       .footer-bottom {
         grid-column: 1 / -1;
-        border-top: 1px solid rgba(255,255,255,0.06);
+        border-top: 1px solid rgba(237, 234, 227,0.06);
         padding-top: 1.25rem;
         margin-top: 0.5rem;
         display: flex;
@@ -571,7 +578,7 @@
         flex-wrap: wrap;
         gap: 0.5rem;
         font-size: 0.78rem;
-        color: rgba(255,255,255,0.35);
+        color: rgba(237, 234, 227,0.35);
       }
 
       @media (max-width: 860px) {
@@ -605,7 +612,8 @@
         *, *::before, *::after { transition-duration: 0.01ms !important; }
       }
     </style>
-    <link rel="stylesheet" href="../site.css" />
+    <link rel="stylesheet" href="../site.css?v=2026-09-29" />
+    <link rel="stylesheet" href="../brand.css?v=2026-09-29" />
   </head>
   <body class="page-docs">
     <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top" tabindex="-1">&uarr;</button>
@@ -616,7 +624,7 @@
       <a class="skip-link" href="#main">Skip to content</a>
       <nav aria-label="Primary">
         <a class="nav-brand" href="../index.html" aria-label="Satori home">
-          <img class="nav-brand-logo" src="../logo-mark.svg" alt="" aria-hidden="true" width="35" height="36" />
+          <img class="nav-brand-logo" src="../logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="35" height="36" />
           <span>Satori</span>
         </a>
         <div class="nav-links">
@@ -632,7 +640,7 @@
         <div class="eyebrow">Learn the product first · reference it second</div>
         <h1>Satori Docs</h1>
         <p class="hero-copy">
-          Satori is a local-first code-intelligence layer for developers and coding agents.
+          Satori is local-first semantic code search and code intelligence for developers and coding agents.
           Ask a repository question in natural language, let Satori combine semantic + lexical evidence,
           then follow the result into real owners, structure, relationships, references, and exact source.
         </p>
@@ -1674,7 +1682,7 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
       <footer class="footer">
         <div class="footer-col">
           <a class="footer-brand-home" href="../index.html" aria-label="Satori home">
-            <img class="footer-brand-logo" src="../logo-mark.svg" alt="" aria-hidden="true" width="39" height="40" />
+            <img class="footer-brand-logo" src="../logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="39" height="40" />
             <span class="footer-heading">Satori</span>
           </a>
           <p>Local repository intelligence for coding agents: search, ownership, structure, relationships, freshness, and exact source.</p>
@@ -1685,7 +1693,6 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
           <a href="../architecture.html">Architecture</a>
           <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
           <a href="https://www.npmjs.com/package/@satori-code/cli" target="_blank" rel="noopener noreferrer">npm Package</a>
-          <a href="https://www.producthunt.com/products/satori-4" target="_blank" rel="noopener noreferrer">Product Hunt</a>
         </div>
         <div class="footer-col">
           <div class="footer-heading">Contact</div>

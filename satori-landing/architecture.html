@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="logo.svg" />
+    <link rel="icon" type="image/svg+xml" href="logo.svg?v=2026-09-29" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29" />
     <title>Satori Architecture | Repository Intelligence, Publications, Local Retrieval</title>
     <meta
       name="description"
@@ -17,11 +18,17 @@
     <meta property="og:type" content="article" />
     <meta property="og:url" content="https://satori.hamza.my.id/architecture" />
     <meta property="og:site_name" content="Satori" />
-    <meta property="og:image" content="https://satori.hamza.my.id/og-image.svg" />
+    <meta property="og:image" content="https://satori.hamza.my.id/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
+    <meta property="og:locale" content="en_US" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Satori Architecture | Repository Intelligence by Publication" />
     <meta name="twitter:description" content="Hybrid retrieval, symbol ownership, structural navigation, relationship evidence, freshness, and exact source bound to one coherent repository generation." />
-    <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.svg" />
+    <meta name="twitter:image" content="https://satori.hamza.my.id/og-image.png" />
+    <meta name="twitter:image:alt" content="Satori: ask your codebase, follow the evidence. A brush ensō with a vermilion seal." />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -57,10 +64,10 @@
         --bg: #000000;
         --panel: rgba(10, 10, 10, 0.85);
         --fg: #ffffff;
-        --muted: rgba(255, 255, 255, 0.55);
-        --line: rgba(255, 255, 255, 0.15);
-        --accent: #dfff00; /* Radioactive Chartreuse */
-        --accent-dim: rgba(223, 255, 0, 0.15);
+        --muted: rgba(237, 234, 227, 0.55);
+        --line: rgba(237, 234, 227, 0.15);
+        --accent: #e5553b;
+        --accent-dim: rgba(229, 85, 59, 0.15);
         --serif: "Cormorant Garamond", serif;
         --sans: "Inter", sans-serif;
         --mono: "JetBrains Mono", monospace;
@@ -99,9 +106,9 @@
       overflow: hidden;
       opacity: 0.22;
       background:
-        radial-gradient(circle at 20% 30%, rgba(180, 142, 255, 0.06) 0%, transparent 45%),
-        radial-gradient(circle at 80% 70%, rgba(92, 200, 255, 0.04) 0%, transparent 45%),
-        radial-gradient(circle at 50% 50%, rgba(223, 255, 0, 0.03) 0%, transparent 50%);
+        radial-gradient(circle at 20% 30%, rgba(201, 193, 178, 0.06) 0%, transparent 45%),
+        radial-gradient(circle at 80% 70%, rgba(201, 193, 178, 0.04) 0%, transparent 45%),
+        radial-gradient(circle at 50% 50%, rgba(229, 85, 59, 0.03) 0%, transparent 50%);
       filter: blur(60px);
       animation: ambient-pulse 12s ease-in-out infinite alternate;
     }
@@ -113,7 +120,7 @@
       top: -50%;
       left: -50%;
       background:
-        conic-gradient(from 0deg at 50% 50%, transparent 0deg, rgba(180, 142, 255, 0.04) 90deg, transparent 180deg, rgba(92, 200, 255, 0.025) 270deg, transparent 360deg);
+        conic-gradient(from 0deg at 50% 50%, transparent 0deg, rgba(201, 193, 178, 0.04) 90deg, transparent 180deg, rgba(201, 193, 178, 0.025) 270deg, transparent 360deg);
       animation: ambient-rotate 30s linear infinite;
       mix-blend-mode: screen;
     }
@@ -123,7 +130,7 @@
       animation-duration: 38s;
       opacity: 0.4;
       background:
-        conic-gradient(from 180deg at 50% 50%, transparent 0deg, rgba(223, 255, 0, 0.03) 90deg, transparent 180deg, rgba(180, 142, 255, 0.04) 270deg, transparent 360deg);
+        conic-gradient(from 180deg at 50% 50%, transparent 0deg, rgba(229, 85, 59, 0.03) 90deg, transparent 180deg, rgba(201, 193, 178, 0.04) 270deg, transparent 360deg);
     }
 
     @keyframes ambient-pulse { 0% { transform: scale(1); opacity: 0.22; } 50% { transform: scale(1.08); opacity: 0.32; } 100% { transform: scale(1); opacity: 0.22; } }
@@ -142,38 +149,38 @@
       }
 
       .container > section:nth-of-type(1) {
-        --section-accent: #dfff00;
-        --section-accent-dim: rgba(223, 255, 0, 0.12);
+        --section-accent: #e5553b;
+        --section-accent-dim: rgba(229, 85, 59, 0.12);
       }
 
       .container > section:nth-of-type(2) {
-        --section-accent: #5cc8ff;
-        --section-accent-dim: rgba(92, 200, 255, 0.12);
+        --section-accent: #c9c1b2;
+        --section-accent-dim: rgba(201, 193, 178, 0.12);
       }
 
       .container > section:nth-of-type(3) {
-        --section-accent: #dfff00;
-        --section-accent-dim: rgba(223, 255, 0, 0.12);
+        --section-accent: #e5553b;
+        --section-accent-dim: rgba(229, 85, 59, 0.12);
       }
 
       .container > section:nth-of-type(4) {
-        --section-accent: #5cc8ff;
-        --section-accent-dim: rgba(92, 200, 255, 0.12);
+        --section-accent: #c9c1b2;
+        --section-accent-dim: rgba(201, 193, 178, 0.12);
       }
 
       .container > section:nth-of-type(5) {
-        --section-accent: #b48eff;
-        --section-accent-dim: rgba(180, 142, 255, 0.12);
+        --section-accent: #c9c1b2;
+        --section-accent-dim: rgba(201, 193, 178, 0.12);
       }
 
       .container > section:nth-of-type(6) {
-        --section-accent: #dfff00;
-        --section-accent-dim: rgba(223, 255, 0, 0.12);
+        --section-accent: #e5553b;
+        --section-accent-dim: rgba(229, 85, 59, 0.12);
       }
 
       .container > section:nth-of-type(7) {
-        --section-accent: #5cc8ff;
-        --section-accent-dim: rgba(92, 200, 255, 0.12);
+        --section-accent: #c9c1b2;
+        --section-accent-dim: rgba(201, 193, 178, 0.12);
       }
 
       /* Skip link for keyboard users */
@@ -199,7 +206,7 @@
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(237, 234, 227, 0.1);
         padding: 0.5rem 1rem;
         text-transform: uppercase;
         letter-spacing: 0.12em;
@@ -260,7 +267,7 @@
       }
       .nav-links a:hover {
         color: var(--accent);
-        border-color: rgba(255,255,255,0.1);
+        border-color: rgba(237, 234, 227,0.1);
       }
       .nav-links a.cta-contact {
         color: #050510;
@@ -286,8 +293,8 @@
 
       .hero {
         margin-top: 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        border-top: 1px solid rgba(237, 234, 227, 0.12);
         padding: 5rem 2rem;
         background: linear-gradient(160deg, rgba(20, 20, 24, 0.5) 0%, rgba(5, 5, 8, 0.7) 100%);
         backdrop-filter: blur(12px);
@@ -305,7 +312,7 @@
         line-height: 0.9;
         font-weight: 300;
         letter-spacing: -0.04em;
-        background: linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0.7) 100%);
+        background: linear-gradient(180deg, #ffffff 0%, rgba(237, 234, 227,0.7) 100%);
         -webkit-background-clip: text;
         background-clip: text;
         -webkit-text-fill-color: transparent;
@@ -333,7 +340,7 @@
       }
 
       .hero p .sel-mcp {
-        background: rgba(223, 255, 0, 0.22);
+        background: rgba(229, 85, 59, 0.22);
         color: #eaff9b;
       }
 
@@ -343,7 +350,7 @@
       }
 
       .hero p .sel-data {
-        background: rgba(180, 142, 255, 0.24);
+        background: rgba(201, 193, 178, 0.24);
         color: #d8beff;
       }
 
@@ -357,12 +364,12 @@
       }
 
       .trust-chip {
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid rgba(237, 234, 227, 0.1);
+        background: rgba(237, 234, 227, 0.025);
         padding: 0.4rem 0.65rem;
         font-family: var(--mono);
         font-size: 0.68rem;
-        color: rgba(255, 255, 255, 0.65);
+        color: rgba(237, 234, 227, 0.65);
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-weight: 400;
@@ -370,9 +377,9 @@
 
       .section {
         margin-top: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-left: 2px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.015) 0%, rgba(0,0,0,0.2) 100%);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        border-left: 2px solid rgba(237, 234, 227, 0.06);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.015) 0%, rgba(0,0,0,0.2) 100%);
         backdrop-filter: blur(8px);
         padding: 4rem 2rem;
         position: relative;
@@ -380,7 +387,7 @@
       }
 
       .section:hover {
-        border-color: rgba(255, 255, 255, 0.1);
+        border-color: rgba(237, 234, 227, 0.1);
         border-left-color: var(--section-accent, var(--accent));
       }
 
@@ -423,8 +430,8 @@
       }
 
       .card {
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.15) 100%);
+        border: 1px solid rgba(237, 234, 227, 0.06);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.02) 0%, rgba(0,0,0,0.15) 100%);
         padding: 1.75rem;
         transition: border-color 0.25s ease, background 0.25s ease;
         position: relative;
@@ -447,8 +454,8 @@
       }
 
       .card:hover {
-        border-color: rgba(255, 255, 255, 0.12);
-        background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(0,0,0,0.2) 100%);
+        border-color: rgba(237, 234, 227, 0.12);
+        background: linear-gradient(180deg, rgba(237, 234, 227,0.035) 0%, rgba(0,0,0,0.2) 100%);
       }
 
       .card:hover::before {
@@ -468,7 +475,7 @@
       .card p,
       .card li {
         font-family: var(--sans);
-        color: rgba(255, 255, 255, 0.62);
+        color: rgba(237, 234, 227, 0.62);
         font-size: 0.95rem;
         font-weight: 300;
         line-height: 1.65;
@@ -498,7 +505,7 @@
       }
 
       .runtime-card {
-        border-color: rgba(255, 255, 255, 0.2);
+        border-color: rgba(237, 234, 227, 0.2);
       }
 
       .runtime-card h3 {
@@ -520,9 +527,9 @@
       }
 
       .runtime-mcp {
-        --runtime-accent: #dfff00;
-        --runtime-bg: rgba(223, 255, 0, 0.08);
-        --runtime-line: rgba(223, 255, 0, 0.35);
+        --runtime-accent: #e5553b;
+        --runtime-bg: rgba(229, 85, 59, 0.08);
+        --runtime-line: rgba(229, 85, 59, 0.35);
       }
 
       .runtime-core {
@@ -552,8 +559,8 @@
       }
 
       .tool-card {
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid rgba(237, 234, 227, 0.08);
+        background: rgba(237, 234, 227, 0.025);
         padding: 1.25rem;
         min-height: 180px;
       }
@@ -575,13 +582,13 @@
         margin-top: 0.75rem;
         padding-top: 0.75rem;
         border-top: 1px dotted var(--line);
-        color: rgba(255, 255, 255, 0.68);
+        color: rgba(237, 234, 227, 0.68);
       }
 
       .pipeline-line {
         margin-bottom: 1.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.025);
+        border: 1px solid rgba(237, 234, 227, 0.08);
+        background: rgba(237, 234, 227, 0.025);
         padding: 1rem;
         font-family: var(--mono);
         font-size: 0.82rem;
@@ -595,8 +602,8 @@
       .table-wrap {
         margin-top: 2rem;
         overflow-x: auto;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(237, 234, 227, 0.1);
+        background: rgba(237, 234, 227, 0.02);
         backdrop-filter: blur(10px);
       }
 
@@ -628,14 +635,14 @@
 
       td code {
         color: var(--section-accent, var(--accent));
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(237, 234, 227, 0.08);
         padding: 0.2rem 0.4rem;
         font-size: 0.8rem;
       }
 
       pre {
         margin: 1rem 0 0 0;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(237, 234, 227, 0.1);
         background: rgba(5, 5, 8, 0.74);
         padding: 1rem;
         overflow-x: auto;
@@ -655,12 +662,12 @@
       pre::-webkit-scrollbar-thumb,
       .diagram-wrap::-webkit-scrollbar-thumb,
       .table-wrap::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.2);
+        background: rgba(237, 234, 227, 0.2);
       }
 
       .diagram-wrap {
         margin-top: 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(237, 234, 227, 0.12);
         background: rgba(8, 8, 10, 0.6);
         backdrop-filter: blur(10px);
         padding: 2rem;
@@ -735,8 +742,8 @@
       }
 
       details {
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(237, 234, 227, 0.1);
+        background: rgba(237, 234, 227, 0.02);
         backdrop-filter: blur(8px);
         transition: border-color 0.2s;
       }
@@ -831,7 +838,7 @@
 
       .footer {
         margin-top: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(237, 234, 227, 0.06);
         background: var(--bg);
         padding: 2.5rem 2rem;
         display: grid;
@@ -859,14 +866,14 @@
       .footer-col a {
         display: block;
         padding: 0.3rem 0;
-        color: rgba(255,255,255,0.65);
+        color: rgba(237, 234, 227,0.65);
         transition: color 0.2s;
       }
       .footer-col a:hover { color: var(--accent); }
       .footer-col p { line-height: 1.55; }
       .footer-bottom {
         grid-column: 1 / -1;
-        border-top: 1px solid rgba(255,255,255,0.06);
+        border-top: 1px solid rgba(237, 234, 227,0.06);
         padding-top: 1.25rem;
         margin-top: 0.5rem;
         display: flex;
@@ -874,7 +881,7 @@
         flex-wrap: wrap;
         gap: 0.5rem;
         font-size: 0.78rem;
-        color: rgba(255,255,255,0.35);
+        color: rgba(237, 234, 227,0.35);
       }
 
       @media (max-width: 768px) {
@@ -989,7 +996,8 @@
         }
       }
     </style>
-    <link rel="stylesheet" href="site.css" />
+    <link rel="stylesheet" href="site.css?v=2026-09-29" />
+    <link rel="stylesheet" href="brand.css?v=2026-09-29" />
   </head>
   <body class="page-architecture">
   <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top" tabindex="-1">&uarr;</button>
@@ -997,7 +1005,7 @@
   <svg class="bg-accents" viewBox="0 0 100 100" preserveAspectRatio="none">
     <defs>
       <pattern id="grid" width="8" height="8" patternUnits="userSpaceOnUse">
-        <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(255, 255, 255, 0.03)" stroke-width="0.1"/>
+        <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(237, 234, 227, 0.03)" stroke-width="0.1"/>
       </pattern>
       <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="rgba(0,0,0,0)" />
@@ -1017,7 +1025,7 @@
       <a class="skip-link" href="#main">Skip to content</a>
       <nav aria-label="Primary">
         <a class="nav-brand" href="index.html" aria-label="Satori home">
-          <img class="nav-brand-logo" src="logo-mark.svg" alt="" aria-hidden="true" width="35" height="36" />
+          <img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="35" height="36" />
           <span>Satori</span>
         </a>
         <div class="nav-links">
@@ -1070,8 +1078,8 @@
             <svg class="arch-svg" viewBox="0 0 800 500" preserveAspectRatio="xMidYMid meet">
               <defs>
                 <linearGradient id="grad-agent" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(223, 255, 0, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(223, 255, 0, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(229, 85, 59, 0.2)" />
+                  <stop offset="100%" stop-color="rgba(229, 85, 59, 0.05)" />
                 </linearGradient>
                 <linearGradient id="grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="rgba(0, 170, 255, 0.2)" />
@@ -1083,7 +1091,7 @@
                 </linearGradient>
 
                 <marker id="overview-arrowhead" viewBox="0 0 10 10" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="9" refY="5" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255, 255, 255, 0.45)" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(237, 234, 227, 0.45)" />
                 </marker>
 
                 <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
@@ -1096,56 +1104,56 @@
               </defs>
 
               <!-- Edges -->
-              <path d="M 400 80 L 400 130" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
-              <path d="M 400 200 L 400 250" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
+              <path d="M 400 80 L 400 130" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
+              <path d="M 400 200 L 400 250" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
 
-              <path d="M 400 370 L 400 420" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
-              <path d="M 300 370 L 200 420" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
-              <path d="M 500 370 L 600 420" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
+              <path d="M 400 370 L 400 420" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
+              <path d="M 300 370 L 200 420" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
+              <path d="M 500 370 L 600 420" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#overview-arrowhead)" />
 
               <!-- Nodes -->
               <!-- Agent -->
               <g transform="translate(300, 10)">
-                <rect width="200" height="70" rx="8" fill="url(#grad-agent)" stroke="rgba(223, 255, 0, 0.5)" stroke-width="2" />
+                <rect width="200" height="70" rx="8" fill="url(#grad-agent)" stroke="rgba(229, 85, 59, 0.5)" stroke-width="2" />
                 <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Agent</text>
-                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Claude / Codex / OpenCode</text>
+                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Claude / Codex / OpenCode</text>
               </g>
 
               <!-- Tool Registry -->
               <g transform="translate(300, 130)">
-                <rect width="200" height="70" rx="8" fill="rgba(255, 255, 255, 0.05)" stroke="rgba(255, 255, 255, 0.2)" stroke-width="1" stroke-dasharray="4 4" />
+                <rect width="200" height="70" rx="8" fill="rgba(237, 234, 227, 0.05)" stroke="rgba(237, 234, 227, 0.2)" stroke-width="1" stroke-dasharray="4 4" />
                 <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Tool Registry</text>
-                <text x="100" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(11 MCP Tools)</text>
+                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(11 MCP Tools)</text>
               </g>
 
               <!-- MCP Runtime -->
               <g transform="translate(250, 250)">
                 <rect width="300" height="120" rx="8" fill="url(#grad-mcp)" stroke="rgba(0, 170, 255, 0.5)" stroke-width="2" filter="url(#glow)" />
                 <text x="150" y="35" fill="#fff" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">MCP Runtime</text>
-                <text x="150" y="60" fill="rgba(255,255,255,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">ToolHandlers &amp; Orchestration</text>
-                <text x="150" y="80" fill="rgba(255,255,255,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Freshness Gate</text>
-                <text x="150" y="100" fill="rgba(255,255,255,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Publication + Fingerprint Gates</text>
+                <text x="150" y="60" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">ToolHandlers &amp; Orchestration</text>
+                <text x="150" y="80" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Freshness Gate</text>
+                <text x="150" y="100" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Publication + Fingerprint Gates</text>
               </g>
 
               <!-- Vector Store -->
               <g transform="translate(100, 420)">
                 <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
                 <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Local Retrieval</text>
-                <text x="90" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Potion / LanceDB</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Potion / LanceDB</text>
               </g>
 
               <!-- Publication -->
               <g transform="translate(310, 420)">
                 <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
                 <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Publication</text>
-                <text x="90" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Search / Symbols / Graph</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Search / Symbols / Graph</text>
               </g>
 
               <!-- Core -->
               <g transform="translate(520, 420)">
                 <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
                 <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Core Sync</text>
-                <text x="90" y="50" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">File Sync / Merkle / Hash</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">File Sync / Merkle / Hash</text>
               </g>
             </svg>
           </div>
@@ -1419,8 +1427,8 @@
             <svg class="arch-svg" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
               <defs>
                 <linearGradient id="grad-idle" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(255, 255, 255, 0.1)" />
-                  <stop offset="100%" stop-color="rgba(255, 255, 255, 0.02)" />
+                  <stop offset="0%" stop-color="rgba(237, 234, 227, 0.1)" />
+                  <stop offset="100%" stop-color="rgba(237, 234, 227, 0.02)" />
                 </linearGradient>
                 <linearGradient id="grad-active" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="rgba(0, 170, 255, 0.2)" />
@@ -1435,12 +1443,12 @@
                   <stop offset="100%" stop-color="rgba(255, 0, 85, 0.05)" />
                 </linearGradient>
                 <linearGradient id="grad-warn" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(255, 170, 0, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(255, 170, 0, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(239, 106, 80, 0.2)" />
+                  <stop offset="100%" stop-color="rgba(239, 106, 80, 0.05)" />
                 </linearGradient>
 
                 <marker id="state-arrowhead" viewBox="0 0 10 10" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="9" refY="5" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255, 255, 255, 0.45)" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(237, 234, 227, 0.45)" />
                 </marker>
                 <marker id="state-arrowhead-red" viewBox="0 0 10 10" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="9" refY="5" orient="auto-start-reverse">
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255, 0, 85, 0.45)" />
@@ -1448,35 +1456,35 @@
               </defs>
 
               <!-- Link: not_indexed -> indexing -->
-              <path d="M 400 90 L 400 160" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="410" y="130" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12">manage_index(create)</text>
+              <path d="M 400 90 L 400 160" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <text x="410" y="130" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12">manage_index(create)</text>
 
               <!-- Link: indexing -> ready -->
-              <path d="M 360 230 L 250 300" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <path d="M 360 230 L 250 300" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
               <text x="290" y="255" fill="rgba(0, 255, 136, 0.8)" font-family="sans-serif" font-size="12" text-anchor="end">success</text>
 
               <!-- Link: indexing -> failed -->
-              <path d="M 440 230 L 550 300" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <path d="M 440 230 L 550 300" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
               <text x="510" y="255" fill="rgba(255, 0, 85, 0.8)" font-family="sans-serif" font-size="12" text-anchor="start">failure</text>
 
               <!-- Link: ready -> sync_completed -->
-              <path d="M 200 370 L 200 450" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="210" y="415" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12">manage_index(sync)</text>
+              <path d="M 200 370 L 200 450" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <text x="210" y="415" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12">manage_index(sync)</text>
 
               <!-- Link: sync loop -->
-              <path d="M 180 520 C 130 560, 50 500, 100 480" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="110" y="550" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">auto-sync</text>
+              <path d="M 180 520 C 130 560, 50 500, 100 480" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <text x="110" y="550" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">auto-sync</text>
 
               <!-- Link: ready -> requires_reindex -->
-              <path d="M 300 335 L 500 450" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
-              <text x="400" y="380" fill="rgba(255, 170, 0, 0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">fingerprint mismatch</text>
+              <path d="M 300 335 L 500 450" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
+              <text x="400" y="380" fill="rgba(239, 106, 80, 0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">fingerprint mismatch</text>
 
               <!-- Link: sync_completed -> requires_reindex -->
-              <path d="M 300 485 L 500 485" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
+              <path d="M 300 485 L 500 485" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
 
               <!-- Link: requires_reindex -> indexing -->
-              <path d="M 600 450 C 760 360, 760 180, 500 195" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="744" y="286" fill="rgba(255,255,255,0.6)" font-family="sans-serif" font-size="12" text-anchor="end">auto-reindex / override</text>
+              <path d="M 600 450 C 760 360, 760 180, 500 195" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
+              <text x="744" y="286" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="end">auto-reindex / override</text>
 
               <!-- Link: clear -->
               <path d="M 700 485 L 750 485 L 750 55 L 500 55" stroke="rgba(255, 0, 85, 0.3)" stroke-width="1.5" fill="none" marker-end="url(#state-arrowhead-red)" stroke-dasharray="2 2" />
@@ -1485,7 +1493,7 @@
 
               <!-- Node: not_indexed -->
               <g transform="translate(300, 20)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-idle)" stroke="rgba(255, 255, 255, 0.3)" stroke-width="2" />
+                <rect width="200" height="70" rx="35" fill="url(#grad-idle)" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" />
                 <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">not_indexed</text>
               </g>
 
@@ -1515,7 +1523,7 @@
 
               <!-- Node: requires_reindex -->
               <g transform="translate(500, 450)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-warn)" stroke="rgba(255, 170, 0, 0.5)" stroke-width="2" />
+                <rect width="200" height="70" rx="35" fill="url(#grad-warn)" stroke="rgba(239, 106, 80, 0.5)" stroke-width="2" />
                 <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">requires_reindex</text>
               </g>
             </svg>
@@ -1767,7 +1775,7 @@
       <footer class="footer">
         <div class="footer-col">
           <a class="footer-brand-home" href="index.html" aria-label="Satori home">
-            <img class="footer-brand-logo" src="logo-mark.svg" alt="" aria-hidden="true" width="39" height="40" />
+            <img class="footer-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="39" height="40" />
             <span class="footer-heading">Satori</span>
           </a>
           <p>Local repository intelligence for coding agents: retrieval, ownership, structure, relationships, freshness, and exact source.</p>
@@ -1778,7 +1786,6 @@
           <a href="docs/">Documentation</a>
           <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
           <a href="https://www.npmjs.com/package/@satori-code/cli" target="_blank" rel="noopener noreferrer">npm Package</a>
-          <a href="https://www.producthunt.com/products/satori-4" target="_blank" rel="noopener noreferrer">Product Hunt</a>
         </div>
         <div class="footer-col">
           <div class="footer-heading">Contact</div>

@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import ignore from 'ignore';
+import { createIndexIgnoreMatcher, type IndexIgnoreMatcher } from './ignore-matcher';
 import type {
     Embedding,
     EmbeddingIdentity,
@@ -97,8 +97,6 @@ export type ExpectedIndexedChunk = Readonly<{
     chunkIndex: number;
 }>;
 
-type IgnoreMatcher = ReturnType<typeof ignore>;
-
 export type ProcessedFileList = Readonly<{
     processedFiles: number;
     totalChunks: number;
@@ -158,7 +156,7 @@ type IndexingPipelineConfig = Readonly<{
         filePath: string,
         codebasePath: string,
         isDirectory: boolean,
-        matcher?: IgnoreMatcher,
+        matcher?: IndexIgnoreMatcher,
     ) => boolean;
     getSymbolExtractorVersion: () => string;
 }>;
@@ -254,7 +252,7 @@ export class IndexingPipeline {
         const supportedExtensions = indexPolicy?.supportedExtensions
             ?? this.getIndexedExtensionsForCodebase(codebasePath);
         const policyMatcher = indexPolicy
-            ? ignore().add([...indexPolicy.effectiveIgnorePatterns])
+            ? createIndexIgnoreMatcher(indexPolicy.effectiveIgnorePatterns)
             : null;
 
         const traverseDirectory = async (currentPath: string): Promise<void> => {

@@ -17,6 +17,12 @@ export type {
     ResolvedIndexPolicy,
 } from './core/context';
 export {
+    createIndexIgnoreMatcher,
+} from './core/ignore-matcher';
+export type {
+    IndexIgnoreMatcher,
+} from './core/ignore-matcher';
+export {
     computeIndexPolicyControlSignature,
 } from './core/index-policy-input-observer';
 export {

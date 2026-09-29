@@ -64,7 +64,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { resolveSatoriStateRoot } from '../config/runtime-state-root';
 import * as crypto from 'crypto';
-import ignore from 'ignore';
+import type { IndexIgnoreMatcher } from './ignore-matcher';
 import {
     FileSynchronizer,
     type ProvenSourceFreshnessCheckpointEvidence,
@@ -1762,7 +1762,7 @@ export class Context {
         filePath: string,
         codebasePath: string,
         isDirectory: boolean = false,
-        matcherOverride?: ReturnType<typeof ignore>,
+        matcherOverride?: IndexIgnoreMatcher,
     ): boolean {
         return this.ignoreRuleService.matchesIgnorePattern(
             filePath,

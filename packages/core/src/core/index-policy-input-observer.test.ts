@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ignore from 'ignore';
+import { createIndexIgnoreMatcher } from './ignore-matcher';
 import {
     computeIndexPolicyControlSignature,
+    observeFileBasedIgnorePatterns,
     observeIndexPolicyInputs,
 } from './index-policy-input-observer';
 
@@ -33,11 +35,11 @@ test('policy observation preserves root anchoring and cross-file rule order', as
         fs.writeFileSync(path.join(root, '.gitignore'), '!data/\n!data/keep.ts\n', 'utf8');
         observed = await observeIndexPolicyInputs(root);
         assert.deepEqual(observed.fileBasedIgnorePatterns, [
-            'data/',
             '!data/',
             '!data/keep.ts',
+            'data/',
         ]);
-        assert.equal(ignore().add(observed.fileBasedIgnorePatterns).ignores('data/keep.ts'), false);
+        assert.equal(ignore().add(observed.fileBasedIgnorePatterns).ignores('data/keep.ts'), true);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -73,6 +75,139 @@ test('policy observation rejects oversized control files', async () => {
             () => observeIndexPolicyInputs(root),
             /exceeds the 1048576-byte policy limit/,
         );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+function write(root: string, relativePath: string, content: string): void {
+    const filePath = path.join(root, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+}
+
+test('.satoriignore takes precedence over .gitignore in both directions', async () => {
+    const root = createRoot();
+    try {
+        write(root, '.gitignore', '*.gen.ts\n!legacy/\n');
+        write(root, '.satoriignore', '!keep.gen.ts\nlegacy/\n');
+        const patterns = (await observeIndexPolicyInputs(root)).fileBasedIgnorePatterns;
+        const matcher = createIndexIgnoreMatcher(patterns);
+        assert.equal(matcher.ignores('src/other.gen.ts'), true);
+        assert.equal(matcher.ignores('keep.gen.ts'), false);
+        assert.equal(matcher.ignores('legacy/a.ts'), true);
+        assert.deepEqual(await observeFileBasedIgnorePatterns(root), patterns);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('nested .gitignore files and .git/info/exclude are ordered by git precedence below .satoriignore', async () => {
+    const root = createRoot();
+    try {
+        write(root, '.git/info/exclude', 'excluded.ts\n');
+        write(root, '.gitignore', 'root.ts\n');
+        write(root, 'b/.gitignore', '/b-only.ts\n');
+        write(root, 'a/.gitignore', '*.tmpfile\n');
+        write(root, 'a/deep/.gitignore', '!keep.tmpfile\n');
+        write(root, '.satoriignore', 'last.ts\n');
+        const observed = await observeIndexPolicyInputs(root);
+        assert.deepEqual(observed.fileBasedIgnorePatterns, [
+            'excluded.ts',
+            'root.ts',
+            'a/**/*.tmpfile',
+            'b/b-only.ts',
+            '!a/deep/**/keep.tmpfile',
+            'last.ts',
+        ]);
+        const matcher = createIndexIgnoreMatcher(observed.fileBasedIgnorePatterns);
+        assert.equal(matcher.ignores('a/x/y.tmpfile'), true);
+        assert.equal(matcher.ignores('a/deep/keep.tmpfile'), false);
+        assert.equal(matcher.ignores('b/b-only.ts'), true);
+        assert.equal(matcher.ignores('c/b-only.ts'), false);
+        assert.equal(matcher.ignores('excluded.ts'), true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('control signature is unchanged without nested ignore inputs and tracks them when present', async () => {
+    const root = createRoot();
+    try {
+        write(root, '.satoriignore', 'data/\n');
+        const baseline = await computeIndexPolicyControlSignature(root);
+        assert.match(baseline, /^v1:\.satoriignore:sha256:[0-9a-f]{64}:6\|\.gitignore:missing\|satori\.toml:missing$/);
+
+        write(root, 'pkg/.gitignore', 'a\n');
+        const withNested = await computeIndexPolicyControlSignature(root);
+        assert.equal(withNested.startsWith(`${baseline}|pkg/.gitignore:sha256:`), true);
+
+        write(root, 'pkg/.gitignore', 'b\n');
+        const edited = await computeIndexPolicyControlSignature(root);
+        assert.notEqual(edited, withNested);
+
+        write(root, '.git/info/exclude', 'x\n');
+        const withExclude = await computeIndexPolicyControlSignature(root);
+        assert.equal(withExclude.startsWith(`${baseline}|.git/info/exclude:sha256:`), true);
+        assert.equal(withExclude.includes('|pkg/.gitignore:sha256:'), true);
+
+        fs.rmSync(path.join(root, 'pkg/.gitignore'));
+        fs.rmSync(path.join(root, '.git'), { recursive: true });
+        assert.equal(await computeIndexPolicyControlSignature(root), baseline);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('nested discovery prunes ignored directories and never follows symlinks', async () => {
+    const root = createRoot();
+    const outside = createRoot();
+    try {
+        // Reading any of these would throw (oversized or symlinked), so a pass proves they were not entered.
+        fs.mkdirSync(path.join(root, 'node_modules/pkg'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'node_modules/pkg/.gitignore'), Buffer.alloc(1_048_577, 0x78));
+        fs.mkdirSync(path.join(root, 'vendor/x'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'vendor/x/.gitignore'), Buffer.alloc(1_048_577, 0x78));
+        fs.mkdirSync(path.join(root, 'gen/x'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'gen/x/.gitignore'), Buffer.alloc(1_048_577, 0x78));
+        write(root, '.gitignore', 'vendor/\n');
+        write(root, '.satoriignore', 'gen/\n');
+        write(outside, '.gitignore', 'from-outside\n');
+        fs.symlinkSync(outside, path.join(root, 'linked'));
+        write(root, 'src/.gitignore', 'seen\n');
+
+        const observed = await observeIndexPolicyInputs(root);
+        assert.deepEqual(observed.fileBasedIgnorePatterns, ['vendor/', 'src/**/seen', 'gen/']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+test('a nested .gitignore that is a symlink or oversized is rejected', async () => {
+    const root = createRoot();
+    try {
+        write(root, 'pkg/real.txt', 'x\n');
+        fs.symlinkSync(path.join(root, 'pkg/real.txt'), path.join(root, 'pkg/.gitignore'));
+        await assert.rejects(() => observeIndexPolicyInputs(root), /pkg\/\.gitignore' must not be a symbolic link/);
+        fs.rmSync(path.join(root, 'pkg/.gitignore'));
+        fs.writeFileSync(path.join(root, 'pkg/.gitignore'), Buffer.alloc(1_048_577, 0x78));
+        await assert.rejects(() => observeIndexPolicyInputs(root), /pkg\/\.gitignore exceeds the 1048576-byte policy limit/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('.git/info/exclude is read only when .git is a directory and the file is regular', async () => {
+    const root = createRoot();
+    try {
+        write(root, '.git', 'gitdir: ../elsewhere\n');
+        assert.deepEqual((await observeIndexPolicyInputs(root)).fileBasedIgnorePatterns, []);
+        fs.rmSync(path.join(root, '.git'));
+        fs.mkdirSync(path.join(root, '.git/info'), { recursive: true });
+        write(root, 'target.txt', 'x\n');
+        fs.symlinkSync(path.join(root, 'target.txt'), path.join(root, '.git/info/exclude'));
+        assert.deepEqual((await observeIndexPolicyInputs(root)).fileBasedIgnorePatterns, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

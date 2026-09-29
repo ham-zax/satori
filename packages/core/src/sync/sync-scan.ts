@@ -2,7 +2,7 @@ import * as fsp from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import ignore from 'ignore';
+import type { IndexIgnoreMatcher } from '../core/ignore-matcher';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { canonicalizeRepositoryRelativePath } from '../paths/repository-path';
 import {
@@ -28,7 +28,7 @@ export type FileStatSignature = SnapshotFileStatSignature;
  */
 export interface SynchronizerScanContext {
     rootDir: string;
-    ignoreMatcher: ReturnType<typeof ignore>;
+    ignoreMatcher: IndexIgnoreMatcher;
     /** Normalized once by the synchronizer; see SupportedExtensionsInput. */
     supportedExtensions: SupportedExtensionsInput;
     additionalObservablePaths?: ReadonlySet<string>;

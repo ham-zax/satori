@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import ignore from "ignore";
 import {
+    createIndexIgnoreMatcher,
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
     recordSourceProcessing,
@@ -376,8 +376,9 @@ function buildReadFileIgnoreMatcher(codebaseRoot: string, ctx: ToolContext): ((r
         return undefined;
     }
     try {
-        const matcher = ignore();
-        matcher.add(patterns.filter((pattern): pattern is string => typeof pattern === "string"));
+        const matcher = createIndexIgnoreMatcher(
+            patterns.filter((pattern): pattern is string => typeof pattern === "string"),
+        );
         return (relativePath: string) => {
             const normalized = relativePath.replace(/\\/g, "/");
             if (!normalized) {

@@ -202,3 +202,40 @@ test('IndexingPipeline stops with limit_reached before aggregate searchable sour
     assert.deepEqual(result.sourceFiles.map((file) => file.path), ['first.ts']);
 });
 
+
+test('getCodeFiles keeps built-in denylisted files excluded despite policy re-include rules', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-code-files-'));
+    try {
+        fs.mkdirSync(path.join(root, 'vendor'));
+        fs.writeFileSync(path.join(root, 'vendor', 'x.min.js'), 'var a = 1;\n');
+        fs.writeFileSync(path.join(root, 'vendor', 'y.js'), 'var b = 2;\n');
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: () => createMockVectorDb(),
+            languageAnalyzer: createLanguageAnalysisService(),
+            semanticAnalyzer: noopSemanticProjectAnalyzer,
+            getEmbedding: () => createMockEmbedding(),
+            assertEmbeddingIdentityCurrent: () => ({
+                provider: 'test',
+                model: 'test',
+                dimension: 768,
+                artifactDigest: null,
+                normalizationPolicy: 'none',
+            }),
+            isHybridEnabled: () => false,
+            canonicalizeCodebasePath: (p) => p,
+            normalizeRelativePathForCodebase: (_cb, p) => p as unknown as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.js'],
+            matchesIgnorePattern: (filePath, codebasePath, _isDirectory, matcher) => (
+                matcher?.ignores(path.relative(codebasePath, filePath).split(path.sep).join('/')) ?? false
+            ),
+            getSymbolExtractorVersion: () => 'extractor-v1',
+        });
+        const files = await pipeline.getCodeFiles(root, {
+            supportedExtensions: ['.js'],
+            effectiveIgnorePatterns: ['*.min.js', '!vendor/x.min.js'],
+        });
+        assert.deepEqual(files.map((file) => path.relative(root, file)), ['vendor/y.js']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

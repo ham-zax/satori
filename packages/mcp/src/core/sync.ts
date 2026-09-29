@@ -1,11 +1,12 @@
 import * as fs from "fs";
 import * as path from "path";
 import chokidar, { FSWatcher } from "chokidar";
-import ignore from "ignore";
 import {
     AtomicIncrementalPublicationUnsupportedError,
     computeIndexPolicyControlSignature,
     Context,
+    createIndexIgnoreMatcher,
+    type IndexIgnoreMatcher,
     type PublicationRef,
 } from "@satori-code/core";
 import {
@@ -328,8 +329,8 @@ type SyncExecutionRequest = Pick<
 >;
 
 interface IgnoreReloadResult {
-    previousMatcher?: ReturnType<typeof ignore>;
-    matcher: ReturnType<typeof ignore>;
+    previousMatcher?: IndexIgnoreMatcher;
+    matcher: IndexIgnoreMatcher;
     version: number;
 }
 
@@ -384,7 +385,7 @@ export class SyncManager {
     private watchers: Map<string, FSWatcher> = new Map();
     private watcherLifecycleStates: Map<string, WatcherLifecycleState> = new Map();
     private watcherErrorCodes: Map<string, string> = new Map();
-    private watcherIgnoreMatchers: Map<string, ReturnType<typeof ignore>> = new Map();
+    private watcherIgnoreMatchers: Map<string, IndexIgnoreMatcher> = new Map();
     private watcherCandidatePolicies: Map<string, CandidateWatcherPolicy> = new Map();
     private watcherGenerations: Map<string, number> = new Map();
     private nextWatcherGeneration = 0;
@@ -1850,14 +1851,12 @@ export class SyncManager {
     private async buildIgnoreMatcherForCodebase(
         codebasePath: string,
         effectiveIgnorePatterns?: readonly string[],
-    ): Promise<ReturnType<typeof ignore>> {
-        const matcher = ignore();
+    ): Promise<IndexIgnoreMatcher> {
         // Context is the single source of truth for effective ignore rules.
         const basePatterns = effectiveIgnorePatterns
             ?? this.context.getActiveIgnorePatterns?.(codebasePath)
             ?? [];
-        matcher.add([...new Set(basePatterns)]);
-        return matcher;
+        return createIndexIgnoreMatcher(basePatterns);
     }
 
     private async computeIgnoreControlSignature(codebasePath: string): Promise<string> {
@@ -1884,10 +1883,10 @@ export class SyncManager {
         if (!relativePath || relativePath === '.' || relativePath.startsWith('..')) {
             return false;
         }
-        return IGNORE_RULE_CONTROL_FILES.has(relativePath);
+        return IGNORE_RULE_CONTROL_FILES.has(relativePath) || relativePath.endsWith('/.gitignore');
     }
 
-    private matcherIgnoresRelativePath(matcher: ReturnType<typeof ignore>, relativePath: string): boolean {
+    private matcherIgnoresRelativePath(matcher: IndexIgnoreMatcher, relativePath: string): boolean {
         const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
         if (!normalized || normalized === '.') {
             return false;
@@ -1899,15 +1898,14 @@ export class SyncManager {
         return matcher.ignores(withSlash);
     }
 
-    private getIgnoreMatcherForCodebase(codebasePath: string): ReturnType<typeof ignore> {
+    private getIgnoreMatcherForCodebase(codebasePath: string): IndexIgnoreMatcher {
         const existing = this.watcherIgnoreMatchers.get(codebasePath);
         if (existing) {
             return existing;
         }
 
-        const matcher = ignore();
         const patterns = this.context.getActiveIgnorePatterns?.(codebasePath) || [];
-        matcher.add(patterns);
+        const matcher = createIndexIgnoreMatcher(patterns);
         this.watcherIgnoreMatchers.set(codebasePath, matcher);
         return matcher;
     }

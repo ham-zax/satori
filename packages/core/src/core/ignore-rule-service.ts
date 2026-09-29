@@ -1,14 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import ignore from 'ignore';
 import { envManager } from '../utils/env-manager';
-import {
-    openRegularFileInsideRootNoFollow,
-    readFileHandleExactly,
-    verifyStableFileObservation,
-} from '../sync/root-bound-fs';
+import { createIndexIgnoreMatcher, type IndexIgnoreMatcher } from './ignore-matcher';
+import { parseIgnorePatterns } from './ignore-file-inputs';
+import { observeFileBasedIgnorePatterns } from './index-policy-input-observer';
 
-type IgnoreMatcher = ReturnType<typeof ignore>;
+export { parseIgnorePatterns };
+
+type IgnoreMatcher = IndexIgnoreMatcher;
 
 type CodebaseIgnoreState = {
     canonicalRoot: string;
@@ -30,13 +29,6 @@ type IgnoreRuleServiceConfig = Readonly<{
     resolveCollectionName: (codebasePath: string) => string;
     ensureRuntimePolicyLoaded: (canonicalRoot: string) => void;
 }>;
-
-export function parseIgnorePatterns(content: string): string[] {
-    return content
-        .split('\n')
-        .map((line) => line.endsWith('\r') ? line.slice(0, -1) : line)
-        .filter((line) => line.length > 0 && !line.startsWith('#'));
-}
 
 export async function readIgnorePatternsFile(filePath: string): Promise<string[]> {
     try {
@@ -187,27 +179,24 @@ export class IgnoreRuleService {
         const collectionName = this.resolveCollectionName(codebasePath);
         const state = this.getOrCreateState(codebasePath);
         if (state.matcher) return state.matcher;
-        const matcher = ignore();
-        matcher.add(state.effectivePatterns);
+        const matcher = createIndexIgnoreMatcher(state.effectivePatterns);
         this.stateByCollection.set(collectionName, { ...state, matcher });
         return matcher;
     }
 
+    /**
+     * Reload file-based patterns through the policy input observer, the single
+     * owner of ignore file discovery, ordering, and precedence.
+     */
     async loadIgnorePatterns(codebasePath: string): Promise<void> {
         try {
-            const ignoreFiles = await this.findIgnoreFiles(codebasePath);
-            const fileBasedPatterns: string[] = [];
-            for (const ignoreFile of ignoreFiles) {
-                fileBasedPatterns.push(...await this.loadIgnoreFile(
-                    ignoreFile,
-                    path.basename(ignoreFile),
-                    codebasePath,
-                ));
-            }
+            const fileBasedPatterns = await observeFileBasedIgnorePatterns(
+                this.canonicalizeCodebasePath(codebasePath),
+            );
             this.setFileBasedPatterns(codebasePath, fileBasedPatterns);
             if (fileBasedPatterns.length > 0) {
                 console.log(
-                    `[Context] 🚫 Loaded total ${fileBasedPatterns.length} ignore patterns from supported root ignore files`,
+                    `[Context] 🚫 Loaded total ${fileBasedPatterns.length} ignore patterns from ignore files`,
                 );
             } else {
                 console.log(
@@ -244,71 +233,6 @@ export class IgnoreRuleService {
             return matcher.ignores(relativePath) || matcher.ignores(withSlash);
         }
         return matcher.ignores(relativePath);
-    }
-
-    async findIgnoreFiles(codebasePath: string): Promise<string[]> {
-        const ignoreFiles: string[] = [];
-        for (const fileName of ['.satoriignore', '.gitignore']) {
-            const absolutePath = path.join(codebasePath, fileName);
-            try {
-                const stat = await fs.promises.lstat(absolutePath);
-                if (stat.isSymbolicLink()) {
-                    throw new Error(
-                        `Ignore file '${fileName}' must not be a symbolic link.`,
-                    );
-                }
-                if (!stat.isFile()) {
-                    throw new Error(`Ignore file '${fileName}' is not a regular file.`);
-                }
-                ignoreFiles.push(absolutePath);
-            } catch (error) {
-                if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-                throw error;
-            }
-        }
-        if (ignoreFiles.length > 0) {
-            console.log(
-                `📄 Found ${ignoreFiles.length} supported root ignore file(s).`,
-            );
-        }
-        return ignoreFiles;
-    }
-
-    async loadIgnoreFile(
-        filePath: string,
-        fileName: string,
-        codebasePath: string,
-    ): Promise<string[]> {
-        const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const handle = await openRegularFileInsideRootNoFollow(
-            filePath,
-            canonicalRoot,
-        );
-        let content: string;
-        try {
-            const stat = await handle.stat();
-            const maximumIgnoreFileBytes = 1_048_576;
-            if (stat.size > maximumIgnoreFileBytes) {
-                throw new Error(
-                    `${fileName} exceeds the ${maximumIgnoreFileBytes}-byte policy limit.`,
-                );
-            }
-            content = (await readFileHandleExactly(handle, stat.size)).toString('utf8');
-            await verifyStableFileObservation(handle, filePath, canonicalRoot, stat, {
-                rejectFinalSymlink: true,
-            });
-        } finally {
-            await handle.close().catch(() => undefined);
-        }
-        const patterns = parseIgnorePatterns(content);
-        if (patterns.length > 0) {
-            console.log(
-                `[Context] 🚫 Loaded ${patterns.length} ignore patterns from ${fileName}`,
-            );
-            return patterns;
-        }
-        console.log(`📄 ${fileName} file found but no valid patterns detected`);
-        return [];
     }
 
     private buildEffectivePatterns(

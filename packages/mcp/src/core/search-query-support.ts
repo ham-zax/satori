@@ -4,6 +4,7 @@ import ignore from "ignore";
 import {
     beginSourceMeasurementObservation,
     compareContractStrings,
+    createIndexIgnoreMatcher,
     createLanguageAnalysisService,
     detectLanguageId,
     isLanguageCapabilitySupportedForLanguage,
@@ -311,8 +312,9 @@ export class SearchQuerySupport {
         }
 
         try {
-            const matcher = ignore();
-            matcher.add(patterns.filter((pattern: unknown) => typeof pattern === 'string'));
+            const matcher = createIndexIgnoreMatcher(
+                patterns.filter((pattern: unknown): pattern is string => typeof pattern === 'string'),
+            );
             return (relativePath: string) => {
                 const normalized = this.normalizeRelativePathForIgnoreCheck(relativePath);
                 if (!normalized) {

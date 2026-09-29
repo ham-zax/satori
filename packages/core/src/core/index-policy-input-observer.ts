@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, type FileHandle } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
     parseSatoriRepoConfig,
@@ -7,11 +7,10 @@ import {
     type SatoriRepoConfig,
 } from '../config/repo-config';
 import {
-    openRegularFileInsideRootNoFollow,
-    readFileHandleExactly,
-    verifyStableFileObservation,
-} from '../sync/root-bound-fs';
-import { parseIgnorePatterns } from './ignore-rule-service';
+    observeIgnoreFileInputs,
+    readPolicyControlFile,
+    type ObservedIgnoreFile,
+} from './ignore-file-inputs';
 
 export const INDEX_POLICY_CONTROL_FILE_NAMES = [
     '.satoriignore',
@@ -31,8 +30,6 @@ type ObservedControlFile = Readonly<{
     name: IndexPolicyControlFileName;
     content: Buffer | null;
 }>;
-
-const MAXIMUM_CONTROL_FILE_BYTES = 1_048_576;
 
 async function observeControlFile(
     canonicalRoot: string,
@@ -60,63 +57,82 @@ async function observeControlFile(
             : `${name} is not a regular file.`);
     }
 
-    const handle: FileHandle = await openRegularFileInsideRootNoFollow(filePath, canonicalRoot);
-
-    try {
-        const stat = await handle.stat();
-        if (stat.size > MAXIMUM_CONTROL_FILE_BYTES) {
-            throw new Error(`${name} exceeds the ${MAXIMUM_CONTROL_FILE_BYTES}-byte policy limit.`);
-        }
-        const content = await readFileHandleExactly(handle, stat.size);
-        await verifyStableFileObservation(handle, filePath, canonicalRoot, stat, {
-            rejectFinalSymlink: true,
-        });
-        return { name, content };
-    } finally {
-        await handle.close().catch(() => undefined);
-    }
+    return { name, content: await readPolicyControlFile(filePath, canonicalRoot, name) };
 }
 
-function buildControlSignature(files: readonly ObservedControlFile[]): string {
-    const parts = files.map(({ name, content }) => {
-        if (content === null) return `${name}:missing`;
-        const digest = createHash('sha256').update(content).digest('hex');
-        return `${name}:sha256:${digest}:${content.length}`;
-    });
+type ObservedControlInputs = Readonly<{
+    files: readonly ObservedControlFile[];
+    fileBasedIgnorePatterns: string[];
+    additionalIgnoreFiles: readonly ObservedIgnoreFile[];
+}>;
+
+function digestPart(label: string, content: Buffer): string {
+    const digest = createHash('sha256').update(content).digest('hex');
+    return `${label}:sha256:${digest}:${content.length}`;
+}
+
+// The root parts keep their historical format. Nested `.gitignore` files and
+// `.git/info/exclude` are appended only when present, so repositories without
+// them keep a byte-identical signature.
+function buildControlSignature(inputs: ObservedControlInputs): string {
+    const parts = [
+        ...inputs.files.map(({ name, content }) => (
+            content === null ? `${name}:missing` : digestPart(name, content)
+        )),
+        ...inputs.additionalIgnoreFiles.map(({ relativePath, content }) => digestPart(relativePath, content)),
+    ];
     return `v1:${parts.join('|')}`;
 }
 
-async function observeControlFiles(canonicalRoot: string): Promise<readonly ObservedControlFile[]> {
+async function observeControlInputs(canonicalRoot: string): Promise<ObservedControlInputs> {
     const files: ObservedControlFile[] = [];
     for (const name of INDEX_POLICY_CONTROL_FILE_NAMES) {
         files.push(await observeControlFile(canonicalRoot, name));
     }
-    return files;
+    const contentOf = (name: IndexPolicyControlFileName): Buffer | null => (
+        files.find((file) => file.name === name)?.content ?? null
+    );
+    const ignoreInputs = await observeIgnoreFileInputs(canonicalRoot, {
+        gitignore: contentOf('.gitignore'),
+        satoriignore: contentOf('.satoriignore'),
+    });
+    return {
+        files,
+        fileBasedIgnorePatterns: ignoreInputs.patterns,
+        additionalIgnoreFiles: ignoreInputs.additionalFiles,
+    };
+}
+
+/**
+ * Observe only the ignore control files (the same observation the policy
+ * signature covers) and return the ordered file-based ignore patterns.
+ */
+export async function observeFileBasedIgnorePatterns(canonicalRoot: string): Promise<string[]> {
+    const gitignore = await observeControlFile(canonicalRoot, '.gitignore');
+    const satoriignore = await observeControlFile(canonicalRoot, '.satoriignore');
+    return (await observeIgnoreFileInputs(canonicalRoot, {
+        gitignore: gitignore.content,
+        satoriignore: satoriignore.content,
+    })).patterns;
 }
 
 export async function computeIndexPolicyControlSignature(canonicalRoot: string): Promise<string> {
-    return buildControlSignature(await observeControlFiles(canonicalRoot));
+    return buildControlSignature(await observeControlInputs(canonicalRoot));
 }
 
 export async function observeIndexPolicyInputs(canonicalRoot: string): Promise<ObservedIndexPolicyInputs> {
-    const files = await observeControlFiles(canonicalRoot);
-    const byName = new Map(files.map((file) => [file.name, file.content] as const));
-    const profileContent = byName.get(SATORI_REPO_CONFIG_FILENAME) ?? null;
+    const inputs = await observeControlInputs(canonicalRoot);
+    const profileContent = inputs.files.find((file) => file.name === SATORI_REPO_CONFIG_FILENAME)?.content ?? null;
     const profileConfig = profileContent === null
         ? { profile: 'default' as const }
         : parseSatoriRepoConfig(
             profileContent.toString('utf8'),
             path.join(canonicalRoot, SATORI_REPO_CONFIG_FILENAME),
         );
-    const fileBasedIgnorePatterns = ['.satoriignore', '.gitignore']
-        .flatMap((name) => {
-            const content = byName.get(name as IndexPolicyControlFileName) ?? null;
-            return content === null ? [] : parseIgnorePatterns(content.toString('utf8'));
-        });
 
     return {
         profileConfig,
-        fileBasedIgnorePatterns,
-        controlSignature: buildControlSignature(files),
+        fileBasedIgnorePatterns: inputs.fileBasedIgnorePatterns,
+        controlSignature: buildControlSignature(inputs),
     };
 }

@@ -478,3 +478,29 @@ test('exact live-path recovery reads unrecognized extensions and admits them by 
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('active ignore matcher keeps the built-in denylist authoritative over re-include rules', () => {
+    const support = new SearchQuerySupport({
+        normalizeSearchPath: (value) => value,
+        hasPathSegment: () => false,
+        isGeneratedPath: () => false,
+        isTestPath: () => false,
+        isFixturePath: () => false,
+        isDocPath: () => false,
+        getContextActiveIgnorePatterns: () => ['!package-lock.json', '!vendor/x.min.js'],
+        getContextTrackedRelativePaths: () => [],
+        classifyPathCategory: () => 'srcRuntime',
+        shouldIncludeCategoryInScope: () => true,
+        capabilities: {} as CapabilityResolver,
+        runtimeFingerprint: {} as never,
+        reranker: null,
+        gitignoreForceReloadEveryN: 25,
+    });
+    const matcher = (support as unknown as {
+        buildActiveIgnoreMatcher(root: string): ((relativePath: string) => boolean) | undefined;
+    }).buildActiveIgnoreMatcher('/repo');
+    assert.ok(matcher);
+    assert.equal(matcher('package-lock.json'), true);
+    assert.equal(matcher('vendor/x.min.js'), true);
+    assert.equal(matcher('src/app.ts'), false);
+});

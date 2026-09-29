@@ -1,6 +1,6 @@
 import * as fsSync from 'fs';
 import * as path from 'path';
-import ignore from 'ignore';
+import { createIndexIgnoreMatcher, type IndexIgnoreMatcher } from '../core/ignore-matcher';
 import { computeMerkleRoot } from './merkle';
 import {
     buildPublicationSourceCheckpoint,
@@ -103,7 +103,7 @@ export class FileSynchronizer {
     private merkleRoot: string;
     private readonly rootDir: string;
     private ignorePatterns: string[];
-    private ignoreMatcher: ReturnType<typeof ignore>;
+    private ignoreMatcher: IndexIgnoreMatcher;
     private partialScan: boolean;
     private unscannedDirPrefixes: string[];
     private unprocessedPaths: string[];
@@ -121,8 +121,7 @@ export class FileSynchronizer {
     ) {
         this.rootDir = FileSynchronizer.canonicalizeRoot(rootDir);
         this.ignorePatterns = [...ignorePatterns];
-        this.ignoreMatcher = ignore();
-        this.ignoreMatcher.add(this.ignorePatterns);
+        this.ignoreMatcher = createIndexIgnoreMatcher(this.ignorePatterns);
         this.supportedExtensions = new Set(normalizeSupportedExtensions(
             supportedExtensions.length > 0 ? supportedExtensions : DEFAULT_SUPPORTED_EXTENSIONS,
         ));

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main, claude_context]
+    branches: [master]
   pull_request:
-    branches: [master, main, claude_context]
+    branches: [master]
 
 jobs:
   core_sync_gate:

@@ -36,7 +36,7 @@ declare -A PACKAGE_DIRS=(
   [cli]="packages/cli"
 )
 
-declare -A PACKAGE_RELEVANT_FILES
+declare -A PACKAGE_RELEVANT_FILES=()
 for key in core mcp cli; do
   directory="${PACKAGE_DIRS[${key}]}"
   relevant="$(printf '%s\n' "${CHANGED_FILES}" \
@@ -52,7 +52,7 @@ if [[ ${#PACKAGE_RELEVANT_FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-declare -A REQUIRED_KEYS
+declare -A REQUIRED_KEYS=()
 if [[ -n "${PACKAGE_RELEVANT_FILES[core]:-}" ]]; then
   REQUIRED_KEYS[core]=1
   REQUIRED_KEYS[mcp]=1

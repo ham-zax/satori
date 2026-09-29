@@ -2660,6 +2660,27 @@ test("install replaces the legacy Claude skill copy with a link to the canonical
     });
 });
 
+// A copy from a release that predates the ownership marker, exactly as that installer wrote it.
+test("a pre-marker Satori skill copy is still migrated by install and removed by uninstall", async () => {
+    const historical = fs.readFileSync(path.join(PACKAGE_ROOT, "src", "test-fixtures", "legacy-satori-skill.md"));
+    assert.equal(historical.toString("utf8").includes("satori-managed-skill"), false);
+    for (const action of ["install", "uninstall"] as const) {
+        await withTempHome(async (homeDir) => {
+            const linkPath = path.join(homeDir, ".claude", "skills", "satori");
+            fs.mkdirSync(linkPath, { recursive: true });
+            fs.writeFileSync(path.join(linkPath, "SKILL.md"), historical);
+
+            if (action === "install") {
+                await executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+                assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+            } else {
+                await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
+                assert.equal(fs.existsSync(linkPath), false);
+            }
+        });
+    }
+});
+
 test("canonical skill is never overwritten unless Satori owns it and is removed by a full uninstall", async () => {
     await withTempHome(async (homeDir) => {
         const skillFile = path.join(homeDir, ".agents", "skills", "satori", "SKILL.md");

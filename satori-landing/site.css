@@ -144,8 +144,10 @@ nav[aria-label="Primary"] {
   text-decoration: none;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-brand:hover {
   color: var(--fg);
+}
 }
 
 .nav-brand-logo {
@@ -170,10 +172,12 @@ nav[aria-label="Primary"] {
   transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-links a:hover {
   color: var(--fg);
   border-color: rgba(237, 234, 227, 0.12);
   background: rgba(237, 234, 227, 0.035);
+}
 }
 
 .nav-links a.cta-contact {
@@ -183,10 +187,12 @@ nav[aria-label="Primary"] {
   font-weight: 600;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-links a.cta-contact:hover {
   color: #060607;
   background: #ef6a50;
   box-shadow: 0 0 20px var(--accent-dim);
+}
 }
 
 .status-dot {
@@ -215,12 +221,14 @@ nav[aria-label="Primary"] {
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .btn:hover {
   border-color: rgba(237, 234, 227, 0.28);
   background: rgba(237, 234, 227, 0.055);
   color: var(--fg);
   box-shadow: none;
   transform: translateY(-1px);
+}
 }
 
 .btn.primary {
@@ -230,11 +238,13 @@ nav[aria-label="Primary"] {
   box-shadow: 0 0 20px rgba(229, 85, 59, 0.08);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .btn.primary:hover {
   color: #060607;
   background: #ef6a50;
   border-color: #ef6a50;
   box-shadow: 0 0 24px rgba(229, 85, 59, 0.14);
+}
 }
 
 /* Shared hero */
@@ -640,9 +650,11 @@ h1 {
   transition: border-color 180ms ease, border-left-color 180ms ease;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .section:hover {
   border-color: rgba(237, 234, 227, 0.10);
   border-left-color: var(--section-accent, var(--accent));
+}
 }
 
 .page-landing .section > h3,
@@ -738,6 +750,7 @@ h1 {
   display: none;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .card:hover,
 .panel:hover,
 .tool-card:hover,
@@ -746,7 +759,9 @@ h1 {
   border-color: rgba(237, 234, 227, 0.12);
   background: linear-gradient(180deg, rgba(237, 234, 227, 0.035) 0%, rgba(0, 0, 0, 0.20) 100%);
 }
+}
 
+@media (hover: hover) and (pointer: fine) {
 .card:hover::before,
 .panel:hover::before,
 .tool-card:hover::before,
@@ -754,6 +769,7 @@ h1 {
 .contact-card:hover::before,
 .runtime-card:hover::before {
   transform: scaleX(1);
+}
 }
 
 .card,
@@ -823,8 +839,10 @@ h1 {
   background: linear-gradient(180deg, rgba(20, 20, 24, 0.50) 0%, rgba(5, 5, 8, 0.52) 100%);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .flow-item:hover {
   background: linear-gradient(180deg, rgba(237, 234, 227, 0.04) 0%, rgba(5, 5, 8, 0.56) 100%);
+}
 }
 
 .flow-index {
@@ -853,8 +871,10 @@ h1 {
   backdrop-filter: blur(8px);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .install-strip:hover {
   border: 1px solid var(--line-strong);
+}
 }
 
 .install-top {
@@ -919,8 +939,10 @@ th {
   border-left-color: var(--line-strong);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .step:hover {
   border-left-color: var(--section-accent, var(--accent));
+}
 }
 
 .flow-step {
@@ -934,9 +956,11 @@ details {
   backdrop-filter: blur(6px);
 }
 
+@media (hover: hover) and (pointer: fine) {
 details:hover,
 details[open] {
   border-color: var(--line-strong);
+}
 }
 
 summary {
@@ -1049,10 +1073,12 @@ summary {
   text-align: center;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .page-docs .quick-links a:hover {
   border-color: rgba(201, 193, 178, 0.34);
   background: rgba(201, 193, 178, 0.045);
   color: var(--cyan);
+}
 }
 
 
@@ -1095,10 +1121,12 @@ summary {
   color: rgba(237, 234, 227, 0.70);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .contact-subject:hover {
   border-color: rgba(201, 193, 178, 0.38);
   color: var(--cyan);
   background: var(--cyan-dim);
+}
 }
 
 /* Footer: same visual contract on every page. */
@@ -1135,8 +1163,10 @@ summary {
   margin: 0;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .footer-brand-home:hover .footer-heading {
   color: var(--accent);
+}
 }
 
 .footer-col a,
@@ -1151,8 +1181,10 @@ summary {
   align-items: center;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .footer-col a:hover {
   color: var(--cyan);
+}
 }
 
 .footer-bottom {
@@ -2604,12 +2636,17 @@ summary {
   }
 
   .arch-mobile-node[data-tone="agent"] {
-    border-color: rgba(229, 85, 59, 0.44);
+    border-color: rgba(237, 234, 227, 0.35);
   }
 
   .arch-mobile-node[data-tone="runtime"] {
-    border-color: rgba(201, 193, 178, 0.48);
-    background: linear-gradient(180deg, rgba(201, 193, 178, 0.055), rgba(0, 0, 0, 0.20));
+    border-color: rgba(229, 85, 59, 0.48);
+    background: linear-gradient(180deg, rgba(229, 85, 59, 0.06), rgba(0, 0, 0, 0.20));
+  }
+
+  .arch-mobile-node[data-tone="active"] {
+    border-color: rgba(237, 234, 227, 0.6);
+    background: linear-gradient(180deg, rgba(237, 234, 227, 0.05), rgba(0, 0, 0, 0.20));
   }
 
   .arch-mobile-node[data-tone="store"] {
@@ -2617,7 +2654,7 @@ summary {
   }
 
   .arch-mobile-node[data-tone="success"] {
-    border-color: rgba(0, 255, 136, 0.44);
+    border-color: rgba(201, 193, 178, 0.44);
   }
 
   .arch-mobile-node[data-tone="danger"] {

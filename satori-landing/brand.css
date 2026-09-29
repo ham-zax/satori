@@ -67,9 +67,23 @@ html {
   overflow-x: clip;
 }
 
-a,
-button {
+/* Touch: no grey tap flash (every control has its own :active), no double-tap delay,
+   and long-press never selects a control's label. Body text stays selectable. */
+html {
   -webkit-tap-highlight-color: transparent;
+}
+
+a,
+button,
+[role="tab"] {
+  touch-action: manipulation;
+}
+
+button,
+.btn,
+[role="tab"] {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 body {
@@ -218,8 +232,10 @@ nav[aria-label="Primary"] {
   text-decoration: none;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-brand:hover {
   color: var(--paper);
+}
 }
 
 .nav-brand-logo,
@@ -253,10 +269,12 @@ nav[aria-label="Primary"] {
   transition: color 180ms var(--ease-out), background-color 180ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-links a:hover {
   color: var(--paper);
   background: rgba(237, 234, 227, 0.06);
   border-color: transparent;
+}
 }
 
 .nav-links a[aria-current="page"] {
@@ -283,10 +301,12 @@ nav[aria-label="Primary"] {
   box-shadow: none;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .nav-links a.cta-contact:hover {
   color: var(--ink-0);
   background: #fff8ee;
   box-shadow: none;
+}
 }
 
 /* ---------- Buttons ---------- */
@@ -320,12 +340,14 @@ nav[aria-label="Primary"] {
     color 200ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .btn:hover {
   border-color: rgba(237, 234, 227, 0.32);
   background: rgba(237, 234, 227, 0.07);
   color: var(--paper);
   box-shadow: none;
   transform: none;
+}
 }
 
 .btn:active {
@@ -340,18 +362,22 @@ nav[aria-label="Primary"] {
   box-shadow: 0 10px 30px -12px rgba(229, 85, 59, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .btn.primary:hover {
   border-color: var(--shu-hi);
   background: var(--shu-hi);
   color: #140806;
+}
 }
 
 .btn .btn-arrow {
   transition: transform 220ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .btn:hover .btn-arrow {
   transform: translateX(3px);
+}
 }
 
 .copy-btn {
@@ -366,9 +392,11 @@ nav[aria-label="Primary"] {
   transition: color 180ms var(--ease-out), border-color 180ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .copy-btn:hover {
   color: var(--paper);
   border-color: rgba(237, 234, 227, 0.32);
+}
 }
 
 .copy-btn:active {
@@ -419,8 +447,10 @@ nav[aria-label="Primary"] {
   font-weight: 600;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .footer-brand-home:hover .footer-heading {
   color: var(--paper);
+}
 }
 
 .footer-brand-logo {
@@ -453,8 +483,10 @@ nav[aria-label="Primary"] {
   transition: color 180ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .footer-col a:hover {
   color: var(--paper);
+}
 }
 
 .footer-bottom {
@@ -497,8 +529,10 @@ nav[aria-label="Primary"] {
   pointer-events: auto;
 }
 
+@media (hover: hover) and (pointer: fine) {
 .back-to-top:hover {
   border-color: var(--shu);
+}
 }
 
 /* ---------- Reveal (shared) ----------

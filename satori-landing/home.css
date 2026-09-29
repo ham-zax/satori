@@ -66,16 +66,20 @@ h3.minor {
   transition: background-size 320ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .text-link:hover {
   background-size: 100% 1px;
+}
 }
 
 .text-link span {
   transition: transform 220ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .text-link:hover span {
   transform: translateX(3px);
+}
 }
 
 .fresh-dot {
@@ -127,7 +131,7 @@ h3.minor {
   grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
   align-items: center;
   gap: clamp(2rem, 5vw, 4.5rem);
-  min-height: min(720px, calc(100dvh - 90px));
+  min-height: min(720px, calc(100svh - 90px));
   padding: clamp(3rem, 7vw, 5.5rem) clamp(0.25rem, 2vw, 1.5rem) clamp(3rem, 6vw, 4.5rem);
   isolation: isolate;
 }
@@ -494,7 +498,9 @@ h3.minor {
   transition: color 180ms var(--ease-out), border-color 180ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .ask-replay:hover { color: var(--paper); border-color: rgba(237, 234, 227, 0.32); }
+}
 .ask-replay:active { transform: scale(0.95); }
 
 /* Final state is the default (no JS, reduced motion). Choreography only applies once armed. */
@@ -674,9 +680,11 @@ h3.minor {
   transition: border-color 260ms var(--ease-out), background-color 260ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .stratum:hover {
   border-color: var(--line-strong);
   background: rgba(237, 234, 227, 0.035);
+}
 }
 
 .stratum::before {
@@ -882,8 +890,12 @@ h3.minor {
   transition: opacity 300ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .tile:hover { border-color: var(--line-strong); }
+}
+@media (hover: hover) and (pointer: fine) {
 .tile:hover::after { opacity: 1; }
+}
 
 .tile p {
   color: var(--paper-2);
@@ -968,10 +980,18 @@ h3.minor {
 
 @media (prefers-reduced-motion: no-preference) {
   .publication-strip li { transition: transform 300ms var(--ease-out), background-color 300ms var(--ease-out); }
-  .tile-wide:hover .publication-strip li { background: rgba(229, 85, 59, 0.18); transform: translateY(-2px); }
-  .tile-wide:hover .publication-strip li:nth-child(2) { transition-delay: 40ms; }
-  .tile-wide:hover .publication-strip li:nth-child(3) { transition-delay: 80ms; }
-  .tile-wide:hover .publication-strip li:nth-child(4) { transition-delay: 120ms; }
+  @media (hover: hover) and (pointer: fine) {
+.tile-wide:hover .publication-strip li { background: rgba(229, 85, 59, 0.18); transform: translateY(-2px); }
+}
+  @media (hover: hover) and (pointer: fine) {
+.tile-wide:hover .publication-strip li:nth-child(2) { transition-delay: 40ms; }
+}
+  @media (hover: hover) and (pointer: fine) {
+.tile-wide:hover .publication-strip li:nth-child(3) { transition-delay: 80ms; }
+}
+  @media (hover: hover) and (pointer: fine) {
+.tile-wide:hover .publication-strip li:nth-child(4) { transition-delay: 120ms; }
+}
 }
 
 /* ---------- Use cases ---------- */
@@ -1018,18 +1038,21 @@ h3.minor {
   margin-top: -5px;
   border-radius: 2px;
   background: var(--shu);
-  transform: rotate(-6deg) scale(0);
-  transition: transform 300ms var(--ease-stamp);
+  opacity: 0;
+  transform: rotate(-6deg) scale(0.4);
+  transition: opacity 160ms var(--ease-out), transform 300ms var(--ease-stamp);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .usecase-list button:hover { color: var(--paper-2); }
+}
 
 .usecase-list button[aria-selected="true"] {
   color: var(--paper);
   padding-left: 1.9rem;
 }
 
-.usecase-list button[aria-selected="true"]::before { transform: rotate(-6deg) scale(1); }
+.usecase-list button[aria-selected="true"]::before { opacity: 1; transform: rotate(-6deg) scale(1); }
 
 .usecase-list button:focus-visible { outline-offset: -2px; }
 
@@ -1079,13 +1102,13 @@ h3.minor {
 
 @media (prefers-reduced-motion: no-preference) {
   .usecases.is-tabbed .usecase:not([hidden]) {
-    animation: panel-in 320ms var(--ease-out) both;
+    animation: panel-in 200ms var(--ease-out) both;
   }
 }
 
 @keyframes panel-in {
   from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; filter: blur(0); transform: none; }
+  to { opacity: 1; transform: none; }
 }
 
 /* ---------- Quickstart ---------- */
@@ -1337,9 +1360,11 @@ h3.minor {
   transition: background-size 380ms var(--ease-out), color 200ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .contact-email:hover {
   color: #fff8ee;
   background-size: 100% 6px;
+}
 }
 
 .contact-subjects {
@@ -1363,7 +1388,9 @@ h3.minor {
   transition: color 180ms var(--ease-out), border-color 180ms var(--ease-out), transform 160ms var(--ease-out);
 }
 
+@media (hover: hover) and (pointer: fine) {
 .contact-subject:hover { color: var(--paper); border-color: var(--shu); }
+}
 .contact-subject:active { transform: scale(0.97); }
 
 .contact-context {
@@ -1440,4 +1467,89 @@ h3.minor {
   .stack-grid { grid-template-columns: 1fr 1fr; }
   .lifecycle li { grid-template-columns: 1fr; gap: 0.2rem; }
   .publication-strip { flex-wrap: wrap; }
+}
+
+/* ---------- Free / no catch ---------- */
+.faq {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+  margin-top: clamp(2.5rem, 5vw, 3.5rem);
+}
+
+.faq-item {
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(237, 234, 227, 0.02);
+}
+
+.faq-item dt {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.faq-item dd {
+  margin: 0.6rem 0 0;
+  color: var(--paper-2);
+  font-size: 0.95rem;
+  text-wrap: pretty;
+}
+
+.faq-item code {
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(237, 234, 227, 0.07);
+  color: var(--paper);
+  font-size: 0.84em;
+}
+
+/* The price answer is the one most people came for. */
+.faq-lead {
+  grid-row: span 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-color: rgba(229, 85, 59, 0.35);
+  background:
+    radial-gradient(90% 70% at 0% 0%, rgba(229, 85, 59, 0.16), transparent 60%),
+    rgba(237, 234, 227, 0.02);
+}
+
+.faq-lead dt {
+  font-size: clamp(1.8rem, 3.4vw, 2.6rem);
+  font-stretch: 88%;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+.faq-lead dd {
+  margin-top: 1rem;
+  font-size: 1.02rem;
+}
+
+/* Six answers, no holes: the lead takes three rows, the last answer takes the remaining two columns. */
+.faq-item:last-child {
+  grid-column: span 2;
+}
+
+.terminal-next {
+  border-top: 1px solid var(--line);
+}
+
+.terminal-prompt {
+  white-space: pre-wrap;
+  color: var(--paper-2) !important;
+}
+
+@media (max-width: 860px) {
+  .faq { grid-template-columns: 1fr 1fr; }
+  .faq-lead { grid-column: 1 / -1; grid-row: auto; }
+  .faq-item:last-child { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .faq { grid-template-columns: 1fr; }
 }

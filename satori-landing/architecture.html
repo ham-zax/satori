@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="logo.svg?v=2026-09-29" />
-    <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29" />
+    <meta name="theme-color" content="#0b0b0c" />
+    <link rel="icon" type="image/svg+xml" href="logo.svg?v=2026-09-29c" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29c" />
     <title>Satori Architecture | Repository Intelligence, Publications, Local Retrieval</title>
     <meta
       name="description"
@@ -61,7 +62,7 @@
     />
     <style>
       :root {
-        --bg: #000000;
+        --bg: #0b0b0c;
         --panel: rgba(10, 10, 10, 0.85);
         --fg: #ffffff;
         --muted: rgba(237, 234, 227, 0.55);
@@ -335,23 +336,23 @@
       }
 
       .hero p .sel-core {
-        background: rgba(105, 216, 255, 0.22);
-        color: #bdefff;
+        background: rgba(201, 193, 178, 0.22);
+        color: #edeae3;
       }
 
       .hero p .sel-mcp {
         background: rgba(229, 85, 59, 0.22);
-        color: #eaff9b;
+        color: #ffd9cf;
       }
 
       .hero p .sel-safety {
-        background: rgba(255, 140, 107, 0.22);
-        color: #ffc5b5;
+        background: rgba(239, 106, 80, 0.22);
+        color: #ffd9cf;
       }
 
       .hero p .sel-data {
         background: rgba(201, 193, 178, 0.24);
-        color: #d8beff;
+        color: #edeae3;
       }
 
       .trust-chips {
@@ -533,9 +534,9 @@
       }
 
       .runtime-core {
-        --runtime-accent: #69d8ff;
-        --runtime-bg: rgba(105, 216, 255, 0.1);
-        --runtime-line: rgba(105, 216, 255, 0.35);
+        --runtime-accent: #c9c1b2;
+        --runtime-bg: rgba(201, 193, 178, 0.1);
+        --runtime-line: rgba(201, 193, 178, 0.35);
       }
 
       .tool-group {
@@ -996,8 +997,8 @@
         }
       }
     </style>
-    <link rel="stylesheet" href="site.css?v=2026-09-29" />
-    <link rel="stylesheet" href="brand.css?v=2026-09-29" />
+    <link rel="stylesheet" href="site.css?v=2026-09-29c" />
+    <link rel="stylesheet" href="brand.css?v=2026-09-29c" />
   </head>
   <body class="page-architecture">
   <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top" tabindex="-1">&uarr;</button>
@@ -1025,7 +1026,7 @@
       <a class="skip-link" href="#main">Skip to content</a>
       <nav aria-label="Primary">
         <a class="nav-brand" href="index.html" aria-label="Satori home">
-          <img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="35" height="36" />
+          <img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29c" alt="" aria-hidden="true" width="35" height="36" />
           <span>Satori</span>
         </a>
         <div class="nav-links">
@@ -1078,16 +1079,16 @@
             <svg class="arch-svg" viewBox="0 0 800 500" preserveAspectRatio="xMidYMid meet">
               <defs>
                 <linearGradient id="grad-agent" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="rgba(237, 234, 227, 0.1)" />
+                  <stop offset="100%" stop-color="rgba(237, 234, 227, 0.02)" />
+                </linearGradient>
+                <linearGradient id="grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="rgba(229, 85, 59, 0.2)" />
                   <stop offset="100%" stop-color="rgba(229, 85, 59, 0.05)" />
                 </linearGradient>
-                <linearGradient id="grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(0, 170, 255, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(0, 170, 255, 0.05)" />
-                </linearGradient>
                 <linearGradient id="grad-store" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(138, 43, 226, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(138, 43, 226, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(201, 193, 178, 0.2)" />
+                  <stop offset="100%" stop-color="rgba(201, 193, 178, 0.05)" />
                 </linearGradient>
 
                 <marker id="overview-arrowhead" viewBox="0 0 10 10" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="9" refY="5" orient="auto-start-reverse">
@@ -1114,46 +1115,46 @@
               <!-- Nodes -->
               <!-- Agent -->
               <g transform="translate(300, 10)">
-                <rect width="200" height="70" rx="8" fill="url(#grad-agent)" stroke="rgba(229, 85, 59, 0.5)" stroke-width="2" />
-                <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Agent</text>
-                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Claude / Codex / OpenCode</text>
+                <rect width="200" height="70" rx="8" fill="url(#grad-agent)" stroke="rgba(237, 234, 227, 0.35)" stroke-width="1.5" />
+                <text x="100" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Agent</text>
+                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Claude / Codex / OpenCode</text>
               </g>
 
               <!-- Tool Registry -->
               <g transform="translate(300, 130)">
                 <rect width="200" height="70" rx="8" fill="rgba(237, 234, 227, 0.05)" stroke="rgba(237, 234, 227, 0.2)" stroke-width="1" stroke-dasharray="4 4" />
-                <text x="100" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Tool Registry</text>
-                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">(11 MCP Tools)</text>
+                <text x="100" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Tool Registry</text>
+                <text x="100" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">(11 MCP Tools)</text>
               </g>
 
               <!-- MCP Runtime -->
               <g transform="translate(250, 250)">
-                <rect width="300" height="120" rx="8" fill="url(#grad-mcp)" stroke="rgba(0, 170, 255, 0.5)" stroke-width="2" filter="url(#glow)" />
-                <text x="150" y="35" fill="#fff" font-family="sans-serif" font-size="18" font-weight="bold" text-anchor="middle">MCP Runtime</text>
-                <text x="150" y="60" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">ToolHandlers &amp; Orchestration</text>
-                <text x="150" y="80" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Freshness Gate</text>
-                <text x="150" y="100" fill="rgba(237, 234, 227,0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">Publication + Fingerprint Gates</text>
+                <rect width="300" height="120" rx="8" fill="url(#grad-mcp)" stroke="rgba(229, 85, 59, 0.5)" stroke-width="2" />
+                <text x="150" y="35" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="18" font-weight="bold" text-anchor="middle">MCP Runtime</text>
+                <text x="150" y="60" fill="rgba(237, 234, 227,0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">ToolHandlers &amp; Orchestration</text>
+                <text x="150" y="80" fill="rgba(237, 234, 227,0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Freshness Gate</text>
+                <text x="150" y="100" fill="rgba(237, 234, 227,0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Publication + Fingerprint Gates</text>
               </g>
 
               <!-- Vector Store -->
               <g transform="translate(100, 420)">
-                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
-                <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Local Retrieval</text>
-                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Potion / LanceDB</text>
+                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(201, 193, 178, 0.5)" stroke-width="2" />
+                <text x="90" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Local Retrieval</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Potion / LanceDB</text>
               </g>
 
               <!-- Publication -->
               <g transform="translate(310, 420)">
-                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
-                <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Publication</text>
-                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">Search / Symbols / Graph</text>
+                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(201, 193, 178, 0.5)" stroke-width="2" />
+                <text x="90" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Publication</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">Search / Symbols / Graph</text>
               </g>
 
               <!-- Core -->
               <g transform="translate(520, 420)">
-                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(138, 43, 226, 0.5)" stroke-width="2" />
-                <text x="90" y="30" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Core Sync</text>
-                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">File Sync / Merkle / Hash</text>
+                <rect width="180" height="70" rx="8" fill="url(#grad-store)" stroke="rgba(201, 193, 178, 0.5)" stroke-width="2" />
+                <text x="90" y="30" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">Core Sync</text>
+                <text x="90" y="50" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">File Sync / Merkle / Hash</text>
               </g>
             </svg>
           </div>
@@ -1431,16 +1432,16 @@
                   <stop offset="100%" stop-color="rgba(237, 234, 227, 0.02)" />
                 </linearGradient>
                 <linearGradient id="grad-active" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(0, 170, 255, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(0, 170, 255, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(237, 234, 227, 0.16)" />
+                  <stop offset="100%" stop-color="rgba(237, 234, 227, 0.04)" />
                 </linearGradient>
                 <linearGradient id="grad-success" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(0, 255, 136, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(0, 255, 136, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(201, 193, 178, 0.2)" />
+                  <stop offset="100%" stop-color="rgba(201, 193, 178, 0.05)" />
                 </linearGradient>
                 <linearGradient id="grad-error" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="rgba(255, 0, 85, 0.2)" />
-                  <stop offset="100%" stop-color="rgba(255, 0, 85, 0.05)" />
+                  <stop offset="0%" stop-color="rgba(229, 85, 59, 0.2)" />
+                  <stop offset="100%" stop-color="rgba(229, 85, 59, 0.05)" />
                 </linearGradient>
                 <linearGradient id="grad-warn" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="rgba(239, 106, 80, 0.2)" />
@@ -1451,80 +1452,80 @@
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(237, 234, 227, 0.45)" />
                 </marker>
                 <marker id="state-arrowhead-red" viewBox="0 0 10 10" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" refX="9" refY="5" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(255, 0, 85, 0.45)" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(229, 85, 59, 0.45)" />
                 </marker>
               </defs>
 
               <!-- Link: not_indexed -> indexing -->
               <path d="M 400 90 L 400 160" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="410" y="130" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12">manage_index(create)</text>
+              <text x="410" y="130" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12">manage_index(create)</text>
 
               <!-- Link: indexing -> ready -->
               <path d="M 360 230 L 250 300" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="290" y="255" fill="rgba(0, 255, 136, 0.8)" font-family="sans-serif" font-size="12" text-anchor="end">success</text>
+              <text x="290" y="255" fill="rgba(201, 193, 178, 0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="end">success</text>
 
               <!-- Link: indexing -> failed -->
               <path d="M 440 230 L 550 300" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="510" y="255" fill="rgba(255, 0, 85, 0.8)" font-family="sans-serif" font-size="12" text-anchor="start">failure</text>
+              <text x="510" y="255" fill="rgba(229, 85, 59, 0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="start">failure</text>
 
               <!-- Link: ready -> sync_completed -->
               <path d="M 200 370 L 200 450" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="210" y="415" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12">manage_index(sync)</text>
+              <text x="210" y="415" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12">manage_index(sync)</text>
 
               <!-- Link: sync loop -->
               <path d="M 180 520 C 130 560, 50 500, 100 480" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="110" y="550" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="middle">auto-sync</text>
+              <text x="110" y="550" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">auto-sync</text>
 
               <!-- Link: ready -> requires_reindex -->
               <path d="M 300 335 L 500 450" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
-              <text x="400" y="380" fill="rgba(239, 106, 80, 0.8)" font-family="sans-serif" font-size="12" text-anchor="middle">fingerprint mismatch</text>
+              <text x="400" y="380" fill="rgba(239, 106, 80, 0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="middle">fingerprint mismatch</text>
 
               <!-- Link: sync_completed -> requires_reindex -->
               <path d="M 300 485 L 500 485" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" stroke-dasharray="4 4" />
 
               <!-- Link: requires_reindex -> indexing -->
               <path d="M 600 450 C 760 360, 760 180, 500 195" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" fill="none" marker-end="url(#state-arrowhead)" />
-              <text x="744" y="286" fill="rgba(237, 234, 227,0.6)" font-family="sans-serif" font-size="12" text-anchor="end">auto-reindex / override</text>
+              <text x="744" y="286" fill="rgba(237, 234, 227,0.6)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="end">auto-reindex / override</text>
 
               <!-- Link: clear -->
-              <path d="M 700 485 L 750 485 L 750 55 L 500 55" stroke="rgba(255, 0, 85, 0.3)" stroke-width="1.5" fill="none" marker-end="url(#state-arrowhead-red)" stroke-dasharray="2 2" />
-              <text x="740" y="45" fill="rgba(255, 0, 85, 0.8)" font-family="sans-serif" font-size="12" text-anchor="end">manage_index(clear) from any state</text>
+              <path d="M 700 485 L 750 485 L 750 55 L 500 55" stroke="rgba(229, 85, 59, 0.3)" stroke-width="1.5" fill="none" marker-end="url(#state-arrowhead-red)" stroke-dasharray="2 2" />
+              <text x="740" y="45" fill="rgba(229, 85, 59, 0.8)" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="12" text-anchor="end">manage_index(clear) from any state</text>
 
 
               <!-- Node: not_indexed -->
               <g transform="translate(300, 20)">
                 <rect width="200" height="70" rx="35" fill="url(#grad-idle)" stroke="rgba(237, 234, 227, 0.3)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">not_indexed</text>
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">not_indexed</text>
               </g>
 
               <!-- Node: indexing -->
               <g transform="translate(300, 160)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-active)" stroke="rgba(0, 170, 255, 0.5)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">indexing</text>
+                <rect width="200" height="70" rx="35" fill="url(#grad-active)" stroke="rgba(237, 234, 227, 0.7)" stroke-width="2" />
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">indexing</text>
               </g>
 
               <!-- Node: ready -->
               <g transform="translate(100, 300)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-success)" stroke="rgba(0, 255, 136, 0.5)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">ready</text>
+                <rect width="200" height="70" rx="35" fill="url(#grad-success)" stroke="rgba(201, 193, 178, 0.5)" stroke-width="2" />
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">ready</text>
               </g>
 
               <!-- Node: failed -->
               <g transform="translate(500, 300)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-error)" stroke="rgba(255, 0, 85, 0.5)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">failed</text>
+                <rect width="200" height="70" rx="35" fill="url(#grad-error)" stroke="rgba(229, 85, 59, 0.5)" stroke-width="2" />
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">failed</text>
               </g>
 
               <!-- Node: sync_completed -->
               <g transform="translate(100, 450)">
-                <rect width="200" height="70" rx="35" fill="url(#grad-success)" stroke="rgba(0, 255, 136, 0.3)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">sync_completed</text>
+                <rect width="200" height="70" rx="35" fill="url(#grad-success)" stroke="rgba(201, 193, 178, 0.3)" stroke-width="2" />
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">sync_completed</text>
               </g>
 
               <!-- Node: requires_reindex -->
               <g transform="translate(500, 450)">
                 <rect width="200" height="70" rx="35" fill="url(#grad-warn)" stroke="rgba(239, 106, 80, 0.5)" stroke-width="2" />
-                <text x="100" y="40" fill="#fff" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">requires_reindex</text>
+                <text x="100" y="40" fill="#edeae3" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle">requires_reindex</text>
               </g>
             </svg>
           </div>
@@ -1535,7 +1536,7 @@
               <small>No active Publication yet.</small>
             </div>
             <div class="arch-mobile-link"><span>manage_index(create)</span></div>
-            <div class="arch-mobile-node" data-tone="runtime">
+            <div class="arch-mobile-node" data-tone="active">
               <strong>indexing</strong>
               <small>Build the next Publication off to the side.</small>
             </div>
@@ -1561,7 +1562,7 @@
               <small>Managed offline schedules a safe rebuild; other cases require operator recovery.</small>
             </div>
             <div class="arch-mobile-link"><span>auto-reindex / operator override</span></div>
-            <div class="arch-mobile-node" data-tone="runtime">
+            <div class="arch-mobile-node" data-tone="active">
               <strong>indexing</strong>
               <small>Re-enter the build path with the new fingerprint.</small>
             </div>
@@ -1775,7 +1776,7 @@
       <footer class="footer">
         <div class="footer-col">
           <a class="footer-brand-home" href="index.html" aria-label="Satori home">
-            <img class="footer-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="39" height="40" />
+            <img class="footer-brand-logo" src="logo-mark.svg?v=2026-09-29c" alt="" aria-hidden="true" width="39" height="40" />
             <span class="footer-heading">Satori</span>
           </a>
           <p>Local repository intelligence for coding agents: retrieval, ownership, structure, relationships, freshness, and exact source.</p>

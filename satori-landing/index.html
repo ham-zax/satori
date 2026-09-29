@@ -4,11 +4,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" type="image/svg+xml" href="logo.svg?v=2026-09-29" />
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg?v=2026-09-29c" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2026-09-29c" />
   <title>Satori | Semantic Code Search for Coding Agents</title>
   <meta name="description"
-    content="Ask where behavior lives in plain English. Satori finds relevant code and owning symbols, then lets coding agents verify the result in exact source, locally through MCP." />
+    content="Free, open-source semantic code search for coding agents. Ask where behavior lives in plain English; Satori finds the owning code and exact source, locally through MCP." />
   <meta name="keywords" content="Satori, MCP server, AI coding agents, repository intelligence, semantic code search, call graph, code navigation, Codex, Claude Code, OpenCode, LanceDB" />
   <meta name="robots" content="index,follow" />
   <meta name="theme-color" content="#0b0b0c" />
@@ -48,6 +48,7 @@
       "runtimePlatform": "Node.js",
       "license": "https://spdx.org/licenses/AGPL-3.0-only.html",
       "applicationCategory": "DeveloperApplication",
+      "isAccessibleForFree": true,
       "operatingSystem": "Linux x64",
       "offers": {
         "@type": "Offer",
@@ -67,13 +68,69 @@
       }
     }
   </script>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Is it really free?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Satori is open source under AGPL-3.0 and costs nothing. There is no account, no sign-up, and no paid tier. The default offline runtime needs no model API key, so there is no usage bill either."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does my code leave my machine?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage and Milvus/Zilliz runtimes are opt-in and billed by those providers."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Will it change my repository?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Source access is read-only. Install adds nothing to AGENTS.md or hook files and never overwrites files it did not write."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does install download?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The runtime and about 100 MB of local models, once, into ~/.satori/. Your agent does not download anything again on startup."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Which languages?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Symbol navigation for TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, and Scala, plus Kotlin and PHP. Around 140 languages are searchable."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I remove it?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "satori uninstall removes client config and the shared skill. Add --purge to also delete the runtime, models, and indexes."
+      }
+    }
+  ]
+}
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
     href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="brand.css?v=2026-09-29" />
-  <link rel="stylesheet" href="home.css?v=2026-09-29" />
+  <link rel="stylesheet" href="brand.css?v=2026-09-29c" />
+  <link rel="stylesheet" href="home.css?v=2026-09-29c" />
   <script>document.documentElement.classList.add("js");</script>
 </head>
 
@@ -88,7 +145,7 @@
     <a class="skip-link" href="#main">Skip to content</a>
     <nav aria-label="Primary">
       <a class="nav-brand" href="index.html" aria-label="Satori home">
-        <span class="nav-mark" data-enso data-enso-draw="0.15"><img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="34" height="34" /></span>
+        <span class="nav-mark" data-enso data-enso-draw="0.15"><img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29c" alt="" aria-hidden="true" width="34" height="34" /></span>
         <span>Satori</span>
       </a>
       <div class="nav-links">
@@ -111,7 +168,7 @@
             <span class="line"><span class="word">Follow</span> <span class="word">the</span> <span class="word">evidence<span class="seal-dot" aria-hidden="true"></span></span></span>
           </h1>
           <p class="hero-lede" data-reveal style="--i:6">
-            Ask where behavior lives in plain English. Satori finds the owning code and hands your agent exact, current source.
+            Ask where behavior lives in plain English. Satori finds the owning code and hands your agent exact source. Free, open source, and local.
           </p>
           <div class="hero-actions" data-reveal style="--i:7">
             <a class="btn primary" href="#quickstart">Try it on a repo <span class="btn-arrow" aria-hidden="true">&rarr;</span></a>
@@ -174,7 +231,7 @@
           <li>Antigravity</li>
           <li>Any MCP client</li>
         </ul>
-        <span class="works-note">Linux x64 and WSL2. No model API key on the offline path.</span>
+        <span class="works-note">Free and open source. No account. Linux x64 and WSL2.</span>
       </div>
 
       <section class="section strata-section" id="how-it-works">
@@ -339,13 +396,44 @@
         </div>
       </section>
 
+      <section class="section free-section" id="free">
+        <h2>Free, local, read-only. No catch.</h2>
+        <p class="section-intro">The questions worth asking before you install anything that reads your code.</p>
+        <dl class="faq">
+          <div class="faq-item faq-lead" data-reveal>
+            <dt>Is it really free?</dt>
+            <dd>Yes. Satori is open source under AGPL-3.0 and costs nothing. There is no account, no sign-up, and no paid tier. The default offline runtime needs no model API key, so there is no usage bill either.</dd>
+          </div>
+          <div class="faq-item" data-reveal style="--i:1">
+            <dt>Does my code leave my machine?</dt>
+            <dd>Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage and Milvus/Zilliz runtimes are opt-in and billed by those providers.</dd>
+          </div>
+          <div class="faq-item" data-reveal style="--i:2">
+            <dt>Will it change my repository?</dt>
+            <dd>No. Source access is read-only. Install adds nothing to <code>AGENTS.md</code> or hook files and never overwrites files it did not write.</dd>
+          </div>
+          <div class="faq-item" data-reveal style="--i:0">
+            <dt>What does install download?</dt>
+            <dd>The runtime and about 100 MB of local models, once, into <code>~/.satori/</code>. Your agent does not download anything again on startup.</dd>
+          </div>
+          <div class="faq-item" data-reveal style="--i:1">
+            <dt>Which languages?</dt>
+            <dd>Symbol navigation for TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, and Scala, plus Kotlin and PHP. Around 140 languages are searchable.</dd>
+          </div>
+          <div class="faq-item" data-reveal style="--i:2">
+            <dt>How do I remove it?</dt>
+            <dd><code>satori uninstall</code> removes client config and the shared skill. Add <code>--purge</code> to also delete the runtime, models, and indexes.</dd>
+          </div>
+        </dl>
+      </section>
+
       <section class="section quickstart-section" id="quickstart">
         <div class="quickstart">
           <div class="quickstart-copy">
             <h2>Try it on one repo.</h2>
             <p>
-              The qualified Linux x64 / WSL2 path is offline after installation: local Potion embeddings, BM25 search,
-              LateOn reranking, LanceDB storage, and parser-derived code intelligence. No model API key is required.
+              Two commands to install, one sentence to your agent. It runs on Linux x64 and WSL2, fully offline after
+              installation, with no account and no API key.
             </p>
           </div>
           <div class="terminal">
@@ -355,6 +443,11 @@
             </div>
             <pre id="quick-install-code"><code>npx -y @satori-code/cli@latest install
 npx -y @satori-code/cli@latest doctor</code></pre>
+            <div class="terminal-top terminal-next">
+              <span class="terminal-title">Then restart your agent and tell it</span>
+              <button class="copy-btn" data-copy-target="quick-first-prompt" aria-label="Copy first prompt">Copy</button>
+            </div>
+            <pre id="quick-first-prompt" class="terminal-prompt"><code>Index /absolute/path/to/repo with Satori, then find where auth refresh is handled.</code></pre>
           </div>
           <ol class="steps">
             <li><h3>Index</h3><p>Create the repository Publication and wait until status is ready.</p></li>
@@ -428,7 +521,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
     <footer class="footer">
       <div class="footer-col">
         <a class="footer-brand-home" href="index.html" aria-label="Satori home">
-          <img class="footer-brand-logo" src="logo-mark.svg?v=2026-09-29" alt="" aria-hidden="true" width="40" height="40" />
+          <img class="footer-brand-logo" src="logo-mark.svg?v=2026-09-29c" alt="" aria-hidden="true" width="40" height="40" />
           <span class="footer-heading">Satori</span>
         </a>
         <p>Local repository intelligence for coding agents: search, ownership, structure, relationships, freshness, and exact source.</p>
@@ -453,8 +546,8 @@ npx -y @satori-code/cli@latest doctor</code></pre>
     </footer>
   </div>
 
-  <script src="brand.js?v=2026-09-29" defer></script>
-  <script src="home.js?v=2026-09-29" defer></script>
+  <script src="brand.js?v=2026-09-29c" defer></script>
+  <script src="home.js?v=2026-09-29c" defer></script>
 </body>
 
 </html>

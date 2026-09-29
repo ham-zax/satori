@@ -26,7 +26,7 @@ test("packed Potion runtime repairs the helper mode and returns a 256-dimensiona
 
         const { helperPath, modelPath } = resolveInstalledPotionPaths(packedRuntime.runtimeRoot);
         assert.ok(fs.existsSync(helperPath), `packed Potion helper exists at ${helperPath}`);
-        assert.ok(fs.existsSync(modelPath), `packed Potion model directory exists at ${modelPath}`);
+        assert.ok(fs.existsSync(modelPath), `workspace Potion model directory exists at ${modelPath}`);
 
         if (process.platform !== "linux" || process.arch !== "x64") {
             t.skip("packed Potion execution requires Linux x64");

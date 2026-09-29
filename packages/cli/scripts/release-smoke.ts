@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -20,8 +20,9 @@ import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // Optional native packages remain omitted; required host-native LanceDB,
 // oxc-parser, and LateOn/Sharp packages are installed explicitly and measured
-// by the gate below.
-const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 700 * 1024 * 1024;
+// by the gate below. The budget keeps ~13 MiB of headroom over the measured
+// closure (707 MiB with the CBM language extractors, Potion model not bundled).
+const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 720 * 1024 * 1024;
 
 interface PackageManifest {
     name?: unknown;
@@ -418,6 +419,31 @@ function runCliSmoke(
 }
 
 /*
+ * The smoke home has no client configured, so the packed doctor must run to
+ * completion and report exactly that one problem, exiting 1.
+ */
+function assertPackedDoctorReportsNotInstalled(
+    cliEntry: string,
+    smokeExecDir: string,
+    env: NodeJS.ProcessEnv,
+): void {
+    const result = spawnSync(process.execPath, [cliEntry, "doctor", "--json"], {
+        cwd: smokeExecDir,
+        encoding: "utf8",
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.status !== 1) {
+        throw new Error(`Packed doctor exited ${String(result.status)}; expected 1. ${result.stderr}`);
+    }
+    const report = JSON.parse(result.stdout) as { status?: unknown; checks?: Array<{ name?: unknown; status?: unknown }> };
+    const problems = (report.checks ?? []).filter((check) => check.status !== "ok");
+    if (report.status !== "error" || problems.length !== 1 || problems[0]?.name !== "managed_client_configuration") {
+        throw new Error(`Packed doctor reported unexpected problems: ${JSON.stringify(problems)}`);
+    }
+}
+
+/*
  * The packed closure is installed once above. Avoid separate npm exec
  * environments, which can hide dependency or binary collisions.
  */
@@ -573,7 +599,7 @@ async function main(): Promise<void> {
         assertPackedCliHelp(runCliSmoke(["--format", "json", "--help"], packed.cliEntry, smokeExecDir, baseEnv));
         await assertPackedPotionExecutionCapability(smokeExecDir, packed.packedMcpRoot);
         const doctorEnv = packedPotionSmokeEnv(baseEnv, packed.packedMcpRoot, smokeHomeDir);
-        runCliSmoke(["doctor"], packed.cliEntry, smokeExecDir, doctorEnv);
+        assertPackedDoctorReportsNotInstalled(packed.cliEntry, smokeExecDir, doctorEnv);
         console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, and D32 acquisition authority passed.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

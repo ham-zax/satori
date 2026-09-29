@@ -231,6 +231,12 @@ export function installPackedRuntimeClosure(
     };
 }
 
+// The package ships only the Potion helper; installs acquire the model from
+// Hugging Face. The smoke uses the workspace copy of the same pinned files.
+const WORKSPACE_POTION_MODEL_PATH = fileURLToPath(
+    new URL("../assets/potion/linux-x64/model/", import.meta.url),
+);
+
 export function resolveInstalledPotionPaths(runtimeRoot: string): {
     helperPath: string;
     modelPath: string;
@@ -246,7 +252,7 @@ export function resolveInstalledPotionPaths(runtimeRoot: string): {
     );
     return {
         helperPath: path.join(potionAssetsRoot, "satori-potion"),
-        modelPath: path.join(potionAssetsRoot, "model"),
+        modelPath: WORKSPACE_POTION_MODEL_PATH,
     };
 }
 

@@ -219,7 +219,7 @@ Upgrade the installed CLI, MCP runtime, and its compatible Core dependency:
 satori upgrade
 ```
 
-`satori update` is an exact alias for `satori upgrade`. If you do not keep the
+If you do not keep the
 CLI installed globally, run the same release flow through the latest CLI:
 
 ```bash
@@ -563,8 +563,8 @@ The default Potion embedding model (`minishlab/potion-code-16M-v2`, about
 helper. Model downloads show progress, resume after an interruption, retry
 transient failures, and replace a corrupt cached copy automatically. Set
 `HF_ENDPOINT` to use a Hugging Face mirror. `satori uninstall --purge` removes
-the model cache together with the runtime and indexes. `satori upgrade` migrates previous managed LateOn combinations to the
-v5 default atomically. Disable neural reranking explicitly with:
+the model cache together with the runtime and indexes. A managed LateOn install bound to an older profile is refused with a
+reinstall instruction; it is not migrated. Disable neural reranking explicitly with:
 
 ```bash
 satori install --runtime offline --reranker none
@@ -591,8 +591,8 @@ SATORI_LATEON_PROFILE=lateon_offline_quality_projection_v5_d32_v1
 SATORI_LATEON_ACTIVATION_POLICY=lateon_context_v5_d32_owner_default_v1
 ```
 
-Older LateOn profile IDs are recognized only for migration guidance and cannot
-execute. `satori upgrade` migrates managed installations to v5. One local
+Any other LateOn profile ID is rejected and cannot execute; reinstall the
+managed runtime to bind v5. One local
 LateOn worker serves overlapping searches through a FIFO queue instead of
 falling back merely because another search is already reranking. Cancellation,
 a genuine worker/output failure, or the hard safety ceiling restores the
@@ -688,6 +688,38 @@ Every other language in the catalog is search-only: its files are indexed for se
 - Those cold and memory measurements were not rerun after the current master's
   full-reindex V4 authority-publication change. They are retained release
   characterization, not strict proof of identical current-master performance.
+
+## Breaking changes (next major)
+
+This release removes support for every earlier on-disk format, config shape, CLI flag, environment variable, and install artifact. There is no migration and nothing is deleted for you: old state is refused with a message naming the single fix. No CHANGELOG file exists in this repository, so the notes live here.
+
+After upgrading, do both of these:
+
+1. **Reinstall** the managed runtime: `satori upgrade` (or `npx -y @satori-code/cli@latest upgrade` without a global CLI), then `satori install ...` again for your client. Restart every MCP client afterward. Managed LateOn installs must be reinstalled with `satori install --runtime offline --reranker lateon`, or with `--reranker none` to disable LateOn.
+2. **Reindex** every repository with `manage_index` `action="reindex"`. An index written by an older release is reported as `requires_reindex`; the old generation is left on disk and never parsed, migrated, or deleted.
+
+Removed, and what you will see:
+
+| Removed | What happens now |
+|---|---|
+| Publication v1, `package_ownership_v1`, `symbol_index_v3`, `relationship_v4` readers | The index is reported `requires_reindex`; `manage_index reindex` rebuilds it. Core rejects with `Unsupported Publication version at '<path>'; reindex is required.` or `Unsupported Publication package ownership schema version; reindex is required.` |
+| Persisted call evidence without `CallSite.kind` | `CallSite.kind` is now required in persisted call evidence; reindex to regenerate it. |
+| `.ts` source fallback for workers and server entry | `Satori runtime file '<path>' is missing; reinstall is required.` |
+| Shared-runtime attach protocol v1 (`launcherNonce`) | `Attach handshake protocol version is unsupported; reinstall is required.` Reinstall the launcher. |
+| `~/.context` state-directory migration | Old `~/.context` state is ignored and left in place. Reindex. |
+| Language capability import/export facade and aliases | One canonical capability set only. |
+| `satori update` alias | Not a command. Use `satori upgrade`. |
+| Legacy install cleanup (retired skill, instruction, and guidance-hook companions; old Codex hooks, env templates, AGENTS.md blocks, pre-marker skill copies; silent deletion of retired runtime env vars) | Nothing is stripped or deleted. A real directory at a skill-link path is refused: `Refusing to replace <path>: it is not managed by Satori. Remove it manually and rerun install.` |
+| LateOn historical profile and activation-policy IDs, and `satori upgrade` migration of them | CLI: `Existing managed LateOn installation uses unsupported profile <profile>. Reinstall with \`satori install --runtime offline --reranker lateon\`, or \`satori install --runtime offline --reranker none\` to disable LateOn.` MCP: `Invalid SATORI_LATEON_PROFILE '<id>'. Expected <current id>; reinstall is required.` and the same for `SATORI_LATEON_ACTIVATION_POLICY`. Existing LateOn installs must be reinstalled (the rerank request contract and runtime profile pin were regenerated). |
+| `SATORI_RERANK_APPLICATION_MODE` | `SATORI_RERANK_APPLICATION_MODE has been removed; unset it.` |
+| `OLLAMA_MODEL` | `OLLAMA_MODEL has been removed; set EMBEDDING_MODEL instead and unset OLLAMA_MODEL.` |
+| `MILVUS_ADDRESS` alone selecting Milvus | MCP: `MILVUS_ADDRESS no longer selects Milvus; set VECTOR_STORE_PROVIDER=Milvus explicitly.` CLI install: `MILVUS_ADDRESS no longer selects Milvus; pass --vector-store milvus or set VECTOR_STORE_PROVIDER=Milvus.` Voyage and Zilliz/Milvus remain fully supported. |
+| Grouped `search_codebase` result `score` field | Removed. Response order and `resultIndex.rank` are the ranking. |
+| `read_file` `open_symbol` without `contractVersion` | `contractVersion` is required whenever an exact-symbol marker is present. |
+| Index fingerprints without version fields (`legacy` sentinel) | Fingerprints must carry their version fields; reindex to regenerate them. |
+| Retired v1/v3 rerank request-contract evidence | Removed. |
+| `satori-cli` bin alias | Use `satori`, or `npx -y @satori-code/cli@latest`. |
+| `VectorDatabase` optional `lexicalMatchModes` / `defaultLexicalMatchMode`; Milvus `collection_names` fallback | Custom `VectorDatabase` implementations must provide both lexical fields. |
 
 ## Packages
 

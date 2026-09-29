@@ -59,7 +59,7 @@ does not duplicate the established lifecycle owners below.
 
 | Decision | Existing authority |
 | --- | --- |
-| Expanded release and production admission | Track B of `SATORI_OFFLINE_SEARCH_PRODUCTIZATION_AND_QUALITY_FOLLOW_UP_PLAN.md` |
+| Expanded release and production admission | Not covered here |
 | LateOn artifact, runtime, prototype, cache, and sidecar qualification | Existing Track C0--C4 |
 | Alternative first-stage embeddings or representation | Existing Track F |
 | Semantic abstention or public no-answer behavior | `SEMANTIC_ABSTENTION_QUALIFICATION_REVIEW.md` |

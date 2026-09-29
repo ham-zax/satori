@@ -69,8 +69,7 @@ publication; it does not introduce a Potion-specific storage schema.
 
 ## 2. Explicitly out of scope
 
-The following belong to
-`SATORI_OFFLINE_SEARCH_PRODUCTIZATION_AND_QUALITY_FOLLOW_UP_PLAN.md`:
+The following are out of scope:
 
 * local neural reranking;
 * Late-interaction scoring, LateOn artifacts, multi-vector caching, and sidecar

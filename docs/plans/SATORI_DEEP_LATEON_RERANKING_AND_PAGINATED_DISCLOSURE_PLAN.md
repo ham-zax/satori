@@ -128,8 +128,7 @@ sealed, and baseline `B` remains product policy. See
 That L3 terminal result applies only to the deployment profile frozen by L0. It
 does not assert that D32 is unusable on the measured host or under every product
 service class. A separate prospective operational authority may evaluate D32
-without rewriting L3; see
-`docs/plans/SATORI_OFFLINE_LATEON_OPERATIONAL_QUALIFICATION_PLAN.md`.
+without rewriting L3.
 
 Metric provenance must remain explicit. The earlier three-family diagnostic
 suite produced baseline MRR `0.3602` and owner-at-three `0.3722`. The later

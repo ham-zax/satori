@@ -58,7 +58,7 @@ satori doctor
 
 Restart the MCP client after installation.
 
-Use `satori upgrade` to update the globally installed CLI, then stage and activate that release's exact MCP and Core versions. `satori update` is an exact alias. Without a global CLI, use `npx -y @satori-code/cli@latest upgrade`. The CLI update happens first. If MCP/Core verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run the command again. Client configuration, indexes, hooks, and repository profiles are not rewritten.
+Use `satori upgrade` to update the globally installed CLI, then stage and activate that release's exact MCP and Core versions. Without a global CLI, use `npx -y @satori-code/cli@latest upgrade`. The CLI update happens first. If MCP/Core verification fails, the updated CLI remains installed and the managed launcher is left unchanged; correct the reported problem and run the command again. Client configuration, indexes, hooks, and repository profiles are not rewritten.
 
 The command reports progress before each potentially slow phase:
 

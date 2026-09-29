@@ -33,7 +33,7 @@ The managed implementation is not model-agnostic internally. The configured prov
 
 The current managed profile reranks at most 32 candidates, limits projected documents to 2,048 tokens, and caps the aggregate request at 65,792 tokens. It uses a pinned `lightonai/LateOn-Code-edge` revision with a 48-dimensional token projection. ([profile](../../packages/mcp/assets/lateon/runtime-profile-v4-d32.json))
 
-Existing repository evidence is stronger than external model-card comparisons because it measures the actual Satori task shape. The historical D-L16 run improved macro MRR from 0.3602 to 0.4011 and owner@3 from 0.3722 to 0.4944. The later D32 tuning suite reported MRR 0.5046 versus 0.2900 baseline and owner@3 0.6389 versus 0.3611, but the repository explicitly records that D32 held-out quality remains unproven. ([D-L16 receipt](../evidence/lateon-runtime-profile-20260730/LATEON_RUNTIME_PROFILE_RECEIPT.md), [D32 qualification plan](../plans/SATORI_OFFLINE_LATEON_OPERATIONAL_QUALIFICATION_PLAN.md))
+Existing repository evidence is stronger than external model-card comparisons because it measures the actual Satori task shape. The historical D-L16 run improved macro MRR from 0.3602 to 0.4011 and owner@3 from 0.3722 to 0.4944. The later D32 tuning suite reported MRR 0.5046 versus 0.2900 baseline and owner@3 0.6389 versus 0.3611, but the repository explicitly records that D32 held-out quality remains unproven. ([D-L16 receipt](../evidence/lateon-runtime-profile-20260730/LATEON_RUNTIME_PROFILE_RECEIPT.md), )
 
 ## Recommended experiment
 

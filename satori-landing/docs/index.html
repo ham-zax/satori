@@ -804,7 +804,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
           <p>
             This updates the globally installed CLI, then stages and verifies
             that release's exact MCP and Core runtime before switching the
-            stable launcher. <code>satori update</code> is an exact alias.
+            stable launcher.
             Restart running coding agents after a successful runtime upgrade.
           </p>
           <p>
@@ -1356,8 +1356,9 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
             <p>
               <code>manage_index action="reindex"</code> creates a fresh
               Publication when the current generation is absent, corrupt, or
-              incompatible with the running architecture/configuration. Satori
-              does not expose a repair action for retired authority formats.
+              incompatible with the running architecture/configuration, including
+              Publications written in a retired format. Satori never migrates or
+              repairs an old Publication; reindex is the only fix.
             </p>
             <p>
               A failed build leaves the previous complete Publication in

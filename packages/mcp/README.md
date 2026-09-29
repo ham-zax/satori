@@ -161,8 +161,7 @@ Age is not proof that source changed. Exact registry hits expose `registryBuiltA
 separately. Outline and graph freshness also include current-source hash checks;
 per-file index dates are `null` because the symbol registry does not retain them. Call edges expose `strategy` (`rule` or
 `heuristic`), existing confidence scores, and `args` source expressions when
-available. Legacy relationship records can lack arguments; newly analyzed files
-retain them. These expressions are not evaluated values or complete data flow.
+available. These expressions are not evaluated values or complete data flow.
 
 `detect_changes` compares `baseRef` (default `HEAD`) to the tracked working tree
 and returns changed files, symbol seeds, and transitive callers up to depth 3.
@@ -210,9 +209,8 @@ its results are advisory and do not establish complete impact coverage.
   unless it is cancelled, the worker genuinely fails, or the hard safety
   ceiling is exceeded. Direct runtimes enable LateOn when
   `SATORI_RERANKER_PROVIDER=lateon` and an absolute `SATORI_LATEON_MODEL_PATH`
-  are configured. Older LateOn profile IDs are recognized only for migration
-  guidance and cannot execute; `satori upgrade` migrates managed installations
-  to v5.
+  are configured. Any other LateOn profile ID is rejected and cannot execute;
+  reinstall the managed runtime to bind v5.
   `SATORI_RERANKER_PROVIDER=none` is the explicit opt-out: with Ollama embeddings
   it means the selected embedding provider plus baseline ordering, not
   "Potion + BM25". Automatic failure fallback and explicit opt-out are different

@@ -8,7 +8,6 @@ import { Context } from '../core/context';
 import { IndexingPipeline } from '../core/indexing-pipeline';
 import { JsonNavigationStore } from '../navigation/store';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
-import { IndexFormatIncompatibleError } from './errors';
 import { resolvePublicationGenerationRoot } from './publication-store';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
 
@@ -410,7 +409,7 @@ test('read admission requires reindex when the package ownership sidecar is miss
             version: 1,
             packageOwnership: { digest: 'legacy-digest' },
         }));
-        assert.throws(() => fixture.context.getCurrentPublication(root), IndexFormatIncompatibleError);
+        assert.equal(fixture.context.getCurrentPublication(root), null);
         assert.equal(
             (await fixture.context.getCurrentPublicationForValidation(root)).status,
             'requires_reindex',
@@ -452,6 +451,35 @@ test('a Publication from the previous index format is rejected as requiring rein
             await fixture.context.getCurrentPublicationForValidation(root),
             { status: 'requires_reindex' },
         );
+    } finally {
+        await fixture.context.dispose();
+        await fixture.database.close();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});
+
+test('a forced reindex replaces an incompatible current Publication and leaves the old generation on disk', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-incompatible-reindex-'));
+    const root = path.join(tempRoot, 'repo');
+    writeFile(root, 'src/main.py', 'def main():\n    return 1\n');
+    const fixture = createContext(path.join(tempRoot, 'vectors'));
+    try {
+        await fixture.context.indexCodebase(root);
+        const previous = fixture.context.getCurrentPublication(root);
+        assert.ok(previous);
+        const previousGeneration = resolvePublicationGenerationRoot(root, previous.id);
+        const descriptorPath = path.join(previousGeneration, 'publication.json');
+        const descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
+        fs.writeFileSync(descriptorPath, JSON.stringify({ ...descriptor, version: 1 }));
+        assert.equal((await fixture.context.getCurrentPublicationForValidation(root)).status, 'requires_reindex');
+
+        await fixture.context.indexCodebase(root, undefined, true);
+
+        const replacement = fixture.context.getCurrentPublication(root);
+        assert.ok(replacement);
+        assert.notEqual(replacement.id, previous.id);
+        assert.equal((await fixture.context.getCurrentPublicationForValidation(root)).status, 'valid');
+        assert.ok(fs.existsSync(descriptorPath), 'incompatible generation must be left on disk');
     } finally {
         await fixture.context.dispose();
         await fixture.database.close();

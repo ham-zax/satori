@@ -260,6 +260,15 @@ function parseCurrentPointer(value: unknown, sourcePath: string): CurrentPublica
     return { version: 1, publicationId: value.publicationId };
 }
 
+/**
+ * Selection state of a root's current Publication. An incompatible descriptor is a known
+ * "requires reindex" state: only its version is inspected, never migrated or trusted.
+ */
+export type CurrentPublicationState =
+    | { kind: 'current'; ref: PublicationRef }
+    | { kind: 'incompatible'; publicationId: PublicationId }
+    | { kind: 'missing' };
+
 export class PublicationStore {
     private readonly stateRoot: string;
     private readonly publicationsRoot: string;
@@ -429,17 +438,32 @@ export class PublicationStore {
         ));
     }
 
-    getCurrent(root: string): PublicationRef | null {
+    /** The single reader that decides whether a root's current Publication is usable. */
+    getCurrentState(root: string): CurrentPublicationState {
         const canonicalRoot = canonicalizeRoot(root);
         const pointer = this.readCurrentPointer(canonicalRoot);
-        if (!pointer) return null;
-        const current = this.getByIdCanonical(canonicalRoot, pointer.publicationId);
+        if (!pointer) return { kind: 'missing' };
+        let current: PublicationRef | null;
+        try {
+            current = this.getByIdCanonical(canonicalRoot, pointer.publicationId);
+        } catch (error) {
+            if (error instanceof IndexFormatIncompatibleError) {
+                return { kind: 'incompatible', publicationId: pointer.publicationId };
+            }
+            throw error;
+        }
         if (!current) {
             throw new Error(
                 `Current Publication '${pointer.publicationId}' for '${canonicalRoot}' is missing its descriptor.`,
             );
         }
-        return current;
+        return { kind: 'current', ref: current };
+    }
+
+    /** The usable current Publication; null when missing or incompatible (see getCurrentState). */
+    getCurrent(root: string): PublicationRef | null {
+        const state = this.getCurrentState(root);
+        return state.kind === 'current' ? state.ref : null;
     }
 
     listCurrent(): PublicationRef[] {
@@ -471,7 +495,14 @@ export class PublicationStore {
                 pointer.publicationId,
                 'publication.json',
             );
-            const publication = this.readPublication(descriptorPath);
+            let publication: Publication;
+            try {
+                publication = this.readPublication(descriptorPath);
+            } catch (error) {
+                // Incompatible roots are reported by getCurrentState, not enumerated as usable.
+                if (error instanceof IndexFormatIncompatibleError) continue;
+                throw error;
+            }
             const canonicalRoot = canonicalizeRoot(publication.canonicalRoot);
             if (
                 canonicalRoot !== publication.canonicalRoot
@@ -496,15 +527,8 @@ export class PublicationStore {
         // Pointer resolution and the ID-keyed pin are deliberately one synchronous
         // operation. Retirement reservation is synchronous in this owner too, so a
         // candidate cannot become reclaimable between selection and pinning.
-        const pointer = this.readCurrentPointer(canonicalRoot);
-        if (!pointer) return null;
-        const current = this.getByIdCanonical(canonicalRoot, pointer.publicationId);
-        if (!current) {
-            throw new Error(
-                `Current Publication '${pointer.publicationId}' for '${canonicalRoot}' is missing its descriptor.`,
-            );
-        }
-        return this.acquireRef(canonicalRoot, current);
+        const state = this.getCurrentState(canonicalRoot);
+        return state.kind === 'current' ? this.acquireRef(canonicalRoot, state.ref) : null;
     }
 
     acquireRead(root: string, id: PublicationId): PublicationLease | null {
@@ -933,7 +957,15 @@ export class PublicationStore {
                 current.publicationId,
                 'publication.json',
             );
-            const publication = this.readPublication(descriptorPath);
+            let publication: Publication;
+            try {
+                publication = this.readPublication(descriptorPath);
+            } catch (error) {
+                // An incompatible descriptor does not expose a root identity we may trust, so cold-start
+                // cleanup skips this root entirely and leaves its state for reindex.
+                if (error instanceof IndexFormatIncompatibleError) return null;
+                throw error;
+            }
             if (publication.id !== current.publicationId) {
                 throw new Error(`Current Publication '${current.publicationId}' does not match its descriptor.`);
             }
@@ -1011,7 +1043,14 @@ export class PublicationStore {
                 throw new Error(`Publication state contains unsupported generation entry '${path.join(generationsRoot, entry.name)}'.`);
             }
             assertPublicationId(entry.name);
-            const ref = this.getByIdCanonical(canonicalRoot, entry.name);
+            let ref: PublicationRef | null;
+            try {
+                ref = this.getByIdCanonical(canonicalRoot, entry.name);
+            } catch (error) {
+                // Incompatible generations are left on disk and excluded from retention decisions.
+                if (error instanceof IndexFormatIncompatibleError) continue;
+                throw error;
+            }
             if (ref) publications.push(ref);
         }
         return publications.sort((left, right) => left.id.localeCompare(right.id));

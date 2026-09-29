@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +88,33 @@ test('opted-in workspace indexing starts after handshake without blocking tools/
     assert.equal((await client.listTools()).tools.length, Object.keys(toolRegistry).length);
     assert.equal(host.getActivity().operations, 1);
     finish();
+});
+
+test("runtime host starts when a tracked root has an incompatible current Publication", async (t) => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-incompatible-startup-"));
+    const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-incompatible-repo-")));
+    // Publication layout owned by core: <state>/publications/<sha256(root)>/generations/<id>.
+    const publicationRoot = path.join(stateRoot, "publications", crypto.createHash("sha256").update(repo).digest("hex"));
+    const generationRoot = path.join(publicationRoot, "generations", "legacy-publication");
+    fs.mkdirSync(generationRoot, { recursive: true });
+    fs.writeFileSync(
+        path.join(generationRoot, "publication.json"),
+        JSON.stringify({ version: 1, id: "legacy-publication", canonicalRoot: repo }),
+    );
+    fs.writeFileSync(
+        path.join(publicationRoot, "current.json"),
+        JSON.stringify({ version: 1, publicationId: "legacy-publication" }),
+    );
+    const runtimeConfig: ContextMcpConfig = { ...config(), stateRoot };
+    t.after(() => {
+        fs.rmSync(stateRoot, { recursive: true, force: true });
+        fs.rmSync(repo, { recursive: true, force: true });
+    });
+
+    const host = new SharedRuntimeHost(runtimeConfig, buildRuntimeIndexFingerprint(runtimeConfig, 1024), "cli");
+    await host.shutdown();
+
+    assert.ok(fs.existsSync(path.join(generationRoot, "publication.json")));
 });
 
 test("one runtime host serves independent MCP sessions over separate transports", async (t) => {

@@ -25,6 +25,7 @@ import {
     parsePublicationPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
+import { IndexFormatIncompatibleError } from './errors';
 import {
     INDEX_CANDIDATE_RECEIPT_VERSION,
     parseIndexCandidateReceipt,
@@ -175,9 +176,11 @@ function parseStringArray(value: unknown, field: string): readonly string[] {
 }
 
 function parsePublication(value: unknown, sourcePath: string): Publication {
-    // Version 1 recorded package ownership as a digest object (or omitted it).
-    if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
+    if (!isRecord(value)) {
         throw new Error(`Unsupported Publication format at '${sourcePath}'.`);
+    }
+    if (value.version !== 2) {
+        throw new IndexFormatIncompatibleError(`Unsupported Publication version at '${sourcePath}'`);
     }
     if (
         typeof value.id !== 'string'
@@ -199,7 +202,7 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
         || typeof value.vector.totalChunks !== 'number'
         || !Number.isSafeInteger(value.vector.totalChunks)
         || value.vector.totalChunks < 0
-        || (value.version === 2 && typeof value.packageOwnership !== 'boolean')
+        || typeof value.packageOwnership !== 'boolean'
         || (value.status === 'complete' && (
             !isRecord(value.navigation)
             || value.navigation.relativeRoot !== 'navigation'
@@ -237,9 +240,7 @@ function parsePublication(value: unknown, sourcePath: string): Publication {
             indexedFiles: Number(value.vector.indexedFiles),
             totalChunks: Number(value.vector.totalChunks),
         }),
-        packageOwnership: value.version === 2
-            ? value.packageOwnership as boolean
-            : isRecord(value.packageOwnership),
+        packageOwnership: value.packageOwnership,
         navigation: value.navigation === null
             ? null
             : Object.freeze({ relativeRoot: 'navigation' as const }),

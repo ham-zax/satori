@@ -19,10 +19,7 @@ export type LanguageCapability =
     | 'search'
     | 'astSplitter'
     | 'symbols'
-    | 'symbolMetadata'
     | 'owner'
-    | 'imports'
-    | 'callGraph'
     | 'callGraphBuild'
     | 'callGraphQuery'
     | 'fileOutline'
@@ -32,10 +29,7 @@ export interface LanguageAdapterCapabilities {
     search: boolean;
     astSplitter: boolean;
     symbols: boolean;
-    symbolMetadata: boolean;
     owner: boolean;
-    imports: boolean;
-    callGraph: boolean;
     callGraphBuild: boolean;
     callGraphQuery: boolean;
     fileOutline: boolean;
@@ -65,10 +59,7 @@ function toAdapterCapabilities(declaration: LanguageCapabilityDeclaration): Lang
         search: isEnabled(declaration.searchEligibility),
         astSplitter: isProductionReady(declaration.parserCapability),
         symbols: symbolReady,
-        symbolMetadata: symbolReady,
         owner: isProductionReady(declaration.ownerExtractionCapability),
-        imports: isProductionReady(declaration.importExportCapability),
-        callGraph: callsReady,
         callGraphBuild: callsReady,
         callGraphQuery: callsReady,
         fileOutline: symbolReady,

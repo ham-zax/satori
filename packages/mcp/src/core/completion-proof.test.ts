@@ -19,17 +19,25 @@ function publication(version: number) {
     };
 }
 
-test("completion proof accepts the publication versions PublicationStore writes and reads", async () => {
-    for (const version of [1, 2]) {
-        const result = await validateCompletionProof({
+test("completion proof accepts only the current publication version", async () => {
+    const current = await validateCompletionProof({
+        codebasePath: "/repo",
+        getCurrentPublication: async () => ({ status: "valid", publication: publication(2), navigationStatus: "valid" }),
+    });
+    assert.equal(current.outcome, "valid");
+    for (const version of [1, 3]) {
+        const rejected = await validateCompletionProof({
             codebasePath: "/repo",
             getCurrentPublication: async () => ({ status: "valid", publication: publication(version), navigationStatus: "valid" }),
         });
-        assert.equal(result.outcome, "valid", `version ${version}`);
+        assert.deepEqual(rejected, { outcome: "stale_local", reason: "invalid_payload" }, `version ${version}`);
     }
-    const unknown = await validateCompletionProof({
+});
+
+test("completion proof maps a core requires_reindex status to stale_local", async () => {
+    const result = await validateCompletionProof({
         codebasePath: "/repo",
-        getCurrentPublication: async () => ({ status: "valid", publication: publication(3), navigationStatus: "valid" }),
+        getCurrentPublication: async () => ({ status: "requires_reindex" }),
     });
-    assert.deepEqual(unknown, { outcome: "stale_local", reason: "invalid_payload" });
+    assert.deepEqual(result, { outcome: "stale_local", reason: "requires_reindex" });
 });

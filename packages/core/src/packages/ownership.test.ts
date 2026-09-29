@@ -9,6 +9,7 @@ import {
     discoverPackageOwnership,
     parsePublicationPackageOwnership,
 } from './ownership';
+import { IndexFormatIncompatibleError } from '../generation/errors';
 
 function createRepo(): { root: string; cleanup: () => void } {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-package-ownership-'));
@@ -276,7 +277,7 @@ test('package.json workspaces persist both the root package and child packages',
 test('ownership parser rejects incoherent workspace/package semantics', () => {
     const hash = 'a'.repeat(64);
     const base = {
-        schemaVersion: 'package_ownership_v1',
+        schemaVersion: 'package_ownership_v2',
         canonicalRoot: '/repo',
         workspace: {
             kind: 'pnpm',
@@ -284,6 +285,7 @@ test('ownership parser rejects incoherent workspace/package semantics', () => {
             manifestPath: 'pnpm-workspace.yaml',
             patterns: ['packages/*'],
         },
+        cargoWorkspaces: [],
         packages: [
             {
                 ecosystem: 'node',
@@ -311,6 +313,11 @@ test('ownership parser rejects incoherent workspace/package semantics', () => {
     };
 
     assert.doesNotThrow(() => parsePublicationPackageOwnership(JSON.stringify(base), '/repo'));
+
+    assert.throws(
+        () => parsePublicationPackageOwnership(JSON.stringify({ ...base, schemaVersion: 'package_ownership_v1' }), '/repo'),
+        IndexFormatIncompatibleError,
+    );
 
     const wrongWorkspaceManifest = structuredClone(base);
     wrongWorkspaceManifest.workspace.manifestPath = 'package.json';

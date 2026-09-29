@@ -1,18 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+/** A runtime artifact (built worker/entry file) is absent; the only fix is reinstalling the package. */
+export class RuntimeArtifactMissingError extends Error {
+    readonly remediation = 'reinstall' as const;
+
+    constructor(artifactPath: string) {
+        super(`Satori runtime file '${artifactPath}' is missing; reinstall is required.`);
+        this.name = 'RuntimeArtifactMissingError';
+    }
+}
+
 /**
- * Resolves a worker entry next to its caller: the compiled `.js` in dist, or the
- * `.ts` source when running under a TypeScript loader.
+ * Resolves a worker entry next to its caller with the caller's own extension:
+ * compiled `.js` in dist, or `.ts` when the caller itself runs from source under a loader.
  */
 export function resolveWorkerScriptPath(callerFilename: string, baseName: string): string {
-    const dir = path.dirname(callerFilename);
-    const candidateTs = path.resolve(dir, `${baseName}.ts`);
-    const candidateJs = path.resolve(dir, `${baseName}.js`);
-    const isTs = callerFilename.endsWith('.ts') || !fs.existsSync(candidateJs);
-    if (isTs && fs.existsSync(candidateTs)) return candidateTs;
-    if (fs.existsSync(candidateJs)) return candidateJs;
-    return candidateTs;
+    const scriptPath = path.resolve(path.dirname(callerFilename), `${baseName}${path.extname(callerFilename)}`);
+    if (!fs.existsSync(scriptPath)) throw new RuntimeArtifactMissingError(scriptPath);
+    return scriptPath;
 }
 
 /** Loader flags (e.g. `--import tsx`) a worker needs to run the same sources as its parent. */

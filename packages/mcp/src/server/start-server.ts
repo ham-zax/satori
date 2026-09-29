@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
     createMcpConfig,
@@ -22,36 +19,6 @@ export interface StartMcpServerOptions {
     protocolStdin?: Readable;
     protocolStdout?: Writable;
     args?: string[];
-}
-
-function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function migrateLegacyStateDir(): void {
-    const homeDir = os.homedir();
-    const legacyDir = path.join(homeDir, ".context");
-    const newDir = path.join(homeDir, ".satori");
-
-    if (fs.existsSync(newDir) || !fs.existsSync(legacyDir)) {
-        return;
-    }
-
-    try {
-        fs.renameSync(legacyDir, newDir);
-        console.log(`[MIGRATION] Moved legacy state directory '${legacyDir}' -> '${newDir}'`);
-        return;
-    } catch {
-        // Fallback for cross-device moves: copy then remove.
-    }
-
-    try {
-        fs.cpSync(legacyDir, newDir, { recursive: true, force: false, errorOnExist: true });
-        fs.rmSync(legacyDir, { recursive: true, force: true });
-        console.log(`[MIGRATION] Copied legacy state directory '${legacyDir}' -> '${newDir}' and removed source`);
-    } catch (copyError) {
-        console.error(`[MIGRATION] Failed to migrate '${legacyDir}' -> '${newDir}':`, errorMessage(copyError));
-    }
 }
 
 export class ContextMcpServer {
@@ -108,8 +75,6 @@ export async function startMcpServerFromEnv(options: StartMcpServerOptions = {})
         showHelpMessage();
         return null;
     }
-
-    migrateLegacyStateDir();
 
     const parsedConfig = createMcpConfig();
     const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(

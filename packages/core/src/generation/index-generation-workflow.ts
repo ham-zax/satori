@@ -1265,25 +1265,25 @@ export class IndexGenerationWorkflow {
             !semanticRegistry.isAuxiliaryPath(filePath)
             && !publicationSourceControls.has(filePath)
         );
-        // Older Publications indexed auxiliaries with supported extensions (e.g. Cargo.toml).
-        // Remove those documents even when the source file itself has not changed.
         const existingSearchablePaths = new Set(
             existingRegistry.manifest.files.map((file) => file.path),
         );
         const newlySearchablePaths = [...input.preparedChanges.fileHashes.keys()]
             .filter((filePath) => isSearchable(filePath) && !existingSearchablePaths.has(filePath));
-        const legacyAuxiliaryPaths = existingRegistry.manifest.files
+        // Package-membership transitions can turn an indexed file into a control/auxiliary
+        // path without editing it; its existing documents must be removed.
+        const noLongerSearchablePaths = existingRegistry.manifest.files
             .filter((file) => !isSearchable(file.path))
             .map((file) => file.path);
         const searchableChangedFiles = Array.from(new Set([
             ...changedFiles.filter(isSearchable),
             ...newlySearchablePaths,
-            ...legacyAuxiliaryPaths,
+            ...noLongerSearchablePaths,
         ]));
         const navigationChangedFiles = Array.from(new Set([
             ...changedFiles,
             ...newlySearchablePaths,
-            ...legacyAuxiliaryPaths,
+            ...noLongerSearchablePaths,
         ]));
         const publicationId = mutationLease.operationId;
         const candidateCollectionName = this.ports.resolvePublicationCollectionName(input.codebasePath, publicationId);
@@ -1691,18 +1691,10 @@ export class IndexGenerationWorkflow {
         }
         const { added, removed, modified } = preparedChanges.changes;
         const totalChanges = added.length + removed.length + modified.length;
-        const semanticRegistry = this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
         const resolutionControlSet = new Set(resolutionSourceControls);
         const packageOwnershipControlSet = new Set(packageOwnershipSourceControls);
-        const publicationControlSet = new Set(publicationSourceControls);
-        const searchableFileCount = [...preparedChanges.fileHashes.keys()]
-            .filter((filePath) => !semanticRegistry.isAuxiliaryPath(filePath) && !publicationControlSet.has(filePath)).length;
 
-        // A quiet tree can still need to shed legacy searchable auxiliary documents.
-        if (totalChanges === 0 && (
-            currentPublicationSource.ref.publication.status !== 'complete'
-            || currentPublicationSource.ref.publication.vector.indexedFiles === searchableFileCount
-        )) {
+        if (totalChanges === 0) {
             options.assertMutationCurrent?.();
             await preparedChanges.commit(options.assertMutationCurrent);
             progressCallback?.({ phase: 'No changes detected', current: 100, total: 100, percentage: 100 });

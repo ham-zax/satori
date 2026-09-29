@@ -134,7 +134,7 @@ export function isEligibleCallTarget(call: CallSite, symbol: SymbolRecord): bool
     return false;
 }
 
-export function ownerForCall(fileSymbols: readonly SymbolRecord[], call: CallSite): SymbolRecord | undefined {
+export function ownerForCall(fileSymbols: readonly SymbolRecord[], call: Pick<CallSite, 'span'>): SymbolRecord | undefined {
     const lineCandidates = fileSymbols.filter((symbol) => (
         isSourceOwner(symbol)
         && symbol.span.startLine <= call.span.startLine
@@ -437,7 +437,7 @@ function pythonImportBindingVisibleToSource(input: {
 }): boolean {
     const bindingOwner = ownerForCall(
         input.registry.symbolsByFile.get(input.source.file) ?? [],
-        { calleeName: '', span: input.binding.span },
+        { span: input.binding.span },
     );
     if (!bindingOwner) return true;
     return bindingOwner.symbolInstanceId === input.source.symbolInstanceId
@@ -510,7 +510,7 @@ function sameModulePythonConstructorShadowed(input: {
         ) {
             continue;
         }
-        const owner = ownerForCall(fileSymbols, { calleeName: '', span: binding.span });
+        const owner = ownerForCall(fileSymbols, { span: binding.span });
         if (owner?.symbolInstanceId !== input.source.symbolInstanceId) {
             continue;
         }
@@ -747,7 +747,7 @@ function resolvePythonMemberTarget(input: {
         if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(receiver)) {
             const scopedBindings = (input.evidence.receiverTypeBindings ?? []).filter((binding) => (
                 binding.localName === receiver
-                && ownerForCall(fileSymbols, { calleeName: '', span: binding.span })?.symbolInstanceId
+                && ownerForCall(fileSymbols, { span: binding.span })?.symbolInstanceId
                     === input.source.symbolInstanceId
             ));
             const annotatedTypes = new Set(
@@ -792,7 +792,7 @@ function resolvePythonMemberTarget(input: {
             if (!sourceClass) return undefined;
             const fieldBindings = (input.evidence.receiverTypeBindings ?? []).filter((binding) => {
                 if (binding.kind !== 'self_field_constructor' || binding.localName !== receiver) return false;
-                const bindingOwner = ownerForCall(fileSymbols, { calleeName: '', span: binding.span });
+                const bindingOwner = ownerForCall(fileSymbols, { span: binding.span });
                 return bindingOwner?.kind === 'method'
                     && bindingOwner.name === '__init__'
                     && enclosingClassForSymbol(bindingOwner, input.classesByFile)?.symbolInstanceId
@@ -1440,7 +1440,7 @@ function pythonParameterBinding(
         && binding.localName === parameterName
         && ownerForCall(
             context.registry.symbolsByFile.get(file) ?? [],
-            { calleeName: '', span: binding.span },
+            { span: binding.span },
         )?.symbolInstanceId === owner.symbolInstanceId
     ));
     const typeNames = new Set(matches.map((binding) => binding.typeName));
@@ -1761,7 +1761,7 @@ function resolvePythonServiceMemberTarget(input: {
         && binding.localName === rootReceiver
         && ownerForCall(
             input.context.registry.symbolsByFile.get(input.source.file) ?? [],
-            { calleeName: '', span: binding.span },
+            { span: binding.span },
         )?.symbolInstanceId === input.source.symbolInstanceId
     ));
     const typeNames = [...new Set(parameterBindings.map((binding) => binding.typeName))];
@@ -2016,7 +2016,7 @@ function resolvePythonOriginMemberTarget(input: {
             && binding.localName === receiverName
             && ownerForCall(
                 input.context.registry.symbolsByFile.get(input.source.file) ?? [],
-                { calleeName: '', span: binding.span },
+                { span: binding.span },
             )?.symbolInstanceId === input.source.symbolInstanceId
         ));
         if (directParameterBinding) return undefined;
@@ -2162,7 +2162,7 @@ function pythonFallbackProofSteps(input: {
                 binding.localName === receiver
                 && ownerForCall(
                     fileSymbols,
-                    { calleeName: '', span: binding.span },
+                    { span: binding.span },
                 )?.symbolInstanceId === input.source.symbolInstanceId
             ));
             if (scopedBindings.length > 0) {

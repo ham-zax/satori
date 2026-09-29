@@ -8,6 +8,7 @@ import { Context } from '../core/context';
 import { IndexingPipeline } from '../core/indexing-pipeline';
 import { JsonNavigationStore } from '../navigation/store';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
+import { IndexFormatIncompatibleError } from './errors';
 import { resolvePublicationGenerationRoot } from './publication-store';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
 
@@ -401,7 +402,7 @@ test('read admission requires reindex when the package ownership sidecar is miss
             'valid',
         );
 
-        // Descriptors written before format v2 recorded ownership as a digest object.
+        // Descriptors written before format v2 are rejected, never read.
         const descriptorPath = path.join(resolvePublicationGenerationRoot(root, current.id), 'publication.json');
         const descriptor = JSON.parse(fs.readFileSync(descriptorPath, 'utf8'));
         fs.writeFileSync(descriptorPath, JSON.stringify({
@@ -409,10 +410,10 @@ test('read admission requires reindex when the package ownership sidecar is miss
             version: 1,
             packageOwnership: { digest: 'legacy-digest' },
         }));
-        assert.equal(fixture.context.getCurrentPublication(root)?.publication.packageOwnership, true);
+        assert.throws(() => fixture.context.getCurrentPublication(root), IndexFormatIncompatibleError);
         assert.equal(
             (await fixture.context.getCurrentPublicationForValidation(root)).status,
-            'valid',
+            'requires_reindex',
         );
     } finally {
         await fixture.context.dispose();

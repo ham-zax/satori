@@ -7,7 +7,6 @@ export type CapabilityStatus =
 export type PublicLanguageClaim =
     | 'search_only'
     | 'symbol_only'
-    | 'imports_exports'
     | 'calls_v0'
     | 'type_receiver_aware';
 
@@ -18,7 +17,6 @@ export interface LanguageCapabilityFixtures {
     readonly ownerMetadata?: readonly string[];
     readonly fileOutline?: readonly string[];
     readonly readFileOpenSymbol?: readonly string[];
-    readonly importsExports?: readonly string[];
     readonly calls?: readonly string[];
     readonly typeReceiverAware?: readonly string[];
 }
@@ -32,7 +30,6 @@ export interface LanguageCapabilityDeclaration {
     readonly parserCapability: CapabilityStatus;
     readonly symbolExtractionCapability: CapabilityStatus;
     readonly ownerExtractionCapability: CapabilityStatus;
-    readonly importExportCapability: CapabilityStatus;
     readonly callsCapability: CapabilityStatus;
     readonly typeReceiverAwareCapability: CapabilityStatus;
     readonly testReferenceCapability: CapabilityStatus;

@@ -5,3 +5,13 @@ export class AtomicIncrementalPublicationUnsupportedError extends Error {
         this.name = 'AtomicIncrementalPublicationUnsupportedError';
     }
 }
+
+/** On-disk index data was written by another format version; the only fix is a fresh index. */
+export class IndexFormatIncompatibleError extends Error {
+    readonly remediation = 'reindex' as const;
+
+    constructor(detail: string) {
+        super(`${detail}; reindex is required.`);
+        this.name = 'IndexFormatIncompatibleError';
+    }
+}

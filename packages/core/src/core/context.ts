@@ -97,6 +97,7 @@ export type {
     PublicationRef,
 } from '../generation/contracts';
 export { AtomicIncrementalPublicationUnsupportedError } from '../generation/errors';
+import { IndexFormatIncompatibleError } from '../generation/errors';
 import {
     EMBEDDING_PROJECTION_VERSION,
     LEXICAL_PROJECTION_VERSION,
@@ -1193,7 +1194,13 @@ export class Context {
     /** Lightweight current-selection validation. Ordinary reads acquire their own lease separately. */
     async getCurrentPublicationForValidation(codebasePath: string): Promise<PublicationValidationEvidence> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const publication = this.publicationStore.getCurrent(canonicalRoot);
+        let publication: PublicationRef | null;
+        try {
+            publication = this.publicationStore.getCurrent(canonicalRoot);
+        } catch (error) {
+            if (error instanceof IndexFormatIncompatibleError) return { status: 'requires_reindex' };
+            throw error;
+        }
         if (!publication) return { status: 'missing' };
         if (
             !this.isPublicationFormatCurrent(publication.publication)

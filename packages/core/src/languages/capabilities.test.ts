@@ -60,21 +60,12 @@ function assertPublicClaimConsistent(declaration: LanguageCapabilityDeclaration)
             assert.equal(productionReady(declaration.searchEligibility), true, declaration.languageId);
             assert.equal(enabled(declaration.symbolExtractionCapability), false, declaration.languageId);
             assert.equal(enabled(declaration.ownerExtractionCapability), false, declaration.languageId);
-            assert.equal(enabled(declaration.importExportCapability), false, declaration.languageId);
             assert.equal(enabled(declaration.callsCapability), false, declaration.languageId);
             assert.equal(enabled(declaration.typeReceiverAwareCapability), false, declaration.languageId);
         },
         symbol_only: () => {
             assert.equal(productionReady(declaration.symbolExtractionCapability), true, declaration.languageId);
             assert.equal(productionReady(declaration.ownerExtractionCapability), true, declaration.languageId);
-            assert.equal(enabled(declaration.importExportCapability), false, declaration.languageId);
-            assert.equal(enabled(declaration.callsCapability), false, declaration.languageId);
-            assert.equal(enabled(declaration.typeReceiverAwareCapability), false, declaration.languageId);
-        },
-        imports_exports: () => {
-            assert.equal(productionReady(declaration.symbolExtractionCapability), true, declaration.languageId);
-            assert.equal(productionReady(declaration.ownerExtractionCapability), true, declaration.languageId);
-            assert.equal(productionReady(declaration.importExportCapability), true, declaration.languageId);
             assert.equal(enabled(declaration.callsCapability), false, declaration.languageId);
             assert.equal(enabled(declaration.typeReceiverAwareCapability), false, declaration.languageId);
         },
@@ -264,14 +255,6 @@ test('tiered catalog counts are computed from the Satori matrix', () => {
     assert.ok(counts.recognizedRoutedLanguages > counts.symbolOnlyLanguages);
     assert.equal(counts.symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.length - CBM_CALLS_LANGUAGE_IDS.length);
     assert.ok(counts.callGraphLanguages > 0);
-});
-
-test('legacy imports facade remains separate from relationship-sidecar TS/JS import/export extraction', () => {
-    const typescript = getLanguageCapabilityDeclaration('typescript');
-    const javascript = getLanguageCapabilityDeclaration('javascript');
-
-    assert.equal(typescript?.importExportCapability, 'none');
-    assert.equal(javascript?.importExportCapability, 'none');
 });
 
 test('CBM symbol languages are exactly the manifest languages that pass the parity evidence', () => {

@@ -772,7 +772,7 @@ async function createRawWorkerClient(helperPath: string, modelPath: string): Pro
     };
 }
 
-test('pinned L1 helper satisfies legacy single-encode vs native batch-encode parity and failure classification via raw worker protocol', {
+test('pinned L1 helper satisfies single-encode vs batch-encode parity and failure classification via raw worker protocol', {
     skip: !realHelperPath || !realModelPath,
 }, async (t) => {
     const rawWorker = await createRawWorkerClient(realHelperPath as string, realModelPath as string);

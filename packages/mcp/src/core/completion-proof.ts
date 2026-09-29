@@ -58,8 +58,7 @@ function parsePublicationRef(value: unknown): PublicationRef | null {
     const navigation = publication.navigation;
     if (
         publication.id !== value.id
-        // Mirrors PublicationStore, which reads v1 and writes v2 (package ownership).
-        || (publication.version !== 1 && publication.version !== 2)
+        || publication.version !== 2
         || typeof publication.canonicalRoot !== "string"
         || typeof publication.createdAt !== "string"
         || (publication.status !== "complete" && publication.status !== "partial")

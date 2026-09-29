@@ -34,8 +34,6 @@ function milvusSdk(): typeof MilvusSdk {
 
 type MilvusCollectionListPayload = {
     data?: Array<{ name?: unknown; timestamp?: unknown }>;
-    collection_names?: unknown;
-    collections?: unknown;
 };
 
 // Zilliz serverless collection removal can legitimately take substantially
@@ -759,38 +757,30 @@ export class MilvusVectorDatabase implements VectorDatabase {
         const result = await this.client.showCollections();
         const payload = result as unknown as MilvusCollectionListPayload;
 
-        if (Array.isArray(payload?.data)) {
-            return payload.data
-                .map((entry) => {
-                    const name = stringValue(entry.name);
-                    const rawTimestamp = entry.timestamp;
-                    let createdAt: string | undefined;
+        if (!Array.isArray(payload?.data)) {
+            throw new Error('Milvus showCollections returned an unexpected response shape (missing data array).');
+        }
 
-                    if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== '') {
-                        try {
-                            const unixSeconds = Number(milvusSdk().hybridtsToUnixtime(String(rawTimestamp)));
-                            if (Number.isFinite(unixSeconds) && unixSeconds > 0) {
-                                createdAt = new Date(unixSeconds * 1000).toISOString();
-                            }
-                        } catch {
-                            // Best-effort only; keep createdAt undefined when timestamp parsing fails.
+        return payload.data
+            .map((entry) => {
+                const name = stringValue(entry.name);
+                const rawTimestamp = entry.timestamp;
+                let createdAt: string | undefined;
+
+                if (rawTimestamp !== null && rawTimestamp !== undefined && rawTimestamp !== '') {
+                    try {
+                        const unixSeconds = Number(milvusSdk().hybridtsToUnixtime(String(rawTimestamp)));
+                        if (Number.isFinite(unixSeconds) && unixSeconds > 0) {
+                            createdAt = new Date(unixSeconds * 1000).toISOString();
                         }
+                    } catch {
+                        // Best-effort only; keep createdAt undefined when timestamp parsing fails.
                     }
+                }
 
-                    return { name, createdAt };
-                })
-                .filter((entry: CollectionDetails) => entry.name.length > 0);
-        }
-
-        // Legacy response fallback
-        const collections = payload?.collection_names || payload?.collections || [];
-        if (!Array.isArray(collections)) {
-            return [];
-        }
-
-        return collections
-            .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0)
-            .map((name) => ({ name }));
+                return { name, createdAt };
+            })
+            .filter((entry: CollectionDetails) => entry.name.length > 0);
     }
 
     getBackendInfo(): VectorStoreBackendInfo {

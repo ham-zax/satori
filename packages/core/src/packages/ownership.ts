@@ -2,11 +2,11 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { IndexFormatIncompatibleError } from '../generation/errors';
 import { validateRepositoryRelativePath } from '../paths/repository-path';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 
 export const PACKAGE_OWNERSHIP_SCHEMA_VERSION = 'package_ownership_v2';
-const LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION = 'package_ownership_v1';
 
 export type PackageWorkspaceKind = 'pnpm' | 'package_json';
 
@@ -38,10 +38,10 @@ export interface PackageFileOwnership {
 }
 
 export interface PublicationPackageOwnership {
-    readonly schemaVersion: typeof PACKAGE_OWNERSHIP_SCHEMA_VERSION | typeof LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION;
+    readonly schemaVersion: typeof PACKAGE_OWNERSHIP_SCHEMA_VERSION;
     readonly canonicalRoot: string;
     readonly workspace: PackageWorkspaceRecord | null;
-    readonly cargoWorkspaces?: readonly CargoWorkspaceRecord[];
+    readonly cargoWorkspaces: readonly CargoWorkspaceRecord[];
     readonly packages: readonly PackageOwnershipPackage[];
     readonly files: readonly PackageFileOwnership[];
     readonly controlFiles: readonly (readonly [string, string])[];
@@ -665,52 +665,47 @@ export function parsePublicationPackageOwnership(
     expectedCanonicalRoot: string,
 ): PublicationPackageOwnership {
     const parsed: unknown = JSON.parse(data);
+    if (isRecord(parsed) && parsed.schemaVersion !== PACKAGE_OWNERSHIP_SCHEMA_VERSION) {
+        throw new IndexFormatIncompatibleError('Unsupported Publication package ownership schema version');
+    }
     if (
         !isRecord(parsed)
-        || (parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION
-            ? !hasExactKeys(parsed, ['schemaVersion', 'canonicalRoot', 'workspace', 'cargoWorkspaces', 'packages', 'files', 'controlFiles'])
-            : !hasExactKeys(parsed, ['schemaVersion', 'canonicalRoot', 'workspace', 'packages', 'files', 'controlFiles']))
-        || (parsed.schemaVersion !== PACKAGE_OWNERSHIP_SCHEMA_VERSION
-            && parsed.schemaVersion !== LEGACY_PACKAGE_OWNERSHIP_SCHEMA_VERSION)
+        || !hasExactKeys(parsed, ['schemaVersion', 'canonicalRoot', 'workspace', 'cargoWorkspaces', 'packages', 'files', 'controlFiles'])
         || parsed.canonicalRoot !== expectedCanonicalRoot
         || !Array.isArray(parsed.packages)
         || !Array.isArray(parsed.files)
         || !Array.isArray(parsed.controlFiles)
+        || !Array.isArray(parsed.cargoWorkspaces)
     ) {
         throw new Error('Invalid or unsupported Publication package ownership snapshot.');
     }
 
     const cargoWorkspaces: CargoWorkspaceRecord[] = [];
-    if (parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION) {
-        if (!Array.isArray(parsed.cargoWorkspaces)) {
-            throw new Error('Invalid Publication Cargo workspaces.');
+    const seenCargoRoots = new Set<string>();
+    for (const entry of parsed.cargoWorkspaces) {
+        if (!isRecord(entry)
+            || !hasExactKeys(entry, ['kind', 'root', 'manifestPath', 'patterns'])
+            || entry.kind !== 'cargo'
+            || typeof entry.manifestPath !== 'string'
+            || !Array.isArray(entry.patterns)
+            || entry.patterns.some((pattern) => typeof pattern !== 'string')) {
+            throw new Error('Invalid Publication Cargo workspace record.');
         }
-        const seenCargoRoots = new Set<string>();
-        for (const entry of parsed.cargoWorkspaces) {
-            if (!isRecord(entry)
-                || !hasExactKeys(entry, ['kind', 'root', 'manifestPath', 'patterns'])
-                || entry.kind !== 'cargo'
-                || typeof entry.manifestPath !== 'string'
-                || !Array.isArray(entry.patterns)
-                || entry.patterns.some((pattern) => typeof pattern !== 'string')) {
-                throw new Error('Invalid Publication Cargo workspace record.');
-            }
-            const root = validatePackageRoot(entry.root);
-            if (root === null || seenCargoRoots.has(root)) {
-                throw new Error('Invalid or duplicate Publication Cargo workspace root.');
-            }
-            const manifestPath = normalizeRelativePath(entry.manifestPath);
-            if (manifestPath !== (root ? root + '/Cargo.toml' : 'Cargo.toml')) {
-                throw new Error('Publication Cargo workspace manifest path does not match its root.');
-            }
-            seenCargoRoots.add(root);
-            cargoWorkspaces.push({
-                kind: 'cargo', root, manifestPath,
-                patterns: entry.patterns.map((pattern) => normalizeWorkspacePattern(String(pattern))),
-            });
+        const root = validatePackageRoot(entry.root);
+        if (root === null || seenCargoRoots.has(root)) {
+            throw new Error('Invalid or duplicate Publication Cargo workspace root.');
         }
-        cargoWorkspaces.sort((a, b) => compareContractStrings(a.root, b.root));
+        const manifestPath = normalizeRelativePath(entry.manifestPath);
+        if (manifestPath !== (root ? root + '/Cargo.toml' : 'Cargo.toml')) {
+            throw new Error('Publication Cargo workspace manifest path does not match its root.');
+        }
+        seenCargoRoots.add(root);
+        cargoWorkspaces.push({
+            kind: 'cargo', root, manifestPath,
+            patterns: entry.patterns.map((pattern) => normalizeWorkspacePattern(String(pattern))),
+        });
     }
+    cargoWorkspaces.sort((a, b) => compareContractStrings(a.root, b.root));
 
     let workspace: PackageWorkspaceRecord | null = null;
     if (parsed.workspace !== null) {
@@ -867,10 +862,10 @@ export function parsePublicationPackageOwnership(
     }
 
     return {
-        schemaVersion: parsed.schemaVersion as PublicationPackageOwnership['schemaVersion'],
+        schemaVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
         canonicalRoot: expectedCanonicalRoot,
         workspace,
-        ...(parsed.schemaVersion === PACKAGE_OWNERSHIP_SCHEMA_VERSION ? { cargoWorkspaces } : {}),
+        cargoWorkspaces,
         packages,
         files,
         controlFiles,

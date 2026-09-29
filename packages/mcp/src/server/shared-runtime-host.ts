@@ -51,50 +51,36 @@ function isAbsolutePathArray(value: unknown): value is readonly string[] {
         && value.every((entry) => typeof entry === "string" && path.isAbsolute(entry));
 }
 
-function parseAttachRequest(line: string): AttachRequest | null {
+const UNSUPPORTED_PROTOCOL = Symbol("unsupported-shared-runtime-protocol");
+
+function parseAttachRequest(line: string): AttachRequest | typeof UNSUPPORTED_PROTOCOL | null {
     try {
         const value = JSON.parse(line) as Partial<AttachRequest> & {
             launcherNonce?: unknown;
         };
-        // Protocol v1 launchers send the legacy `launcherNonce` field. The host
-        // accepts it during parsing so the protocol-version gate below can
-        // reject v1 handshakes with the incompatible-runtime response instead
-        // of a malformed-message error. Protocol v2 requires `challengeNonce`.
-        const challengeNonce = typeof value.challengeNonce === "string"
-            ? value.challengeNonce
-            : value.protocolVersion === 1 && typeof value.launcherNonce === "string"
-                ? value.launcherNonce
-                : "";
-        // Strict parsing: the legacy `launcherNonce` field is unknown in the
-        // current protocol version. A v2 request carrying it (with or without
-        // challengeNonce) is malformed, never ambiguously parsed.
-        if (
-            value.protocolVersion === SHARED_RUNTIME_PROTOCOL_VERSION
-            && value.launcherNonce !== undefined
-        ) {
+        if (value.type !== "satori-shared-runtime-attach" || typeof value.protocolVersion !== "number") {
             return null;
         }
+        // Any other protocol version comes from an outdated launcher; the fix is reinstalling it.
+        if (value.protocolVersion !== SHARED_RUNTIME_PROTOCOL_VERSION) return UNSUPPORTED_PROTOCOL;
+        // Strict parsing: `launcherNonce` is unknown in the current protocol, so a
+        // request carrying it (with or without challengeNonce) is malformed.
         if (
-            value.type !== "satori-shared-runtime-attach"
-            || typeof value.protocolVersion !== "number"
+            value.launcherNonce !== undefined
             || typeof value.sharedRuntimeIdentityHash !== "string"
             || typeof value.installedRuntimeRoot !== "string"
             || typeof value.mcpVersion !== "string"
-            || !/^[a-f0-9]{48}$/.test(challengeNonce)
+            || typeof value.challengeNonce !== "string"
+            || !/^[a-f0-9]{48}$/.test(value.challengeNonce)
         ) {
             return null;
         }
-        // Protocol v2 carries the launcher's immutable workspace roots; shape
-        // is validated here (absolute strings, 1-16), and the session policy
-        // is constructed after identity checks so broad or unauthorized roots
-        // reject the attach with a stable message, unless the launcher's
-        // per-session SATORI_ALLOW_BROAD_ROOTS=true opt-in is present. The
-        // flag is optional so older launchers stay compatible (absent=false,
-        // fail closed); a non-boolean value never opts in.
-        if (
-            value.protocolVersion === SHARED_RUNTIME_PROTOCOL_VERSION
-            && !isAbsolutePathArray(value.workspaceRoots)
-        ) {
+        // The launcher's immutable workspace roots are shape-validated here (absolute
+        // strings, 1-16); the session policy is constructed after identity checks so
+        // broad or unauthorized roots reject the attach with a stable message, unless the
+        // launcher's per-session SATORI_ALLOW_BROAD_ROOTS=true opt-in is present. The flag
+        // is optional (absent=false, fail closed); a non-boolean value never opts in.
+        if (!isAbsolutePathArray(value.workspaceRoots)) {
             return null;
         }
         return Object.freeze({
@@ -103,10 +89,8 @@ function parseAttachRequest(line: string): AttachRequest | null {
             sharedRuntimeIdentityHash: value.sharedRuntimeIdentityHash,
             installedRuntimeRoot: value.installedRuntimeRoot,
             mcpVersion: value.mcpVersion,
-            challengeNonce,
-            workspaceRoots: value.protocolVersion === SHARED_RUNTIME_PROTOCOL_VERSION
-                ? value.workspaceRoots
-                : [],
+            challengeNonce: value.challengeNonce,
+            workspaceRoots: value.workspaceRoots,
             allowBroadRoots: value.allowBroadRoots === true,
         } as AttachRequest);
     } catch {
@@ -288,9 +272,12 @@ export class SharedRuntimeSocketHost {
                 reject("Attach handshake is malformed.");
                 return;
             }
+            if (request === UNSUPPORTED_PROTOCOL) {
+                reject("Attach handshake protocol version is unsupported; reinstall is required.");
+                return;
+            }
             if (
-                request.protocolVersion !== SHARED_RUNTIME_PROTOCOL_VERSION
-                || request.sharedRuntimeIdentityHash !== this.identity.hash
+                request.sharedRuntimeIdentityHash !== this.identity.hash
                 || request.installedRuntimeRoot !== this.identity.installedRuntimeRoot
                 || request.mcpVersion !== this.identity.mcpVersion
             ) {

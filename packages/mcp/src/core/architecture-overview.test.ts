@@ -55,9 +55,10 @@ function call(source: SymbolRecord, target: SymbolRecord): RelationshipRecord {
 
 function rootOwnership(files: readonly string[]): PublicationPackageOwnership {
     return {
-        schemaVersion: "package_ownership_v1",
+        schemaVersion: "package_ownership_v2",
         canonicalRoot: "/repo",
         workspace: null,
+        cargoWorkspaces: [],
         packages: [{
             ecosystem: "node",
             root: "",
@@ -90,9 +91,10 @@ function ownershipFixture(input: {
     workspace?: PublicationPackageOwnership["workspace"];
 }): PublicationPackageOwnership {
     return {
-        schemaVersion: "package_ownership_v1",
+        schemaVersion: "package_ownership_v2",
         canonicalRoot: "/repo",
         workspace: input.workspace ?? null,
+        cargoWorkspaces: [],
         packages: input.packages,
         files: input.files,
         controlFiles: [],

@@ -327,7 +327,7 @@ test("private socket host keeps MCP sessions independent and shares one runtime 
         challengeNonce: "a".repeat(48),
     })}\n`)) as { accepted: boolean; error: string };
     assert.equal(protocolRejected.accepted, false);
-    assert.match(protocolRejected.error, /identity does not match/);
+    assert.match(protocolRejected.error, /reinstall is required/);
 
     const prematureMcp = JSON.parse(await sendHandshake(
         paths.socketPath,
@@ -492,9 +492,7 @@ test("protocol v1 is rejected", async (t) => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    // A protocol-v1 launcher still sends the legacy launcherNonce field. The
-    // host parses it so the version gate can reject the handshake with the
-    // incompatible-runtime response rather than a malformed-message error.
+    // A protocol-v1 launcher is rejected with a reinstall message, never attached.
     const response = JSON.parse(await sendHandshake(paths.socketPath, `${JSON.stringify({
         type: "satori-shared-runtime-attach",
         protocolVersion: 1,
@@ -505,7 +503,7 @@ test("protocol v1 is rejected", async (t) => {
     })}\n`)) as { accepted: boolean; protocolVersion: number; error: string };
     assert.equal(response.accepted, false);
     assert.equal(response.protocolVersion, SHARED_RUNTIME_PROTOCOL_VERSION);
-    assert.match(response.error, /identity does not match/);
+    assert.match(response.error, /reinstall is required/);
 });
 
 test("protocol v2 rejects a legacy-only launcherNonce attach request", async (t) => {

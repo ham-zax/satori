@@ -231,11 +231,9 @@ function resolveLexicalMatchCapabilities(vectorDatabase: VectorDatabase): {
     defaultMode: 'all_terms' | 'any_terms' | 'provider_sparse';
 } {
     const backend = vectorDatabase.getBackendInfo?.();
-    // Missing declarations resolve conservatively: no standardized modes and
-    // provider-defined sparse semantics, so older/custom backends keep their
-    // existing implicit behavior.
-    const supportedModes = backend?.lexicalMatchModes ?? [];
-    const defaultMode = backend?.defaultLexicalMatchMode ?? 'provider_sparse';
+    // A backend that exposes no info declares no standardized modes.
+    const supportedModes = backend ? backend.lexicalMatchModes : [];
+    const defaultMode = backend ? backend.defaultLexicalMatchMode : 'provider_sparse';
     if (defaultMode !== 'provider_sparse' && !supportedModes.includes(defaultMode)) {
         throw new Error(
             `Backend declares default lexical mode '${defaultMode}' without listing it as supported.`,

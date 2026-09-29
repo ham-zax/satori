@@ -70,8 +70,10 @@ export type {
     PublicationNavigationStatus,
     PublicationRef,
 } from './generation/contracts';
+export { RuntimeArtifactMissingError } from './utils/worker-threads';
 export {
     AtomicIncrementalPublicationUnsupportedError,
+    IndexFormatIncompatibleError,
 } from './generation/errors';
 export {
     createLanguageAnalysisService,

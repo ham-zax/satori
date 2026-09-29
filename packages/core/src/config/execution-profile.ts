@@ -21,8 +21,9 @@ const OFFLINE_POLICY: ResolvedExecutionPolicy = Object.freeze({
 
 /**
  * Resolve the one persisted execution profile into its derived network policy.
- * Missing configuration remains connected for compatibility and must never
- * silently acquire the stronger offline guarantee.
+ * Missing configuration means connected (direct/custom-harness runs without the
+ * installer, which always writes the profile) and must never silently acquire the
+ * stronger offline guarantee.
  */
 export function resolveExecutionPolicy(value: string | undefined): ResolvedExecutionPolicy {
     if (value === undefined || value === 'connected') return CONNECTED_POLICY;

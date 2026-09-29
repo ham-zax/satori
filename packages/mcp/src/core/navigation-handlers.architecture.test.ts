@@ -81,9 +81,10 @@ test("architecture overview loads package ownership from the exact leased Public
 test("architecture overview fails closed on package ownership from a mismatched Publication root", async () => {
     const lease = fakeLease();
     const ownership = {
-        schemaVersion: "package_ownership_v1",
+        schemaVersion: "package_ownership_v2",
         canonicalRoot: "/different-repo",
         workspace: null,
+        cargoWorkspaces: [],
         packages: [],
         files: [],
         controlFiles: [],

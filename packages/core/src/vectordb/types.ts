@@ -123,27 +123,23 @@ export type VectorStoreBackendInfo =
         /**
          * Declared standardized lexical match-mode capabilities.
          *
-         * Backends without standardized modes may declare an empty array. The
-         * field remains optional for source compatibility with Core 3.6.0
-         * external implementations; absence is resolved conservatively as no
-         * standardized modes. Explicit requests for undeclared modes are
-         * rejected instead of silently degraded. Built-in adapters always
-         * declare their capabilities explicitly.
+         * Backends without standardized modes declare an empty array.
+         * Explicit requests for undeclared modes are rejected instead of
+         * silently degraded.
          */
-        lexicalMatchModes?: readonly ('all_terms' | 'any_terms')[];
+        lexicalMatchModes: readonly ('all_terms' | 'any_terms')[];
         /**
          * The mode the backend actually applies when `matchMode` is omitted.
-         * `provider_sparse` means provider-defined sparse semantics. Absent
-         * declarations resolve to `provider_sparse`.
+         * `provider_sparse` means provider-defined sparse semantics.
          */
-        defaultLexicalMatchMode?: 'all_terms' | 'any_terms' | 'provider_sparse';
+        defaultLexicalMatchMode: 'all_terms' | 'any_terms' | 'provider_sparse';
     }
     | {
         provider: 'lancedb';
         transport: 'embedded';
         address: string;
-        lexicalMatchModes?: readonly ('all_terms' | 'any_terms')[];
-        defaultLexicalMatchMode?: 'all_terms' | 'any_terms' | 'provider_sparse';
+        lexicalMatchModes: readonly ('all_terms' | 'any_terms')[];
+        defaultLexicalMatchMode: 'all_terms' | 'any_terms' | 'provider_sparse';
     };
 
 export type CollectionCreateOptions = {

@@ -33,7 +33,6 @@ test('language registry is backed by canonical capability declarations', () => {
     assert.equal(go?.parserCapability, 'production_ready');
     assert.equal(go?.symbolExtractionCapability, 'production_ready');
     assert.equal(go?.ownerExtractionCapability, 'production_ready');
-    assert.equal(go?.importExportCapability, 'none');
     assert.equal(go?.callsCapability, 'production_ready');
     assert.equal(go?.typeReceiverAwareCapability, 'none');
     assert.equal(go?.testReferenceCapability, 'production_ready');
@@ -66,18 +65,15 @@ test('language registry routes modern module and systems extensions through qual
 test('language capability tiers expose promoted calls without promoting unrelated graph surfaces', () => {
     for (const language of ['ruby', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), false, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
     }
     for (const language of ['rust', 'java', 'csharp', 'cpp', 'scala', 'kotlin', 'php']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphBuild'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraphQuery'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'testLinks'), false, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'imports'), false, language);
     }
     for (const language of ['go', 'rust', 'java', 'csharp', 'cpp', 'scala']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
@@ -94,12 +90,9 @@ test('language capability tiers expose promoted calls without promoting unrelate
     assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'owner'), false);
     assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
 
-    assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraph'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraphBuild'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraphQuery'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'imports'), false);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'testLinks'), true);
-    assert.equal(isLanguageCapabilitySupportedForExtension('.go', 'callGraph'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.go', 'callGraphBuild'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.go', 'callGraphQuery'), true);
 });
@@ -109,8 +102,6 @@ test('language registry exposes search-only frontend/style containers until extr
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'search'), true, extension);
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'symbols'), false, extension);
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'owner'), false, extension);
-        assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'imports'), false, extension);
-        assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'callGraph'), false, extension);
         assert.equal(isLanguageCapabilitySupportedForExtension(extension, 'fileOutline'), false, extension);
     }
 });
@@ -119,7 +110,6 @@ test('declared parser catalog entries do not claim executable AST splitter suppo
     for (const language of ['zig', 'solidity', 'gleam', 'ruby', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'search'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'astSplitter'), false, language);
-        assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'callGraph'), false, language);
     }
     // CBM-promoted languages outline through extracted symbols, not an AST splitter,
     // even where the semantic engine also resolves their calls.
@@ -147,25 +137,19 @@ test('language registry routes special filenames to their languages without call
         assert.equal(getLanguageAdapterByFilename(filename)?.id, language, filename);
         assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'search'), true, filename);
         assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'owner'), owner, filename);
-        assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'callGraph'), false, filename);
+        assert.equal(isLanguageCapabilitySupportedForFilename(filename, 'callGraphBuild'), false, filename);
     }
 });
 
-test('language registry keeps legacy and plan capability aliases compatible', () => {
+test('language registry exposes one canonical capability set', () => {
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'symbols'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'symbolMetadata'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'callGraph'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'callGraphBuild'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'callGraphQuery'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'fileOutline'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'imports'), false);
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'testLinks'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('javascript', 'imports'), false);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('python', 'imports'), false);
 
     assert.equal(isLanguageCapabilitySupportedForLanguage('vue', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('vue', 'symbols'), false);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('vue', 'symbolMetadata'), false);
 });
 
 test('language registry reports deterministic capability extension and filename sets', () => {

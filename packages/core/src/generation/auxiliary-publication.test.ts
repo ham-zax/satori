@@ -8,7 +8,6 @@ import { Context } from '../core/context';
 import { IndexingPipeline, MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION } from '../core/indexing-pipeline';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
-import { DefaultSemanticLanguageRegistry } from '../semantic/descriptor';
 import { readSymbolRegistrySidecar } from '../symbols';
 import { FileSynchronizer } from '../sync/synchronizer';
 
@@ -120,26 +119,6 @@ test('Full indexing excludes Cargo manifests while auxiliary removal and additio
         await fixture.close();
     }
 });
-
-for (const changeSource of [false, true]) {
-    test(`Incremental sync removes unchanged legacy Cargo documents (source changed: ${changeSource})`, async (t) => {
-        const fixture = await createFixture();
-        try {
-            // Seed a coherent legacy Publication using the former searchable classification.
-            const legacyClassification = t.mock.method(DefaultSemanticLanguageRegistry.prototype, 'isAuxiliaryPath', () => false);
-            await fixture.context.indexCodebase(fixture.root);
-            legacyClassification.mock.restore();
-            const previous = fixture.context.getCurrentPublication(fixture.root);
-            assert.equal(previous?.publication.vector.indexedFiles, 4);
-            if (changeSource) fs.appendFileSync(path.join(fixture.root, 'lib.rs'), 'pub fn extra() {}\n');
-            await fixture.context.reindexByChange(fixture.root);
-            const current = await assertSearchablePublication(fixture);
-            assert.notEqual(current.id, previous?.id);
-        } finally {
-            await fixture.close();
-        }
-    });
-}
 
 test('Quiet partial Publication retains its checkpoint without attempting atomic sync', async (t) => {
     const fixture = await createFixture();

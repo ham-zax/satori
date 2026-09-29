@@ -105,6 +105,7 @@ test('relationship manifest validates compatibility anchor', () => {
     assert.equal(isRelationshipManifest(manifest), true);
     assert.equal(isRelationshipManifest({ ...manifest, symbolRegistryManifestHash: '' }), false);
     assert.equal(isRelationshipManifest({ ...manifest, schemaVersion: 'relationship_v1' }), false);
+    assert.equal(isRelationshipManifest({ ...manifest, schemaVersion: 'relationship_v4' }), false);
     assert.equal(isRelationshipManifest({
         ...manifest,
         fileContributionSchemaVersion: 'relationship_file_contribution_v3',

@@ -5,7 +5,7 @@ import {
     resolveExecutionPolicy,
 } from './execution-profile';
 
-test('missing execution profile preserves the legacy connected policy', () => {
+test('missing execution profile resolves to the connected policy', () => {
     assert.deepEqual(resolveExecutionPolicy(undefined), {
         executionProfile: 'connected',
         networkPolicy: { kind: 'remote-allowed' },

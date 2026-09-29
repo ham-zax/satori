@@ -47,7 +47,7 @@ function resolveTypedMemberTarget(input: {
         && binding.span.startByte <= input.call.span.startByte
         && ownerForCall(
             fileSymbols,
-            { calleeName: '', span: binding.span },
+            { span: binding.span },
         )?.symbolInstanceId === input.source.symbolInstanceId
     ));
     const typeNames = [...new Set(bindings.map((binding) => binding.typeName))];

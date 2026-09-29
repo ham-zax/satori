@@ -364,7 +364,7 @@ function formatHelpText(): string {
         "Commands:",
         "  install       Install Satori for detected clients; use --client all to force all supported clients",
         "  version       Show installed CLI, MCP, and Core versions",
-        "  upgrade       Update the CLI and its compatible MCP/Core runtime",
+        "  upgrade       Update the CLI and its compatible MCP/Core runtime (alias: update)",
         "  terminate     Stop all running Satori MCP servers",
         "  doctor        Check installation, runtime, and client configuration",
         "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",
@@ -681,7 +681,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     }
                     : undefined,
                 modelProgress: showProgress ? createModelProgressReporter(writers) : undefined,
-                installRetryCommand: satoriCliCommand("update"),
+                installRetryCommand: satoriCliCommand("upgrade"),
             });
             const delegatedFromCli = effectiveEnv.SATORI_UPGRADE_DELEGATED_TARGET === currentCliVersion
                 ? effectiveEnv.SATORI_UPGRADE_FROM_CLI_VERSION

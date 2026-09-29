@@ -26,7 +26,10 @@ import {
     writeLateOnAcquisitionFixture,
     writeLateOnModelDirectory,
 } from "./test-fixtures/lateon-fixture.js";
+import { plannedCbmExtendedDirectory } from "./cbm-extractor-store.js";
+import { planInstallRuntimeEnvironment } from "./install-preflight.js";
 import { loadAcquisitionAuthority } from "./lateon-model-store.js";
+import { formatInstallText } from "./install-format.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const POTION_ASSETS_ROOT = path.resolve(PACKAGE_ROOT, "../mcp/assets/potion/linux-x64");
@@ -3572,4 +3575,102 @@ test("application failure reports completed and unattempted mutation paths", asy
         fs.rmSync(homeDir, { recursive: true, force: true });
         fs.rmSync(repoDir, { recursive: true, force: true });
     }
+});
+
+function snapshotTree(root: string): string[] {
+    return fs.readdirSync(root, { recursive: true, withFileTypes: true })
+        .map((entry) => path.join(entry.parentPath, entry.name))
+        .sort();
+}
+
+test("install --dry-run lists the same paths a real install writes and changes nothing", async () => {
+    await withTempHome(async (homeDir) => {
+        const command = { kind: "install", client: "codex", runtime: "voyage" } as const;
+        const preview = await executeInstallCommand({ ...command, dryRun: true }, installOptions(homeDir));
+        assert.deepEqual(snapshotTree(homeDir), []);
+
+        const expected = [
+            { kind: "launcher", path: launcherPath(homeDir) },
+            { kind: "client-config", client: "codex", path: path.join(homeDir, ".codex", "config.toml") },
+            { kind: "skill", client: "codex", path: path.join(homeDir, ".agents", "skills", "satori") },
+        ];
+        assert.deepEqual(preview.plannedChanges, expected);
+
+        const applied = await executeInstallCommand({ ...command, dryRun: false }, installOptions(homeDir));
+        assert.equal(applied.plannedChanges, undefined);
+        for (const change of expected) {
+            assert.equal(fs.existsSync(change.path), true, change.path);
+        }
+
+        const text = formatInstallText(preview);
+        assert.match(text, /^Would create or modify:$/m);
+        assert.match(text, new RegExp(`Managed launcher\\s+${launcherPath(homeDir).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+        assert.match(text, /Codex configuration\s+\S+config\.toml/);
+        assert.match(text, /Shared skill\s+\S+skills\/satori/);
+    });
+});
+
+test("install --dry-run includes the managed runtime package when it would be installed", async () => {
+    await withTempHome(async (homeDir) => {
+        const preview = await executeInstallCommand(
+            { kind: "install", client: "codex", runtime: "voyage", dryRun: true },
+            { homeDir, packageSpecifier: EXPECTED_PACKAGE_SPECIFIER },
+        );
+        assert.equal(preview.plannedChanges?.[0]?.kind, "runtime");
+        assert.equal(preview.plannedChanges?.[0]?.path.startsWith(path.join(homeDir, ".satori", "mcp-runtime")), true);
+        assert.deepEqual(snapshotTree(homeDir), []);
+    });
+});
+
+test("install --dry-run omits the runtime and launcher steps a real install would reuse", async () => {
+    await withTempHome(async (homeDir) => {
+        const command = { kind: "install", client: "codex", runtime: "voyage" } as const;
+        const options = { homeDir, packageSpecifier: EXPECTED_PACKAGE_SPECIFIER };
+        await executeInstallCommand({ ...command, dryRun: false }, {
+            ...options,
+            execFileSyncImpl: installRuntimePackageStub("custom/server.mjs") as never,
+            // Same launcher environment a real run resolves once the CBM pack is present.
+            cbmExtendedPath: plannedCbmExtendedDirectory(homeDir),
+            preflightRunner: async (input) => ({ runtimeEnvironment: planInstallRuntimeEnvironment(input) }),
+        });
+        const before = snapshotTree(homeDir);
+        const noNpm = (() => {
+            throw new Error("dry-run must not run npm");
+        }) as never;
+
+        const unchanged = await executeInstallCommand({ ...command, dryRun: true }, {
+            ...options,
+            execFileSyncImpl: noNpm,
+        });
+        assert.deepEqual(unchanged.plannedChanges, []);
+        assert.deepEqual(snapshotTree(homeDir), before);
+
+        fs.rmSync(launcherPath(homeDir));
+        const missingLauncher = await executeInstallCommand({ ...command, dryRun: true }, {
+            ...options,
+            execFileSyncImpl: noNpm,
+        });
+        assert.deepEqual(missingLauncher.plannedChanges, [{ kind: "launcher", path: launcherPath(homeDir) }]);
+    });
+});
+
+test("uninstall --dry-run says it would remove or modify the paths it lists", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        const before = snapshotTree(homeDir);
+
+        const preview = await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: true }, { homeDir });
+        assert.deepEqual(snapshotTree(homeDir), before);
+        assert.deepEqual(
+            preview.plannedChanges?.map((change) => change.kind),
+            ["client-config", "skill"],
+        );
+        const text = formatInstallText(preview);
+        assert.match(text, /^Would remove or modify:$/m);
+        assert.doesNotMatch(text, /Would create or modify:/);
+        assert.match(text, /Codex configuration\s+\S+config\.toml/);
+
+        const nothing = await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: true }, { homeDir });
+        assert.match(formatInstallText(nothing), /No files would change\./);
+    });
 });

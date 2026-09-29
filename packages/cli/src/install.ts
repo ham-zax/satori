@@ -36,6 +36,7 @@ export type {
     ManagedRuntimeCommand,
     ManagedRuntimeUpgradePhase,
     ManagedRuntimeUpgradeResult,
+    PlannedChange,
 } from "./install-contracts.js";
 export { assertAutoClientTargets, detectClientTargets } from "./client-targets.js";
 export { resolveLauncherPath, resolveManagedClientCommand } from "./managed-runtime-paths.js";
@@ -61,6 +62,7 @@ import {
 import {
     applyInstallPlan,
     exactRuntimePreflightDependencies,
+    findReusableManagedRuntime,
     installManagedRuntimeCandidate,
     pruneManagedRuntimeAfterActivation,
     readContainingPackageIdentity,
@@ -167,6 +169,19 @@ export async function executeInstallCommand(
             let lateOnModel: VerifiedLateOnModel | undefined;
             let lateOnModelPath = requestedLateOnModelPath;
             if (command.dryRun) {
+                // Read-only: plan from the runtime a real install would reuse, so the preview lists only real changes.
+                installedRuntimeCommand ??= findReusableManagedRuntime(
+                    homeDir,
+                    packageSpecifier,
+                    undefined,
+                    {
+                        vectorStore,
+                        lateOn: reranker === "lateon",
+                        platform: options.platform,
+                        architecture: options.architecture,
+                        libc: options.libc,
+                    },
+                )?.command;
                 if (reranker === "lateon" && !lateOnModelPath) {
                     lateOnModelPath = resolveDefaultLateOnModelDirectory(homeDir);
                 }

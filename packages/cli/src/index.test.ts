@@ -623,7 +623,7 @@ test("runCli install reports progress and the first repository action", async ()
         assert.match(stdout, /Verification: passed \(1 check\)/);
         assert.match(stdout, /Restart Codex to load Satori/);
         assert.match(stdout, /Then ask your agent: Index \/absolute\/path\/to\/repo with Satori/);
-        assert.match(stdout, /Update later with `npx -y @zokizuan\/satori-cli@latest update`/);
+        assert.match(stdout, /Update later with `npx -y @zokizuan\/satori-cli@latest upgrade`/);
         assert.equal(stderr, "Configuring your coding agents...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);

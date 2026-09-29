@@ -39,7 +39,15 @@ function terminalSafeCell(value: string): string {
     return sanitizeTerminalText(value) || "—";
 }
 
-function runtimeConfigurationTable(result: DoctorResult): string[] | null {
+/** Table form of a model identity: drop the registry owner and pinned revision (`org/name@rev` -> `name`). */
+function shortModelName(model: string | null): string | null {
+    if (model === null) return null;
+    const withoutRevision = model.split("@")[0];
+    return withoutRevision.slice(withoutRevision.lastIndexOf("/") + 1) || model;
+}
+
+function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): string[] | null {
+    const modelLabel = (model: string | null) => (verbose ? model : shortModelName(model));
     if (!result.runtimeConfigurations || result.runtimeConfigurations.length === 0) {
         return null;
     }
@@ -53,8 +61,8 @@ function runtimeConfigurationTable(result: DoctorResult): string[] | null {
                 : "Not configured",
         configuration.profile ?? "—",
         configuration.embeddingProvider
-            ? `${configuration.embeddingProvider} / ${configuration.embeddingModel ?? "—"}`
-            : configuration.embeddingModel ?? "—",
+            ? `${configuration.embeddingProvider} / ${modelLabel(configuration.embeddingModel) ?? "—"}`
+            : modelLabel(configuration.embeddingModel) ?? "—",
         configuration.embeddingDimension ?? "—",
         configuration.rerankerProvider === "lateon"
             ? configuration.rerankerProfile === DEFAULT_LATEON_PROFILE_ID
@@ -87,8 +95,8 @@ function runtimeConfigurationTable(result: DoctorResult): string[] | null {
     ];
 }
 
-function selectedRuntimeLines(result: DoctorResult): string[] {
-    const table = runtimeConfigurationTable(result);
+function selectedRuntimeLines(result: DoctorResult, verbose: boolean): string[] {
+    const table = runtimeConfigurationTable(result, verbose);
     if (table) {
         return table;
     }
@@ -254,7 +262,7 @@ export function formatDoctorText(result: DoctorResult, options: DoctorTextOption
             `Doctor bundle: ${result.packageVersions.map((pkg) => `${packageLabel(pkg.name)} ${pkg.version ?? "unknown"}`).join(" · ")}`,
         );
     }
-    lines.push(...selectedRuntimeLines(result));
+    lines.push(...selectedRuntimeLines(result, options.verbose));
 
     renderIssues(lines, "Problems", errors, options.verbose);
     renderIssues(lines, "Warnings", warnings, options.verbose);

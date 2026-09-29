@@ -5,8 +5,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { CliError } from "./errors.js";
 import type {
+    ClientName,
     InstallCommandResult,
     ManagedRuntimeCommand,
+    PlannedChangeKind,
 } from "./install-contracts.js";
 import {
     probeLanceDbRuntime,
@@ -117,13 +119,16 @@ export function npmOutput(error: unknown): string {
     return `${stdout}\n${stderr}\n${error.message}`.trim();
 }
 
-export function installManagedRuntimeCandidate(
+/**
+ * Read-only lookup of the exact-version managed runtime a real install would
+ * reuse instead of running npm. Shared by install and its dry-run preview.
+ */
+export function findReusableManagedRuntime(
     homeDir: string,
     packageSpecifier: string,
-    execImpl: ExecFileSyncLike,
     expectedCoreVersion: string | undefined,
     closure: ManagedRuntimeClosure,
-): ManagedRuntimeCandidate {
+): ManagedRuntimeCandidate | null {
     const stableRuntimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
     const existing = resolveInstalledRuntimeCommand(
         stableRuntimeRoot,
@@ -138,6 +143,19 @@ export function installManagedRuntimeCandidate(
             newlyInstalled: false,
         };
     }
+    return null;
+}
+
+export function installManagedRuntimeCandidate(
+    homeDir: string,
+    packageSpecifier: string,
+    execImpl: ExecFileSyncLike,
+    expectedCoreVersion: string | undefined,
+    closure: ManagedRuntimeClosure,
+): ManagedRuntimeCandidate {
+    const stableRuntimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
+    const reusable = findReusableManagedRuntime(homeDir, packageSpecifier, expectedCoreVersion, closure);
+    if (reusable) return reusable;
     const installTargets = [
         packageSpecifier,
         ...(closure.vectorStore === "LanceDB"
@@ -384,12 +402,22 @@ export function applyInstallPlan(
         !command.dryRun && command.kind === "install" && !options.runtimeCommand
             ? acquireManagedRuntimeMutationLock({ homeDir })
             : undefined;
+    // The same step list drives a real apply and the dry-run preview, so both name identical paths.
+    const plannedSteps: Array<{
+        kind: PlannedChangeKind;
+        client?: ClientName;
+        path: string;
+        description: string;
+        changed: boolean;
+        apply: () => void;
+    }> = [];
     try {
-        if (!command.dryRun) {
-        const plannedSteps: Array<{ description: string; changed: boolean; apply: () => void }> = [];
         if (command.kind === "install" && !options.runtimeCommand) {
+            const runtimeRoot = resolveRuntimeRoot(homeDir, packageSpecifier);
             plannedSteps.push({
-                description: `managed runtime package at ${resolveRuntimeRoot(homeDir, packageSpecifier)}`,
+                kind: "runtime",
+                path: runtimeRoot,
+                description: `managed runtime package at ${runtimeRoot}`,
                 changed: true,
                 apply: () => {
                     const installedRuntime = installManagedRuntimeCandidate(
@@ -422,6 +450,8 @@ export function applyInstallPlan(
         }
         if (command.kind === "install") {
             plannedSteps.push({
+                kind: "launcher",
+                path: resolveLauncherPath(homeDir),
                 description: `managed launcher at ${resolveLauncherPath(homeDir)}`,
                 changed: launcherMutation.changed || !options.runtimeCommand,
                 apply: () => {
@@ -430,6 +460,8 @@ export function applyInstallPlan(
                 },
             });
             plannedSteps.push({
+                kind: "profile",
+                path: profileMutation.filePath ?? "satori.toml",
                 description: `repository profile at ${profileMutation.filePath ?? "satori.toml"}`,
                 changed: profileMutation.changed,
                 apply: () => {
@@ -441,6 +473,9 @@ export function applyInstallPlan(
         const plannedCompanionPaths = new Set<string>();
         for (const mutation of prepared) {
             plannedSteps.push({
+                kind: "client-config",
+                client: mutation.target.client,
+                path: mutation.target.configPath,
                 description: `${mutation.target.client} client configuration at ${mutation.target.configPath}`,
                 changed: mutation.configMutation.changed,
                 apply: () => {
@@ -454,6 +489,9 @@ export function applyInstallPlan(
                 if (plannedCompanionPaths.has(companionKey)) continue;
                 plannedCompanionPaths.add(companionKey);
                 plannedSteps.push({
+                    kind: companion.companion.kind,
+                    client: mutation.target.client,
+                    path: companion.companion.path,
                     description: `${mutation.target.client} ${companion.companion.kind} at ${companion.companion.path}`,
                     changed: companion.changed,
                     apply: () => {
@@ -464,7 +502,7 @@ export function applyInstallPlan(
             }
         }
 
-        const mutationSteps = plannedSteps.filter((step) => step.changed);
+        const mutationSteps = command.dryRun ? [] : plannedSteps.filter((step) => step.changed);
         const applied: string[] = [];
         for (let index = 0; index < mutationSteps.length; index += 1) {
             const step = mutationSteps[index];
@@ -483,7 +521,6 @@ export function applyInstallPlan(
                     1,
                 );
             }
-        }
         }
         if (installedManagedRuntimeCandidate) {
             pruneManagedRuntimeAfterActivation(
@@ -507,6 +544,17 @@ export function applyInstallPlan(
         runtimeEnvironment: command.kind === "install" && command.runtime
             ? runtimeEnvironment
             : undefined,
+        ...(command.dryRun
+            ? {
+                plannedChanges: plannedSteps
+                    .filter((step) => step.changed)
+                    .map(({ kind, client, path: changePath }) => ({
+                        kind,
+                        ...(client ? { client } : {}),
+                        path: changePath,
+                    })),
+            }
+            : {}),
         results: prepared.map((mutation) => ({
             client: mutation.target.client,
             configPath: mutation.target.configPath,

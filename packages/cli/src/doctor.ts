@@ -630,6 +630,9 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     const authoritativeClientProofs = managedClientProofs.filter((proof) => (
         clientProofProvidesRuntimeAuthority(proof, managedLauncherIsUsable)
     ));
+    // Not installed: no usable launcher and no client entry. The CLI process environment is not
+    // the runtime in that state, so runtime-environment checks would only report defaults.
+    const notInstalled = managedClientProofs.length === 0 && !managedLauncherIsUsable;
     const runtimeContexts: DoctorRuntimeContext[] = authoritativeClientProofs.length > 0
         ? authoritativeClientProofs.map((proof) => ({
             client: proof.client,
@@ -639,7 +642,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
                 ...(proof.usesManagedLauncher ? managedRuntimeEnvironment : {}),
             },
         }))
-        : managedClientProofs.length === 0
+        : managedClientProofs.length === 0 && !notInstalled
             ? [{ client: null, environment: runtimeEnv }]
             : [];
 
@@ -832,16 +835,17 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     }
 
     if (managedLauncherPath) {
-        appendManagedLauncherCheck(checks, nextSteps, activeManagedRuntime);
+        appendManagedLauncherCheck(checks, nextSteps, activeManagedRuntime, notInstalled);
     }
 
     appendManagedClientChecks(
         checks,
         nextSteps,
         managedClientProofs,
+        notInstalled ? { launcherStatus: activeManagedRuntime?.status ?? "missing" } : null,
     );
 
-    if (nextSteps.length > 0) {
+    if (nextSteps.length > 0 && !notInstalled) {
         nextSteps.push("Restart your MCP client after changing Satori environment variables.");
     }
 
@@ -863,7 +867,21 @@ function appendManagedClientChecks(
     checks: DoctorCheck[],
     nextSteps: string[],
     proofs: ReturnType<typeof inspectManagedClientConfigurations>,
+    notInstalled: { launcherStatus: ManagedLauncherStatus } | null,
 ): void {
+    if (notInstalled) {
+        addCheck(
+            checks,
+            "managed_client_configuration",
+            "error",
+            "Satori is not installed for any supported client (Codex, Claude Code, OpenCode).",
+        );
+        // A present-but-broken launcher already carries its own repair step.
+        if (notInstalled.launcherStatus === "missing") {
+            nextSteps.push(`Run ${SATORI_CLI_NPX_COMMAND} install.`);
+        }
+        return;
+    }
     if (proofs.length === 0) {
         addCheck(checks, "managed_client_configuration", "warning", "No supported MCP client has a Satori configuration entry.");
         nextSteps.push(`Run ${SATORI_CLI_NPX_COMMAND} install.`);
@@ -1202,10 +1220,13 @@ function appendManagedLauncherCheck(
     checks: DoctorCheck[],
     nextSteps: string[],
     activeManagedRuntime: ActiveManagedRuntimeResolution | null,
+    notInstalled: boolean,
 ): void {
     const resolution = activeManagedRuntime;
     const status = resolution?.status ?? "missing";
     if (status === "missing" || !resolution) {
+        // The not-installed problem already says this and carries the single install step.
+        if (notInstalled) return;
         addCheck(checks, "managed_launcher", "warning", `Managed Satori launcher is missing at ${resolution?.launcherPath || ""}.`);
         nextSteps.push(`Run ${SATORI_CLI_NPX_COMMAND} install to create the stable managed launcher.`);
         return;

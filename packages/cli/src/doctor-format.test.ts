@@ -102,3 +102,29 @@ test("Doctor renders effective configuration for every supported client as a tab
     assert.match(text, /OpenCode\s+\| Needs repair\s+\| connected\s+\| VoyageAI \/ voyage-code-3\s+\| 1024\s+\| none\s+\| Milvus\s+\| Client config/);
     assert.doesNotMatch(text, /Selected runtime:|Configured runtimes:/);
 });
+
+test("Doctor table shortens model identity and verbose output keeps the full identity", () => {
+    const model = "minishlab/potion-code-16M@0123456789abcdef";
+    const result: DoctorResult = {
+        ...resultWithActiveRuntime(),
+        runtimeConfigurations: [{
+            client: "codex" as const,
+            status: "configured" as const,
+            source: "managed_launcher" as const,
+            profile: "offline",
+            embeddingProvider: "Potion",
+            embeddingModel: model,
+            embeddingDimension: "256",
+            rerankerProvider: "none",
+            rerankerProfile: null,
+            vectorStore: "LanceDB",
+        }],
+    };
+
+    const compact = formatDoctorText(result, { verbose: false });
+    assert.match(compact, /Potion \/ potion-code-16M\s+\|/);
+    assert.doesNotMatch(compact, /minishlab|0123456789abcdef/);
+
+    const verbose = formatDoctorText(result, { verbose: true });
+    assert.match(verbose, /Potion \/ minishlab\/potion-code-16M@0123456789abcdef/);
+});

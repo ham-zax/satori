@@ -164,6 +164,20 @@ export interface ClientInstallResult {
     dryRun: boolean;
 }
 
+export type PlannedChangeKind =
+    | "runtime"
+    | "launcher"
+    | "profile"
+    | "client-config"
+    | CompanionTarget["kind"];
+
+/** A file or directory an install or uninstall would create, modify, or remove. */
+export interface PlannedChange {
+    kind: PlannedChangeKind;
+    client?: ClientName;
+    path: string;
+}
+
 export interface InstallCommandResult {
     action: "install" | "uninstall";
     client: InstallClient;
@@ -177,6 +191,8 @@ export interface InstallCommandResult {
     /** Non-secret runtime values persisted in the managed launcher. */
     runtimeEnvironment?: Readonly<Record<string, string>>;
     results: ClientInstallResult[];
+    /** Dry runs only: every path the same command would change, in application order. */
+    plannedChanges?: PlannedChange[];
     /** Directories removed (or, for a dry run, that would be removed) by uninstall --purge. */
     purgedPaths?: string[];
 }

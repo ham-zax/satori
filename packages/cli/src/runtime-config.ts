@@ -200,7 +200,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 name: "lateon_activation_policy",
                 status: "error",
                 message: `Historical LateOn activation policy bound: ${activationPolicy}.`,
-                nextStep: `Run \`${satoriCliCommand("update")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
+                nextStep: `Run \`${satoriCliCommand("upgrade")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
             });
         } else if (
             activationPolicy === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY
@@ -210,7 +210,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 name: "lateon_activation_policy",
                 status: "error",
                 message: `Previous LateOn activation policy bound: ${activationPolicy}.`,
-                nextStep: `Run \`${satoriCliCommand("update")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
+                nextStep: `Run \`${satoriCliCommand("upgrade")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
             });
         } else if (activationPolicy && activationPolicy !== LATEON_D32_ACTIVATION_POLICY) {
             checks.push({
@@ -231,7 +231,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                     name: "lateon_activation_policy",
                     status: "error",
                     message: `SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
-                    nextStep: `Run \`${satoriCliCommand("update")}\` or \`${satoriCliCommand("install --reranker lateon")}\` to bind SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}.`,
+                    nextStep: `Run \`${satoriCliCommand("upgrade")}\` or \`${satoriCliCommand("install --reranker lateon")}\` to bind SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}.`,
                 });
         } else {
             checks.push({

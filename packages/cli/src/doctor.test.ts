@@ -1629,3 +1629,47 @@ test("runDoctor errors when the active managed MCP cannot resolve Core", async (
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test("runDoctor reports one not-installed problem and one install step when nothing is installed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-not-installed-"));
+    try {
+        const result = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir },
+            managedLauncherPath: path.join(tempDir, ".satori", "bin", "satori-mcp.js"),
+            inspectManagedClients: () => [],
+        }));
+        const problems = result.checks.filter((check) => check.status === "error");
+        assert.equal(result.status, "error");
+        assert.equal(problems.length, 1);
+        assert.match(problems[0]?.message ?? "", /^Satori is not installed for any supported client/);
+        assert.deepEqual(result.nextSteps, ["Run npx -y @zokizuan/satori-cli@latest install."]);
+        // The CLI's own environment is not a Satori runtime, so no runtime-environment verdicts.
+        assert.equal(result.checks.some((check) => check.name === "embedding_provider_env"), false);
+        assert.equal(result.checks.some((check) => /Voyage/i.test(check.message)), false);
+        assert.equal(result.checks.some((check) => check.name === "managed_launcher"), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test("runDoctor keeps a broken launcher's repair step without a duplicate install step", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-not-installed-broken-"));
+    try {
+        const launcherPath = path.join(tempDir, ".satori", "bin", "satori-mcp.js");
+        fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
+        fs.writeFileSync(launcherPath, "not a managed launcher\n");
+        const result = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir },
+            managedLauncherPath: launcherPath,
+            inspectManagedClients: () => [],
+        }));
+        assert.equal(result.status, "error");
+        assert.equal(result.checks.find((check) => check.name === "managed_launcher")?.status, "error");
+        assert.equal(result.checks.some((check) => check.name === "embedding_provider_env"), false);
+        assert.equal(result.nextSteps.length, 1);
+        assert.match(result.nextSteps[0] ?? "", /replace the managed launcher/);
+        assert.equal(result.nextSteps.some((step) => step === "Run npx -y @zokizuan/satori-cli@latest install."), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

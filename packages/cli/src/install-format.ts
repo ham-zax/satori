@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { CliWriters } from "./format.js";
-import type { InstallCommandResult } from "./install.js";
+import type { InstallCommandResult, PlannedChange } from "./install.js";
 import type { InstallPostflightCheck, InstallPostflightResult } from "./install-postflight.js";
 import { satoriCliCommand } from "./cli-command.js";
 
@@ -57,6 +57,31 @@ function clientLabels(result: InstallCommandResult): string[] {
     return result.results.map((entry) => CLIENT_LABELS[entry.client]);
 }
 
+function plannedChangeLabel(change: PlannedChange): string {
+    const client = change.client ? CLIENT_LABELS[change.client] : "Client";
+    switch (change.kind) {
+        case "runtime": return "Managed runtime package";
+        case "launcher": return "Managed launcher";
+        case "profile": return "Repository profile";
+        case "client-config": return `${client} configuration`;
+        case "skill": return "Shared skill";
+        case "skill-link": return `${client} skill link`;
+        case "legacy-skill": return "Legacy skill (removed)";
+        case "legacy-instructions": return "Legacy instructions (removed)";
+        case "legacy-guidance-hook": return "Legacy guidance hook (removed)";
+    }
+}
+
+function plannedChangeLines(result: InstallCommandResult, changes: readonly PlannedChange[]): string[] {
+    if (changes.length === 0) return ["No files would change."];
+    const labels = changes.map(plannedChangeLabel);
+    const width = Math.max(...labels.map((label) => label.length));
+    return [
+        result.action === "uninstall" ? "Would remove or modify:" : "Would create or modify:",
+        ...changes.map((change, index) => `  ${labels[index].padEnd(width)}  ${change.path}`),
+    ];
+}
+
 function restartInstruction(result: InstallCommandResult): string | null {
     if (result.action !== "install" || result.dryRun) return null;
     const clients = clientLabels(result);
@@ -97,6 +122,10 @@ export function formatInstallText(
     const clients = clientLabels(result);
     if (clients.length > 0) lines.push(`${clients.length === 1 ? "Client" : "Clients"}: ${clients.join(", ")}`);
 
+    if (result.dryRun && result.plannedChanges) {
+        lines.push("", ...plannedChangeLines(result, result.plannedChanges));
+    }
+
     if (postflight) {
         lines.push("", ...verificationLines(postflight));
     }
@@ -121,7 +150,7 @@ export function formatInstallText(
     if (postflight?.status !== undefined && postflight.status !== "ok") {
         lines.push(`Run \`${satoriCliCommand("doctor --verbose")}\` for diagnostic details.`);
     } else if (result.action === "install" && !result.dryRun) {
-        lines.push(`Update later with \`${satoriCliCommand("update")}\`.`);
+        lines.push(`Update later with \`${satoriCliCommand("upgrade")}\`.`);
     }
     return `${lines.join("\n")}\n`;
 }

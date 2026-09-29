@@ -116,10 +116,18 @@ test("install preflight loads LanceDB from the installed MCP runtime", async () 
 
 test("candidate preflight proves initialization, version, and the canonical tool surface", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-candidate-runtime-preflight-"));
-    const runtimeEntry = path.join(homeDir, "candidate.mjs");
+    const runtimeEntry = path.join(homeDir, ".satori", "mcp-runtime", "candidate.mjs");
     try {
+        fs.mkdirSync(path.dirname(runtimeEntry), { recursive: true });
         fs.writeFileSync(runtimeEntry, `
 import readline from "node:readline";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const expectedRoot = path.dirname(fileURLToPath(import.meta.url));
+if (process.cwd() !== expectedRoot || process.env.SATORI_SESSION_ROOTS_JSON !== JSON.stringify([expectedRoot])) {
+  process.stderr.write("candidate workspace was not isolated from installer cwd\\n");
+  process.exit(1);
+}
 const tools = ${JSON.stringify([
             "manage_index",
             "search_codebase",
@@ -160,7 +168,7 @@ input.on("line", (line) => {
         await probeManagedRuntimeCandidate({
             runtimeCommand: { command: process.execPath, args: [runtimeEntry] },
             runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "connected" }),
-            inheritedEnvironment: {},
+            inheritedEnvironment: { SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]) },
             homeDir,
             expectedVersion: "9.8.7-test",
         });

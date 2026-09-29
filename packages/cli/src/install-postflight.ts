@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { ListToolsResult } from "./client.js";
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
@@ -62,6 +63,7 @@ export interface InstallPostflightOptions {
         command: string;
         args: string[];
         env: Record<string, string | undefined>;
+        cwd?: string;
         startupTimeoutMs: number;
         callTimeoutMs: number;
         writeStderr: (text: string) => void;
@@ -236,14 +238,17 @@ export async function runInstallPostflight(options: InstallPostflightOptions): P
     let closeCompleted = true;
     const wait = options.wait || ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
     const terminationTimeoutMs = options.terminationTimeoutMs ?? 2_000;
+    const workspaceRoot = path.dirname(launcher.args[0]);
     try {
         session = await (options.connectSession || connectCliMcpSession)({
             command: launcher.command,
             args: launcher.args,
+            cwd: workspaceRoot,
             env: {
                 ...options.env,
                 HOME: options.homeDir,
                 SATORI_RUN_MODE: "postflight",
+                SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceRoot]),
                 // Candidate/postflight verification must execute the candidate
                 // itself rather than attach to an already-running shared host.
                 SATORI_SHARED_RUNTIME_DISABLE: "1",

@@ -69,13 +69,19 @@ test("install postflight verifies launcher, clients, tools, owner, config, and t
         const result = await runInstallPostflight({
             installResult,
             homeDir,
-            env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
+            env: {
+                EMBEDDING_PROVIDER: "Ollama",
+                MILVUS_ADDRESS: "localhost:19530",
+                SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]),
+            },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
             writeStderr: () => {},
-            connectSession: async ({ command, args, env }) => {
+            connectSession: async ({ command, args, env, cwd }) => {
                 assert.equal(command, process.execPath);
                 assert.equal(args[0], path.join(homeDir, ".satori", "bin", "satori-mcp.js"));
+                assert.equal(cwd, path.dirname(args[0]));
+                assert.equal(env.SATORI_SESSION_ROOTS_JSON, JSON.stringify([cwd]));
                 assert.equal(env.SATORI_RUN_MODE, "postflight");
                 assert.equal(env.SATORI_SHARED_RUNTIME_DISABLE, "1");
                 return createSession(homeDir);

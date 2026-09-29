@@ -351,16 +351,19 @@ export async function probeManagedRuntimeCandidate(
     input: ManagedRuntimeCandidateProbeInput,
 ): Promise<void> {
     const stderrCollector = createCandidateStderrCollector();
+    const workspaceRoot = path.dirname(input.runtimeCommand.args[0]);
     let session: Awaited<ReturnType<typeof connectCliMcpSession>> | null = null;
     try {
         session = await connectCliMcpSession({
             command: input.runtimeCommand.command,
             args: [...input.runtimeCommand.args],
+            cwd: workspaceRoot,
             env: {
                 ...input.inheritedEnvironment,
                 ...input.runtimeEnvironment,
                 HOME: input.homeDir,
                 SATORI_RUN_MODE: "postflight",
+                SATORI_SESSION_ROOTS_JSON: JSON.stringify([workspaceRoot]),
             },
             startupTimeoutMs: 10_000,
             callTimeoutMs: 45_000,

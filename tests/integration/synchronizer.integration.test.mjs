@@ -81,6 +81,9 @@ test('integration: minimal profile excludes config and scripts but keeps code an
   const codebasePath = createTempCodebase({
     'src/app.ts': 'export const app = true;\n',
     'README.md': '# Demo\n',
+    'config/app.yaml': 'app:\n  name: demo\n',
+    'scripts/release.zsh': 'echo release\n',
+    // TOML and Bash are navigation languages, so minimal keeps them.
     'config/app.toml': '[app]\nname = "demo"\n',
     'scripts/release.sh': 'echo release\n',
   });
@@ -95,8 +98,10 @@ test('integration: minimal profile excludes config and scripts but keeps code an
 
     assert.equal(persistedKeys.includes('src/app.ts'), true);
     assert.equal(persistedKeys.includes('README.md'), true);
-    assert.equal(persistedKeys.includes('config/app.toml'), false);
-    assert.equal(persistedKeys.includes('scripts/release.sh'), false);
+    assert.equal(persistedKeys.includes('config/app.yaml'), false);
+    assert.equal(persistedKeys.includes('scripts/release.zsh'), false);
+    assert.equal(persistedKeys.includes('config/app.toml'), true);
+    assert.equal(persistedKeys.includes('scripts/release.sh'), true);
   } finally {
     await cleanupCodebase(codebasePath);
   }

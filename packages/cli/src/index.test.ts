@@ -489,6 +489,7 @@ test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const exitCode = await runCli(["tools", "list"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("normal"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -540,6 +541,7 @@ test("runCli fails with deterministic protocol error when session connection fai
     const exitCode = await runCli(["tools", "list"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => {
             throw new Error("Connection closed");
         },
@@ -559,6 +561,7 @@ test("runCli treats structured non-ok envelope as tool error even when isError=f
     const exitCode = await runCli(["search_codebase", "--path", "/repo", "--query", "auth"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("envelope"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1051,6 +1054,7 @@ test("runCli doctor defaults to a human summary without starting an MCP session"
                 toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
             },
         }),
+        serverCommand: process.execPath,
         connectSession: async () => {
             throw new Error("doctor should not connect to MCP");
         },
@@ -1371,6 +1375,7 @@ test("runCli keeps its owned session alive until manage_index create completes",
     ], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("manage_wait"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1397,6 +1402,7 @@ test("runCli does not let a low per-call timeout destroy an active managed index
     ], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("manage_wait"),
         startupTimeoutMs: 10_000,
         callTimeoutMs: 200,
@@ -1424,6 +1430,7 @@ test("runCli emits deterministic JSON error payload for tool-call timeout instea
     ], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("timeout_error"),
         startupTimeoutMs: 10_000,
         callTimeoutMs: 200,
@@ -1443,6 +1450,7 @@ test("runCli forwards wrapper --debug to tool arguments instead of consuming it 
     const exitCode = await runCli(["search_codebase", "--path", "/repo", "--query", "auth", "--debug"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("normal"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1472,6 +1480,7 @@ async function runWithSession(argv: string[], session: MockCliSession) {
     const exitCode = await runCli(argv, {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => session,
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1657,6 +1666,7 @@ test("runCli returns initial manage_index create error without polling status", 
     const exitCode = await runCli(["manage_index", "--action", "create", "--path", "/repo"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("manage_initial_error"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1674,6 +1684,7 @@ test("runCli exits on initial manage_index blocked envelope without polling stat
     const exitCode = await runCli(["manage_index", "--action", "create", "--path", "/repo"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("manage_initial_blocked"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,
@@ -1692,6 +1703,7 @@ test("runCli exits when awaited manage_index operation fails while publication s
     const exitCode = await runCli(["manage_index", "--action", "reindex", "--path", "/repo"], {
         writeStdout: io.writeStdout,
         writeStderr: io.writeStderr,
+        serverCommand: process.execPath,
         connectSession: async () => createMockSession("manage_terminal_failed"),
         startupTimeoutMs: 10000,
         callTimeoutMs: 10000,

@@ -130,4 +130,4 @@ The compiled CBM semantic engine currently supports Go, Java, C#, C++, and Rust.
    - Run `pnpm semantic:verify` and add focused relationship characterization/qualification coverage under `packages/core/src/relationships/`.
    - Admit only resolver results whose target, caller, and required build context are proven. Keep receiver/dynamic dispatch and configuration-dependent cases fail-closed until separately modeled.
 5. **Promote the proven public slice:**
-   - In `packages/core/src/languages/capabilities.ts`, set `callsCapability` to `production_ready` and `publicClaim` to `calls_v0` only for the qualified slice. `callGraphBuild` and `callGraphQuery` derive from `callsCapability`; import/export, receiver-aware, and test-reference capabilities remain independent.
+   - In `packages/core/src/languages/capabilities.ts`, set `callsCapability` to `production_ready` and `publicClaim` to `calls_v0` only for the qualified slice. `callGraphBuild` and `callGraphQuery` derive from `callsCapability`; the test-reference capability remains independent.

@@ -33,10 +33,7 @@ The package installs the `satori` command. Run `satori` without arguments for
 human-readable help.
 
 For the default offline Potion + LanceDB runtime on Linux x64/WSL2, LateOn D32
-reranks the bounded query-time candidate set. D32 is operationally qualified but
-not held-out qualified; it became the managed offline default through an
-explicit owner activation decision scoped to Linux x64/WSL2 managed offline
-installations. The installer downloads its pinned Apache-2.0 model closure once
+reranks the bounded query-time candidate set. The installer downloads its pinned Apache-2.0 model closure once
 into `~/.satori/models/`, verifies every artifact, and reuses it across MCP
 upgrades. `--reranker none` is the explicit opt-out: it keeps the selected
 embedding provider plus baseline ordering (exact + BM25 + single vector) - with
@@ -73,22 +70,15 @@ The latest CLI manifest is the release authority: it names one exact MCP/Core cl
 
 For a no-install invocation, replace `satori` with `npx -y @satori-code/cli@latest`.
 
-The offline package carries a checksum-pinned 36.0 MiB Potion model/helper
-closure. The default LateOn reranker adds one shared download of about 72 MB,
-not one copy per MCP runtime version. A representative Satori publication
-indexed 10,830 chunks in 34.46 seconds on CPU, with 154.543 ms warm-search p95
-after publication.
-
-The qualified native deployment contract requires at least 2 GiB of available
-runtime capacity. This is a deployment allowance, not measured steady
-consumption: earlier integration evidence observed a 1,447.21 MiB incremental
-publication peak. A later six-publication run established bounded retained
-capacity, not a proven plateau or multi-day guarantee.
+The Potion embedding model (about 32 MB) and the LateOn reranker (about 72 MB)
+are downloaded once into `~/.satori/models/` and shared across runtime versions.
+The runtime needs at least 2 GiB of available memory; that is a deployment
+allowance, not measured steady consumption.
 
 ## Commands
 
 ```text
-install [--client auto|all|codex|claude|opencode]
+install [--client auto|all|codex|claude|opencode|agy]
         [--runtime offline|voyage] # defaults to offline Potion + LateOn D32
         [--vector-store lancedb|milvus]
         [--ollama-model <model>]
@@ -98,9 +88,9 @@ install [--client auto|all|codex|claude|opencode]
 
 doctor [--verbose] [--json]
 version # aliases: -v, --version
-upgrade # alias: update
+upgrade
 terminate
-uninstall [--client auto|all|codex|claude|opencode] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
+uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] # defaults to all supported clients; --purge deletes ~/.satori
 tools list
 tool call <toolName> --args-json '<json>'
 tool call <toolName> --args-file <path>
@@ -116,9 +106,9 @@ tool call:
   and OpenCode load it directly; Claude Code gets a link to it at
   `~/.claude/skills/satori`.
 
-Install adds nothing to `AGENTS.md` or hook files. It removes Satori blocks and the
-Codex guidance hook left by earlier versions, and never overwrites a skill it
-did not write. `satori uninstall` removes the shared skill only when it targets
+Install adds nothing to `AGENTS.md` or hook files, and it never removes or
+overwrites files it did not write: a real directory at a skill-link path is
+refused with instructions to remove it yourself. `satori uninstall` removes the shared skill only when it targets
 all clients (the default).
 
 Global flags must precede the command token:

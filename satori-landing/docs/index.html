@@ -1011,13 +1011,10 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
         </div>
         <div class="callout">
           <p>
-            <strong>Measured on Satori:</strong> warm Potion + LanceDB search reached
-            154.543 ms p95 across 10,830 chunks. Owner-oriented retrieval and bounded
-            source reads are designed to cut repository-discovery token waste dramatically
-            instead of feeding broad files into the model. An exploratory six-repo LateOn
-            tuning run reached 0.5046 MRR versus 0.2900
-            without reranking across 36 owner-discovery tasks; that MRR result is tuning
-            evidence, not a held-out release guarantee.
+            <strong>Measured:</strong> across five pinned repositories, exact symbol
+            lookup took 14–65 ms p50 on the offline Potion + LanceDB + LateOn runtime
+            (raw results in <code>docs/evidence/benchmarks/</code>). Owner-oriented retrieval
+            and bounded source reads keep broad files out of the model's context.
           </p>
         </div>
       </section>

@@ -8,7 +8,7 @@
 
 Satori is a **local-first code-intelligence layer** for coding agents. Ask where behavior lives in plain English, even when you do not know the filename or symbol yet. Satori combines semantic meaning with BM25 and exact lexical evidence, maps results back to owning symbols, and lets the agent continue into file structure, conservative relationship evidence, exact source spans, and freshness-aware navigation through MCP.
 
-On the qualified Linux x64 / WSL2 path, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. Codex, Claude Code, and OpenCode are supported directly by the installer.
+On the qualified Linux x64 / WSL2 path, the default managed runtime keeps that retrieval stack local with Potion embeddings + BM25 + LateOn reranking + LanceDB. No model API key is required for the offline path after installation. The installer configures Codex, Claude Code, and OpenCode, plus Antigravity (`agy`) on request.
 
 ```text
 Repository
@@ -134,13 +134,12 @@ Interactive diagram: [`docs/architecture/satori-architecture.html`](./docs/archi
 ## Documentation
 
 - [`docs/PRODUCT_GUIDE.md`](./docs/PRODUCT_GUIDE.md) — how to think about Satori and use it for repository learning, debugging, refactors, local models, and multi-agent work.
-- [`docs/README.md`](./docs/README.md) — documentation map and current-vs-historical guidance.
 - [`satori-landing/docs/index.html`](./satori-landing/docs/index.html) — complete operational setup, tool, lifecycle, and troubleshooting reference.
 - [`satori-landing/architecture.html`](./satori-landing/architecture.html) — Publication, retrieval, navigation, freshness, and runtime architecture.
 - [`docs/architecture/LANGUAGE_INTELLIGENCE.md`](./docs/architecture/LANGUAGE_INTELLIGENCE.md) — language backends and relationship capability boundaries.
 - [`docs/RELEASING.md`](./docs/RELEASING.md) — release qualification and publication workflow.
-
-Dated files under `docs/plans/`, `docs/research/`, `docs/remediation/`, and `docs/superpowers/` are engineering history unless a current document explicitly points to them as an active contract.
+- [`docs/improvements/`](./docs/improvements/README.md) — evaluated but deferred proposals.
+- [`docs/evidence/`](./docs/evidence/) — raw benchmark results, the CBM language-parity run that gates symbol-only languages, and the security findings registry checked by `pnpm findings:check`.
 
 ## Install
 
@@ -166,7 +165,8 @@ satori doctor
 
 `install` auto-detects supported Codex, Claude Code, and OpenCode clients from
 their documented local markers or CLI executables. `--client auto` is the
-explicit equivalent; use `--client all` to force configuration of all three.
+explicit equivalent. Antigravity (`agy`) is opt-in: use `--client agy`, or
+`--client all` to configure every supported client.
 If no supported client is detected, Satori stops before runtime installation and
 shows explicit client commands. `satori uninstall` defaults to all supported
 clients; use `--client auto` to limit cleanup to currently detected clients.
@@ -183,9 +183,9 @@ tool call:
   and OpenCode load it directly; Claude Code gets a link to it at
   `~/.claude/skills/satori`.
 
-Install adds nothing to `AGENTS.md` or hook files. It removes Satori blocks and the
-Codex guidance hook left by earlier versions, and never overwrites a skill it
-did not write. `satori uninstall` removes the shared skill only when it targets
+Install adds nothing to `AGENTS.md` or hook files, and it never removes or
+overwrites files it did not write: a real directory at a skill-link path is
+refused with instructions to remove it yourself. `satori uninstall` removes the shared skill only when it targets
 all clients (the default).
 
 Restart your coding agent and tell it:
@@ -319,41 +319,11 @@ Satori distinguishes ordinary source drift from states that need a full rebuild:
 This keeps routine local reindex maintenance out of the user's way without hiding cases where a rebuild can have operational or provider-cost consequences.
 
 <details>
-<summary><strong>Measured evidence from the Satori repository</strong></summary>
+<summary><strong>Benchmark: Satori versus codebase-memory-mcp</strong></summary>
 
 ## Measured on Satori
 
-These are repository measurements, not borrowed model-card claims.
-
-### Local Potion + LanceDB
-
-A checksum-sealed run on the Satori repository published 488 files and 10,830 chunks with 256-dimensional Potion vectors:
-
-| Operation | Measured result |
-|---|---:|
-| Warm search p95 | 154.543 ms |
-| Zero-change synchronization p95 | 185.662 ms |
-| One-file addition p95 | 789.310 ms |
-| One-file body edit p95 | 792.245 ms |
-| One-file signature edit p95 | 811.632 ms |
-| One-file deletion p95 | 864.802 ms |
-| Rename p95 | 880.937 ms |
-
-The bundled native feasibility run measured a 36.0 MiB model/helper closure, 104.3 MiB model-related RSS, and 232.404 ms model load. Its short-text microbenchmark reached 19,282 items/s, but that isolated throughput number is not a full indexing claim.
-
-### Potion versus Voyage
-
-The same frozen 30 positive retrieval tasks were queried against compatible Potion and Voyage hybrid publications. BM25, exact evidence, fusion, grouping, source projection, and request policy were held constant; only the dense model/publication differed.
-
-| Retrieval result | Potion | Voyage |
-|---|---:|---:|
-| Required owner at rank 1 | 13/30 | 14/30 |
-| Required owner in top 5 | 23/30 | 25/30 |
-| Required owner in top 15 | 25/30 | 27/30 |
-| Observed search latency p50 | 94.64 ms | 1,009.46 ms |
-| Observed search latency p95 | 1,251.00 ms | 1,813.34 ms |
-
-Potion is a useful local first stage, not a claim of Voyage parity. The comparison found weaker Java and configuration/runtime retrieval for Potion. The paired latency observations are descriptive rather than a repeated cross-provider performance qualification.
+Measured with the repository's own benchmark script; raw results are committed.
 
 ### Satori versus codebase-memory-mcp
 
@@ -369,14 +339,6 @@ Five pinned repositories, two sequential runs each, measured with `scripts/bench
 
 Satori found a same-name definition in the defining file for 80–100% of lookups, and its file outlines covered 76–100% of CBM's definitions in 30 sampled files per repository. Satori indexes slower because it also builds embeddings, a vector index, and publication proofs; CBM builds a graph only. Satori's peak RSS during indexing was 1.2–3.1 GB (whole process tree) versus 0.1–2.2 GB for CBM's shared daemon. Satori's index timings agreed within 10% across runs; CBM's shared-daemon timings and Satori's edit sync on two repositories did not, so treat those as indicative. Raw results: [`docs/evidence/benchmarks/2026-09-28-final.json`](./docs/evidence/benchmarks/2026-09-28-final.json).
 
-### Token-efficient retrieval
-
-Satori groups retrieval around owners and exposes bounded source instead of making an agent assemble context from repeated broad reads. The product is designed to cut repository-discovery token waste dramatically by routing exact symbols and compact source windows instead of whole-file dumps.
-
-A fresh two-task OpenCode comparison also reached the correct answers through a shorter evidence route. The detailed exploratory artifact retains the raw tool, context, and token accounting; this public page deliberately does not turn one small run into a universal token-reduction percentage.
-
-The qualification details and limitations remain available in the [Potion plan](./docs/plans/SATORI_POTION_OFFLINE_EMBEDDING_LEAN_QUALIFICATION_PLAN.md).
-
 </details>
 
 ## Runtime Choices
@@ -386,7 +348,7 @@ The qualification details and limitations remain available in the [Potion plan](
 | Offline | Potion Code 16M v2 + BM25 | LanceDB | Linux x64; no model API key |
 | Connected | Voyage Code 3 + BM25 | LanceDB | `VOYAGEAI_API_KEY` |
 | Ollama | selected Ollama model + BM25 | LanceDB | local loopback Ollama |
-| Connected Milvus | Voyage Code 3 + BM25 | Milvus or Zilliz | explicit Milvus configuration |
+| Connected Milvus | Voyage Code 3 + BM25 | Milvus or Zilliz Cloud | `VOYAGEAI_API_KEY`, `MILVUS_ADDRESS` (plus `MILVUS_TOKEN` for Zilliz) |
 
 Connected install:
 
@@ -404,7 +366,7 @@ managed launcher temporarily points at a local repository build; doctor keeps
 the outside-managed-store warning while reporting the profile the launcher
 actually applies.
 
-Existing Milvus deployments can select `--vector-store milvus`. Existing Ollama installations can select or retain an explicit model:
+For Milvus or Zilliz Cloud, add `--vector-store milvus` to a Voyage install; the launcher then sets `VECTOR_STORE_PROVIDER=Milvus`, which the runtime requires (`MILVUS_ADDRESS` alone does not select Milvus). For Ollama embeddings, select an explicit model:
 
 ```bash
 satori install --client all --runtime offline --ollama-model nomic-embed-text
@@ -514,7 +476,7 @@ profile = "minimal"
 | `minimal` | Source (including every navigation language's extensions) and documentation text. |
 | `all-text` | `default` plus additional bounded UTF-8 text files. |
 
-Every profile honors `.satoriignore`, `.gitignore`, and the hard denylist for secrets, dependencies, generated output, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Profiles control what is indexed; `search_codebase` still defaults to implementation-first `scope="runtime"`.
+Every profile honors `.satoriignore`, `.gitignore`, and the hard denylist for secrets, dependencies, generated output, lockfiles, binaries, logs, databases, bundles, source maps, and snapshots. Git ignore files (`.git/info/exclude`, the root `.gitignore`, then nested `.gitignore` files, parent before child) apply first, and `.satoriignore` is applied last so its rules, including `!` re-includes, override them. The hard denylist cannot be re-included by any `!` rule, and it matches directory names such as `build`, `out`, `target`, `tmp`, and `logs` at any depth. Profiles control what is indexed; `search_codebase` still defaults to implementation-first `scope="runtime"`.
 
 ## Configuration
 
@@ -616,9 +578,7 @@ The runtime verifies the pinned revision's artifact digests before use, performs
 ONNX inference in a killable child process, and preserves the complete
 deterministic baseline when model loading, scoring, validation, or the request
 deadline fails. Projection profiles freeze model, projection, depth, thread,
-and batching behavior. Operators may only reduce their request deadline, queue
-wait, reranker-stage deadline, or active/queued capacity using the corresponding
-variables listed above; deadlines are never increased. A terminal rerank
+and batching behavior. A terminal rerank
 execution reports qualified diagnostics — attempts, retries, timeouts, the
 effective deadline, observed wall time, and deadline lateness — alongside the
 frozen retrieval order. The resulting effective profile remains part of the
@@ -675,23 +635,10 @@ Every other language in the catalog is search-only: its files are indexed for se
 - Local diagnostics exclude source, queries, paths, symbols, and repository identifiers and are never uploaded by Satori.
 - Native Windows and macOS are not supported in this release. On Windows, run Satori inside WSL2.
 - The relationship graph is conservative navigation evidence, not a full static-analysis proof.
-- At revision `4138b1e…`, fresh-process startup measured 645.95 ms p50, after
-  which the first `call_graph` measured 7,204.25 ms p50 and 7,530.10 ms p95.
-  Calls measured after two preparation calls were 11.97 ms p50 and 13.57 ms
-  p95. The cold owners were checkpoint/completion validation and relationship
-  loading/validation; adjacency construction was only about 21 ms.
-- The six-publication memory experiment at that revision peaked at 881.82 MiB
-  RSS and established `memory_retained_capacity_bounded`, not a proven plateau
-  or multi-day guarantee. The separate 2 GiB deployment allowance comes from
-  earlier integration evidence that observed a 1,447.21 MiB incremental
-  publication peak.
-- Those cold and memory measurements were not rerun after the current master's
-  full-reindex V4 authority-publication change. They are retained release
-  characterization, not strict proof of identical current-master performance.
 
 ## Breaking changes (next major)
 
-This release removes support for every earlier on-disk format, config shape, CLI flag, environment variable, and install artifact. There is no migration and nothing is deleted for you: old state is refused with a message naming the single fix. No CHANGELOG file exists in this repository, so the notes live here.
+This release removes support for every earlier on-disk format, config shape, CLI flag, environment variable, and install artifact. There is no migration and nothing is deleted for you: old state is refused with a message naming the single fix.
 
 After upgrading, do both of these:
 

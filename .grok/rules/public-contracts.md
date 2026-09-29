@@ -16,7 +16,7 @@ serialized envelopes, errors, migrations, or generated contract artifacts.
 ## Establish authority first
 
 - Read the owning boundary schema and serializer, one production caller, the
-  frozen plan or fixture, and the focused contract test before editing.
+  fixture, and the focused contract test before editing.
 - Record the accepted variants, required and forbidden fields, success and
   error shapes, global and effective limits, compatibility decision, and
   first-party consumers.

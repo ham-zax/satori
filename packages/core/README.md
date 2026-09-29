@@ -7,7 +7,7 @@ Most coding-agent installations should use `@satori-code/cli` and `@satori-code/
 ## What Core Owns
 
 - repository discovery, ignore policy, source observation, and incremental synchronization;
-- Oxc and Tree-sitter-WASM language analysis;
+- Oxc, Tree-sitter-WASM, and the CBM semantic engine (WebAssembly) for language analysis;
 - structural chunks, symbols, navigation, and conservative relationship evidence;
 - Potion, VoyageAI, OpenAI, Gemini, and Ollama embeddings;
 - dense and BM25 hybrid retrieval;

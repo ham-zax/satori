@@ -5,7 +5,7 @@ Status: deferred. Recorded 2026-09-27.
 ## Question
 
 Should Satori install through a `curl | sh` (and PowerShell) script, the way
-codebase-memory-mcp does, instead of `npx @zokizuan/satori-cli install`?
+codebase-memory-mcp does, instead of `npx @satori-code/cli install`?
 
 ## What codebase-memory-mcp actually does
 
@@ -82,4 +82,4 @@ install, and a full uninstall) delivers most of the perceived benefit.
 
 A cheap intermediate step, if wanted: a tiny `install.sh` that checks for a
 supported Node version, prints a friendly remediation when it is missing, and
-then runs `npx -y @zokizuan/satori-cli@latest install`.
+then runs `npx -y @satori-code/cli@latest install`.

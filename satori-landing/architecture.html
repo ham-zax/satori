@@ -1614,9 +1614,8 @@
             <h3>Hybrid Retrieval + Reranking</h3>
             <p>
               Dense and BM25 hits merge through reciprocal rank fusion, then LateOn
-              reranks a bounded candidate set. Exploratory six-repo tuning reached
-              <strong>0.5046 MRR</strong> versus 0.2900 without reranking across 36
-              owner-discovery tasks; that is tuning evidence, not a held-out guarantee.
+              reranks a bounded candidate set. If reranking fails, the retrieval
+              order is kept.
             </p>
           </article>
           <article class="card">

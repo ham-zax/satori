@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes target the current `main` branch and the latest published versions of:
+Security fixes target the current `master` branch and the latest published versions of:
 
 - `@satori-code/core`
 - `@satori-code/mcp`

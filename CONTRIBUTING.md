@@ -4,24 +4,15 @@ This repository is intentionally narrow. Keep changes focused on:
 - `packages/core`: semantic indexing engine
 - `packages/mcp`: MCP server runtime
 - `packages/cli`: installer, doctor, and shell entrypoints
+- `scripts/` and `evals/`: release tooling, benchmarks, and retrieval evaluations
 - `docs/` and `satori-landing/`: public documentation and launch collateral
 
-Do not add UI extensions, eval sidecars, or parallel product surfaces here.
+Do not add UI extensions or parallel product surfaces here.
 
 ## Setup
 
 ```bash
 pnpm install
-```
-
-## Common Commands
-
-```bash
-pnpm run check
-pnpm build
-pnpm --filter @satori-code/mcp test
-pnpm --filter @satori-code/cli test
-pnpm test:integration
 ```
 
 ## Architecture Guardrails
@@ -38,8 +29,10 @@ Before opening a PR, run:
 ```bash
 pnpm run check
 pnpm build
+pnpm --filter @satori-code/core test
 pnpm --filter @satori-code/mcp test
 pnpm --filter @satori-code/cli test
+pnpm test:scripts
 pnpm test:integration
 ```
 

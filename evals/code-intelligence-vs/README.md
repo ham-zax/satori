@@ -17,7 +17,7 @@ Run the default suite against both providers:
 
 ```bash
 pnpm run vs:code-intelligence -- \
-  --cmm-command /home/hamza/.local/bin/codebase-memory-mcp \
+  --cmm-command /path/to/codebase-memory-mcp \
   --out /tmp/satori-vs-both.json
 ```
 
@@ -27,7 +27,7 @@ Run only one provider:
 pnpm run vs:code-intelligence -- --provider satori
 pnpm run vs:code-intelligence -- \
   --provider codebase-memory \
-  --cmm-command /home/hamza/.local/bin/codebase-memory-mcp
+  --cmm-command /path/to/codebase-memory-mcp
 ```
 
 Use JSON-array command specs when a server command needs arguments:

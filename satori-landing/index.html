@@ -1551,12 +1551,12 @@ npx -y @satori-code/cli@latest doctor</code></pre>
       </p>
       <div class="grid">
         <article class="card">
-          <h4>154 ms local search</h4>
-          <p>Potion + LanceDB measured 154.543 ms warm-search p95 on Satori's 10,830-chunk release benchmark.</p>
+          <h4>Fast exact lookups</h4>
+          <p>Exact symbol lookup measured 14–65 ms p50 across five pinned repositories on the offline Potion + LanceDB + LateOn runtime.</p>
         </article>
         <article class="card">
           <h4>Parser-derived repository structure</h4>
-          <p>Parser-backed symbols, structural evidence, exact spans, and qualified CALLS v0 navigation ship across nine production languages.</p>
+          <p>Parser-backed symbols, structural evidence, exact spans, and qualified CALLS v0 navigation ship across nine production languages, plus Kotlin and PHP.</p>
         </article>
         <article class="card">
           <h4>Token-efficient by design</h4>
@@ -1564,7 +1564,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
         </article>
         <article class="card">
           <h4>Reranking that finds owners</h4>
-          <p>Exploratory six-repo tuning reached 0.5046 MRR versus 0.2900 without reranking across 36 owner-discovery tasks—not a held-out release claim.</p>
+          <p>LateOn reranks a bounded candidate set locally to put the owning code first; if reranking fails, results keep their retrieval order.</p>
         </article>
         <article class="card">
           <h4>Offline after install</h4>

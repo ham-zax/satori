@@ -2,9 +2,9 @@
 
 This guide covers contribution rules specific to the MCP server package.
 
-## Current Tool Surface (v1.0.0+)
+## Tool Surface
 
-Only these tools are supported:
+The public surface is exactly these 11 tools:
 
 - `list_codebases`
 - `manage_index` (`action`: `create | reindex | sync | status | cancel | clear`)
@@ -13,11 +13,10 @@ Only these tools are supported:
 - `continue_search`
 - `file_outline`
 - `call_graph`
+- `trace_path`
 - `find_references`
 - `detect_changes`
 - `read_file`
-
-Legacy tool names from pre-1.0 are intentionally removed.
 
 ## Quick Commands
 
@@ -47,7 +46,7 @@ pnpm --filter @satori-code/mcp docs:check
 
 - Keep routing and tool exposure capability-driven (no direct env checks in handlers).
 - Keep tool schemas canonical in `src/tools/*` Zod definitions; JSON Schema must be generated from those definitions.
-- Treat the selected immutable Publication as the sole durable indexed/source/navigation/policy authority; unsupported pre-clean-break state requires a fresh index/reindex.
+- Treat the selected immutable Publication as the sole durable indexed/source/navigation/policy authority; any older on-disk format is rejected as `requires_reindex`, never migrated.
 - Managed offline runtimes should transparently start or join rebuild-safe reindex maintenance for already-tracked incompatible Publications. Preserve deterministic `requires_reindex` recovery responses for states where automatic maintenance is unavailable, suppressed after failure, or unsafe.
 - Do not reintroduce compatibility aliases for removed tools.
 - Keep `search_codebase` telemetry as structured stderr JSON (`event=search_executed`).

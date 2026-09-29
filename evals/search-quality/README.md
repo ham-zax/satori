@@ -1,20 +1,16 @@
 # Search-quality evaluation
 
-This harness is the durable behavioral retrieval benchmark for Satori's search product contract.
+The behavioral retrieval benchmark for `search_codebase`: each case asks a
+behavioral question and checks that the owning implementation appears within a
+top-k budget.
 
-## F2 behavioral-owner provenance
+```bash
+pnpm eval:search-quality
+```
 
-Relationship Evidence Recovery F2 searched repository history for the previously reported
-`inferPhase` behavioral-owner fixture with both content pickaxe and regex history searches
-(`git log --all -SinferPhase` and `git log --all -G inferPhase`). Neither search found a
-historical repository fixture or benchmark case to replay directly.
+Cases and fixtures live in `fixtures/search-quality/`; the harness is
+`search-quality-evaluation.ts` and runs against the production search path.
 
-The committed `behavioral_owner_infer_phase` workload is therefore the smallest durable
-equivalent of that missing case. It models a behavioral question whose implementation owner
-(`inferPhase`) is initially ranked behind a normalizer, caller/explainer, and orchestration
-candidate. The acceptance criterion is product-facing owner recovery within the ordinary
-top-3 budget, measured by the same search-quality harness as the rest of the corpus.
-
-This benchmark is intentionally separate from semantic relationship qualification. A passing
-relationship resolver qualification does not substitute for a passing behavioral retrieval
-replay.
+This benchmark measures retrieval only. Semantic relationship qualification
+(`evals/semantic-relationship-qualification/`) is separate, and passing one does
+not substitute for the other.

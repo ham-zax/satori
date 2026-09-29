@@ -38,7 +38,7 @@ export type ResolvedVectorStoreConfig =
     | { vectorStoreProvider: 'LanceDB'; lanceDbPath: string };
 /**
  * Distinct freshness / sync timing knobs. Values may coincide numerically but
- * must not be treated as one concept (see docs/plans/INCREMENTAL_INDEX_FRESHNESS_PLAN.md).
+ * must not be treated as one concept.
  *
  * BACKGROUND_SYNC_INITIAL_DELAY_MS — first background tick after embedding runtime starts.
  * BACKGROUND_SYNC_INTERVAL_MS — delay between background ticks (self-scheduling).

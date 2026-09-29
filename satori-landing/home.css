@@ -903,6 +903,15 @@ h3.minor {
   text-wrap: pretty;
 }
 
+.tile-link {
+  position: relative;
+  z-index: 1;
+  color: var(--paper);
+  text-decoration: underline;
+  text-decoration-color: var(--shu);
+  text-underline-offset: 3px;
+}
+
 .tile-speed {
   grid-column: span 3;
   grid-row: span 2;

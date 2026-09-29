@@ -340,6 +340,7 @@ test("call graph keeps candidate disagreement visible in summary and pages its d
             providerId: "fixture",
             providerVersion: "v1",
             candidateInstanceIds: ["candidate-a"],
+            unidentifiedCandidateCount: 0,
             publishedTargetInstanceIds: ["target-b"],
         }],
     }];
@@ -348,6 +349,11 @@ test("call graph keeps candidate disagreement visible in summary and pages its d
     assert.equal(summary.evidenceSummary?.candidateConflictCount, 1);
     assert.ok(summary.evidenceSummary?.availableKinds.includes("candidate_conflicts"));
     assert.deepEqual(summary.constructCoverage?.[0]?.conflictingCandidates, []);
+    const [step] = summary.hints?.nextSteps as Array<{ tool: string; args: unknown; reason: string }>;
+    assert.equal(step?.tool, "call_graph");
+    assert.deepEqual(step?.args, { path: input.path, symbolRef: input.symbolRef, evidence: { kind: "candidate_conflicts" } });
+    assert.match(step?.reason ?? "", /1 call site\(s\) have provider candidates that conflict/);
+    assert.equal(projectCallGraphEvidence(payload()).hints, undefined);
 
     const page = projectCallGraphEvidence(input, { kind: "candidate_conflicts", limit: 1 });
     assert.equal(page.evidencePage?.availableCount, 1);

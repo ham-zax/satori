@@ -123,6 +123,7 @@ test('construct coverage reports a candidate mismatch without discarding the pro
         providerId: 'fixture-provider',
         providerVersion: 'fixture-v1',
         candidateInstanceIds: ['candidate-a'],
+        unidentifiedCandidateCount: 0,
         publishedTargetInstanceIds: ['target-b'],
     }]);
 
@@ -139,7 +140,19 @@ test('construct coverage reports a candidate mismatch without discarding the pro
             }],
         },
     })], { relationships: [relationship] });
-    assert.equal(incomplete?.conflictingCandidateCount, 0);
+    assert.equal(incomplete?.status, 'ready');
+    assert.equal(incomplete?.conflictingCandidateCount, 1);
+    assert.deepEqual(incomplete?.conflictingCandidates[0]?.candidateInstanceIds, ['candidate-a']);
+    assert.deepEqual(incomplete?.conflictingCandidates[0]?.publishedTargetInstanceIds, ['target-b']);
+    assert.equal(incomplete?.conflictingCandidates[0]?.unidentifiedCandidateCount, 1);
+
+    const [uncomparable] = summarizeResolutionConstructCoverage([unresolvedClaim({
+        observation: {
+            ...claim.observation,
+            candidates: [{ file: 'src/unknown.ts', span: callSpan, name: 'pump' }],
+        },
+    })], { relationships: [relationship] });
+    assert.equal(uncomparable?.conflictingCandidateCount, 0);
 });
 
 test('publication-backed resolved coverage requires the authoritative target at the exact site', () => {

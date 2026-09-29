@@ -26,6 +26,8 @@ export interface ResolutionConstructCandidateConflict {
     readonly providerId: string;
     readonly providerVersion: string;
     readonly candidateInstanceIds: readonly string[];
+    /** Candidates without a symbolInstanceId; they cannot be compared with published targets. */
+    readonly unidentifiedCandidateCount: number;
     readonly publishedTargetInstanceIds: readonly string[];
 }
 
@@ -178,12 +180,13 @@ export function summarizeResolutionConstructCoverage(
             ));
             const conflicts = sorted.flatMap((claim): ResolutionConstructCandidateConflict[] => {
                 if (claim.decision === 'resolved'
-                    || claim.resolutionAuthority === 'unsupported'
-                    || claim.observation.candidates.some((candidate) => !candidate.symbolInstanceId)) return [];
+                    || claim.resolutionAuthority === 'unsupported') return [];
                 const candidateIds = [...new Set(claim.observation.candidates
                     .map((candidate) => candidate.symbolInstanceId)
                     .filter((id): id is string => id !== undefined))].sort(compareStrings);
                 if (candidateIds.length === 0) return [];
+                const unidentifiedCandidateCount = claim.observation.candidates
+                    .filter((candidate) => !candidate.symbolInstanceId).length;
                 const key = exactCallSiteKey({
                     file: claim.sourceFile,
                     sourceInstanceId: claim.sourceInstanceId,
@@ -201,6 +204,7 @@ export function summarizeResolutionConstructCoverage(
                     providerId: claim.providerId,
                     providerVersion: claim.providerVersion,
                     candidateInstanceIds: candidateIds,
+                    unidentifiedCandidateCount,
                     publishedTargetInstanceIds: unmatchedTargets,
                 }];
             });

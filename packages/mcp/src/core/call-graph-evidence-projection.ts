@@ -257,6 +257,34 @@ function summarizePayload(
     };
 }
 
+// Summary-only responses keep the conflict as a count; this tells the caller that a
+// proved edge disagrees with provider candidates and how to disclose the details.
+function withCandidateConflictHint(
+    payload: CallGraphResponseEnvelope,
+    summary: CallGraphEvidenceSummaryResult,
+): CallGraphResponseEnvelope {
+    if (summary.candidateConflictCount === 0) return payload;
+    const existingSteps = Array.isArray(payload.hints?.nextSteps) ? payload.hints.nextSteps : [];
+    return {
+        ...payload,
+        hints: {
+            ...payload.hints,
+            nextSteps: [{
+                tool: "call_graph",
+                args: {
+                    path: payload.path,
+                    symbolRef: payload.symbolRef,
+                    ...(payload.direction ? { direction: payload.direction } : {}),
+                    ...(payload.depth !== undefined ? { depth: payload.depth } : {}),
+                    ...(payload.limit !== undefined ? { limit: payload.limit } : {}),
+                    evidence: { kind: "candidate_conflicts" },
+                },
+                reason: `${summary.candidateConflictCount} call site(s) have provider candidates that conflict with the proved CALLS edge. The edge is kept; request evidence "candidate_conflicts" to inspect the disagreement.`,
+            }, ...existingSteps],
+        },
+    };
+}
+
 export function projectCallGraphEvidence(
     payload: CallGraphResponseEnvelope,
     request?: CallGraphEvidenceRequest,
@@ -265,7 +293,7 @@ export function projectCallGraphEvidence(
 
     const summary = evidenceSummary(payload);
     const projected = summarizePayload(payload, summary);
-    if (!request) return projected;
+    if (!request) return withCandidateConflictHint(projected, summary);
 
     const pageSize = Math.max(1, Math.min(50, Math.floor(request.limit)));
     const publicationId = payload.navigationAuthority?.publicationId;

@@ -16,12 +16,6 @@ import {
 import type { InstallCommandInput } from "./install-contracts.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
-    HISTORICAL_LATEON_CONTEXT_V3_PROFILE_ID,
-    HISTORICAL_LATEON_D32_ACTIVATION_POLICY,
-    PREVIOUS_LATEON_CONTEXT_V3_ACTIVATED_PROFILE_ID,
-    PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY,
-    PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY,
-    PREVIOUS_LATEON_CONTEXT_V4_PROFILE_ID,
     ensureDefaultLateOnModel,
     resolveDefaultLateOnModelDirectory,
     verifyLateOnModelDirectory,
@@ -30,28 +24,12 @@ import {
 } from "./lateon-model-store.js";
 import { ensureModel, type ModelProgressReporter } from "./model-store.js";
 
-export function historicalManagedLateOnProfile(
+/** The managed LateOn profile bound in the launcher when it is not the one current profile. */
+function staleManagedLateOnProfile(
     managedEnvironment: Readonly<Record<string, string>>,
 ): string | null {
     const managed = managedEnvironment.SATORI_RERANKER_PROVIDER;
     const profile = managedEnvironment.SATORI_LATEON_PROFILE?.trim();
-    const policy = managedEnvironment.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-    if (profile === HISTORICAL_LATEON_CONTEXT_V3_PROFILE_ID) {
-        return null;
-    }
-    if (
-        profile === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATED_PROFILE_ID
-        && (policy === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY
-            || policy === HISTORICAL_LATEON_D32_ACTIVATION_POLICY)
-    ) {
-        return null;
-    }
-    if (
-        profile === PREVIOUS_LATEON_CONTEXT_V4_PROFILE_ID
-        && policy === PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY
-    ) {
-        return null;
-    }
     if (managed === "lateon" && profile !== DEFAULT_LATEON_PROFILE_ID) {
         return profile || "(missing)";
     }
@@ -61,10 +39,10 @@ export function historicalManagedLateOnProfile(
     return null;
 }
 
-export function migrationGuidance(profile: string): CliError {
+function staleLateOnProfileError(profile: string): CliError {
     return new CliError(
         "E_USAGE",
-        `Existing managed LateOn installation uses profile ${profile}, which is treated as historical D16. Run \`${satoriCliCommand("install --runtime offline --reranker lateon")}\` to migrate to D32, or \`${satoriCliCommand("install --runtime offline --reranker none")}\` to disable LateOn.`,
+        `Existing managed LateOn installation uses unsupported profile ${profile}. Reinstall with \`${satoriCliCommand("install --runtime offline --reranker lateon")}\`, or \`${satoriCliCommand("install --runtime offline --reranker none")}\` to disable LateOn.`,
         2,
     );
 }
@@ -101,11 +79,11 @@ export function resolveOfflineReranker(
                 2,
             );
         }
-        const historicalProfile = managedOffline
-            ? historicalManagedLateOnProfile(managedEnvironment)
+        const staleProfile = managedOffline
+            ? staleManagedLateOnProfile(managedEnvironment)
             : null;
-        if (historicalProfile) {
-            throw migrationGuidance(historicalProfile);
+        if (staleProfile) {
+            throw staleLateOnProfileError(staleProfile);
         }
         if (configured === "lateon" && !isQualifiedPlatform) rejectUnsupportedLateOn();
         return configured;
@@ -116,21 +94,8 @@ export function resolveOfflineReranker(
         if (managed === "none") return "none";
         if (managed === "lateon") {
             const profile = managedEnvironment.SATORI_LATEON_PROFILE?.trim();
-            const policy = managedEnvironment.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-            const previousManagedCombination = (
-                profile === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATED_PROFILE_ID
-                && (policy === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY
-                    || policy === HISTORICAL_LATEON_D32_ACTIVATION_POLICY)
-            ) || (
-                profile === PREVIOUS_LATEON_CONTEXT_V4_PROFILE_ID
-                && policy === PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY
-            );
-            if (
-                profile !== DEFAULT_LATEON_PROFILE_ID
-                && profile !== HISTORICAL_LATEON_CONTEXT_V3_PROFILE_ID
-                && !previousManagedCombination
-            ) {
-                throw migrationGuidance(profile || "(missing)");
+            if (profile !== DEFAULT_LATEON_PROFILE_ID) {
+                throw staleLateOnProfileError(profile || "(missing)");
             }
             if (!isQualifiedPlatform) rejectUnsupportedLateOn();
             return "lateon";
@@ -142,9 +107,9 @@ export function resolveOfflineReranker(
                 2,
             );
         }
-        const historicalProfile = historicalManagedLateOnProfile(managedEnvironment);
-        if (historicalProfile) {
-            throw migrationGuidance(historicalProfile);
+        const staleProfile = staleManagedLateOnProfile(managedEnvironment);
+        if (staleProfile) {
+            throw staleLateOnProfileError(staleProfile);
         }
         return isQualifiedPlatform ? "lateon" : "none";
     }

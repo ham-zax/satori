@@ -67,9 +67,6 @@ function plannedChangeLabel(change: PlannedChange): string {
         case "client-config": return `${client} configuration`;
         case "skill": return "Shared skill";
         case "skill-link": return `${client} skill link`;
-        case "legacy-skill": return "Legacy skill (removed)";
-        case "legacy-instructions": return "Legacy instructions (removed)";
-        case "legacy-guidance-hook": return "Legacy guidance hook (removed)";
     }
 }
 

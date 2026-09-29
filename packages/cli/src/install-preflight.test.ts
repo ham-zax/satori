@@ -1313,7 +1313,7 @@ function writeHistoricalD16Launcher(homeDir: string): string {
     return launcherPath;
 }
 
-test("managed D16 + env provider lateon without a CLI flag rejects with migration guidance", async () => {
+test("managed D16 + env provider lateon without a CLI flag rejects with reinstall guidance", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-d16-env-migration-"));
     try {
         writeHistoricalD16Launcher(homeDir);
@@ -1327,13 +1327,13 @@ test("managed D16 + env provider lateon without a CLI flag rejects with migratio
             env: { SATORI_RERANKER_PROVIDER: "lateon" },
             platform: "linux",
             architecture: "x64",
-        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
+        }), /Existing managed LateOn installation uses unsupported profile lateon_projection_v2_d16_v1\. Reinstall with `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon`, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
 });
 
-test("managed D16 + env provider none without a CLI flag rejects with migration guidance", async () => {
+test("managed D16 + env provider none without a CLI flag rejects with reinstall guidance", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-d16-env-disable-"));
     try {
         writeHistoricalD16Launcher(homeDir);
@@ -1347,7 +1347,7 @@ test("managed D16 + env provider none without a CLI flag rejects with migration 
             env: { SATORI_RERANKER_PROVIDER: "none" },
             platform: "linux",
             architecture: "x64",
-        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
+        }), /Existing managed LateOn installation uses unsupported profile lateon_projection_v2_d16_v1\. Reinstall with `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon`, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1430,7 +1430,7 @@ test("managed D16 + CLI --reranker none disables LateOn", async () => {
     }
 });
 
-test("managed D16 without CLI or environment rejects with migration guidance", async () => {
+test("managed D16 without CLI or environment rejects with reinstall guidance", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-d16-noflag-"));
     try {
         writeHistoricalD16Launcher(homeDir);
@@ -1444,7 +1444,7 @@ test("managed D16 without CLI or environment rejects with migration guidance", a
             env: {},
             platform: "linux",
             architecture: "x64",
-        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\./);
+        }), /Existing managed LateOn installation uses unsupported profile lateon_projection_v2_d16_v1\./);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1615,7 +1615,7 @@ test("existing managed D32 stays D32", async () => {
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v3_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
         },
     }), "utf8");
     try {
@@ -1959,7 +1959,7 @@ function seedManagedLateOnInstallation(homeDir: string): ManagedLateOnSnapshot {
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v3_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
         },
     }), "utf8");
     return {

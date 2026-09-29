@@ -408,12 +408,15 @@ export async function resolveMcpRuntimeBootstrap(
     });
 }
 
-export function createMcpConfig(): ContextMcpConfig {
-    if (envManager.get('SATORI_RERANK_APPLICATION_MODE') !== undefined) {
-        throw new Error(
-            'SATORI_RERANK_APPLICATION_MODE has been removed; unset it or roll back to the previous Satori release for legacy_rrf behavior.',
-        );
+/** Single owner of the removed-runtime-env guard shared by the config and shared-runtime client entry points. */
+export function assertRemovedRuntimeEnvUnset(read: (name: string) => string | undefined): void {
+    if (read('SATORI_RERANK_APPLICATION_MODE') !== undefined) {
+        throw new Error('SATORI_RERANK_APPLICATION_MODE has been removed; unset it.');
     }
+}
+
+export function createMcpConfig(): ContextMcpConfig {
+    assertRemovedRuntimeEnvUnset((name) => envManager.get(name));
     const executionPolicy = resolveExecutionPolicy(envManager.get('SATORI_RUNTIME_PROFILE'));
     const defaultProvider = (envManager.get('EMBEDDING_PROVIDER') as EmbeddingProvider) || 'VoyageAI';
     const defaultReadFileMaxLines = 1000;
@@ -530,21 +533,9 @@ export function createMcpConfig(): ContextMcpConfig {
     const lateOnProfileRaw = rerankerProvider === 'lateon'
         ? envManager.get('SATORI_LATEON_PROFILE')
         : undefined;
-    const knownLateOnProfiles = Object.values(LATEON_RUNTIME_PROFILE_IDS);
-    if (lateOnProfileRaw && !knownLateOnProfiles.includes(lateOnProfileRaw as LateOnRuntimeProfileId)) {
+    if (lateOnProfileRaw && lateOnProfileRaw !== LATEON_RUNTIME_PROFILE_IDS.contextV5D32) {
         throw new Error(
-            `Invalid SATORI_LATEON_PROFILE '${lateOnProfileRaw}'. Expected one of: ${knownLateOnProfiles.join(', ')}.`,
-        );
-    }
-    if (
-        lateOnProfileRaw
-        && lateOnProfileRaw !== LATEON_RUNTIME_PROFILE_IDS.contextV5D32
-    ) {
-        throw new Error(
-            `Unsupported SATORI_LATEON_PROFILE '${lateOnProfileRaw}'. `
-            + 'This historical LateOn runtime profile is retired and cannot execute. '
-            + `Run \`satori upgrade\` to migrate to SATORI_LATEON_PROFILE=${LATEON_RUNTIME_PROFILE_IDS.contextV5D32} `
-            + `with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5}.`,
+            `Invalid SATORI_LATEON_PROFILE '${lateOnProfileRaw}'. Expected ${LATEON_RUNTIME_PROFILE_IDS.contextV5D32}; reinstall is required.`,
         );
     }
     const lateOnProfileId = rerankerProvider === 'lateon'
@@ -552,34 +543,19 @@ export function createMcpConfig(): ContextMcpConfig {
             ?? LATEON_RUNTIME_PROFILE_IDS.contextV5D32
         : undefined;
     const lateOnActivationPolicyRaw = envManager.get('SATORI_LATEON_ACTIVATION_POLICY');
-    const knownLateOnActivationPolicies = Object.values(LATEON_ACTIVATION_POLICY_IDS);
     if (
         lateOnActivationPolicyRaw
-        && !knownLateOnActivationPolicies.includes(
-            lateOnActivationPolicyRaw as LateOnActivationPolicyId,
-        )
+        && lateOnActivationPolicyRaw !== LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5
     ) {
         throw new Error(
             `Invalid SATORI_LATEON_ACTIVATION_POLICY '${lateOnActivationPolicyRaw}'. `
-            + `Expected one of: ${knownLateOnActivationPolicies.join(', ')}.`,
+            + `Expected ${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5}; reinstall is required.`,
         );
     }
     if (lateOnActivationPolicyRaw && rerankerProvider !== 'lateon') {
         throw new Error(
             `SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; `
             + `received ${rerankerProvider}.`,
-        );
-    }
-    if (
-        lateOnActivationPolicyRaw === LATEON_ACTIVATION_POLICY_IDS.ownerDefaultD32V2
-        || lateOnActivationPolicyRaw === LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV3
-        || lateOnActivationPolicyRaw === LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV4
-    ) {
-        throw new Error(
-            `Unsupported SATORI_LATEON_ACTIVATION_POLICY '${lateOnActivationPolicyRaw}'. `
-            + 'This historical LateOn activation policy is retired. '
-            + `Run \`satori upgrade\` to migrate to SATORI_LATEON_ACTIVATION_POLICY=${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5} `
-            + `with SATORI_LATEON_PROFILE=${LATEON_RUNTIME_PROFILE_IDS.contextV5D32}.`,
         );
     }
     const lateOnActivationPolicy = (

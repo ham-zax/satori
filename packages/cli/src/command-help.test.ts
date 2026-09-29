@@ -40,9 +40,8 @@ test("per-command help lists usage, exactly the parser's options, and examples",
     }
 });
 
-test("every help topic renders, and update is presented as an alias of upgrade", () => {
+test("every help topic renders", () => {
     for (const topic of TOPICS) {
         assert.match(formatCommandHelpText(topic), /^\S.*\n\nUsage:\n {2}satori /, topic);
     }
-    assert.match(formatCommandHelpText("upgrade"), /satori update/);
 });

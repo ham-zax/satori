@@ -19,12 +19,11 @@ import type {
     LateOnWorkerResponse,
 } from "./lateon-reranker-protocol.js";
 import {
-    LATEON_RETIRED_RUNTIME_PROFILE_IDS,
     LATEON_RUNTIME_PROFILE_IDS,
     type LateOnRuntimeProfileId,
 } from "./lateon-reranker-protocol.js";
 
-export { LATEON_RETIRED_RUNTIME_PROFILE_IDS, LATEON_RUNTIME_PROFILE_IDS } from "./lateon-reranker-protocol.js";
+export { LATEON_RUNTIME_PROFILE_IDS } from "./lateon-reranker-protocol.js";
 export type { LateOnRuntimeProfileId } from "./lateon-reranker-protocol.js";
 
 export type LateOnOperationalReason =
@@ -119,18 +118,13 @@ function validateCommonProfile(profile: Partial<LateOnRuntimeProfile>): void {
 export function loadLateOnRuntimeProfile(
     profileIdOrPath: LateOnRuntimeProfileId | string = LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
 ): LateOnRuntimeProfile {
-    // Phase 9.1 — retired profiles are recognized only to produce a clear
-    // rejection; they never load or execute.
-    if (
-        (LATEON_RETIRED_RUNTIME_PROFILE_IDS as readonly string[]).includes(profileIdOrPath)
-    ) {
+    const profilePath = PROFILE_PATHS[profileIdOrPath as LateOnRuntimeProfileId]
+        ?? (path.isAbsolute(profileIdOrPath) ? profileIdOrPath : undefined);
+    if (!profilePath) {
         throw new Error(
-            `LateOn runtime profile '${profileIdOrPath}' is retired and unsupported. `
-            + `Run \`satori upgrade\` to migrate to ${LATEON_RUNTIME_PROFILE_IDS.contextV5D32}.`,
+            `Unsupported LateOn runtime profile '${profileIdOrPath}'; reinstall is required.`,
         );
     }
-    const profilePath = PROFILE_PATHS[profileIdOrPath as LateOnRuntimeProfileId]
-        ?? path.resolve(profileIdOrPath);
     const parsed = JSON.parse(fs.readFileSync(profilePath, "utf8")) as Partial<LateOnRuntimeProfile>;
     validateCommonProfile(parsed);
     if (parsed.schemaVersion !== "satori_lateon_runtime_profile_v5") {

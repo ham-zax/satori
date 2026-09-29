@@ -8,7 +8,6 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
-import { prepareSkillLinkRemoval } from "./client-config-mutations.js";
 import { CliError } from "./errors.js";
 import {
     executeInstallCommand as executeInstallCommandProduction,
@@ -1278,7 +1277,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v3_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
         });
         const originalLauncher = readFile(launcherPath(homeDir));
         const originalConfig = readFile(path.join(homeDir, ".codex", "config.toml"));
@@ -1389,220 +1388,6 @@ test("legacy no-provider upgrade defaults to LateOn D32", async () => {
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
             "lateon_context_v5_d32_owner_default_v1",
-        );
-    });
-});
-
-test("managed runtime upgrade migrates the previous managed context-v4 default combination atomically", async () => {
-    const previousManagedEnvironmentFor = (homeDir: string) => ({
-        SATORI_RUNTIME_PROFILE: "offline",
-        VECTOR_STORE_PROVIDER: "LanceDB",
-        LANCEDB_PATH: path.join(homeDir, "lancedb"),
-        EMBEDDING_PROVIDER: "Potion",
-        SATORI_RERANKER_PROVIDER: "lateon",
-        SATORI_LATEON_MODEL_PATH: path.join(homeDir, "lateon-model"),
-        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v4_d32_v1",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v4_d32_owner_default_v1",
-    });
-
-    await withTempHome(async (homeDir) => {
-        await installUpgradeSourceRuntime(homeDir, previousManagedEnvironmentFor(homeDir));
-        writeLateOnModelDirectory(path.join(homeDir, "lateon-model"), LATEON_FIXTURE_ARTIFACTS);
-        let observedProfile: string | undefined;
-        let observedPolicy: string | undefined;
-
-        await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
-            homeDir,
-            env: {},
-            platform: "linux",
-            architecture: "x64",
-            lateOnModelPath: path.join(homeDir, "lateon-model"),
-            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
-            lateOnAuthorityLoader: loadAcquisitionAuthority,
-            execFileSyncImpl: installRuntimePackageStub(
-                "dist/target-runtime.mjs",
-                UPGRADE_TARGET.mcpPackageSpecifier,
-                UPGRADE_TARGET.mcpVersion,
-                UPGRADE_TARGET.coreVersion,
-            ) as never,
-            preflightDependencies: {
-                probeCandidateRuntime: async () => {},
-            },
-            preflightRunner: async (input) => {
-                observedProfile = input.lateOnProfileId;
-                observedPolicy = input.lateOnActivationPolicy;
-                return {
-                    runtimeEnvironment: Object.freeze({
-                        SATORI_RUNTIME_PROFILE: "offline",
-                        VECTOR_STORE_PROVIDER: "LanceDB",
-                        EMBEDDING_PROVIDER: "Potion",
-                        SATORI_RERANKER_PROVIDER: input.reranker ?? "",
-                        SATORI_LATEON_MODEL_PATH: input.lateOnModelPath ?? "",
-                        SATORI_LATEON_PROFILE: input.lateOnProfileId ?? "",
-                        SATORI_LATEON_ACTIVATION_POLICY: input.lateOnActivationPolicy ?? "",
-                    }),
-                };
-            },
-        });
-
-        assert.equal(observedProfile, "lateon_offline_quality_projection_v5_d32_v1");
-        assert.equal(observedPolicy, "lateon_context_v5_d32_owner_default_v1");
-        const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
-        );
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
-        );
-    });
-
-    await withTempHome(async (homeDir) => {
-        await installUpgradeSourceRuntime(homeDir, previousManagedEnvironmentFor(homeDir));
-        writeLateOnModelDirectory(path.join(homeDir, "lateon-model"), LATEON_FIXTURE_ARTIFACTS);
-        const originalLauncher = readFile(launcherPath(homeDir));
-
-        await assert.rejects(
-            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
-                homeDir,
-                env: {},
-                platform: "linux",
-                architecture: "x64",
-                lateOnModelPath: path.join(homeDir, "lateon-model"),
-                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
-                lateOnAuthorityLoader: loadAcquisitionAuthority,
-                execFileSyncImpl: installRuntimePackageStub(
-                    "dist/target-runtime.mjs",
-                    UPGRADE_TARGET.mcpPackageSpecifier,
-                    UPGRADE_TARGET.mcpVersion,
-                    UPGRADE_TARGET.coreVersion,
-                ) as never,
-                preflightDependencies: {
-                    probeCandidateRuntime: async () => {},
-                },
-                preflightRunner: async () => {
-                    const staleLauncher = readFile(launcherPath(homeDir));
-                    if (staleLauncher !== originalLauncher) {
-                        throw new Error("launcher changed before the preflight failure");
-                    }
-                    throw new Error("probe failure");
-                },
-            }),
-            /probe failure/,
-        );
-        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
-    });
-});
-
-test("managed runtime upgrade migrates the historical context-v3 activation combination atomically", async () => {
-    const historicalEnvironmentFor = (homeDir: string) => ({
-        SATORI_RUNTIME_PROFILE: "offline",
-        VECTOR_STORE_PROVIDER: "LanceDB",
-        LANCEDB_PATH: path.join(homeDir, "lancedb"),
-        EMBEDDING_PROVIDER: "Potion",
-        SATORI_RERANKER_PROVIDER: "lateon",
-        SATORI_LATEON_MODEL_PATH: path.join(homeDir, "lateon-model"),
-        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v3_d32_v1",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_d32_owner_default_v1",
-    });
-
-    await withTempHome(async (homeDir) => {
-        await installUpgradeSourceRuntime(homeDir, historicalEnvironmentFor(homeDir));
-        writeLateOnModelDirectory(path.join(homeDir, "lateon-model"), LATEON_FIXTURE_ARTIFACTS);
-        let observedProfile: string | undefined;
-        let observedPolicy: string | undefined;
-
-        await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
-            homeDir,
-            env: {},
-            platform: "linux",
-            architecture: "x64",
-            lateOnModelPath: path.join(homeDir, "lateon-model"),
-            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
-            lateOnAuthorityLoader: loadAcquisitionAuthority,
-            execFileSyncImpl: installRuntimePackageStub(
-                "dist/target-runtime.mjs",
-                UPGRADE_TARGET.mcpPackageSpecifier,
-                UPGRADE_TARGET.mcpVersion,
-                UPGRADE_TARGET.coreVersion,
-            ) as never,
-            preflightDependencies: {
-                probeCandidateRuntime: async () => {},
-            },
-            preflightRunner: async (input) => {
-                observedProfile = input.lateOnProfileId;
-                observedPolicy = input.lateOnActivationPolicy;
-                return {
-                    runtimeEnvironment: Object.freeze({
-                        SATORI_RUNTIME_PROFILE: "offline",
-                        VECTOR_STORE_PROVIDER: "LanceDB",
-                        EMBEDDING_PROVIDER: "Potion",
-                        SATORI_RERANKER_PROVIDER: input.reranker ?? "",
-                        SATORI_LATEON_MODEL_PATH: input.lateOnModelPath ?? "",
-                        SATORI_LATEON_PROFILE: input.lateOnProfileId ?? "",
-                        SATORI_LATEON_ACTIVATION_POLICY: input.lateOnActivationPolicy ?? "",
-                    }),
-                };
-            },
-        });
-
-        assert.equal(observedProfile, "lateon_offline_quality_projection_v5_d32_v1");
-        assert.equal(observedPolicy, "lateon_context_v5_d32_owner_default_v1");
-        const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
-        );
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
-        );
-    });
-
-    await withTempHome(async (homeDir) => {
-        await installUpgradeSourceRuntime(homeDir, historicalEnvironmentFor(homeDir));
-        writeLateOnModelDirectory(path.join(homeDir, "lateon-model"), LATEON_FIXTURE_ARTIFACTS);
-        const originalLauncher = readFile(launcherPath(homeDir));
-
-        await assert.rejects(
-            executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
-                homeDir,
-                env: {},
-                platform: "linux",
-                architecture: "x64",
-                lateOnModelPath: path.join(homeDir, "lateon-model"),
-                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
-                lateOnAuthorityLoader: loadAcquisitionAuthority,
-                execFileSyncImpl: installRuntimePackageStub(
-                    "dist/target-runtime.mjs",
-                    UPGRADE_TARGET.mcpPackageSpecifier,
-                    UPGRADE_TARGET.mcpVersion,
-                    UPGRADE_TARGET.coreVersion,
-                ) as never,
-                preflightDependencies: {
-                    probeCandidateRuntime: async () => {
-                        throw new Error("candidate probe failed");
-                    },
-                },
-                preflightRunner: async () => ({
-                    runtimeEnvironment: Object.freeze({
-                        SATORI_RUNTIME_PROFILE: "offline",
-                    }),
-                }),
-            }),
-            /candidate probe failed/,
-        );
-
-        assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
-        const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v3_d32_v1",
-        );
-        assert.equal(
-            launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_d32_owner_default_v1",
         );
     });
 });
@@ -2303,41 +2088,6 @@ test("install is idempotent for managed Codex config", async () => {
     });
 });
 
-test("install removes the legacy Codex AGENTS block and preserves user content", async () => {
-    await withTempHome(async (homeDir) => {
-        const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
-        fs.mkdirSync(path.dirname(agentsPath), { recursive: true });
-        fs.writeFileSync(agentsPath, [
-            "# User Rules",
-            "Keep this introduction.",
-            "",
-            "<!-- satori-mcp:start -->",
-            "# Old Satori Instructions",
-            "old exact-only guidance",
-            "<!-- satori-mcp:end -->",
-            "",
-            "## Local Notes",
-            "Keep this footer.",
-            "",
-        ].join("\n"), "utf8");
-
-        const result = await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-        }, installOptions(homeDir));
-
-        const content = readFile(agentsPath);
-        assert.equal(result.results[0]?.status, "updated");
-        assert.equal(content.includes("Keep this introduction."), true);
-        assert.equal(content.includes("Keep this footer."), true);
-        assert.equal(content.includes("old exact-only guidance"), false);
-        assert.equal(content.includes("satori-mcp:start"), false);
-        assert.equal(content.includes("satori-mcp:end"), false);
-    });
-});
-
 test("install replaces an existing managed Codex block", async () => {
     await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
@@ -2353,12 +2103,6 @@ test("install replaces an existing managed Codex block", async () => {
                 'args = ["old"]',
                 "startup_timeout_ms = 180000",
                 "# <<< satori-cli managed satori end <<<",
-                "",
-                "# >>> satori-cli optional satori env template >>>",
-                "# [mcp_servers.satori.env]",
-                "# SATORI_RUNTIME_PROFILE = \"connected\"",
-                "# EMBEDDING_PROVIDER = \"VoyageAI\"",
-                "# <<< satori-cli optional satori env template <<<",
                 "",
             ].join("\n"),
             "utf8"
@@ -2378,7 +2122,6 @@ test("install replaces an existing managed Codex block", async () => {
         assert.equal(content.includes("\"VOYAGEAI_API_KEY\""), true);
         assert.equal(content.includes("\"MILVUS_ADDRESS\""), true);
         assert.equal(content.includes("# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js."), true);
-        assert.equal(content.includes("# >>> satori-cli optional satori env template >>>"), false);
         assert.equal(content.includes("VoyageAI"), false);
         assert.equal(content.includes("node_modules"), false);
         assert.equal(content.includes("old-managed-satori"), false);
@@ -2417,82 +2160,13 @@ test("install preserves user-owned Codex env values outside the managed block", 
         const content = readFile(codexConfigPath);
         assert.equal(content.includes('VOYAGEAI_API_KEY = "direct-key"'), true);
         assert.equal(content.includes('MILVUS_TOKEN = "direct-token"'), true);
-        assert.equal(content.includes("# >>> satori-cli optional satori env template >>>"), false);
     });
 });
 
-test("install removes a legacy inline Codex guidance hook without adding hooks.json", async () => {
+test("uninstall removes an existing managed Codex block", async () => {
     await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
-        fs.writeFileSync(
-            codexConfigPath,
-            [
-                "# >>> satori-cli managed codex guidance hook start >>>",
-                "[[hooks.SessionStart]]",
-                'matcher = "startup"',
-                "",
-                "[[hooks.SessionStart.hooks]]",
-                'type = "command"',
-                'command = \'echo "old satori guidance"\'',
-                "# <<< satori-cli managed codex guidance hook end <<<",
-                "",
-            ].join("\n"),
-            "utf8"
-        );
-
-        await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-        }, installOptions(homeDir));
-
-        const content = readFile(codexConfigPath);
-        assert.equal(content.includes("old satori guidance"), false);
-        assert.equal(content.includes("satori-cli managed codex guidance hook start"), false);
-        assert.equal(fs.existsSync(path.join(homeDir, ".codex", "hooks.json")), false);
-    });
-});
-
-test("install removes a legacy managed hooks.json entry", async () => {
-    await withTempHome(async (homeDir) => {
-        const hooksPath = path.join(homeDir, ".codex", "hooks.json");
-        fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-        fs.writeFileSync(hooksPath, JSON.stringify({
-            hooks: {
-                SessionStart: [{
-                    matcher: "startup|resume|clear|compact",
-                    hooks: [{
-                        type: "command",
-                        command: 'sh -lc \'mkdir -p "${XDG_RUNTIME_DIR:-/tmp}/satori-codex-guidance.${uid}"; echo old\'',
-                        timeout: 1,
-                    }],
-                }],
-            },
-        }, null, 2), "utf8");
-
-        const result = await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            runtime: "voyage",
-            dryRun: false,
-        }, installOptions(homeDir));
-
-        const content = readFile(hooksPath);
-        assert.equal(result.results[0]?.status, "updated");
-        assert.equal(content.includes("satori-codex-guidance"), false);
-        assert.equal(JSON.parse(content).hooks, undefined);
-    });
-});
-
-test("uninstall removes an existing managed Codex block and legacy skill", async () => {
-    await withTempHome(async (homeDir) => {
-        const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
-        const agentsPath = path.join(homeDir, ".codex", "AGENTS.md");
-        const skillPath = path.join(homeDir, ".codex", "skills", "satori", "SKILL.md");
-        fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
-        fs.mkdirSync(path.dirname(skillPath), { recursive: true });
         fs.writeFileSync(
             codexConfigPath,
             [
@@ -2507,17 +2181,6 @@ test("uninstall removes an existing managed Codex block and legacy skill", async
             ].join("\n"),
             "utf8"
         );
-        fs.writeFileSync(skillPath, "# Managed Satori Skill\n", "utf8");
-        fs.writeFileSync(agentsPath, [
-            "# User Rules",
-            "",
-            "<!-- satori-mcp:start -->",
-            "# Managed Satori",
-            "<!-- satori-mcp:end -->",
-            "",
-            "Keep this local note.",
-            "",
-        ].join("\n"), "utf8");
 
         const result = await executeInstallCommand({
             kind: "uninstall",
@@ -2526,45 +2189,9 @@ test("uninstall removes an existing managed Codex block and legacy skill", async
         }, { homeDir });
 
         const content = readFile(codexConfigPath);
-        const instructions = readFile(agentsPath);
         assert.equal(result.results[0]?.status, "updated");
         assert.equal(content.includes("[mcp_servers.satori]"), false);
         assert.equal(content.includes(launcherPath(homeDir).replace(/\\/g, "\\\\")), false);
-        assert.equal(fs.existsSync(path.dirname(skillPath)), false);
-        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), false);
-        assert.equal(instructions.includes("Keep this local note."), true);
-    });
-});
-
-test("uninstall removes a legacy Codex guidance hook and preserves user hooks", async () => {
-    await withTempHome(async (homeDir) => {
-        const hooksPath = path.join(homeDir, ".codex", "hooks.json");
-        fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-        fs.writeFileSync(hooksPath, `${JSON.stringify({
-            hooks: {
-                SessionStart: [
-                    {
-                        matcher: "startup|resume|clear|compact",
-                        hooks: [{ type: "command", command: "sh -lc 'dir=/tmp/satori-codex-guidance.1; echo old'", timeout: 5 }],
-                    },
-                    {
-                        matcher: "startup",
-                        hooks: [{ type: "command", command: 'echo "user hook"', timeout: 3 }],
-                    },
-                ],
-            },
-        }, null, 2)}\n`, "utf8");
-
-        const result = await executeInstallCommand({
-            kind: "uninstall",
-            client: "codex",
-            dryRun: false,
-        }, { homeDir });
-
-        const content = readFile(hooksPath);
-        assert.equal(result.results[0]?.status, "updated");
-        assert.equal(content.includes("satori-codex-guidance"), false);
-        assert.equal(content.includes('echo \\"user hook\\"'), true);
     });
 });
 
@@ -2597,16 +2224,13 @@ test("install refuses to overwrite unmanaged Codex Satori sections", async () =>
     });
 });
 
-test("install replaces the legacy Claude skill copy with a link to the canonical skill", async () => {
+test("install links the Claude skill directory to the canonical skill", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".claude.json");
         const skillsDir = path.join(homeDir, ".claude", "skills");
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.mkdirSync(path.join(skillsDir, "custom-skill"), { recursive: true });
-        fs.mkdirSync(path.join(skillsDir, "satori"), { recursive: true });
         fs.writeFileSync(path.join(skillsDir, "custom-skill", "SKILL.md"), "# custom\n", "utf8");
-        // What an earlier installer wrote: the skill asset, including its ownership marker.
-        fs.writeFileSync(path.join(skillsDir, "satori", "SKILL.md"), readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
         fs.writeFileSync(configPath, JSON.stringify({
             projects: {
                 "/tmp/example": {
@@ -2661,24 +2285,20 @@ test("install replaces the legacy Claude skill copy with a link to the canonical
 });
 
 // A copy from a release that predates the ownership marker, exactly as that installer wrote it.
-test("a pre-marker Satori skill copy is still migrated by install and removed by uninstall", async () => {
-    const historical = fs.readFileSync(path.join(PACKAGE_ROOT, "src", "test-fixtures", "legacy-satori-skill.md"));
-    assert.equal(historical.toString("utf8").includes("satori-managed-skill"), false);
-    for (const action of ["install", "uninstall"] as const) {
-        await withTempHome(async (homeDir) => {
-            const linkPath = path.join(homeDir, ".claude", "skills", "satori");
-            fs.mkdirSync(linkPath, { recursive: true });
-            fs.writeFileSync(path.join(linkPath, "SKILL.md"), historical);
+test("a real directory at a skill link path is unmanaged: install refuses and uninstall leaves it", async () => {
+    await withTempHome(async (homeDir) => {
+        const linkPath = path.join(homeDir, ".claude", "skills", "satori");
+        fs.mkdirSync(linkPath, { recursive: true });
+        const skillFile = path.join(linkPath, "SKILL.md");
+        fs.writeFileSync(skillFile, readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
 
-            if (action === "install") {
-                await executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir));
-                assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
-            } else {
-                await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
-                assert.equal(fs.existsSync(linkPath), false);
-            }
-        });
-    }
+        await assert.rejects(
+            executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+            /not managed by Satori\. Remove it manually/,
+        );
+        await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
+        assert.equal(fs.existsSync(skillFile), true);
+    });
 });
 
 test("canonical skill is never overwritten unless Satori owns it and is removed by a full uninstall", async () => {
@@ -3101,26 +2721,6 @@ test("skill-link handling leaves a user-authored SKILL.md, or a marked copy with
     }
 });
 
-test("skill-link removal rechecks ownership at apply time", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-skill-link-"));
-    try {
-        const canonical = path.join(root, "agents", "satori");
-        const linkPath = path.join(root, "client", "satori");
-        fs.mkdirSync(linkPath, { recursive: true });
-        fs.writeFileSync(path.join(linkPath, "SKILL.md"), readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
-
-        const mutation = prepareSkillLinkRemoval(linkPath, canonical);
-        assert.equal(mutation.changed, true);
-        // The user adds a file after the plan was prepared.
-        fs.writeFileSync(path.join(linkPath, "my-notes.txt"), "keep me\n", "utf8");
-        mutation.apply();
-        assert.equal(readFile(path.join(linkPath, "my-notes.txt")), "keep me\n");
-        assert.equal(fs.existsSync(path.join(linkPath, "SKILL.md")), true);
-    } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-    }
-});
-
 test("a symlinked HOME spelling of this home's launcher stays Satori-managed", async () => {
     for (const client of ["agy", "claude"] as const) {
         for (const entryUsesAlias of [true, false]) {
@@ -3261,10 +2861,9 @@ test("OpenCode install removes stale launcher-owned runtime identity while prese
                         SATORI_RUNTIME_PROFILE: "offline",
                         EMBEDDING_PROVIDER: "Potion",
                         SATORI_RERANKER_PROVIDER: "lateon",
-                        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v3_d32_v1",
-                        SATORI_LATEON_ACTIVATION_POLICY: "lateon_d32_owner_default_v1",
+                        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
+                        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v5_d32_owner_default_v1",
                         VOYAGEAI_API_KEY: "{env:VOYAGEAI_API_KEY}",
-                        SATORI_LATEON_REQUEST_DEADLINE_MS: "12345",
                     },
                 },
             },
@@ -3284,7 +2883,6 @@ test("OpenCode install removes stale launcher-owned runtime identity while prese
         assert.equal(environment.SATORI_LATEON_PROFILE, undefined);
         assert.equal(environment.SATORI_LATEON_ACTIVATION_POLICY, undefined);
         assert.equal(environment.VOYAGEAI_API_KEY, "{env:VOYAGEAI_API_KEY}");
-        assert.equal(environment.SATORI_LATEON_REQUEST_DEADLINE_MS, undefined);
     });
 });
 
@@ -3754,7 +3352,7 @@ test("install --profile updates existing repo config and preserves unrelated TOM
     });
 });
 
-test("uninstall removes managed OpenCode config and legacy instruction block only", async () => {
+test("uninstall removes managed OpenCode config and leaves AGENTS.md alone", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
         const instructionsPath = path.join(homeDir, ".config", "opencode", "AGENTS.md");
@@ -3766,7 +3364,8 @@ test("uninstall removes managed OpenCode config and legacy instruction block onl
             runtime: "voyage",
             dryRun: false,
         }, installOptions(homeDir));
-        fs.writeFileSync(instructionsPath, "<!-- satori-mcp:start -->\n# Legacy Satori\n<!-- satori-mcp:end -->\n\n# User Notes\n", "utf8");
+        const notes = "<!-- satori-mcp:start -->\n# Old Satori\n<!-- satori-mcp:end -->\n\n# User Notes\n";
+        fs.writeFileSync(instructionsPath, notes, "utf8");
 
         await executeInstallCommand({
             kind: "uninstall",
@@ -3776,9 +3375,7 @@ test("uninstall removes managed OpenCode config and legacy instruction block onl
 
         const removed = JSON.parse(readFile(configPath));
         assert.equal(Boolean(removed.mcp?.satori), false);
-        const instructions = readFile(instructionsPath);
-        assert.equal(instructions.includes("<!-- satori-mcp:start -->"), false);
-        assert.equal(instructions.includes("# User Notes"), true);
+        assert.equal(readFile(instructionsPath), notes);
     });
 });
 

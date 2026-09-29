@@ -51,9 +51,6 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
             configPath: path.join(codexHome, "config.toml"),
             companions: [
                 skill,
-                { kind: "legacy-skill", path: path.join(codexHome, "skills", SATORI_SKILL_NAME) },
-                { kind: "legacy-instructions", path: path.join(codexHome, "AGENTS.md") },
-                { kind: "legacy-guidance-hook", path: path.join(codexHome, "hooks.json") },
             ],
         },
         {
@@ -73,7 +70,6 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
             configPath: opencodeConfigPath,
             companions: [
                 skill,
-                { kind: "legacy-instructions", path: path.join(opencodeGlobalConfigDir, "AGENTS.md") },
             ],
         },
         {

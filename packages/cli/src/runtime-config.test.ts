@@ -8,7 +8,7 @@ test("retired reranker application mode fails clearly during CLI configuration c
         name: "rerank_application_mode",
         status: "error",
         message: "SATORI_RERANK_APPLICATION_MODE has been removed; the native reranker order is now mandatory.",
-        nextStep: "Unset SATORI_RERANK_APPLICATION_MODE or roll back to the previous Satori release for legacy_rrf behavior.",
+        nextStep: "Unset SATORI_RERANK_APPLICATION_MODE.",
     }]);
 });
 
@@ -153,7 +153,7 @@ test("static runtime config rejects a LateOn activation policy without the lateo
         POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
         POTION_MODEL_PATH: "/opt/satori/potion/model",
         SATORI_RERANKER_PROVIDER: "none",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_d32_owner_default_v1",
+        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v5_d32_owner_default_v1",
     });
     const policy = checks.find((check) => check.name === "lateon_activation_policy");
     assert.equal(policy?.status, "error");
@@ -185,7 +185,7 @@ test("static runtime config rejects the context-v3 policy without the activated 
     );
 });
 
-test("static runtime config flags the historical D32 activation policy with migration guidance", () => {
+test("static runtime config rejects a non-current activation policy with reinstall guidance", () => {
     const checks = evaluateStaticRuntimeConfig({
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
@@ -203,9 +203,9 @@ test("static runtime config flags the historical D32 activation policy with migr
     assert.equal(policy?.status, "error");
     assert.match(
         policy?.message || "",
-        /Historical LateOn activation policy bound: lateon_d32_owner_default_v1\./,
+        /Invalid LateOn activation policy: lateon_d32_owner_default_v1\./,
     );
-    assert.match(policy?.nextStep || "", /@satori-code\/cli@latest upgrade/);
+    assert.match(policy?.nextStep || "", /Reinstall with `.*install --reranker lateon`/);
 });
 
 test("static runtime config rejects a changed Potion model identity", () => {

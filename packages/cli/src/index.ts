@@ -325,7 +325,7 @@ function buildHelpPayload() {
         commands: [
             "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
             "version (-v, --version)",
-            "upgrade (alias: update)",
+            "upgrade",
             "terminate",
             "uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
@@ -364,7 +364,7 @@ function formatHelpText(): string {
         "Commands:",
         "  install       Install Satori for detected clients; use --client all to force all supported clients",
         "  version       Show installed CLI, MCP, and Core versions",
-        "  upgrade       Update the CLI and its compatible MCP/Core runtime (alias: update)",
+        "  upgrade       Update the CLI and its compatible MCP/Core runtime",
         "  terminate     Stop all running Satori MCP servers",
         "  doctor        Check installation, runtime, and client configuration",
         "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",

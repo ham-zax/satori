@@ -123,7 +123,6 @@ const HELP_TOPIC_BY_COMMAND: Readonly<Record<string, HelpTopic>> = {
     uninstall: "uninstall",
     doctor: "doctor",
     upgrade: "upgrade",
-    update: "upgrade",
     terminate: "terminate",
     version: "version",
     tools: "tools-list",
@@ -139,7 +138,6 @@ const RESERVED_SUBCOMMANDS = new Set([
     "install",
     "uninstall",
     "upgrade",
-    "update",
     "terminate",
 ]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
@@ -466,9 +464,9 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         };
     }
 
-    if (rest[0] === "upgrade" || rest[0] === "update") {
+    if (rest[0] === "upgrade") {
         if (rest.length !== 1) {
-            throw new CliError("E_USAGE", `Unknown arguments for ${rest[0]}: ${rest.slice(1).join(" ")}`, 2);
+            throw new CliError("E_USAGE", `Unknown arguments for upgrade: ${rest.slice(1).join(" ")}`, 2);
         }
         return {
             globals,

@@ -11,27 +11,11 @@ import {
 } from "./model-store.js";
 
 /**
- * Managed D32 profile identity used for planning and migration checks.
+ * Managed D32 profile identity used for planning and install checks.
  * Real installation still binds the target MCP package's frozen authority.
  */
 export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v5_d32_v1";
 export const LATEON_D32_ACTIVATION_POLICY = "lateon_context_v5_d32_owner_default_v1";
-/**
- * Historical context-v3 rollout artifact. Its managed combination with the
- * historical `lateon_d32_owner_default_v1` policy is migratable by
- * `satori upgrade`, never treated as unknown D16 history.
- */
-export const HISTORICAL_LATEON_CONTEXT_V3_PROFILE_ID = "lateon_offline_quality_projection_v3_d32_v1";
-export const HISTORICAL_LATEON_D32_ACTIVATION_POLICY = "lateon_d32_owner_default_v1";
-/**
- * Previous managed default (context-v3 activated profile + its owner policy).
- * The managed combination is admitted and migrated to the current default by
- * `satori upgrade`; historical meaning stays immutable.
- */
-export const PREVIOUS_LATEON_CONTEXT_V3_ACTIVATED_PROFILE_ID = "lateon_offline_quality_projection_v3_d32_v2";
-export const PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY = "lateon_context_v3_d32_owner_default_v1";
-export const PREVIOUS_LATEON_CONTEXT_V4_PROFILE_ID = "lateon_offline_quality_projection_v4_d32_v1";
-export const PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY = "lateon_context_v4_d32_owner_default_v1";
 
 const LATEON_PROFILE_FILE = "runtime-profile-v5-d32.json";
 const LATEON_ACQUISITION_FILE = "runtime-profile-v5-d32.acquisition.json";

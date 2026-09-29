@@ -52,15 +52,6 @@ export const SATORI_RUNTIME_ENV_VARS = [
     "MCP_ENABLE_WATCHER",
 ] as const;
 
-export const RETIRED_SATORI_RUNTIME_ENV_VARS = [
-    "SATORI_LATEON_REQUEST_DEADLINE_MS",
-    "SATORI_LATEON_MAX_QUEUE_WAIT_MS",
-    "SATORI_LATEON_RERANKER_STAGE_DEADLINE_MS",
-    "SATORI_LATEON_MAX_ACTIVE_RERANKS",
-    "SATORI_LATEON_MAX_QUEUED_RERANKS",
-    "SATORI_LATEON_INTRA_OP_THREADS",
-] as const;
-
 export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "SATORI_RUNTIME_PROFILE",
     "VECTOR_STORE_PROVIDER",
@@ -219,15 +210,11 @@ export interface ClientTarget {
  * Satori guidance reaches agents through the MCP server's session-start
  * `instructions` and one canonical skill. `skill` is the shared copy that
  * agents load natively; `skill-link` adapts an agent that only reads its own
- * skills directory. `legacy-*` companions exist only to remove output written
- * by earlier installers.
+ * skills directory.
  */
 export type CompanionTarget =
     | { kind: "skill"; path: string }
-    | { kind: "skill-link"; path: string; target: string }
-    | { kind: "legacy-skill"; path: string }
-    | { kind: "legacy-instructions"; path: string }
-    | { kind: "legacy-guidance-hook"; path: string };
+    | { kind: "skill-link"; path: string; target: string };
 
 export interface ManagedClientConfigProof {
     client: ClientName;

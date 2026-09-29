@@ -1,34 +1,11 @@
 export const LATEON_RUNTIME_PROFILE_IDS = Object.freeze({
-    legacyD16: "lateon_projection_v1_d16_legacy",
-    projectionV2D16: "lateon_projection_v2_d16_v1",
-    offlineQualityD32: "lateon_offline_quality_projection_v2_d32_v2",
-    contextV3D32: "lateon_offline_quality_projection_v3_d32_v1",
-    contextV3D32Activated: "lateon_offline_quality_projection_v3_d32_v2",
-    contextV4D32: "lateon_offline_quality_projection_v4_d32_v1",
     contextV5D32: "lateon_offline_quality_projection_v5_d32_v1",
 } as const);
 
 export type LateOnRuntimeProfileId =
     typeof LATEON_RUNTIME_PROFILE_IDS[keyof typeof LATEON_RUNTIME_PROFILE_IDS];
 
-/**
- * Phase 9.1 — historical profile IDs recognized exclusively for rejection in
- * the MCP runtime and for migration at the CLI upgrade boundary. None of these
- * may execute.
- */
-export const LATEON_RETIRED_RUNTIME_PROFILE_IDS = Object.freeze([
-    LATEON_RUNTIME_PROFILE_IDS.legacyD16,
-    LATEON_RUNTIME_PROFILE_IDS.projectionV2D16,
-    LATEON_RUNTIME_PROFILE_IDS.offlineQualityD32,
-    LATEON_RUNTIME_PROFILE_IDS.contextV3D32,
-    LATEON_RUNTIME_PROFILE_IDS.contextV3D32Activated,
-    LATEON_RUNTIME_PROFILE_IDS.contextV4D32,
-] as const);
-
 export const LATEON_ACTIVATION_POLICY_IDS = Object.freeze({
-    ownerDefaultD32V2: "lateon_d32_owner_default_v1",
-    ownerDefaultContextV3: "lateon_context_v3_d32_owner_default_v1",
-    ownerDefaultContextV4: "lateon_context_v4_d32_owner_default_v1",
     ownerDefaultContextV5: "lateon_context_v5_d32_owner_default_v1",
 } as const);
 

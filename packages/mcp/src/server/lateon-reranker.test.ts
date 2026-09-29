@@ -126,7 +126,7 @@ async function assertOperationalReason(
     ));
 }
 
-test("LateOn runtime profile loading defaults to the V5 D32 context profile and rejects retired profiles", () => {
+test("LateOn runtime profile loading defaults to the V5 D32 context profile and rejects any other profile id", () => {
     const defaultProfile = loadLateOnRuntimeProfile();
 
     assert.equal(defaultProfile.schemaVersion, "satori_lateon_runtime_profile_v5");
@@ -134,19 +134,10 @@ test("LateOn runtime profile loading defaults to the V5 D32 context profile and 
     assert.equal(defaultProfile.identity.queryProjectionVersion, "search_rerank_query_v2");
     assert.equal(defaultProfile.inference.candidateDepth, 32);
 
-    for (const retiredId of [
-        LATEON_RUNTIME_PROFILE_IDS.legacyD16,
-        LATEON_RUNTIME_PROFILE_IDS.projectionV2D16,
-        LATEON_RUNTIME_PROFILE_IDS.offlineQualityD32,
-        LATEON_RUNTIME_PROFILE_IDS.contextV3D32,
-        LATEON_RUNTIME_PROFILE_IDS.contextV3D32Activated,
-        LATEON_RUNTIME_PROFILE_IDS.contextV4D32,
-    ]) {
-        assert.throws(
-            () => loadLateOnRuntimeProfile(retiredId),
-            new RegExp(`LateOn runtime profile '${retiredId}' is retired and unsupported[\\s\\S]*satori upgrade[\\s\\S]*lateon_offline_quality_projection_v5_d32_v1`),
-        );
-    }
+    assert.throws(
+        () => loadLateOnRuntimeProfile("lateon_offline_quality_projection_v4_d32_v1"),
+        /Unsupported LateOn runtime profile 'lateon_offline_quality_projection_v4_d32_v1'; reinstall is required/,
+    );
 });
 
 test("LateOn context-v5 profile keeps query-v2 and document-v4 semantic projections", () => {
@@ -189,20 +180,14 @@ test("LateOn reranker defaults to the V5 profile and reports semantic projection
     assert.equal(contextV4.getQueryProjectionVersion(), "search_rerank_query_v2");
 });
 
-test("LateOn reranker rejects retired profile selections at construction", () => {
-    for (const retiredId of [
-        LATEON_RUNTIME_PROFILE_IDS.legacyD16,
-        LATEON_RUNTIME_PROFILE_IDS.projectionV2D16,
-        LATEON_RUNTIME_PROFILE_IDS.offlineQualityD32,
-        LATEON_RUNTIME_PROFILE_IDS.contextV3D32,
-        LATEON_RUNTIME_PROFILE_IDS.contextV3D32Activated,
-        LATEON_RUNTIME_PROFILE_IDS.contextV4D32,
-    ]) {
-        assert.throws(
-            () => new LateOnReranker({ modelDirectory: "/unused", profileId: retiredId }),
-            new RegExp(`LateOn runtime profile '${retiredId}' is retired and unsupported`),
-        );
-    }
+test("LateOn reranker rejects unknown profile selections at construction", () => {
+    assert.throws(
+        () => new LateOnReranker({
+            modelDirectory: "/unused",
+            profileId: "lateon_offline_quality_projection_v4_d32_v1" as never,
+        }),
+        /Unsupported LateOn runtime profile[\s\S]*reinstall is required/,
+    );
 });
 
 test("LateOn advertised query identities route to the promised query projection", async (t) => {

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
@@ -12,19 +11,11 @@ import type {
 } from "./install-contracts.js";
 import {
     LAUNCHER_OWNED_RUNTIME_ENV_VARS,
-    RETIRED_SATORI_RUNTIME_ENV_VARS,
     SATORI_RUNTIME_ENV_VARS,
 } from "./install-contracts.js";
 
 export const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
 export const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
-export const CODEX_ENV_TEMPLATE_START = "# >>> satori-cli optional satori env template >>>";
-export const CODEX_ENV_TEMPLATE_END = "# <<< satori-cli optional satori env template <<<";
-export const CODEX_GUIDANCE_HOOK_START = "# >>> satori-cli managed codex guidance hook start >>>";
-export const CODEX_GUIDANCE_HOOK_END = "# <<< satori-cli managed codex guidance hook end <<<";
-export const INSTRUCTIONS_BLOCK_START = "<!-- satori-mcp:start -->";
-export const INSTRUCTIONS_BLOCK_END = "<!-- satori-mcp:end -->";
-const CODEX_GUIDANCE_HOOK_MATCHER = "startup|resume|clear|compact";
 export interface CompanionMutation {
     companion: CompanionTarget;
     changed: boolean;
@@ -232,26 +223,6 @@ export function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): s
     ].join("\n");
 }
 
-export function removeLegacyCodexGuidanceHookBlock(content: string): string {
-    if (!content.includes(CODEX_GUIDANCE_HOOK_START) || !content.includes(CODEX_GUIDANCE_HOOK_END)) {
-        return content;
-    }
-    return content
-        .replace(new RegExp(`\\n?${escapeRegExp(CODEX_GUIDANCE_HOOK_START)}[\\s\\S]*?${escapeRegExp(CODEX_GUIDANCE_HOOK_END)}\\n?`, "m"), "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .replace(/^\n+/, "");
-}
-
-export function removeManagedCodexEnvTemplate(content: string): string {
-    if (!content.includes(CODEX_ENV_TEMPLATE_START) || !content.includes(CODEX_ENV_TEMPLATE_END)) {
-        return content;
-    }
-    return content
-        .replace(new RegExp(`\\n?${escapeRegExp(CODEX_ENV_TEMPLATE_START)}[\\s\\S]*?${escapeRegExp(CODEX_ENV_TEMPLATE_END)}\\n?`, "m"), "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .replace(/^\n+/, "");
-}
-
 export function codexHasUnmanagedSatoriSection(content: string): boolean {
     if (!content.includes("[mcp_servers.satori]")) {
         return false;
@@ -282,8 +253,6 @@ export function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRun
         next = `${normalizeTrailingNewline(current)}\n${managedBlock}`;
     }
 
-    next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(next));
-
     return {
         changed: next !== current,
         apply: () => {
@@ -309,23 +278,14 @@ export function prepareCodexUninstall(filePath: string): FileMutation {
         );
     }
     if (!current.includes(MANAGED_BLOCK_START) || !current.includes(MANAGED_BLOCK_END)) {
-        const next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(current));
-        return {
-            changed: next !== current,
-            apply: () => {
-                if (next === current) {
-                    return;
-                }
-                fs.writeFileSync(filePath, next, "utf8");
-            },
-        };
+        return { changed: false, apply: () => {} };
     }
 
     const withoutManagedBlock = current
         .replace(new RegExp(`\\n?${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"), "\n")
         .replace(/\n{3,}/g, "\n\n")
         .replace(/^\n+/, "");
-    const next = removeManagedCodexEnvTemplate(removeLegacyCodexGuidanceHookBlock(withoutManagedBlock));
+    const next = withoutManagedBlock;
 
     if (next === current) {
         return { changed: false, apply: () => {} };
@@ -357,67 +317,6 @@ export function parseJsonObject(filePath: string): Record<string, unknown> {
         throw new CliError("E_USAGE", `Expected top-level JSON object in ${filePath}.`, 2);
     }
     return parsed as Record<string, unknown>;
-}
-
-export function codexSessionStartHooks(document: Record<string, unknown>, filePath: string): {
-    hooks: Record<string, unknown>;
-    entries: unknown[];
-} {
-    const hooks = document.hooks === undefined ? {} : objectValue(document.hooks);
-    if (!hooks) {
-        throw new CliError("E_USAGE", `Expected 'hooks' to be an object in ${filePath}.`, 2);
-    }
-    const entries = hooks.SessionStart === undefined ? [] : hooks.SessionStart;
-    if (!Array.isArray(entries)) {
-        throw new CliError("E_USAGE", `Expected 'hooks.SessionStart' to be an array in ${filePath}.`, 2);
-    }
-    return { hooks, entries };
-}
-
-export function isManagedCodexGuidanceHook(value: unknown): boolean {
-    const entry = objectValue(value);
-    if (!entry || entry.matcher !== CODEX_GUIDANCE_HOOK_MATCHER || !Array.isArray(entry.hooks) || entry.hooks.length !== 1) {
-        return false;
-    }
-    const hook = objectValue(entry.hooks[0]);
-    return hook?.type === "command"
-        && typeof hook.command === "string"
-        && hook.command.includes("satori-codex-guidance.");
-}
-
-export function prepareCodexGuidanceHookRemoval(filePath: string): FileMutation {
-    const currentFile = readTextIfExists(filePath);
-    if (!currentFile?.includes("satori-codex-guidance.")) {
-        return { changed: false, apply: () => {} };
-    }
-    const document = parseJsonObject(filePath);
-    const { hooks, entries } = codexSessionStartHooks(document, filePath);
-    const retained = entries.filter((entry) => !isManagedCodexGuidanceHook(entry));
-    if (retained.length === entries.length) {
-        return { changed: false, apply: () => {} };
-    }
-    const nextHooks = { ...hooks };
-    if (retained.length > 0) {
-        nextHooks.SessionStart = retained;
-    } else {
-        delete nextHooks.SessionStart;
-    }
-    const nextDocument = { ...document };
-    if (Object.keys(nextHooks).length > 0) {
-        nextDocument.hooks = nextHooks;
-    } else {
-        delete nextDocument.hooks;
-    }
-    const next = `${JSON.stringify(nextDocument, null, 2)}\n`;
-    return {
-        changed: next !== currentFile,
-        assertUnchanged: () => assertFileContentUnchanged(filePath, currentFile),
-        apply: () => {
-            assertFileContentUnchanged(filePath, currentFile);
-            fs.writeFileSync(filePath, next, { encoding: "utf8", mode: 0o600 });
-            fs.chmodSync(filePath, 0o600);
-        },
-    };
 }
 
 export function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
@@ -595,10 +494,7 @@ export function parseJsoncObject(filePath: string, content: string): Record<stri
 
 export function buildOpenCodeServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
     const environment = mergeRuntimeEnv(existing?.environment, runtimeEnvMap((name) => `{env:${name}}`));
-    for (const name of [
-        ...LAUNCHER_OWNED_RUNTIME_ENV_VARS,
-        ...RETIRED_SATORI_RUNTIME_ENV_VARS,
-    ]) {
+    for (const name of LAUNCHER_OWNED_RUNTIME_ENV_VARS) {
         delete environment[name];
     }
     return {
@@ -686,23 +582,6 @@ export function prepareOpenCodeUninstall(filePath: string, runtimeCommand: Manag
 
 const SATORI_SKILL_SOURCE_URL = new URL("../assets/skills/satori/SKILL.md", import.meta.url);
 const SATORI_SKILL_OWNERSHIP_MARKER = "satori-managed-skill";
-// Earlier installers copied the packaged skill verbatim before it carried the
-// ownership marker; these are the SHA-256 digests of every such released asset.
-const HISTORICAL_SATORI_SKILL_SHA256 = new Set([
-    "3826480884b4d782b5496be675faaaa8d4080966396eb1155a283c5a91195982",
-    "cccae0e14bff125b11b40b6f4a6c6d2ec335d0f8fdd61607e4b5df7289fb38a6",
-    "890318e538fc2869d7cfb317ef91a3b7a493d90290d4e1f64cc45f8f7b97df93",
-    "ef6c2c043cc154a31ad2cb517f5a08aa072b2bbbbbf7a57b6ed378830f225623",
-    "968b26ef1341182c94a589268de28931732bce2597c0afa60270e3776ff61abf",
-    "d486527227448aea31d3ff1546fa0bdc3641cc10ecc14052f8906b1efbbbb736",
-    "4475569a9cf508126e1fed3b7aac8e6f5a0e16ab742d2d69175aff3a09d4639d",
-    "9b89e39a24cb01895ba2e350391b531c555b175c6f8f1c2c572380381c590748",
-    "4cf67a6ba1531b073b0e2e3761a8fde142df2e6d8a8af600386b027d8c263051",
-    "b5048485829a8d567657bfbcdab1d99fe758f4e765093a589877bb9b302a52dc",
-    "b692e4815bae7c8d634b92a6c71c400dd65efbde63f087ed1afbf8f6cfc2f43b",
-    "445fde3fec5e454fb256f3dbe5294781a009f2a1dcde503aca0052eb710cc21b",
-    "bf5b4aaee4ec513f3ea1330fc0f0d7a1a993ac346c59f34031dbfcb43d95aaf8",
-]);
 
 function unchangedMutation(): FileMutation {
     return { changed: false, apply: () => {} };
@@ -785,45 +664,14 @@ function linkParentIsTargetParent(linkPath: string, target: string): boolean {
     return resolveDirectory(path.dirname(linkPath)) === resolveDirectory(path.dirname(target));
 }
 
-/**
- * A real directory at a client's skill-link path is ours only when it is a copy
- * an earlier installer wrote: exactly SKILL.md, carrying the ownership marker or
- * byte-identical to a released pre-marker asset. Anything else (user-authored
- * skill, extra files) is never replaced or removed.
- */
-function isLegacySkillCopy(directory: string): boolean {
-    try {
-        const entries = fs.readdirSync(directory);
-        if (entries.length !== 1 || entries[0] !== "SKILL.md") return false;
-        const content = fs.readFileSync(path.join(directory, "SKILL.md"));
-        return content.toString("utf8").includes(SATORI_SKILL_OWNERSHIP_MARKER)
-            || HISTORICAL_SATORI_SKILL_SHA256.has(createHash("sha256").update(content).digest("hex"));
-    } catch {
-        return false;
-    }
-}
-
-/**
- * Re-proves ownership immediately before deleting, and never removes recursively:
- * a file added since the plan was prepared survives (rmdir fails on a non-empty directory).
- */
-function removeLegacySkillCopy(directory: string): boolean {
-    if (!isLegacySkillCopy(directory)) {
-        return false;
-    }
-    fs.rmSync(path.join(directory, "SKILL.md"));
-    fs.rmdirSync(directory);
-    return true;
-}
-
 function linkPointsTo(linkPath: string, target: string): boolean {
     return path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === path.resolve(target);
 }
 
 /**
- * Links an agent's own skills directory to the canonical skill. A real
- * directory at the link path is a copy written by an earlier Satori installer
- * and is replaced; any other symlink or file is left to the user.
+ * Links an agent's own skills directory to the canonical skill. Anything else at
+ * the link path (a real directory, a file, another symlink) is unmanaged: the
+ * install fails and the user removes it; it is never replaced.
  */
 export function prepareSkillLinkInstall(linkPath: string, target: string): FileMutation {
     if (linkParentIsTargetParent(linkPath, target)) {
@@ -833,15 +681,12 @@ export function prepareSkillLinkInstall(linkPath: string, target: string): FileM
     if (stats?.isSymbolicLink() && linkPointsTo(linkPath, target)) {
         return unchangedMutation();
     }
-    if (stats && (!stats.isDirectory() || !isLegacySkillCopy(linkPath))) {
-        throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori.`, 2);
+    if (stats) {
+        throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori. Remove it manually and rerun install.`, 2);
     }
     return {
         changed: true,
         apply: () => {
-            if (stats && !removeLegacySkillCopy(linkPath)) {
-                throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori.`, 2);
-            }
             fs.mkdirSync(path.dirname(linkPath), { recursive: true });
             // "junction" lets Windows link directories without elevation; POSIX ignores it.
             fs.symlinkSync(target, linkPath, "junction");
@@ -859,44 +704,7 @@ export function prepareSkillLinkRemoval(linkPath: string, target: string): FileM
             ? { changed: true, apply: () => fs.unlinkSync(linkPath) }
             : unchangedMutation();
     }
-    return stats?.isDirectory() && isLegacySkillCopy(linkPath)
-        ? { changed: true, apply: () => { removeLegacySkillCopy(linkPath); } }
-        : unchangedMutation();
-}
-
-export function prepareLegacySkillRemoval(skillPath: string): FileMutation {
-    const changed = fs.existsSync(skillPath);
-    return {
-        changed,
-        apply: () => {
-            if (changed) {
-                fs.rmSync(skillPath, { recursive: true, force: true });
-            }
-        },
-    };
-}
-
-export function prepareInstructionsRemoval(filePath: string): FileMutation {
-    const current = readTextIfExists(filePath);
-    if (!current || !current.includes(INSTRUCTIONS_BLOCK_START) || !current.includes(INSTRUCTIONS_BLOCK_END)) {
-        return { changed: false, apply: () => {} };
-    }
-
-    const next = current
-        .replace(new RegExp(`\\n?${escapeRegExp(INSTRUCTIONS_BLOCK_START)}[\\s\\S]*?${escapeRegExp(INSTRUCTIONS_BLOCK_END)}\\n?`, "m"), "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .replace(/^\n+/, "");
-
-    return {
-        changed: next !== current,
-        assertUnchanged: () => assertFileContentUnchanged(filePath, current),
-        apply: () => {
-            if (next === current) {
-                return;
-            }
-            fs.writeFileSync(filePath, next, "utf8");
-        },
-    };
+    return unchangedMutation();
 }
 
 export function prepareCompanionMutation(
@@ -916,15 +724,6 @@ export function prepareCompanionMutation(
             mutation = install
                 ? prepareSkillLinkInstall(companion.path, companion.target)
                 : prepareSkillLinkRemoval(companion.path, companion.target);
-            break;
-        case "legacy-skill":
-            mutation = prepareLegacySkillRemoval(companion.path);
-            break;
-        case "legacy-instructions":
-            mutation = prepareInstructionsRemoval(companion.path);
-            break;
-        case "legacy-guidance-hook":
-            mutation = prepareCodexGuidanceHookRemoval(companion.path);
             break;
     }
     return {

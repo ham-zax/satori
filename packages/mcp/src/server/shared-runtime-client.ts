@@ -19,6 +19,7 @@ import {
     removeOwnedLifecycleState,
     type SharedRuntimeHostMetadata,
 } from "./shared-runtime-lifecycle.js";
+import { assertRemovedRuntimeEnvUnset } from "../config.js";
 import { resolveAllowBroadRoots, resolveSessionWorkspaceRoots } from "./shared-runtime.js";
 
 type AttachRequest = Readonly<{
@@ -478,11 +479,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
 }
 
 export async function runSharedRuntimeClient(options: SharedRuntimeClientOptions): Promise<void> {
-    if (options.env.SATORI_RERANK_APPLICATION_MODE !== undefined) {
-        throw new Error(
-            "SATORI_RERANK_APPLICATION_MODE has been removed; unset it or roll back to the previous Satori release for legacy_rrf behavior.",
-        );
-    }
+    assertRemovedRuntimeEnvUnset((name) => options.env[name]);
     if (!isSharedOfflineRuntimeEligible(options.env)) {
         throw new Error("Shared runtime client was invoked for an ineligible configuration.");
     }

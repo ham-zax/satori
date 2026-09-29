@@ -250,7 +250,7 @@ test('offline config selects the shared LateOn model without machine-speed overr
     }
 });
 
-test('LateOn config selects the current profile and rejects retired profiles and policies', () => {
+test('LateOn config selects the current profile and rejects any other profile or policy', () => {
     const keys = [
         'SATORI_RUNTIME_PROFILE',
         'VECTOR_STORE_PROVIDER',
@@ -292,41 +292,20 @@ test('LateOn config selects the current profile and rejects retired profiles and
             'lateon_context_v5_d32_owner_default_v1',
         );
 
-        // Phase 9.1 — retired profiles are recognized but never execute.
-        for (const retiredProfile of [
-            'lateon_projection_v1_d16_legacy',
-            'lateon_projection_v2_d16_v1',
-            'lateon_offline_quality_projection_v2_d32_v2',
-            'lateon_offline_quality_projection_v3_d32_v1',
-            'lateon_offline_quality_projection_v3_d32_v2',
-            'lateon_offline_quality_projection_v4_d32_v1',
-        ]) {
-            process.env.SATORI_LATEON_PROFILE = retiredProfile;
-            process.env.SATORI_LATEON_ACTIVATION_POLICY = undefined;
-            delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
-            assert.throws(
-                createMcpConfig,
-                new RegExp(
-                    `Unsupported SATORI_LATEON_PROFILE '${retiredProfile}'[\\s\\S]*satori upgrade[\\s\\S]*lateon_offline_quality_projection_v5_d32_v1`,
-                ),
-            );
-        }
+        // Any profile or policy other than the current one is rejected.
+        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v4_d32_v1';
+        delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
+        assert.throws(
+            createMcpConfig,
+            /Invalid SATORI_LATEON_PROFILE 'lateon_offline_quality_projection_v4_d32_v1'[\s\S]*lateon_offline_quality_projection_v5_d32_v1; reinstall is required/,
+        );
 
-        // Retired activation policies are recognized but never execute.
         process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v5_d32_v1';
-        for (const retiredPolicy of [
-            'lateon_d32_owner_default_v1',
-            'lateon_context_v3_d32_owner_default_v1',
-            'lateon_context_v4_d32_owner_default_v1',
-        ]) {
-            process.env.SATORI_LATEON_ACTIVATION_POLICY = retiredPolicy;
-            assert.throws(
-                createMcpConfig,
-                new RegExp(
-                    `Unsupported SATORI_LATEON_ACTIVATION_POLICY '${retiredPolicy}'[\\s\\S]*satori upgrade[\\s\\S]*lateon_context_v5_d32_owner_default_v1`,
-                ),
-            );
-        }
+        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v4_d32_owner_default_v1';
+        assert.throws(
+            createMcpConfig,
+            /Invalid SATORI_LATEON_ACTIVATION_POLICY 'lateon_context_v4_d32_owner_default_v1'[\s\S]*lateon_context_v5_d32_owner_default_v1; reinstall is required/,
+        );
 
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'untrusted_policy_v1';
         assert.throws(createMcpConfig, /Invalid SATORI_LATEON_ACTIVATION_POLICY/);

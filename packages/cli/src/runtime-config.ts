@@ -3,10 +3,7 @@ import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { satoriCliCommand } from "./cli-command.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
-    HISTORICAL_LATEON_D32_ACTIVATION_POLICY,
     LATEON_D32_ACTIVATION_POLICY,
-    PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY,
-    PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY,
 } from "./lateon-model-store.js";
 
 export type RuntimeConfigCheckStatus = "ok" | "error";
@@ -108,7 +105,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
             name: "rerank_application_mode",
             status: "error",
             message: "SATORI_RERANK_APPLICATION_MODE has been removed; the native reranker order is now mandatory.",
-            nextStep: "Unset SATORI_RERANK_APPLICATION_MODE or roll back to the previous Satori release for legacy_rrf behavior.",
+            nextStep: "Unset SATORI_RERANK_APPLICATION_MODE.",
         }];
     }
     const selection = resolveRuntimeConfigSelection(env);
@@ -195,29 +192,12 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 nextStep: "Set SATORI_LATEON_MODEL_PATH to the pinned shared model directory.",
             });
         const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-        if (activationPolicy === HISTORICAL_LATEON_D32_ACTIVATION_POLICY) {
-            checks.push({
-                name: "lateon_activation_policy",
-                status: "error",
-                message: `Historical LateOn activation policy bound: ${activationPolicy}.`,
-                nextStep: `Run \`${satoriCliCommand("upgrade")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
-            });
-        } else if (
-            activationPolicy === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY
-            || activationPolicy === PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY
-        ) {
-            checks.push({
-                name: "lateon_activation_policy",
-                status: "error",
-                message: `Previous LateOn activation policy bound: ${activationPolicy}.`,
-                nextStep: `Run \`${satoriCliCommand("upgrade")}\` to migrate to SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID} with SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY}.`,
-            });
-        } else if (activationPolicy && activationPolicy !== LATEON_D32_ACTIVATION_POLICY) {
+        if (activationPolicy && activationPolicy !== LATEON_D32_ACTIVATION_POLICY) {
             checks.push({
                 name: "lateon_activation_policy",
                 status: "error",
                 message: `Invalid LateOn activation policy: ${activationPolicy}.`,
-                nextStep: `Set SATORI_LATEON_ACTIVATION_POLICY to ${LATEON_D32_ACTIVATION_POLICY} or remove it.`,
+                nextStep: `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
             });
         } else if (activationPolicy) {
             const lateOnProfileId = env.SATORI_LATEON_PROFILE?.trim() ?? DEFAULT_LATEON_PROFILE_ID;
@@ -231,7 +211,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                     name: "lateon_activation_policy",
                     status: "error",
                     message: `SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
-                    nextStep: `Run \`${satoriCliCommand("upgrade")}\` or \`${satoriCliCommand("install --reranker lateon")}\` to bind SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}.`,
+                    nextStep: `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
                 });
         } else {
             checks.push({
@@ -257,10 +237,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
 
     const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
     if (activationPolicy && rerankerProvider !== "lateon") {
-        const knownPolicy = activationPolicy === LATEON_D32_ACTIVATION_POLICY
-            || activationPolicy === HISTORICAL_LATEON_D32_ACTIVATION_POLICY
-            || activationPolicy === PREVIOUS_LATEON_CONTEXT_V3_ACTIVATION_POLICY
-            || activationPolicy === PREVIOUS_LATEON_CONTEXT_V4_ACTIVATION_POLICY;
+        const knownPolicy = activationPolicy === LATEON_D32_ACTIVATION_POLICY;
         checks.push({
             name: "lateon_activation_policy",
             status: "error",
@@ -269,7 +246,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 : `Invalid LateOn activation policy: ${activationPolicy}.`,
             nextStep: knownPolicy
                 ? "Set SATORI_RERANKER_PROVIDER=lateon or remove SATORI_LATEON_ACTIVATION_POLICY."
-                : `Set SATORI_LATEON_ACTIVATION_POLICY to ${LATEON_D32_ACTIVATION_POLICY} or remove it.`,
+                : `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
         });
     }
 

@@ -95,7 +95,6 @@ test("parseCliArgs rejects an unknown leading option", () => {
 test("parseCliArgs selects per-command help and keeps top-level help topic-free", () => {
     assert.deepEqual(parseCliArgs(["install", "--help"]).command, { kind: "help", topic: "install" });
     assert.deepEqual(parseCliArgs(["doctor", "-h"]).command, { kind: "help", topic: "doctor" });
-    assert.deepEqual(parseCliArgs(["update", "--help"]).command, { kind: "help", topic: "upgrade" });
     assert.deepEqual(parseCliArgs(["tools", "list", "--help"]).command, { kind: "help", topic: "tools-list" });
     assert.deepEqual(parseCliArgs(["tool", "call", "--help"]).command, { kind: "help", topic: "tool-call" });
     assert.deepEqual(parseCliArgs(["--help"]).command, { kind: "help" });
@@ -114,9 +113,12 @@ test("parseCliArgs defaults install to offline Potion", () => {
     assert.equal(parsed.command.ollamaModel, undefined);
 });
 
-test("parseCliArgs treats upgrade and update as the same command", () => {
+test("parseCliArgs parses upgrade and no longer treats update as an alias", () => {
     assert.deepEqual(parseCliArgs(["upgrade"]).command, { kind: "upgrade" });
-    assert.deepEqual(parseCliArgs(["update"]).command, { kind: "upgrade" });
+    // `update` is no longer a command: it falls through to the generic tool wrapper like any unknown word.
+    assert.deepEqual(parseCliArgs(["update"]).command, {
+        kind: "wrapper", toolName: "update", rawArgsMode: { kind: "none" }, wrapperArgs: [],
+    });
     assert.throws(
         () => parseCliArgs(["upgrade", "--client", "codex"]),
         /Unknown arguments for upgrade/,

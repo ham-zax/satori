@@ -37,8 +37,8 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
         ],
     },
     upgrade: {
-        usage: ["satori upgrade", "satori update"],
-        summary: "Update the CLI and its compatible MCP/Core runtime (update is an alias).",
+        usage: ["satori upgrade"],
+        summary: "Update the CLI and its compatible MCP/Core runtime.",
         examples: ["satori upgrade"],
     },
     terminate: {

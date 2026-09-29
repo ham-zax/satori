@@ -872,41 +872,6 @@ test("runCli reports the installed CLI version when delegated upgrade cannot sta
     assert.match(output.stderr, new RegExp(`E_UPGRADE Global CLI updated to ${futureVersionPattern}.*could not start.*EAGAIN`, "s"));
 });
 
-test("runCli update alias preserves the structured upgrade receipt", async () => {
-    const io = captureIo();
-    const exitCode = await runCli(["--format", "json", "update"], {
-        writeStdout: io.writeStdout,
-        writeStderr: io.writeStderr,
-        diagnosticsPath: null,
-        env: { HOME: "/home/test" },
-        upgradeTargetResolver: () => ({
-            cliPackageSpecifier: `@satori-code/cli@${CLI_PACKAGE_VERSION}`,
-            cliVersion: CLI_PACKAGE_VERSION,
-            mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
-            mcpVersion: "6.2.0",
-            coreVersion: "3.1.0",
-        }),
-        managedRuntimeUpgradeRunner: async () => ({
-            action: "upgrade",
-            status: "up_to_date",
-            fromMcpVersion: "6.2.0",
-            toMcpVersion: "6.2.0",
-            fromCoreVersion: "3.1.0",
-            toCoreVersion: "3.1.0",
-            packageSpecifier: "@satori-code/mcp@6.2.0",
-            configuredClients: [],
-            restartRequired: false,
-        }),
-    });
-
-    assert.equal(exitCode, 0);
-    const result = JSON.parse(io.read().stdout);
-    assert.equal(result.action, "upgrade");
-    assert.equal(result.status, "up_to_date");
-    assert.equal(result.fromCliVersion, CLI_PACKAGE_VERSION);
-    assert.equal(result.toCliVersion, CLI_PACKAGE_VERSION);
-});
-
 test("runCli install preserves the structured receipt when JSON is requested", async () => {
     const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-json-home-"));
     const io = captureIo();

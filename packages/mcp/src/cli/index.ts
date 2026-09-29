@@ -89,7 +89,7 @@ function resolveDefaultServerArgs(): string[] {
 
 function buildHelpPayload() {
     return {
-        usage: "satori <command> (tool shell; install via satori-cli)",
+        usage: "satori <command> (tool shell; install via npx -y @satori-code/cli@latest install)",
         commands: [
             "tools list",
             "tool call <toolName> --args-json '<json>'",

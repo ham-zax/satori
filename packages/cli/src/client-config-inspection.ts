@@ -114,7 +114,7 @@ export function verifyManagedClientTarget(
             // agy skips entries flagged disabled, so the launcher wiring alone does not make it configured.
             disabled = target.client === "agy" && entry?.disabled === true;
             matches = commandMatchesExpected(entry?.command, entry?.args, expected) && !disabled;
-            usesManagedLauncher = isManagedCommandParts(entry?.command, entry?.args);
+            usesManagedLauncher = isManagedCommandParts(entry?.command, entry?.args, expected.args[0]);
             runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
         } else {
             const content = readTextIfExists(target.configPath) ?? "";
@@ -123,8 +123,8 @@ export function verifyManagedClientTarget(
             matches = Array.isArray(entry?.command)
                 && commandMatchesExpected(entry.command[0], entry.command.slice(1), expected);
             usesManagedLauncher = Array.isArray(entry?.command)
-                ? isManagedCommandParts(entry.command[0], entry.command.slice(1))
-                : isManagedCommandParts(entry?.command, entry?.args);
+                ? isManagedCommandParts(entry.command[0], entry.command.slice(1), expected.args[0])
+                : isManagedCommandParts(entry?.command, entry?.args, expected.args[0]);
             runtimeEnvironment = filteredRuntimeEnvironment(entry?.environment, inheritedEnv);
         }
     } catch {

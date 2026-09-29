@@ -8,6 +8,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
+import { prepareSkillLinkRemoval } from "./client-config-mutations.js";
 import { CliError } from "./errors.js";
 import {
     executeInstallCommand as executeInstallCommandProduction,
@@ -2604,7 +2605,8 @@ test("install replaces the legacy Claude skill copy with a link to the canonical
         fs.mkdirSync(path.join(skillsDir, "custom-skill"), { recursive: true });
         fs.mkdirSync(path.join(skillsDir, "satori"), { recursive: true });
         fs.writeFileSync(path.join(skillsDir, "custom-skill", "SKILL.md"), "# custom\n", "utf8");
-        fs.writeFileSync(path.join(skillsDir, "satori", "SKILL.md"), "# legacy satori\n", "utf8");
+        // What an earlier installer wrote: the skill asset, including its ownership marker.
+        fs.writeFileSync(path.join(skillsDir, "satori", "SKILL.md"), readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
         fs.writeFileSync(configPath, JSON.stringify({
             projects: {
                 "/tmp/example": {
@@ -3017,6 +3019,154 @@ test("agy dry-run lists its config path and skill link for install and uninstall
             ],
         );
     });
+});
+
+test("skill-link handling never replaces or removes a real directory it did not write", async () => {
+    for (const [client, linkParts] of [
+        ["agy", [".gemini", "skills", "satori"]],
+        ["claude", [".claude", "skills", "satori"]],
+    ] as const) {
+        await withTempHome(async (homeDir) => {
+            const linkPath = path.join(homeDir, ...linkParts);
+            const notes = path.join(linkPath, "my-notes.txt");
+            fs.mkdirSync(linkPath, { recursive: true });
+            fs.writeFileSync(notes, "keep me\n", "utf8");
+
+            await assert.rejects(
+                executeInstallCommand(
+                    { kind: "install", client, runtime: "voyage", dryRun: false },
+                    installOptions(homeDir),
+                ),
+                /not managed by Satori/,
+                client,
+            );
+            assert.equal(readFile(notes), "keep me\n", client);
+
+            await executeInstallCommand({ kind: "uninstall", client, dryRun: false }, installOptions(homeDir));
+            assert.equal(readFile(notes), "keep me\n", client);
+        });
+    }
+});
+
+test("skill-link handling leaves a user-authored SKILL.md, or a marked copy with extra files, alone", async () => {
+    const marked = readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md"));
+    const cases = [
+        { name: "user-authored SKILL.md", files: { "SKILL.md": "# my own satori notes\n" } },
+        { name: "marked copy plus user file", files: { "SKILL.md": marked, "my-notes.txt": "keep me\n" } },
+    ];
+    for (const client of ["agy", "claude"] as const) {
+        const linkParts = client === "agy" ? [".gemini", "skills", "satori"] : [".claude", "skills", "satori"];
+        for (const { name, files } of cases) {
+            await withTempHome(async (homeDir) => {
+                const linkPath = path.join(homeDir, ...linkParts);
+                fs.mkdirSync(linkPath, { recursive: true });
+                for (const [file, content] of Object.entries(files)) {
+                    fs.writeFileSync(path.join(linkPath, file), content, "utf8");
+                }
+                const snapshot = () => Object.keys(files).map((file) => readFile(path.join(linkPath, file)));
+                const expected = snapshot();
+                const label = `${client}: ${name}`;
+
+                await assert.rejects(
+                    executeInstallCommand({ kind: "install", client, runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+                    /not managed by Satori/,
+                    label,
+                );
+                assert.deepEqual(snapshot(), expected, label);
+                await executeInstallCommand({ kind: "uninstall", client, dryRun: false }, installOptions(homeDir));
+                assert.deepEqual(snapshot(), expected, label);
+            });
+        }
+    }
+});
+
+test("skill-link removal rechecks ownership at apply time", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-skill-link-"));
+    try {
+        const canonical = path.join(root, "agents", "satori");
+        const linkPath = path.join(root, "client", "satori");
+        fs.mkdirSync(linkPath, { recursive: true });
+        fs.writeFileSync(path.join(linkPath, "SKILL.md"), readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
+
+        const mutation = prepareSkillLinkRemoval(linkPath, canonical);
+        assert.equal(mutation.changed, true);
+        // The user adds a file after the plan was prepared.
+        fs.writeFileSync(path.join(linkPath, "my-notes.txt"), "keep me\n", "utf8");
+        mutation.apply();
+        assert.equal(readFile(path.join(linkPath, "my-notes.txt")), "keep me\n");
+        assert.equal(fs.existsSync(path.join(linkPath, "SKILL.md")), true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a symlinked HOME spelling of this home's launcher stays Satori-managed", async () => {
+    for (const client of ["agy", "claude"] as const) {
+        for (const entryUsesAlias of [true, false]) {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-home-alias-"));
+            try {
+                const realHome = path.join(root, "home");
+                const aliasHome = path.join(root, "alias");
+                fs.mkdirSync(realHome);
+                fs.symlinkSync(realHome, aliasHome);
+                // The command runs with one spelling; the entry was written with the other.
+                const commandHome = entryUsesAlias ? realHome : aliasHome;
+                const entryHome = entryUsesAlias ? aliasHome : realHome;
+                const configPath = path.join(commandHome, ...(client === "agy" ? [".gemini", "config", "mcp_config.json"] : [".claude.json"]));
+                fs.mkdirSync(path.dirname(configPath), { recursive: true });
+                const entryLauncher = launcherPath(entryHome);
+                assert.equal(fs.existsSync(entryLauncher), false);
+                fs.writeFileSync(configPath, JSON.stringify({
+                    mcpServers: { satori: { command: process.execPath, args: [entryLauncher] } },
+                }), "utf8");
+                const label = `${client} alias=${entryUsesAlias}`;
+
+                assert.equal(inspectManagedClientConfigurations(commandHome)[0]?.usesManagedLauncher, true, label);
+                await executeInstallCommand(
+                    { kind: "install", client, runtime: "voyage", dryRun: false },
+                    installOptions(commandHome),
+                );
+                await executeInstallCommand({ kind: "uninstall", client, dryRun: false }, installOptions(commandHome));
+                const remaining = JSON.parse(readFile(configPath)).mcpServers;
+                assert.equal(remaining?.satori, undefined, label);
+            } finally {
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        }
+    }
+});
+
+test("an entry pointing at another home's launcher is not Satori-managed for this home", async () => {
+    const foreign = "/other-home/.satori/bin/satori-mcp.js";
+    const cases = [
+        { client: "agy", file: [".gemini", "config", "mcp_config.json"], entry: { command: "node", args: [foreign], extra: true }, read: (c: any) => c.mcpServers.satori },
+        { client: "claude", file: [".claude.json"], entry: { type: "stdio", command: "node", args: [foreign], extra: true }, read: (c: any) => c.mcpServers.satori },
+        { client: "opencode", file: [".config", "opencode", "opencode.json"], entry: { type: "local", command: ["node", foreign], extra: true }, read: (c: any) => c.mcp.satori },
+    ] as const;
+    for (const { client, file, entry, read } of cases) {
+        await withTempHome(async (homeDir) => {
+            const configPath = path.join(homeDir, ...file);
+            fs.mkdirSync(path.dirname(configPath), { recursive: true });
+            const original = JSON.stringify(client === "opencode" ? { mcp: { satori: entry } } : { mcpServers: { satori: entry } });
+            fs.writeFileSync(configPath, original, "utf8");
+
+            await assert.rejects(
+                executeInstallCommand({ kind: "install", client, runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+                /unmanaged Satori config/,
+                client,
+            );
+            await assert.rejects(
+                executeInstallCommand({ kind: "uninstall", client, dryRun: false }, installOptions(homeDir)),
+                /unmanaged Satori config/,
+                client,
+            );
+            assert.equal(readFile(configPath), original, client);
+            assert.deepEqual(read(JSON.parse(original)), entry);
+            const proof = inspectManagedClientConfigurations(homeDir).find((candidate) => candidate.client === client);
+            assert.equal(proof?.usesManagedLauncher, false, client);
+            assert.equal(proof?.status, "error", client);
+        });
+    }
 });
 
 test("doctor inspection reports a disabled agy entry as not ok", async () => {

@@ -11,8 +11,6 @@ import type {
 } from "./install-contracts.js";
 import {
     LAUNCHER_OWNED_RUNTIME_ENV_VARS,
-    MANAGED_BIN_DIR,
-    MANAGED_LAUNCHER_FILE,
     RETIRED_SATORI_RUNTIME_ENV_VARS,
     SATORI_RUNTIME_ENV_VARS,
 } from "./install-contracts.js";
@@ -432,11 +430,31 @@ export function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, e
     };
 }
 
-export function isManagedLauncherPath(value: unknown): value is string {
-    return typeof value === "string" && value.replace(/\\/g, "/").endsWith(`/.satori/${MANAGED_BIN_DIR}/${MANAGED_LAUNCHER_FILE}`);
+/** Ownership is this home's launcher exactly; another home's launcher belongs to that install. */
+export function isManagedLauncherPath(value: unknown, expectedLauncher: string): value is string {
+    return typeof value === "string" && canonicalPath(value) === canonicalPath(expectedLauncher);
 }
 
-export function isManagedCommandParts(command: unknown, args: unknown): boolean {
+/**
+ * Resolves symlinks through the deepest existing ancestor, so a symlinked HOME
+ * spelling matches even while the launcher file itself does not exist yet.
+ */
+function canonicalPath(value: string): string {
+    const missing: string[] = [];
+    let current = path.resolve(value);
+    for (;;) {
+        try {
+            return path.join(fs.realpathSync(current), ...missing.reverse());
+        } catch {
+            const parent = path.dirname(current);
+            if (parent === current) return path.resolve(value);
+            missing.push(path.basename(current));
+            current = parent;
+        }
+    }
+}
+
+export function isManagedCommandParts(command: unknown, args: unknown, expectedLauncher: string): boolean {
     if (!Array.isArray(args)) {
         return false;
     }
@@ -445,15 +463,15 @@ export function isManagedCommandParts(command: unknown, args: unknown): boolean 
     return typeof command === "string"
         && command.length > 0
         && args.length === 1
-        && isManagedLauncherPath(entryPath);
+        && isManagedLauncherPath(entryPath, expectedLauncher);
 }
 
-export function isManagedClaudeEntry(value: unknown): value is Record<string, unknown> {
+export function isManagedClaudeEntry(value: unknown, expectedLauncher: string): value is Record<string, unknown> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
         return false;
     }
     const entry = value as Record<string, unknown>;
-    return isManagedCommandParts(entry.command, entry.args);
+    return isManagedCommandParts(entry.command, entry.args, expectedLauncher);
 }
 
 /** Antigravity (agy) reads the same `mcpServers` map; entries carry `disabled` instead of `type`. */
@@ -494,7 +512,7 @@ function prepareMcpServersJsonInstall(
         throw new CliError("E_USAGE", `Expected mcpServers to be an object in ${filePath}.`, 2);
     }
 
-    if (mcpServers.satori !== undefined && !isManagedClaudeEntry(mcpServers.satori)) {
+    if (mcpServers.satori !== undefined && !isManagedClaudeEntry(mcpServers.satori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
             `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove mcpServers.satori manually or align it to the managed Satori form first.`,
@@ -527,7 +545,7 @@ function prepareMcpServersJsonInstall(
     };
 }
 
-export function prepareClaudeUninstall(filePath: string): FileMutation {
+export function prepareClaudeUninstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const currentObject = parseJsonObject(filePath);
     const mcpServersValue = currentObject.mcpServers;
     if (!mcpServersValue || typeof mcpServersValue !== "object" || Array.isArray(mcpServersValue)) {
@@ -538,7 +556,7 @@ export function prepareClaudeUninstall(filePath: string): FileMutation {
     if (!Object.prototype.hasOwnProperty.call(mcpServers, "satori")) {
         return { changed: false, apply: () => {} };
     }
-    if (!isManagedClaudeEntry(mcpServers.satori)) {
+    if (!isManagedClaudeEntry(mcpServers.satori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
             `Refusing to remove unmanaged Satori config in ${filePath}. Remove mcpServers.satori manually instead.`,
@@ -590,16 +608,16 @@ export function buildOpenCodeServerConfig(runtimeCommand: ManagedRuntimeCommand,
     };
 }
 
-export function isManagedOpenCodeEntry(value: unknown): value is Record<string, unknown> {
+export function isManagedOpenCodeEntry(value: unknown, expectedLauncher: string): value is Record<string, unknown> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
         return false;
     }
     const entry = value as Record<string, unknown>;
     if (Array.isArray(entry.command)) {
         const [command, ...args] = entry.command;
-        return isManagedCommandParts(command, args);
+        return isManagedCommandParts(command, args, expectedLauncher);
     }
-    return isManagedCommandParts(entry.command, entry.args);
+    return isManagedCommandParts(entry.command, entry.args, expectedLauncher);
 }
 
 export function mutateJsonc(filePath: string, current: string, pathSegments: Array<string | number>, value: unknown): FileMutation {
@@ -631,7 +649,7 @@ export function prepareOpenCodeInstall(filePath: string, runtimeCommand: Managed
         throw new CliError("E_USAGE", `Expected mcp to be an object in ${filePath}.`, 2);
     }
     const existingSatori = (mcpValue as Record<string, unknown> | undefined)?.satori;
-    if (existingSatori !== undefined && !isManagedOpenCodeEntry(existingSatori)) {
+    if (existingSatori !== undefined && !isManagedOpenCodeEntry(existingSatori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
             `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove mcp.satori manually or align it to the managed Satori form first.`,
@@ -641,7 +659,7 @@ export function prepareOpenCodeInstall(filePath: string, runtimeCommand: Managed
     return mutateJsonc(filePath, current, ["mcp", "satori"], buildOpenCodeServerConfig(runtimeCommand, objectValue(existingSatori)));
 }
 
-export function prepareOpenCodeUninstall(filePath: string): FileMutation {
+export function prepareOpenCodeUninstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
     const current = readTextIfExists(filePath);
     if (!current) {
         return { changed: false, apply: () => {} };
@@ -655,7 +673,7 @@ export function prepareOpenCodeUninstall(filePath: string): FileMutation {
     if (existingSatori === undefined) {
         return { changed: false, apply: () => {} };
     }
-    if (!isManagedOpenCodeEntry(existingSatori)) {
+    if (!isManagedOpenCodeEntry(existingSatori, runtimeCommand.args[0])) {
         throw new CliError(
             "E_USAGE",
             `Refusing to remove unmanaged Satori config in ${filePath}. Remove mcp.satori manually instead.`,
@@ -749,6 +767,35 @@ function linkParentIsTargetParent(linkPath: string, target: string): boolean {
     return resolveDirectory(path.dirname(linkPath)) === resolveDirectory(path.dirname(target));
 }
 
+/**
+ * A real directory at a client's skill-link path is ours only when it is a copy
+ * an earlier installer wrote: exactly SKILL.md, carrying the ownership marker.
+ * Anything else (user-authored skill, extra files) is never replaced or removed.
+ */
+function isLegacySkillCopy(directory: string): boolean {
+    try {
+        const entries = fs.readdirSync(directory);
+        return entries.length === 1
+            && entries[0] === "SKILL.md"
+            && fs.readFileSync(path.join(directory, "SKILL.md"), "utf8").includes(SATORI_SKILL_OWNERSHIP_MARKER);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Re-proves ownership immediately before deleting, and never removes recursively:
+ * a file added since the plan was prepared survives (rmdir fails on a non-empty directory).
+ */
+function removeLegacySkillCopy(directory: string): boolean {
+    if (!isLegacySkillCopy(directory)) {
+        return false;
+    }
+    fs.rmSync(path.join(directory, "SKILL.md"));
+    fs.rmdirSync(directory);
+    return true;
+}
+
 function linkPointsTo(linkPath: string, target: string): boolean {
     return path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === path.resolve(target);
 }
@@ -766,14 +813,14 @@ export function prepareSkillLinkInstall(linkPath: string, target: string): FileM
     if (stats?.isSymbolicLink() && linkPointsTo(linkPath, target)) {
         return unchangedMutation();
     }
-    if (stats && !stats.isDirectory()) {
+    if (stats && (!stats.isDirectory() || !isLegacySkillCopy(linkPath))) {
         throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori.`, 2);
     }
     return {
         changed: true,
         apply: () => {
-            if (stats) {
-                fs.rmSync(linkPath, { recursive: true, force: true });
+            if (stats && !removeLegacySkillCopy(linkPath)) {
+                throw new CliError("E_USAGE", `Refusing to replace ${linkPath}: it is not managed by Satori.`, 2);
             }
             fs.mkdirSync(path.dirname(linkPath), { recursive: true });
             // "junction" lets Windows link directories without elevation; POSIX ignores it.
@@ -792,7 +839,9 @@ export function prepareSkillLinkRemoval(linkPath: string, target: string): FileM
             ? { changed: true, apply: () => fs.unlinkSync(linkPath) }
             : unchangedMutation();
     }
-    return stats?.isDirectory() ? prepareLegacySkillRemoval(linkPath) : unchangedMutation();
+    return stats?.isDirectory() && isLegacySkillCopy(linkPath)
+        ? { changed: true, apply: () => { removeLegacySkillCopy(linkPath); } }
+        : unchangedMutation();
 }
 
 export function prepareLegacySkillRemoval(skillPath: string): FileMutation {
@@ -881,11 +930,11 @@ export function prepareConfigMutation(
         // Both keep Satori under mcpServers.satori; uninstall removal is identical.
         mutation = command.kind === "install"
             ? (target.client === "agy" ? prepareAgyInstall : prepareClaudeInstall)(target.configPath, runtimeCommand)
-            : prepareClaudeUninstall(target.configPath);
+            : prepareClaudeUninstall(target.configPath, runtimeCommand);
     } else {
         mutation = command.kind === "install"
             ? prepareOpenCodeInstall(target.configPath, runtimeCommand)
-            : prepareOpenCodeUninstall(target.configPath);
+            : prepareOpenCodeUninstall(target.configPath, runtimeCommand);
     }
     return guardFileMutation(target.configPath, expected, mutation);
 }

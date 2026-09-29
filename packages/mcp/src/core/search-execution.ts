@@ -1354,17 +1354,17 @@ export async function runSearchExecution(
                 }),
             );
             if (dirtyOverlayResults.length > 0) {
-                // This pass replaces every stale semantic pass for the dirty path,
-                // so retain equivalent fusion weight instead of penalizing freshness.
+                // This pass replaces the stale semantic passes for the dirty path.
+                // Semantic passes combine by max, so one pass weight is equivalent.
                 if (candidateSurvival) {
                     appendSearchCandidatePass(
                         candidateSurvival,
                         dirtyOverlayResults,
                         `attempt:${attempt + 1}/dirty_overlay`,
-                        successfulPasses.length,
+                        1,
                     );
                 }
-                addPass(dirtyOverlayResults, "dirty_overlay", successfulPasses.length);
+                addPass(dirtyOverlayResults, "dirty_overlay", 1);
                 passesUsed.add("dirty_overlay");
             }
         }

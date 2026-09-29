@@ -99,6 +99,7 @@ export function verifyManagedClientTarget(
     inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): ManagedClientConfigProof {
     let matches = false;
+    let disabled = false;
     let usesManagedLauncher: boolean | undefined;
     let runtimeEnvironment: Readonly<Record<string, string>> | undefined;
     try {
@@ -107,10 +108,12 @@ export function verifyManagedClientTarget(
             matches = content.includes(buildCodexManagedBlock(expected));
             usesManagedLauncher = content.includes(toTomlString(expected.args[0]));
             runtimeEnvironment = readCodexRuntimeEnvironment(content, inheritedEnv);
-        } else if (target.client === "claude") {
+        } else if (target.client === "claude" || target.client === "agy") {
             const config = parseJsonObject(target.configPath);
             const entry = objectValue(objectValue(config.mcpServers)?.satori);
-            matches = commandMatchesExpected(entry?.command, entry?.args, expected);
+            // agy skips entries flagged disabled, so the launcher wiring alone does not make it configured.
+            disabled = target.client === "agy" && entry?.disabled === true;
+            matches = commandMatchesExpected(entry?.command, entry?.args, expected) && !disabled;
             usesManagedLauncher = isManagedCommandParts(entry?.command, entry?.args);
             runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
         } else {
@@ -136,6 +139,8 @@ export function verifyManagedClientTarget(
         status: matches ? "ok" : "error",
         message: matches
             ? `${target.client} config points to ${expected.args[0]}.`
+            : disabled
+            ? `${target.client} config has the Satori entry disabled. Set \"disabled\" to false or rerun install --client ${target.client}.`
             : `${target.client} config does not point exactly to ${expected.command} ${expected.args[0]}.`,
         runtimeEnvironment,
         usesManagedLauncher,
@@ -151,7 +156,7 @@ export function hasSatoriClientEntry(target: ClientTarget): boolean {
         if (target.client === "codex") {
             return content.includes(MANAGED_BLOCK_START) || /\[mcp_servers\.satori(?:\.|\])/.test(content);
         }
-        if (target.client === "claude") {
+        if (target.client === "claude" || target.client === "agy") {
             return objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori) !== undefined;
         }
         return objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori) !== undefined;
@@ -209,9 +214,12 @@ export function readClientVectorStore(target: ClientTarget): InstallVectorStore 
     if (target.client === "codex") {
         return readCodexVectorStore(target.configPath);
     }
-    if (target.client === "claude") {
+    if (target.client === "claude" || target.client === "agy") {
         const entry = objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori);
-        return parseVectorStoreLiteral(objectValue(entry?.env)?.VECTOR_STORE_PROVIDER, `Claude config '${target.configPath}'`);
+        return parseVectorStoreLiteral(
+            objectValue(entry?.env)?.VECTOR_STORE_PROVIDER,
+            `${target.client === "agy" ? "Antigravity" : "Claude"} config '${target.configPath}'`,
+        );
     }
     const content = readTextIfExists(target.configPath);
     if (content === null) {

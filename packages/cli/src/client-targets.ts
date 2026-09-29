@@ -34,13 +34,14 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
     const claudeConfigDir = resolveConfiguredPath(env.CLAUDE_CONFIG_DIR, homeDir)
         ?? path.join(homeDir, ".claude");
     const claudeUserRoot = resolveConfiguredPath(env.CLAUDE_CONFIG_DIR, homeDir) ?? homeDir;
+    const agyConfigDir = path.join(homeDir, ".gemini", "config");
     const opencodeGlobalConfigDir = resolveOpenCodeGlobalConfigDir(homeDir);
     const opencodeConfigPath = resolveConfiguredPath(env.OPENCODE_CONFIG, homeDir)
         ?? path.join(opencodeGlobalConfigDir, "opencode.json");
 
     // One canonical skill in the cross-agent skills directory. Codex and
-    // OpenCode load it natively; Claude Code only scans its own directory, so
-    // it receives a link to the same copy.
+    // OpenCode load it natively; Claude Code and Antigravity scan their own
+    // directories, so they receive a link to the same copy.
     const canonicalSkillPath = resolveCanonicalSkillPath(homeDir);
     const skill = { kind: "skill", path: canonicalSkillPath } as const;
 
@@ -73,6 +74,20 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
             companions: [
                 skill,
                 { kind: "legacy-instructions", path: path.join(opencodeGlobalConfigDir, "AGENTS.md") },
+            ],
+        },
+        {
+            client: "agy",
+            configPath: path.join(agyConfigDir, "mcp_config.json"),
+            companions: [
+                skill,
+                // agy scans ~/.gemini/skills. Where that directory already is the
+                // canonical one (a symlink), the link mutation leaves it alone.
+                {
+                    kind: "skill-link",
+                    path: path.join(homeDir, ".gemini", "skills", SATORI_SKILL_NAME),
+                    target: canonicalSkillPath,
+                },
             ],
         },
     ];
@@ -137,6 +152,9 @@ function isClientDetected(target: ClientTarget, homeDir: string, env: NodeJS.Pro
                 || configuredPathExists(customConfigDir, homeDir, true)
                 || executableExists("opencode", homeDir, env);
         }
+        case "agy":
+            return configuredPathExists(path.dirname(target.configPath), homeDir, true)
+                || executableExists("agy", homeDir, env);
     }
 }
 
@@ -164,10 +182,11 @@ export function assertAutoClientTargets(
             "",
             "Detected clients: none",
             "",
-            "Install Codex, Claude Code, or OpenCode, or explicitly choose:",
+            "Install Codex, Claude Code, OpenCode, or Antigravity, or explicitly choose:",
             `  ${satoriCliCommand("install --client codex")}`,
             `  ${satoriCliCommand("install --client claude")}`,
             `  ${satoriCliCommand("install --client opencode")}`,
+            `  ${satoriCliCommand("install --client agy")}`,
             `  ${satoriCliCommand("install --client all")}`,
         ].join("\n"),
         2,

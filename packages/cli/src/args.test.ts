@@ -216,6 +216,14 @@ test("parseCliArgs rejects unsupported install profiles", () => {
     );
 });
 
+test("parseCliArgs supports install and uninstall with the agy client", () => {
+    for (const kind of ["install", "uninstall"] as const) {
+        const parsed = parseCliArgs([kind, "--client", "agy"]);
+        assert.equal(parsed.command.kind, kind);
+        assert.equal((parsed.command as { client: string }).client, "agy");
+    }
+});
+
 test("parseCliArgs supports install with OpenCode client", () => {
     const parsed = parseCliArgs(["install", "--client", "opencode"]);
     assert.equal(parsed.command.kind, "install");
@@ -288,6 +296,6 @@ test("parseCliArgs rejects guidance hook flag for uninstall", () => {
 test("parseCliArgs rejects unsupported install clients", () => {
     assert.throws(
         () => parseCliArgs(["install", "--client", "cursor"]),
-        /--client must be one of: auto, all, claude, codex, opencode/
+        /--client must be one of: auto, all, claude, codex, opencode, agy/
     );
 });

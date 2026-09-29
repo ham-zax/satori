@@ -91,11 +91,24 @@ test("Doctor renders effective configuration for every supported client as a tab
                 rerankerProfile: null,
                 vectorStore: "Milvus",
             },
+            {
+                client: "agy" as const,
+                status: "not_configured" as const,
+                source: null,
+                profile: null,
+                embeddingProvider: null,
+                embeddingModel: null,
+                embeddingDimension: null,
+                rerankerProvider: null,
+                rerankerProfile: null,
+                vectorStore: null,
+            },
         ],
     };
 
     const text = formatDoctorText(result, { verbose: false });
     assert.match(text, /Applied runtime configuration:/);
+    assert.match(text, /Antigravity\s+\| Not configured\s+\| —/);
     assert.match(text, /Client\s+\| Status\s+\| Profile\s+\| Embedding\s+\| Dim\s+\| Reranker\s+\| Storage\s+\| Source/);
     assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn · Code-edge D32\s+\| LanceDB\s+\| Managed launcher/);
     assert.match(text, /Claude Code\s+\| Not configured\s+\| —/);

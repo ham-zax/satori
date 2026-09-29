@@ -2873,6 +2873,209 @@ test("install writes OpenCode JSONC config and the canonical skill", async () =>
     });
 });
 
+test("install --client agy writes the managed entry, preserves other servers, and is idempotent", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        const other = { command: "other-server", args: ["--flag"], env: { A: "1" } };
+        fs.writeFileSync(configPath, `${JSON.stringify({ theme: "dark", mcpServers: { other } }, null, 2)}\n`, "utf8");
+        const desktopConfigPath = path.join(homeDir, ".gemini", "antigravity", "mcp_config.json");
+        fs.mkdirSync(path.dirname(desktopConfigPath), { recursive: true });
+        fs.writeFileSync(desktopConfigPath, "{}\n", "utf8");
+
+        const command = { kind: "install", client: "agy", runtime: "voyage", dryRun: false } as const;
+        const first = await executeInstallCommand(command, installOptions(homeDir));
+        assert.equal(first.results.length, 1);
+        assert.equal(first.results[0]?.client, "agy");
+        assert.equal(first.results[0]?.status, "updated");
+
+        const written = JSON.parse(readFile(configPath));
+        assert.equal(written.theme, "dark");
+        assert.deepEqual(written.mcpServers.other, other);
+        assert.deepEqual(written.mcpServers.satori, {
+            command: process.execPath,
+            args: [launcherPath(homeDir)],
+            disabled: false,
+        });
+        assert.equal(readFile(desktopConfigPath), "{}\n");
+        assert.equal(fs.existsSync(path.join(homeDir, ".agents", "skills", "satori", "SKILL.md")), true);
+        // Without a ~/.gemini/skills directory, agy gets a link to the canonical skill.
+        assert.equal(
+            fs.realpathSync(path.join(homeDir, ".gemini", "skills", "satori")),
+            fs.realpathSync(path.join(homeDir, ".agents", "skills", "satori")),
+        );
+
+        const before = readFile(configPath);
+        const second = await executeInstallCommand(command, installOptions(homeDir));
+        assert.equal(second.results[0]?.status, "unchanged");
+        assert.equal(readFile(configPath), before);
+    });
+});
+
+test("agy install accepts the hand-made managed entry and keeps ~/.gemini/skills aliased to the canonical dir", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            mcpServers: { satori: { args: [launcherPath(homeDir)], command: process.execPath, disabled: false } },
+        }), "utf8");
+        const canonicalRoot = path.join(homeDir, ".agents", "skills");
+        fs.mkdirSync(canonicalRoot, { recursive: true });
+        fs.symlinkSync(canonicalRoot, path.join(homeDir, ".gemini", "skills"));
+
+        const command = { kind: "install", client: "agy", runtime: "voyage", dryRun: false } as const;
+        await executeInstallCommand(command, installOptions(homeDir));
+        const canonicalSkill = path.join(canonicalRoot, "satori");
+        assert.equal(fs.lstatSync(canonicalSkill).isDirectory(), true);
+        assert.equal(fs.existsSync(path.join(canonicalSkill, "SKILL.md")), true);
+        assert.deepEqual(JSON.parse(readFile(configPath)).mcpServers.satori, {
+            command: process.execPath,
+            args: [launcherPath(homeDir)],
+            disabled: false,
+        });
+
+        // Uninstalling agy alone must not delete the canonical skill it shares through the alias.
+        await executeInstallCommand({ ...command, kind: "uninstall" }, installOptions(homeDir));
+        assert.equal(fs.existsSync(path.join(canonicalSkill, "SKILL.md")), true);
+    });
+});
+
+test("uninstall --client agy removes only the Satori entry and a Satori-owned skill link", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        const other = { command: "other-server", args: [] };
+        fs.writeFileSync(configPath, JSON.stringify({ keep: 1, mcpServers: { other } }), "utf8");
+        await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            installOptions(homeDir),
+        );
+        const linkPath = path.join(homeDir, ".gemini", "skills", "satori");
+        assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true);
+
+        const result = await executeInstallCommand(
+            { kind: "uninstall", client: "agy", dryRun: false },
+            installOptions(homeDir),
+        );
+        assert.equal(result.results[0]?.client, "agy");
+        assert.deepEqual(JSON.parse(readFile(configPath)), { keep: 1, mcpServers: { other } });
+        assert.equal(fs.existsSync(linkPath), false);
+        // The canonical skill belongs to every client; only --client all removes it.
+        assert.equal(fs.existsSync(path.join(homeDir, ".agents", "skills", "satori", "SKILL.md")), true);
+    });
+});
+
+test("agy install and uninstall refuse an unmanaged satori entry", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        const content = JSON.stringify({ mcpServers: { satori: { command: "custom", args: ["x"] } } });
+        fs.writeFileSync(configPath, content, "utf8");
+        for (const kind of ["install", "uninstall"] as const) {
+            await assert.rejects(
+                executeInstallCommand(
+                    kind === "install"
+                        ? { kind, client: "agy", runtime: "voyage", dryRun: false }
+                        : { kind, client: "agy", dryRun: false },
+                    installOptions(homeDir),
+                ),
+                /unmanaged Satori config/,
+            );
+        }
+        assert.equal(readFile(configPath), content);
+    });
+});
+
+test("agy dry-run lists its config path and skill link for install and uninstall", async () => {
+    await withTempHome(async (homeDir) => {
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        const preview = await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: true },
+            installOptions(homeDir),
+        );
+        assert.deepEqual(preview.plannedChanges, [
+            { kind: "launcher", path: launcherPath(homeDir) },
+            { kind: "client-config", client: "agy", path: configPath },
+            { kind: "skill", client: "agy", path: path.join(homeDir, ".agents", "skills", "satori") },
+            { kind: "skill-link", client: "agy", path: path.join(homeDir, ".gemini", "skills", "satori") },
+        ]);
+        assert.deepEqual(snapshotTree(homeDir), []);
+
+        await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            installOptions(homeDir),
+        );
+        const removal = await executeInstallCommand(
+            { kind: "uninstall", client: "agy", dryRun: true },
+            installOptions(homeDir),
+        );
+        assert.deepEqual(
+            removal.plannedChanges?.map((change) => [change.kind, change.path]),
+            [
+                ["client-config", configPath],
+                ["skill-link", path.join(homeDir, ".gemini", "skills", "satori")],
+            ],
+        );
+    });
+});
+
+test("doctor inspection reports a disabled agy entry as not ok", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            installOptions(homeDir),
+        );
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        const config = JSON.parse(readFile(configPath));
+        config.mcpServers.satori.disabled = true;
+        fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+        const proof = inspectManagedClientConfigurations(homeDir)[0];
+        assert.equal(proof.client, "agy");
+        assert.equal(proof.status, "error");
+        assert.match(proof.message, /disabled/);
+        assert.match(proof.message, /install --client agy|"disabled"/);
+    });
+});
+
+test("agy install treats a symlink chain to a missing canonical skills dir like the direct alias", async () => {
+    await withTempHome(async (homeDir) => {
+        const gemini = path.join(homeDir, ".gemini");
+        fs.mkdirSync(gemini, { recursive: true });
+        fs.symlinkSync(path.join(homeDir, ".agents", "skills"), path.join(gemini, "skills-hop"));
+        fs.symlinkSync(path.join(gemini, "skills-hop"), path.join(gemini, "skills"));
+
+        const result = await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            installOptions(homeDir),
+        );
+        assert.equal(result.results[0]?.status, "updated");
+        const canonical = path.join(homeDir, ".agents", "skills", "satori");
+        assert.equal(fs.lstatSync(canonical).isDirectory(), true);
+        assert.equal(fs.existsSync(path.join(canonical, "SKILL.md")), true);
+    });
+});
+
+test("doctor inspection recognizes the agy entry and detects stale wiring", async () => {
+    await withTempHome(async (homeDir) => {
+        await executeInstallCommand(
+            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            installOptions(homeDir),
+        );
+        const proofs = inspectManagedClientConfigurations(homeDir);
+        assert.deepEqual(proofs.map((proof) => [proof.client, proof.status, proof.usesManagedLauncher]), [
+            ["agy", "ok", true],
+        ]);
+        assert.match(proofs[0].message, /^agy config points to /);
+
+        const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+        const config = JSON.parse(readFile(configPath));
+        config.mcpServers.satori.command = "/stale/node";
+        fs.writeFileSync(configPath, JSON.stringify(config), "utf8");
+        assert.equal(inspectManagedClientConfigurations(homeDir)[0]?.status, "error");
+    });
+});
+
 test("OpenCode install removes stale launcher-owned runtime identity while preserving pass-through environment", async () => {
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".config", "opencode", "opencode.json");
@@ -2923,7 +3126,7 @@ test("install all smoke writes launcher-backed config for every supported client
             dryRun: false,
         }, installOptions(homeDir));
 
-        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode"]);
+        assert.deepEqual(result.results.map((entry) => entry.client), ["codex", "claude", "opencode", "agy"]);
         assert.equal(result.results.every((entry) => entry.status === "updated"), true);
 
         const launcher = readFile(launcherPath(homeDir));
@@ -3026,6 +3229,21 @@ test("auto client selection uses client markers and PATH executables", async () 
         assert.deepEqual(
             plan({ PATH: binDir }).prepared.map((entry) => entry.target.client),
             ["codex", "opencode"],
+        );
+
+        // agy is detected by its config directory or its binary, like the others.
+        const agyPath = path.join(binDir, "agy");
+        fs.writeFileSync(agyPath, "#!/bin/sh\n", "utf8");
+        fs.chmodSync(agyPath, 0o755);
+        assert.deepEqual(
+            plan({ PATH: binDir }).prepared.map((entry) => entry.target.client),
+            ["codex", "opencode", "agy"],
+        );
+        fs.rmSync(agyPath);
+        fs.mkdirSync(path.join(homeDir, ".gemini", "config"), { recursive: true });
+        assert.deepEqual(
+            plan({ PATH: binDir }).prepared.map((entry) => entry.target.client),
+            ["codex", "opencode", "agy"],
         );
     });
 });
@@ -3265,7 +3483,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
             VOYAGEAI_API_KEY: "pa-client-owned",
             MILVUS_ADDRESS: "localhost:19530",
         });
-        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode"]);
+        assert.deepEqual(healthy.map((proof) => proof.client), ["codex", "claude", "opencode", "agy"]);
         assert.equal(healthy.every((proof) => proof.status === "ok"), true);
         assert.equal(healthy.every((proof) => proof.usesManagedLauncher === true), true);
         assert.equal(
@@ -3282,7 +3500,7 @@ test("managed client inspection reuses installer parsers and reports stale wirin
 
         const stale = inspectManagedClientConfigurations(homeDir);
         assert.equal(stale.find((proof) => proof.client === "claude")?.status, "error");
-        assert.equal(stale.filter((proof) => proof.status === "ok").length, 2);
+        assert.equal(stale.filter((proof) => proof.status === "ok").length, 3);
     });
 });
 
@@ -3529,8 +3747,9 @@ test("dry-run reports install actions without writing files", async () => {
             dryRun: true,
         }, installOptions(homeDir));
 
-        assert.equal(result.results.length, 3);
+        assert.equal(result.results.length, 4);
         assert.equal(result.results.every((entry) => entry.dryRun), true);
+        assert.equal(fs.existsSync(path.join(homeDir, ".gemini", "config", "mcp_config.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".claude.json")), false);
         assert.equal(fs.existsSync(path.join(homeDir, ".config", "opencode", "opencode.json")), false);

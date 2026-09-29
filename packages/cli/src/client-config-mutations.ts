@@ -456,11 +456,33 @@ export function isManagedClaudeEntry(value: unknown): value is Record<string, un
     return isManagedCommandParts(entry.command, entry.args);
 }
 
+/** Antigravity (agy) reads the same `mcpServers` map; entries carry `disabled` instead of `type`. */
+export function buildAgyServerConfig(runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>): Record<string, unknown> {
+    return {
+        command: runtimeCommand.command,
+        args: runtimeCommand.args,
+        env: buildPreservedManagedEnv(existing?.env),
+        disabled: false,
+    };
+}
+
 export function prepareClaudeInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    return prepareMcpServersJsonInstall(filePath, runtimeCommand, buildClaudeServerConfig);
+}
+
+export function prepareAgyInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    return prepareMcpServersJsonInstall(filePath, runtimeCommand, buildAgyServerConfig);
+}
+
+function prepareMcpServersJsonInstall(
+    filePath: string,
+    runtimeCommand: ManagedRuntimeCommand,
+    buildServer: (runtimeCommand: ManagedRuntimeCommand, existing?: Record<string, unknown>) => Record<string, unknown>,
+): FileMutation {
     const currentObject = parseJsonObject(filePath);
     const currentSerialized = JSON.stringify(currentObject);
     const existingSatori = objectValue((currentObject.mcpServers as Record<string, unknown> | undefined)?.satori);
-    const desiredServer = buildClaudeServerConfig(runtimeCommand, existingSatori);
+    const desiredServer = buildServer(runtimeCommand, existingSatori);
 
     const mcpServersValue = currentObject.mcpServers;
     let mcpServers: Record<string, unknown>;
@@ -705,6 +727,28 @@ export function prepareSkillRemoval(skillDir: string): FileMutation {
     };
 }
 
+/** Resolves a directory that may not exist yet, following a whole (possibly dangling) symlink chain. */
+function resolveDirectory(directory: string): string {
+    try {
+        return fs.realpathSync(directory);
+    } catch {
+        let current = path.resolve(directory);
+        for (let hop = 0; hop < 40 && lstatIfExists(current)?.isSymbolicLink(); hop += 1) {
+            current = path.resolve(path.dirname(current), fs.readlinkSync(current));
+        }
+        return current;
+    }
+}
+
+/**
+ * True when the link's directory already resolves to the target's directory
+ * (for example ~/.gemini/skills symlinked to ~/.agents/skills). The link path
+ * is then the canonical skill itself, so it must never be replaced or removed.
+ */
+function linkParentIsTargetParent(linkPath: string, target: string): boolean {
+    return resolveDirectory(path.dirname(linkPath)) === resolveDirectory(path.dirname(target));
+}
+
 function linkPointsTo(linkPath: string, target: string): boolean {
     return path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === path.resolve(target);
 }
@@ -715,6 +759,9 @@ function linkPointsTo(linkPath: string, target: string): boolean {
  * and is replaced; any other symlink or file is left to the user.
  */
 export function prepareSkillLinkInstall(linkPath: string, target: string): FileMutation {
+    if (linkParentIsTargetParent(linkPath, target)) {
+        return unchangedMutation();
+    }
     const stats = lstatIfExists(linkPath);
     if (stats?.isSymbolicLink() && linkPointsTo(linkPath, target)) {
         return unchangedMutation();
@@ -736,6 +783,9 @@ export function prepareSkillLinkInstall(linkPath: string, target: string): FileM
 }
 
 export function prepareSkillLinkRemoval(linkPath: string, target: string): FileMutation {
+    if (linkParentIsTargetParent(linkPath, target)) {
+        return unchangedMutation();
+    }
     const stats = lstatIfExists(linkPath);
     if (stats?.isSymbolicLink()) {
         return linkPointsTo(linkPath, target)
@@ -827,9 +877,10 @@ export function prepareConfigMutation(
         mutation = command.kind === "install"
             ? prepareCodexInstall(target.configPath, runtimeCommand)
             : prepareCodexUninstall(target.configPath);
-    } else if (target.client === "claude") {
+    } else if (target.client === "claude" || target.client === "agy") {
+        // Both keep Satori under mcpServers.satori; uninstall removal is identical.
         mutation = command.kind === "install"
-            ? prepareClaudeInstall(target.configPath, runtimeCommand)
+            ? (target.client === "agy" ? prepareAgyInstall : prepareClaudeInstall)(target.configPath, runtimeCommand)
             : prepareClaudeUninstall(target.configPath);
     } else {
         mutation = command.kind === "install"

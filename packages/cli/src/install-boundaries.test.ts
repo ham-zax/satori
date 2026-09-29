@@ -32,6 +32,7 @@ test("neutral install boundaries preserve configured targets and runtime paths",
             ["codex", path.join(homeDir, "codex-home", "config.toml")],
             ["claude", path.join(homeDir, "claude-config", ".claude.json")],
             ["opencode", path.join(homeDir, "opencode", "config.json")],
+            ["agy", path.join(homeDir, ".gemini", "config", "mcp_config.json")],
         ],
     );
     assert.deepEqual(detectClientTargets(homeDir, { PATH: "" }), []);

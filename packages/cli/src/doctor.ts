@@ -146,7 +146,7 @@ interface EvaluatedDoctorRuntimeContext extends DoctorRuntimeContext {
 const PACKAGE_VERSION_NOTE =
     "Satori ships independent package versions (cli, mcp, core). Doctor reports the installed set for support and debugging; versions need not match each other.";
 const MAX_DIAGNOSTIC_DETAILS = 10;
-const SUPPORTED_DOCTOR_CLIENTS = ["codex", "claude", "opencode"] as const satisfies readonly ManagedClientConfigProof["client"][];
+const SUPPORTED_DOCTOR_CLIENTS = ["codex", "claude", "opencode", "agy"] as const satisfies readonly ManagedClientConfigProof["client"][];
 const DISPLAYED_RUNTIME_PROFILES = new Set<NonNullable<DoctorRuntimeConfiguration["profile"]>>(["connected", "offline"]);
 const DISPLAYED_EMBEDDING_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfiguration["embeddingProvider"]>>([
     "OpenAI",
@@ -206,6 +206,7 @@ function clientLabel(client: DoctorRuntimeContext["client"]): string {
     if (client === "codex") return "Codex";
     if (client === "opencode") return "OpenCode";
     if (client === "claude") return "Claude Code";
+    if (client === "agy") return "Antigravity";
     return "Runtime";
 }
 
@@ -874,7 +875,7 @@ function appendManagedClientChecks(
             checks,
             "managed_client_configuration",
             "error",
-            "Satori is not installed for any supported client (Codex, Claude Code, OpenCode).",
+            "Satori is not installed for any supported client (Codex, Claude Code, OpenCode, Antigravity).",
         );
         // A present-but-broken launcher already carries its own repair step.
         if (notInstalled.launcherStatus === "missing") {

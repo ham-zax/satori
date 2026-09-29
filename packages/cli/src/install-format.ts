@@ -8,6 +8,7 @@ const CLIENT_LABELS = {
     codex: "Codex",
     claude: "Claude Code",
     opencode: "OpenCode",
+    agy: "Antigravity",
 } as const;
 
 const CHECK_LABELS: Record<InstallPostflightCheck["name"], string> = {

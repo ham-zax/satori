@@ -65,7 +65,7 @@ export interface ResolveRawArgsOptions {
     stdinTimeoutMs: number;
 }
 
-export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode";
+export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "agy";
 export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
@@ -86,7 +86,7 @@ export const GLOBAL_OPTION_SPECS: readonly CommandOptionSpec[] = [
     { flag: "--call-timeout-ms", value: "n", description: "MCP call timeout in milliseconds (default: 600000)" },
 ];
 
-const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode";
+const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy";
 
 /** The flags each command's parser below accepts; per-command help renders exactly this table. */
 export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOptionSpec[]>> = {
@@ -315,8 +315,8 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         const token = args[i];
         if (token === "--client") {
             const next = args[i + 1];
-            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode") {
-                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode.", 2);
+            if (next !== "auto" && next !== "all" && next !== "claude" && next !== "codex" && next !== "opencode" && next !== "agy") {
+                throw new CliError("E_USAGE", "--client must be one of: auto, all, claude, codex, opencode, agy.", 2);
             }
             client = next;
             i += 1;

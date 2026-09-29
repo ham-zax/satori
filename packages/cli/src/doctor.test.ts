@@ -218,6 +218,17 @@ test("runDoctor validates each configured client runtime instead of a shell-defa
                 reranker: "none",
                 store: "Milvus",
             },
+            {
+                client: "agy",
+                status: "not_configured",
+                source: null,
+                profile: null,
+                provider: null,
+                model: null,
+                dimension: null,
+                reranker: null,
+                store: null,
+            },
         ],
     );
     assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");

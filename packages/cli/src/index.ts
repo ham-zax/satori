@@ -323,11 +323,11 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect supported clients; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
+            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect supported clients; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
             "version (-v, --version)",
             "upgrade (alias: update)",
             "terminate",
-            "uninstall [--client auto|all|codex|claude|opencode] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
+            "uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
             "tools list",
             "tool call <toolName> --args-json '<json>'",

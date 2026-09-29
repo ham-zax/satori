@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { RootMutationOperation } from "@zokizuan/satori-core/integration";
+import type { RootMutationOperation } from "@satori-code/core/integration";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS } from "../config.js";
 import type { ToolResponseBuildersHost } from "./tool-response-builders.js";
 import { ToolResponseBuilders } from "./tool-response-builders.js";

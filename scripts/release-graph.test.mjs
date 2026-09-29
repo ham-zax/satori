@@ -31,21 +31,21 @@ function createWorkspace(files) {
 function standardWorkspace(overrides = {}) {
   return createWorkspace({
     'packages/core/package.json': {
-      name: '@zokizuan/satori-core',
+      name: '@satori-code/core',
       version: '3.6.0',
       dependencies: { '@lancedb/lancedb': '0.31.0', 'oxc-parser': '0.139.0' },
     },
     'packages/mcp/package.json': {
-      name: '@zokizuan/satori-mcp',
+      name: '@satori-code/mcp',
       version: '6.8.0',
       dependencies: {
-        '@zokizuan/satori-core': 'workspace:*',
+        '@satori-code/core': 'workspace:*',
         '@huggingface/transformers': '3.0.2',
         'onnxruntime-node': '1.19.2',
       },
     },
     'packages/cli/package.json': {
-      name: '@zokizuan/satori-cli',
+      name: '@satori-code/cli',
       version: '1.9.0',
       dependencies: {},
       satoriManagedRuntime: {
@@ -137,9 +137,9 @@ test('server.json mismatch is rejected', () => {
 test('non-workspace MCP dependency on Core is rejected', () => {
   const cwd = standardWorkspace({
     'packages/mcp/package.json': {
-      name: '@zokizuan/satori-mcp',
+      name: '@satori-code/mcp',
       version: '6.8.0',
-      dependencies: { '@zokizuan/satori-core': '^3.6.0' },
+      dependencies: { '@satori-code/core': '^3.6.0' },
     },
   });
   assert.throws(() => readLocalReleaseGraph(cwd), /must remain workspace:\*/);
@@ -148,9 +148,9 @@ test('non-workspace MCP dependency on Core is rejected', () => {
 test('CLI bootstrap dependency on managed runtime is rejected', () => {
   const cwd = standardWorkspace({
     'packages/cli/package.json': {
-      name: '@zokizuan/satori-cli',
+      name: '@satori-code/cli',
       version: '1.9.0',
-      dependencies: { '@zokizuan/satori-mcp': '6.8.0' },
+      dependencies: { '@satori-code/mcp': '6.8.0' },
       satoriManagedRuntime: {
         mcp: '6.8.0',
         core: '3.6.0',
@@ -165,15 +165,15 @@ test('CLI bootstrap dependency on managed runtime is rejected', () => {
 
 test('wrong package names and unstable versions are rejected', () => {
   const cwd = standardWorkspace({
-    'packages/core/package.json': { name: '@zokizuan/satori-wrong', version: '3.6.0' },
+    'packages/core/package.json': { name: '@satori-code/wrong', version: '3.6.0' },
   });
-  assert.throws(() => readLocalReleaseGraph(cwd), /name must be @zokizuan\/satori-core/);
+  assert.throws(() => readLocalReleaseGraph(cwd), /name must be @satori-code\/core/);
 
   const prerelease = standardWorkspace({
     'packages/mcp/package.json': {
-      name: '@zokizuan/satori-mcp',
+      name: '@satori-code/mcp',
       version: '6.8.0-rc.1',
-      dependencies: { '@zokizuan/satori-core': 'workspace:*' },
+      dependencies: { '@satori-code/core': 'workspace:*' },
     },
   });
   assert.throws(() => readLocalReleaseGraph(prerelease), /major\.minor\.patch/);
@@ -181,14 +181,14 @@ test('wrong package names and unstable versions are rejected', () => {
 
 function packedManifests(overrides = {}) {
   return {
-    core: { name: '@zokizuan/satori-core', version: '3.6.0', dependencies: {} },
+    core: { name: '@satori-code/core', version: '3.6.0', dependencies: {} },
     mcp: {
-      name: '@zokizuan/satori-mcp',
+      name: '@satori-code/mcp',
       version: '6.8.0',
-      dependencies: { '@zokizuan/satori-core': '3.6.0' },
+      dependencies: { '@satori-code/core': '3.6.0' },
     },
     cli: {
-      name: '@zokizuan/satori-cli',
+      name: '@satori-code/cli',
       version: '1.9.0',
       dependencies: {},
       satoriManagedRuntime: { core: '3.6.0', mcp: '6.8.0' },
@@ -215,10 +215,10 @@ test('packed MCP with stale Core pin is rejected', () => {
       validatePackedDependencyGraph({
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
         packedManifests: packedManifests({
-          mcp: { name: '@zokizuan/satori-mcp', version: '6.8.0', dependencies: { '@zokizuan/satori-core': '3.5.0' } },
+          mcp: { name: '@satori-code/mcp', version: '6.8.0', dependencies: { '@satori-code/core': '3.5.0' } },
         }),
       }),
-    /@zokizuan\/satori-core.*exact version 3\.6\.0.*received "3\.5\.0"/
+    /@satori-code\/core.*exact version 3\.6\.0.*received "3\.5\.0"/
   );
 });
 
@@ -229,14 +229,14 @@ test('packed CLI with stale MCP pin is rejected', () => {
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
         packedManifests: packedManifests({
           cli: {
-            name: '@zokizuan/satori-cli',
+            name: '@satori-code/cli',
             version: '1.9.0',
             dependencies: {},
             satoriManagedRuntime: { core: '3.6.0', mcp: '6.7.0' },
           },
         }),
       }),
-    /@zokizuan\/satori-mcp.*exact version 6\.8\.0.*received "6\.7\.0"/
+    /@satori-code\/mcp.*exact version 6\.8\.0.*received "6\.7\.0"/
   );
 });
 
@@ -247,14 +247,14 @@ test('packed CLI with stale Core pin is rejected', () => {
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
         packedManifests: packedManifests({
           cli: {
-            name: '@zokizuan/satori-cli',
+            name: '@satori-code/cli',
             version: '1.9.0',
             dependencies: {},
             satoriManagedRuntime: { core: '3.5.0', mcp: '6.8.0' },
           },
         }),
       }),
-    /@zokizuan\/satori-core.*exact version 3\.6\.0.*received "3\.5\.0"/
+    /@satori-code\/core.*exact version 3\.6\.0.*received "3\.5\.0"/
   );
 });
 
@@ -265,7 +265,7 @@ test('dependency ranges and workspace syntax in packed manifests are rejected', 
         validatePackedDependencyGraph({
           localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
           packedManifests: packedManifests({
-            mcp: { name: '@zokizuan/satori-mcp', version: '6.8.0', dependencies: { '@zokizuan/satori-core': badDependency } },
+            mcp: { name: '@satori-code/mcp', version: '6.8.0', dependencies: { '@satori-code/core': badDependency } },
           }),
         }),
       /exact version/,
@@ -281,7 +281,7 @@ test('missing packed managed-runtime target is rejected', () => {
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
         packedManifests: packedManifests({
           cli: {
-            name: '@zokizuan/satori-cli',
+            name: '@satori-code/cli',
             version: '1.9.0',
             dependencies: {},
             satoriManagedRuntime: { core: '3.6.0' },
@@ -297,7 +297,7 @@ test('packed version mismatches and prereleases are rejected', () => {
     () =>
       validatePackedDependencyGraph({
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
-        packedManifests: packedManifests({ core: { name: '@zokizuan/satori-core', version: '3.5.0', dependencies: {} } }),
+        packedManifests: packedManifests({ core: { name: '@satori-code/core', version: '3.5.0', dependencies: {} } }),
       }),
     /does not match local version 3\.6\.0/
   );
@@ -305,7 +305,7 @@ test('packed version mismatches and prereleases are rejected', () => {
     () =>
       validatePackedDependencyGraph({
         localVersions: { core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' },
-        packedManifests: packedManifests({ core: { name: '@zokizuan/satori-core', version: '3.6.0-beta.1', dependencies: {} } }),
+        packedManifests: packedManifests({ core: { name: '@satori-code/core', version: '3.6.0-beta.1', dependencies: {} } }),
       }),
     /major\.minor\.patch/
   );

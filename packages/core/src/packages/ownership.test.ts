@@ -206,9 +206,9 @@ test('Satori pnpm workspace discovers the root, core, mcp, and cli packages', ()
         discovered.packages.map((entry) => [entry.root, entry.name]),
     );
     assert.equal(packageNamesByRoot.get(''), 'satori');
-    assert.equal(packageNamesByRoot.get('packages/core'), '@zokizuan/satori-core');
-    assert.equal(packageNamesByRoot.get('packages/mcp'), '@zokizuan/satori-mcp');
-    assert.equal(packageNamesByRoot.get('packages/cli'), '@zokizuan/satori-cli');
+    assert.equal(packageNamesByRoot.get('packages/core'), '@satori-code/core');
+    assert.equal(packageNamesByRoot.get('packages/mcp'), '@satori-code/mcp');
+    assert.equal(packageNamesByRoot.get('packages/cli'), '@satori-code/cli');
     assert.equal(packageNamesByRoot.get('experiments/potion-l0-l1'), 'satori-potion-l0-l1');
     assert.equal(packageNamesByRoot.has('satori-landing'), false);
     assert.equal(discovered.controlFiles.some(([filePath]) => filePath === 'package.json'), true);

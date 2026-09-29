@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
-import { Context, type Reranker } from "@zokizuan/satori-core";
-import type { RootMutationRuntime } from "@zokizuan/satori-core/integration";
+import { Context, type Reranker } from "@satori-code/core";
+import type { RootMutationRuntime } from "@satori-code/core/integration";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { SyncManager } from "../core/sync.js";
 import { IndexFingerprint } from "../config.js";

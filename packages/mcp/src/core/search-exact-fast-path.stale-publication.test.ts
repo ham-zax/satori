@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SymbolRegistry, SymbolRecord } from "@zokizuan/satori-core";
+import type { SymbolRegistry, SymbolRecord } from "@satori-code/core";
 import { runExactRegistryFastPath, type SearchExactFastPathHost, type SearchExactFastPathInput } from "./search-exact-fast-path.js";
 import { buildSearchQueryPlan, parseSearchOperators } from "./search-query-planning.js";
 import { SearchQuerySupport } from "./search-query-support.js";

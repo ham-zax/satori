@@ -5,8 +5,8 @@ import {
     buildSymbolRegistry,
     buildSymbolRecordsForFile,
     createLanguageAnalysisService,
-} from "@zokizuan/satori-core";
-import type { SymbolRecord, SymbolRegistryManifest } from "@zokizuan/satori-core";
+} from "@satori-code/core";
+import type { SymbolRecord, SymbolRegistryManifest } from "@satori-code/core";
 
 type SymbolRegistryManifestFile = SymbolRegistryManifest["files"][number];
 import {

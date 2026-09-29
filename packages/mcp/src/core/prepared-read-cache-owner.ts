@@ -1,7 +1,7 @@
 import type {
     JsonNavigationStore,
     PublicationRef,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { SearchReadinessDebugHint, SearchReadinessInvalidationReason } from "./search-types.js";
 import type { TrackedRootReadinessState } from "./tracked-root-readiness.js";
 import { PreparedReadCache } from "./prepared-read-cache.js";

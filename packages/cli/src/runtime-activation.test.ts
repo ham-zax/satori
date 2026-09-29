@@ -61,11 +61,11 @@ function readProcessTitle(pid: number): string {
 }
 
 function writeManagedRuntime(homeDir: string): string {
-    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@zokizuan-satori-mcp@9.9.9");
-    const packageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
+    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@9.9.9");
+    const packageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-        name: "@zokizuan/satori-mcp",
+        name: "@satori-code/mcp",
         version: "9.9.9",
     }), "utf8");
     return runtimeRoot;

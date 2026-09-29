@@ -10,7 +10,7 @@ import {
     type RelationshipRecord,
     type SymbolRecord,
     type SymbolRegistry,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type {
     CallGraphDirection,
     CallGraphEdgeResult as CallGraphEdge,
@@ -110,7 +110,7 @@ export type RelationshipBackedCallGraphResult = {
     exactReferences?: CallGraphExactReference[];
     sourceReferences?: CallGraphSourceReference[];
     sourceReferenceCoverage?: ExactReferenceSearchResult["coverage"];
-    constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
+    constructCoverage?: import("@satori-code/core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReference[];
     notesTruncated: boolean;
     totalNoteCount: number;

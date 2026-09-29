@@ -5,7 +5,7 @@
  * only compact watcher/checkpoint observations and the temporary full-index
  * handoff barrier used while MCP lifecycle state is still "indexing".
  */
-import type { ProvenSourceFreshnessCheckpointEvidence } from "@zokizuan/satori-core/integration";
+import type { ProvenSourceFreshnessCheckpointEvidence } from "@satori-code/core/integration";
 import type {
     FullIndexSourceHandoffBarrierInput,
     FullIndexSourceHandoffInput,

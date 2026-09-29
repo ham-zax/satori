@@ -1,7 +1,7 @@
 import type {
     SemanticSearchCandidateTrace,
     SemanticSearchCandidateTraceOccurrence,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { SearchResultLike } from "./search-lexical-scoring.js";
 import type {
     SearchCandidateSurvivalDebug,

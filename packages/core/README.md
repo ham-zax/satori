@@ -1,8 +1,8 @@
-# @zokizuan/satori-core
+# @satori-code/core
 
 The indexing, language-analysis, Publication, and hybrid-retrieval engine behind [Satori](https://github.com/ham-zax/satori).
 
-Most coding-agent installations should use `@zokizuan/satori-cli` and `@zokizuan/satori-mcp`. Install Core directly when embedding Satori's lower-level analysis, indexing, storage, or retrieval APIs in another Node.js application.
+Most coding-agent installations should use `@satori-code/cli` and `@satori-code/mcp`. Install Core directly when embedding Satori's lower-level analysis, indexing, storage, or retrieval APIs in another Node.js application.
 
 ## What Core Owns
 
@@ -25,7 +25,7 @@ The persistence model separates source-derived lexical/navigation state from mod
 ## Install
 
 ```bash
-npm install @zokizuan/satori-core
+npm install @satori-code/core
 ```
 
 Node.js 22.13 or newer is required. Provider and storage requirements depend on the adapters selected by the host application.
@@ -45,9 +45,9 @@ As a policy-authority file, `satori.toml` must be a regular file at the reposito
 ## Development
 
 ```bash
-pnpm --filter @zokizuan/satori-core build
-pnpm --filter @zokizuan/satori-core typecheck
-pnpm --filter @zokizuan/satori-core test
+pnpm --filter @satori-code/core build
+pnpm --filter @satori-code/core typecheck
+pnpm --filter @satori-code/core test
 ```
 
 ## License

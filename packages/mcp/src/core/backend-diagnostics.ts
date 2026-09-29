@@ -1,4 +1,4 @@
-import type { EmbeddingProviderErrorCode } from "@zokizuan/satori-core";
+import type { EmbeddingProviderErrorCode } from "@satori-code/core";
 
 export type VectorBackendDiagnosticCode =
     | "ZILLIZ_CLUSTER_STOPPED"

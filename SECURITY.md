@@ -4,9 +4,9 @@
 
 Security fixes target the current `main` branch and the latest published versions of:
 
-- `@zokizuan/satori-core`
-- `@zokizuan/satori-mcp`
-- `@zokizuan/satori-cli`
+- `@satori-code/core`
+- `@satori-code/mcp`
+- `@satori-code/cli`
 
 Older versions may receive fixes when the issue is severe and a patch release is practical.
 

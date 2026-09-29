@@ -21,7 +21,7 @@ test('registry client pins production registry and returns sorted stable version
     },
   });
 
-  const versions = client.listStableVersions('@zokizuan/satori-core');
+  const versions = client.listStableVersions('@satori-code/core');
   assert.deepEqual(versions, ['3.6.1', '3.9.9', '3.10.0']);
   assert.equal(registryMaxStableVersion(['3.10.0', '3.6.1', '3.9.9']), '3.10.0');
   assert.deepEqual(calls[0].args.slice(-2), ['--registry', PRODUCTION_NPM_REGISTRY]);
@@ -32,16 +32,16 @@ test('registry client normalizes npm 11 and npm 12 view output shapes', () => {
     const client = createReleaseRegistryClient({
       execFileSyncImpl: () => JSON.stringify(versionOutput),
     });
-    assert.equal(client.viewVersion('@zokizuan/satori-core', '3.6.1'), '3.6.1');
+    assert.equal(client.viewVersion('@satori-code/core', '3.6.1'), '3.6.1');
   }
 
-  const dependencies = { '@zokizuan/satori-core': '3.6.1' };
+  const dependencies = { '@satori-code/core': '3.6.1' };
   for (const dependenciesOutput of [dependencies, [dependencies]]) {
     const client = createReleaseRegistryClient({
       execFileSyncImpl: () => JSON.stringify(dependenciesOutput),
     });
     assert.deepEqual(
-      client.viewDependencies('@zokizuan/satori-mcp', '6.8.2'),
+      client.viewDependencies('@satori-code/mcp', '6.8.2'),
       dependencies,
     );
   }
@@ -51,7 +51,7 @@ test('registry client normalizes npm 11 and npm 12 view output shapes', () => {
     const client = createReleaseRegistryClient({
       execFileSyncImpl: () => JSON.stringify(runtimeOutput),
     });
-    assert.deepEqual(client.viewManagedRuntime('@zokizuan/satori-cli', '1.9.3'), runtime);
+    assert.deepEqual(client.viewManagedRuntime('@satori-code/cli', '1.9.3'), runtime);
   }
 
   for (const versionsOutput of [
@@ -63,7 +63,7 @@ test('registry client normalizes npm 11 and npm 12 view output shapes', () => {
       execFileSyncImpl: () => JSON.stringify(versionsOutput),
     });
     assert.deepEqual(
-      client.listStableVersions('@zokizuan/satori-core'),
+      client.listStableVersions('@satori-code/core'),
       versionsOutput.flat(),
     );
   }
@@ -75,7 +75,7 @@ test('registry version listing fails closed on malformed structured output', () 
       execFileSyncImpl: () => JSON.stringify(output),
     });
     assert.throws(
-      () => client.listStableVersions('@zokizuan/satori-core'),
+      () => client.listStableVersions('@satori-code/core'),
       /Malformed npm view versions output/,
     );
   }
@@ -86,7 +86,7 @@ test('registry scalar and object queries fail closed on ambiguous npm output', (
     execFileSyncImpl: () => JSON.stringify(['3.6.0', '3.6.1']),
   });
   assert.throws(
-    () => versionClient.viewVersion('@zokizuan/satori-core', 'latest'),
+    () => versionClient.viewVersion('@satori-code/core', 'latest'),
     /expected one version string/,
   );
 
@@ -94,7 +94,7 @@ test('registry scalar and object queries fail closed on ambiguous npm output', (
     execFileSyncImpl: () => JSON.stringify([{ a: '1.0.0' }, { a: '2.0.0' }]),
   });
   assert.throws(
-    () => dependenciesClient.viewDependencies('@zokizuan/satori-mcp', '6.8.2'),
+    () => dependenciesClient.viewDependencies('@satori-code/mcp', '6.8.2'),
     /expected one dependencies object/,
   );
 });
@@ -104,12 +104,12 @@ test('release verification checks exact versions, latest tags, and dependency cl
   const registryClient = {
     viewVersion(packageName, selector) {
       calls.push(`version:${packageName}@${selector}`);
-      const key = packageName.endsWith('-core') ? 'core' : packageName.endsWith('-mcp') ? 'mcp' : 'cli';
+      const key = packageName.endsWith('/core') ? 'core' : packageName.endsWith('/mcp') ? 'mcp' : 'cli';
       return LOCAL_VERSIONS[key];
     },
     viewDependencies(packageName) {
       calls.push(`dependencies:${packageName}`);
-      return { '@zokizuan/satori-core': LOCAL_VERSIONS.core };
+      return { '@satori-code/core': LOCAL_VERSIONS.core };
     },
     viewManagedRuntime(packageName) {
       calls.push(`runtime:${packageName}`);
@@ -130,13 +130,13 @@ test('release verification checks exact versions, latest tags, and dependency cl
 test('release verification rejects a stale latest tag', async () => {
   const registryClient = {
     viewVersion(packageName, selector) {
-      if (packageName.endsWith('-cli') && selector === PRODUCTION_NPM_TAG) {
+      if (packageName.endsWith('/cli') && selector === PRODUCTION_NPM_TAG) {
         return '1.9.2';
       }
-      return packageName.endsWith('-core') ? LOCAL_VERSIONS.core : packageName.endsWith('-mcp') ? LOCAL_VERSIONS.mcp : LOCAL_VERSIONS.cli;
+      return packageName.endsWith('/core') ? LOCAL_VERSIONS.core : packageName.endsWith('/mcp') ? LOCAL_VERSIONS.mcp : LOCAL_VERSIONS.cli;
     },
     viewDependencies() {
-      return { '@zokizuan/satori-core': LOCAL_VERSIONS.core };
+      return { '@satori-code/core': LOCAL_VERSIONS.core };
     },
     viewManagedRuntime() {
       return { core: LOCAL_VERSIONS.core, mcp: LOCAL_VERSIONS.mcp };
@@ -145,7 +145,7 @@ test('release verification rejects a stale latest tag', async () => {
 
   await assert.rejects(
     verifyReleaseRegistry({ localVersions: LOCAL_VERSIONS, registryClient }),
-    /@zokizuan\/satori-cli@latest is "1\.9\.2"; expected 1\.9\.3/,
+    /@satori-code\/cli@latest is "1\.9\.2"; expected 1\.9\.3/,
   );
 });
 
@@ -156,7 +156,7 @@ test('published-identical latest preflight rejects stale tags before publication
       localVersions: LOCAL_VERSIONS,
       registryClient: { viewVersion: () => '3.6.0' },
     }),
-    /Cannot publish because @zokizuan\/satori-core@latest is "3\.6\.0"; expected skipped version 3\.6\.1/,
+    /Cannot publish because @satori-code\/core@latest is "3\.6\.0"; expected skipped version 3\.6\.1/,
   );
 });
 
@@ -169,14 +169,14 @@ test('final verification retries transient and propagating registry state', asyn
         firstLookup = false;
         throw { status: 1, stderr: 'npm error code ECONNRESET' };
       }
-      const key = packageName.endsWith('-core') ? 'core' : packageName.endsWith('-mcp') ? 'mcp' : 'cli';
-      if (packageName.endsWith('-cli') && selector === PRODUCTION_NPM_TAG && sleeps === 1) {
+      const key = packageName.endsWith('/core') ? 'core' : packageName.endsWith('/mcp') ? 'mcp' : 'cli';
+      if (packageName.endsWith('/cli') && selector === PRODUCTION_NPM_TAG && sleeps === 1) {
         return '1.9.2';
       }
       return LOCAL_VERSIONS[key];
     },
     viewDependencies() {
-      return { '@zokizuan/satori-core': LOCAL_VERSIONS.core };
+      return { '@satori-code/core': LOCAL_VERSIONS.core };
     },
     viewManagedRuntime() {
       return { core: LOCAL_VERSIONS.core, mcp: LOCAL_VERSIONS.mcp };

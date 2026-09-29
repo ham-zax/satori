@@ -96,7 +96,7 @@ function buildHelpPayload() {
             "tool call <toolName> --args-file <path>",
             "<toolName> [schema-driven flags]"
         ],
-        install: "npx -y @zokizuan/satori-cli@latest install --client all",
+        install: "npx -y @satori-code/cli@latest install --client all",
         globalFlags: [
             "--startup-timeout-ms <n>",
             "--call-timeout-ms <n>",
@@ -217,7 +217,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
         if (parsed.command.kind === "version") {
             emitJson(writers, {
-                name: "@zokizuan/satori-mcp",
+                name: "@satori-code/mcp",
                 cli: "satori-cli",
                 version: readPackageVersion(),
             });

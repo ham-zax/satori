@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import type { Reranker } from "@zokizuan/satori-core";
+import type { Reranker } from "@satori-code/core";
 import { SEARCH_CANDIDATE_ROLES } from "./search-rerank-context.js";
 import {
     SEARCH_RERANK_STRUCTURAL_CONTEXT_POLICY,

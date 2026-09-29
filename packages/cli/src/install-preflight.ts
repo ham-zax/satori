@@ -4,7 +4,7 @@ import path from "node:path";
 import type {
     ResolvedOllamaModelIdentity,
     VectorDatabase,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     assertLocalOnlyEndpoint,
     EMBEDDING_PROJECTION_VERSION,
@@ -285,7 +285,7 @@ function resolveCandidateRuntimeIdentities(entryPath: string): {
     }
     const segments = entryPath.split(path.sep);
     const packageMarker = segments.findIndex(
-        (segment, index) => segment === "@zokizuan" && segments[index + 1] === "satori-mcp",
+        (segment, index) => segment === "@satori-code" && segments[index + 1] === "mcp",
     );
     if (packageMarker <= 0) {
         return { packageRoot: null, runtimeRoot: null };
@@ -465,7 +465,7 @@ export async function probeLanceDbRuntime(
 ): Promise<void> {
     const target = validateLanceDbTargetPath(databasePath);
     const loadLanceDb = dependencies.loadLanceDb ?? (async () => {
-        const moduleSpecifier = "@zokizuan/satori-core/lancedb";
+        const moduleSpecifier = "@satori-code/core/lancedb";
         return import(moduleSpecifier) as Promise<LanceDbModule>;
     });
     const { LanceDbVectorDatabase } = await loadLanceDb();

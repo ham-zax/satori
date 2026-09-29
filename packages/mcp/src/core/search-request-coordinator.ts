@@ -6,10 +6,10 @@ import {
     JsonNavigationStore,
     perfSpan,
     type Reranker,
-} from "@zokizuan/satori-core";
-import type { SemanticSearchCandidateTraceOptions, SemanticSearchExecutionResult, SemanticSearchRequest, SemanticSearchResult } from "@zokizuan/satori-core";
-import type { ProvenSourceFreshnessCheckpointEvidence, SourceFreshnessPathComparison } from "@zokizuan/satori-core/integration";
-import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+} from "@satori-code/core";
+import type { SemanticSearchCandidateTraceOptions, SemanticSearchExecutionResult, SemanticSearchRequest, SemanticSearchResult } from "@satori-code/core";
+import type { ProvenSourceFreshnessCheckpointEvidence, SourceFreshnessPathComparison } from "@satori-code/core/integration";
+import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { CapabilityResolver } from "./capabilities.js";
 import { absolutePathOrRaw } from "../utils.js";
 import {
@@ -527,7 +527,7 @@ export interface SearchPreparedReadCollaborator {
     acquirePublicationLease(codebasePath: string, publicationId?: string): PublicationLease | undefined;
     isPublicationLeaseAdmitted(lease: PublicationLease): Promise<boolean>;
     isPublicationAdmitted(publication: PublicationRef): Promise<boolean>;
-    getPublicationNavigationStatus(publication: PublicationRef): Promise<import("@zokizuan/satori-core").PublicationNavigationStatus>;
+    getPublicationNavigationStatus(publication: PublicationRef): Promise<import("@satori-code/core").PublicationNavigationStatus>;
 }
 
 export interface SearchFreshnessCollaborator {

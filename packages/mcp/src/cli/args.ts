@@ -36,9 +36,9 @@ const RESERVED_SUBCOMMANDS = new Set(["tools", "tool", "help", "version", "insta
 
 /** Hard-deprecation messages only — no installer work, no config writes. */
 export const MCP_INSTALL_USE_SATORI_CLI_MESSAGE =
-    "Install is owned by @zokizuan/satori-cli. Use: npx -y @zokizuan/satori-cli@latest install --client <client>";
+    "Install is owned by @satori-code/cli. Use: npx -y @satori-code/cli@latest install --client <client>";
 export const MCP_UNINSTALL_USE_SATORI_CLI_MESSAGE =
-    "Uninstall is owned by @zokizuan/satori-cli. Use: npx -y @zokizuan/satori-cli@latest uninstall --client <client>";
+    "Uninstall is owned by @satori-code/cli. Use: npx -y @satori-code/cli@latest uninstall --client <client>";
 
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 

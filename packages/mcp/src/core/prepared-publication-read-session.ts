@@ -1,4 +1,4 @@
-import type { PublicationLease } from "@zokizuan/satori-core";
+import type { PublicationLease } from "@satori-code/core";
 
 /**
  * One request, one immutable Publication lease.

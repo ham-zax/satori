@@ -8,9 +8,9 @@ import {
 } from "./upgrade.js";
 
 const TARGET = {
-    cliPackageSpecifier: "@zokizuan/satori-cli@1.4.0",
+    cliPackageSpecifier: "@satori-code/cli@1.4.0",
     cliVersion: "1.4.0",
-    mcpPackageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+    mcpPackageSpecifier: "@satori-code/mcp@6.3.0",
     mcpVersion: "6.3.0",
     coreVersion: "3.2.0",
 };
@@ -44,7 +44,7 @@ test("installGlobalCliAndDelegate updates the exact CLI before invoking its upgr
         args: [
             "install",
             "--global",
-            "@zokizuan/satori-cli@1.4.0",
+            "@satori-code/cli@1.4.0",
             "--no-audit",
             "--no-fund",
         ],
@@ -125,7 +125,7 @@ test("formatUpgradeText reports the CLI, MCP, and Core closure concisely", () =>
         toMcpVersion: "6.3.0",
         fromCoreVersion: "3.1.0",
         toCoreVersion: "3.2.0",
-        packageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+        packageSpecifier: "@satori-code/mcp@6.3.0",
         configuredClients: ["codex", "opencode"],
         restartRequired: true,
     }, "1.3.0", "1.4.0");
@@ -154,7 +154,7 @@ test("combineUpgradeResult reports no-op closure without restart guidance", () =
         toMcpVersion: "6.3.0",
         fromCoreVersion: "3.2.0",
         toCoreVersion: "3.2.0",
-        packageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+        packageSpecifier: "@satori-code/mcp@6.3.0",
         configuredClients: [],
         restartRequired: false,
     }, "1.4.0", "1.4.0");

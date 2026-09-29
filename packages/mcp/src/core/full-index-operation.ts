@@ -5,13 +5,13 @@ import {
     type CustomIndexPolicyUpdate,
     type IndexCodebaseResult,
     type ObservedResolvedIndexPolicy,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { SyncManager, WatcherBootstrapCapture } from "./sync.js";
 import {
     RootMutationCancelledError,
     RootMutationRuntime,
     type MutationOperationPhase,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 
 export interface FullIndexOperationInput {
     readonly codebasePath: string;

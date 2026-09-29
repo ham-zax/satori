@@ -3,7 +3,7 @@
 // analysis worker pool must produce deep-equal results; also reports timings.
 //
 //   node scripts/perf/analysis-parity.cjs <repo> [--workers 6]
-// Requires `pnpm --filter @zokizuan/satori-core build`.
+// Requires `pnpm --filter @satori-code/core build`.
 
 const fs = require('node:fs');
 const path = require('node:path');

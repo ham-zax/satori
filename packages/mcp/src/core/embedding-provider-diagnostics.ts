@@ -1,7 +1,7 @@
 import {
     EmbeddingProviderError,
     type EmbeddingProviderErrorCode,
-} from '@zokizuan/satori-core';
+} from '@satori-code/core';
 
 export interface EmbeddingProviderDiagnostic {
     code: EmbeddingProviderErrorCode;

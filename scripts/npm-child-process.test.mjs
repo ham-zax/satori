@@ -73,7 +73,7 @@ test('sanitized environment preserves non-config variables', () => {
     HTTP_PROXY: 'http://proxy',
     HTTPS_PROXY: 'https://proxy',
     NO_PROXY: 'localhost',
-    npm_package_name: '@zokizuan/satori-mcp',
+    npm_package_name: '@satori-code/mcp',
     npm_package_version: '6.8.1',
     CUSTOM_KEY: 'kept',
   };

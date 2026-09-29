@@ -16,8 +16,8 @@ import {
     recordSourceIo,
     recordSourceProcessing,
     sourceIoOwnerForCurrentOperation,
-} from "@zokizuan/satori-core";
-import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+} from "@satori-code/core";
+import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { CapabilityResolver } from "./capabilities.js";
 import {
     SyncManager,
@@ -160,7 +160,7 @@ import {
     type RuntimeOwnerMutationGate,
     type RuntimeOwnerMutationGateResult,
 } from "./runtime-owner.js";
-import { RootMutationRuntime } from "@zokizuan/satori-core/integration";
+import { RootMutationRuntime } from "@satori-code/core/integration";
 import { PreparedPublicationReadSession } from "./prepared-publication-read-session.js";
 import type { SessionWorkspacePolicy } from "./session-workspace-policy.js";
 
@@ -176,7 +176,7 @@ type PublicationAuthorityContext = {
     acquirePublicationRead?: (codebasePath: string, publicationId: string) => PublicationLease | null;
     isPublicationReadAdmitted?: (publication: PublicationRef) => Promise<boolean>;
     getPublicationNavigationAddress?: (publication: PublicationRef) => { publicationId: string; navigationRoot: string } | null;
-    getPublicationNavigationStatus?: (publication: PublicationRef) => Promise<import("@zokizuan/satori-core").PublicationNavigationStatus>;
+    getPublicationNavigationStatus?: (publication: PublicationRef) => Promise<import("@satori-code/core").PublicationNavigationStatus>;
     getActiveIndexedCollectionName?: (codebasePath: string) => Promise<string | null>;
     getCurrentPublicationCollectionName?: (codebasePath: string) => Promise<string | null>;
 };
@@ -223,14 +223,14 @@ type ContextLifecycleCapabilities = PublicationAuthorityContext & {
     getTrackedRelativePaths?: (codebasePath: string) => string[];
     semanticSearchInPublication?: (
         publication: PublicationRef,
-        request: import('@zokizuan/satori-core').SemanticSearchRequest,
-    ) => Promise<import('@zokizuan/satori-core').SemanticSearchResult[]>;
+        request: import('@satori-code/core').SemanticSearchRequest,
+    ) => Promise<import('@satori-code/core').SemanticSearchResult[]>;
     semanticSearchWithCandidateTraceInPublication?: (
         publication: PublicationRef,
-        request: import('@zokizuan/satori-core').SemanticSearchRequest,
+        request: import('@satori-code/core').SemanticSearchRequest,
         maxEntriesPerStage: number,
-        options?: import('@zokizuan/satori-core').SemanticSearchCandidateTraceOptions,
-    ) => Promise<import('@zokizuan/satori-core').SemanticSearchExecutionResult>;
+        options?: import('@satori-code/core').SemanticSearchCandidateTraceOptions,
+    ) => Promise<import('@satori-code/core').SemanticSearchExecutionResult>;
 };
 
 type CompletionProbeDebugHint = {
@@ -721,11 +721,11 @@ export class ToolHandlers {
                 getReadFileMaxBytes: () => this.readFileMaxBytes,
                 parseIndexedAtMs: (indexedAt) => this.parseIndexedAtMs(indexedAt),
                 getEmbeddingProviderName: () => this.context.getEmbeddingEngine().getProvider(),
-                semanticSearch: (request: import("@zokizuan/satori-core").SemanticSearchRequest) => this.context.semanticSearch(request),
+                semanticSearch: (request: import("@satori-code/core").SemanticSearchRequest) => this.context.semanticSearch(request),
                 get semanticSearchInPublication() {
                     const implementation = getSearchContextLifecycle().semanticSearchInPublication;
                     return typeof implementation === 'function'
-                        ? (publication: PublicationRef, request: import("@zokizuan/satori-core").SemanticSearchRequest) => (
+                        ? (publication: PublicationRef, request: import("@satori-code/core").SemanticSearchRequest) => (
                             implementation.call(searchContext, publication, request)
                         )
                         : undefined;
@@ -735,9 +735,9 @@ export class ToolHandlers {
                     return typeof implementation === 'function'
                         ? (
                             publication: PublicationRef,
-                            request: import("@zokizuan/satori-core").SemanticSearchRequest,
+                            request: import("@satori-code/core").SemanticSearchRequest,
                             maxEntriesPerStage: number,
-                            options?: import("@zokizuan/satori-core").SemanticSearchCandidateTraceOptions,
+                            options?: import("@satori-code/core").SemanticSearchCandidateTraceOptions,
                         ) => implementation.call(searchContext, publication, request, maxEntriesPerStage, options)
                         : undefined;
                 },

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLanguageAnalysisService } from '@zokizuan/satori-core';
+import { createLanguageAnalysisService } from '@satori-code/core';
 
 test('language analysis emits TS class/method breadcrumbs', async () => {
     const analyzer = createLanguageAnalysisService();

@@ -4,14 +4,14 @@ import {
     deleteCollectionWithVerification,
     type VectorDatabase,
     SATORI_COLLECTION_FAMILY_PREFIXES,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import path from "node:path";
 import {
     RootMutationInProgressError,
     RootMutationRuntime,
     type MutationOperationPhase,
     type RootMutationActivity,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 
 const MIN_RELIABLE_COLLECTION_CREATED_AT_MS = Date.UTC(2000, 0, 1);
 

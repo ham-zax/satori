@@ -25,21 +25,21 @@ function createWorkspace(files) {
 function standardWorkspace() {
   return createWorkspace({
     'packages/core/package.json': {
-      name: '@zokizuan/satori-core',
+      name: '@satori-code/core',
       version: '3.6.0',
       dependencies: { '@lancedb/lancedb': '0.31.0', 'oxc-parser': '0.139.0' },
     },
     'packages/mcp/package.json': {
-      name: '@zokizuan/satori-mcp',
+      name: '@satori-code/mcp',
       version: '6.8.0',
       dependencies: {
-        '@zokizuan/satori-core': 'workspace:*',
+        '@satori-code/core': 'workspace:*',
         '@huggingface/transformers': '3.0.2',
         'onnxruntime-node': '1.19.2',
       },
     },
     'packages/cli/package.json': {
-      name: '@zokizuan/satori-cli',
+      name: '@satori-code/cli',
       version: '1.9.0',
       dependencies: {},
       satoriManagedRuntime: {
@@ -59,7 +59,7 @@ const LOCAL_VERSIONS = Object.freeze({ core: '3.6.0', mcp: '6.8.0', cli: '1.9.0'
 function publishedSet(versions) {
   const published = new Set(versions);
   return (packageName, version) => {
-    const key = { '@zokizuan/satori-core': 'core', '@zokizuan/satori-mcp': 'mcp', '@zokizuan/satori-cli': 'cli' }[packageName];
+    const key = { '@satori-code/core': 'core', '@satori-code/mcp': 'mcp', '@satori-code/cli': 'cli' }[packageName];
     return published.has(key) && version === LOCAL_VERSIONS[key];
   };
 }
@@ -133,7 +133,7 @@ test('prepared target is strengthened when a later request needs a larger bump',
     localVersions: { ...LOCAL_VERSIONS, core: '3.6.2' },
     publishedStableVersions,
     isVersionPublishedImpl: (packageName, version) => (
-      packageName === '@zokizuan/satori-core' && publishedStableVersions.core.includes(version)
+      packageName === '@satori-code/core' && publishedStableVersions.core.includes(version)
     ),
   });
   assert.equal(strengthened.entries.find((entry) => entry.key === 'core').to, '3.7.0');
@@ -148,7 +148,7 @@ test('prepared target is strengthened when a later request needs a larger bump',
     localVersions: { ...LOCAL_VERSIONS, core: '3.7.0' },
     publishedStableVersions,
     isVersionPublishedImpl: (packageName, version) => (
-      packageName === '@zokizuan/satori-core' && publishedStableVersions.core.includes(version)
+      packageName === '@satori-code/core' && publishedStableVersions.core.includes(version)
     ),
   });
   assert.equal(plan.entries.find((entry) => entry.key === 'core').to, '3.7.0');
@@ -166,7 +166,7 @@ test('stale local target bumps from the registry maximum', () => {
     localVersions: { ...LOCAL_VERSIONS, core: '3.6.2' },
     publishedStableVersions,
     isVersionPublishedImpl: (packageName, version) => (
-      packageName === '@zokizuan/satori-core' && publishedStableVersions.core.includes(version)
+      packageName === '@satori-code/core' && publishedStableVersions.core.includes(version)
     ),
   });
   assert.equal(plan.entries.find((entry) => entry.key === 'core').to, '3.7.1');
@@ -191,10 +191,10 @@ test('published downstream receives a patch bump', () => {
 
 test('downstream patch collision increments until unpublished', () => {
   const isPublished = (packageName, version) => {
-    if (packageName === '@zokizuan/satori-mcp') {
+    if (packageName === '@satori-code/mcp') {
       return version === '6.8.0' || version === '6.8.1';
     }
-    if (packageName === '@zokizuan/satori-core') {
+    if (packageName === '@satori-code/core') {
       return version === '3.6.0';
     }
     return false;
@@ -303,7 +303,7 @@ test('apply writes exact versions', async () => {
   assert.deepEqual(readJson(cwd, 'packages/core/package.json').version, '3.7.0');
   assert.deepEqual(readJson(cwd, 'packages/mcp/package.json').version, '6.8.1');
   assert.deepEqual(readJson(cwd, 'packages/cli/package.json').version, '1.9.1');
-  assert.equal(readJson(cwd, 'packages/mcp/package.json').dependencies['@zokizuan/satori-core'], 'workspace:*');
+  assert.equal(readJson(cwd, 'packages/mcp/package.json').dependencies['@satori-code/core'], 'workspace:*');
   assert.deepEqual(readJson(cwd, 'packages/cli/package.json').dependencies, {});
   assert.deepEqual(readJson(cwd, 'packages/cli/package.json').satoriManagedRuntime.mcp, '6.8.1');
   assert.deepEqual(readJson(cwd, 'packages/cli/package.json').satoriManagedRuntime.core, '3.7.0');
@@ -436,7 +436,7 @@ test('dirty worktree rejects apply', async () => {
 });
 
 test('defaultIsVersionPublishedImpl interprets 404 as unpublished and failures as errors', () => {
-  const notFound = { status: 1, stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@zokizuan%2fsatori-core/3.6.0 - Not found' };
+  const notFound = { status: 1, stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@satori-code%2fcore/3.6.0 - Not found' };
   const runner = (command, args) => {
     if (args[1].includes('3.6.0')) {
       throw notFound;
@@ -447,9 +447,9 @@ test('defaultIsVersionPublishedImpl interprets 404 as unpublished and failures a
     return '"1.9.0"';
   };
   const isPublished = defaultIsVersionPublishedImpl(runner);
-  assert.equal(isPublished('@zokizuan/satori-core', '3.6.0'), false);
-  assert.equal(isPublished('@zokizuan/satori-cli', '1.9.0'), true);
-  assert.throws(() => isPublished('@zokizuan/satori-mcp', '6.8.0'), /Cannot verify/);
+  assert.equal(isPublished('@satori-code/core', '3.6.0'), false);
+  assert.equal(isPublished('@satori-code/cli', '1.9.0'), true);
+  assert.throws(() => isPublished('@satori-code/mcp', '6.8.0'), /Cannot verify/);
 });
 
 test('defaultIsVersionPublishedImpl uses a quiet sanitized npm probe', () => {
@@ -461,7 +461,7 @@ test('defaultIsVersionPublishedImpl uses a quiet sanitized npm probe', () => {
     throw { status: 1, stderr: 'npm error code E404\nversion not found' };
   };
   const isPublished = defaultIsVersionPublishedImpl(runner);
-  assert.equal(isPublished('@zokizuan/satori-core', '3.6.0'), false);
+  assert.equal(isPublished('@satori-code/core', '3.6.0'), false);
   assert.equal(recordedOptions.length, 1);
   assert.deepEqual(recordedOptions[0].stdio, ['ignore', 'pipe', 'pipe']);
   assert.deepEqual(recordedOptions[0].env, createNpmChildEnvironment(process.env));
@@ -471,7 +471,7 @@ test('defaultIsVersionPublishedImpl uses a quiet sanitized npm probe', () => {
 
 test('defaultIsVersionPublishedImpl accepts npm 12 single-result arrays', () => {
   const isPublished = defaultIsVersionPublishedImpl(() => JSON.stringify(['3.6.1']));
-  assert.equal(isPublished('@zokizuan/satori-core', '3.6.1'), true);
+  assert.equal(isPublished('@satori-code/core', '3.6.1'), true);
 });
 
 test('usage errors exit with usage message', async () => {

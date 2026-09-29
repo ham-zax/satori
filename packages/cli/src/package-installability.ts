@@ -93,9 +93,9 @@ export function verifyManagedPackageInstallability(options: PackageInstallabilit
     }
     const mcp = String(mcpVersion);
     const core = String(coreVersion);
-    assertPublishedVersion("@zokizuan/satori-mcp", mcp, pkg.name, pkg.version, execImpl, "dependency");
-    assertPublishedVersion("@zokizuan/satori-core", core, pkg.name, pkg.version, execImpl, "dependency");
-    return `@zokizuan/satori-mcp@${mcp}`;
+    assertPublishedVersion("@satori-code/mcp", mcp, pkg.name, pkg.version, execImpl, "dependency");
+    assertPublishedVersion("@satori-code/core", core, pkg.name, pkg.version, execImpl, "dependency");
+    return `@satori-code/mcp@${mcp}`;
 }
 
 export function runPublishedPackageReleaseSmoke(options: ReleaseSmokeOptions = {}): void {

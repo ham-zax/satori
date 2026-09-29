@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     withSourceMeasurementOperation,
-} from '@zokizuan/satori-core';
+} from '@satori-code/core';
 import {
     AuthorizedSourceReadError,
     READ_FILE_MAX_BYTES_DEFAULT,

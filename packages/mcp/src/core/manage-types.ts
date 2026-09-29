@@ -1,8 +1,8 @@
 import type {
     LanguageCapabilityEvidenceSummary,
     SymbolQualitySummary,
-} from "@zokizuan/satori-core";
-import type { RootMutationOperation } from "@zokizuan/satori-core/integration";
+} from "@satori-code/core";
+import type { RootMutationOperation } from "@satori-code/core/integration";
 import { WarningCode } from "./warnings.js";
 
 /** Public manage_index action set (SSOT for schema, docs, and contract tests). */

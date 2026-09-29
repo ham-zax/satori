@@ -11,7 +11,7 @@ import {
 import type { InstallCommandOptions } from "./install-contracts.js";
 
 // The extended CBM extractor pack (languages beyond the 39 core modules that
-// ship inside @zokizuan/satori-core) is published once per extractor build to
+// ship inside @satori-code/core) is published once per extractor build to
 // this Hugging Face repository. The revision pins the exact upload; every file
 // is verified against the sha256 in the installed core package's manifest, so
 // a runtime whose manifest does not match this upload fails integrity and its
@@ -26,7 +26,7 @@ type ExtractorManifest = {
 };
 
 function coreManifestPath(runtimePackageRoot: string): string {
-    const coreEntry = createRequire(path.join(runtimePackageRoot, "package.json")).resolve("@zokizuan/satori-core");
+    const coreEntry = createRequire(path.join(runtimePackageRoot, "package.json")).resolve("@satori-code/core");
     // dist/index.js -> package root
     return path.join(path.dirname(path.dirname(coreEntry)), "assets", "cbm-extractor", "manifest.json");
 }

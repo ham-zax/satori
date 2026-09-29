@@ -169,15 +169,15 @@ function inspectManagedRuntimeDirectory(
     const packageJsonPath = path.join(
         candidateRoot,
         "node_modules",
-        "@zokizuan",
-        "satori-mcp",
+        "@satori-code",
+        "mcp",
         "package.json",
     );
     try {
         const packageJson = readJson(packageJsonPath);
         if (
             !isRecord(packageJson)
-            || packageJson.name !== "@zokizuan/satori-mcp"
+            || packageJson.name !== "@satori-code/mcp"
             || typeof packageJson.version !== "string"
         ) {
             return null;

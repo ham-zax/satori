@@ -450,11 +450,11 @@ async function verifyPublished(key, version, localVersions, impls) {
           }
           lastDependencyMismatch = `Published ${packageName}@${version} dependency metadata is not visible yet.`;
         }
-        if (dependencies?.['@zokizuan/satori-core'] === localVersions.core) {
+        if (dependencies?.['@satori-code/core'] === localVersions.core) {
           return;
         }
         lastDependencyMismatch = dependencies && typeof dependencies === 'object'
-          ? `Published ${packageName}@${version} dependency @zokizuan/satori-core is ${JSON.stringify(dependencies['@zokizuan/satori-core'])}, expected ${localVersions.core}`
+          ? `Published ${packageName}@${version} dependency @satori-code/core is ${JSON.stringify(dependencies['@satori-code/core'])}, expected ${localVersions.core}`
           : `Published ${packageName}@${version} dependency metadata is not visible yet.`;
       } else {
         let runtime;

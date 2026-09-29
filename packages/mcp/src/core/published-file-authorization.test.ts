@@ -13,7 +13,7 @@ import {
     openAuthorizedPublishedFile,
     PublishedFileAuthorizationError,
 } from "./published-file-authorization.js";
-import { RootBoundFileError, verifyStableFileObservation } from "@zokizuan/satori-core";
+import { RootBoundFileError, verifyStableFileObservation } from "@satori-code/core";
 
 const IS_LINUX = process.platform === "linux";
 

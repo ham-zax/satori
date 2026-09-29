@@ -243,13 +243,13 @@ function installedPackageVersion(
 
 function buildVersionPayload(packages: DoctorPackageVersion[], state: RuntimeVersionState) {
     const cliVersion = state.cliVersion || readPackageVersion();
-    const releaseMcpVersion = installedPackageVersion(packages, "@zokizuan/satori-mcp")
+    const releaseMcpVersion = installedPackageVersion(packages, "@satori-code/mcp")
         ?? state.releaseMcpVersion;
-    const releaseCoreVersion = installedPackageVersion(packages, "@zokizuan/satori-core")
+    const releaseCoreVersion = installedPackageVersion(packages, "@satori-code/core")
         ?? state.releaseCoreVersion;
     const hasActiveMcp = state.activeManagedMcpVersion !== null;
     return {
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         cli: "satori",
         version: cliVersion,
         cliVersion,
@@ -359,7 +359,7 @@ function formatHelpText(): string {
         "  Restart your coding agent, then ask: Index /absolute/path/to/repo with Satori.",
         "",
         "Optional persistent command:",
-        "  npm install -g @zokizuan/satori-cli@latest",
+        "  npm install -g @satori-code/cli@latest",
         "",
         "Commands:",
         "  install       Install Satori for detected clients; use --client all to force all supported clients",

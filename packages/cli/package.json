@@ -1,6 +1,6 @@
 {
-  "name": "@zokizuan/satori-cli",
-  "version": "4.0.0",
+  "name": "@satori-code/cli",
+  "version": "0.4.0",
   "description": "Install, configure, diagnose, and upgrade Satori's local-first MCP runtime for Claude Code, Codex, and OpenCode.",
   "keywords": [
     "satori",
@@ -31,7 +31,7 @@
     "release:smoke": "tsx scripts/release-smoke.ts",
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
     "prepublishOnly": "pnpm build",
-    "test": "pnpm --filter @zokizuan/satori-mcp build:runtime && pnpm run test:raw",
+    "test": "pnpm --filter @satori-code/mcp build:runtime && pnpm run test:raw",
     "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
@@ -39,8 +39,8 @@
     "jsonc-parser": "^3.3.1"
   },
   "satoriManagedRuntime": {
-    "mcp": "8.0.0",
-    "core": "4.0.0",
+    "mcp": "0.8.0",
+    "core": "0.4.0",
     "lanceDb": "0.31.0",
     "oxcParser": "0.139.0",
     "lateOn": {
@@ -60,8 +60,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@zokizuan/satori-core": "workspace:*",
-    "@zokizuan/satori-mcp": "workspace:*",
+    "@satori-code/core": "workspace:*",
+    "@satori-code/mcp": "workspace:*",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   },

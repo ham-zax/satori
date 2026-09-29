@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { RootMutationRuntime } from "@zokizuan/satori-core/integration";
+import { RootMutationRuntime } from "@satori-code/core/integration";
 import { VectorBackendMaintenance } from "./vector-backend-maintenance.js";
 
 function candidateReceipt(root: string) {

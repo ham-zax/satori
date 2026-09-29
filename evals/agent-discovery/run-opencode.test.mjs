@@ -233,7 +233,7 @@ test("Satori runtime identity covers deterministic Core and MCP build outputs", 
     fs.mkdirSync(mcpDist, { recursive: true });
     fs.writeFileSync(path.join(coreDist, "index.js"), "export * from './nested/helper.js';\n");
     fs.writeFileSync(path.join(coreDist, "nested/helper.js"), "export const value = 1;\n");
-    fs.writeFileSync(path.join(mcpDist, "index.js"), "import '@zokizuan/satori-core';\n");
+    fs.writeFileSync(path.join(mcpDist, "index.js"), "import '@satori-code/core';\n");
 
     try {
         const initial = getSatoriRuntimeIdentity(repoRoot);

@@ -6,19 +6,19 @@ import process from 'node:process';
 export const RELEASE_PACKAGES = Object.freeze({
   core: Object.freeze({
     key: 'core',
-    name: '@zokizuan/satori-core',
+    name: '@satori-code/core',
     directory: 'packages/core',
     dependencies: Object.freeze([]),
   }),
   mcp: Object.freeze({
     key: 'mcp',
-    name: '@zokizuan/satori-mcp',
+    name: '@satori-code/mcp',
     directory: 'packages/mcp',
     dependencies: Object.freeze(['core']),
   }),
   cli: Object.freeze({
     key: 'cli',
-    name: '@zokizuan/satori-cli',
+    name: '@satori-code/cli',
     directory: 'packages/cli',
     dependencies: Object.freeze(['core', 'mcp']),
   }),
@@ -146,10 +146,10 @@ export function readLocalReleaseGraph(cwd = process.cwd()) {
   const mcpDependencies = packages.mcp.manifest.dependencies || {};
   const cliDependencies = packages.cli.manifest.dependencies || {};
   const cliRuntime = packages.cli.manifest.satoriManagedRuntime || {};
-  if (mcpDependencies['@zokizuan/satori-core'] !== 'workspace:*') {
-    throw new Error(`MCP source dependency on @zokizuan/satori-core must remain workspace:*; received ${JSON.stringify(mcpDependencies['@zokizuan/satori-core'])}`);
+  if (mcpDependencies['@satori-code/core'] !== 'workspace:*') {
+    throw new Error(`MCP source dependency on @satori-code/core must remain workspace:*; received ${JSON.stringify(mcpDependencies['@satori-code/core'])}`);
   }
-  for (const dependency of ['@zokizuan/satori-core', '@zokizuan/satori-mcp']) {
+  for (const dependency of ['@satori-code/core', '@satori-code/mcp']) {
     if (Object.prototype.hasOwnProperty.call(cliDependencies, dependency)) {
       throw new Error(`CLI bootstrap must not install managed runtime dependency ${dependency}.`);
     }
@@ -208,7 +208,7 @@ export function validatePackedDependencyGraph(input) {
   }
 
   const edges = [
-    { from: 'mcp', to: 'core', kind: 'dependency', actual: packedManifests.mcp.dependencies?.['@zokizuan/satori-core'] },
+    { from: 'mcp', to: 'core', kind: 'dependency', actual: packedManifests.mcp.dependencies?.['@satori-code/core'] },
     { from: 'cli', to: 'mcp', kind: 'managed-runtime', actual: packedManifests.cli.satoriManagedRuntime?.mcp },
     { from: 'cli', to: 'core', kind: 'managed-runtime', actual: packedManifests.cli.satoriManagedRuntime?.core },
   ];

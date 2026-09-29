@@ -11,7 +11,7 @@ import { ToolResponseBuilders } from './tool-response-builders.js';
 import { buildGroupedSearchEnvelope } from './search-response-envelopes.js';
 import type { SearchResponseCommonInput } from './search-response-envelopes.js';
 import { SEARCH_RESPONSE_FORMAT_VERSION } from './search-types.js';
-import type { PublicationLease, PublicationRef } from '@zokizuan/satori-core';
+import type { PublicationLease, PublicationRef } from '@satori-code/core';
 
 function publicationRef(
     root: string,

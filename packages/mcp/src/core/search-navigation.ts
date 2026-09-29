@@ -1,4 +1,4 @@
-import type { SymbolRecord } from "@zokizuan/satori-core";
+import type { SymbolRecord } from "@satori-code/core";
 import type {
     CallGraphHint,
     FileOutlineStatus,

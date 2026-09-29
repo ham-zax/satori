@@ -5,7 +5,7 @@ import type {
     RootMutationActivity,
     RootMutationExecution,
     RootMutationRuntime,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 import type { SyncWorkerResult } from "../core/sync.js";
 import { spawnSupervisedMutationWorker } from "./mutation-worker-supervisor.js";
 

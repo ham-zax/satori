@@ -1,4 +1,4 @@
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings } from "@satori-code/core";
 import type {
     CallGraphEdgeResult as CallGraphEdge,
     CallGraphNoteResult as CallGraphNote,

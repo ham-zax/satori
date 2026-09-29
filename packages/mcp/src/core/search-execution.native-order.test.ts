@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Reranker, RerankResult } from "@zokizuan/satori-core";
+import type { Reranker, RerankResult } from "@satori-code/core";
 import { CapabilityResolver } from "./capabilities.js";
 import { parseSearchOperators, buildSearchQueryPlan } from "./search-query-planning.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";

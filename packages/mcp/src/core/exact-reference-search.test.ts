@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { findExactPublishedSourceReferences } from "./exact-reference-search.js";
 
 function symbol(input: Partial<SymbolRecord> & Pick<SymbolRecord, "symbolInstanceId" | "name" | "file">): SymbolRecord {

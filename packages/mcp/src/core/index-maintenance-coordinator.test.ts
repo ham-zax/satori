@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { RootMutationOperation } from '@zokizuan/satori-core/integration';
+import type { RootMutationOperation } from '@satori-code/core/integration';
 import { IndexMaintenanceCoordinator } from './index-maintenance-coordinator.js';
 
 const options = {

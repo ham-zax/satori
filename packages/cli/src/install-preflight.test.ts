@@ -33,7 +33,7 @@ import { loadAcquisitionAuthority } from "./lateon-model-store.js";
 const DIGEST = "b".repeat(64);
 const POTION_ASSETS_ROOT = fileURLToPath(new URL("../../mcp/assets/potion/linux-x64/", import.meta.url));
 const loadWorkspaceCore = async (): Promise<PotionRuntimeCoreModule> => (
-    import("@zokizuan/satori-core") as Promise<PotionRuntimeCoreModule>
+    import("@satori-code/core") as Promise<PotionRuntimeCoreModule>
 );
 
 function installRuntimeWithProbeMarker(markerPath: string) {
@@ -42,18 +42,18 @@ function installRuntimeWithProbeMarker(markerPath: string) {
         assert.notEqual(prefixIndex, -1);
         const runtimeRoot = args[prefixIndex + 1];
         assert.ok(runtimeRoot);
-        const mcpRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
-        const coreRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core");
+        const mcpRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
+        const coreRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "core");
         fs.mkdirSync(path.join(mcpRoot, "dist"), { recursive: true });
         fs.mkdirSync(coreRoot, { recursive: true });
         fs.writeFileSync(path.join(mcpRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-mcp",
+            name: "@satori-code/mcp",
             version: "0.0.0-exact-runtime-test",
             bin: { satori: "dist/index.js" },
         }), "utf8");
         fs.writeFileSync(path.join(mcpRoot, "dist", "index.js"), "", "utf8");
         fs.writeFileSync(path.join(coreRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-core",
+            name: "@satori-code/core",
             type: "module",
             exports: { "./lancedb": "./lancedb.mjs" },
         }), "utf8");
@@ -99,7 +99,7 @@ test("install preflight loads LanceDB from the installed MCP runtime", async () 
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-exact-runtime-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-exact-runtime-test",
             execFileSyncImpl: installRuntimeWithProbeMarker(markerPath),
             preflightDependencies: {
                 probeCandidateRuntime: async () => {},
@@ -242,8 +242,8 @@ test("empty candidate stderr is reported explicitly", async () => {
 test("preflight diagnostics include only safe candidate identities", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-candidate-identity-"));
     try {
-        const runtimeRoot = path.join(homeDir, "mcp-runtime", "@zokizuan-satori-mcp@6.8.1");
-        const mcpPackageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
+        const runtimeRoot = path.join(homeDir, "mcp-runtime", "@satori-code-mcp@6.8.1");
+        const mcpPackageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
         const entryPath = path.join(mcpPackageRoot, "dist", "index.js");
         writeCandidateEntry(entryPath, 'process.stderr.write("boom\\n"); process.exit(1);\n');
         await assert.rejects(
@@ -543,7 +543,7 @@ test("normalizeCandidateStderr never retains NUL bytes or terminal controls", ()
 test("candidate probe failure leaves the existing managed launcher unchanged", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-probe-failure-launcher-"));
     const markerPath = path.join(homeDir, "managed-core-probe.log");
-    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@zokizuan-satori-mcp@0.0.0-exact-runtime-test");
+    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@0.0.0-exact-runtime-test");
     try {
         const snapshot = seedManagedLateOnInstallation(homeDir);
         await assert.rejects(
@@ -555,7 +555,7 @@ test("candidate probe failure leaves the existing managed launcher unchanged", a
             }, {
                 homeDir,
                 env: { SATORI_RERANKER_PROVIDER: "none" },
-                packageSpecifier: "@zokizuan/satori-mcp@0.0.0-exact-runtime-test",
+                packageSpecifier: "@satori-code/mcp@0.0.0-exact-runtime-test",
                 platform: "linux",
                 architecture: "x64",
                 execFileSyncImpl: installRuntimeWithProbeMarker(markerPath),
@@ -649,7 +649,7 @@ test("managed connected launcher pins the Milvus backend that passed preflight",
         }, {
             homeDir,
             env: externalEnvironment,
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             preflightDependencies: {
                 probeLanceDb: async () => {
@@ -827,7 +827,7 @@ test("new offline install persists Potion embeddings and LateOn D32 in the manag
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: fixture.runtimeCommand,
@@ -884,7 +884,7 @@ test("offline install persists an explicit reranker opt-out", async () => {
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
@@ -914,18 +914,18 @@ test("managed offline install acquires the pinned LateOn closure before activati
     };
     const execFileSyncImpl = ((_command: string, args: string[]) => {
         const runtimeRoot = args[args.indexOf("--prefix") + 1];
-        const mcpRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
-        const coreRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core");
+        const mcpRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
+        const coreRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "core");
         fs.mkdirSync(path.join(mcpRoot, "dist"), { recursive: true });
         fs.mkdirSync(coreRoot, { recursive: true });
         fs.writeFileSync(path.join(mcpRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-mcp",
+            name: "@satori-code/mcp",
             version: "0.0.0-lateon-test",
             bin: { satori: "dist/index.js" },
         }), "utf8");
         fs.writeFileSync(path.join(mcpRoot, "dist", "index.js"), "", "utf8");
         fs.writeFileSync(path.join(coreRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-core",
+            name: "@satori-code/core",
             version: "0.0.0-core-test",
         }), "utf8");
         writeLateOnAcquisitionFixture(mcpRoot, artifacts);
@@ -941,7 +941,7 @@ test("managed offline install acquires the pinned LateOn closure before activati
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-lateon-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-lateon-test",
             platform: "linux",
             architecture: "x64",
             execFileSyncImpl,
@@ -1002,7 +1002,7 @@ test("unsupported Potion platform fails before managed package installation", as
     }, {
         homeDir: "/tmp/satori-potion-unsupported-install",
         env: {},
-        packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+        packageSpecifier: "@satori-code/mcp@0.0.0-test",
         platform: "darwin",
         architecture: "arm64",
         execFileSyncImpl: (() => {
@@ -1141,7 +1141,7 @@ test(`connected reinstall preserves a managed custom LanceDB path when the shell
         }, {
             homeDir,
             env: currentPath === undefined ? {} : { LANCEDB_PATH: currentPath },
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: { command: process.execPath, args: ["/tmp/new-runtime.js"] },
             preflightDependencies: {
                 probeLanceDb: async (candidate) => { probedPaths.push(candidate); },
@@ -1195,7 +1195,7 @@ test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"L
         }, {
             homeDir,
             env: currentValues,
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
             preflightDependencies: {
@@ -1253,7 +1253,7 @@ test("offline reinstall without a model preserves an existing managed Ollama sel
             runtime: "offline",
         }, {
             homeDir,
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
             preflightRunner: async (input) => {
@@ -1327,7 +1327,7 @@ test("managed D16 + env provider lateon without a CLI flag rejects with migratio
             env: { SATORI_RERANKER_PROVIDER: "lateon" },
             platform: "linux",
             architecture: "x64",
-        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker none` to disable LateOn\./);
+        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1347,7 +1347,7 @@ test("managed D16 + env provider none without a CLI flag rejects with migration 
             env: { SATORI_RERANKER_PROVIDER: "none" },
             platform: "linux",
             architecture: "x64",
-        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker none` to disable LateOn\./);
+        }), /Existing managed LateOn installation uses profile lateon_projection_v2_d16_v1, which is treated as historical D16\. Run `npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon` to migrate to D32, or `npx -y @satori-code\/cli@latest install --runtime offline --reranker none` to disable LateOn\./);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1368,7 +1368,7 @@ test("managed D16 + CLI --reranker lateon migrates to D32", async () => {
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: fixture.runtimeCommand,
@@ -1409,7 +1409,7 @@ test("managed D16 + CLI --reranker none disables LateOn", async () => {
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
@@ -1657,7 +1657,7 @@ test("--reranker none performs zero LateOn fetch calls", async () => {
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             potionAssetsRoot: POTION_ASSETS_ROOT,
             potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
@@ -1700,7 +1700,7 @@ test("connected reinstall reads a literal Milvus selection from Codex config", a
         }, {
             homeDir,
             env: {},
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             preflightDependencies: {
                 probeLanceDb: async () => {
@@ -1843,7 +1843,7 @@ test("install reads mutable client configuration after awaited preflight", async
             runtime: "voyage",
         }, {
             homeDir,
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             preflightRunner: async () => {
                 await preflightPending;
@@ -1877,7 +1877,7 @@ test("rejected runtime preflight leaves managed client files byte-for-byte uncha
                 runtime: "voyage",
             }, {
                 homeDir,
-                packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+                packageSpecifier: "@satori-code/mcp@0.0.0-test",
                 runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
                 preflightRunner: async () => {
                     throw new Error("native load rejected");
@@ -1905,7 +1905,7 @@ test("successful offline install persists its non-secret identity in the shared 
             ollamaModel: "nomic-embed-text",
         }, {
             homeDir,
-            packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+            packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
             preflightRunner: async () => ({
@@ -2016,7 +2016,7 @@ function failingOfflineLateOnReinstall(
     }, {
         homeDir,
         env: {},
-        packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+        packageSpecifier: "@satori-code/mcp@0.0.0-test",
         platform: "linux",
         architecture: "x64",
         runtimeCommand: fixture.runtimeCommand,

@@ -8,7 +8,7 @@ import {
     buildSymbolRegistry,
     SYMBOL_REGISTRY_SCHEMA_VERSION,
     type SymbolRecord,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { CurrentSourceEvidence } from "./current-source-symbols.js";
 import { SEARCH_RERANK_DOCUMENT_POLICY } from "./search-rerank-document.js";
 import type { SearchResultLike } from "./search-lexical-scoring.js";

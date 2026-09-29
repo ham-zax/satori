@@ -196,7 +196,7 @@ export async function resolveVerifiedLateOnModel(
     if (!runtimePackageRoot) {
         throw new CliError(
             "E_INSTALL_PREFLIGHT",
-            "Managed LateOn D32 activation requires a resolvable @zokizuan/satori-mcp package root containing the frozen profile and acquisition manifest; refusing to use a predicted model path.",
+            "Managed LateOn D32 activation requires a resolvable @satori-code/mcp package root containing the frozen profile and acquisition manifest; refusing to use a predicted model path.",
             1,
         );
     }

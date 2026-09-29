@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { CliError } from "./errors.js";
 
-const CLI_PACKAGE_NAME = "@zokizuan/satori-cli";
-const MANAGED_PACKAGE_NAME = "@zokizuan/satori-mcp";
+const CLI_PACKAGE_NAME = "@satori-code/cli";
+const MANAGED_PACKAGE_NAME = "@satori-code/mcp";
 
 type ExecFileSyncLike = typeof execFileSync;
 

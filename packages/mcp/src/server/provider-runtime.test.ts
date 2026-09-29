@@ -28,7 +28,7 @@ import {
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     type Reranker,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 
 function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {

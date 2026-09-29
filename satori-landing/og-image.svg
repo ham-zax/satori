@@ -32,6 +32,6 @@
   </g>
   <g transform="translate(84 514)">
     <rect width="548" height="62" fill="rgba(0,0,0,0.46)" stroke="rgba(223,255,0,0.42)" />
-    <text x="24" y="40" fill="#dfff00" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="23">npx @zokizuan/satori-cli install</text>
+    <text x="24" y="40" fill="#dfff00" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="23">npx @satori-code/cli install</text>
   </g>
 </svg>

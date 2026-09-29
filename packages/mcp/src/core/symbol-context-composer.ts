@@ -2,7 +2,7 @@ import {
     compareContractStrings,
     type SymbolRecord,
     type SymbolRegistry,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type {
     CallGraphEdgeResult as CallGraphEdge,
     CallGraphNoteResult as CallGraphNote,

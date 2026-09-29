@@ -7,7 +7,7 @@ import {
     POTION_DIMENSION,
     POTION_SEMANTIC_VERSION,
     POTION_MODEL_ID,
-} from '@zokizuan/satori-core';
+} from '@satori-code/core';
 import {
     createMcpConfig,
     resolveMcpRuntimeBootstrap,

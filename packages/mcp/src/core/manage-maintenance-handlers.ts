@@ -12,7 +12,7 @@ import {
     type PublicationRef,
     type LanguageCapabilityEvidenceSummary,
     type SymbolQualitySummary,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     type SourceFreshnessAssessment,
     type SyncManager,
@@ -51,7 +51,7 @@ import {
     type RootMutationActivity,
     type RootMutationExecution,
     type RootMutationOperation,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 
 type ToolArgs = Record<string, unknown>;
 

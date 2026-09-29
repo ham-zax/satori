@@ -7,7 +7,7 @@ import {
     type ResolutionConstructCoverage,
     type SymbolRecord,
     type SymbolRegistryManifest,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { PathCategory } from "./search-constants.js";
 import {
     matchesPublishedPathScope,

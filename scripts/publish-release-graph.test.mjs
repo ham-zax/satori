@@ -12,9 +12,9 @@ import {
 import { createNpmChildEnvironment, REGISTRY_PROBE_STDIO } from './npm-child-process.mjs';
 
 const NAMES = {
-  core: '@zokizuan/satori-core',
-  mcp: '@zokizuan/satori-mcp',
-  cli: '@zokizuan/satori-cli',
+  core: '@satori-code/core',
+  mcp: '@satori-code/mcp',
+  cli: '@satori-code/cli',
 };
 
 const VERSIONS = Object.freeze({ core: '3.6.0', mcp: '6.8.0', cli: '1.9.0' });
@@ -29,9 +29,9 @@ function fakeReport(statuses, extra = {}) {
       ])
     ),
     tarballs: extra.tarballs || {
-      core: 'verified/@zokizuan/satori-core-3.6.0.tgz',
-      mcp: 'verified/@zokizuan/satori-mcp-6.8.0.tgz',
-      cli: 'verified/@zokizuan/satori-cli-1.9.0.tgz',
+      core: 'verified/@satori-code/core-3.6.0.tgz',
+      mcp: 'verified/@satori-code/mcp-6.8.0.tgz',
+      cli: 'verified/@satori-code/cli-1.9.0.tgz',
     },
     ...(extra.tempDirectory ? { tempDirectory: extra.tempDirectory } : {}),
   };
@@ -40,9 +40,9 @@ function fakeReport(statuses, extra = {}) {
 function verifiedTarballFixture(statuses = { core: 'unpublished', mcp: 'unpublished', cli: 'unpublished' }, parent) {
   const tempDirectory = fs.mkdtempSync(path.join(parent || os.tmpdir(), 'satori-verified-'));
   const tarballs = {
-    core: path.join(tempDirectory, 'zokizuan-satori-core-3.6.0.tgz'),
-    mcp: path.join(tempDirectory, 'zokizuan-satori-mcp-6.8.0.tgz'),
-    cli: path.join(tempDirectory, 'zokizuan-satori-cli-1.9.0.tgz'),
+    core: path.join(tempDirectory, 'satori-code-core-3.6.0.tgz'),
+    mcp: path.join(tempDirectory, 'satori-code-mcp-6.8.0.tgz'),
+    cli: path.join(tempDirectory, 'satori-code-cli-1.9.0.tgz'),
   };
   for (const file of Object.values(tarballs)) {
     fs.writeFileSync(file, 'verified tarball');
@@ -54,9 +54,9 @@ function retainedReport(statuses) {
   return (cwd, tempRoot) => {
     const tempDirectory = fs.mkdtempSync(path.join(tempRoot, 'satori-release-check-'));
     const tarballs = {
-      core: path.join(tempDirectory, 'zokizuan-satori-core-3.6.0.tgz'),
-      mcp: path.join(tempDirectory, 'zokizuan-satori-mcp-6.8.0.tgz'),
-      cli: path.join(tempDirectory, 'zokizuan-satori-cli-1.9.0.tgz'),
+      core: path.join(tempDirectory, 'satori-code-core-3.6.0.tgz'),
+      mcp: path.join(tempDirectory, 'satori-code-mcp-6.8.0.tgz'),
+      cli: path.join(tempDirectory, 'satori-code-cli-1.9.0.tgz'),
     };
     for (const file of Object.values(tarballs)) {
       fs.writeFileSync(file, 'verified tarball');
@@ -76,7 +76,7 @@ function runnerOptions(extra = {}) {
   const ancestorCalls = [];
   const skippedLatestCalls = [];
   let coreVisibleAfter = 0;
-  let mcpDependencies = { '@zokizuan/satori-core': VERSIONS.core };
+  let mcpDependencies = { '@satori-code/core': VERSIONS.core };
   let cliManagedRuntime = { core: VERSIONS.core, mcp: VERSIONS.mcp };
   const gitStatusImpl = extra.gitStatusImpl || (() => '');
   const versionsCheckImpl = extra.versionsCheckImpl || (() => '');
@@ -127,18 +127,18 @@ function runnerOptions(extra = {}) {
     });
     options.viewVersionImpl = extra.viewVersionImpl || ((packageName, version) => {
       viewCalls.push(`version:${packageName}@${version}`);
-      if (packageName === '@zokizuan/satori-core' && viewCalls.length > coreVisibleAfter) {
+      if (packageName === '@satori-code/core' && viewCalls.length > coreVisibleAfter) {
         return version;
       }
       return version;
     });
     options.viewDependenciesImpl = extra.viewDependenciesImpl || ((packageName, version) => {
       viewCalls.push(`deps:${packageName}@${version}`);
-      return packageName === '@zokizuan/satori-mcp' ? mcpDependencies : {};
+      return packageName === '@satori-code/mcp' ? mcpDependencies : {};
     });
     options.viewManagedRuntimeImpl = extra.viewManagedRuntimeImpl || ((packageName, version) => {
       viewCalls.push(`runtime:${packageName}@${version}`);
-      return packageName === '@zokizuan/satori-cli' ? cliManagedRuntime : {};
+      return packageName === '@satori-code/cli' ? cliManagedRuntime : {};
     });
   }
   options.records = {
@@ -156,7 +156,7 @@ function runnerOptions(extra = {}) {
 test('all-unpublished graph publishes Core, MCP, CLI in order', async () => {
   const options = runnerOptions();
   const result = await publishReleaseGraph(options);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-core', '@zokizuan/satori-mcp', '@zokizuan/satori-cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
   assert.deepEqual(result.published.map((entry) => entry.key), ['core', 'mcp', 'cli']);
   assert.deepEqual(result.skipped, []);
 });
@@ -166,7 +166,7 @@ test('published-identical Core is skipped while MCP/CLI publish', async () => {
     checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'unpublished', cli: 'unpublished' }),
   });
   const result = await publishReleaseGraph(options);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-mcp', '@zokizuan/satori-cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/mcp', '@satori-code/cli']);
   assert.deepEqual(options.records.skippedLatestCalls, [{ packageKeys: ['core'], localVersions: VERSIONS }]);
   assert.deepEqual(result.skipped, ['core']);
 });
@@ -175,10 +175,10 @@ test('stale latest on a skipped package prevents the first registry write', asyn
   const options = runnerOptions({
     checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'unpublished', cli: 'unpublished' }),
     verifySkippedLatestImpl: () => {
-      throw new Error('@zokizuan/satori-core@latest is stale');
+      throw new Error('@satori-code/core@latest is stale');
     },
   });
-  await assert.rejects(publishReleaseGraph(options), /satori-core@latest is stale/);
+  await assert.rejects(publishReleaseGraph(options), /@satori-code\/core@latest is stale/);
   assert.deepEqual(options.records.publishCalls, []);
 });
 
@@ -187,7 +187,7 @@ test('CLI-only release skips Core and MCP', async () => {
     checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'published-identical', cli: 'unpublished' }),
   });
   const result = await publishReleaseGraph(options);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/cli']);
   assert.deepEqual(result.skipped, ['core', 'mcp']);
 });
 
@@ -206,7 +206,7 @@ test('async check graph results are awaited', async () => {
     checkGraphImpl: (cwd, tempRoot) => Promise.resolve(retainedReport({ core: 'unpublished', mcp: 'unpublished', cli: 'unpublished' })(cwd, tempRoot)),
   });
   const result = await publishReleaseGraph(options);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-core', '@zokizuan/satori-mcp', '@zokizuan/satori-cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
   assert.deepEqual(result.published.map((entry) => entry.key), ['core', 'mcp', 'cli']);
 });
 
@@ -307,28 +307,28 @@ test('Core registry verification failure prevents MCP publish', async () => {
     },
   });
   await assert.rejects(publishReleaseGraph(options), /not visible on the registry/);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-core']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core']);
   assert.equal(options.records.sleepCalls.length, 180);
 });
 
 test('MCP dependency mismatch prevents CLI publish', async () => {
   const options = runnerOptions({
     viewDependenciesImpl: (packageName) => {
-      if (packageName === '@zokizuan/satori-mcp') {
-        return { '@zokizuan/satori-core': '3.5.0' };
+      if (packageName === '@satori-code/mcp') {
+        return { '@satori-code/core': '3.5.0' };
       }
-      return { '@zokizuan/satori-core': VERSIONS.core, '@zokizuan/satori-mcp': VERSIONS.mcp };
+      return { '@satori-code/core': VERSIONS.core, '@satori-code/mcp': VERSIONS.mcp };
     },
   });
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
-  assert.deepEqual(options.records.publishCalls, ['@zokizuan/satori-core', '@zokizuan/satori-mcp']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp']);
 });
 
 test('CLI managed-runtime verification succeeds', async () => {
   const options = runnerOptions();
   const result = await publishReleaseGraph(options);
   assert.deepEqual(result.published.map((entry) => entry.key), ['core', 'mcp', 'cli']);
-  const cliRuntimeCalls = options.records.viewCalls.filter((call) => call.includes('@zokizuan/satori-cli') && call.startsWith('runtime:'));
+  const cliRuntimeCalls = options.records.viewCalls.filter((call) => call.includes('@satori-code/cli') && call.startsWith('runtime:'));
   assert.equal(cliRuntimeCalls.length, 1);
 });
 
@@ -337,16 +337,16 @@ test('publish command failure reports uncertain registry state and prior verific
   const options = runnerOptions({
     publishImpl: (packageName) => {
       recordedCalls.push(packageName);
-      if (packageName === '@zokizuan/satori-mcp') {
+      if (packageName === '@satori-code/mcp') {
         throw new Error('EPUBLISHCONFLICT');
       }
     },
   });
   await assert.rejects(
     publishReleaseGraph(options),
-    /The publish command for @zokizuan\/satori-mcp@6\.8\.0 failed\.[\s\S]*registry state of @zokizuan\/satori-mcp@6\.8\.0 may be unknown[\s\S]*Query the exact version before retrying[\s\S]*Registry-verified packages:[\s\S]*@zokizuan\/satori-core@3\.6\.0/,
+    /The publish command for @satori-code\/mcp@6\.8\.0 failed\.[\s\S]*registry state of @satori-code\/mcp@6\.8\.0 may be unknown[\s\S]*Query the exact version before retrying[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
   );
-  assert.deepEqual(recordedCalls, ['@zokizuan/satori-core', '@zokizuan/satori-mcp']);
+  assert.deepEqual(recordedCalls, ['@satori-code/core', '@satori-code/mcp']);
 });
 
 test('registry visibility retries are bounded', async () => {
@@ -358,7 +358,7 @@ test('registry visibility retries are bounded', async () => {
     },
   });
   await assert.rejects(publishReleaseGraph(options), /not visible on the registry after waiting up to 15 minutes/);
-  assert.deepEqual(recordedVersionCalls, Array.from({ length: 181 }, () => '@zokizuan/satori-core@3.6.0'));
+  assert.deepEqual(recordedVersionCalls, Array.from({ length: 181 }, () => '@satori-code/core@3.6.0'));
   assert.equal(options.records.sleepCalls.length, 180);
 });
 
@@ -388,13 +388,13 @@ test('publish itself is never automatically retried', async () => {
   let mcpAttempts = 0;
   const options = runnerOptions({
     publishImpl: (packageName) => {
-      if (packageName === '@zokizuan/satori-mcp') {
+      if (packageName === '@satori-code/mcp') {
         mcpAttempts += 1;
         throw new Error('EPUBLISHCONFLICT');
       }
     },
   });
-  await assert.rejects(publishReleaseGraph(options), /The publish command for @zokizuan\/satori-mcp@6\.8\.0 failed/);
+  await assert.rejects(publishReleaseGraph(options), /The publish command for @satori-code\/mcp@6\.8\.0 failed/);
   assert.equal(mcpAttempts, 1);
 });
 
@@ -404,7 +404,7 @@ test('default publish uses the exact verified tarballs in graph order', async ()
     calls.push({ command, args, callOptions });
     if (command === 'npm' && args[0] === 'view') {
       if (args.includes('dependencies')) {
-        return JSON.stringify({ '@zokizuan/satori-core': VERSIONS.core });
+        return JSON.stringify({ '@satori-code/core': VERSIONS.core });
       }
       if (args.includes('satoriManagedRuntime')) {
         return JSON.stringify({ core: VERSIONS.core, mcp: VERSIONS.mcp });
@@ -473,7 +473,7 @@ test('EOTP failure reports no verified publication and runs no verification', as
   });
   await assert.rejects(
     publishReleaseGraph(options),
-    /The publish command for @zokizuan\/satori-core@3\.6\.0 failed\.[\s\S]*registry state of @zokizuan\/satori-core@3\.6\.0 may be unknown[\s\S]*Query the exact version before retrying/,
+    /The publish command for @satori-code\/core@3\.6\.0 failed\.[\s\S]*registry state of @satori-code\/core@3\.6\.0 may be unknown[\s\S]*Query the exact version before retrying/,
   );
   assert.deepEqual(options.records.viewCalls, []);
   assert.deepEqual(options.records.sleepCalls, []);
@@ -484,7 +484,7 @@ test('EOTP failure on a later package keeps verified names and stops verificatio
   const options = runnerOptions({
     publishImpl: (packageName) => {
       publishAttempts.push(packageName);
-      if (packageName === '@zokizuan/satori-mcp') {
+      if (packageName === '@satori-code/mcp') {
         const error = new Error('Command failed: pnpm publish');
         error.status = 1;
         error.stderr = 'npm error code EOTP\nThis operation requires a one-time password.';
@@ -494,14 +494,14 @@ test('EOTP failure on a later package keeps verified names and stops verificatio
   });
   await assert.rejects(
     publishReleaseGraph(options),
-    /The publish command for @zokizuan\/satori-mcp@6\.8\.0 failed\.[\s\S]*Registry-verified packages:[\s\S]*@zokizuan\/satori-core@3\.6\.0/,
+    /The publish command for @satori-code\/mcp@6\.8\.0 failed\.[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
   );
-  assert.deepEqual(publishAttempts, ['@zokizuan/satori-core', '@zokizuan/satori-mcp']);
+  assert.deepEqual(publishAttempts, ['@satori-code/core', '@satori-code/mcp']);
   const coreVerifications = options.records.viewCalls.filter(
-    (call) => call.startsWith('version:') && call.includes('satori-core')
+    (call) => call.startsWith('version:') && call.includes('@satori-code/core')
   );
   assert.equal(coreVerifications.length, 1);
-  assert.equal(options.records.viewCalls.filter((call) => call.includes('satori-mcp')).length, 0);
+  assert.equal(options.records.viewCalls.filter((call) => call.includes('@satori-code/mcp')).length, 0);
 });
 
 test('build and release smokes run before graph validation', async () => {
@@ -617,7 +617,7 @@ test('publisher-owned storage is cleaned after a publish failure', async () => {
       return fixture.report;
     },
     publishImpl: (packageName) => {
-      if (packageName === '@zokizuan/satori-mcp') {
+      if (packageName === '@satori-code/mcp') {
         throw new Error('EPUBLISHCONFLICT');
       }
     },
@@ -633,14 +633,14 @@ test('a successful publish with failed registry verification is reported without
   const options = runnerOptions({
     viewDependenciesImpl: (packageName) => {
       if (packageName === NAMES.mcp) {
-        return { '@zokizuan/satori-core': '3.5.0' };
+        return { '@satori-code/core': '3.5.0' };
       }
-      return { '@zokizuan/satori-core': VERSIONS.core, '@zokizuan/satori-mcp': VERSIONS.mcp };
+      return { '@satori-code/core': VERSIONS.core, '@satori-code/mcp': VERSIONS.mcp };
     },
   });
   await assert.rejects(
     publishReleaseGraph(options),
-    /The publish command succeeded for @zokizuan\/satori-mcp@6\.8\.0,[\s\S]*registry verification failed[\s\S]*Publish commands that succeeded:[\s\S]*@zokizuan\/satori-core@3\.6\.0[\s\S]*@zokizuan\/satori-mcp@6\.8\.0[\s\S]*Registry-verified packages:[\s\S]*@zokizuan\/satori-core@3\.6\.0/,
+    /The publish command succeeded for @satori-code\/mcp@6\.8\.0,[\s\S]*registry verification failed[\s\S]*Publish commands that succeeded:[\s\S]*@satori-code\/core@3\.6\.0[\s\S]*@satori-code\/mcp@6\.8\.0[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
   );
   assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
   assert.equal(options.records.viewCalls.filter((call) => call.startsWith('version:') && call.includes(NAMES.cli)).length, 0);
@@ -652,9 +652,9 @@ test('dependency metadata that appears after the version is polled until it matc
     viewDependenciesImpl: (packageName) => {
       if (packageName === NAMES.mcp) {
         dependencyCalls += 1;
-        return dependencyCalls < 3 ? {} : { '@zokizuan/satori-core': VERSIONS.core };
+        return dependencyCalls < 3 ? {} : { '@satori-code/core': VERSIONS.core };
       }
-      return { '@zokizuan/satori-core': VERSIONS.core, '@zokizuan/satori-mcp': VERSIONS.mcp };
+      return { '@satori-code/core': VERSIONS.core, '@satori-code/mcp': VERSIONS.mcp };
     },
   });
   const result = await publishReleaseGraph(options);
@@ -669,9 +669,9 @@ test('incorrect dependency pins remain bounded and fail after all verification a
     viewDependenciesImpl: (packageName) => {
       if (packageName === NAMES.mcp) {
         dependencyCalls += 1;
-        return { '@zokizuan/satori-core': '3.5.0' };
+        return { '@satori-code/core': '3.5.0' };
       }
-      return { '@zokizuan/satori-core': VERSIONS.core, '@zokizuan/satori-mcp': VERSIONS.mcp };
+      return { '@satori-code/core': VERSIONS.core, '@satori-code/mcp': VERSIONS.mcp };
     },
   });
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
@@ -734,9 +734,9 @@ test('the real checker receives the publisher root and its retained child is del
         receivedTempRoot = tempRoot;
         createdRetainedDir = fs.mkdtempSync(path.join(tempRoot, 'satori-release-check-'));
         const tarballs = {
-          core: path.join(createdRetainedDir, 'zokizuan-satori-core-3.6.0.tgz'),
-          mcp: path.join(createdRetainedDir, 'zokizuan-satori-mcp-6.8.0.tgz'),
-          cli: path.join(createdRetainedDir, 'zokizuan-satori-cli-1.9.0.tgz'),
+          core: path.join(createdRetainedDir, 'satori-code-core-3.6.0.tgz'),
+          mcp: path.join(createdRetainedDir, 'satori-code-mcp-6.8.0.tgz'),
+          cli: path.join(createdRetainedDir, 'satori-code-cli-1.9.0.tgz'),
         };
         for (const file of Object.values(tarballs)) {
           fs.writeFileSync(file, 'verified tarball');
@@ -787,7 +787,7 @@ test('a report pointing at a foreign retained directory is rejected without publ
 test('a foreign tarball with the expected filename is rejected without publishing', async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-publish-parent-'));
   const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-foreign-tarball-'));
-  const foreignTarball = path.join(foreignDir, 'zokizuan-satori-core-3.6.0.tgz');
+  const foreignTarball = path.join(foreignDir, 'satori-code-core-3.6.0.tgz');
   fs.writeFileSync(foreignTarball, 'foreign');
   let receivedTempRoot = null;
   const options = runnerOptions({
@@ -797,8 +797,8 @@ test('a foreign tarball with the expected filename is rejected without publishin
       const tempDirectory = fs.mkdtempSync(path.join(tempRoot, 'satori-release-check-'));
       const tarballs = {
         core: foreignTarball,
-        mcp: path.join(tempDirectory, 'zokizuan-satori-mcp-6.8.0.tgz'),
-        cli: path.join(tempDirectory, 'zokizuan-satori-cli-1.9.0.tgz'),
+        mcp: path.join(tempDirectory, 'satori-code-mcp-6.8.0.tgz'),
+        cli: path.join(tempDirectory, 'satori-code-cli-1.9.0.tgz'),
       };
       for (const [key, file] of Object.entries(tarballs)) {
         if (key !== 'core') {
@@ -937,7 +937,7 @@ test('authentication failures during dependency verification fail immediately', 
         dependencyCalls += 1;
         throw { status: 1, stderr: 'npm error code E403\nForbidden' };
       }
-      return { '@zokizuan/satori-core': VERSIONS.core, '@zokizuan/satori-mcp': VERSIONS.mcp };
+      return { '@satori-code/core': VERSIONS.core, '@satori-code/mcp': VERSIONS.mcp };
     },
   });
   await assert.rejects(publishReleaseGraph(options), /authentication failed while verifying/);
@@ -947,7 +947,7 @@ test('authentication failures during dependency verification fail immediately', 
 test('publisher rejects a verified tarball outside the retained verification directory', async () => {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-publish-parent-'));
   const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-outside-tarball-'));
-  const outsideTarball = path.join(outsideRoot, 'zokizuan-satori-core-3.6.0.tgz');
+  const outsideTarball = path.join(outsideRoot, 'satori-code-core-3.6.0.tgz');
   fs.writeFileSync(outsideTarball, 'outside');
   const calls = [];
   const options = runnerOptions({

@@ -15,7 +15,7 @@ import {
     type RootBoundFileIdentity,
     type SourceMeasurementObservation,
     type SourceProcessingOutcome,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 
 export type InspectableSourceFailureReason =
     | "source_exceeds_inspection_limit"

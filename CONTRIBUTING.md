@@ -19,8 +19,8 @@ pnpm install
 ```bash
 pnpm run check
 pnpm build
-pnpm --filter @zokizuan/satori-mcp test
-pnpm --filter @zokizuan/satori-cli test
+pnpm --filter @satori-code/mcp test
+pnpm --filter @satori-code/cli test
 pnpm test:integration
 ```
 
@@ -38,8 +38,8 @@ Before opening a PR, run:
 ```bash
 pnpm run check
 pnpm build
-pnpm --filter @zokizuan/satori-mcp test
-pnpm --filter @zokizuan/satori-cli test
+pnpm --filter @satori-code/mcp test
+pnpm --filter @satori-code/cli test
 pnpm test:integration
 ```
 

@@ -7,7 +7,7 @@ import {
 
 function manifest(overrides: Record<string, unknown> = {}): string {
     return JSON.stringify({
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         version: "1.4.0",
         satoriManagedRuntime: {
             mcp: "6.3.0",
@@ -27,13 +27,13 @@ test("resolveSatoriUpgradeTarget pins the latest CLI runtime closure exactly", (
     });
 
     assert.deepEqual(target, {
-        cliPackageSpecifier: "@zokizuan/satori-cli@1.4.0",
+        cliPackageSpecifier: "@satori-code/cli@1.4.0",
         cliVersion: "1.4.0",
-        mcpPackageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+        mcpPackageSpecifier: "@satori-code/mcp@6.3.0",
         mcpVersion: "6.3.0",
         coreVersion: "3.2.0",
     });
-    assert.deepEqual(calls, ["npm view @zokizuan/satori-cli@latest --json"]);
+    assert.deepEqual(calls, ["npm view @satori-code/cli@latest --json"]);
 });
 
 test("resolveSatoriUpgradeTarget handles array response from modern npm view", () => {
@@ -42,9 +42,9 @@ test("resolveSatoriUpgradeTarget handles array response from modern npm view", (
     });
 
     assert.deepEqual(target, {
-        cliPackageSpecifier: "@zokizuan/satori-cli@1.4.0",
+        cliPackageSpecifier: "@satori-code/cli@1.4.0",
         cliVersion: "1.4.0",
-        mcpPackageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+        mcpPackageSpecifier: "@satori-code/mcp@6.3.0",
         mcpVersion: "6.3.0",
         coreVersion: "3.2.0",
     });

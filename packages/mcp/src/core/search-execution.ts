@@ -4,12 +4,12 @@ import type {
     RerankResult,
     SemanticSearchExecutionResult,
     SemanticSearchResult,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     LexicalRetrievalModeUnsupportedError,
     RerankerRequestError,
     type RerankerFailureKind,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,

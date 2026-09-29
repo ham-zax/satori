@@ -5,7 +5,7 @@ import {
     Context,
     RemoteCollectionDeletePendingError,
     type CustomIndexPolicyUpdate,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { SyncManager } from "./sync.js";
 import type { ManageIndexAction } from "./manage-types.js";
 import type { CompletionProofValidationResult } from "./completion-proof.js";
@@ -25,7 +25,7 @@ import {
     type RootMutationExecution,
     type RootMutationOperation,
     type RootMutationStart,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 import {
     FullIndexOperation,
     type FullIndexCandidateResult,

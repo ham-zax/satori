@@ -21,8 +21,8 @@ import {
     type ExecutionProfile,
     type NetworkPolicy,
     type ResolvedOllamaModelIdentity,
-} from "@zokizuan/satori-core";
-import { resolveSatoriStateRoot } from "@zokizuan/satori-core/integration";
+} from "@satori-code/core";
+import { resolveSatoriStateRoot } from "@satori-code/core/integration";
 import {
     LATEON_ACTIVATION_POLICY_IDS,
     LATEON_RUNTIME_PROFILE_IDS,
@@ -728,7 +728,7 @@ Satori MCP Server
 
 Usage:
   satori [options]
-  node /path/to/@zokizuan/satori-mcp/dist/index.js [options]
+  node /path/to/@satori-code/mcp/dist/index.js [options]
 
 Options:
   --help, -h                          Show this help message
@@ -771,7 +771,7 @@ Environment Variables:
 
 Examples:
   # Install resident MCP config without package-manager startup on every client launch
-  npx -y @zokizuan/satori-cli@latest install --client all
+  npx -y @satori-code/cli@latest install --client all
 
   # Start MCP server with OpenAI and explicit Milvus address
   OPENAI_API_KEY=sk-xxx MILVUS_ADDRESS=localhost:19530 satori

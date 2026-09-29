@@ -30,10 +30,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build core package
-        run: pnpm --filter @zokizuan/satori-core build
+        run: pnpm --filter @satori-code/core build
 
       - name: Run core integration tests
-        run: pnpm --filter @zokizuan/satori-core test:integration
+        run: pnpm --filter @satori-code/core test:integration
 
   lint_and_build:
     runs-on: ${{ matrix.os }}
@@ -138,10 +138,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run core unit tests
-        run: pnpm --filter @zokizuan/satori-core test
+        run: pnpm --filter @satori-code/core test
 
       - name: Run MCP unit tests
-        run: pnpm --filter @zokizuan/satori-mcp test
+        run: pnpm --filter @satori-code/mcp test
 
       - name: Run CLI unit tests
-        run: pnpm --filter @zokizuan/satori-cli test
+        run: pnpm --filter @satori-code/cli test

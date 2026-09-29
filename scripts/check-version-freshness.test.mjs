@@ -11,18 +11,18 @@ import {
 
 test('findStalePackageVersionReferences ignores tests and flags stale docs/config references', () => {
   const files = new Map([
-    ['README.md', 'Use @zokizuan/satori-mcp@4.6.0 here'],
-    ['packages/mcp/src/config.ts', 'npx -y @zokizuan/satori-mcp@4.8.0'],
-    ['packages/mcp/src/cli/index.test.ts', 'fixture @zokizuan/satori-mcp@4.4.1'],
+    ['README.md', 'Use @satori-code/mcp@4.6.0 here'],
+    ['packages/mcp/src/config.ts', 'npx -y @satori-code/mcp@4.8.0'],
+    ['packages/mcp/src/cli/index.test.ts', 'fixture @satori-code/mcp@4.4.1'],
   ]);
 
   const findings = findStalePackageVersionReferences(files, {
-    '@zokizuan/satori-mcp': '4.8.0',
+    '@satori-code/mcp': '4.8.0',
   });
 
   assert.deepEqual(findings, [{
     filePath: 'README.md',
-    packageName: '@zokizuan/satori-mcp',
+    packageName: '@satori-code/mcp',
     foundVersion: '4.6.0',
     expectedVersion: '4.8.0',
   }]);
@@ -30,14 +30,14 @@ test('findStalePackageVersionReferences ignores tests and flags stale docs/confi
 
 test('parsePackageVersions returns publishable package versions', () => {
   const versions = parsePackageVersions(new Map([
-    ['packages/core/package.json', JSON.stringify({ name: '@zokizuan/satori-core', version: '1.5.0' })],
-    ['packages/mcp/package.json', JSON.stringify({ name: '@zokizuan/satori-mcp', version: '4.8.0' })],
+    ['packages/core/package.json', JSON.stringify({ name: '@satori-code/core', version: '1.5.0' })],
+    ['packages/mcp/package.json', JSON.stringify({ name: '@satori-code/mcp', version: '4.8.0' })],
     ['package.json', JSON.stringify({ name: 'satori', version: '0.4.0', private: true })],
   ]));
 
   assert.deepEqual(versions, {
-    '@zokizuan/satori-core': '1.5.0',
-    '@zokizuan/satori-mcp': '4.8.0',
+    '@satori-code/core': '1.5.0',
+    '@satori-code/mcp': '4.8.0',
   });
 });
 
@@ -51,18 +51,18 @@ test('checkVersionFreshness scans generated package version references', () => {
     ]) {
       fs.mkdirSync(path.join(cwd, dir), { recursive: true });
     }
-    fs.writeFileSync(path.join(cwd, 'packages/core/package.json'), JSON.stringify({ name: '@zokizuan/satori-core', version: '1.5.0' }));
-    fs.writeFileSync(path.join(cwd, 'packages/mcp/package.json'), JSON.stringify({ name: '@zokizuan/satori-mcp', version: '4.8.0' }));
-    fs.writeFileSync(path.join(cwd, 'packages/cli/package.json'), JSON.stringify({ name: '@zokizuan/satori-cli', version: '0.2.0' }));
+    fs.writeFileSync(path.join(cwd, 'packages/core/package.json'), JSON.stringify({ name: '@satori-code/core', version: '1.5.0' }));
+    fs.writeFileSync(path.join(cwd, 'packages/mcp/package.json'), JSON.stringify({ name: '@satori-code/mcp', version: '4.8.0' }));
+    fs.writeFileSync(path.join(cwd, 'packages/cli/package.json'), JSON.stringify({ name: '@satori-code/cli', version: '0.2.0' }));
     fs.writeFileSync(path.join(cwd, 'README.md'), '');
     fs.writeFileSync(path.join(cwd, 'packages/mcp/README.md'), '');
     fs.writeFileSync(path.join(cwd, 'packages/cli/README.md'), '');
     fs.writeFileSync(path.join(cwd, 'packages/mcp/src/config.ts'), '');
-    fs.writeFileSync(path.join(cwd, 'server.json'), '@zokizuan/satori-mcp@4.7.0');
+    fs.writeFileSync(path.join(cwd, 'server.json'), '@satori-code/mcp@4.7.0');
     assert.deepEqual(checkVersionFreshness({ cwd }), [
       {
         filePath: 'server.json',
-        packageName: '@zokizuan/satori-mcp',
+        packageName: '@satori-code/mcp',
         foundVersion: '4.7.0',
         expectedVersion: '4.8.0',
       },

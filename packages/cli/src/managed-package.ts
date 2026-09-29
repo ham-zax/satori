@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CliError } from "./errors.js";
 
-const MANAGED_PACKAGE_NAME = "@zokizuan/satori-mcp";
-const CORE_PACKAGE_NAME = "@zokizuan/satori-core";
+const MANAGED_PACKAGE_NAME = "@satori-code/mcp";
+const CORE_PACKAGE_NAME = "@satori-code/core";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
 
 export interface ManagedRuntimeRelease {

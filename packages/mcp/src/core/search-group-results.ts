@@ -1,4 +1,4 @@
-import type { SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import {
     repairSourceBackedPythonSpan,
     type PythonSourceBackedSpanRepair,

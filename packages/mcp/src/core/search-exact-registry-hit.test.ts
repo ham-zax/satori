@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SymbolRecord } from "@zokizuan/satori-core";
+import type { SymbolRecord } from "@satori-code/core";
 import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
 import { SEARCH_RESULT_SET_DIGEST_PLACEHOLDER } from "./search-constants.js";
 import type { SearchNavigationHelpers } from "./search-navigation.js";

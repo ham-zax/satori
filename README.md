@@ -2,7 +2,7 @@
 
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](./LICENSE)
 [![CI](https://github.com/ham-zax/satori/actions/workflows/ci.yml/badge.svg)](https://github.com/ham-zax/satori/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@zokizuan/satori-cli?label=npm)](https://www.npmjs.com/package/@zokizuan/satori-cli)
+[![npm](https://img.shields.io/npm/v/@satori-code/cli?label=npm)](https://www.npmjs.com/package/@satori-code/cli)
 
 **Ask your codebase in natural language, then verify the answer in real source.**
 
@@ -151,15 +151,15 @@ consumption.
 The recommended first run needs no global install:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install
-npx -y @zokizuan/satori-cli@latest doctor
+npx -y @satori-code/cli@latest install
+npx -y @satori-code/cli@latest doctor
 ```
 
 For a persistent `satori` command, install the lightweight CLI globally and use
 the same flow without the `npx` prefix:
 
 ```bash
-npm install -g @zokizuan/satori-cli@latest
+npm install -g @satori-code/cli@latest
 satori install
 satori doctor
 ```
@@ -223,7 +223,7 @@ satori upgrade
 CLI installed globally, run the same release flow through the latest CLI:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest upgrade
+npx -y @satori-code/cli@latest upgrade
 ```
 
 Satori reports each potentially slow phase as it works:
@@ -239,7 +239,7 @@ The CLI is updated first. Satori then stages and verifies the exact MCP/Core run
 
 An upgrade follows one coordinated release closure declared by the latest CLI package. It does not independently combine the newest CLI, MCP, and Core versions. This keeps every activated runtime on an exact, tested MCP/Core pairing.
 
-For other no-install commands, replace `satori` with `npx -y @zokizuan/satori-cli@latest`.
+For other no-install commands, replace `satori` with `npx -y @satori-code/cli@latest`.
 
 ## First five minutes
 
@@ -458,8 +458,8 @@ runtime, run the published installer again. The explicit form below also
 restores the same offline Potion + LateOn selection used in the first example:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install --client opencode --runtime offline --reranker lateon
-npx -y @zokizuan/satori-cli@latest doctor
+npx -y @satori-code/cli@latest install --client opencode --runtime offline --reranker lateon
+npx -y @satori-code/cli@latest doctor
 ```
 
 If the latest CLI is already installed globally, the equivalent first command
@@ -694,9 +694,9 @@ Every other language in the catalog is search-only: its files are indexed for se
 
 | Package | Purpose |
 |---|---|
-| [`@zokizuan/satori-cli`](./packages/cli) | Installer, doctor, and command-line access to MCP tools. |
-| [`@zokizuan/satori-mcp`](./packages/mcp) | The MCP server and 11 public tools. |
-| [`@zokizuan/satori-core`](./packages/core) | Indexing, analysis, embeddings, storage, and retrieval. |
+| [`@satori-code/cli`](./packages/cli) | Installer, doctor, and command-line access to MCP tools. |
+| [`@satori-code/mcp`](./packages/mcp) | The MCP server and 11 public tools. |
+| [`@satori-code/core`](./packages/core) | Indexing, analysis, embeddings, storage, and retrieval. |
 
 ## Development
 
@@ -709,9 +709,9 @@ pnpm run check
 Focused package tests:
 
 ```bash
-pnpm --filter @zokizuan/satori-core test
-pnpm --filter @zokizuan/satori-mcp test
-pnpm --filter @zokizuan/satori-cli test
+pnpm --filter @satori-code/core test
+pnpm --filter @satori-code/mcp test
+pnpm --filter @satori-code/cli test
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for repository conventions, [docs/RELEASING.md](./docs/RELEASING.md) for coordinated package releases, [SECURITY.md](./SECURITY.md) for private vulnerability reporting, and [THIRD_PARTY.md](./THIRD_PARTY.md) for attribution.

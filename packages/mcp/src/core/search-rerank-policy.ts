@@ -1,4 +1,4 @@
-import type { SemanticSearchResult } from "@zokizuan/satori-core";
+import type { SemanticSearchResult } from "@satori-code/core";
 import {
     SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,

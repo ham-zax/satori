@@ -1,7 +1,7 @@
 import type {
     RootMutationActivity,
     RootMutationOperation,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 
 export type AutomaticReindexReason =
     | "requires_reindex"

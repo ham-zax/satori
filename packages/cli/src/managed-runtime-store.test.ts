@@ -31,19 +31,19 @@ function writeRuntime(homeDir: string, version: string, suffix = ""): string {
         homeDir,
         ".satori",
         "mcp-runtime",
-        `@zokizuan-satori-mcp@${version}${suffix}`,
+        `@satori-code-mcp@${version}${suffix}`,
     );
-    const packageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
+    const packageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-        name: "@zokizuan/satori-mcp",
+        name: "@satori-code/mcp",
         version,
     }), "utf8");
     return runtimeRoot;
 }
 
 function packageRoot(runtimeRoot: string): string {
-    return path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
+    return path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
 }
 
 function processInspector(
@@ -251,7 +251,7 @@ test("never follows an unknown symlink in the managed runtime store", async () =
                 homeDir,
                 ".satori",
                 "mcp-runtime",
-                "@zokizuan-satori-mcp@6.1.0",
+                "@satori-code-mcp@6.1.0",
             );
             fs.symlinkSync(outside, symlinkPath, "dir");
 

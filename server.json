@@ -2,14 +2,14 @@
   "schemaVersion": 1,
   "id": "satori",
   "name": "Satori MCP",
-  "packageName": "@zokizuan/satori-mcp",
-  "version": "8.0.0",
+  "packageName": "@satori-code/mcp",
+  "version": "0.8.0",
   "description": "Local-first code intelligence for AI coding agents: natural-language + lexical repository search, exact source/symbol navigation, relationships, freshness, and indexing.",
   "install": {
     "command": "npx",
     "args": [
       "-y",
-      "@zokizuan/satori-cli@latest",
+      "@satori-code/cli@latest",
       "install",
       "--client",
       "all"

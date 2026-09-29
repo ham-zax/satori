@@ -157,42 +157,42 @@ function installAndVerifyPackedReleaseClosure(
     const mcpVersion = requireStableVersion(sourceMcp.version, "Source MCP version");
     const coreVersion = requireStableVersion(sourceCore.version, "Source Core version");
     if (
-        sourceCli.dependencies?.["@zokizuan/satori-mcp"] !== undefined
-        || sourceCli.dependencies?.["@zokizuan/satori-core"] !== undefined
+        sourceCli.dependencies?.["@satori-code/mcp"] !== undefined
+        || sourceCli.dependencies?.["@satori-code/core"] !== undefined
         || sourceCli.satoriManagedRuntime?.mcp !== mcpVersion
         || sourceCli.satoriManagedRuntime?.core !== coreVersion
-        || sourceMcp.dependencies?.["@zokizuan/satori-core"] !== "workspace:*"
+        || sourceMcp.dependencies?.["@satori-code/core"] !== "workspace:*"
     ) {
         throw new Error("Source Satori package closure must keep the CLI bootstrap separate and pin the managed runtime explicitly.");
     }
 
     const nodeModulesRoot = path.join(installRoot, "node_modules");
-    const cliRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-cli");
-    const mcpRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-mcp");
-    const coreRoot = path.join(nodeModulesRoot, "@zokizuan", "satori-core");
+    const cliRoot = path.join(nodeModulesRoot, "@satori-code", "cli");
+    const mcpRoot = path.join(nodeModulesRoot, "@satori-code", "mcp");
+    const coreRoot = path.join(nodeModulesRoot, "@satori-code", "core");
     const packedCli = readManifest(path.join(cliRoot, "package.json"));
     const packedMcp = readManifest(path.join(mcpRoot, "package.json"));
     const packedCore = readManifest(path.join(coreRoot, "package.json"));
 
     if (
-        packedCli.name !== "@zokizuan/satori-cli"
+        packedCli.name !== "@satori-code/cli"
         || requireStableVersion(packedCli.version, "Packed CLI version") !== cliVersion
-        || packedMcp.name !== "@zokizuan/satori-mcp"
+        || packedMcp.name !== "@satori-code/mcp"
         || requireStableVersion(packedMcp.version, "Packed MCP version") !== mcpVersion
-        || packedCore.name !== "@zokizuan/satori-core"
+        || packedCore.name !== "@satori-code/core"
         || requireStableVersion(packedCore.version, "Packed Core version") !== coreVersion
     ) {
         throw new Error("Packed Satori package identities do not match their source manifests.");
     }
     if (
-        packedCli.dependencies?.["@zokizuan/satori-mcp"] !== undefined
-        || packedCli.dependencies?.["@zokizuan/satori-core"] !== undefined
+        packedCli.dependencies?.["@satori-code/mcp"] !== undefined
+        || packedCli.dependencies?.["@satori-code/core"] !== undefined
         || packedCli.satoriManagedRuntime?.mcp !== mcpVersion
         || packedCli.satoriManagedRuntime?.core !== coreVersion
     ) {
         throw new Error("Packed CLI must remain a lightweight bootstrap with exact satoriManagedRuntime targets.");
     }
-    requireDependency(packedMcp, "@zokizuan/satori-core", coreVersion, "Packed MCP");
+    requireDependency(packedMcp, "@satori-code/core", coreVersion, "Packed MCP");
 
     const cliEntryRelative = packedCli.bin?.satori;
     if (
@@ -211,13 +211,13 @@ function installAndVerifyPackedReleaseClosure(
     }
 
     const resolvedCorePackageJson = createRequire(mcpEntry)
-        .resolve("@zokizuan/satori-core/package.json");
+        .resolve("@satori-code/core/package.json");
     if (!isPathWithin(installRoot, resolvedCorePackageJson)) {
         throw new Error("Packed MCP resolved Core outside the installed release closure.");
     }
     const resolvedCore = readManifest(resolvedCorePackageJson);
     if (
-        resolvedCore.name !== "@zokizuan/satori-core"
+        resolvedCore.name !== "@satori-code/core"
         || resolvedCore.version !== coreVersion
     ) {
         throw new Error("Packed MCP did not resolve the expected packed Core version.");
@@ -281,8 +281,8 @@ function assertPackedBootstrapCli(
 
     const nodeModulesRoot = path.join(bootstrapRoot, "node_modules");
     for (const forbiddenPath of [
-        path.join(nodeModulesRoot, "@zokizuan", "satori-core"),
-        path.join(nodeModulesRoot, "@zokizuan", "satori-mcp"),
+        path.join(nodeModulesRoot, "@satori-code", "core"),
+        path.join(nodeModulesRoot, "@satori-code", "mcp"),
         path.join(nodeModulesRoot, "onnxruntime-node"),
         path.join(nodeModulesRoot, "@huggingface", "transformers"),
     ]) {
@@ -291,7 +291,7 @@ function assertPackedBootstrapCli(
         }
     }
 
-    const cliEntry = path.join(nodeModulesRoot, "@zokizuan", "satori-cli", "dist", "index.js");
+    const cliEntry = path.join(nodeModulesRoot, "@satori-code", "cli", "dist", "index.js");
     assertPackedCliHelp(runCliSmoke(["--format", "json", "--help"], cliEntry, bootstrapRoot, bootstrapEnv));
 }
 
@@ -502,7 +502,7 @@ async function assertPackedPotionExecutionCapability(installRoot: string, packed
     const helperPath = path.join(assetsRoot, "satori-potion");
     const modelPath = WORKSPACE_POTION_MODEL_PATH;
 
-    const coreEntry = path.join(installRoot, "node_modules", "@zokizuan", "satori-core", "dist", "index.js");
+    const coreEntry = path.join(installRoot, "node_modules", "@satori-code", "core", "dist", "index.js");
     if (!fs.existsSync(coreEntry)) {
         throw new Error(`Packed Core entry is missing under ${installRoot}.`);
     }

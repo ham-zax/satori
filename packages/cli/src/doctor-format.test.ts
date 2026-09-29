@@ -7,9 +7,9 @@ function resultWithActiveRuntime(): DoctorResult {
     return {
         status: "ok",
         packageVersions: [
-            { name: "@zokizuan/satori-cli", version: "1.9.2", source: "/cli/package.json" },
-            { name: "@zokizuan/satori-mcp", version: "6.8.1", source: "/cli/node_modules/mcp/package.json" },
-            { name: "@zokizuan/satori-core", version: "3.6.0", source: "/cli/node_modules/core/package.json" },
+            { name: "@satori-code/cli", version: "1.9.2", source: "/cli/package.json" },
+            { name: "@satori-code/mcp", version: "6.8.1", source: "/cli/node_modules/mcp/package.json" },
+            { name: "@satori-code/core", version: "3.6.0", source: "/cli/node_modules/core/package.json" },
         ],
         packageVersionNote: "independent package versions",
         checks: [],
@@ -38,10 +38,10 @@ function resultWithActiveRuntime(): DoctorResult {
 test("Doctor uses active runtime authority and labels bundled package sources", () => {
     const text = formatDoctorText(resultWithActiveRuntime(), { verbose: true });
     assert.match(text, /Doctor runtime: CLI 1\.9\.2 · MCP 6\.7\.0 · Core 3\.5\.0/);
-    assert.match(text, /@zokizuan\/satori-cli@1\.9\.2 \(CLI package source\)/);
-    assert.match(text, /@zokizuan\/satori-mcp@6\.8\.1 \(CLI release metadata\)/);
-    assert.match(text, /@zokizuan\/satori-core@3\.6\.0 \(CLI release metadata\)/);
-    assert.doesNotMatch(text, /@zokizuan\/satori-cli@1\.9\.2 \(CLI release metadata\)/);
+    assert.match(text, /@satori-code\/cli@1\.9\.2 \(CLI package source\)/);
+    assert.match(text, /@satori-code\/mcp@6\.8\.1 \(CLI release metadata\)/);
+    assert.match(text, /@satori-code\/core@3\.6\.0 \(CLI release metadata\)/);
+    assert.doesNotMatch(text, /@satori-code\/cli@1\.9\.2 \(CLI release metadata\)/);
 });
 
 test("Doctor falls back to the bundle when the launcher is not active", () => {

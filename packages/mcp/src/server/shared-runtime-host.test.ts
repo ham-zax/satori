@@ -9,7 +9,7 @@ import {
     POTION_DIMENSION,
     POTION_MODEL_ID,
     POTION_SEMANTIC_VERSION,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     buildRuntimeIndexFingerprint,
     type ContextMcpConfig,

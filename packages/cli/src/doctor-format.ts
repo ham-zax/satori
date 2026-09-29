@@ -12,14 +12,14 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
 }
 
 function packageLabel(packageName: string): string {
-    if (packageName.endsWith("-cli")) return "CLI";
-    if (packageName.endsWith("-mcp")) return "MCP";
-    if (packageName.endsWith("-core")) return "Core";
+    if (packageName.endsWith("/cli")) return "CLI";
+    if (packageName.endsWith("/mcp")) return "MCP";
+    if (packageName.endsWith("/core")) return "Core";
     return packageName;
 }
 
 function packageSourceLabel(packageName: string): string {
-    return packageName.endsWith("-cli") ? "CLI package source" : "CLI release metadata";
+    return packageName.endsWith("/cli") ? "CLI package source" : "CLI release metadata";
 }
 
 function checkValue(result: DoctorResult, name: string): string | null {
@@ -253,7 +253,7 @@ export function formatDoctorText(result: DoctorResult, options: DoctorTextOption
 
     if (result.managedRuntime?.status === "active" && result.managedRuntime.mcpVersion) {
         const cliVersion = result.packageVersions
-            .find((pkg) => pkg.name.endsWith("-cli"))?.version;
+            .find((pkg) => pkg.name.endsWith("/cli"))?.version;
         lines.push(
             "",
             `Doctor runtime: CLI ${cliVersion ?? "unknown"} · MCP ${result.managedRuntime.mcpVersion}${result.managedRuntime.coreVersion ? ` · Core ${result.managedRuntime.coreVersion}` : ""}`,

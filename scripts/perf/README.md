@@ -12,7 +12,7 @@ systemd-run --user --scope -q -p MemoryMax=7G -p MemorySwapMax=0 node scripts/pe
 Most tools load `packages/*/dist`, so build first:
 
 ```bash
-pnpm --filter @zokizuan/satori-core build && pnpm --filter @zokizuan/satori-mcp build
+pnpm --filter @satori-code/core build && pnpm --filter @satori-code/mcp build
 ```
 
 ## Built-in tracing

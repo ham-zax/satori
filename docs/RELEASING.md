@@ -2,9 +2,9 @@
 
 Satori is published as three packages:
 
-- `@zokizuan/satori-core`
-- `@zokizuan/satori-mcp`
-- `@zokizuan/satori-cli`
+- `@satori-code/core`
+- `@satori-code/mcp`
+- `@satori-code/cli`
 
 They have independent versions but form one exact release closure:
 
@@ -69,7 +69,7 @@ npm whoami --registry=https://registry.npmjs.org/
 ```
 
 `release:login` runs npm's web-login flow. The `whoami` command must return the
-npm account that has publish access to the `@zokizuan` packages. Do not continue
+npm account that has publish access to the `@satori-code` packages. Do not continue
 with publication if it returns `E401`, an unexpected identity, or an account
 without package write access. npm can surface a scoped-package write-permission
 failure as `E404 Not Found` on the publish `PUT`, so verify identity before
@@ -100,7 +100,7 @@ release:verify
 ### `pnpm run versions:check`
 
 Scans the fixed list of package manifests plus generated references and fails
-when a literal `@zokizuan/<package>@x.y.z` reference does not match the local
+when a literal `@satori-code/<package>@x.y.z` reference does not match the local
 manifest version. This is the fast literal-reference gate; it is part of
 `pnpm run check`.
 
@@ -151,14 +151,14 @@ Example shape of a valid release candidate:
 Satori release graph
 
 Package                         Local            Registry state   Action
-@zokizuan/satori-core           <core-version>   unpublished      publish
-@zokizuan/satori-mcp            <mcp-version>    unpublished      publish
-@zokizuan/satori-cli            <cli-version>    unpublished      publish
+@satori-code/core           <core-version>   unpublished      publish
+@satori-code/mcp            <mcp-version>    unpublished      publish
+@satori-code/cli            <cli-version>    unpublished      publish
 
 Packed release graph
-@zokizuan/satori-mcp dependency -> @zokizuan/satori-core@<core-version>
-@zokizuan/satori-cli managed runtime -> @zokizuan/satori-mcp@<mcp-version>
-@zokizuan/satori-cli managed runtime -> @zokizuan/satori-core@<core-version>
+@satori-code/mcp dependency -> @satori-code/core@<core-version>
+@satori-code/cli managed runtime -> @satori-code/mcp@<mcp-version>
+@satori-code/cli managed runtime -> @satori-code/core@<core-version>
 
 Release graph valid.
 ```
@@ -246,7 +246,7 @@ from locally-ahead commits requires the explicit `--allow-unpushed-head`
 override; canonical release master must still be an ancestor of `HEAD`, so
 stale or diverged history is rejected.
 
-After publishing Core, `release:all` polls until `@zokizuan/satori-core@<version>`
+After publishing Core, `release:all` polls until `@satori-code/core@<version>`
 is visible on npm, then publishes MCP, then verifies that the published MCP pins
 the exact Core version, then publishes CLI and verifies its exact
 `satoriManagedRuntime` Core and MCP targets. A publish
@@ -310,7 +310,7 @@ satori upgrade
 or, without a global CLI installation:
 
 ```bash
-npx -y @zokizuan/satori-cli@latest upgrade
+npx -y @satori-code/cli@latest upgrade
 ```
 
 The CLI update occurs first. The exact MCP/Core candidate is then installed,

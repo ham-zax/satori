@@ -1,7 +1,7 @@
 import type {
     PublicationNavigationStatus,
     PublicationRef,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 
 export type CompletionProofOutcome = "valid" | "stale_local" | "policy_incompatible" | "probe_failed";
 

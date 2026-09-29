@@ -1,4 +1,4 @@
-# Contributing to @zokizuan/satori-mcp
+# Contributing to @satori-code/mcp
 
 This guide covers contribution rules specific to the MCP server package.
 
@@ -29,19 +29,19 @@ pnpm build:mcp
 pnpm dev:mcp
 
 # Start server
-pnpm --filter @zokizuan/satori-mcp start
+pnpm --filter @satori-code/mcp start
 
 # Typecheck
-pnpm --filter @zokizuan/satori-mcp typecheck
+pnpm --filter @satori-code/mcp typecheck
 
 # Unit tests
-pnpm --filter @zokizuan/satori-mcp test
+pnpm --filter @satori-code/mcp test
 
 # Check README tool docs are in sync
-pnpm --filter @zokizuan/satori-mcp docs:check
+pnpm --filter @satori-code/mcp docs:check
 ```
 
-`pnpm --filter @zokizuan/satori-mcp build` already runs docs generation.
+`pnpm --filter @satori-code/mcp build` already runs docs generation.
 
 ## Development Notes
 

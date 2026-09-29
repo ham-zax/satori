@@ -141,7 +141,7 @@ async function sha256File(filePath: string): Promise<string> {
 }
 
 // Installation owns the managed model cache and repairs it on rerun.
-const POTION_RESTORE_HINT = 'Rerun `npx -y @zokizuan/satori-cli@latest install` to restore it.';
+const POTION_RESTORE_HINT = 'Rerun `npx -y @satori-code/cli@latest install` to restore it.';
 
 async function assertFileDigest(filePath: string, expected: string, label: string): Promise<void> {
     let actual: string;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings } from "@satori-code/core";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 
 /** Mutating manage_index actions that must honor the runtime-owner gate. */

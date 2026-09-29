@@ -205,7 +205,7 @@ test("static runtime config flags the historical D32 activation policy with migr
         policy?.message || "",
         /Historical LateOn activation policy bound: lateon_d32_owner_default_v1\./,
     );
-    assert.match(policy?.nextStep || "", /@zokizuan\/satori-cli@latest upgrade/);
+    assert.match(policy?.nextStep || "", /@satori-code\/cli@latest upgrade/);
 });
 
 test("static runtime config rejects a changed Potion model identity", () => {

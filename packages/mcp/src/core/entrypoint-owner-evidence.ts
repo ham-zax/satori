@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import {
     compareContractStrings,
     type SymbolRegistry,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     prepareInspectableSource,
     type InspectableSourceFinalizationResult,

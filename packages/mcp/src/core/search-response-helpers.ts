@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings } from "@satori-code/core";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 import type {
     CallGraphHint,

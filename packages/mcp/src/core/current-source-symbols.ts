@@ -8,7 +8,7 @@ import {
     type LanguageAnalysisPort,
     type SourceMeasurementObservation,
     type SourceProcessingOutcome,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { prepareInspectableSource } from "./inspectable-source.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 

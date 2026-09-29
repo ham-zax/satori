@@ -17,7 +17,7 @@ import {
     type SourceMeasurementObservation,
     type SymbolRecord,
     type Reranker,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { CapabilityResolver } from "./capabilities.js";
 import type { IndexFingerprint } from "../config.js";
 import {

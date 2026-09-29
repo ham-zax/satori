@@ -5,7 +5,7 @@ import {
     OpenAIEmbedding,
     PotionEmbedding,
     VoyageAIEmbedding,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { ContextMcpConfig } from "./config.js";
 
 // Helper function to create embedding instance based on provider

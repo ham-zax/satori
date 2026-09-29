@@ -1,4 +1,4 @@
-import { perfSpan, type SymbolRegistry } from "@zokizuan/satori-core";
+import { perfSpan, type SymbolRegistry } from "@satori-code/core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,

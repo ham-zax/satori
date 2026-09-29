@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PublicationLease, SymbolRecord, SymbolRegistry } from "@zokizuan/satori-core";
+import type { PublicationLease, SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { ToolHandlers } from "./handlers.js";
 import type { PrepareSymbolContextSnapshotResult } from "./symbol-context-composer.js";
 

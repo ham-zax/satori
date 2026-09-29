@@ -5,7 +5,7 @@ import {
     RerankerRequestError,
     type Reranker,
     type RerankResult,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { CapabilityResolver } from "./capabilities.js";
 import {
     runSearchExecution,

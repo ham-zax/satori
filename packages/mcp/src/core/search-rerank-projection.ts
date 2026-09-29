@@ -5,11 +5,11 @@ import type {
     RelationshipRecord,
     SymbolRecord,
     SymbolRegistry,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     readStableRootBoundFileWindow,
     RootBoundFileWindowLimitError,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { readCurrentSourceEvidence } from "./current-source-symbols.js";
 import { READ_FILE_MAX_BYTES_DEFAULT } from "./published-source-reader.js";
 import { resolveSearchCandidateRole } from "./search-candidate-role.js";

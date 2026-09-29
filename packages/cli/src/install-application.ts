@@ -81,7 +81,7 @@ export function prepareLauncherInstall(
     const runtimePackageRoot = runtimeCommand.args.length === 1
         ? readContainingPackageIdentity(
             runtimeCommand.args[0],
-            "@zokizuan/satori-mcp",
+            "@satori-code/mcp",
         )?.packageRoot
         : undefined;
     const managedRuntimeRoot = runtimePackageRoot
@@ -237,7 +237,7 @@ export function installManagedRuntimeCandidate(
 }
 
 export const EXACT_PACKAGE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-export const CORE_PACKAGE_NAME = "@zokizuan/satori-core";
+export const CORE_PACKAGE_NAME = "@satori-code/core";
 
 export function requestedExactPackageVersion(packageSpecifier: string): string | null {
     const packageName = packageNameFromSpecifier(packageSpecifier);
@@ -345,7 +345,7 @@ export function exactRuntimeLanceDbProbe(runtimeCommand: ManagedRuntimeCommand):
     const runtimeEntry = runtimeCommand.args[0];
     return async (databasePath: string): Promise<void> => {
         const requireFromRuntime = createRequire(runtimeEntry);
-        const resolved = requireFromRuntime.resolve("@zokizuan/satori-core/lancedb");
+        const resolved = requireFromRuntime.resolve("@satori-code/core/lancedb");
         await probeLanceDbRuntime(databasePath, {
             loadLanceDb: () => import(pathToFileURL(resolved).href) as Promise<LanceDbModule>,
         });
@@ -359,7 +359,7 @@ type ExactRuntimeCoreModule = PotionRuntimeCoreModule & {
 async function loadExactRuntimeCore(runtimeCommand: ManagedRuntimeCommand): Promise<ExactRuntimeCoreModule> {
     const runtimeEntry = runtimeCommand.args[0];
     const requireFromRuntime = createRequire(runtimeEntry);
-    const resolved = requireFromRuntime.resolve("@zokizuan/satori-core");
+    const resolved = requireFromRuntime.resolve("@satori-code/core");
     return import(pathToFileURL(resolved).href) as Promise<ExactRuntimeCoreModule>;
 }
 

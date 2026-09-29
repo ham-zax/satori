@@ -1,5 +1,5 @@
 import type { SearchActionIntent } from "./search-response-helpers.js";
-import type { SymbolRecord } from "@zokizuan/satori-core";
+import type { SymbolRecord } from "@satori-code/core";
 import {
     repairSourceBackedPythonSpan,
 } from "./python-call-fallback.js";

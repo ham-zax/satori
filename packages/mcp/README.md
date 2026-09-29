@@ -1,33 +1,33 @@
-# @zokizuan/satori-mcp
+# @satori-code/mcp
 
 The MCP runtime behind [Satori](https://github.com/ham-zax/satori), a local-first code-intelligence layer for coding agents.
 
 Agents can ask a repository question in natural language and move from hybrid semantic + lexical search to owning symbols, exact source, structural context, references, relationship navigation, architecture evidence, change orientation, and freshness-aware index state. The live MCP registry exposes 11 tools, including bounded `trace_path` and ranking-independent `find_references`.
 
-Most users should install Satori through `@zokizuan/satori-cli`. The installer writes a stable local launcher, configures supported MCP clients, and selects the managed runtime. This package is the server/runtime surface, not a separate end-user product and not a client-configuration manager.
+Most users should install Satori through `@satori-code/cli`. The installer writes a stable local launcher, configures supported MCP clients, and selects the managed runtime. This package is the server/runtime surface, not a separate end-user product and not a client-configuration manager.
 
 ## Install
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install
-npx -y @zokizuan/satori-cli@latest doctor
+npx -y @satori-code/cli@latest install
+npx -y @satori-code/cli@latest doctor
 ```
 
 `install` auto-detects supported clients; use `--client all` only when you want
 to force configuration of all three. A persistent `satori` command is optional:
-`npm install -g @zokizuan/satori-cli@latest`.
+`npm install -g @satori-code/cli@latest`.
 
 The qualified default offline path supports Linux x64, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Explicit local Ollama and connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
 
 When installed through the CLI, compatible offline Potion + LanceDB clients
 share one private local host, provider/LanceDB state, and one Potion worker. Each
-client remains an independent MCP session. Direct `npx @zokizuan/satori-mcp`
+client remains an independent MCP session. Direct `npx @satori-code/mcp`
 execution is still isolated and does not join the managed host.
 
 Direct package execution is intended for inspection and custom harnesses:
 
 ```bash
-npx -y @zokizuan/satori-mcp@latest --help
+npx -y @satori-code/mcp@latest --help
 ```
 
 Do not use `npx` as the resident MCP command when the CLI installer supports your client; package resolution can exceed normal MCP startup timeouts.
@@ -221,9 +221,9 @@ its results are advisory and do not establish complete impact coverage.
 ## Development
 
 ```bash
-pnpm --filter @zokizuan/satori-mcp build
-pnpm --filter @zokizuan/satori-mcp test
-pnpm --filter @zokizuan/satori-mcp docs:check
+pnpm --filter @satori-code/mcp build
+pnpm --filter @satori-code/mcp test
+pnpm --filter @satori-code/mcp docs:check
 ```
 
 Node.js 22.13 or newer is required.

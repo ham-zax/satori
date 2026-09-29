@@ -1,4 +1,4 @@
-import { compareContractStrings, type SymbolRecord } from "@zokizuan/satori-core";
+import { compareContractStrings, type SymbolRecord } from "@satori-code/core";
 import type { CallGraphHint } from "./search-types.js";
 import type { FileOutlineResponseEnvelope, FileOutlineSymbolResult } from "./search-types.js";
 import {

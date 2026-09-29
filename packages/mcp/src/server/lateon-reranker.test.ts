@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { RerankExecutionDiagnostics } from "@zokizuan/satori-core";
+import type { RerankExecutionDiagnostics } from "@satori-code/core";
 import {
     LATEON_RUNTIME_PROFILE_IDS,
     LateOnOperationalError,

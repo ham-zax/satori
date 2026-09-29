@@ -202,8 +202,8 @@ If an index format, embedding identity, navigation representation, or rebuild-re
 Requirements for the packaged default path are Node.js 22.13+ and Linux x64. WSL2 is the primary qualified Windows path.
 
 ```bash
-npx -y @zokizuan/satori-cli@latest install
-npx -y @zokizuan/satori-cli@latest doctor
+npx -y @satori-code/cli@latest install
+npx -y @satori-code/cli@latest doctor
 ```
 
 The installer can configure supported Codex, Claude Code, and OpenCode clients.

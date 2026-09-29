@@ -7,7 +7,7 @@ import type {
     ResolutionClaim,
     SymbolRecord,
     SymbolRegistryManifest,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     ArchitecturePackageOwnershipError,
     buildArchitectureOverview,

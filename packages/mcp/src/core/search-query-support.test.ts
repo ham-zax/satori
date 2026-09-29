@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { withSourceMeasurementOperation } from '@zokizuan/satori-core';
+import { withSourceMeasurementOperation } from '@satori-code/core';
 import type { CapabilityResolver } from './capabilities.js';
 import { SearchQuerySupport } from './search-query-support.js';
 import type { SearchQuerySupportHost } from './search-query-support.js';

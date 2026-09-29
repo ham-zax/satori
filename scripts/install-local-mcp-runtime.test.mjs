@@ -163,7 +163,7 @@ function createLocalRuntimeFixture() {
   fs.mkdirSync(path.dirname(runtimeEntry), { recursive: true });
   fs.writeFileSync(runtimeEntry, '#!/usr/bin/env node\n', 'utf8');
   fs.writeFileSync(path.join(repoRoot, 'packages', 'mcp', 'package.json'), JSON.stringify({
-    name: '@zokizuan/satori-mcp',
+    name: '@satori-code/mcp',
     version: '9.9.9',
   }), 'utf8');
   return { repoRoot, homeDir, runtimeEntry };
@@ -350,9 +350,9 @@ test('installLocalMcpRuntime builds Core, MCP, and CLI before activation', async
 
     assert.deepEqual(buildCalls, [
       [pnpmCmd, ['semantic:verify']],
-      [pnpmCmd, ['--filter', '@zokizuan/satori-core', 'build']],
-      [pnpmCmd, ['--filter', '@zokizuan/satori-mcp', 'build:runtime']],
-      [pnpmCmd, ['--filter', '@zokizuan/satori-cli', 'build']],
+      [pnpmCmd, ['--filter', '@satori-code/core', 'build']],
+      [pnpmCmd, ['--filter', '@satori-code/mcp', 'build:runtime']],
+      [pnpmCmd, ['--filter', '@satori-code/cli', 'build']],
     ]);
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });

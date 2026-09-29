@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { PublicationRef } from '@zokizuan/satori-core';
+import type { PublicationRef } from '@satori-code/core';
 import {
     TrackedRootReadiness,
     type TrackedRootReadinessHost,

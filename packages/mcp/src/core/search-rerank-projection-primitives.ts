@@ -9,7 +9,7 @@
 import {
     compareContractStrings,
     isRepositoryRelativePath,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
     selectBoundedSource,

@@ -4,7 +4,7 @@ import {
     formatSymbolQualityMarker,
     readSymbolRegistrySidecar,
     type PublicationRef,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { McpTool, ToolContext, formatZodError } from "./types.js";
 import { classifyVectorBackendError, isMissingProviderConfigIssue } from "./setup-errors.js";
 import { getPublicationProofReader, validateCompletionProof } from "../core/completion-proof.js";

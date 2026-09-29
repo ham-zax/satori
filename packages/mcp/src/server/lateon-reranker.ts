@@ -10,7 +10,7 @@ import type {
     RerankExecutionDiagnostics,
     RerankOptions,
     RerankResult,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { serializeCanonicalJson } from "../core/canonical-json.js";
 import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
 import type {

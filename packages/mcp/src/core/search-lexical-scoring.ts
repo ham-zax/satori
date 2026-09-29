@@ -1,4 +1,4 @@
-import type { SemanticSearchResult } from "@zokizuan/satori-core";
+import type { SemanticSearchResult } from "@satori-code/core";
 
 export type SearchQueryIntent = "identifier" | "semantic" | "mixed" | "uncertain";
 export type SearchIntentConfidence = "high" | "medium" | "low";

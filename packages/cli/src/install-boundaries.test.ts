@@ -40,17 +40,17 @@ test("neutral install boundaries preserve configured targets and runtime paths",
     assert.strictEqual(facadeResolveLauncherPath, resolveLauncherPath);
     assert.strictEqual(facadeResolveManagedClientCommand, resolveManagedClientCommand);
 
-    const runtimePackageRoot = resolveRuntimePackageRoot(homeDir, "@zokizuan/satori-mcp@1.2.3");
+    const runtimePackageRoot = resolveRuntimePackageRoot(homeDir, "@satori-code/mcp@1.2.3");
     assert.equal(
         runtimePackageRoot,
         path.join(
             homeDir,
             ".satori",
             "mcp-runtime",
-            "@zokizuan-satori-mcp@1.2.3",
+            "@satori-code-mcp@1.2.3",
             "node_modules",
-            "@zokizuan",
-            "satori-mcp",
+            "@satori-code",
+            "mcp",
         ),
     );
     assert.equal(

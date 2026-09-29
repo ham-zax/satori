@@ -16,7 +16,7 @@ import {
     type SymbolRegistry,
     type SymbolStructuralAnalysis,
     type TraceRelationshipPathInput,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 
 import {
     repairSourceBackedPythonSpan,
@@ -119,7 +119,7 @@ type NavigationHandlersHost = {
         publicationId: string;
         navigationRoot: string;
     } | null;
-    getPublicationNavigationStatus(publication: PublicationRef): Promise<import("@zokizuan/satori-core").PublicationNavigationStatus>;
+    getPublicationNavigationStatus(publication: PublicationRef): Promise<import("@satori-code/core").PublicationNavigationStatus>;
     tracePath?: (input: TraceRelationshipPathInput) => ReturnType<typeof traceRelationshipPath>;
     loadPreparedNavigationSymbolsByFile(
         preparedRead: Extract<TrackedRootReadinessState, { state: "ready" }>,

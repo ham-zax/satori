@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { PublicationNavigationStatus, PublicationRef } from "@zokizuan/satori-core";
+import type { PublicationNavigationStatus, PublicationRef } from "@satori-code/core";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS } from "../config.js";
 import { requireAbsoluteFilesystemPath, trackCodebasePath } from "../utils.js";
 import type { CompletionProofReason } from "./completion-proof.js";

@@ -5,7 +5,7 @@ import type {
     RelationshipRecord,
     SymbolRecord,
     TraceRelationshipPathInput,
-} from '@zokizuan/satori-core';
+} from '@satori-code/core';
 import { NavigationHandlers } from './navigation-handlers.js';
 
 type Host = ConstructorParameters<typeof NavigationHandlers>[0];

@@ -76,10 +76,10 @@ export function fixtureLateOnRuntime(homeDir: string): {
     runtimeCommand: { command: string; args: string[] };
     fetchImpl: typeof fetch;
 } {
-    const mcpRoot = path.join(homeDir, "fixture-runtime", "node_modules", "@zokizuan", "satori-mcp");
+    const mcpRoot = path.join(homeDir, "fixture-runtime", "node_modules", "@satori-code", "mcp");
     fs.mkdirSync(path.join(mcpRoot, "dist"), { recursive: true });
     fs.writeFileSync(path.join(mcpRoot, "package.json"), JSON.stringify({
-        name: "@zokizuan/satori-mcp",
+        name: "@satori-code/mcp",
         version: "0.0.0-test",
         bin: { satori: "dist/index.js" },
     }), "utf8");

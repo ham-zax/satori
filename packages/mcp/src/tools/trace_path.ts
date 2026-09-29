@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TRACE_PATH_RELATIONSHIP_KINDS } from '@zokizuan/satori-core';
+import { TRACE_PATH_RELATIONSHIP_KINDS } from '@satori-code/core';
 import { requireAbsoluteFilesystemPath } from '../utils.js';
 import { WorkspaceAuthorizationError } from '../core/session-workspace-policy.js';
 import {

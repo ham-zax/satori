@@ -14,11 +14,11 @@ import {
 
 function fakeRuntime(root: string, wasm: Buffer): string {
     const runtime = path.join(root, "runtime");
-    const core = path.join(runtime, "node_modules", "@zokizuan", "satori-core");
+    const core = path.join(runtime, "node_modules", "@satori-code", "core");
     fs.mkdirSync(path.join(core, "dist"), { recursive: true });
     fs.mkdirSync(path.join(core, "assets", "cbm-extractor"), { recursive: true });
-    fs.writeFileSync(path.join(runtime, "package.json"), JSON.stringify({ name: "@zokizuan/satori-mcp", version: "1.0.0" }));
-    fs.writeFileSync(path.join(core, "package.json"), JSON.stringify({ name: "@zokizuan/satori-core", version: "1.0.0", main: "dist/index.js" }));
+    fs.writeFileSync(path.join(runtime, "package.json"), JSON.stringify({ name: "@satori-code/mcp", version: "1.0.0" }));
+    fs.writeFileSync(path.join(core, "package.json"), JSON.stringify({ name: "@satori-code/core", version: "1.0.0", main: "dist/index.js" }));
     fs.writeFileSync(path.join(core, "dist", "index.js"), "");
     fs.writeFileSync(path.join(core, "assets", "cbm-extractor", "manifest.json"), JSON.stringify({
         modules: [

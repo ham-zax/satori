@@ -179,7 +179,7 @@ export async function executeManagedRuntimeUpgrade(
         );
     }
 
-    const mcpIdentity = readContainingPackageIdentity(runtimeEntry, "@zokizuan/satori-mcp");
+    const mcpIdentity = readContainingPackageIdentity(runtimeEntry, "@satori-code/mcp");
     const currentRuntimeRoot = mcpIdentity
         ? resolveContainingManagedRuntimeRoot(homeDir, mcpIdentity.packageRoot)
         : null;

@@ -100,7 +100,7 @@ function readPackageVersion(runtimeEntry: string): {
                 version?: unknown;
             };
             if (
-                parsed.name === "@zokizuan/satori-mcp"
+                parsed.name === "@satori-code/mcp"
                 && typeof parsed.version === "string"
                 && parsed.version.length > 0
             ) {
@@ -114,7 +114,7 @@ function readPackageVersion(runtimeEntry: string): {
         if (parent === current) break;
         current = parent;
     }
-    throw new Error(`Cannot locate @zokizuan/satori-mcp package for '${runtimeEntry}'.`);
+    throw new Error(`Cannot locate @satori-code/mcp package for '${runtimeEntry}'.`);
 }
 
 export function isSharedOfflineRuntimeEligible(

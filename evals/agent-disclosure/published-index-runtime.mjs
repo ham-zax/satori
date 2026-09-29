@@ -50,8 +50,8 @@ function blockAsync(prototype, method, operation) {
 }
 
 const requireFromRuntime = createRequire(entryPath);
-const coreEntry = requireFromRuntime.resolve("@zokizuan/satori-core");
-const lanceEntry = requireFromRuntime.resolve("@zokizuan/satori-core/lancedb");
+const coreEntry = requireFromRuntime.resolve("@satori-code/core");
+const lanceEntry = requireFromRuntime.resolve("@satori-code/core/lancedb");
 const syncEntry = path.join(path.dirname(entryPath), "core", "sync.js");
 const resultSetCacheEntry = path.join(path.dirname(entryPath), "core", "search-result-set-cache.js");
 const [

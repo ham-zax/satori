@@ -72,7 +72,7 @@ function createRunner({ fixtures = {}, viewVersion, viewRaw, viewError } = {}) {
 function localFixture(version, pins = {}) {
   return makeFixture({
     'package/package.json': JSON.stringify({
-      name: '@zokizuan/satori-core',
+      name: '@satori-code/core',
       version,
       dependencies: pins,
     }),
@@ -91,18 +91,18 @@ test('local pack receives exact package name and an isolated destination', () =>
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-cwd-'));
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
   const fixture = localFixture('3.6.0');
-  const runner = createRunner({ fixtures: { 'zokizuan-satori-core-1.0.0.tgz': fixture } });
+  const runner = createRunner({ fixtures: { 'satori-code-core-1.0.0.tgz': fixture } });
   const result = packLocalPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     cwd,
     workDirectory,
     execFileSyncImpl: runner,
   });
   const packCall = runner.calls.find((call) => call.command === 'pnpm');
-  assert.deepEqual(packCall.args.slice(0, 4), ['--filter', '@zokizuan/satori-core', 'pack', '--pack-destination']);
+  assert.deepEqual(packCall.args.slice(0, 4), ['--filter', '@satori-code/core', 'pack', '--pack-destination']);
   assert.ok(packCall.args[4].startsWith(workDirectory));
   assert.ok(packCall.args[4].endsWith(path.join('pack')));
-  assert.equal(result.manifest.name, '@zokizuan/satori-core');
+  assert.equal(result.manifest.name, '@satori-code/core');
   assert.equal(result.manifest.version, '3.6.0');
   assert.ok(result.snapshot.some((entry) => entry.path === 'package.json'));
 });
@@ -110,9 +110,9 @@ test('local pack receives exact package name and an isolated destination', () =>
 test('exactly one new tarball is required', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-cwd-'));
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
-  const runner = createRunner({ fixtures: { 'zokizuan-satori-core-1.0.0.tgz': localFixture('3.6.0') } });
+  const runner = createRunner({ fixtures: { 'satori-code-core-1.0.0.tgz': localFixture('3.6.0') } });
   const result = packLocalPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     cwd,
     workDirectory,
     execFileSyncImpl: runner,
@@ -125,16 +125,16 @@ test('an older tarball already in the pack directory is ignored', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
   const packDirectory = path.join(workDirectory, 'pack');
   fs.mkdirSync(packDirectory, { recursive: true });
-  fs.writeFileSync(path.join(packDirectory, 'zokizuan-satori-core-0.9.0.tgz'), 'old');
-  const runner = createRunner({ fixtures: { 'zokizuan-satori-core-1.0.0.tgz': localFixture('3.6.0') } });
+  fs.writeFileSync(path.join(packDirectory, 'satori-code-core-0.9.0.tgz'), 'old');
+  const runner = createRunner({ fixtures: { 'satori-code-core-1.0.0.tgz': localFixture('3.6.0') } });
   const result = packLocalPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     cwd,
     workDirectory,
     execFileSyncImpl: runner,
   });
   assert.equal(result.manifest.version, '3.6.0');
-  assert.equal(fs.readFileSync(path.join(packDirectory, 'zokizuan-satori-core-0.9.0.tgz'), 'utf8'), 'old');
+  assert.equal(fs.readFileSync(path.join(packDirectory, 'satori-code-core-0.9.0.tgz'), 'utf8'), 'old');
 });
 
 test('no new tarball fails', () => {
@@ -148,7 +148,7 @@ test('no new tarball fails', () => {
     throw new Error(`unexpected command ${command}`);
   };
   assert.throws(
-    () => packLocalPackage({ packageName: '@zokizuan/satori-core', cwd, workDirectory, execFileSyncImpl: runner }),
+    () => packLocalPackage({ packageName: '@satori-code/core', cwd, workDirectory, execFileSyncImpl: runner }),
     /produced no tarball/
   );
 });
@@ -167,7 +167,7 @@ test('multiple new tarballs fail', () => {
     throw new Error(`unexpected command ${command}`);
   };
   assert.throws(
-    () => packLocalPackage({ packageName: '@zokizuan/satori-core', cwd, workDirectory, execFileSyncImpl: runner }),
+    () => packLocalPackage({ packageName: '@satori-code/core', cwd, workDirectory, execFileSyncImpl: runner }),
     /produced 2 tarballs/
   );
 });
@@ -175,10 +175,10 @@ test('multiple new tarballs fail', () => {
 test('npm exact version not found returns unpublished', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
   const runner = createRunner({
-    viewError: { status: 1, stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@zokizuan%2fsatori-core/3.6.0 - Not found' },
+    viewError: { status: 1, stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@satori-code%2fcore/3.6.0 - Not found' },
   });
   const result = fetchPublishedPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     version: '3.6.0',
     workDirectory,
     execFileSyncImpl: runner,
@@ -192,14 +192,14 @@ test('registry or network failure is not interpreted as unpublished', () => {
     viewError: { status: 1, stderr: 'npm error code ETIMEDOUT\nnpm error request to https://registry.npmjs.org failed' },
   });
   assert.throws(
-    () => fetchPublishedPackage({ packageName: '@zokizuan/satori-core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
-    /Cannot verify @zokizuan\/satori-core@3\.6\.0 on the registry/
+    () => fetchPublishedPackage({ packageName: '@satori-code/core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
+    /Cannot verify @satori-code\/core@3\.6\.0 on the registry/
   );
   const authRunner = createRunner({
     viewError: { status: 1, stderr: 'npm error code E401\nnpm error Unable to authenticate' },
   });
   assert.throws(
-    () => fetchPublishedPackage({ packageName: '@zokizuan/satori-core', version: '3.6.0', workDirectory, execFileSyncImpl: authRunner }),
+    () => fetchPublishedPackage({ packageName: '@satori-code/core', version: '3.6.0', workDirectory, execFileSyncImpl: authRunner }),
     /Cannot verify/
   );
 });
@@ -208,20 +208,20 @@ test('malformed npm output fails', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
   const runner = createRunner({ viewRaw: 'not-json' });
   assert.throws(
-    () => fetchPublishedPackage({ packageName: '@zokizuan/satori-core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
+    () => fetchPublishedPackage({ packageName: '@satori-code/core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
     /Malformed npm view output/
   );
 });
 
 test('published package lookup accepts npm 12 single-result arrays', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
-  const fixture = publishedFixture('@zokizuan/satori-core', '3.6.0', {});
+  const fixture = publishedFixture('@satori-code/core', '3.6.0', {});
   const runner = createRunner({
     viewRaw: JSON.stringify(['3.6.0']),
-    fixtures: { 'zokizuan-satori-core-3.6.0.tgz': fixture },
+    fixtures: { 'satori-code-core-3.6.0.tgz': fixture },
   });
   const result = fetchPublishedPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     version: '3.6.0',
     workDirectory,
     execFileSyncImpl: runner,
@@ -231,27 +231,27 @@ test('published package lookup accepts npm 12 single-result arrays', () => {
 
 test('published package identity mismatch fails', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
-  const fixture = publishedFixture('@zokizuan/satori-wrong', '3.6.0', {});
+  const fixture = publishedFixture('@satori-code/wrong', '3.6.0', {});
   const runner = createRunner({
     viewVersion: '3.6.0',
-    fixtures: { 'zokizuan-satori-core-3.6.0.tgz': fixture },
+    fixtures: { 'satori-code-core-3.6.0.tgz': fixture },
   });
   assert.throws(
-    () => fetchPublishedPackage({ packageName: '@zokizuan/satori-core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
-    /does not match requested @zokizuan\/satori-core@3\.6\.0/
+    () => fetchPublishedPackage({ packageName: '@satori-code/core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
+    /does not match requested @satori-code\/core@3\.6\.0/
   );
 });
 
 test('published manifest with wrong version fails', () => {
   const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-work-'));
-  const fixture = publishedFixture('@zokizuan/satori-core', '3.5.0', {});
+  const fixture = publishedFixture('@satori-code/core', '3.5.0', {});
   const runner = createRunner({
     viewVersion: '3.6.0',
-    fixtures: { 'zokizuan-satori-core-3.6.0.tgz': fixture },
+    fixtures: { 'satori-code-core-3.6.0.tgz': fixture },
   });
   assert.throws(
-    () => fetchPublishedPackage({ packageName: '@zokizuan/satori-core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
-    /does not match requested @zokizuan\/satori-core@3\.6\.0/
+    () => fetchPublishedPackage({ packageName: '@satori-code/core', version: '3.6.0', workDirectory, execFileSyncImpl: runner }),
+    /does not match requested @satori-code\/core@3\.6\.0/
   );
 });
 
@@ -299,26 +299,26 @@ test('local and published snapshots share one normalization path', () => {
   const localWork = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-local-'));
   const publishedWork = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pkg-published-'));
   const localFixture = makeFixture({
-    'package/package.json': JSON.stringify({ name: '@zokizuan/satori-mcp', version: '6.8.0', dependencies: { '@zokizuan/satori-core': '3.6.0' } }),
+    'package/package.json': JSON.stringify({ name: '@satori-code/mcp', version: '6.8.0', dependencies: { '@satori-code/core': '3.6.0' } }),
     'package/dist/server.js': 'serve();\n',
   });
   const publishedFixtureTree = makeFixture({
-    'package/package.json': JSON.stringify({ name: '@zokizuan/satori-mcp', version: '6.8.0', dependencies: { '@zokizuan/satori-core': '3.6.0' } }),
+    'package/package.json': JSON.stringify({ name: '@satori-code/mcp', version: '6.8.0', dependencies: { '@satori-code/core': '3.6.0' } }),
     'package/dist/server.js': 'serve();\n',
   });
-  const localRunner = createRunner({ fixtures: { 'zokizuan-satori-mcp-1.0.0.tgz': localFixture } });
+  const localRunner = createRunner({ fixtures: { 'satori-code-mcp-1.0.0.tgz': localFixture } });
   const publishedRunner = createRunner({
     viewVersion: '6.8.0',
-    fixtures: { 'zokizuan-satori-mcp-6.8.0.tgz': publishedFixtureTree },
+    fixtures: { 'satori-code-mcp-6.8.0.tgz': publishedFixtureTree },
   });
   const local = packLocalPackage({
-    packageName: '@zokizuan/satori-mcp',
+    packageName: '@satori-code/mcp',
     cwd,
     workDirectory: localWork,
     execFileSyncImpl: localRunner,
   });
   const published = fetchPublishedPackage({
-    packageName: '@zokizuan/satori-mcp',
+    packageName: '@satori-code/mcp',
     version: '6.8.0',
     workDirectory: publishedWork,
     execFileSyncImpl: publishedRunner,
@@ -331,7 +331,7 @@ test('local and published snapshots share one normalization path', () => {
 test('loadPackedPackageSnapshot reads manifest and snapshot together', () => {
   const fixture = localFixture('3.6.0');
   const { manifest, snapshot } = loadPackedPackageSnapshot({ rootDirectory: path.join(fixture, 'package') });
-  assert.equal(manifest.name, '@zokizuan/satori-core');
+  assert.equal(manifest.name, '@satori-code/core');
   assert.equal(manifest.version, '3.6.0');
   assert.ok(snapshot.length >= 2);
   assert.ok(snapshot.some((entry) => entry.path === 'dist/index.js'));
@@ -344,18 +344,18 @@ test('pnpm pack keeps the original environment while npm probes are sanitized', 
   const runner = createRunner({
     viewVersion: '3.6.0',
     fixtures: {
-      'zokizuan-satori-core-1.0.0.tgz': fixture,
-      'zokizuan-satori-core-3.6.0.tgz': fixture,
+      'satori-code-core-1.0.0.tgz': fixture,
+      'satori-code-core-3.6.0.tgz': fixture,
     },
   });
   packLocalPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     cwd,
     workDirectory: work,
     execFileSyncImpl: runner,
   });
   fetchPublishedPackage({
-    packageName: '@zokizuan/satori-core',
+    packageName: '@satori-code/core',
     version: '3.6.0',
     workDirectory: work,
     execFileSyncImpl: runner,

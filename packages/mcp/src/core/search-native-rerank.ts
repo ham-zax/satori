@@ -1,4 +1,4 @@
-import type { RerankResult } from "@zokizuan/satori-core";
+import type { RerankResult } from "@satori-code/core";
 
 export type ValidatedNativeRerankItem = Readonly<{
     candidateId: string;

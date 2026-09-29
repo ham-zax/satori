@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import test from "node:test";
-import type { Reranker, RerankResult } from "@zokizuan/satori-core";
+import type { Reranker, RerankResult } from "@satori-code/core";
 import type { CapabilityResolver } from "./capabilities.js";
 import {
     runSearchExecution,

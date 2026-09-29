@@ -62,7 +62,7 @@ When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://gith
    ```
 5. **Run Test Suites**:
    ```bash
-   pnpm --filter @zokizuan/satori-core test
+   pnpm --filter @satori-code/core test
    ```
 
 ---

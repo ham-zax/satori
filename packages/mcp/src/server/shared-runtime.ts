@@ -5,8 +5,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { Readable, Writable } from "node:stream";
 import os from "node:os";
 import path from "node:path";
-import { withSourceMeasurementOperation } from "@zokizuan/satori-core";
-import { resolveRuntimeOwnerStateDir } from "@zokizuan/satori-core/integration";
+import { withSourceMeasurementOperation } from "@satori-code/core";
+import { resolveRuntimeOwnerStateDir } from "@satori-code/core/integration";
 import type { ContextMcpConfig, IndexFingerprint } from "../config.js";
 import { CapabilityResolver } from "../core/capabilities.js";
 import {
@@ -18,7 +18,7 @@ import {
     RootMutationRuntime,
     createSharedPublicationRuntime,
     type SharedPublicationRuntime,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 import {
     RuntimeOwnerRegistry,
     buildRuntimeOwnerIdentityFromConfig,

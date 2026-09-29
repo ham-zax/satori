@@ -3,7 +3,7 @@ import test from "node:test";
 import type {
     PublicationLease,
     PublicationPackageOwnership,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { NavigationHandlers } from "./navigation-handlers.js";
 
 type NavigationHandlersHost = ConstructorParameters<typeof NavigationHandlers>[0];

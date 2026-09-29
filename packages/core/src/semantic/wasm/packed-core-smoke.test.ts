@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
-test('Packed @zokizuan/satori-core contains semantic engine assets and executes WASM Go analysis in clean temp dir', async () => {
+test('Packed @satori-code/core contains semantic engine assets and executes WASM Go analysis in clean temp dir', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-packed-core-test-'));
     try {
         const corePkgDir = path.resolve(__dirname, '../../..');
@@ -20,7 +20,7 @@ test('Packed @zokizuan/satori-core contains semantic engine assets and executes 
             });
         }
 
-        // Pack @zokizuan/satori-core to temp dir
+        // Pack @satori-code/core to temp dir
         const packOutput = execFileSync('pnpm', ['pack', '--pack-destination', tempDir], {
             cwd: corePkgDir,
             encoding: 'utf8',

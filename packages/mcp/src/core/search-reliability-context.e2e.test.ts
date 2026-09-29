@@ -11,8 +11,8 @@ import {
     RerankerRequestError,
     type Reranker,
     type RerankResult,
-} from "@zokizuan/satori-core";
-import { resolveRuntimeOwnerStateDir } from "@zokizuan/satori-core/integration";
+} from "@satori-code/core";
+import { resolveRuntimeOwnerStateDir } from "@satori-code/core/integration";
 import type { IndexFingerprint } from "../config.js";
 import { DEFAULT_MANAGE_RETRY_AFTER_MS } from "../config.js";
 import type { CapabilityResolver } from "./capabilities.js";

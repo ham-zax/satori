@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { SymbolRecord } from "@zokizuan/satori-core";
+import type { SymbolRecord } from "@satori-code/core";
 import {
     buildCanonicalSymbolRegistryView,
     projectCanonicalSymbolIdentity,

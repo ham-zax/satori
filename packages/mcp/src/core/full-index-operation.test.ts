@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RootMutationCancelledError } from "@zokizuan/satori-core/integration";
+import { RootMutationCancelledError } from "@satori-code/core/integration";
 import { FullIndexOperation } from "./full-index-operation.js";
 
 const policy = {

@@ -35,7 +35,7 @@ async function installFixture(homeDir: string) {
         runtime: "voyage",
     }, {
         homeDir,
-        packageSpecifier: "@zokizuan/satori-mcp@4.11.17",
+        packageSpecifier: "@satori-code/mcp@4.11.17",
         runtimeCommand: { command: process.execPath, args: [path.join(homeDir, "runtime.js")] },
         preflightRunner: async () => ({
             runtimeEnvironment: Object.freeze({

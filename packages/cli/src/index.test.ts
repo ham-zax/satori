@@ -172,10 +172,10 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
 }
 
 function fakeInstallRuntimeCommand(homeDir: string) {
-    const packageRoot = path.join(homeDir, ".satori", "mcp-runtime", "fake", "node_modules", "@zokizuan", "satori-mcp");
+    const packageRoot = path.join(homeDir, ".satori", "mcp-runtime", "fake", "node_modules", "@satori-code", "mcp");
     fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-        name: "@zokizuan/satori-mcp",
+        name: "@satori-code/mcp",
         version: "0.0.0-test",
         bin: { satori: "dist/index.js" },
     }), "utf8");
@@ -196,11 +196,11 @@ test("runCli defaults to human help and preserves structured help on request", a
     });
 
     assert.equal(exitCode, 0);
-    assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started \(no global install required\):\n {2}npx -y @zokizuan\/satori-cli@latest install/m);
+    assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started \(no global install required\):\n {2}npx -y @satori-code\/cli@latest install/m);
     assert.doesNotMatch(io.read().stdout, /--install-guidance-hook/);
     assert.match(io.read().stdout, /Index \/absolute\/path\/to\/repo with Satori/);
     assert.match(io.read().stdout, /install --runtime offline --reranker none/);
-    assert.match(io.read().stdout, /npm install -g @zokizuan\/satori-cli@latest/);
+    assert.match(io.read().stdout, /npm install -g @satori-code\/cli@latest/);
     assert.match(io.read().stdout, /-v, --version\s+Show installed CLI, MCP, and Core versions/);
     assert.match(io.read().stdout, /terminate\s+Stop all running Satori MCP servers/);
     assert.doesNotMatch(io.read().stdout, /legacy/i);
@@ -284,9 +284,9 @@ test("runCli terminate preserves a structured error receipt", async () => {
 
 test("runCli version shortcuts report the installed CLI, MCP, and Core set", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const noLauncherState = (): RuntimeVersionState => ({
         cliVersion: CLI_PACKAGE_VERSION,
@@ -324,7 +324,7 @@ test("runCli version shortcuts report the installed CLI, MCP, and Core set", asy
 
     assert.equal(jsonExitCode, 0);
     assert.deepEqual(JSON.parse(jsonIo.read().stdout), {
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         cli: "satori",
         version: CLI_PACKAGE_VERSION,
         cliVersion: CLI_PACKAGE_VERSION,
@@ -340,9 +340,9 @@ test("runCli version shortcuts report the installed CLI, MCP, and Core set", asy
 });
 test("runCli version distinguishes the bundled release from the active managed runtime", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const io = captureIo();
     const exitCode = await runCli(["-v"], {
@@ -369,9 +369,9 @@ test("runCli version distinguishes the bundled release from the active managed r
 
 test("runCli version omits the bundle line when bundled and active runtimes match", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const io = captureIo();
     const exitCode = await runCli(["-v"], {
@@ -398,9 +398,9 @@ test("runCli version omits the bundle line when bundled and active runtimes matc
 
 test("runCli version shows both runtimes when only Core differs", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const io = captureIo();
     const exitCode = await runCli(["-v"], {
@@ -427,9 +427,9 @@ test("runCli version shows both runtimes when only Core differs", async () => {
 
 test("runCli version JSON never combines active MCP with bundled Core", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const io = captureIo();
     const exitCode = await runCli(["--format", "json", "--version"], {
@@ -456,9 +456,9 @@ test("runCli version JSON never combines active MCP with bundled Core", async ()
 
 test("runCli version reports a malformed launcher without claiming an active runtime", async () => {
     const versions = [
-        { name: "@zokizuan/satori-cli", version: CLI_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-mcp", version: MCP_PACKAGE_VERSION, source: "test" },
-        { name: "@zokizuan/satori-core", version: CORE_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/cli", version: CLI_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/mcp", version: MCP_PACKAGE_VERSION, source: "test" },
+        { name: "@satori-code/core", version: CORE_PACKAGE_VERSION, source: "test" },
     ];
     const io = captureIo();
     const exitCode = await runCli(["-v"], {
@@ -586,7 +586,7 @@ test("runCli install reports progress and the first repository action", async ()
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir, SATORI_LATEON_MODEL_PATH: lateOnModelPath },
-            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installabilityVerifier: () => "@satori-code/mcp@4.4.1",
             installPreflightRunner: async () => ({
                 runtimeEnvironment: Object.freeze({
                     SATORI_RUNTIME_PROFILE: "offline",
@@ -623,7 +623,7 @@ test("runCli install reports progress and the first repository action", async ()
         assert.match(stdout, /Verification: passed \(1 check\)/);
         assert.match(stdout, /Restart Codex to load Satori/);
         assert.match(stdout, /Then ask your agent: Index \/absolute\/path\/to\/repo with Satori/);
-        assert.match(stdout, /Update later with `npx -y @zokizuan\/satori-cli@latest upgrade`/);
+        assert.match(stdout, /Update later with `npx -y @satori-code\/cli@latest upgrade`/);
         assert.equal(stderr, "Configuring your coding agents...\nVerifying Satori launcher and client configuration...\n");
         assert.doesNotMatch(stdout, /noisy startup detail|runtimeEnvironment|configPath/);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), true);
@@ -648,7 +648,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             env: { HOME: homeDir },
-            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installabilityVerifier: () => "@satori-code/mcp@4.4.1",
             installRuntimeCommand: fakeInstallRuntimeCommand(homeDir),
             installPotionModelPath: "/tmp/satori-test-potion-model",
             installCbmExtendedPath: "/tmp/satori-test-cbm-extended",
@@ -661,7 +661,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
         assert.match(io.read().stderr, /LateOn D32 model preflight failed: acquisition unavailable/);
         assert.match(
             io.read().stderr,
-            /Retry: npx -y @zokizuan\/satori-cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal$/m,
+            /Retry: npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal$/m,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -681,7 +681,7 @@ test("runCli rejects an empty automatic client selection before package verifica
             env: { HOME: homeDir, PATH: "" },
             installabilityVerifier: () => {
                 installabilityCalls += 1;
-                return "@zokizuan/satori-mcp@4.4.1";
+                return "@satori-code/mcp@4.4.1";
             },
             installPreflightRunner: async () => {
                 preflightCalls += 1;
@@ -694,7 +694,7 @@ test("runCli rejects an empty automatic client selection before package verifica
         assert.equal(preflightCalls, 0);
         assert.equal(fs.existsSync(path.join(homeDir, ".satori")), false);
         assert.match(io.read().stderr, /E_NO_CLIENTS_DETECTED/);
-        assert.match(io.read().stderr, /npx -y @zokizuan\/satori-cli@latest install --client all/);
+        assert.match(io.read().stderr, /npx -y @satori-code\/cli@latest install --client all/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -711,9 +711,9 @@ test("runCli upgrade updates the global CLI before delegating runtime activation
         env: { HOME: "/home/test" },
         invokedScriptPath: "/global/bin/satori",
         upgradeTargetResolver: () => ({
-            cliPackageSpecifier: "@zokizuan/satori-cli@99.0.0",
+            cliPackageSpecifier: "@satori-code/cli@99.0.0",
             cliVersion: "99.0.0",
-            mcpPackageSpecifier: "@zokizuan/satori-mcp@99.0.0",
+            mcpPackageSpecifier: "@satori-code/mcp@99.0.0",
             mcpVersion: "99.0.0",
             coreVersion: "99.0.0",
         }),
@@ -755,9 +755,9 @@ test("runCli upgrade reports the complete CLI, MCP, and Core result", async () =
             SATORI_UPGRADE_FROM_CLI_VERSION: "1.2.0",
         },
         upgradeTargetResolver: () => ({
-            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliPackageSpecifier: `@satori-code/cli@${CLI_PACKAGE_VERSION}`,
             cliVersion: CLI_PACKAGE_VERSION,
-            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
             mcpVersion: "6.2.0",
             coreVersion: "3.1.0",
         }),
@@ -772,7 +772,7 @@ test("runCli upgrade reports the complete CLI, MCP, and Core result", async () =
                 toMcpVersion: "6.2.0",
                 fromCoreVersion: "3.0.0",
                 toCoreVersion: "3.1.0",
-                packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+                packageSpecifier: "@satori-code/mcp@6.2.0",
                 configuredClients: ["codex"],
                 restartRequired: true,
             };
@@ -807,9 +807,9 @@ test("runCli reports a completed CLI update separately when runtime activation f
             SATORI_UPGRADE_FROM_CLI_VERSION: "1.2.0",
         },
         upgradeTargetResolver: () => ({
-            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliPackageSpecifier: `@satori-code/cli@${CLI_PACKAGE_VERSION}`,
             cliVersion: CLI_PACKAGE_VERSION,
-            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
             mcpVersion: "6.2.0",
             coreVersion: "3.1.0",
         }),
@@ -841,9 +841,9 @@ test("runCli reports the installed CLI version when delegated upgrade cannot sta
         diagnosticsPath: null,
         env: { HOME: "/home/test" },
         upgradeTargetResolver: () => ({
-            cliPackageSpecifier: `@zokizuan/satori-cli@${FUTURE_CLI_VERSION}`,
+            cliPackageSpecifier: `@satori-code/cli@${FUTURE_CLI_VERSION}`,
             cliVersion: FUTURE_CLI_VERSION,
-            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.3.0",
+            mcpPackageSpecifier: "@satori-code/mcp@6.3.0",
             mcpVersion: "6.3.0",
             coreVersion: "3.2.0",
         }),
@@ -880,9 +880,9 @@ test("runCli update alias preserves the structured upgrade receipt", async () =>
         diagnosticsPath: null,
         env: { HOME: "/home/test" },
         upgradeTargetResolver: () => ({
-            cliPackageSpecifier: `@zokizuan/satori-cli@${CLI_PACKAGE_VERSION}`,
+            cliPackageSpecifier: `@satori-code/cli@${CLI_PACKAGE_VERSION}`,
             cliVersion: CLI_PACKAGE_VERSION,
-            mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
             mcpVersion: "6.2.0",
             coreVersion: "3.1.0",
         }),
@@ -893,7 +893,7 @@ test("runCli update alias preserves the structured upgrade receipt", async () =>
             toMcpVersion: "6.2.0",
             fromCoreVersion: "3.1.0",
             toCoreVersion: "3.1.0",
-            packageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+            packageSpecifier: "@satori-code/mcp@6.2.0",
             configuredClients: [],
             restartRequired: false,
         }),
@@ -918,7 +918,7 @@ test("runCli install preserves the structured receipt when JSON is requested", a
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir, SATORI_LATEON_MODEL_PATH: lateOnModelPath },
-            installabilityVerifier: () => "@zokizuan/satori-mcp@4.4.1",
+            installabilityVerifier: () => "@satori-code/mcp@4.4.1",
             installPreflightRunner: async () => ({
                 runtimeEnvironment: Object.freeze({ SATORI_RUNTIME_PROFILE: "offline" }),
             }),
@@ -962,7 +962,7 @@ test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem
                 diagnosticsPath: null,
                 installabilityVerifier: () => {
                     installabilityCalls += 1;
-                    return "@zokizuan/satori-mcp@4.4.1";
+                    return "@satori-code/mcp@4.4.1";
                 },
                 installPreflightRunner: async () => {
                     preflightCalls += 1;
@@ -1065,7 +1065,7 @@ test("runCli doctor defaults to a human summary without starting an MCP session"
         doctorRunner: ({ env }) => ({
             status: env.MILVUS_ADDRESS ? "ok" : "error",
             packageVersions: [
-                { name: "@zokizuan/satori-cli", version: "0.0.0", source: "test" },
+                { name: "@satori-code/cli", version: "0.0.0", source: "test" },
             ],
             packageVersionNote: "independent package versions",
             checks: [
@@ -1181,7 +1181,7 @@ test("runCli doctor reports stale MCP clients independently without changing JSO
             message: "codex config does not point exactly to the managed launcher. opencode config does not point exactly to the managed launcher.",
         }],
         nextSteps: [
-            "Rerun npx -y @zokizuan/satori-cli@latest install for each stale configured MCP client, then restart it.",
+            "Rerun npx -y @satori-code/cli@latest install for each stale configured MCP client, then restart it.",
             "Restart your MCP client after changing Satori environment variables.",
         ],
         managedRuntime: null,
@@ -1274,7 +1274,7 @@ test("runCli doctor text mode hides sensitive diagnostic details", async () => {
         doctorRunner: () => ({
             status: "warning",
             packageVersions: [
-                { name: "@zokizuan/satori-cli", version: "0.0.0", source: "test" },
+                { name: "@satori-code/cli", version: "0.0.0", source: "test" },
             ],
             packageVersionNote: "independent package versions",
             checks: [
@@ -1310,7 +1310,7 @@ test("runCli doctor verbose mode includes complete support details", async () =>
         doctorRunner: () => ({
             status: "warning",
             packageVersions: [
-                { name: "@zokizuan/satori-cli", version: "1.0.0", source: "/private/npm/package.json" },
+                { name: "@satori-code/cli", version: "1.0.0", source: "/private/npm/package.json" },
             ],
             packageVersionNote: "independent package versions",
             checks: [{
@@ -1349,7 +1349,7 @@ test("runCli install fails preflight with explicit package guidance before writi
             writeStderr: io.writeStderr,
             env: { ...process.env, HOME: homeDir },
             installabilityVerifier: () => {
-                throw new Error("Cannot install @zokizuan/satori-mcp@4.4.1 because required dependency @zokizuan/satori-core@1.1.1 is not published on npm.");
+                throw new Error("Cannot install @satori-code/mcp@4.4.1 because required dependency @satori-code/core@1.1.1 is not published on npm.");
             },
             startupTimeoutMs: 100,
             callTimeoutMs: 100,
@@ -1358,7 +1358,7 @@ test("runCli install fails preflight with explicit package guidance before writi
         const { stdout, stderr } = io.read();
         assert.equal(exitCode, 3);
         assert.equal(stdout.trim(), "");
-        assert.equal(stderr.includes("@zokizuan/satori-core@1.1.1 is not published on npm"), true);
+        assert.equal(stderr.includes("@satori-code/core@1.1.1 is not published on npm"), true);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex", "config.toml")), false);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });

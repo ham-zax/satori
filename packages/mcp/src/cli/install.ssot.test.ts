@@ -36,7 +36,7 @@ test("parseCliArgs install throws explicit use-satori-cli deprecation (no instal
         () => parseCliArgs(["install", "--client", "codex"]),
         (error: unknown) => {
             assert.ok(error instanceof Error);
-            assert.match(error.message, /@zokizuan\/satori-cli/);
+            assert.match(error.message, /@satori-code\/cli/);
             assert.equal(error.message, MCP_INSTALL_USE_SATORI_CLI_MESSAGE);
             return true;
         },
@@ -76,7 +76,7 @@ test("runCli install returns usage error and does not mutate filesystem", async 
         const { stdout, stderr } = io.read();
         assert.equal(exitCode, 2);
         assert.equal(stdout.trim(), "");
-        assert.match(stderr, /@zokizuan\/satori-cli/);
+        assert.match(stderr, /@satori-code\/cli/);
         assert.match(stderr, /install --client/);
         assert.deepEqual(listTree(homeDir), before);
         assert.equal(fs.existsSync(path.join(homeDir, ".codex")), false);
@@ -104,7 +104,7 @@ test("runCli uninstall returns usage error and does not mutate filesystem", asyn
         const { stdout, stderr } = io.read();
         assert.equal(exitCode, 2);
         assert.equal(stdout.trim(), "");
-        assert.match(stderr, /@zokizuan\/satori-cli/);
+        assert.match(stderr, /@satori-code\/cli/);
         assert.match(stderr, /uninstall --client/);
         assert.deepEqual(listTree(homeDir), before);
     } finally {

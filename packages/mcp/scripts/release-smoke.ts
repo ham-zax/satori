@@ -202,12 +202,12 @@ export function installPackedRuntimeClosure(
         },
         stdio: ["ignore", "pipe", "pipe"],
     });
-    const serverEntry = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp", "dist", "index.js");
+    const serverEntry = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp", "dist", "index.js");
     const sharedRuntimeClientEntry = path.join(
         runtimeRoot,
         "node_modules",
-        "@zokizuan",
-        "satori-mcp",
+        "@satori-code",
+        "mcp",
         "dist",
         "server",
         "shared-runtime-client.js",
@@ -244,8 +244,8 @@ export function resolveInstalledPotionPaths(runtimeRoot: string): {
     const potionAssetsRoot = path.join(
         runtimeRoot,
         "node_modules",
-        "@zokizuan",
-        "satori-mcp",
+        "@satori-code",
+        "mcp",
         "assets",
         "potion",
         "linux-x64",
@@ -261,7 +261,7 @@ export async function runPackedPotionSmoke(runtimeRoot: string): Promise<void> {
     if (!fs.existsSync(helperPath) || !fs.existsSync(modelPath)) {
         throw new Error(`Packed Potion assets are missing under ${runtimeRoot}.`);
     }
-    const coreEntry = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core", "dist", "index.js");
+    const coreEntry = path.join(runtimeRoot, "node_modules", "@satori-code", "core", "dist", "index.js");
     if (!fs.existsSync(coreEntry)) {
         throw new Error(`Packed Core entry is missing under ${runtimeRoot}.`);
     }
@@ -311,7 +311,7 @@ export async function runPackedPotionSmoke(runtimeRoot: string): Promise<void> {
 
 function runPackedCoreParserSmoke(runtimeRoot: string): void {
     const script = [
-        "const { createLanguageAnalysisService, GeminiEmbedding } = require('@zokizuan/satori-core');",
+        "const { createLanguageAnalysisService, GeminiEmbedding } = require('@satori-code/core');",
         "const analyzer = createLanguageAnalysisService();",
         "const gemini = new GeminiEmbedding({ model: 'gemini-embedding-001', apiKey: 'release-smoke-no-network' });",
         "if (gemini.getClient()?.constructor?.name !== 'GoogleGenAI') process.exit(10);",

@@ -7,7 +7,7 @@ import {
     computeIndexPolicyControlSignature,
     Context,
     type PublicationRef,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     RootMutationInProgressError,
     RootMutationRuntime,
@@ -15,7 +15,7 @@ import {
     type RootMutationActivity,
     type RootMutationExecution,
     type RootMutationOperation,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 import {
     BACKGROUND_FRESHNESS_THRESHOLD_MS,
     BACKGROUND_SYNC_INITIAL_DELAY_MS,

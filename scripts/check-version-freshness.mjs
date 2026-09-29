@@ -17,9 +17,9 @@ const DEFAULT_SCAN_PATHS = [
 ];
 
 const PUBLISHABLE_PACKAGE_NAMES = new Set([
-  '@zokizuan/satori-core',
-  '@zokizuan/satori-mcp',
-  '@zokizuan/satori-cli',
+  '@satori-code/core',
+  '@satori-code/mcp',
+  '@satori-code/cli',
 ]);
 
 function readFiles(filePaths, cwd = process.cwd()) {

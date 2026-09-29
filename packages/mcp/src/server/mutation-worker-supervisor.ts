@@ -1,6 +1,6 @@
 import { fork, spawn } from "node:child_process";
 import fs from "node:fs";
-import type { MutationOperationPhase, RootMutationExecutor } from "@zokizuan/satori-core/integration";
+import type { MutationOperationPhase, RootMutationExecutor } from "@satori-code/core/integration";
 
 const MUTATION_OPERATION_ID_ENV = "SATORI_MUTATION_OPERATION_ID";
 const MUTATION_PARENT_PID_ENV = "SATORI_MUTATION_PARENT_PID";

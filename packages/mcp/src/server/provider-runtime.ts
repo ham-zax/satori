@@ -9,7 +9,7 @@ import {
     type Reranker,
     VectorDatabase,
     VoyageAIReranker,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { CapabilityResolver } from "../core/capabilities.js";
@@ -27,7 +27,7 @@ import {
     RootMutationRuntime,
     type RootMutationExecution,
     type SharedPublicationRuntime,
-} from "@zokizuan/satori-core/integration";
+} from "@satori-code/core/integration";
 import { SyncManager } from "../core/sync.js";
 import {
     ContextMcpConfig,
@@ -267,8 +267,8 @@ function missingRuntimeArtifacts(config: ContextMcpConfig): MissingProviderConfi
         missing.map(([name]) => name),
         `Satori runtime files are missing: ${missing.map(([name, filePath]) => `${name}=${filePath}`).join(", ")}.`,
         [
-            "Run `npx -y @zokizuan/satori-cli@latest install` to restore the runtime, then restart the MCP client.",
-            "Run `npx -y @zokizuan/satori-cli@latest doctor` to check the installation.",
+            "Run `npx -y @satori-code/cli@latest install` to restore the runtime, then restart the MCP client.",
+            "Run `npx -y @satori-code/cli@latest doctor` to check the installation.",
         ],
     );
 }
@@ -607,7 +607,7 @@ export class ProviderRuntime {
     ): Promise<VectorDatabase> {
         switch (bootstrap.vectorBackend.kind) {
             case 'lancedb': {
-                const moduleSpecifier = '@zokizuan/satori-core/lancedb';
+                const moduleSpecifier = '@satori-code/core/lancedb';
                 // Core deliberately publishes this native boundary as CommonJS.
                 // Requiring it lazily avoids Node's synthetic ESM named-export
                 // module namespace object, which can observe getter-backed exports as undefined

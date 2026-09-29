@@ -10,7 +10,7 @@ import {
     withSourceMeasurementOperation,
     type LanguageAnalysisPort,
     type SymbolRecord,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     readHashMatchedCurrentSourceSymbolContent,
     readCurrentSourceEvidence,

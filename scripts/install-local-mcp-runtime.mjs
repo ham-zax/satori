@@ -138,15 +138,15 @@ function runBuild(repoRoot, execFileSyncImpl) {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-core', 'build'], {
+  execFileSyncImpl(pnpmCmd, ['--filter', '@satori-code/core', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-mcp', 'build:runtime'], {
+  execFileSyncImpl(pnpmCmd, ['--filter', '@satori-code/mcp', 'build:runtime'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  execFileSyncImpl(pnpmCmd, ['--filter', '@zokizuan/satori-cli', 'build'], {
+  execFileSyncImpl(pnpmCmd, ['--filter', '@satori-code/cli', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });

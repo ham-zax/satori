@@ -1,5 +1,5 @@
-import { RootMutationRuntime, type MutationOperationPhase } from "@zokizuan/satori-core/integration";
-import { perfTrace } from "@zokizuan/satori-core";
+import { RootMutationRuntime, type MutationOperationPhase } from "@satori-code/core/integration";
+import { perfTrace } from "@satori-code/core";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { createMcpConfig, resolveMcpRuntimeBootstrap } from "../config.js";
 import { ProviderRuntime } from "./provider-runtime.js";

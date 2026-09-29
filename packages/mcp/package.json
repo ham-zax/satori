@@ -1,6 +1,6 @@
 {
-  "name": "@zokizuan/satori-mcp",
-  "version": "8.0.0",
+  "name": "@satori-code/mcp",
+  "version": "0.8.0",
   "description": "Local-first code intelligence for AI coding agents: natural-language + lexical repository search, exact source/symbol navigation, relationships, freshness, and indexing.",
   "keywords": [
     "mcp",
@@ -40,13 +40,13 @@
     "test:release-smoke": "node --import tsx --test scripts/release-smoke.test.ts",
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
     "prepublishOnly": "pnpm build && pnpm docs:check && pnpm manifest:check",
-    "test": "pnpm --filter @zokizuan/satori-core build && pnpm run test:raw",
+    "test": "pnpm --filter @satori-code/core build && pnpm run test:raw",
     "test:raw": "node --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@huggingface/transformers": "3.0.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@zokizuan/satori-core": "workspace:*",
+    "@satori-code/core": "workspace:*",
     "chokidar": "^5.0.0",
     "ignore": "^7.0.5",
     "jsonc-parser": "^3.3.1",

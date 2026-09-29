@@ -11,7 +11,7 @@ import {
     type Reranker,
     type SymbolRecord,
     type SymbolRegistryManifest,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { BOUNDED_SOURCE_SELECTION_POLICY_VERSION } from "./bounded-source-selector.js";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";

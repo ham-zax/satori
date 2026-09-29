@@ -1,4 +1,4 @@
-# Contributing to @zokizuan/satori-core
+# Contributing to @satori-code/core
 
 Read the [main contributing guide](../../CONTRIBUTING.md) first for shared setup and workflow rules.
 

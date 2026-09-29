@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { JsonNavigationStore } from '@zokizuan/satori-core';
-import type { PublicationRef } from '@zokizuan/satori-core';
+import { JsonNavigationStore } from '@satori-code/core';
+import type { PublicationRef } from '@satori-code/core';
 import type { TrackedRootReadinessState } from './tracked-root-readiness.js';
 import { PreparedReadCacheOwner } from './prepared-read-cache-owner.js';
 

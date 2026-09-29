@@ -1,4 +1,4 @@
-import { normalizeLanguageId } from "@zokizuan/satori-core";
+import { normalizeLanguageId } from "@satori-code/core";
 import { SEARCH_OPERATOR_PREFIX_MAX_CHARS } from "./search-constants.js";
 import type {
     SearchIntentConfidence,

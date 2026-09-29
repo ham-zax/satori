@@ -7,7 +7,7 @@
 //
 // Run memory-capped, e.g.
 //   systemd-run --user --scope -q -p MemoryMax=7G -p MemorySwapMax=0 node scripts/perf/index-probe.mjs ../some-repo
-// Requires `pnpm --filter @zokizuan/satori-core build && pnpm --filter @zokizuan/satori-mcp build`.
+// Requires `pnpm --filter @satori-code/core build && pnpm --filter @satori-code/mcp build`.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';

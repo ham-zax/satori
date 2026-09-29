@@ -8,7 +8,7 @@
  * fixture material survives only as inert contract evidence in
  * `search-rerank-request-contract.ts`.
  */
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings } from "@satori-code/core";
 import { serializeCanonicalJson } from "./canonical-json.js";
 import {
     isSearchCandidateRole,

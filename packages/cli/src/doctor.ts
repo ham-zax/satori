@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ResolvedOllamaModelIdentity } from "@zokizuan/satori-core";
+import type { ResolvedOllamaModelIdentity } from "@satori-code/core";
 import { assertLocalOnlyEndpoint } from "./local-runtime-contract.js";
 import {
     readManagedRuntimeRelease,
@@ -435,17 +435,17 @@ export function resolveInstalledPackageVersions(): DoctorPackageVersion[] {
     const releaseSource = `${cliPackageJson}#satoriManagedRuntime`;
     return [
         {
-            name: "@zokizuan/satori-cli",
+            name: "@satori-code/cli",
             version: cliInfo?.version ?? null,
             source: cliPackageJson,
         },
         {
-            name: "@zokizuan/satori-mcp",
+            name: "@satori-code/mcp",
             version: release.mcp,
             source: releaseSource,
         },
         {
-            name: "@zokizuan/satori-core",
+            name: "@satori-code/core",
             version: release.core,
             source: releaseSource,
         },
@@ -536,10 +536,10 @@ function resolveActiveManagedRuntime(homeDir: string, launcherPath: string): Act
     let coreVersion: string | null = null;
     try {
         const corePackageJsonPath = createRequire(mcpPackage.packageJsonPath)
-            .resolve("@zokizuan/satori-core/package.json");
+            .resolve("@satori-code/core/package.json");
         if (isPathWithinReal(generationRoot, corePackageJsonPath)) {
             const coreInfo = readJsonVersion(corePackageJsonPath);
-            if (coreInfo?.name === "@zokizuan/satori-core") {
+            if (coreInfo?.name === "@satori-code/core") {
                 coreVersion = coreInfo.version;
             }
         }
@@ -564,9 +564,9 @@ export function resolveRuntimeVersionState(
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     const active = resolveActiveManagedRuntime(homeDir, launcherPath);
     return {
-        cliVersion: installedPackageVersion(packageVersions, "@zokizuan/satori-cli") ?? "unknown",
-        releaseMcpVersion: installedPackageVersion(packageVersions, "@zokizuan/satori-mcp"),
-        releaseCoreVersion: installedPackageVersion(packageVersions, "@zokizuan/satori-core"),
+        cliVersion: installedPackageVersion(packageVersions, "@satori-code/cli") ?? "unknown",
+        releaseMcpVersion: installedPackageVersion(packageVersions, "@satori-code/mcp"),
+        releaseCoreVersion: installedPackageVersion(packageVersions, "@satori-code/core"),
         activeManagedMcpVersion: active?.status === "active" ? active.mcpVersion : null,
         activeManagedCoreVersion: active?.status === "active" ? active.coreVersion : null,
         activeLauncherPath: active?.status === "missing" ? null : (active?.launcherPath ?? null),
@@ -613,8 +613,8 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     const managedRuntimeEnvironment = managedLauncherIsUsable
         ? activeManagedRuntime?.managedEnvironment ?? Object.freeze({})
         : Object.freeze({});
-    const releaseMcpVersion = installedPackageVersion(packageVersions, "@zokizuan/satori-mcp");
-    const releaseCoreVersion = installedPackageVersion(packageVersions, "@zokizuan/satori-core");
+    const releaseMcpVersion = installedPackageVersion(packageVersions, "@satori-code/mcp");
+    const releaseCoreVersion = installedPackageVersion(packageVersions, "@satori-code/core");
     if (
         managedRuntime?.mcpVersion
         && releaseMcpVersion
@@ -677,23 +677,23 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
             checks,
             "active_runtime_mcp",
             "ok",
-            `Active managed MCP runtime: @zokizuan/satori-mcp@${activeManagedRuntime.mcpVersion}`,
+            `Active managed MCP runtime: @satori-code/mcp@${activeManagedRuntime.mcpVersion}`,
         );
         if (activeManagedRuntime.coreVersion) {
             addCheck(
                 checks,
                 "active_runtime_core",
                 "ok",
-                `Active managed Core runtime: @zokizuan/satori-core@${activeManagedRuntime.coreVersion}`,
+                `Active managed Core runtime: @satori-code/core@${activeManagedRuntime.coreVersion}`,
             );
         } else {
             addCheck(
                 checks,
                 "active_managed_core_version",
                 "error",
-                `Active managed MCP ${activeManagedRuntime.mcpVersion} could not resolve @zokizuan/satori-core inside its managed generation.`,
+                `Active managed MCP ${activeManagedRuntime.mcpVersion} could not resolve @satori-code/core inside its managed generation.`,
             );
-            nextSteps.push(`Rerun ${SATORI_CLI_NPX_COMMAND} install so the managed runtime closure includes a matching @zokizuan/satori-core.`);
+            nextSteps.push(`Rerun ${SATORI_CLI_NPX_COMMAND} install so the managed runtime closure includes a matching @satori-code/core.`);
         }
     }
 
@@ -716,7 +716,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             addCheck(checks, "npm_package_access", "warning", `Could not verify npm package access: ${message}`);
-            nextSteps.push("Verify npm can access @zokizuan/satori-mcp from this machine.");
+            nextSteps.push("Verify npm can access @satori-code/mcp from this machine.");
         }
     }
 
@@ -767,7 +767,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
                     ?? (activeManagedRuntime?.status === "active"
                         ? async (input: { model: string; host?: string }) => {
                             const requireFromRuntime = createRequire(activeManagedRuntime.target);
-                            const coreEntry = requireFromRuntime.resolve("@zokizuan/satori-core");
+                            const coreEntry = requireFromRuntime.resolve("@satori-code/core");
                             const core = await import(pathToFileURL(coreEntry).href) as {
                                 resolveOllamaModelIdentity: NonNullable<DoctorOptions["resolveOllamaIdentity"]>;
                             };
@@ -816,7 +816,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     const inspectProcess = resolveProcessInspector(options);
     const expectedRuntimeOwnerVersion = activeManagedRuntime?.status === "active"
         ? activeManagedRuntime.mcpVersion
-        : (packageVersions.find((entry) => entry.name === "@zokizuan/satori-mcp")?.version ?? null);
+        : (packageVersions.find((entry) => entry.name === "@satori-code/mcp")?.version ?? null);
     appendRuntimeOwnerChecks(
         checks,
         nextSteps,
@@ -1185,7 +1185,7 @@ function appendMutationLeaseChecks(
 
 async function loadManagedLanceDbFromRuntime(runtimeTarget: string): Promise<void> {
     const requireFromRuntime = createRequire(runtimeTarget);
-    const resolvedModule = requireFromRuntime.resolve("@zokizuan/satori-core/lancedb");
+    const resolvedModule = requireFromRuntime.resolve("@satori-code/core/lancedb");
     await import(pathToFileURL(resolvedModule).href);
 }
 
@@ -1206,7 +1206,7 @@ function findMcpPackage(runtimeTarget: string): {
     while (true) {
         const packageJsonPath = path.join(current, "package.json");
         const info = readJsonVersion(packageJsonPath);
-        if (info?.name === "@zokizuan/satori-mcp") {
+        if (info?.name === "@satori-code/mcp") {
             return { root: current, packageJsonPath, version: info.version };
         }
         const parent = path.dirname(current);
@@ -1237,7 +1237,7 @@ function appendManagedLauncherCheck(
             checks,
             "managed_launcher",
             "ok",
-            `Managed Satori launcher targets @zokizuan/satori-mcp@${resolution.mcpVersion}: ${resolution.launcherPath}.`,
+            `Managed Satori launcher targets @satori-code/mcp@${resolution.mcpVersion}: ${resolution.launcherPath}.`,
         );
         return;
     }

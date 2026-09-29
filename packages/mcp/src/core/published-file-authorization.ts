@@ -3,7 +3,7 @@ import path from "node:path";
 import {
     openRegularFileWithIdentityInsideRoot,
     type RootBoundFileIdentity,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type { SessionWorkspacePolicy } from "./session-workspace-policy.js";
 
 export type PublishedFileAuthorizationCode =

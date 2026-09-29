@@ -2,7 +2,7 @@ import type {
     RepositoryOntologyTag,
     SymbolKind,
     SymbolSpan,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import type {
     FreshnessDecision,
     PreparedReadWatcherDiagnostics,
@@ -988,7 +988,7 @@ export interface CanonicalSymbolIdentity {
 
 export interface FileOutlineSymbolResult extends CanonicalSymbolIdentity {
     callGraphHint: CallGraphHint;
-    analysis?: import("@zokizuan/satori-core").SymbolStructuralAnalysis;
+    analysis?: import("@satori-code/core").SymbolStructuralAnalysis;
     relationships?: {
         directCallerCount: number | null;
         directCalleeCount: number | null;
@@ -1010,7 +1010,7 @@ export interface FileOutlineRelationshipEvidence {
     resolvedClaimCount: number;
     ambiguousClaimCount: number;
     unresolvedClaimCount: number;
-    constructCoverage: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
+    constructCoverage: import("@satori-code/core").ResolutionConstructCoverage[];
 }
 
 export interface FileOutlineResponseEnvelope {
@@ -1086,7 +1086,7 @@ export interface CallGraphNodeResult {
 
 export interface CallGraphEdgeResult {
     strategy?: "rule" | "heuristic";
-    resolutionAuthority?: import("@zokizuan/satori-core").RelationshipRecord["resolutionAuthority"];
+    resolutionAuthority?: import("@satori-code/core").RelationshipRecord["resolutionAuthority"];
     args?: readonly string[];
     srcSymbolId: string;
     dstSymbolId: string;
@@ -1119,10 +1119,10 @@ export interface CallGraphExactReferenceCandidateResult {
 
 export interface CallGraphExactReferenceResult {
     relationship: "caller" | "callee";
-    matchKind: import("@zokizuan/satori-core").NavigationResolutionEvidenceMatchKind;
-    decision: import("@zokizuan/satori-core").ResolutionClaim["decision"];
-    resolutionAuthority: import("@zokizuan/satori-core").ResolutionClaim["resolutionAuthority"];
-    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+    matchKind: import("@satori-code/core").NavigationResolutionEvidenceMatchKind;
+    decision: import("@satori-code/core").ResolutionClaim["decision"];
+    resolutionAuthority: import("@satori-code/core").ResolutionClaim["resolutionAuthority"];
+    construct: import("@satori-code/core").ResolutionCallConstruct;
     providerId: string;
     providerVersion: string;
     sourceSymbolId?: string;
@@ -1211,13 +1211,13 @@ export interface CallGraphEvidenceSummaryResult {
 }
 
 export interface CallGraphConstructGapPageItem {
-    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
-    gap: import("@zokizuan/satori-core").ResolutionConstructCoverageGap;
+    construct: import("@satori-code/core").ResolutionCallConstruct;
+    gap: import("@satori-code/core").ResolutionConstructCoverageGap;
 }
 
 export interface CallGraphCandidateConflictPageItem {
-    construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
-    conflict: import("@zokizuan/satori-core").ResolutionConstructCandidateConflict;
+    construct: import("@satori-code/core").ResolutionCallConstruct;
+    conflict: import("@satori-code/core").ResolutionConstructCandidateConflict;
 }
 
 export interface CallGraphEdgeArgumentsPageItem {
@@ -1278,7 +1278,7 @@ export interface CallGraphTraversalResponseEnvelope {
     exactReferences?: CallGraphExactReferenceResult[];
     sourceReferences?: CallGraphSourceReferenceResult[];
     sourceReferenceCoverage?: import("./exact-reference-search.js").ExactReferenceSearchCoverage;
-    constructCoverage?: import("@zokizuan/satori-core").ResolutionConstructCoverage[];
+    constructCoverage?: import("@satori-code/core").ResolutionConstructCoverage[];
     testReferences?: CallGraphTestReferenceResult[];
     evidenceSummary?: CallGraphEvidenceSummaryResult;
     evidencePage?: CallGraphEvidencePageResult;

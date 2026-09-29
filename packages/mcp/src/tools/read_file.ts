@@ -6,7 +6,7 @@ import {
     isLanguageCapabilitySupportedForExtension,
     isLanguageCapabilitySupportedForFilename,
     recordSourceProcessing,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import {
     McpTool,
     ToolContext,
@@ -815,7 +815,7 @@ export const readFileTool: McpTool = {
 
             const maxBytes = Math.max(1, ctx.readFileMaxBytes ?? READ_FILE_MAX_BYTES_DEFAULT);
             let sourceBytes: Buffer;
-            let sourceObservation: import("@zokizuan/satori-core").SourceMeasurementObservation | undefined;
+            let sourceObservation: import("@satori-code/core").SourceMeasurementObservation | undefined;
             try {
                 // Publication-bound read through the shared bounded reader: the
                 // same open, byte-ceiling, descriptor read, and stability

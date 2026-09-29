@@ -240,7 +240,7 @@ export async function executeInstallCommand(
                         ?? (installedRuntimeCommand.args.length === 1
                             ? readContainingPackageIdentity(
                                 installedRuntimeCommand.args[0],
-                                "@zokizuan/satori-mcp",
+                                "@satori-code/mcp",
                             )?.packageRoot
                             : undefined);
                     lateOnModel = await resolveVerifiedLateOnModel(
@@ -258,7 +258,7 @@ export async function executeInstallCommand(
                     homeDir,
                     runtimePackageRoot: managedRuntimeCandidate?.packageRoot
                         ?? (installedRuntimeCommand.args.length === 1
-                            ? readContainingPackageIdentity(installedRuntimeCommand.args[0], "@zokizuan/satori-mcp")?.packageRoot
+                            ? readContainingPackageIdentity(installedRuntimeCommand.args[0], "@satori-code/mcp")?.packageRoot
                             : undefined),
                     env,
                     options,

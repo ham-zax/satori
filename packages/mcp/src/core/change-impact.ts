@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { compareContractStrings } from "@zokizuan/satori-core";
+import { compareContractStrings } from "@satori-code/core";
 import type {
     CallGraphEdgeResult,
     CallGraphResponseEnvelope,
@@ -103,8 +103,8 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         startLine: number;
         endLine?: number;
         decision: "ambiguous" | "unresolved";
-        resolutionAuthority: import("@zokizuan/satori-core").ResolutionClaim["resolutionAuthority"];
-        construct: import("@zokizuan/satori-core").ResolutionCallConstruct;
+        resolutionAuthority: import("@satori-code/core").ResolutionClaim["resolutionAuthority"];
+        construct: import("@satori-code/core").ResolutionCallConstruct;
         providerId: string;
         providerVersion: string;
         calleeText: string;

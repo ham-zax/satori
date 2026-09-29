@@ -7,7 +7,7 @@ import {
     verifyStableFileObservation,
     type RootBoundFileIdentity,
     type SourceIoOwner,
-} from "@zokizuan/satori-core";
+} from "@satori-code/core";
 import { openAuthorizedPublishedFile } from "./published-file-authorization.js";
 import type { SessionWorkspacePolicy } from "./session-workspace-policy.js";
 
@@ -59,7 +59,7 @@ export type AuthorizedSourceRead = Readonly<{
      * was supplied; consumers use it for their own processing bookkeeping
      * (for example read_file's selector record).
      */
-    sourceMeasurementObservation?: import("@zokizuan/satori-core").SourceMeasurementObservation;
+    sourceMeasurementObservation?: import("@satori-code/core").SourceMeasurementObservation;
 }>;
 
 /**

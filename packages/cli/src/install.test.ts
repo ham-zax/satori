@@ -74,10 +74,10 @@ function fakeRuntimeCommand(homeDir: string) {
                 homeDir,
                 ".satori",
                 "mcp-runtime",
-                "@zokizuan-satori-mcp-4.11.2",
+                "@satori-code-mcp-4.11.2",
                 "node_modules",
-                "@zokizuan",
-                "satori-mcp",
+                "@satori-code",
+                "mcp",
                 "dist",
                 "index.js"
             )
@@ -235,11 +235,11 @@ function installRuntimePackageStub(
         assert.equal(args[packageIndex - 1], "--");
         assert.notEqual(args.indexOf("--omit=optional"), -1);
         assert.notEqual(args.indexOf(EXPECTED_OXC_BINDING_SPECIFIER), -1);
-        const packageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-mcp");
+        const packageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "mcp");
         const entryPath = path.join(packageRoot, relativeEntry);
         fs.mkdirSync(path.dirname(entryPath), { recursive: true });
         fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-mcp",
+            name: "@satori-code/mcp",
             version: installedVersion,
             bin: {
                 satori: relativeEntry,
@@ -247,10 +247,10 @@ function installRuntimePackageStub(
         }, null, 2), "utf8");
         fs.writeFileSync(entryPath, "#!/usr/bin/env node\n", "utf8");
         if (writeCorePackage) {
-            const corePackageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core");
+            const corePackageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "core");
             fs.mkdirSync(corePackageRoot, { recursive: true });
             fs.writeFileSync(path.join(corePackageRoot, "package.json"), JSON.stringify({
-                name: "@zokizuan/satori-core",
+                name: "@satori-code/core",
                 version: installedCoreVersion,
                 exports: {
                     "./package.json": "./package.json",
@@ -277,7 +277,7 @@ function installRuntimePackageWithPreflightCore(
     return (command: string, args: string[]) => {
         const result = install(command, args);
         const runtimeRoot = args[args.indexOf("--prefix") + 1]!;
-        const corePackageRoot = path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core");
+        const corePackageRoot = path.join(runtimeRoot, "node_modules", "@satori-code", "core");
         const packageJsonPath = path.join(corePackageRoot, "package.json");
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
         packageJson.exports = {
@@ -305,7 +305,7 @@ function installRuntimePackageWithPreflightCore(
 
 test("Oxc native target resolution failure leaves no candidate runtime directory", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-oxc-resolution-failure-"));
-    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@zokizuan-satori-mcp@6.8.1");
+    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@6.8.1");
     let installCalls = 0;
     try {
         await assert.rejects(
@@ -321,7 +321,7 @@ test("Oxc native target resolution failure leaves no candidate runtime directory
                     VECTOR_STORE_PROVIDER: "Milvus",
                     MILVUS_ADDRESS: "localhost:19530",
                 },
-                packageSpecifier: "@zokizuan/satori-mcp@6.8.1",
+                packageSpecifier: "@satori-code/mcp@6.8.1",
                 platform: "linux",
                 architecture: "s390x",
                 execFileSyncImpl: (() => {
@@ -340,7 +340,7 @@ test("Oxc native target resolution failure leaves no candidate runtime directory
 
 test("LanceDB native target resolution failure leaves no candidate runtime directory", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lancedb-resolution-failure-"));
-    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@zokizuan-satori-mcp@6.8.1");
+    const runtimeRoot = path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@6.8.1");
     let installCalls = 0;
     try {
         await assert.rejects(
@@ -353,7 +353,7 @@ test("LanceDB native target resolution failure leaves no candidate runtime direc
             }, {
                 homeDir,
                 env: {},
-                packageSpecifier: "@zokizuan/satori-mcp@6.8.1",
+                packageSpecifier: "@satori-code/mcp@6.8.1",
                 platform: "linux",
                 architecture: "s390x",
                 execFileSyncImpl: (() => {
@@ -385,7 +385,7 @@ function brokenRuntimePackageStub(
         const prefix = args[args.indexOf("--prefix") + 1];
         installedPrefixes.push(prefix);
         fs.writeFileSync(
-            path.join(prefix, "node_modules", "@zokizuan", "satori-mcp", "dist", "broken-runtime.mjs"),
+            path.join(prefix, "node_modules", "@satori-code", "mcp", "dist", "broken-runtime.mjs"),
             [
                 'import fs from "node:fs";',
                 `fs.writeFileSync(${JSON.stringify(startedMarkerPath)}, "started\\n", "utf8");`,
@@ -399,9 +399,9 @@ function brokenRuntimePackageStub(
 }
 
 const UPGRADE_TARGET = {
-    cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+    cliPackageSpecifier: "@satori-code/cli@1.3.0",
     cliVersion: "1.3.0",
-    mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+    mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
     mcpVersion: "6.2.0",
     coreVersion: "3.1.0",
 } as const;
@@ -416,7 +416,7 @@ async function installUpgradeSourceRuntime(
 ): Promise<void> {
     const mcpVersion = options.mcpVersion ?? "6.1.0";
     const coreVersion = options.coreVersion ?? "3.0.0";
-    const packageSpecifier = `@zokizuan/satori-mcp@${mcpVersion}`;
+    const packageSpecifier = `@satori-code/mcp@${mcpVersion}`;
     await executeInstallCommand({
         kind: "install",
         client: "codex",
@@ -440,7 +440,7 @@ async function installUpgradeSourceRuntime(
 function writeCorePackage(packageRoot: string, version: string): void {
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-        name: "@zokizuan/satori-core",
+        name: "@satori-code/core",
         version,
         exports: {
             "./package.json": "./package.json",
@@ -613,8 +613,8 @@ test("failed runtime upgrade leaves the previous launcher target unchanged", asy
             dryRun: false,
         }, {
             homeDir,
-            packageSpecifier: "@zokizuan/satori-mcp@1.0.0-test",
-            execFileSyncImpl: installRuntimePackageStub("dist/old-runtime.mjs", "@zokizuan/satori-mcp@1.0.0-test") as never,
+            packageSpecifier: "@satori-code/mcp@1.0.0-test",
+            execFileSyncImpl: installRuntimePackageStub("dist/old-runtime.mjs", "@satori-code/mcp@1.0.0-test") as never,
         });
         const originalLauncher = readFile(launcherPath(homeDir));
         assert.match(originalLauncher, /old-runtime\.mjs/);
@@ -627,8 +627,8 @@ test("failed runtime upgrade leaves the previous launcher target unchanged", asy
                 dryRun: false,
             }, {
                 homeDir,
-                packageSpecifier: "@zokizuan/satori-mcp@2.0.0-test",
-                execFileSyncImpl: installRuntimePackageStub("dist/new-runtime.mjs", "@zokizuan/satori-mcp@2.0.0-test") as never,
+                packageSpecifier: "@satori-code/mcp@2.0.0-test",
+                execFileSyncImpl: installRuntimePackageStub("dist/new-runtime.mjs", "@satori-code/mcp@2.0.0-test") as never,
                 preflightRunner: async () => {
                     throw new Error("staged runtime rejected");
                 },
@@ -642,8 +642,8 @@ test("failed runtime upgrade leaves the previous launcher target unchanged", asy
 
 test("Milvus upgrade starts the candidate and preserves the old install when startup fails", async () => {
     await withTempHome(async (homeDir) => {
-        const oldSpecifier = "@zokizuan/satori-mcp@1.0.0-test";
-        const newSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        const oldSpecifier = "@satori-code/mcp@1.0.0-test";
+        const newSpecifier = "@satori-code/mcp@2.0.0-test";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -692,17 +692,17 @@ test("Milvus upgrade starts the candidate and preserves the old install when sta
 
 test("runtime reuse requires the exact requested package identity", async () => {
     await withTempHome(async (homeDir) => {
-        const requestedSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        const requestedSpecifier = "@satori-code/mcp@2.0.0-test";
         const stableRoot = path.join(
             homeDir,
             ".satori",
             "mcp-runtime",
-            "@zokizuan-satori-mcp@2.0.0-test",
+            "@satori-code-mcp@2.0.0-test",
         );
-        const stalePackageRoot = path.join(stableRoot, "node_modules", "@zokizuan", "satori-mcp");
+        const stalePackageRoot = path.join(stableRoot, "node_modules", "@satori-code", "mcp");
         fs.mkdirSync(path.join(stalePackageRoot, "dist"), { recursive: true });
         fs.writeFileSync(path.join(stalePackageRoot, "package.json"), JSON.stringify({
-            name: "@zokizuan/satori-mcp",
+            name: "@satori-code/mcp",
             version: "1.0.0-test",
             bin: { satori: "dist/stale-runtime.mjs" },
         }), "utf8");
@@ -733,7 +733,7 @@ test("runtime reuse requires the exact requested package identity", async () => 
 
 test("runtime reuse never treats a package tag as a resolved immutable version", async () => {
     await withTempHome(async (homeDir) => {
-        const requestedSpecifier = "@zokizuan/satori-mcp@latest";
+        const requestedSpecifier = "@satori-code/mcp@latest";
         const installedPrefixes: string[] = [];
         const installVersion = (installedVersion: string) => {
             const install = installRuntimePackageStub(
@@ -777,8 +777,8 @@ test("runtime reuse never treats a package tag as a resolved immutable version",
 
 test("successful runtime upgrade switches the launcher only after candidate preflight", async () => {
     await withTempHome(async (homeDir) => {
-        const oldSpecifier = "@zokizuan/satori-mcp@1.0.0-test";
-        const newSpecifier = "@zokizuan/satori-mcp@2.0.0-test";
+        const oldSpecifier = "@satori-code/mcp@1.0.0-test";
+        const newSpecifier = "@satori-code/mcp@2.0.0-test";
         const installedPrefixes: string[] = [];
         const preflightEntries: string[] = [];
         const installVersion = (entry: string, specifier: string) => {
@@ -835,8 +835,8 @@ test("successful runtime upgrade switches the launcher only after candidate pref
 
 test("managed runtime upgrade replaces MCP and Core without rewriting client configuration", async () => {
     await withTempHome(async (homeDir) => {
-        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
-        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        const oldSpecifier = "@satori-code/mcp@6.1.0";
+        const newSpecifier = "@satori-code/mcp@6.2.0";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -859,7 +859,7 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
         const progressPhases: string[] = [];
 
         const result = await executeManagedRuntimeUpgrade({
-            cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+            cliPackageSpecifier: "@satori-code/cli@1.3.0",
             cliVersion: "1.3.0",
             mcpPackageSpecifier: newSpecifier,
             mcpVersion: "6.2.0",
@@ -910,8 +910,8 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
 
 test("failed managed runtime upgrade preserves the previous launcher and removes its candidate", async () => {
     await withTempHome(async (homeDir) => {
-        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
-        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        const oldSpecifier = "@satori-code/mcp@6.1.0";
+        const newSpecifier = "@satori-code/mcp@6.2.0";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -932,12 +932,12 @@ test("failed managed runtime upgrade preserves the previous launcher and removes
             homeDir,
             ".satori",
             "mcp-runtime",
-            "@zokizuan-satori-mcp@6.2.0",
+            "@satori-code-mcp@6.2.0",
         );
 
         await assert.rejects(
             executeManagedRuntimeUpgrade({
-                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliPackageSpecifier: "@satori-code/cli@1.3.0",
                 cliVersion: "1.3.0",
                 mcpPackageSpecifier: newSpecifier,
                 mcpVersion: "6.2.0",
@@ -968,8 +968,8 @@ test("failed managed runtime upgrade preserves the previous launcher and removes
 
 test("managed runtime upgrade refuses to overwrite a launcher changed during preflight", async () => {
     await withTempHome(async (homeDir) => {
-        const oldSpecifier = "@zokizuan/satori-mcp@6.1.0";
-        const newSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        const oldSpecifier = "@satori-code/mcp@6.1.0";
+        const newSpecifier = "@satori-code/mcp@6.2.0";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -989,7 +989,7 @@ test("managed runtime upgrade refuses to overwrite a launcher changed during pre
 
         await assert.rejects(
             executeManagedRuntimeUpgrade({
-                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliPackageSpecifier: "@satori-code/cli@1.3.0",
                 cliVersion: "1.3.0",
                 mcpPackageSpecifier: newSpecifier,
                 mcpVersion: "6.2.0",
@@ -1025,7 +1025,7 @@ test("managed runtime upgrade refuses to overwrite a launcher changed during pre
 
 test("managed runtime upgrade is a no-op when both MCP and Core are current", async () => {
     await withTempHome(async (homeDir) => {
-        const currentSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        const currentSpecifier = "@satori-code/mcp@6.2.0";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -1044,7 +1044,7 @@ test("managed runtime upgrade is a no-op when both MCP and Core are current", as
         const originalLauncher = readFile(launcherPath(homeDir));
 
         const result = await executeManagedRuntimeUpgrade({
-            cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+            cliPackageSpecifier: "@satori-code/cli@1.3.0",
             cliVersion: "1.3.0",
             mcpPackageSpecifier: currentSpecifier,
             mcpVersion: "6.2.0",
@@ -1067,7 +1067,7 @@ test("managed runtime upgrade is a no-op when both MCP and Core are current", as
 
 test("managed runtime upgrade replaces a current legacy closure without the slim manifest", async () => {
     await withTempHome(async (homeDir) => {
-        const currentSpecifier = "@zokizuan/satori-mcp@6.2.0";
+        const currentSpecifier = "@satori-code/mcp@6.2.0";
         await executeInstallCommand({
             kind: "install",
             client: "codex",
@@ -1087,7 +1087,7 @@ test("managed runtime upgrade replaces a current legacy closure without the slim
             homeDir,
             ".satori",
             "mcp-runtime",
-            "@zokizuan-satori-mcp@6.2.0",
+            "@satori-code-mcp@6.2.0",
         );
         fs.rmSync(path.join(legacyRoot, ".satori-runtime-closure.json"));
         const installedPrefixes: string[] = [];
@@ -1099,7 +1099,7 @@ test("managed runtime upgrade replaces a current legacy closure without the slim
         );
 
         const result = await executeManagedRuntimeUpgrade({
-            cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+            cliPackageSpecifier: "@satori-code/cli@1.3.0",
             cliVersion: "1.3.0",
             mcpPackageSpecifier: currentSpecifier,
             mcpVersion: "6.2.0",
@@ -1624,11 +1624,11 @@ test("managed runtime upgrade rejects Core resolved outside the owned runtime", 
             "..",
         );
         fs.rmSync(
-            path.join(runtimeRoot, "node_modules", "@zokizuan", "satori-core"),
+            path.join(runtimeRoot, "node_modules", "@satori-code", "core"),
             { recursive: true, force: true },
         );
         writeCorePackage(
-            path.join(homeDir, "node_modules", "@zokizuan", "satori-core"),
+            path.join(homeDir, "node_modules", "@satori-code", "core"),
             "3.0.0",
         );
 
@@ -1650,7 +1650,7 @@ test("managed runtime upgrade rejects Core resolved outside the owned runtime", 
         });
         const originalLauncher = readFile(launcherPath(homeDir));
         writeCorePackage(
-            path.join(homeDir, "node_modules", "@zokizuan", "satori-core"),
+            path.join(homeDir, "node_modules", "@satori-code", "core"),
             UPGRADE_TARGET.coreVersion,
         );
         let preflightCalls = 0;
@@ -1780,13 +1780,13 @@ test("managed runtime upgrade requires an existing managed installation", async 
     await withTempHome(async (homeDir) => {
         await assert.rejects(
             executeManagedRuntimeUpgrade({
-                cliPackageSpecifier: "@zokizuan/satori-cli@1.3.0",
+                cliPackageSpecifier: "@satori-code/cli@1.3.0",
                 cliVersion: "1.3.0",
-                mcpPackageSpecifier: "@zokizuan/satori-mcp@6.2.0",
+                mcpPackageSpecifier: "@satori-code/mcp@6.2.0",
                 mcpVersion: "6.2.0",
                 coreVersion: "3.1.0",
             }, { homeDir }),
-            /Run `npx -y @zokizuan\/satori-cli@latest install --client all` first/,
+            /Run `npx -y @satori-code\/cli@latest install --client all` first/,
         );
         assert.deepEqual(fs.readdirSync(homeDir), []);
     });
@@ -2252,7 +2252,7 @@ test("install result includes packageSpecifier used for managed runtime", async 
 
         assert.equal(result.action, "install");
         assert.equal(result.packageSpecifier, EXPECTED_PACKAGE_SPECIFIER);
-        assert.match(String(result.packageSpecifier), /@zokizuan\/satori-mcp@/);
+        assert.match(String(result.packageSpecifier), /@satori-code\/mcp@/);
     });
 });
 
@@ -3573,7 +3573,7 @@ test("auto install fails before runtime, model, preflight, or launcher work when
             }),
             (error: unknown) => error instanceof CliError
                 && error.token === "E_NO_CLIENTS_DETECTED"
-                && error.message.includes("npx -y @zokizuan/satori-cli@latest install --client all"),
+                && error.message.includes("npx -y @satori-code/cli@latest install --client all"),
         );
 
         assert.equal(runtimeInstallCalls, 0);
@@ -3625,7 +3625,7 @@ test("auto install revalidates client detection after preflight and removes its 
             }),
             (error: unknown) => error instanceof CliError
                 && error.token === "E_NO_CLIENTS_DETECTED"
-                && error.message.includes("npx -y @zokizuan/satori-cli@latest install --client all"),
+                && error.message.includes("npx -y @satori-code/cli@latest install --client all"),
         );
 
         assert.equal(preflightCalls, 1);
@@ -3942,7 +3942,7 @@ test("application failure reports completed and unattempted mutation paths", asy
             }, {
                 homeDir,
                 repoDir,
-                packageSpecifier: "@zokizuan/satori-mcp@0.0.0-test",
+                packageSpecifier: "@satori-code/mcp@0.0.0-test",
                 runtimeCommand: { command: process.execPath, args: ["/tmp/satori-runtime.js"] },
             }),
             (error: unknown) => {

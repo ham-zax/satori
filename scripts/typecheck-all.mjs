@@ -6,9 +6,9 @@
 import { spawnSync } from "node:child_process";
 
 const packages = [
-  "@zokizuan/satori-core",
-  "@zokizuan/satori-mcp",
-  "@zokizuan/satori-cli",
+  "@satori-code/core",
+  "@satori-code/mcp",
+  "@satori-code/cli",
 ];
 
 let exitCode = 0;

@@ -21,7 +21,7 @@ function withTempPackageJson(
 
 test("verifyManagedPackageInstallability rejects unpublished managed-runtime targets with explicit guidance", () => {
     withTempPackageJson({
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         version: "2.0.6",
         satoriManagedRuntime: { mcp: "4.4.1", core: "1.1.1" },
     }, (packageJsonPath) => {
@@ -31,27 +31,27 @@ test("verifyManagedPackageInstallability rejects unpublished managed-runtime tar
                 packageJsonPath,
                 execFileSyncImpl: ((command: string, args: string[]) => {
                     seen.push(`${command} ${args.join(" ")}`);
-                    if (args[1] === "@zokizuan/satori-mcp@4.4.1") {
+                    if (args[1] === "@satori-code/mcp@4.4.1") {
                         return JSON.stringify("4.4.1");
                     }
                     throw Object.assign(new Error("missing"), {
                         stdout: "",
-                        stderr: "npm error notarget No matching version found for @zokizuan/satori-core@1.1.1.\n",
+                        stderr: "npm error notarget No matching version found for @satori-code/core@1.1.1.\n",
                     });
                 }) as never,
             }),
-            /required dependency @zokizuan\/satori-core@1\.1\.1 is not published on npm/
+            /required dependency @satori-code\/core@1\.1\.1 is not published on npm/
         );
         assert.deepEqual(seen, [
-            "npm view @zokizuan/satori-mcp@4.4.1 version --json",
-            "npm view @zokizuan/satori-core@1.1.1 version --json",
+            "npm view @satori-code/mcp@4.4.1 version --json",
+            "npm view @satori-code/core@1.1.1 version --json",
         ]);
     });
 });
 
 test("verifyManagedPackageInstallability verifies exact managed-runtime targets and returns the MCP specifier", () => {
     withTempPackageJson({
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         version: "2.0.6",
         satoriManagedRuntime: { mcp: "4.4.1", core: "1.0.0" },
     }, (packageJsonPath) => {
@@ -63,17 +63,17 @@ test("verifyManagedPackageInstallability verifies exact managed-runtime targets 
                 return JSON.stringify(args[1].split("@").at(-1));
             }) as never,
         });
-        assert.equal(packageSpecifier, "@zokizuan/satori-mcp@4.4.1");
+        assert.equal(packageSpecifier, "@satori-code/mcp@4.4.1");
         assert.deepEqual(seen, [
-            "npm view @zokizuan/satori-mcp@4.4.1 version --json",
-            "npm view @zokizuan/satori-core@1.0.0 version --json",
+            "npm view @satori-code/mcp@4.4.1 version --json",
+            "npm view @satori-code/core@1.0.0 version --json",
         ]);
     });
 });
 
 test("verifyManagedPackageInstallability rejects missing runtime metadata", () => {
     withTempPackageJson({
-        name: "@zokizuan/satori-cli",
+        name: "@satori-code/cli",
         version: "2.0.6",
     }, (packageJsonPath) => {
         assert.throws(

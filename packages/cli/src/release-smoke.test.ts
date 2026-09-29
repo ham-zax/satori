@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
+import { assertPackedDoctorReport } from "./release-smoke-report.js";
 import { isolatedSmokeEnv } from "./smoke-env.js";
 
 test("release smoke isolates machine configuration and removes pnpm-only npm variables", () => {
@@ -28,4 +29,17 @@ test("release smoke isolates machine configuration and removes pnpm-only npm var
     assert.equal(isolated.SATORI_RUNTIME_PROFILE, undefined);
     assert.equal(isolated.EMBEDDING_PROVIDER, undefined);
     assert.equal(isolated.MILVUS_ADDRESS, undefined);
+});
+
+test("release smoke accepts an npm access warning before the MCP version is published", () => {
+    const missingClient = { name: "managed_client_configuration", status: "error" };
+    const npmWarning = { name: "npm_package_access", status: "warning" };
+
+    assert.doesNotThrow(() => assertPackedDoctorReport({ status: "error", checks: [missingClient] }));
+    assert.doesNotThrow(() => assertPackedDoctorReport({ status: "error", checks: [npmWarning, missingClient] }));
+    assert.throws(() => assertPackedDoctorReport({ status: "error", checks: [npmWarning] }), /unexpected problems/);
+    assert.throws(() => assertPackedDoctorReport({
+        status: "error",
+        checks: [missingClient, { name: "node_version", status: "error" }],
+    }), /unexpected problems/);
 });

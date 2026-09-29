@@ -56,6 +56,22 @@ test('qualification runs with async runner', async () => {
   assert.equal(executed.length, RELEASE_QUALIFICATION_COMMANDS.length);
 });
 
+test('qualification gives inherited test output exclusive use of the terminal', async () => {
+  const output = [];
+  await qualifyReleaseCandidate({
+    cwd: '/repo',
+    progressOptions: { interactive: true, write: (chunk) => output.push(chunk) },
+    gitStatusImpl: () => '',
+    runCommandImpl: (entry, options) => {
+      if (entry.label === 'Core tests') {
+        assert.equal(options.stdio, 'inherit');
+        assert.doesNotMatch(output.at(-1), /Satori release qualification/);
+      }
+    },
+    checkGraphImpl: () => ({ valid: true }),
+  });
+});
+
 test('qualification stops subsequent phases when a command fails', async () => {
   const executed = [];
   await assert.rejects(

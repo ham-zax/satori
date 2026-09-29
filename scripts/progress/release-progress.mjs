@@ -24,6 +24,7 @@ function spinnerFrame() {
 export class ReleaseProgress {
   #timer = null;
   #writeStream;
+  #suspended = false;
 
   constructor(phases, {
     interactive = isInteractiveTerminal(),
@@ -46,7 +47,7 @@ export class ReleaseProgress {
   }
 
   #startTimer() {
-    if (!this.interactive || this.#timer !== null) return;
+    if (!this.interactive || this.#suspended || this.#timer !== null) return;
     this.#timer = setInterval(() => {
       this.write();
     }, 80);
@@ -109,6 +110,21 @@ export class ReleaseProgress {
     this.#writeStream(this.frame.clear());
   }
 
+  suspend() {
+    if (!this.interactive) return;
+    this.#suspended = true;
+    this.clear();
+  }
+
+  resume() {
+    if (!this.interactive || !this.#suspended) return;
+    this.#suspended = false;
+    this.write();
+    if (this.phases.some((phase) => phase.status === 'running')) {
+      this.#startTimer();
+    }
+  }
+
   redraw() {
     this.write();
   }
@@ -156,7 +172,7 @@ export class ReleaseProgress {
   }
 
   write() {
-    if (!this.interactive) return;
+    if (!this.interactive || this.#suspended) return;
 
     this.#writeStream(
       this.frame.render(this.lines()),

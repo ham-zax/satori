@@ -40,3 +40,27 @@ test('ReleaseProgress non-interactive does not write cursor escapes', () => {
   progress.complete(0);
   progress.clear();
 });
+
+test('ReleaseProgress leaves the terminal to a child command until resumed', () => {
+  const output = [];
+  const progress = new ReleaseProgress([
+    { label: 'Core tests' },
+    { label: 'MCP tests' },
+  ], { interactive: true, write: (chunk) => output.push(chunk) });
+
+  try {
+    progress.start(0);
+    progress.suspend();
+    const writesBeforeChild = output.length;
+
+    progress.complete(0);
+    progress.start(1);
+    progress.write();
+    assert.equal(output.length, writesBeforeChild);
+
+    progress.resume();
+    assert.match(output.at(-1), /MCP tests/);
+  } finally {
+    progress.clear();
+  }
+});

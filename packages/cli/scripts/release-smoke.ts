@@ -15,6 +15,7 @@ import {
     DEFAULT_LATEON_PROFILE_ID,
     readLateOnAcquisitionAuthority,
 } from "../src/lateon-model-store.js";
+import { assertPackedDoctorReport } from "../src/release-smoke-report.js";
 import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.mjs";
 
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
@@ -420,7 +421,8 @@ function runCliSmoke(
 
 /*
  * The smoke home has no client configured, so the packed doctor must run to
- * completion and report exactly that one problem, exiting 1.
+ * completion and report that error, exiting 1. The pinned MCP version may not
+ * be published yet during release qualification, so npm access can warn.
  */
 function assertPackedDoctorReportsNotInstalled(
     cliEntry: string,
@@ -437,10 +439,7 @@ function assertPackedDoctorReportsNotInstalled(
         throw new Error(`Packed doctor exited ${String(result.status)}; expected 1. ${result.stderr}`);
     }
     const report = JSON.parse(result.stdout) as { status?: unknown; checks?: Array<{ name?: unknown; status?: unknown }> };
-    const problems = (report.checks ?? []).filter((check) => check.status !== "ok");
-    if (report.status !== "error" || problems.length !== 1 || problems[0]?.name !== "managed_client_configuration") {
-        throw new Error(`Packed doctor reported unexpected problems: ${JSON.stringify(problems)}`);
-    }
+    assertPackedDoctorReport(report);
 }
 
 /*

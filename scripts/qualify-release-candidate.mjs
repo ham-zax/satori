@@ -175,8 +175,9 @@ export async function qualifyReleaseCandidate(options = {}) {
       || entry.label === 'MCP tests'
       || entry.label === 'CLI tests';
     if (progress.interactive && ownsScreen && !(alreadyQualified && entry.cached)) {
-      progress.clear();
+      progress.suspend();
       await runEntry(index, 'inherit');
+      progress.resume();
     } else {
       await runEntry(index, 'pipe');
     }

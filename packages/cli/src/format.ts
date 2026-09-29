@@ -21,6 +21,64 @@ export function emitError(writers: CliWriters, token: string, message: string): 
     writers.writeStderr(`${token} ${message}\n`);
 }
 
+export const DEFAULT_TEXT_WIDTH = 100;
+
+function collapseWhitespace(value: string): string {
+    return value.replace(/\s+/g, " ").trim();
+}
+
+function firstSentence(value: string): string {
+    const text = collapseWhitespace(value);
+    return /^.*?[.!?](?=\s|$)/.exec(text)?.[0] ?? text;
+}
+
+function truncateTo(value: string, width: number): string {
+    if (value.length <= width) return value;
+    return `${value.slice(0, Math.max(0, width - 1)).trimEnd()}…`;
+}
+
+/** Compact text view of an MCP tools/list result: aligned name and first description sentence. */
+export function formatToolsListText(result: unknown, width: number = DEFAULT_TEXT_WIDTH): string {
+    const tools = (result as { tools?: unknown } | null)?.tools;
+    const entries = (Array.isArray(tools) ? tools : [])
+        .map((tool) => tool as { name?: unknown; description?: unknown })
+        .filter((tool): tool is { name: string; description?: unknown } => typeof tool?.name === "string");
+    const nameWidth = Math.max(0, ...entries.map((tool) => tool.name.length));
+    const lines = entries.map((tool) => {
+        const description = typeof tool.description === "string" ? firstSentence(tool.description) : "";
+        const line = description ? `${tool.name.padEnd(nameWidth)}  ${description}` : tool.name;
+        return truncateTo(line, Math.max(width, nameWidth + 4));
+    });
+    return [
+        ...lines,
+        "",
+        "Use --format json for full tool descriptions and input schemas.",
+        "",
+    ].join("\n");
+}
+
+/**
+ * Text view of a tool result: the payload's humanText when it has one, else the parsed JSON
+ * pretty-printed, else the text as-is. Results without text content fall back to JSON.
+ */
+export function formatToolResultText(result: unknown): string {
+    const text = firstTextContent(result);
+    if (text === null) {
+        return `${JSON.stringify(result, null, 2)}\n`;
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        return text.endsWith("\n") ? text : `${text}\n`;
+    }
+    const humanText = parsed && typeof parsed === "object"
+        ? (parsed as { humanText?: unknown }).humanText
+        : undefined;
+    const rendered = typeof humanText === "string" ? humanText : JSON.stringify(parsed, null, 2);
+    return rendered.endsWith("\n") ? rendered : `${rendered}\n`;
+}
+
 function firstTextContent(result: unknown): string | null {
     const content = (result as { content?: ToolTextContent[] } | null)?.content;
     if (!Array.isArray(content)) {

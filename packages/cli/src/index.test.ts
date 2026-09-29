@@ -1514,6 +1514,94 @@ async function runWithSession(argv: string[], session: MockCliSession) {
     return { exitCode, ...io.read() };
 }
 
+test("runCli tools list keeps JSON by default and prints a compact table under --format text after the command", async () => {
+    const session = createMockSession("normal");
+    const expected = await session.listTools();
+
+    const json = await runWithSession(["tools", "list"], session);
+    assert.equal(json.exitCode, 0);
+    assert.equal(json.stdout, `${JSON.stringify(expected, null, 2)}\n`);
+
+    const text = await runWithSession(["tools", "list", "--format", "text"], session);
+    assert.equal(text.exitCode, 0);
+    assert.throws(() => JSON.parse(text.stdout));
+    assert.match(text.stdout, /^manage_index {5}manage\nsearch_codebase {2}search\n/);
+    assert.match(text.stdout, /Use --format json for full tool descriptions and input schemas\./);
+    assert.equal(text.stderr, "");
+});
+
+test("runCli tool call output is byte-identical JSON by default and readable text under --format text", async () => {
+    const result: CallToolResult = {
+        isError: false,
+        content: [{ type: "text", text: JSON.stringify({ status: "ok", humanText: "Found 2 results." }) }],
+    };
+    const argv = ["tool", "call", "search_codebase", "--args-json", '{"path":"/repo","query":"auth"}'];
+
+    const json = await runWithSession(argv, sessionWithToolResult(result));
+    assert.equal(json.exitCode, 0);
+    assert.equal(json.stdout, `${JSON.stringify(result, null, 2)}\n`);
+    assert.equal(json.stderr, "");
+
+    const text = await runWithSession([...argv, "--format", "text"], sessionWithToolResult(result));
+    assert.equal(text.exitCode, 0);
+    assert.equal(text.stdout, "Found 2 results.\n");
+    assert.equal(text.stderr, "");
+
+    const plain = await runWithSession(
+        [...argv, "--format", "text"],
+        sessionWithToolResult({ isError: false, content: [{ type: "text", text: "plain summary" }] }),
+    );
+    assert.equal(plain.stdout, "plain summary\n");
+
+    const parsed = await runWithSession(
+        [...argv, "--format", "text"],
+        sessionWithToolResult({ isError: false, content: [{ type: "text", text: JSON.stringify({ status: "ok", n: 1 }) }] }),
+    );
+    assert.equal(parsed.stdout, '{\n  "status": "ok",\n  "n": 1\n}\n');
+});
+
+test("runCli --format text sends a tool error to stderr with a non-zero exit and empty stdout", async () => {
+    const result: CallToolResult = {
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ status: "error", humanText: "Path is not indexed." }) }],
+    };
+    const text = await runWithSession(
+        ["tool", "call", "search_codebase", "--args-json", '{"path":"/repo","query":"a"}', "--format", "text"],
+        sessionWithToolResult(result),
+    );
+    assert.equal(text.exitCode, 1);
+    assert.equal(text.stdout, "");
+    assert.equal(text.stderr, "E_TOOL_ERROR Path is not indexed.\n");
+});
+
+test("runCli --format text prints nothing to stdout for a structured non-ok envelope and exits 1", async () => {
+    const text = await runWithSession(
+        ["tool", "call", "search_codebase", "--args-json", "{}", "--format", "text"],
+        createMockSession("envelope"),
+    );
+    assert.equal(text.exitCode, 1);
+    assert.equal(text.stdout, "");
+    assert.match(text.stderr, /^E_TOOL_ERROR status=not_ready reason=indexing\n/);
+    assert.match(text.stderr, /"status": "not_ready"/);
+
+    const json = await runWithSession(
+        ["tool", "call", "search_codebase", "--args-json", "{}"],
+        createMockSession("envelope"),
+    );
+    assert.equal(json.exitCode, 1);
+    assert.equal(JSON.parse(json.stdout).content[0].text, '{"status":"not_ready","reason":"indexing"}');
+});
+
+test("runCli --format text prints nothing to stdout when an awaited manage_index operation fails", async () => {
+    const text = await runWithSession(
+        ["--format", "text", "manage_index", "--action", "reindex", "--path", "/repo"],
+        createMockSession("manage_terminal_failed"),
+    );
+    assert.equal(text.exitCode, 1);
+    assert.equal(text.stdout, "");
+    assert.match(text.stderr, /E_TOOL_ERROR manage_index operation phase=failed/);
+});
+
 test("runCli passes a wrapper tool's own --format and --debug flags to the tool, not the CLI", async () => {
     const recorded: Array<{ name: string; args: Record<string, unknown> }> = [];
     const base = createMockSession("normal");

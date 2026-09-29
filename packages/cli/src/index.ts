@@ -9,7 +9,16 @@ import { parseCliArgs, parseWrapperArgumentsFromSchema, resolveRawArguments } fr
 import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
-import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope, type CliWriters } from "./format.js";
+import {
+    DEFAULT_TEXT_WIDTH,
+    emitError,
+    emitJson,
+    formatToolResultText,
+    formatToolsListText,
+    inferManageStatusState,
+    parseStructuredEnvelope,
+    type CliWriters,
+} from "./format.js";
 import { formatCommandHelpText } from "./command-help.js";
 import {
     assertAutoClientTargets,
@@ -293,6 +302,11 @@ function formatVersionText(result: ReturnType<typeof buildVersionPayload>): stri
     return lines.join("\n");
 }
 
+function terminalWidth(): number {
+    const columns = process.stdout.columns;
+    return typeof columns === "number" && columns >= 40 ? columns : DEFAULT_TEXT_WIDTH;
+}
+
 function resolveDefaultServerInvocation(homeDir: string): { command: string; args: string[] } {
     const managedLauncherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     if (fs.existsSync(managedLauncherPath)) {
@@ -401,19 +415,16 @@ function summarizeEnvelopeError(writers: { writeStderr: (text: string) => void }
     writers.writeStderr(`E_TOOL_ERROR status=${status}${reasonPart}${statusHintPart}\n`);
 }
 
-function maybeEmitTextSummary(writers: { writeStderr: (text: string) => void }, result: unknown): void {
-    const text = firstText(result);
-    if (text) {
-        writers.writeStderr(`${text}\n`);
-    }
-}
-
 function evaluateToolResultForError(
     result: unknown,
     writers: { writeStderr: (text: string) => void; },
+    format: "json" | "text",
 ): number | null {
     if (isRecord(result) && result.isError === true) {
-        const message = firstText(result) || "tool call failed";
+        const text = firstText(result);
+        const message = text && format === "text"
+            ? formatToolResultText(result).trimEnd()
+            : text || "tool call failed";
         writers.writeStderr(`E_TOOL_ERROR ${message}\n`);
         return 1;
     }
@@ -453,7 +464,7 @@ async function invokeTool(
     let initialErrorExit: number | null;
     try {
         result = await session.callTool(toolName, args);
-        initialErrorExit = evaluateToolResultForError(result, writers);
+        initialErrorExit = evaluateToolResultForError(result, writers, format);
         if (initialErrorExit === null && shouldAwaitManagedIndex(toolName, args)) {
             result = await waitForManageIndex(session, args.path as string, manageIndexPollIntervalMs);
         }
@@ -477,20 +488,24 @@ async function invokeTool(
         }));
     }
 
-    emitJson(writers, result);
-    if (format === "text") {
-        maybeEmitTextSummary(writers, result);
-    }
-
     const awaitedManageIndex = initialErrorExit === null && shouldAwaitManagedIndex(toolName, args);
     const finalErrorExit = initialErrorExit
         ?? (awaitedManageIndex ? manageIndexOperationFailureExit(result, writers) : null)
-        ?? evaluateToolResultForError(result, writers);
-    if (finalErrorExit !== null) {
-        return finalErrorExit;
+        ?? evaluateToolResultForError(result, writers, format);
+
+    if (format === "text") {
+        // The error state is decided first: stdout carries only successful output.
+        if (finalErrorExit === null) {
+            writers.writeStdout(formatToolResultText(result));
+        } else if (!(isRecord(result) && result.isError === true)) {
+            // Summarizers print only status lines; keep the readable result on stderr.
+            writers.writeStderr(formatToolResultText(result));
+        }
+    } else {
+        emitJson(writers, result);
     }
 
-    return 0;
+    return finalErrorExit ?? 0;
 }
 
 const MEBIBYTE = 1024 * 1024;
@@ -773,7 +788,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         try {
             if (parsed.command.kind === "tools-list") {
                 const result = await session.listTools();
-                emitJson(writers, result);
+                if (parsed.globals.format === "text") {
+                    writers.writeStdout(formatToolsListText(result, terminalWidth()));
+                } else {
+                    emitJson(writers, result);
+                }
                 return 0;
             }
 

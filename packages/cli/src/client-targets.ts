@@ -158,12 +158,16 @@ function isClientDetected(target: ClientTarget, homeDir: string, env: NodeJS.Pro
     }
 }
 
+// Opt-in clients are installed only when named (--client agy) or with --client all;
+// auto-detection covers the default set so a detected extra CLI is never configured unasked.
+const OPT_IN_CLIENTS: ReadonlySet<ClientName> = new Set<ClientName>(["agy"]);
+
 export function detectClientTargets(
     homeDir: string,
     env: NodeJS.ProcessEnv = process.env,
 ): ClientName[] {
     return resolveClientTargets(homeDir, env)
-        .filter((target) => isClientDetected(target, homeDir, env))
+        .filter((target) => !OPT_IN_CLIENTS.has(target.client) && isClientDetected(target, homeDir, env))
         .map((target) => target.client);
 }
 
@@ -182,7 +186,7 @@ export function assertAutoClientTargets(
             "",
             "Detected clients: none",
             "",
-            "Install Codex, Claude Code, OpenCode, or Antigravity, or explicitly choose:",
+            "Install Codex, Claude Code, or OpenCode, or explicitly choose:",
             `  ${satoriCliCommand("install --client codex")}`,
             `  ${satoriCliCommand("install --client claude")}`,
             `  ${satoriCliCommand("install --client opencode")}`,

@@ -91,7 +91,7 @@ const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode|agy";
 /** The flags each command's parser below accepts; per-command help renders exactly this table. */
 export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOptionSpec[]>> = {
     install: [
-        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect)" },
+        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode; agy is opt-in)" },
         { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
         { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
         { flag: "--ollama-model", value: "model", description: "Use Ollama embeddings (offline runtime only)" },

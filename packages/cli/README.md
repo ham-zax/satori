@@ -23,7 +23,8 @@ satori doctor
 
 `install` auto-detects supported Codex, Claude Code, and OpenCode clients from
 their documented local markers or CLI executables. `--client auto` is the
-explicit equivalent; use `--client all` to force configuration of all three.
+explicit equivalent. Antigravity (`agy`) is opt-in: configure it with
+`--client agy`, or use `--client all` to configure every supported client.
 If no supported client is detected, Satori stops before runtime installation and
 shows explicit client commands. `satori uninstall` defaults to all supported
 clients; use `--client auto` to limit cleanup to currently detected clients.

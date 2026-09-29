@@ -3402,19 +3402,14 @@ test("auto client selection uses client markers and PATH executables", async () 
             ["codex", "opencode"],
         );
 
-        // agy is detected by its config directory or its binary, like the others.
+        // agy is opt-in: neither its binary nor its config directory adds it to auto.
         const agyPath = path.join(binDir, "agy");
         fs.writeFileSync(agyPath, "#!/bin/sh\n", "utf8");
         fs.chmodSync(agyPath, 0o755);
-        assert.deepEqual(
-            plan({ PATH: binDir }).prepared.map((entry) => entry.target.client),
-            ["codex", "opencode", "agy"],
-        );
-        fs.rmSync(agyPath);
         fs.mkdirSync(path.join(homeDir, ".gemini", "config"), { recursive: true });
         assert.deepEqual(
             plan({ PATH: binDir }).prepared.map((entry) => entry.target.client),
-            ["codex", "opencode", "agy"],
+            ["codex", "opencode"],
         );
     });
 });

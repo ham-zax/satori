@@ -10,6 +10,7 @@ import type { ParsedCommand } from "./args.js";
 import { connectCliMcpSession, type CallToolResult, type ListToolsResult } from "./client.js";
 import { asCliError, CliError } from "./errors.js";
 import { emitError, emitJson, inferManageStatusState, parseStructuredEnvelope, type CliWriters } from "./format.js";
+import { formatCommandHelpText } from "./command-help.js";
 import {
     assertAutoClientTargets,
     executeInstallCommand,
@@ -367,6 +368,7 @@ function formatHelpText(): string {
         "  --format json     Print structured output",
         "  --debug           Show MCP startup details",
         "",
+        "Run `satori <command> --help` for a command's options and examples.",
         `Run \`${SATORI_CLI_NPX_COMMAND} --format json --help\` for complete command syntax.`,
         "",
     ].join("\n");
@@ -569,7 +571,9 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             if (parsed.globals.formatExplicit && parsed.globals.format === "json") {
                 emitJson(writers, buildHelpPayload());
             } else {
-                writers.writeStdout(formatHelpText());
+                writers.writeStdout(parsed.command.topic
+                    ? formatCommandHelpText(parsed.command.topic)
+                    : formatHelpText());
             }
             return 0;
         }

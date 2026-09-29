@@ -15,8 +15,18 @@ export type RawArgsMode =
     | { kind: "file"; path: string }
     | { kind: "stdin-json" };
 
+export type HelpTopic =
+    | "install"
+    | "uninstall"
+    | "doctor"
+    | "upgrade"
+    | "terminate"
+    | "version"
+    | "tools-list"
+    | "tool-call";
+
 export type ParsedCommand =
-    | { kind: "help" }
+    | { kind: "help"; topic?: HelpTopic }
     | { kind: "version" }
     | { kind: "doctor"; json: boolean; verbose: boolean }
     | { kind: "upgrade" }
@@ -60,6 +70,65 @@ export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
 export type InstallOfflineReranker = "lateon" | "none";
+
+export interface CommandOptionSpec {
+    flag: string;
+    /** Value placeholder; absent for boolean flags. */
+    value?: string;
+    description: string;
+}
+
+/** Accepted at any position on the command line, except inside a wrapper tool's own flags. */
+export const GLOBAL_OPTION_SPECS: readonly CommandOptionSpec[] = [
+    { flag: "--format", value: "json|text", description: "Output format (default: text for commands, json for tool output)" },
+    { flag: "--debug", description: "Show MCP startup details" },
+    { flag: "--startup-timeout-ms", value: "n", description: "MCP startup timeout in milliseconds (default: 30000)" },
+    { flag: "--call-timeout-ms", value: "n", description: "MCP call timeout in milliseconds (default: 600000)" },
+];
+
+const INSTALL_CLIENT_VALUES = "auto|all|claude|codex|opencode";
+
+/** The flags each command's parser below accepts; per-command help renders exactly this table. */
+export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOptionSpec[]>> = {
+    install: [
+        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect)" },
+        { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
+        { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
+        { flag: "--ollama-model", value: "model", description: "Use Ollama embeddings (offline runtime only)" },
+        { flag: "--reranker", value: "lateon|none", description: "Enable or disable LateOn reranking (offline runtime only)" },
+        { flag: "--profile", value: "default|minimal|all-text", description: "Repository index profile" },
+        { flag: "--dry-run", description: "Show what would change without changing anything" },
+    ],
+    uninstall: [
+        { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to unconfigure (default: all)" },
+        { flag: "--dry-run", description: "Show what would be removed without removing anything" },
+        { flag: "--purge", description: "Also stop servers and delete the runtime, models, and indexes" },
+    ],
+    doctor: [
+        { flag: "--verbose", description: "Include paths, every check, and local diagnostics" },
+        { flag: "--json", description: "Print the machine-readable result (same as --format json)" },
+    ],
+    upgrade: [],
+    terminate: [],
+    version: [],
+    "tools-list": [],
+    "tool-call": [
+        { flag: "--args-json", value: "json|@-", description: "Tool arguments as a JSON object; @- reads stdin" },
+        { flag: "--args-file", value: "path", description: "Read tool arguments from a JSON file" },
+    ],
+};
+
+const HELP_TOPIC_BY_COMMAND: Readonly<Record<string, HelpTopic>> = {
+    install: "install",
+    uninstall: "uninstall",
+    doctor: "doctor",
+    upgrade: "upgrade",
+    update: "upgrade",
+    terminate: "terminate",
+    version: "version",
+    tools: "tools-list",
+    tool: "tool-call",
+};
 
 const RESERVED_SUBCOMMANDS = new Set([
     "tools",
@@ -111,6 +180,51 @@ function stripFlagPrefix(token: string): string {
     return token.slice(2);
 }
 
+function requireGlobalValue(argv: string[], index: number, flag: string): string {
+    const next = argv[index + 1];
+    if (next === undefined || next === "") {
+        throw new CliError("E_USAGE", `Missing value for ${flag}.`, 2);
+    }
+    return next;
+}
+
+/** Applies the global option at argv[index]; returns the tokens consumed, or 0 if it is not one. */
+function consumeGlobalOption(globals: GlobalOptions, argv: string[], index: number): number {
+    const token = argv[index];
+    switch (token) {
+        case "--startup-timeout-ms":
+            globals.startupTimeoutMs = parsePositiveInteger(requireGlobalValue(argv, index, token), token);
+            return 2;
+        case "--call-timeout-ms":
+            globals.callTimeoutMs = parsePositiveInteger(requireGlobalValue(argv, index, token), token);
+            return 2;
+        case "--format": {
+            const next = argv[index + 1];
+            if (next !== "json" && next !== "text") {
+                throw new CliError("E_USAGE", "--format must be one of: json, text.", 2);
+            }
+            globals.format = next;
+            globals.formatExplicit = true;
+            return 2;
+        }
+        case "--debug":
+            globals.debug = true;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+function isValuedCommandFlag(command: string, token: string): boolean {
+    const topic = HELP_TOPIC_BY_COMMAND[command];
+    return topic !== undefined
+        && COMMAND_OPTION_SPECS[topic].some((option) => option.flag === token && option.value !== undefined);
+}
+
+/**
+ * Global options are accepted anywhere except after a wrapper tool name, where the remaining
+ * tokens are that tool's own schema-driven flags and a name like --format may be a tool argument.
+ */
 function parseGlobalOptions(argv: string[]): { globals: GlobalOptions; rest: string[] } {
     const globals: GlobalOptions = {
         startupTimeoutMs: 30000,
@@ -120,53 +234,29 @@ function parseGlobalOptions(argv: string[]): { globals: GlobalOptions; rest: str
         debug: false,
     };
 
+    const rest: string[] = [];
     let i = 0;
     while (i < argv.length) {
+        const consumed = consumeGlobalOption(globals, argv, i);
+        if (consumed > 0) {
+            i += consumed;
+            continue;
+        }
         const token = argv[i];
-        switch (token) {
-            case "--startup-timeout-ms": {
-                const next = argv[i + 1];
-                if (!next) {
-                    throw new CliError("E_USAGE", "Missing value for --startup-timeout-ms.", 2);
-                }
-                globals.startupTimeoutMs = parsePositiveInteger(next, "--startup-timeout-ms");
-                i += 2;
-                break;
-            }
-            case "--call-timeout-ms": {
-                const next = argv[i + 1];
-                if (!next) {
-                    throw new CliError("E_USAGE", "Missing value for --call-timeout-ms.", 2);
-                }
-                globals.callTimeoutMs = parsePositiveInteger(next, "--call-timeout-ms");
-                i += 2;
-                break;
-            }
-            case "--format": {
-                const next = argv[i + 1];
-                if (!next || (next !== "json" && next !== "text")) {
-                    throw new CliError("E_USAGE", "--format must be one of: json, text.", 2);
-                }
-                globals.format = next;
-                globals.formatExplicit = true;
-                i += 2;
-                break;
-            }
-            case "--debug": {
-                globals.debug = true;
-                i += 1;
-                break;
-            }
-            default: {
-                return {
-                    globals,
-                    rest: argv.slice(i),
-                };
-            }
+        rest.push(token);
+        i += 1;
+        if (rest.length === 1 && !token.startsWith("-") && !RESERVED_SUBCOMMANDS.has(token)) {
+            rest.push(...argv.slice(i));
+            break;
+        }
+        // A command flag's value is never a global option.
+        if (rest.length > 1 && i < argv.length && isValuedCommandFlag(rest[0], token)) {
+            rest.push(argv[i]);
+            i += 1;
         }
     }
 
-    return { globals, rest: [] };
+    return { globals, rest };
 }
 
 function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining: string[] } {
@@ -324,9 +414,10 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
 export function parseCliArgs(argv: string[]): ParsedCliInput {
     const { globals, rest } = parseGlobalOptions(argv);
     if (rest.length === 0 || rest[0] === "help" || rest.includes("--help") || rest.includes("-h")) {
+        const topic = rest.length > 0 && rest[0] !== "help" ? HELP_TOPIC_BY_COMMAND[rest[0]] : undefined;
         return {
             globals,
-            command: { kind: "help" }
+            command: topic ? { kind: "help", topic } : { kind: "help" }
         };
     }
 
@@ -335,6 +426,10 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
             globals,
             command: { kind: "version" }
         };
+    }
+
+    if (rest[0].startsWith("-")) {
+        throw new CliError("E_USAGE", `Unknown option '${rest[0]}'. Run satori --help for usage.`, 2);
     }
 
     if (rest[0] === "doctor") {
@@ -392,13 +487,16 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
     }
 
     if (rest[0] === "tools") {
-        if (rest.length === 2 && rest[1] === "list") {
-            return {
-                globals,
-                command: { kind: "tools-list" }
-            };
+        if (rest[1] !== "list") {
+            throw new CliError("E_USAGE", "Unsupported tools subcommand. Use: tools list", 2);
         }
-        throw new CliError("E_USAGE", "Unsupported tools subcommand. Use: tools list", 2);
+        if (rest.length > 2) {
+            throw new CliError("E_USAGE", `Unknown arguments for tools list: ${rest.slice(2).join(" ")}`, 2);
+        }
+        return {
+            globals,
+            command: { kind: "tools-list" }
+        };
     }
 
     if (rest[0] === "tool") {
@@ -408,6 +506,9 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         const toolName = rest[2];
         if (!toolName) {
             throw new CliError("E_USAGE", "Missing tool name. Use: tool call <toolName>", 2);
+        }
+        if (toolName.startsWith("-")) {
+            throw new CliError("E_USAGE", `Unknown option '${toolName}'. Use: tool call <toolName>`, 2);
         }
         const { rawArgsMode, remaining } = parseRawArgsMode(rest.slice(3));
         if (remaining.length > 0) {

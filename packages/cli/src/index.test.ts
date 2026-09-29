@@ -1491,6 +1491,113 @@ test("runCli forwards wrapper --debug to tool arguments instead of consuming it 
     assert.equal(payload?.args?.debug, true);
 });
 
+function sessionWithToolResult(result: CallToolResult, recorded?: Array<{ name: string; args: Record<string, unknown> }>) {
+    const base = createMockSession("normal");
+    return {
+        ...base,
+        async callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+            recorded?.push({ name, args });
+            return result;
+        },
+    };
+}
+
+async function runWithSession(argv: string[], session: MockCliSession) {
+    const io = captureIo();
+    const exitCode = await runCli(argv, {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        connectSession: async () => session,
+        startupTimeoutMs: 10000,
+        callTimeoutMs: 10000,
+    });
+    return { exitCode, ...io.read() };
+}
+
+test("runCli passes a wrapper tool's own --format and --debug flags to the tool, not the CLI", async () => {
+    const recorded: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const base = createMockSession("normal");
+    const session: MockCliSession = {
+        ...base,
+        async listTools(): Promise<ListToolsResult> {
+            return {
+                tools: [{
+                    name: "render_report",
+                    description: "render",
+                    inputSchema: {
+                        type: "object" as const,
+                        properties: { format: { type: "string" }, debug: { type: "boolean" } },
+                    },
+                }],
+            };
+        },
+        async callTool(name, args) {
+            recorded.push({ name, args });
+            return { isError: false, content: [{ type: "text", text: JSON.stringify({ status: "ok" }) }] };
+        },
+    };
+
+    const run = await runWithSession(["render_report", "--format", "markdown", "--debug"], session);
+    assert.equal(run.exitCode, 0);
+    assert.deepEqual(recorded, [{ name: "render_report", args: { format: "markdown", debug: true } }]);
+    // The CLI's own output format stayed at its JSON default and debug output stayed off.
+    assert.equal(JSON.parse(run.stdout).isError, false);
+    assert.equal(run.stderr, "");
+});
+
+test("runCli accepts global options after built-in commands", async () => {
+    let doctorRuns = 0;
+    const io = captureIo();
+    const exitCode = await runCli(["doctor", "--debug", "--format", "json"], {
+        writeStdout: io.writeStdout,
+        writeStderr: io.writeStderr,
+        doctorRunner: () => {
+            doctorRuns += 1;
+            return {
+                status: "ok",
+                packageVersions: [],
+                packageVersionNote: "",
+                checks: [],
+                nextSteps: [],
+                managedRuntime: null,
+                localDiagnostics: {
+                    schemaVersion: "v1", storage: "local_only", privacy: "",
+                    eventsRead: 0, malformedEventsSkipped: 0, totalDurationMs: 0,
+                    toolCalls: [], warningCodes: [], fallbackUses: 0, lifecycleOutcomes: [],
+                },
+            };
+        },
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(doctorRuns, 1);
+    assert.equal(JSON.parse(io.read().stdout).status, "ok");
+});
+
+test("runCli prints per-command help with usage, options, and examples", async () => {
+    for (const [argv, usage, option] of [
+        [["install", "--help"], "satori install [options]", "--dry-run"],
+        [["uninstall", "-h"], "satori uninstall [options]", "--purge"],
+        [["doctor", "--help"], "satori doctor [options]", "--verbose"],
+        [["tool", "call", "--help"], "satori tool call <toolName>", "--args-json"],
+    ] as const) {
+        const io = captureIo();
+        const exitCode = await runCli([...argv], {
+            writeStdout: io.writeStdout,
+            writeStderr: io.writeStderr,
+            connectSession: async () => {
+                throw new Error("help must not start an MCP session");
+            },
+        });
+        const { stdout, stderr } = io.read();
+        assert.equal(exitCode, 0, argv.join(" "));
+        assert.equal(stderr, "");
+        assert.match(stdout, /Usage:/);
+        assert.equal(stdout.includes(usage), true, `${argv.join(" ")} usage`);
+        assert.equal(stdout.includes(option), true, `${argv.join(" ")} option`);
+        assert.match(stdout, /Examples:/);
+    }
+});
+
 test("runCli returns initial manage_index create error without polling status", async () => {
     const io = captureIo();
 

@@ -30,11 +30,76 @@ test("parseCliArgs preserves trailing --debug as wrapper flag input", () => {
     assert.deepEqual(parsed.command.wrapperArgs, ["--path", "/repo", "--query", "auth", "--debug"]);
 });
 
-test("parseCliArgs does not treat post-command --debug as global", () => {
-    assert.throws(
-        () => parseCliArgs(["tools", "--debug", "list"]),
-        /Unsupported tools subcommand/
-    );
+test("parseCliArgs accepts global options between built-in command words", () => {
+    const parsed = parseCliArgs(["tools", "--debug", "list"]);
+    assert.equal(parsed.command.kind, "tools-list");
+    assert.equal(parsed.globals.debug, true);
+});
+
+test("parseCliArgs accepts global options after a built-in command", () => {
+    const toolsList = parseCliArgs(["tools", "list", "--format", "json"]);
+    assert.equal(toolsList.command.kind, "tools-list");
+    assert.equal(toolsList.globals.format, "json");
+    assert.equal(toolsList.globals.formatExplicit, true);
+
+    const doctor = parseCliArgs(["doctor", "--debug", "--verbose", "--call-timeout-ms", "5"]);
+    assert.deepEqual(doctor.command, { kind: "doctor", json: false, verbose: true });
+    assert.equal(doctor.globals.debug, true);
+    assert.equal(doctor.globals.callTimeoutMs, 5);
+
+    const install = parseCliArgs(["install", "--dry-run", "--format", "text", "--startup-timeout-ms", "7"]);
+    assert.equal(install.command.kind, "install");
+    assert.equal(install.globals.startupTimeoutMs, 7);
+    assert.equal(install.globals.format, "text");
+});
+
+test("parseCliArgs never treats a command flag's value as a global option", () => {
+    const parsed = parseCliArgs(["tool", "call", "search_codebase", "--args-json", "--format"]);
+    assert.equal(parsed.globals.formatExplicit, false);
+    assert.equal(parsed.command.kind, "tool-call");
+    if (parsed.command.kind !== "tool-call") assert.fail("Expected tool-call parsing");
+    assert.deepEqual(parsed.command.rawArgsMode, { kind: "json", value: "--format" });
+
+    const fileMode = parseCliArgs(["tool", "call", "search_codebase", "--args-file", "--debug", "--format", "json"]);
+    assert.equal(fileMode.globals.debug, false);
+    assert.equal(fileMode.globals.format, "json");
+    if (fileMode.command.kind !== "tool-call") assert.fail("Expected tool-call parsing");
+    assert.deepEqual(fileMode.command.rawArgsMode, { kind: "file", path: "--debug" });
+
+    // An install --ollama-model value equal to a global flag name is the model, not the global.
+    const install = parseCliArgs(["install", "--ollama-model", "--debug", "--dry-run"]);
+    assert.equal(install.globals.debug, false);
+    if (install.command.kind !== "install") assert.fail("Expected install parsing");
+    assert.equal(install.command.ollamaModel, "--debug");
+});
+
+test("parseCliArgs passes a wrapper tool's own --format and --debug tokens through untouched", () => {
+    const parsed = parseCliArgs(["some_tool", "--format", "markdown", "--debug", "--startup-timeout-ms", "9"]);
+    assert.equal(parsed.globals.formatExplicit, false);
+    assert.equal(parsed.globals.debug, false);
+    assert.equal(parsed.globals.startupTimeoutMs, 30000);
+    if (parsed.command.kind !== "wrapper") assert.fail("Expected wrapper command parsing");
+    assert.deepEqual(parsed.command.wrapperArgs, ["--format", "markdown", "--debug", "--startup-timeout-ms", "9"]);
+
+    // Leading globals still apply; only tokens after the tool name belong to the tool.
+    const leading = parseCliArgs(["--format", "text", "some_tool", "--format", "markdown"]);
+    assert.equal(leading.globals.format, "text");
+    if (leading.command.kind !== "wrapper") assert.fail("Expected wrapper command parsing");
+    assert.deepEqual(leading.command.wrapperArgs, ["--format", "markdown"]);
+});
+
+test("parseCliArgs rejects an unknown leading option", () => {
+    assert.throws(() => parseCliArgs(["--bogus", "doctor"]), /Unknown option '--bogus'/);
+});
+
+test("parseCliArgs selects per-command help and keeps top-level help topic-free", () => {
+    assert.deepEqual(parseCliArgs(["install", "--help"]).command, { kind: "help", topic: "install" });
+    assert.deepEqual(parseCliArgs(["doctor", "-h"]).command, { kind: "help", topic: "doctor" });
+    assert.deepEqual(parseCliArgs(["update", "--help"]).command, { kind: "help", topic: "upgrade" });
+    assert.deepEqual(parseCliArgs(["tools", "list", "--help"]).command, { kind: "help", topic: "tools-list" });
+    assert.deepEqual(parseCliArgs(["tool", "call", "--help"]).command, { kind: "help", topic: "tool-call" });
+    assert.deepEqual(parseCliArgs(["--help"]).command, { kind: "help" });
+    assert.deepEqual(parseCliArgs(["help"]).command, { kind: "help" });
 });
 
 test("parseCliArgs defaults install to offline Potion", () => {

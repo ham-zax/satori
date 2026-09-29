@@ -51,7 +51,6 @@ Treat these as historical unless a current document explicitly names one as auth
 - `research/` — investigations, measurements, and external-source analysis captured at a point in time;
 - `remediation/` — issue-specific remediation and qualification records;
 - `superpowers/plans/` and `superpowers/specs/` — dated engineering design/execution artifacts;
-- `superpowers/agent-plans/` — multi-agent coordination artifacts;
 - `architecture/ownership-boundary-audit.md` — explicitly dated pre-clean-break architecture audit.
 
 When a historical document conflicts with the current README, Product Guide, current source, current public docs, or current release tooling, prefer the current product surface.

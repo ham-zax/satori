@@ -1,9 +1,0 @@
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"formatVersion\":3,\"status\":\"not_ready\",\"path\":\"/home/hamza/repo/satori-track-o-heldout-20260804/worktrees/promptready-r0\",\"query\":\"Where is the primary route table defined?\",\"scope\":\"mixed\",\"groupBy\":\"symbol\",\"resultMode\":\"grouped\",\"limit\":15,\"message\":\"Unexpected search_codebase failure: Canonical JSON does not accept undefined.\",\"results\":[]}"
-    }
-  ],
-  "isError": true
-}

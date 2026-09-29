@@ -225,22 +225,52 @@ export function createLocalOnlyContext(
     });
 }
 
-function createMissingConfigIssue(missingEnv: string[]): MissingProviderConfigIssue {
+function createMissingConfigIssue(
+    missingEnv: string[],
+    message?: string,
+    nextSteps?: string[],
+): MissingProviderConfigIssue {
     const uniqueMissing = [...new Set(missingEnv)];
-    const message = `Satori provider setup is incomplete. Missing required environment variable(s): ${uniqueMissing.join(", ")}. MCP startup does not require provider credentials, but this tool call does.`;
     return {
         ok: false,
         code: "MISSING_PROVIDER_CONFIG",
         missingEnv: uniqueMissing,
-        message,
+        message: message
+            ?? `Satori provider setup is incomplete. Missing required environment variable(s): ${uniqueMissing.join(", ")}. MCP startup does not require provider credentials, but this tool call does.`,
         hints: {
             setup: {
                 code: "MISSING_PROVIDER_CONFIG",
                 missingEnv: uniqueMissing,
-                nextSteps: uniqueMissing.map((name) => `Set ${name}, restart the MCP server, then retry the tool call.`),
+                nextSteps: nextSteps
+                    ?? uniqueMissing.map((name) => `Set ${name}, restart the MCP server, then retry the tool call.`),
             }
         }
     };
+}
+
+/**
+ * Local model files the configured runtime needs. Checked once before a
+ * runtime is created (not on every call), so a deleted or moved model is
+ * reported as setup, not as a failure deep inside embedding or reranking.
+ */
+function missingRuntimeArtifacts(config: ContextMcpConfig): MissingProviderConfigIssue | null {
+    const configured: Array<[string, string | undefined]> = [];
+    if (config.encoderProvider === "Potion") {
+        configured.push(["POTION_HELPER_PATH", config.potionHelperPath], ["POTION_MODEL_PATH", config.potionModelPath]);
+    }
+    if (resolveRerankerProvider(config) === "lateon") {
+        configured.push(["SATORI_LATEON_MODEL_PATH", config.lateOnModelPath]);
+    }
+    const missing = configured.filter(([, filePath]) => filePath && !fs.existsSync(filePath));
+    if (missing.length === 0) return null;
+    return createMissingConfigIssue(
+        missing.map(([name]) => name),
+        `Satori runtime files are missing: ${missing.map(([name, filePath]) => `${name}=${filePath}`).join(", ")}.`,
+        [
+            "Run `npx -y @zokizuan/satori-cli@latest install` to restore the runtime, then restart the MCP client.",
+            "Run `npx -y @zokizuan/satori-cli@latest doctor` to check the installation.",
+        ],
+    );
 }
 
 export class ProviderRuntime {
@@ -376,6 +406,10 @@ export class ProviderRuntime {
         const validation = this.validate(operation);
         if (validation) {
             return validation;
+        }
+        if (operation !== "vector_only" && !this.embeddingRuntimePromise) {
+            const artifacts = missingRuntimeArtifacts(this.config);
+            if (artifacts) return artifacts;
         }
 
         if (operation === "vector_only") {

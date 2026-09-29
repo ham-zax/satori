@@ -77,6 +77,30 @@ test("embedding/vector operations require provider key and MILVUS_ADDRESS", () =
     }
 });
 
+test("a configured runtime file that does not exist is reported as setup before any runtime starts", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-missing-artifacts-"));
+    try {
+        const helper = path.join(root, "satori-potion");
+        fs.writeFileSync(helper, "");
+        const runtime = createRuntime(baseConfig({
+            vectorStoreProvider: "LanceDB",
+            lanceDbPath: path.join(root, "lancedb"),
+            encoderProvider: "Potion",
+            encoderModel: "pinned-potion",
+            encoderOutputDimension: 256,
+            potionHelperPath: helper,
+            potionModelPath: path.join(root, "missing-model"),
+        }));
+        const issue = await runtime.requireToolContext("embedding_vector");
+        assert.ok("ok" in issue && issue.ok === false);
+        assert.deepEqual(issue.missingEnv, ["POTION_MODEL_PATH"]);
+        assert.match(issue.message, /runtime files are missing: POTION_MODEL_PATH=/);
+        assert.match(issue.hints.setup.nextSteps.join("\n"), /install/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test("runtime fingerprint seals analysis and projection versions", () => {
     const fingerprint = buildRuntimeIndexFingerprint(baseConfig(), 1024);
     assert.equal(fingerprint.parserVersion, LANGUAGE_PARSER_VERSION);

@@ -32,7 +32,7 @@
     "fix:bin-perms": "node -e \"const fs=require('fs');try{fs.chmodSync('dist/index.js',0o755);}catch(e){console.error(e);process.exit(1);}\"",
     "prepublishOnly": "pnpm build",
     "test": "pnpm --filter @zokizuan/satori-mcp build:runtime && pnpm run test:raw",
-    "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 src/**/*.test.ts"
+    "test:raw": "node --import tsx --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

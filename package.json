@@ -15,7 +15,7 @@
     "dev:install-local-mcp": "node scripts/install-local-mcp-runtime.mjs",
     "dev:install-local-mcp:no-build": "node scripts/install-local-mcp-runtime.mjs --no-build",
     "clean": "pnpm -r clean",
-    "test": "pnpm --filter @zokizuan/satori-core test && pnpm --filter @zokizuan/satori-mcp test",
+    "test": "pnpm --filter @zokizuan/satori-core test && pnpm --filter @zokizuan/satori-mcp test && pnpm --filter @zokizuan/satori-cli test",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run versions:check",
     "check:fast": "pnpm run lint && pnpm run versions:check",
     "lint": "pnpm -r lint",

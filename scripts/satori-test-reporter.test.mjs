@@ -36,14 +36,14 @@ test('non-TTY / CI mode emits deterministic append-only lines without cursor con
       type: 'test:summary',
       data: {
         file: '/repo/packages/core/src/a.test.ts',
-        counts: { pass: 1, fail: 0, skipped: 0 },
+        counts: { passed: 1, failed: 0, skipped: 0 },
         duration_ms: 120,
       },
     },
     {
       type: 'test:summary',
       data: {
-        counts: { pass: 1, fail: 0, skipped: 0 },
+        counts: { passed: 1, failed: 0, skipped: 0 },
       },
     },
   ], { CI: '1', NO_COLOR: '1' });
@@ -71,7 +71,7 @@ test('interleaved events maintain independent counters and report failures accur
       type: 'test:summary',
       data: {
         file: '/repo/packages/core/src/a.test.ts',
-        counts: { pass: 1, fail: 0, skipped: 0 },
+        counts: { passed: 1, failed: 0, skipped: 0 },
         duration_ms: 50,
       },
     },
@@ -79,14 +79,14 @@ test('interleaved events maintain independent counters and report failures accur
       type: 'test:summary',
       data: {
         file: '/repo/packages/core/src/b.test.ts',
-        counts: { pass: 0, fail: 1, skipped: 0 },
+        counts: { passed: 0, failed: 1, skipped: 0 },
         duration_ms: 60,
       },
     },
     {
       type: 'test:summary',
       data: {
-        counts: { pass: 1, fail: 1, skipped: 0 },
+        counts: { passed: 1, failed: 1, skipped: 0 },
       },
     },
   ], { CI: '1', NO_COLOR: '1' });
@@ -112,14 +112,14 @@ test('interactive mode renders live dashboard with active files, progress, and r
         type: 'test:summary',
         data: {
           file: '/repo/packages/core/src/file1.test.ts',
-          counts: { pass: 1, fail: 0, skipped: 0 },
+          counts: { passed: 1, failed: 0, skipped: 0 },
           duration_ms: 200,
         },
       },
       {
         type: 'test:summary',
         data: {
-          counts: { pass: 1, fail: 0, skipped: 0 },
+          counts: { passed: 1, failed: 0, skipped: 0 },
         },
       },
     ], { CI: '', NO_COLOR: '1' });

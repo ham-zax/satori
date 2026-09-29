@@ -204,8 +204,8 @@ function finalSummary(state) {
 function plainFileSummary(data) {
   const counts = data.counts ?? {};
 
-  const passed = counts.pass ?? 0;
-  const failed = counts.fail ?? 0;
+  const passed = counts.passed ?? 0;
+  const failed = counts.failed ?? 0;
   const skipped = counts.skipped ?? 0;
 
   const status = failed > 0 ? 'FAIL' : 'PASS';
@@ -337,8 +337,8 @@ export default async function* satoriTestReporter(source) {
         const counts = data.counts ?? {};
         const recent = {
           file: data.file,
-          passed: counts.pass ?? entry?.completedTests ?? 0,
-          failed: counts.fail ?? entry?.failedTests ?? 0,
+          passed: counts.passed ?? entry?.completedTests ?? 0,
+          failed: counts.failed ?? entry?.failedTests ?? 0,
           skipped: counts.skipped ?? 0,
           durationMs: data.duration_ms ?? (entry ? Date.now() - entry.startedAt : 0),
         };

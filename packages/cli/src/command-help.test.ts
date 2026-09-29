@@ -26,7 +26,7 @@ test("per-command help lists usage, exactly the parser's options, and examples",
     ] as const) {
         const text = formatCommandHelpText(topic);
         assert.match(text, new RegExp(`Usage:\\n  satori ${name}\\b`), topic);
-        assert.match(text, /Examples:\n  satori /, topic);
+        assert.match(text, /Examples:\n {2}satori /, topic);
         assert.deepEqual(
             listedFlags(text, "Options:"),
             [...COMMAND_OPTION_SPECS[topic].map((option) => option.flag), "-h, --help"],

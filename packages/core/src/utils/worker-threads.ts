@@ -33,6 +33,16 @@ export function filterWorkerExecArgv(): string[] {
                 if (i + 1 < process.execArgv.length && !process.execArgv[i + 1].startsWith('-')) {
                     result.push(process.execArgv[++i]);
                 }
+                // Preload scripts written in TypeScript (test setup) only need to run in the parent: workers inherit its env,
+                // and Node < 22.14 workers cannot load a .ts preload.
+                if (arg === '--import' && result[result.length - 1].endsWith('.ts')) {
+                    result.splice(-2, 2);
+                    continue;
+                }
+                // Node < 22.14 workers ignore tsx's ESM hooks ("Unknown file extension .ts"); tsx/cjs works everywhere.
+                if (arg === '--import' && result[result.length - 1] === 'tsx') {
+                    result.splice(-2, 2, '--require', 'tsx/cjs');
+                }
             }
         }
     }

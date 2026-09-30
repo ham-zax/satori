@@ -77,3 +77,37 @@ test('how-does behavioral questions request owner-oriented semantic expansion', 
     );
     assert.equal(documentationPlan.behavioralOwnerSeeking, false);
 });
+
+test('behavioral questions keep calls in when clauses out of reference intent', () => {
+    const queries = [
+        'where does useState schedule a re-render when you call the setter',
+        'where does useState schedule a re-render when I call the setter',
+        'where does React throw when a hook is called outside a component',
+    ];
+    for (const query of queries) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.equal(plan.referenceSeeking, false, query);
+        assert.notEqual(plan.route.kind, 'references', query);
+        assert.equal(plan.implementationSeeking, true, query);
+        assert.equal(plan.referenceDirection, undefined, query);
+    }
+});
+
+test('explicit reference questions retain reference routing and direction', () => {
+    const cases = [
+        ['who calls useState', 'callers'],
+        ['what does dispatchSetState call', 'callees'],
+        ['references to useState', 'callers'],
+        ['where is useState called', 'both'],
+        ['where is useState used', 'both'],
+        ['where does dispatchSetState call scheduleUpdateOnFiber', undefined],
+        ['where is useState called when rendering a component', 'both'],
+        ['how does dispatchSetState call scheduleUpdateOnFiber when updating state', undefined],
+    ] as const;
+    for (const [query, direction] of cases) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.equal(plan.referenceSeeking, true, query);
+        assert.equal(plan.route.kind, 'references', query);
+        assert.equal(plan.referenceDirection, direction, query);
+    }
+});

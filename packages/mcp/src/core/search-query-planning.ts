@@ -521,7 +521,7 @@ function classifySearchRoute(input: {
     if (strongConfigurationCue || configuredPredicate) {
         return buildRouteContract("configuration", "configuration_cue");
     }
-    if (input.referenceSeeking || /\b(calls?|callers?|callees?|references?|imports?|uses?)\b/.test(normalizedQuery)) {
+    if (input.referenceSeeking) {
         return buildRouteContract("references", "reference_cue");
     }
     const explicitOwnershipCue = /\b(who\s+owns?|owner|owning)\b/.test(normalizedQuery);
@@ -583,8 +583,12 @@ export function buildSearchQueryPlan(
     const lexicalTerms = tokenizeLexicalTerms(lexicalSourceTokens)
         .filter((term) => !SEARCH_QUERY_STOPWORDS.has(term.value))
         .slice(0, 8);
-    const explicitReferenceSeeking = /\b(used|uses|usage|reference|references|referenced|callers?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(normalizedQuery)
-        || /\bwho\s+uses\b/.test(normalizedQuery);
+    // In a behavioral question, a when-clause describes the trigger; its calls
+    // do not ask for the callers or references of the implementation.
+    const referenceQuestion = /^\s*(?:where|how)\s+(?:does|do|is|are)\b/.test(normalizedQuery)
+        ? normalizedQuery.split(/\bwhen\b/, 1)[0]
+        : normalizedQuery;
+    const explicitReferenceSeeking = /\b(used|uses?|usage|references?|referenced|calls?|callers?|callees?|called|imports?|imported|instantiat(?:e|ed|ion))\b/.test(referenceQuestion);
     const referenceSeeking = explicitReferenceSeeking;
     const rawTestSeeking = /\b(test|tests|tested|testing|spec|specs|coverage|assert|asserts|assertion|assertions|fixture|fixtures|mock|mocks|mocked|stub|stubs)\b/.test(normalizedQuery)
         || /\.test\b/.test(normalizedQuery)

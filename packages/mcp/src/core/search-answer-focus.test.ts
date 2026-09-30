@@ -10,6 +10,10 @@ const cases = [
     ["where is trade veto documented", "documentation"],
     ["where is the risk threshold configured", "configuration"],
     ["who calls validate_order", "references"],
+    ["where does useState schedule a re-render when you call the setter", "implementation"],
+    ["where does React throw when a hook is called outside a component", "implementation"],
+    ["how does useState schedule a re-render when the setter is called", "implementation"],
+    ["where is useState called when rendering a component", "references"],
     ["trading risk management", "neutral"],
 ] as const;
 

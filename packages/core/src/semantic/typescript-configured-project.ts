@@ -111,11 +111,19 @@ function diagnosticText(diagnostic: ts.Diagnostic): string {
     return ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
 }
 
+/** A tsconfig/jsconfig that cannot be read or parsed as JSON; callers may skip that config. */
+export class TypeScriptConfigReadError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'TypeScriptConfigReadError';
+    }
+}
+
 export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptConfiguredProject {
     const absoluteConfigPath = normalizedPath(configPath);
     const configRead = ts.readConfigFile(absoluteConfigPath, ts.sys.readFile);
     if (configRead.error) {
-        throw new Error(`Unable to read TypeScript config '${absoluteConfigPath}': ${diagnosticText(configRead.error)}`);
+        throw new TypeScriptConfigReadError(`Unable to read TypeScript config '${absoluteConfigPath}': ${diagnosticText(configRead.error)}`);
     }
 
     const parsed = ts.parseJsonConfigFileContent(

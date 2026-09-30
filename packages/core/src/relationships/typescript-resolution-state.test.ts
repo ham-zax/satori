@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 
 import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols/contracts';
 import { buildSymbolRegistry } from '../symbols/registry';
@@ -85,6 +85,37 @@ test('a fresh analyzer resumes a delta from persisted state, sharded or not', as
             write('two/src/c.ts', 'export function c(): number {\n    return 3;\n}\n');
         }
     } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('an unreadable tsconfig only drops its own project instead of failing the analysis', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-broken-config-')));
+    const write = (file: string, text: string) => {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), text);
+    };
+    const warn = mock.method(console, 'warn', () => undefined);
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(4);
+    try {
+        write('tsconfig.json', JSON.stringify({ compilerOptions: COMPILER_OPTIONS, include: ['src'] }));
+        write('src/a.ts', 'export const a = 1;\n');
+        write('broken/tsconfig.json', '{ "compilerOptions": { ');
+        write('broken/b.ts', 'export const b = 2;\n');
+        write('broken/c.ts', 'export const c = 3;\n');
+        const registry = registryFor(root, ['src/a.ts', 'broken/b.ts', 'broken/c.ts']);
+
+        const broken = await analyzer.analyze({ rootPath: root, language: 'typescript', registry });
+        assert.equal(broken.coverage?.analyzedSourceFileCount, 3);
+        const warnings = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('broken/tsconfig.json'));
+        assert.equal(warnings.length, 1, 'the unreadable config is reported once, not once per file');
+
+        write('broken/tsconfig.json', JSON.stringify({ compilerOptions: COMPILER_OPTIONS }));
+        const fixed = await analyzer.analyze({ rootPath: root, language: 'typescript', registry });
+        assert.notEqual(fixed.environmentConfigId, broken.environmentConfigId);
+    } finally {
+        warn.mock.restore();
+        await analyzer.dispose();
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

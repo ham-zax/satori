@@ -16,6 +16,7 @@ import {
     TypeScriptLanguageServiceSession,
     TypeScriptSourceBudgetTracker,
     loadTypeScriptConfiguredProject,
+    TypeScriptConfigReadError,
     type TypeScriptConfiguredProject,
     type TypeScriptSourceBudget,
 } from '../semantic/typescript-configured-project';
@@ -1387,13 +1388,25 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const configuredGroups = new Map<string, string[]>();
         const inferredFiles: string[] = [];
 
-        const load = (configPath: string): TypeScriptConfiguredProject => {
+        // An unreadable config is not a usable candidate: files it would have covered fall through to
+        // the next candidate or the inferred group. It stays a control file of those plans, so fixing
+        // it changes their environment identity.
+        const unreadableConfigs = new Set<string>();
+        const load = (configPath: string): TypeScriptConfiguredProject | undefined => {
             const normalized = normalizeAbsolute(configPath);
             const cached = configCache.get(normalized);
             if (cached) return cached;
-            const project = loadTypeScriptConfiguredProject(normalized);
-            configCache.set(normalized, project);
-            return project;
+            if (unreadableConfigs.has(normalized)) return undefined;
+            try {
+                const project = loadTypeScriptConfiguredProject(normalized);
+                configCache.set(normalized, project);
+                return project;
+            } catch (error) {
+                if (!(error instanceof TypeScriptConfigReadError)) throw error;
+                unreadableConfigs.add(normalized);
+                console.warn(`[TypeScriptResolution] Skipping unreadable TypeScript config: ${error.message}`);
+                return undefined;
+            }
         };
 
         for (const relativeFile of relativeFiles) {
@@ -1401,7 +1414,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             let selected: TypeScriptConfiguredProject | undefined;
             for (const configPath of candidateConfigPaths(normalizedRoot, absoluteFile)) {
                 const project = load(configPath);
-                if (project.fileNames.includes(absoluteFile)) {
+                if (project?.fileNames.includes(absoluteFile)) {
                     selected = project;
                     break;
                 }
@@ -1418,6 +1431,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const plans: ProjectPlan[] = [];
         for (const [configPath, files] of [...configuredGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
             const project = load(configPath);
+            if (!project) continue;
             const sortedFiles = [...files].sort();
             const absoluteFiles = sortedFiles.map((file) => normalizeAbsolute(path.join(normalizedRoot, file)));
             const control = projectControlFiles(normalizedRoot, project, absoluteFiles);

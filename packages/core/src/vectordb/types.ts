@@ -140,6 +140,8 @@ export type VectorStoreBackendInfo =
         address: string;
         lexicalMatchModes: readonly ('all_terms' | 'any_terms')[];
         defaultLexicalMatchMode: 'all_terms' | 'any_terms' | 'provider_sparse';
+        /** Tokenization contract of the persisted lexical index; part of the Publication format. */
+        lexicalAnalyzerVersion: string;
     };
 
 export type CollectionCreateOptions = {

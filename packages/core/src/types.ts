@@ -87,8 +87,8 @@ export interface SemanticSearchCandidateTraceStage {
 
 export interface SemanticSearchCandidateTraceRemoval {
     candidateId: string;
-    afterStage: 'raw_lexical_fallback' | 'core_fusion';
-    reason: 'core_fusion_limit' | 'dense_path_filter';
+    afterStage: 'core_fusion';
+    reason: 'core_fusion_limit';
 }
 
 export type SemanticSearchDiagnosticRetrievalArm =

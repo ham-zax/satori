@@ -976,6 +976,10 @@ export class Context {
 
     private buildPublicationFormat(): Publication['format'] {
         const embeddingIdentity = this.assertEmbeddingIdentityCurrent();
+        const backendInfo = this.vectorDatabase.getBackendInfo?.();
+        const lexicalAnalyzerVersion = backendInfo?.provider === 'lancedb'
+            ? backendInfo.lexicalAnalyzerVersion
+            : undefined;
         return Object.freeze({
             indexFormatVersion: JSON.stringify({
                 vectorSchemaVersion: this.getIsHybrid() === true ? 'hybrid_v3' : 'dense_v3',
@@ -984,6 +988,7 @@ export class Context {
                 extractorVersion: SYMBOL_EXTRACTOR_VERSION,
                 embeddingProjectionVersion: EMBEDDING_PROJECTION_VERSION,
                 lexicalProjectionVersion: LEXICAL_PROJECTION_VERSION,
+                ...(lexicalAnalyzerVersion !== undefined ? { lexicalAnalyzerVersion } : {}),
                 packageOwnershipVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
             }),
             embeddingIdentity: JSON.stringify({

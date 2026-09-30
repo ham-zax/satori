@@ -4,9 +4,7 @@ import test from 'node:test';
 import type { VectorCandidate, VectorDocument } from '../vectordb';
 import { buildSemanticSearchCandidateTrace } from './semantic-search-service';
 import {
-    admitLexicalFallbackCandidates,
     fuseVectorCandidatesWithRrf,
-    LEXICAL_FALLBACK_DISCOVERY_PREFIX,
     VECTOR_CANDIDATE_RRF_K_V1,
 } from './vector-candidate-fusion';
 
@@ -41,83 +39,38 @@ function traceInput(overrides: Record<string, unknown> = {}) {
     } as Parameters<typeof buildSemanticSearchCandidateTrace>[0];
 }
 
-test('Lexical fallback discovery prefix keeps the policy bounded and small', () => {
-    assert.ok(Number.isSafeInteger(LEXICAL_FALLBACK_DISCOVERY_PREFIX));
-    assert.ok(LEXICAL_FALLBACK_DISCOVERY_PREFIX >= 2);
-    assert.ok(LEXICAL_FALLBACK_DISCOVERY_PREFIX <= 5);
-});
-
-test('Strong fallback rows from a dense-missing path survive admission and reach fusion', () => {
+test('Fallback rows from paths dense retrieval missed reach fusion', () => {
     const dense = [candidate('dense-a', 'src/a.ts'), candidate('dense-b', 'src/b.ts')];
-    const densePaths = new Set(dense.map((row) => row.document.relativePath));
     const fallback = [
-        candidate('fallback-c-strong', 'src/c.ts', 21),
-        candidate('fallback-c-next', 'src/c.ts', 20),
-        candidate('fallback-d-tail', 'src/d.ts', 1),
+        candidate('fallback-c', 'src/c.ts', 30),
+        candidate('fallback-d', 'src/d.ts', 20),
+        candidate('fallback-e', 'src/e.ts', 10),
     ];
-    const admission = admitLexicalFallbackCandidates({ fallback, densePaths });
-
-    assert.deepEqual(
-        admission.admitted.map((row) => row.document.id),
-        ['fallback-c-strong', 'fallback-c-next'],
-    );
-    assert.deepEqual(admission.densePathFilteredIds, ['fallback-d-tail']);
-
     const fused = fuseVectorCandidatesWithRrf({
         dense,
-        lexical: admission.admitted,
+        lexical: [],
+        lexicalFallback: fallback,
         k: VECTOR_CANDIDATE_RRF_K_V1,
         limit: 80,
     });
-    assert.ok(fused.some((row) => row.document.id === 'fallback-c-strong'));
-});
-
-test('Fallback tail from dense-missing paths remains excluded', () => {
-    const densePaths = new Set(['src/a.ts']);
-    const fallback = [
-        candidate('keep-1', 'src/new-1.ts', 30),
-        candidate('keep-2', 'src/new-2.ts', 29),
-        candidate('drop-1', 'src/new-3.ts', 28),
-        candidate('drop-2', 'src/new-4.ts', 27),
-    ];
-    assert.equal(fallback.length > LEXICAL_FALLBACK_DISCOVERY_PREFIX, true);
-    const admission = admitLexicalFallbackCandidates({ fallback, densePaths });
-
-    assert.equal(admission.admitted.length, LEXICAL_FALLBACK_DISCOVERY_PREFIX);
-    assert.deepEqual(admission.densePathFilteredIds, ['drop-1', 'drop-2']);
-});
-
-test('Fallback rows on dense-discovered paths remain eligible beyond the prefix', () => {
-    const densePaths = new Set(['src/a.ts']);
-    const fallback = [
-        candidate('prefix-new', 'src/new.ts', 30),
-        candidate('prefix-other', 'src/other.ts', 29),
-        candidate('enrichment-weak', 'src/a.ts', 1),
-    ];
-    const admission = admitLexicalFallbackCandidates({ fallback, densePaths });
 
     assert.deepEqual(
-        admission.admitted.map((row) => row.document.id),
-        ['prefix-new', 'prefix-other', 'enrichment-weak'],
+        fused.map((row) => row.document.id).sort(),
+        ['dense-a', 'dense-b', 'fallback-c', 'fallback-d', 'fallback-e'],
     );
-    assert.deepEqual(admission.densePathFilteredIds, []);
 });
 
-test('Dense-path filtered rows are recorded with the dense_path_filter reason', () => {
-    const trace = buildSemanticSearchCandidateTrace(traceInput({
-        productDense: [candidate('dense-a', 'src/a.ts')],
-        productLexical: [],
-        productLexicalFallback: [candidate('fallback-c-strong', 'src/c.ts')],
-        densePathFilteredIds: ['filtered-tail'],
-        result: [candidate('dense-a', 'src/a.ts')],
-    }));
-
-    const removal = trace.removals.find((entry) => entry.candidateId === 'filtered-tail');
-    assert.deepEqual(removal, {
-        candidateId: 'filtered-tail',
-        afterStage: 'raw_lexical_fallback',
-        reason: 'dense_path_filter',
+test('A short all-terms arm is supplemented, and its rows outrank fallback-only rows', () => {
+    const allTerms = candidate('all-terms', 'src/owner.ts', 5);
+    const fused = fuseVectorCandidatesWithRrf({
+        dense: [],
+        lexical: [allTerms],
+        lexicalFallback: [candidate('any-terms', 'src/other.ts', 40), allTerms],
+        k: VECTOR_CANDIDATE_RRF_K_V1,
+        limit: 80,
     });
+
+    assert.deepEqual(fused.map((row) => row.document.id), ['all-terms', 'any-terms']);
 });
 
 test('Product and diagnostic fallback rows are traced as distinct stages', () => {

@@ -296,7 +296,6 @@ export interface SearchCandidateSurvivalRemoval {
     passId?: string;
     reason:
         | "core_fusion_limit"
-        | "dense_path_filter"
         | "dirty_source_suppressed"
         | "scope_filter"
         | "requested_subdirectory_filter"

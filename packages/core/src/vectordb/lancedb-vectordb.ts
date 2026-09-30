@@ -46,6 +46,12 @@ const DEFAULT_WRITE_AGGREGATION_BATCH_SIZE = 256;
 const STABLE_TIE_INITIAL_MULTIPLIER = 2;
 const STABLE_TIE_MINIMUM_FETCH = 32;
 const COLLECTION_IO_CONCURRENCY = 64;
+/**
+ * Identity of the FTS analyzer below. Lexical terms reach the index lowercased
+ * (canonical fallback terms) or mixed-case (raw queries), so the analyzer must
+ * fold case; a published index built by another analyzer requires a reindex.
+ */
+export const LANCEDB_LEXICAL_ANALYZER_VERSION = 'lancedb_fts_simple_lowercase_v1';
 
 const DATA_FIELDS = [
     'id',
@@ -531,7 +537,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                     withPosition: true,
                     baseTokenizer: 'simple',
                     maxTokenLength: 255,
-                    lowercase: false,
+                    lowercase: true,
                     stem: false,
                     removeStopWords: false,
                     asciiFolding: false,
@@ -618,6 +624,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             address: this.databasePath,
             lexicalMatchModes: ['all_terms', 'any_terms'],
             defaultLexicalMatchMode: 'all_terms',
+            lexicalAnalyzerVersion: LANCEDB_LEXICAL_ANALYZER_VERSION,
         };
     }
 

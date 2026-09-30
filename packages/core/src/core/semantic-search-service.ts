@@ -25,7 +25,6 @@ import { validateVectorFilter } from '../vectordb/filters';
 import type { PublicationLease, PublicationRef } from '../generation/contracts';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import {
-    admitLexicalFallbackCandidates,
     fuseVectorCandidatesWithRrf,
     orderVectorCandidateArm,
     vectorCandidateOwnerId,
@@ -95,7 +94,6 @@ export function buildSemanticSearchCandidateTrace(input: {
     diagnosticDense?: readonly VectorCandidate[];
     diagnosticLexical?: readonly VectorCandidate[];
     diagnosticLexicalFallback?: readonly VectorCandidate[];
-    densePathFilteredIds?: readonly string[];
     diagnosticRetrievals: readonly SemanticSearchDiagnosticRetrieval[];
     result: readonly VectorCandidate[];
     hybrid: boolean;
@@ -153,21 +151,11 @@ export function buildSemanticSearchCandidateTrace(input: {
     ])]
         .filter((candidateId) => !resultIds.has(candidateId))
         .sort(compareContractStrings);
-    const densePathFilteredIds = [...new Set(input.densePathFilteredIds ?? [])]
-        .filter((candidateId) => !resultIds.has(candidateId))
-        .sort(compareContractStrings);
-    const removals = [
-        ...removedIds.slice(0, input.maxEntries).map((candidateId) => ({
-            candidateId,
-            afterStage: 'core_fusion' as const,
-            reason: 'core_fusion_limit' as const,
-        })),
-        ...densePathFilteredIds.map((candidateId) => ({
-            candidateId,
-            afterStage: 'raw_lexical_fallback' as const,
-            reason: 'dense_path_filter' as const,
-        })),
-    ].slice(0, input.maxEntries);
+    const removals = removedIds.slice(0, input.maxEntries).map((candidateId) => ({
+        candidateId,
+        afterStage: 'core_fusion' as const,
+        reason: 'core_fusion_limit' as const,
+    }));
     return {
         schemaVersion: 'semantic_search_candidate_trace_v1',
         maxEntriesPerStage: input.maxEntries,
@@ -179,7 +167,7 @@ export function buildSemanticSearchCandidateTrace(input: {
         removals,
         omittedRemovals: Math.max(
             0,
-            removedIds.length + densePathFilteredIds.length - removals.length,
+            removedIds.length - removals.length,
         ),
     };
 }
@@ -594,7 +582,7 @@ export class SemanticSearchService {
             await assertCandidateReadAuthorityUnchanged(
                 'Index generation changed during lexical retrieval.',
             );
-            const productLexicalFallbackAttempted = productSearchResults.length === 0
+            const productLexicalFallbackAttempted = productSearchResults.length < resolvedRequest.topK
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
             if (productLexicalFallbackAttempted) {
@@ -615,11 +603,15 @@ export class SemanticSearchService {
                     );
                 }
             }
-            const productResults = (
-                productSearchResults.length > 0
-                    ? productSearchResults
-                    : productLexicalFallback
-            ).slice(0, resolvedRequest.topK);
+            const productResults = productLexicalFallback.length > 0
+                ? fuseVectorCandidatesWithRrf({
+                    dense: [],
+                    lexical: productSearchResults.slice(0, resolvedRequest.topK),
+                    lexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK),
+                    k: VECTOR_CANDIDATE_RRF_K_V1,
+                    limit: resolvedRequest.topK,
+                })
+                : productSearchResults.slice(0, resolvedRequest.topK);
             const diagnosticRequests: Array<Promise<DiagnosticRetrievalOutcome>> = [];
             if (diagnosticCandidateRetrievalLimit > resolvedRequest.topK) {
                 diagnosticRequests.push(retrieveDiagnosticCandidates({
@@ -742,10 +734,9 @@ export class SemanticSearchService {
             await assertCandidateReadAuthorityUnchanged(
                 'Index generation changed during hybrid retrieval.',
             );
-            const productLexicalFallbackAttempted = productLexicalCandidates.length === 0
+            const productLexicalFallbackAttempted = productLexicalCandidates.length < resolvedRequest.topK
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
-            const densePathFilteredIds: string[] = [];
             if (productLexicalFallbackAttempted) {
                 try {
                     productLexicalFallback = await vectorDatabase.retrieveLexical(collectionName, {
@@ -757,22 +748,6 @@ export class SemanticSearchService {
                     await assertCandidateReadAuthorityUnchanged(
                         'Index generation changed during hybrid lexical fallback retrieval.',
                     );
-                    // With dense evidence available, fallback enriches known files rather
-                    // than opening an unrelated lexical discovery frontier. A small
-                    // bounded prefix of the strongest fallback rows may still open a
-                    // new file frontier so strong lexical evidence survives a dense
-                    // miss; the tail remains constrained to dense-discovered paths.
-                    if (productDenseCandidates.length > 0) {
-                        const denseCandidatePaths = new Set(
-                            productDenseCandidates.map((candidate) => candidate.document.relativePath),
-                        );
-                        const admission = admitLexicalFallbackCandidates({
-                            fallback: productLexicalFallback,
-                            densePaths: denseCandidatePaths,
-                        });
-                        productLexicalFallback = admission.admitted;
-                        densePathFilteredIds.push(...admission.densePathFilteredIds);
-                    }
                 } catch (error) {
                     console.warn(
                         '[Context] Hybrid lexical fallback retrieval failed; preserving dense retrieval.',
@@ -780,12 +755,10 @@ export class SemanticSearchService {
                     );
                 }
             }
-            const lexicalFusionCandidates = productLexicalCandidates.length > 0
-                ? productLexicalCandidates
-                : productLexicalFallback;
             const searchResults = fuseVectorCandidatesWithRrf({
                 dense: productDenseCandidates.slice(0, resolvedRequest.topK),
-                lexical: lexicalFusionCandidates.slice(0, resolvedRequest.topK),
+                lexical: productLexicalCandidates.slice(0, resolvedRequest.topK),
+                lexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK),
                 k: VECTOR_CANDIDATE_RRF_K_V1,
                 limit: resolvedRequest.topK,
             });
@@ -894,7 +867,6 @@ export class SemanticSearchService {
                 ...(diagnosticDense ? { diagnosticDense } : {}),
                 ...(diagnosticLexical ? { diagnosticLexical } : {}),
                 ...(diagnosticLexicalFallback ? { diagnosticLexicalFallback } : {}),
-                ...(densePathFilteredIds.length > 0 ? { densePathFilteredIds } : {}),
                 diagnosticRetrievals: diagnosticOutcomes.map((outcome) => outcome.retrieval),
                 result: searchResults,
                 hybrid: true,
@@ -912,13 +884,14 @@ export class SemanticSearchService {
                     ...(traceFallbackTerms ? { terms: [...traceFallbackTerms] } : {}),
                 }] : [])],
             }));
+            const lexicalEvidenceCandidates = [...productLexicalCandidates, ...productLexicalFallback];
             const results = searchResults.map((result) => (
                 toSemanticSearchResult(
                     result,
                     'rrf_fusion',
                     selectLexicalOwnerEvidenceCandidate(
                         result,
-                        lexicalFusionCandidates,
+                        lexicalEvidenceCandidates,
                         productLexicalFallbackTerms,
                     ),
                 )

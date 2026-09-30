@@ -1509,3 +1509,20 @@ test('Flow-annotated JavaScript keeps its declarations searchable at symbol leve
     });
     assert.equal(result.callSites.length, 0);
 });
+
+test('Flow annotations without an @flow pragma still recover typed JavaScript declarations', async () => {
+    const analyzer = createLanguageAnalysisService();
+    // Without the pragma Oxc reports a generic syntax error, not "Flow is not supported".
+    const content = [
+        "describe('ReactFlightDOM', () => {",
+        '  async function readInto(container: Document, stream: ReadableStream) {',
+        '    return container;',
+        '  }',
+        '});',
+    ].join('\n');
+    const result = await analyzer.analyze({ content, language: 'javascript', relativePath: 'src/__tests__/Flight-test.js' });
+
+    assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'syntax_error');
+    assert.ok(result.symbols.some((symbol) => symbol.name === 'readInto'), JSON.stringify(result.symbols.map((symbol) => symbol.name)));
+});

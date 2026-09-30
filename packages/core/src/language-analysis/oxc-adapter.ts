@@ -6,7 +6,6 @@ import type { CallSite, LanguageAnalysisInput, ModuleBinding, ReceiverTypeBindin
 
 const { parseSync } = require('oxc-parser') as typeof import('oxc-parser', { with: { "resolution-mode": "require" } });
 
-const FLOW_UNSUPPORTED_MESSAGE = 'Flow is not supported';
 
 type AstNode = {
     type: string;
@@ -25,8 +24,12 @@ export type OxcEvidence = {
 } | {
     readonly complete: false;
     readonly reason: 'syntax_error';
-    /** Oxc rejected the file as Flow-annotated source rather than as malformed JavaScript. */
-    readonly flowSyntax?: true;
+    /**
+     * JavaScript that Oxc rejected. Flow annotations only get Oxc's "Flow is not
+     * supported" error under an @flow pragma; without one they surface as generic
+     * syntax errors, so every JavaScript rejection may still hold typed declarations.
+     */
+    readonly typedJavaScriptRecoverable?: true;
     readonly symbols: readonly [];
     readonly moduleBindings: readonly [];
     readonly callSites: readonly [];
@@ -237,15 +240,16 @@ function oxcLanguage(language: string, relativePath: string): 'js' | 'jsx' | 'ts
 }
 
 export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
+    const lang = oxcLanguage(input.language, input.relativePath);
     const parsed = parseSync(input.relativePath, input.content, {
-        lang: oxcLanguage(input.language, input.relativePath),
+        lang,
         sourceType: 'unambiguous',
     });
     if (parsed.errors.some((error) => error.severity === 'Error')) {
         return {
             complete: false,
             reason: 'syntax_error',
-            ...(parsed.errors.some((error) => error.message === FLOW_UNSUPPORTED_MESSAGE) ? { flowSyntax: true as const } : {}),
+            ...(lang === 'js' || lang === 'jsx' ? { typedJavaScriptRecoverable: true as const } : {}),
             symbols: [],
             moduleBindings: [],
             callSites: [],

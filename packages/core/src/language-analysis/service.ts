@@ -282,8 +282,8 @@ export function createLanguageAnalysisService(
                             ),
                         };
                     }
-                    if ('flowSyntax' in evidence && evidence.flowSyntax) {
-                        // Flow-annotated source is valid for its authors; keep its declarations searchable at symbol level.
+                    if ('typedJavaScriptRecoverable' in evidence && evidence.typedJavaScriptRecoverable) {
+                        // Type-annotated (Flow) JavaScript is valid for its authors; keep its declarations searchable at symbol level.
                         const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);
                         if (symbols.length > 0) {
                             return {

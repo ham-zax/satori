@@ -92,6 +92,7 @@ import {
     TrackedRootReadiness,
     type ReadinessPhase,
     type TrackedRootEntry,
+    type TrackedRootFailedIndexOperation,
     type TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
 import { NavigationHandlers } from "./navigation-handlers.js";
@@ -451,6 +452,7 @@ export class ToolHandlers {
             isPathWithinCodebase: this.isPathWithinCodebase.bind(this),
             listTrackedRoots: this.listTrackedRoots.bind(this),
             getIndexingOperation: (codebasePath: string) => this.getIndexingOperationForReadiness(codebasePath),
+            getFailedIndexOperation: (codebasePath: string) => this.getFailedIndexOperationForReadiness(codebasePath),
             hasSearchableGeneration: (codebasePath: string) => this.hasSearchableGenerationForReadiness(codebasePath),
             validateCompletionProof: (codebasePath: string) => this.validateCompletionProof(codebasePath),
             probeLocalSearchCollectionState: (codebasePath: string) => this.probeLocalSearchCollectionState(codebasePath),
@@ -1404,6 +1406,18 @@ export class ToolHandlers {
             return undefined;
         }
         return { action: activity.action, phase: operation.phase, generation: activity.generation };
+    }
+
+    private getFailedIndexOperationForReadiness(codebasePath: string): TrackedRootFailedIndexOperation | undefined {
+        const operation = this.mutationRuntime.getOperation(codebasePath);
+        if (operation?.phase !== "failed" || (operation.action !== "create" && operation.action !== "reindex")) {
+            return undefined;
+        }
+        return {
+            ...(operation.error !== undefined ? { error: operation.error } : {}),
+            ...(operation.progress !== undefined ? { progress: operation.progress } : {}),
+            updatedAt: operation.updatedAt,
+        };
     }
 
     private hasSearchableGenerationForReadiness(codebasePath: string): boolean {

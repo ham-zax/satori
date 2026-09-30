@@ -28,7 +28,7 @@ import type {
 } from "./search-types.js";
 import { SEARCH_RESPONSE_FORMAT_VERSION } from "./search-types.js";
 
-type CodebaseStatus = "indexed" | "indexing";
+type CodebaseStatus = "indexed" | "indexing" | "index_failed";
 
 export type TrackedCodebaseInfo = Record<string, unknown> & {
     status: CodebaseStatus;
@@ -78,6 +78,13 @@ export type TrackedRootIndexingOperation = {
     generation: number;
 };
 
+/** Terminal failure of the latest create/reindex for a root that has no readable Publication. */
+export type TrackedRootFailedIndexOperation = {
+    error?: string;
+    progress?: number;
+    updatedAt: string;
+};
+
 export type TrackedRootReadinessState =
     | {
         state: "ready";
@@ -106,6 +113,7 @@ export type TrackedRootReadinessHost = {
     isPathWithinCodebase(targetPath: string, rootPath: string): boolean;
     listTrackedRoots(): TrackedRootEntry[];
     getIndexingOperation?(codebasePath: string): TrackedRootIndexingOperation | undefined;
+    getFailedIndexOperation?(codebasePath: string): TrackedRootFailedIndexOperation | undefined;
     hasSearchableGeneration?(codebasePath: string): boolean;
     validateCompletionProof(codebasePath: string): Promise<CompletionProofValidationResult>;
     probeLocalSearchCollectionState(codebasePath: string): Promise<{
@@ -404,6 +412,19 @@ export class TrackedRootReadiness {
         }
 
         if (!searchableRoot) {
+            const failed = this.host.getFailedIndexOperation?.(absolutePath);
+            if (failed) {
+                return {
+                    state: "index_failed",
+                    codebasePath: absolutePath,
+                    info: {
+                        status: "index_failed",
+                        lastUpdated: failed.updatedAt,
+                        ...(failed.error !== undefined ? { errorMessage: failed.error } : {}),
+                        ...(failed.progress !== undefined ? { lastAttemptedPercentage: failed.progress } : {}),
+                    },
+                };
+            }
             return {
                 state: "not_indexed",
             };

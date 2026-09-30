@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import test from "node:test";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
+import { TrackedRootReadiness } from "./tracked-root-readiness.js";
 
 function response(
     action: string,
@@ -100,4 +102,42 @@ test("cancel refuses a create mutation that has no bound supervised executor", a
     assert.equal(payload.status, "blocked");
     assert.equal(payload.reason, "operation_not_cancellable");
     assert.match(payload.message, /No force-unlock was attempted/);
+});
+
+test("status after a failed create reports the failure instead of telling the caller to create", async () => {
+    const root = os.tmpdir();
+    const failedOperation = {
+        id: "op-create",
+        action: "create",
+        canonicalRoot: root,
+        generation: 1,
+        acceptedAt: new Date(0).toISOString(),
+        phase: "failed",
+        updatedAt: new Date(1).toISOString(),
+        error: "boom",
+    };
+    const readiness = new TrackedRootReadiness({
+        isPathWithinCodebase: () => false,
+        listTrackedRoots: () => [],
+        getFailedIndexOperation: () => ({ error: failedOperation.error, updatedAt: failedOperation.updatedAt }),
+    } as never);
+    const handler = new ManageMaintenanceHandlers({
+        mutationRuntime: {
+            getOperation: () => failedOperation,
+            getActiveMutation: () => undefined,
+        },
+        prepareStatusTrackedRootRead: (absolutePath: string) => readiness.prepareTrackedRootForRead(absolutePath),
+        manageResponse: response,
+        buildCompatibilityStatusLines: () => "",
+        buildCreateHint: (path: string) => ({ tool: "manage_index", args: { action: "create", path } }),
+    } as never);
+
+    const result = await handler.handleGetIndexingStatus({ path: root });
+    const payload = JSON.parse(result.content[0]?.text ?? "{}");
+
+    assert.equal(payload.status, "error");
+    assert.match(payload.message, /indexing failed/);
+    assert.match(payload.message, /boom/);
+    assert.equal(payload.hints?.create, undefined);
+    assert.doesNotMatch(JSON.stringify(payload), /is not indexed/);
 });

@@ -217,6 +217,8 @@ export interface SearchGroupResult extends SearchGroupedResultV2 {
     __symbolKey?: string;
     __symbolInstanceId?: string;
     __candidateIds: string[];
+    /** Complete original declaration content, never a preview or evidence fragment. */
+    __implementationContent?: string;
     __exactLexicalMatch: boolean;
     /** Internal immutable order position assigned before grouping. */
     __authoritativeRank?: number;

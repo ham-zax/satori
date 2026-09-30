@@ -94,3 +94,106 @@ export function collapseDuplicateDeclarationGroups<T extends SearchGroupResult>(
 
     return Array.from(deduped.values());
 }
+
+// This deliberately recognizes only simple wrappers. Unsupported syntax stays
+// distinct; a display preview cannot prove that two implementations are equal.
+function simpleWrapperTokens(content: string): string[] | null {
+    const tokens: string[] = [];
+    let offset = 0;
+    while (offset < content.length) {
+        const rest = content.slice(offset);
+        const trivia = /^(?:\s+|\/\/[^\r\n]*|\/\*[\s\S]*?\*\/)/.exec(rest);
+        if (trivia) {
+            if (/[\r\n]/.test(trivia[0]) && ["return", "async"].includes(tokens.at(-1) ?? "")) return null;
+            offset += trivia[0].length;
+            continue;
+        }
+        if (rest[0] === "'" || rest[0] === '"') {
+            const quote = rest[0];
+            let end = 1;
+            for (; end < rest.length && rest[end] !== quote; end += 1) {
+                if (rest[end] === "\\") end += 1;
+                else if (rest[end] === "\n" || rest[end] === "\r") return null;
+            }
+            if (end >= rest.length) return null;
+            tokens.push(rest.slice(0, end + 1));
+            offset += end + 1;
+            continue;
+        }
+        const token = /^(?:[a-zA-Z_$][\w$]*|\d+(?:\.\d+)?|=>|===|!==|==|!=|<=|>=|&&|\|\||[()[\]{}.,;:=<>|?+*!&%-])/.exec(rest);
+        if (!token || rest.startsWith("++") || rest.startsWith("--")) return null;
+        tokens.push(token[0]);
+        offset += token[0].length;
+    }
+
+    const stack: string[] = [];
+    let bodyStart = -1;
+    let bodyEnd = -1;
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === "(" || token === "[" || token === "{") {
+            if (token === "{" && stack.length === 0) bodyStart = index;
+            stack.push(token);
+        } else if (token === ")" || token === "]" || token === "}") {
+            const opening = token === ")" ? "(" : token === "]" ? "[" : "{";
+            if (stack.pop() !== opening) return null;
+            if (token === "}" && stack.length === 0) bodyEnd = index;
+        }
+    }
+    if (stack.length || bodyStart < 0 || bodyEnd <= bodyStart
+        || !tokens.slice(0, bodyStart).includes("(")
+        || !(bodyEnd === tokens.length - 1
+            || (bodyEnd === tokens.length - 2 && tokens.at(-1) === ","))) return null;
+
+    const body = tokens.slice(bodyStart + 1, bodyEnd);
+    if (body.at(-1) !== ";" || body.some((token) => token === "{" || token === "}")) return null;
+    const identifier = /^[a-zA-Z_$][\w$]*$/;
+    const scalar = /^(?:[a-zA-Z_$][\w$]*|\d+(?:\.\d+)?|'[\s\S]*'|"[\s\S]*")$/;
+    let statement: string[] = [];
+    for (const token of body) {
+        if (token !== ";") {
+            statement.push(token);
+            continue;
+        }
+        if (statement[0] === "return") statement = statement.slice(1);
+        const assignment = statement.length === 3 && identifier.test(statement[0])
+            && statement[1] === "=" && scalar.test(statement[2]);
+        const callStart = statement.indexOf("(");
+        const target = statement.slice(0, callStart);
+        const call = callStart > 0 && statement.at(-1) === ")"
+            && target.every((part, index) => index % 2 === 0 ? identifier.test(part) : part === ".")
+            && target.length % 2 === 1
+            && !["if", "while", "for", "switch", "with", "catch"].includes(target[0])
+            && statement.slice(callStart).every((part) => scalar.test(part) || ["(", ")", ",", "."].includes(part));
+        if (!assignment && !call) return null;
+        statement = [];
+    }
+    return tokens;
+}
+
+export function collapseEquivalentImplementationGroups<T extends SearchGroupResult>(groups: T[]): T[] {
+    const deduped: T[] = [];
+    const representatives = new Map<string, number>();
+    for (const group of groups) {
+        const content = group.__implementationContent;
+        const supported = (group.symbolKind === "function" || group.symbolKind === "method")
+            && ["javascript", "typescript", "jsx", "tsx"].includes(group.language);
+        const tokens = supported && content ? simpleWrapperTokens(content) : null;
+        const key = tokens
+            ? JSON.stringify([group.target.file, group.language, group.displayLabel, tokens])
+            : null;
+        const index = key ? representatives.get(key) : undefined;
+        if (index === undefined) {
+            if (key) representatives.set(key, deduped.length);
+            deduped.push(group);
+            continue;
+        }
+        const existing = deduped[index];
+        const winner = compareAuthoritativeRanks(group, existing) < 0 ? group : existing;
+        deduped[index] = {
+            ...winner,
+            __candidateIds: Array.from(new Set([...existing.__candidateIds, ...group.__candidateIds])).sort(),
+        };
+    }
+    return deduped;
+}

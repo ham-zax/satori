@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import {
     buildGroupedSymbolSearchResult,
+    buildExactRegistryGroupResult,
     buildVisibleGroupedSearchResults,
 } from "./search-group-results.js";
 import { resolveSearchOwnerFromRegistry, type SearchOwnerResolutionInputResult } from "./search-owner-resolution.js";
 import { buildSearchGroupRecommendedAction } from "./search-response-helpers.js";
+import { projectGroupedResultV2 } from "./search-response-envelopes.js";
 import type { SearchResultLike } from "./search-lexical-scoring.js";
 
 const navigationHelpers = {
@@ -362,7 +364,7 @@ test("a broad same-file chunk cannot publish a nested registry symbol target", (
 
     assert.ok(result);
     assert.equal(result.target.symbolId, undefined);
-    assert.deepEqual(result.target.span, { startLine: 1, endLine: 300 });
+    assert.deepEqual(result.target.span, { startLine: 1, endLine: 40 });
 });
 
 test("cross-file stale owner metadata cannot merge evidence before scoring", () => {
@@ -447,7 +449,7 @@ test("native grouping chooses the representative by authoritative rank, not exac
     assert.equal(result.visibleResults[0]?.displayLabel, "function providerOwned()");
 });
 
-test("ordinary grouped evidence publishes a bounded deterministic window", () => {
+test("ordinary grouped evidence publishes a bounded deterministic target", () => {
     const result = buildVisibleGroupedSearchResults({
         scored: [candidate("src/large.ts", 100, 900, 0.9)],
         codebaseRoot: "/repo",
@@ -469,7 +471,7 @@ test("ordinary grouped evidence publishes a bounded deterministic window", () =>
     });
 
     assert.equal(result.visibleResults.length, 1);
-    assert.deepEqual(result.visibleResults[0]?.target.span, { startLine: 100, endLine: 900 });
+    assert.deepEqual(result.visibleResults[0]?.target.span, { startLine: 100, endLine: 139 });
     assert.deepEqual(result.visibleResults[0]?.evidenceSpan, { startLine: 100, endLine: 139 });
     assert.deepEqual(
         buildSearchGroupRecommendedAction("/repo", result.visibleResults[0]!)?.args,
@@ -479,6 +481,146 @@ test("ordinary grouped evidence publishes a bounded deterministic window", () =>
             end_line: 139,
         },
     );
+});
+
+test("large declaration search targets matched evidence while retaining exact symbol navigation", () => {
+    for (const kind of ["property", "function", "file"] as const) {
+        const owner: SymbolRecord = {
+            symbolKey: `tests_${kind}`,
+            symbolInstanceId: `tests_${kind}_instance`,
+            language: "typescript",
+            kind,
+            name: "tests",
+            qualifiedName: "tests",
+            label: kind === "property" ? "const tests = [...]" : "tests",
+            file: "src/rule-tests.ts",
+            span: { startLine: 39, endLine: 7901 },
+            parentQualifiedNamePath: [],
+            fileHash: "hash",
+            extractorVersion: "v1",
+        };
+        const matched = {
+            ...candidate(owner.file, 39, 7901, 0.9),
+            result: {
+                ...candidate(owner.file, 39, 7901, 0.9).result,
+                evidenceStartLine: 409,
+                evidenceEndLine: 425,
+                evidenceContent: "{ code: 'useEffect(() => { capture(value); }, [])', errors: ['missing dependency'] }",
+            },
+        };
+        const result = buildGroupedSymbolSearchResult({
+            representative: matched,
+            previewSpan: owner.span,
+            indexedAt: null,
+            ownerSource: "owner_metadata",
+            ownerSymbolKey: owner.symbolKey,
+            ownerSymbolInstanceId: owner.symbolInstanceId,
+            registrySymbol: owner,
+            registryLoaded: true,
+            navigationState: { relationshipReady: true },
+            chunkCount: 2,
+            candidateIds: ["matched-test", "other-test"],
+            semanticMatch: "high",
+            spanValidation: "not_applicable",
+            debugMode: "none",
+            now: navigationHelpers.now,
+            previewMaxBytes: 200,
+            navigationHelpers,
+        });
+        assert.ok(result);
+        assert.deepEqual(result.target.span, { startLine: 409, endLine: 425 });
+        assert.deepEqual(result.evidenceSpan, { startLine: 409, endLine: 425 });
+        assert.equal(result.target.symbolId, kind === "file" ? undefined : owner.symbolInstanceId);
+        assert.equal(result.__symbolInstanceId, owner.symbolInstanceId);
+        assert.equal(result.evidenceChunks, 2);
+        assert.deepEqual(projectGroupedResultV2(result).target, result.target);
+        assert.equal(Object.keys(projectGroupedResultV2(result)).some((key) => key.startsWith("__")), false);
+        assert.match(result.preview, /missing dependency/);
+        assert.deepEqual(owner.span, { startLine: 39, endLine: 7901 });
+        assert.deepEqual(buildSearchGroupRecommendedAction("/repo", result)?.args, {
+            path: "/repo/src/rule-tests.ts", start_line: 409, end_line: 425,
+        });
+
+        const exact = buildExactRegistryGroupResult({
+            symbol: owner,
+            indexedAt: null,
+            navigationState: { relationshipReady: true },
+            debugMode: "none",
+            now: navigationHelpers.now,
+            previewMaxBytes: 200,
+            navigationHelpers,
+        });
+        assert.deepEqual(exact?.target.span, owner.span);
+        assert.equal(exact?.target.symbolId, kind === "file" ? undefined : owner.symbolInstanceId);
+    }
+});
+
+test("small declaration targets remain exact and multiple large-owner matches choose ranked evidence deterministically", () => {
+    const owner: SymbolRecord = {
+        symbolKey: "tests", symbolInstanceId: "tests_instance", language: "typescript",
+        kind: "property", name: "tests", qualifiedName: "tests", label: "const tests = [...]",
+        file: "src/rule-tests.ts", span: { startLine: 39, endLine: 7901 },
+        parentQualifiedNamePath: [], fileHash: "hash", extractorVersion: "v1",
+    };
+    const run = (symbol: SymbolRecord, scored: ReturnType<typeof candidate>[]) => buildVisibleGroupedSearchResults({
+        scored,
+        codebaseRoot: "/repo", groupBy: "symbol", limit: 5,
+        queryPlan: { intent: "semantic", referenceSeeking: false, exactMatchPinningEnabled: false },
+        mustMatchesFirst: false,
+        registry: { symbolsByInstanceId: new Map([[symbol.symbolInstanceId, symbol]]) } as SymbolRegistry,
+        navigationState: { relationshipReady: true }, debugMode: "none",
+        now: navigationHelpers.now, previewMaxBytes: 200, navigationHelpers,
+        parseIndexedAtMs: () => undefined,
+        resolveOwner: () => ({
+            ownerSymbolKey: symbol.symbolKey, ownerSymbolInstanceId: symbol.symbolInstanceId,
+            symbolKind: symbol.kind, ownerSource: "owner_metadata",
+        }),
+    }).visibleResults[0]!;
+    const first = candidate(owner.file, 409, 425, 0.9, { authoritativeRank: 1 });
+    const second = candidate(owner.file, 900, 912, 0.8, { authoritativeRank: 2 });
+    for (const scored of [[first, second], [second, first]]) {
+        const result = run(owner, scored);
+        assert.deepEqual(result.target.span, { startLine: 409, endLine: 425 });
+        assert.equal(result.target.symbolId, owner.symbolInstanceId);
+        assert.equal(result.evidenceChunks, 2);
+    }
+    const small = { ...owner, span: { startLine: 400, endLine: 430 } };
+    const result = run(small, [first]);
+    assert.deepEqual(result.target.span, small.span);
+    assert.equal(result.target.symbolId, small.symbolInstanceId);
+    assert.deepEqual(buildSearchGroupRecommendedAction("/repo", result)?.args.open_symbol, {
+        contractVersion: 2, symbolId: small.symbolInstanceId, context: { preset: "definition" },
+    });
+});
+
+test("implementation comparison receives complete declaration content before evidence target narrowing", () => {
+    const owner: SymbolRecord = {
+        symbolKey: "run", symbolInstanceId: "run_instance", language: "typescript",
+        kind: "function", name: "run", qualifiedName: "run", label: "function run()",
+        file: "src/run.ts", span: { startLine: 10, endLine: 260 },
+        parentQualifiedNamePath: [], fileHash: "hash", extractorVersion: "v1",
+    };
+    const declaration = ["function run() {", ...Array<string>(249).fill("  // context"), "}"].join("\n");
+    const build = (content: string) => buildGroupedSymbolSearchResult({
+        representative: {
+            ...candidate(owner.file, 10, 260, 0.9),
+            result: {
+                ...candidate(owner.file, 10, 260, 0.9).result,
+                content, evidenceStartLine: 120, evidenceEndLine: 125, evidenceContent: "matched evidence",
+            },
+        },
+        previewSpan: owner.span, indexedAt: null, ownerSource: "owner_metadata",
+        registrySymbol: owner, registryLoaded: true,
+        navigationState: { relationshipReady: true }, chunkCount: 1, candidateIds: ["run-match"],
+        semanticMatch: "high", spanValidation: "not_applicable", debugMode: "none",
+        now: navigationHelpers.now, previewMaxBytes: 200, navigationHelpers,
+    })!;
+    const result = build(declaration);
+    assert.deepEqual(result.target.span, { startLine: 120, endLine: 125 });
+    assert.equal(result.__implementationContent, declaration);
+    assert.match(result.preview, /matched evidence/);
+    assert.equal("__implementationContent" in projectGroupedResultV2(result), false);
+    assert.equal(build("function run() { /* truncated */ }").__implementationContent, undefined);
 });
 
 test("grouped disclosure order preserves the visible prefix and global diversity caps", () => {

@@ -15,6 +15,7 @@ import {
 } from "./search-grouping.js";
 import {
     collapseDuplicateDeclarationGroups,
+    collapseEquivalentImplementationGroups,
     sortNativeGroupedSearchResults,
 } from "./search-group-ordering.js";
 import type { SearchOrderAuthority } from "./search-order-policy.js";
@@ -150,9 +151,12 @@ export function rankAndDiversifySearchGroups<
     exactMatchPinningApplied: boolean;
 } {
     const orderAuthority = input.orderAuthority ?? "retrieval_order";
-    const rankedResults = input.collapseDuplicateDeclarations
+    const declarationGroups = input.collapseDuplicateDeclarations
         ? collapseDuplicateDeclarationGroups(input.groupedResults)
         : input.groupedResults;
+    const rankedResults = input.implementationSeeking
+        ? collapseEquivalentImplementationGroups(declarationGroups)
+        : declarationGroups;
     const exactMatchPinningApplied = sortNativeGroupedSearchResults(
         rankedResults,
         input.exactMatchPinningEnabled,
@@ -546,8 +550,21 @@ export function buildGroupedSymbolSearchResult(input: {
     const graphEvidence = input.graphUnavailableReasonOverride
         ? undefined
         : buildGraphEvidence(callGraphHint);
+    // The registry still owns declaration identity and graph navigation. Search
+    // targets for large owners open the matched evidence instead of the whole
+    // declaration (for example, a test array spanning thousands of lines).
+    const evidenceTarget = target.span.endLine - target.span.startLine + 1 >= OVERSIZED_SYMBOL_LINE_THRESHOLD
+        ? { ...target, span: evidenceSpan }
+        : target;
+    const declarationContent = String(input.representative.result.content || "");
+    const declarationLineCount = declarationContent.replace(/\r?\n$/, "").split(/\r?\n/).length;
+    const completeDeclarationContent = registrySymbol
+        && searchSpansEqual(representativeSpan, target.span)
+        && declarationLineCount === target.span.endLine - target.span.startLine + 1
+        ? declarationContent
+        : undefined;
     return {
-        target,
+        target: evidenceTarget,
         indexedAt: input.indexedAt,
         stalenessBucket: getStalenessBucket(input.indexedAt || undefined, input.now()),
         displayLabel: repSymbolLabel,
@@ -571,6 +588,7 @@ export function buildGroupedSymbolSearchResult(input: {
         ),
         __groupId: groupId,
         __candidateIds: [...input.candidateIds],
+        ...(completeDeclarationContent ? { __implementationContent: completeDeclarationContent } : {}),
         ...(input.authoritativeRank !== undefined
             ? { __authoritativeRank: input.authoritativeRank }
             : {}),

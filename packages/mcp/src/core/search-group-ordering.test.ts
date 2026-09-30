@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     collapseDuplicateDeclarationGroups,
+    collapseEquivalentImplementationGroups,
     sortNativeGroupedSearchResults,
 } from "./search-group-ordering.js";
 import { applyGroupDiversity } from "./search-grouping.js";
@@ -225,4 +226,112 @@ test("native duplicate declaration collapse keeps the earliest authoritative gro
     const collapsed = collapseDuplicateDeclarationGroups(groups);
     assert.equal(collapsed.length, 1);
     assert.equal(collapsed[0].__authoritativeRank, 2);
+});
+
+// Complete methods from ReactFiberHooks.js at 4053, 4386, and 4550.
+const mountEffectWrapper = `useEffect(
+  create: () => (() => void) | void,
+  deps: Array<mixed> | void | null,
+): void {
+  currentHookNameInDev = 'useEffect';
+  mountHookTypesDev();
+  checkDepsAreArrayDev(deps);
+  return mountEffect(create, deps);
+},`;
+const updateEffectWrapper = `useEffect(
+  create: () => (() => void) | void,
+  deps: Array<mixed> | void | null,
+): void {
+  currentHookNameInDev = 'useEffect';
+  updateHookTypesDev();
+  return updateEffect(create, deps);
+},`;
+
+function wrapper(content: string, rank: number, file = "ReactFiberHooks.js") {
+    return {
+        ...group({
+            file,
+            language: "javascript",
+            displayLabel: "method useEffect",
+            symbolKind: "method",
+            __authoritativeRank: rank,
+            __groupId: `wrapper-${rank}`,
+            __symbolInstanceId: `symbol-${rank}`,
+            symbolId: `symbol-${rank}`,
+            __candidateIds: [`candidate-${rank}`],
+        }),
+        __implementationContent: content,
+    };
+}
+
+test("equivalent wrappers collapse without hiding distinct mount and update implementations", () => {
+    const mount = wrapper(mountEffectWrapper, 0);
+    const update = wrapper(updateEffectWrapper, 1);
+    const repeatedUpdate = wrapper(updateEffectWrapper, 2);
+    const helper = group({ file: "ReactFiberHooks.js", displayLabel: "function areHookInputsEqual" });
+    const collapsed = collapseEquivalentImplementationGroups([mount, update, repeatedUpdate, helper]);
+    assert.deepEqual(collapsed.map(({ __groupId }) => __groupId), [mount.__groupId, update.__groupId, helper.__groupId]);
+    assert.deepEqual(collapsed[1].__candidateIds, ["candidate-1", "candidate-2"]);
+    assert.equal(collapsed[1].__symbolInstanceId, update.__symbolInstanceId);
+    assert.equal(collapsed[1].target.symbolId, update.target.symbolId);
+});
+
+test("wrapper equivalence ignores formatting and comments while keeping literal contents", () => {
+    const formatted = `useEffect(create:()=> (()=>void)|void,deps:Array<mixed>|void|null,):void{
+      // Development-only hook validation
+      currentHookNameInDev /* hook name */ = 'useEffect'; updateHookTypesDev();
+      return updateEffect(create,deps); },`;
+    assert.equal(collapseEquivalentImplementationGroups([
+        wrapper(updateEffectWrapper, 0), wrapper(formatted, 1),
+    ]).length, 1);
+    for (const changed of [
+        updateEffectWrapper.replace("'useEffect'", "'use Effect'"),
+        updateEffectWrapper.replace("'useEffect'", "'useEffect/*literal*/'"),
+        updateEffectWrapper.replace("updateEffect(create", "mountEffect(create"),
+        updateEffectWrapper.replace("updateEffect(create, deps)", "updateEffect(deps, create)"),
+    ]) {
+        assert.equal(collapseEquivalentImplementationGroups([
+            wrapper(updateEffectWrapper, 0), wrapper(changed, 1),
+        ]).length, 2);
+    }
+});
+
+test("wrapper collapse keeps distinct files and names and retains authoritative representative identity", () => {
+    const later = wrapper(updateEffectWrapper, 8);
+    const earlier = wrapper(updateEffectWrapper, 2);
+    const otherFile = wrapper(updateEffectWrapper, 3, "other/ReactFiberHooks.js");
+    const otherName = { ...wrapper(updateEffectWrapper, 4), displayLabel: "method anotherEffect" };
+    const collapsed = collapseEquivalentImplementationGroups([later, earlier, otherFile, otherName]);
+    assert.deepEqual(collapsed.map(({ __groupId }) => __groupId), [earlier.__groupId, otherFile.__groupId, otherName.__groupId]);
+    assert.equal(collapsed[0].__symbolInstanceId, earlier.__symbolInstanceId);
+    assert.deepEqual(collapsed[0].__candidateIds, ["candidate-2", "candidate-8"]);
+});
+
+test("incomplete and unsupported bodies never become definite wrapper duplicates", () => {
+    const unsupported = [
+        updateEffectWrapper.slice(0, -3),
+        updateEffectWrapper.replace("return updateEffect", "return\nupdateEffect"),
+        updateEffectWrapper.replace("updateHookTypesDev();", "if (enabled) { updateHookTypesDev(); }"),
+        updateEffectWrapper.replace("'useEffect'", "`useEffect${name}`"),
+        updateEffectWrapper.replace("updateHookTypesDev();", "test(/a b/);"),
+        updateEffectWrapper.replace("updateHookTypesDev();", "counter++;"),
+    ];
+    for (const content of unsupported) {
+        assert.equal(collapseEquivalentImplementationGroups([
+            wrapper(content, 0), wrapper(content, 1),
+        ]).length, 2);
+    }
+    const withoutSource = group({ file: "ReactFiberHooks.js", displayLabel: "method useEffect", preview: updateEffectWrapper });
+    assert.equal(collapseEquivalentImplementationGroups([withoutSource, { ...withoutSource, __groupId: "other" }]).length, 2);
+});
+
+test("route arguments and line-sensitive string contents remain distinct", () => {
+    for (const [left, right] of [
+        ["handler() { return serve('/users'); }", "handler() { return serve('/posts'); }"],
+        ["handler() { return serve('a b'); }", "handler() { return serve('ab'); }"],
+    ]) {
+        assert.equal(collapseEquivalentImplementationGroups([
+            wrapper(left, 0), wrapper(right, 1),
+        ]).length, 2);
+    }
 });

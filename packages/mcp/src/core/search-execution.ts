@@ -53,6 +53,7 @@ import {
 } from "./search-response-helpers.js";
 import {
     classifyPathCategory,
+    preferImplementationCandidates,
     shouldIncludeCategoryInScope,
 } from "./search-ranking-policy.js";
 import type { SearchQuerySupport } from "./search-query-support.js";
@@ -874,32 +875,14 @@ async function rerankSearchCandidates(
                     candidateIds: selectedCandidateIds,
                     results: rerankResults,
                 });
-                const effectiveRerankItems = input.answerFocus === "implementation"
-                    && rerankInputMetadataMap
-                    ? (() => {
-                        const retained: Array<(typeof validatedItems)[number]> = [];
-                        const deferredTests: Array<(typeof validatedItems)[number]> = [];
-                        let retainedTest = false;
-
-                        // Keep the provider's highest-ranked test as supporting
-                        // evidence, but do not let additional tests crowd out
-                        // implementation evidence in an implementation-focused answer.
-                        for (const item of validatedItems) {
-                            const candidate = rerankSlice[item.originalIndex]!;
-                            const candidateId = searchCandidateIdentity(candidate.result).candidateId;
-                            const candidateRole = rerankInputMetadataMap.get(candidateId)?.candidateRole;
-                            if (candidateRole === "test") {
-                                if (retainedTest) {
-                                    deferredTests.push(item);
-                                    continue;
-                                }
-                                retainedTest = true;
-                            }
-                            retained.push(item);
-                        }
-                        return [...retained, ...deferredTests];
-                    })()
-                    : validatedItems;
+                const effectiveRerankItems = preferImplementationCandidates({
+                    candidates: validatedItems,
+                    relativePath: (item) => rerankSlice[item.originalIndex]!.result.relativePath,
+                    answerFocus: input.answerFocus,
+                    queryPlan: input.queryPlan,
+                    hasPathConstraint: input.parsedOperators.path.length > 0
+                        || input.requestedSubdirectory != null,
+                });
                 const reordered = applyNativeRerankToSelectedSlots({
                     allCandidates: scored,
                     selectedCandidateIds,

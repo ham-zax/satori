@@ -1,4 +1,6 @@
 import { STALENESS_THRESHOLDS_MS, type PathCategory, type SearchScope } from "./search-constants.js";
+import type { SearchQueryPlan } from "./search-lexical-scoring.js";
+import type { SearchAnswerFocus } from "./search-rerank-context.js";
 import type { StalenessBucket } from "./search-types.js";
 
 type SearchCandidateLike = {
@@ -104,7 +106,8 @@ function isAdapterPath(normalizedPath: string): boolean {
     return hasPathSegment(normalizedPath, "adapters")
         || hasPathSegment(normalizedPath, "adapter")
         || hasPathSegment(normalizedPath, "tools")
-        || hasPathSegment(normalizedPath, "cli");
+        || hasPathSegment(normalizedPath, "cli")
+        || normalizedPath.split("/").some((segment) => /(?:^|[-_])mcp[-_](?:server|client)$/.test(segment));
 }
 
 function isEntrypointPath(normalizedPath: string): boolean {
@@ -176,4 +179,44 @@ export function buildSearchCandidateProvenance(
         exactMatchPinned: candidate.exactMatchPinned,
         ownerRepairApplied: ownerSource === "registry_repair",
     };
+}
+
+/** Apply answer intent without blending relevance scores or reordering peers. */
+export function preferImplementationCandidates<T>(input: {
+    candidates: readonly T[];
+    relativePath: (candidate: T) => string;
+    answerFocus: SearchAnswerFocus;
+    queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
+    hasPathConstraint: boolean;
+}): T[] {
+    const plan = input.queryPlan;
+    if (input.answerFocus !== "implementation" || input.hasPathConstraint
+        || plan.testSeeking || plan.documentationSeeking || plan.referenceSeeking
+        || plan.route.kind === "exact_path" || plan.route.kind === "configuration"
+        || plan.route.kind === "references") {
+        return [...input.candidates];
+    }
+    const queryTerms = new Set(plan.lexicalTerms.map((term) => term.value.toLowerCase()));
+    const implementations: T[] = [];
+    const adapters: T[] = [];
+    const supporting: T[] = [];
+    for (const candidate of input.candidates) {
+        const path = normalizeSearchPath(input.relativePath(candidate));
+        const category = classifyPathCategory(path);
+        if (category === "adapter") {
+            // A named integration is implementation evidence when the query
+            // asks for that integration. Its package name alone is not enough.
+            const requested = path.split(/[^a-z0-9]+/).some((term) => (
+                /^(?:mcp|cli|tools?|adapters?)$/.test(term) && queryTerms.has(term)
+            ));
+            (requested ? implementations : adapters).push(candidate);
+        } else if (category === "tests" || category === "fixture" || category === "docs"
+            || category === "generated" || category === "example" || category === "artifact"
+            || category === "landing" || isConfigurationPath(path)) {
+            supporting.push(candidate);
+        } else {
+            implementations.push(candidate);
+        }
+    }
+    return [...implementations, ...adapters, ...supporting];
 }

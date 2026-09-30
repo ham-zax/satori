@@ -59,8 +59,8 @@ function buildSupport(reranker: Reranker | null): SearchQuerySupport {
     });
 }
 
-function buildInput(): SearchExecutionInput {
-    const parsedOperators = parseSearchOperators("where find the relevant implementation");
+function buildInput(query = "where find the relevant implementation"): SearchExecutionInput {
+    const parsedOperators = parseSearchOperators(query);
     const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
     const answerFocus = resolveSearchAnswerFocus(queryPlan).focus;
     return {
@@ -167,4 +167,44 @@ test("native execution surfaces qualified reranker deadline diagnostics", async 
     assert.equal(outcome.kind, "ok");
     assert.equal(outcome.rerankerApplied, true);
     assert.deepEqual(outcome.rerankerExecutionDiagnostics, diagnostics);
+});
+
+
+test("implementation focus puts runtime owners before tests and unrelated adapters", async () => {
+    const results = [
+        candidate("tests/cleanup.test.ts", 0.95),
+        candidate("packages/helper-mcp-server/src/index.ts", 0.90),
+        candidate("src/core/cleanup.ts", 0.80),
+        candidate("src/core/effects.ts", 0.70),
+    ];
+    const reranker = rerankerReturning(results.map((_row, index) => ({ index, relevanceScore: 1 - index * 0.1 })));
+    const outcome = await run(buildInput(), buildHost(results, reranker));
+    assert.equal(outcome.kind, "ok");
+    assert.deepEqual(outcome.scored.map((entry) => entry.result.relativePath), [
+        "src/core/cleanup.ts", "src/core/effects.ts",
+        "packages/helper-mcp-server/src/index.ts", "tests/cleanup.test.ts",
+    ]);
+    assert.equal(outcome.orderAuthority, "reranker_order");
+    assert.deepEqual(outcome.scored.map((entry) => entry.rerankerRank), [3, 4, 2, 1]);
+});
+
+test("explicit tests, configuration, references, and qualified paths retain provider order", async () => {
+    const results = [candidate("tests/cleanup.test.ts", 0.95), candidate("src/core/cleanup.ts", 0.80)];
+    const reranker = rerankerReturning([{ index: 0, relevanceScore: 0.9 }, { index: 1, relevanceScore: 0.8 }]);
+    for (const query of [
+        "tests for cleanup implementation", "configuration for cleanup", "callers of cleanup",
+        "path:tests/cleanup.test.ts implementation",
+    ]) {
+        const outcome = await run(buildInput(query), buildHost(results, reranker));
+        assert.equal(outcome.kind, "ok");
+        assert.equal(outcome.scored[0]?.result.relativePath, "tests/cleanup.test.ts", query);
+    }
+});
+
+test("an implementation question about an MCP server retains the requested adapter", async () => {
+    const results = [candidate("packages/helper-mcp-server/src/index.ts", 0.95), candidate("src/core/cleanup.ts", 0.80)];
+    const reranker = rerankerReturning([{ index: 0, relevanceScore: 0.9 }, { index: 1, relevanceScore: 0.8 }]);
+    const outcome = await run(buildInput("how does the MCP server implement cleanup"), buildHost(results, reranker));
+    assert.equal(outcome.kind, "ok");
+    assert.equal(outcome.scored[0]?.result.relativePath, "packages/helper-mcp-server/src/index.ts");
 });

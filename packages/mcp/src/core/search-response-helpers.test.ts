@@ -147,6 +147,19 @@ test("non-oversized concrete result recommends role-neutral exact symbol context
     assert.equal(action.reason, "Open bounded symbol context for the highest-ranked concrete result.");
 });
 
+test("a matched evidence target keeps its bounded first read and exact symbol identity", () => {
+    const result = baseGroup({
+        target: {
+            file: "src/tool-handlers.ts", span: { startLine: 100, endLine: 140 },
+            symbolId: "sym_tool_handlers",
+        },
+    });
+    assert.deepEqual(buildSearchGroupRecommendedAction("/repo", result)?.args, {
+        path: "/repo/src/tool-handlers.ts", start_line: 100, end_line: 140,
+    });
+    assert.equal(result.target.symbolId, "sym_tool_handlers");
+});
+
 test('search intent selects an actionable context preset without changing the result target', () => {
     const result = baseGroup({
         target: { file: 'src/owner.ts', span: { startLine: 1, endLine: 30 }, symbolId: 'owner' },

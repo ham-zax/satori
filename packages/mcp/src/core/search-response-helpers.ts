@@ -458,7 +458,11 @@ export function buildSearchGroupRecommendedAction(
         return undefined;
     }
 
-    if (isOversizedSymbolSpan(result.target.span) && result.evidenceSpan && isValidSearchSpan(result.evidenceSpan)) {
+    if (
+        result.evidenceSpan
+        && isValidSearchSpan(result.evidenceSpan)
+        && (isOversizedSymbolSpan(result.target.span) || searchSpansEqual(result.target.span, result.evidenceSpan))
+    ) {
         return {
             ...(resultIndex !== undefined ? { resultIndex } : {}),
             tool: "read_file",

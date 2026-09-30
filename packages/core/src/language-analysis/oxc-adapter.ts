@@ -59,6 +59,35 @@ function isFunctionValue(value: unknown): boolean {
     );
 }
 
+function expressionName(value: unknown): string | undefined {
+    if (!isAstNode(value)) return undefined;
+    if (value.type === 'Identifier' && typeof value.name === 'string') return value.name;
+    if (value.type !== 'MemberExpression') return undefined;
+    const owner = expressionName(value.object);
+    const property = value.property;
+    if (!owner || !isAstNode(property)) return undefined;
+    if (!value.computed && property.type === 'Identifier' && typeof property.name === 'string') {
+        return `${owner}.${property.name}`;
+    }
+    if (value.computed && property.type === 'Literal' && typeof property.value === 'string') {
+        return `${owner}.${property.value}`;
+    }
+    return undefined;
+}
+
+function callbackName(node: AstNode, parent: AstNode | undefined): string | undefined {
+    if (!isFunctionValue(node) || parent?.type !== 'CallExpression' || !Array.isArray(parent.arguments)) return undefined;
+    const index = parent.arguments.indexOf(node);
+    const callee = expressionName(parent.callee);
+    if (index < 0 || !callee) return undefined;
+    const discriminator = parent.arguments.find((argument) => (
+        isAstNode(argument) && argument.type === 'Literal' && typeof argument.value === 'string'
+    )) as AstNode | undefined;
+    const args = discriminator ? JSON.stringify(discriminator.value) : '';
+    const suffix = parent.arguments.filter(isFunctionValue).length > 1 ? ` ${index + 1}` : '';
+    return `${callee}(${args}) callback${suffix}`;
+}
+
 function symbolKind(
     node: AstNode,
     parent: AstNode | undefined,
@@ -81,11 +110,14 @@ function symbolKind(
         case 'VariableDeclarator':
             if (parent?.type !== 'VariableDeclaration' || (insideCallable && !isFunctionValue(node.init))) return undefined;
             return isFunctionValue(node.init) ? 'function' : 'variable';
+        case 'AssignmentExpression':
+            return node.operator === '=' && isFunctionValue(node.right) ? 'function' : undefined;
         default: return undefined;
     }
 }
 
 function symbolName(node: AstNode): string | undefined {
+    if (node.type === 'AssignmentExpression') return expressionName(node.left);
     if (
         node.type === 'MethodDefinition'
         || node.type === 'PropertyDefinition'
@@ -200,7 +232,8 @@ function oxcLanguage(language: string, relativePath: string): 'js' | 'jsx' | 'ts
     if (language === 'tsx' || relativePath.endsWith('.tsx')) return 'tsx';
     if (language === 'jsx' || relativePath.endsWith('.jsx')) return 'jsx';
     if (language === 'typescript' || language === 'ts') return 'ts';
-    return 'js';
+    // JSX is valid in JavaScript repositories that do not use the .jsx suffix.
+    return 'jsx';
 }
 
 export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
@@ -230,10 +263,12 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         parent?: AstNode,
         parents: readonly string[] = [],
         insideCallable = false,
+        insideRegistrationCallback = false,
     ): void => {
-        const kind = symbolKind(node, parent, insideCallable);
-        const name = kind ? symbolName(node) : undefined;
-        const nextParents = name && (kind === 'class' || kind === 'interface' || kind === 'namespace')
+        const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
+        const kind = callback ? 'function' : symbolKind(node, parent, insideCallable);
+        const name = callback ?? (kind ? symbolName(node) : undefined);
+        const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
             ? [...parents, name]
             : parents;
         if (kind && name) {
@@ -269,7 +304,11 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
             || node.type === 'TSAbstractMethodDefinition'
             || (node.type === 'PropertyDefinition' && isFunctionValue(node.value))
         );
-        for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable);
+        const childRegistrationCallback = isFunctionValue(node) || node.type === 'FunctionDeclaration'
+            || node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition'
+            ? Boolean(callback)
+            : insideRegistrationCallback;
+        for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable, childRegistrationCallback);
     };
     visit(parsed.program as Program & AstNode);
 

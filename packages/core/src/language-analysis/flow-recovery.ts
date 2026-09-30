@@ -30,10 +30,37 @@ export function recoverFlowSymbols(source: string, relativePath: string): Extrac
             : undefined
     );
 
-    const visit = (node: ts.Node, parent: ts.Node | undefined, parents: readonly string[], insideCallable: boolean): void => {
+    const expressionName = (node: ts.Expression): string | undefined => {
+        if (ts.isIdentifier(node)) return node.text;
+        if (ts.isPropertyAccessExpression(node)) {
+            const owner = expressionName(node.expression);
+            return owner ? `${owner}.${node.name.text}` : undefined;
+        }
+        if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) {
+            const owner = expressionName(node.expression);
+            return owner ? `${owner}.${node.argumentExpression.text}` : undefined;
+        }
+        return undefined;
+    };
+    const callbackName = (node: ts.Node, parent: ts.Node | undefined): string | undefined => {
+        if (!isFunctionValue(node) || !parent || !ts.isCallExpression(parent)) return undefined;
+        const index = parent.arguments.indexOf(node as ts.Expression);
+        const callee = expressionName(parent.expression);
+        if (index < 0 || !callee) return undefined;
+        const discriminator = parent.arguments.find(ts.isStringLiteral);
+        const args = discriminator ? JSON.stringify(discriminator.text) : '';
+        const suffix = parent.arguments.filter(isFunctionValue).length > 1 ? ` ${index + 1}` : '';
+        return `${callee}(${args}) callback${suffix}`;
+    };
+
+    const visit = (node: ts.Node, parent: ts.Node | undefined, parents: readonly string[], insideCallable: boolean, insideRegistrationCallback: boolean): void => {
         let kind: ExtractedSymbolKind | undefined;
         let name: string | undefined;
-        if (ts.isFunctionDeclaration(node)) {
+        const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
+        if (callback) {
+            kind = 'function';
+            name = callback;
+        } else if (ts.isFunctionDeclaration(node)) {
             kind = 'function';
             name = node.name?.text;
         } else if (ts.isClassDeclaration(node)) {
@@ -63,6 +90,9 @@ export function recoverFlowSymbols(source: string, relativePath: string): Extrac
         ) {
             kind = isFunctionValue(node.initializer) ? 'function' : 'variable';
             name = node.name.text;
+        } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isFunctionValue(node.right)) {
+            kind = 'function';
+            name = expressionName(node.left);
         }
 
         if (kind && name) {
@@ -76,15 +106,19 @@ export function recoverFlowSymbols(source: string, relativePath: string): Extrac
             });
         }
 
-        const nextParents = name && (kind === 'class' || kind === 'interface') ? [...parents, name] : parents;
+        const nextParents = name && (callback || kind === 'class' || kind === 'interface') ? [...parents, name] : parents;
         const nextInsideCallable = insideCallable
             || ts.isFunctionDeclaration(node)
             || ts.isFunctionExpression(node)
             || ts.isArrowFunction(node)
             || ts.isMethodDeclaration(node)
             || ts.isConstructorDeclaration(node);
-        ts.forEachChild(node, (child) => visit(child, node, nextParents, nextInsideCallable));
+        const nextRegistrationCallback = isFunctionValue(node) || ts.isFunctionDeclaration(node)
+            || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node)
+            ? Boolean(callback)
+            : insideRegistrationCallback;
+        ts.forEachChild(node, (child) => visit(child, node, nextParents, nextInsideCallable, nextRegistrationCallback));
     };
-    visit(sourceFile, undefined, [], false);
+    visit(sourceFile, undefined, [], false, false);
     return symbols;
 }

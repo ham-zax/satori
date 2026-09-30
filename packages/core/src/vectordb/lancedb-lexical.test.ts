@@ -6,14 +6,14 @@ import test from 'node:test';
 import { buildSearchProjections } from '../core/search-projections.js';
 import { LanceDbVectorDatabase } from './lancedb-vectordb.js';
 
-test('LanceDB lexical retrieval folds case so lowercase terms match camelCase identifiers', async () => {
+test('LanceDB lexical retrieval folds case and stems, so lowercase terms match camelCase identifiers and word forms', async () => {
     const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lancedb-lexical-'));
     const database = new LanceDbVectorDatabase({ databasePath });
     try {
-        const content = 'function commitHookEffectListUnmount(flags) {\n  useEffect(destroy);\n}';
+        const content = 'function commitHookEffectListUnmount(flags) {\n  // Skips re-rendering.\n  useEffect(destroy);\n}';
         const chunk = {
             content,
-            metadata: { startLine: 1, endLine: 3, language: 'javascript', symbolLabel: 'commitHookEffectListUnmount' },
+            metadata: { startLine: 1, endLine: 4, language: 'javascript', symbolLabel: 'commitHookEffectListUnmount' },
         };
         await database.createHybridCollection('lexical_case', 2);
         await database.writeDocuments('lexical_case', [{
@@ -23,7 +23,7 @@ test('LanceDB lexical retrieval folds case so lowercase terms match camelCase id
                 content,
                 relativePath: 'src/effects.js',
                 startLine: 1,
-                endLine: 3,
+                endLine: 4,
                 fileExtension: '.js',
                 metadata: {},
             },
@@ -31,7 +31,7 @@ test('LanceDB lexical retrieval folds case so lowercase terms match camelCase id
         }]);
         await database.finalizeCollectionForSearch('lexical_case');
 
-        for (const query of ['useeffect', 'unmount', 'effect', 'CommitHookEffectListUnmount']) {
+        for (const query of ['useeffect', 'unmount', 'effect', 'CommitHookEffectListUnmount', 'renders']) {
             const candidates = await database.retrieveLexical('lexical_case', { query, limit: 5, matchMode: 'any_terms' });
             assert.deepEqual(candidates.map((candidate) => candidate.document.id), ['doc-1'], query);
         }

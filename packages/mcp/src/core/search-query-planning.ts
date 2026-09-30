@@ -15,10 +15,15 @@ import type {
 } from "./search-lexical-scoring.js";
 
 const SEARCH_OPERATOR_KEYS = new Set(["lang", "path", "-path", "must", "exclude"]);
+// English filler only. Words that are also common identifiers or keywords
+// (get, set, new, not, all, each, after, before) stay searchable.
 const SEARCH_QUERY_STOPWORDS = new Set([
-    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "find", "for", "from", "how",
-    "in", "is", "it", "logic", "of", "or", "the", "to", "used", "uses", "using",
-    "what", "where", "which", "who", "why",
+    "a", "about", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can", "could",
+    "did", "do", "does", "find", "for", "from", "had", "has", "have", "how",
+    "in", "into", "is", "it", "its", "logic", "of", "or", "should", "than", "that", "the", "their",
+    "them", "there", "these", "they", "this", "those", "to", "used", "uses", "using", "via",
+    "was", "were", "what", "when", "where", "which", "who", "whose", "why", "will", "would",
+    "you", "your",
 ]);
 const SEARCH_STRUCTURAL_CUE_WORDS = new Set([
     "call", "calls", "caller", "callers", "callee", "callees",

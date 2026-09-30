@@ -49,9 +49,11 @@ const COLLECTION_IO_CONCURRENCY = 64;
 /**
  * Identity of the FTS analyzer below. Lexical terms reach the index lowercased
  * (canonical fallback terms) or mixed-case (raw queries), so the analyzer must
- * fold case; a published index built by another analyzer requires a reindex.
+ * fold case. Stemming lets word forms in natural-language queries ("renders")
+ * match source text ("rendering"); LanceDB applies the same analyzer to query
+ * text. A published index built by another analyzer requires a reindex.
  */
-export const LANCEDB_LEXICAL_ANALYZER_VERSION = 'lancedb_fts_simple_lowercase_v1';
+export const LANCEDB_LEXICAL_ANALYZER_VERSION = 'lancedb_fts_simple_lowercase_stem_v1';
 
 const DATA_FIELDS = [
     'id',
@@ -538,7 +540,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
                     baseTokenizer: 'simple',
                     maxTokenLength: 255,
                     lowercase: true,
-                    stem: false,
+                    stem: true,
                     removeStopWords: false,
                     asciiFolding: false,
                 }),

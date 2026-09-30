@@ -32,28 +32,7 @@ Own the task end to end:
 
 ## Delegation
 
-Evaluate delegation for every task, but delegate only when it materially improves latency, coverage, independence, verification, or cost.
-
-Good delegation candidates include independent investigations, disjoint file or module reviews, bounded mechanical work, long-running checks, and consequential changes that benefit from an independent reviewer.
-
-Do not delegate when the work is immediately blocking, too small or tightly coupled to divide, requires context that cannot be transferred reliably, would duplicate active work, or would cost more to coordinate than to complete locally.
-
-Every delegated lane must define:
-
-`mission | inputs | authorized scope | write ownership | required output | stopping condition`
-
-Give agents narrow, non-overlapping missions. Prefer parallel read-only work. Permit concurrent writes only when file and responsibility ownership are explicitly disjoint. Agents must not expand the requested outcome, create adjacent work, or delegate recursively unless their assignment authorizes it.
-
-Require concise, verifiable results: conclusion, supporting evidence, uncertainty, and any recommended action. Do not request raw context dumps or broad project summaries when a bounded answer is sufficient.
-
-Use the host's subagent/delegation mechanism for delegated lanes by default (Luna for codex), at the highest supported reasoning effort: max (use this mostly), with lower effort only when clearly sufficient for routine mechanical work. The delegated-lane model is owned by host/global configuration, not this file (pi: `subagents.defaultModel` in `~/.pi/agent/settings.json`; Codex: its configured delegation model). Verify the effective model and effort when creating or resuming each child.
-
-The primary agent owns synthesis, conflict resolution, final edits, integration, and final verification. Treat subagent output as evidence, not authority. Verify consequential findings against the repository or an independent check before relying on them.
-
-Do not cascade work from a failed, stale, contradictory, or low-confidence result. Retry only with a changed hypothesis, clearer contract, or different verification path. Stop and report the limitation when delegation cannot produce trustworthy evidence.
-
-Stop reviewers, watchers, background commands, and child threads when their bounded purpose ends. Do not leave them running unintentionally.
-
+Follow the delegation rules and model preferences in the global Codex instructions at `~/.codex/AGENTS.md`.
 
 Authorization covers all internal batches necessary to complete the explicitly requested outcome. It does not authorize a new outcome, optional improvement, later phase, or adjacent work.
 

@@ -130,7 +130,7 @@
     href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="brand.css?v=2026-09-29d" />
-  <link rel="stylesheet" href="home.css?v=2026-09-29d" />
+  <link rel="stylesheet" href="home.css?v=2026-09-30a" />
   <script>document.documentElement.classList.add("js");</script>
 </head>
 
@@ -178,6 +178,7 @@
               <button class="copy-btn" data-copy-target="hero-install-code" aria-label="Copy install command">Copy</button>
             </div>
           </div>
+          <a class="text-link hero-watch" href="#demo" data-play-demo data-reveal style="--i:8">Watch it find the right code in Ollama (34 s) <span aria-hidden="true">&rarr;</span></a>
         </div>
 
         <figure class="ask" id="ask" aria-label="Example: Satori answering a repository question" data-reveal style="--i:3">
@@ -285,6 +286,20 @@
         <p class="section-intro">
           The agent does not need a perfect identifier up front. Satori narrows the search in stages and keeps each stage tied to repository evidence.
         </p>
+
+        <figure class="demo-video">
+          <video id="demo-video" controls muted playsinline loop preload="none"
+            poster="media/satori-demo-poster.jpg" width="1920" height="1080"
+            aria-describedby="demo-video-summary">
+            <source src="media/satori-demo.webm" type="video/webm" />
+            <source src="media/satori-demo.mp4" type="video/mp4" />
+          </video>
+          <figcaption id="demo-video-summary">
+            Real run on ollama/ollama: indexed 1,138 files in 30 seconds offline. Asked in plain English where the 5-minute keep-alive default is set,
+            Satori found <code>envconfig.KeepAlive()</code>, its caller, and the exact source, while a grep-driven edit landed in the wrong place.
+            Indexing is shown sped up.
+          </figcaption>
+        </figure>
 
         <div class="journey" data-journey>
           <blockquote class="journey-q">
@@ -515,6 +530,51 @@ npx -y @satori-code/cli@latest doctor</code></pre>
           <div><dt>Client</dt><dd>Codex, Claude, OpenCode, or another MCP host</dd></div>
           <div><dt>Task</dt><dd>bug hunt, refactor, onboarding, or evaluation</dd></div>
         </dl>
+
+        <!-- Plain HTML forms, no third-party scripts. home.js hides a form whose action still holds a REPLACE_WITH placeholder. -->
+        <div class="contact-forms">
+          <form class="contact-form" action="https://formspree.io/f/REPLACE_WITH_FORMSPREE_FORM_ID" method="POST" data-configurable-form>
+            <h3>Tried it? Tell me what happened.</h3>
+            <label>What did you ask your agent?
+              <textarea name="question" rows="3" required placeholder="where does the retry logic for failed payments live?"></textarea>
+            </label>
+            <label>Did it find the right code?
+              <select name="result" required>
+                <option value="">Choose one</option>
+                <option>Yes, first try</option>
+                <option>Partly</option>
+                <option>No, it missed</option>
+                <option>Couldn't install or index</option>
+              </select>
+            </label>
+            <div class="contact-form-row">
+              <label>Language and repo size
+                <input name="repo" type="text" placeholder="Go, ~1,000 files" />
+              </label>
+              <label>Agent
+                <input name="client" type="text" placeholder="Claude Code, Codex, OpenCode" />
+              </label>
+            </div>
+            <label>Email (optional, only to reply)
+              <input name="email" type="email" autocomplete="email" />
+            </label>
+            <label class="contact-check"><input name="call" type="checkbox" value="yes" /> I'm open to a 15-minute call</label>
+            <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" class="contact-trap" aria-hidden="true" />
+            <input type="hidden" name="_subject" value="Satori website feedback" />
+            <button class="btn primary" type="submit">Send feedback</button>
+          </form>
+
+          <form class="contact-form" id="updates" action="https://buttondown.com/api/emails/embed-subscribe/REPLACE_WITH_BUTTONDOWN_USERNAME" method="post" data-configurable-form>
+            <h3>Release notes, every two weeks.</h3>
+            <p>What shipped, what broke, and what real users found. No spam; unsubscribe in one click.</p>
+            <label>Email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <input type="hidden" name="tag" value="website" />
+            <button class="btn" type="submit">Get release notes</button>
+            <a class="text-link" href="https://github.com/ham-zax/satori/issues/new?template=search-miss.yml" target="_blank" rel="noopener noreferrer">Search missed the code? Report the case <span aria-hidden="true">&rarr;</span></a>
+          </form>
+        </div>
       </section>
     </main>
 
@@ -537,6 +597,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
         <div class="footer-heading">Contact</div>
         <a href="mailto:ahmed@hamza.my.id">ahmed@hamza.my.id</a>
         <a href="#contact">Send feedback</a>
+        <a href="#updates">Release notes</a>
         <p>AGPL-3.0-only open source. Built by Hamza.</p>
       </div>
       <div class="footer-bottom">
@@ -547,7 +608,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
   </div>
 
   <script src="brand.js?v=2026-09-29d" defer></script>
-  <script src="home.js?v=2026-09-29d" defer></script>
+  <script src="home.js?v=2026-09-30a" defer></script>
 </body>
 
 </html>

@@ -1415,6 +1415,92 @@ h3.minor {
 .contact-context div { display: flex; gap: 0.5rem; }
 .contact-context dt { color: var(--paper); font-weight: 500; }
 
+/* ---------- Feedback and release-notes forms ---------- */
+.contact-forms {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 1.25rem;
+  width: min(100%, 980px);
+  margin-top: 3rem;
+  text-align: left;
+}
+
+.contact-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+
+.contact-form[hidden] { display: none; }
+.contact-form h3 { font-family: var(--display); font-size: 1.35rem; font-weight: 600; letter-spacing: -0.02em; }
+.contact-form p { color: var(--paper-2); font-size: 0.92rem; }
+
+.contact-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: var(--paper-2);
+  font-size: 0.88rem;
+}
+
+.contact-form input[type="text"],
+.contact-form input[type="email"],
+.contact-form select,
+.contact-form textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--ink-1);
+  color: var(--paper);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.contact-form textarea { resize: vertical; }
+.contact-form :is(input, select, textarea):focus-visible { outline: 2px solid var(--shu); outline-offset: 1px; border-color: transparent; }
+
+.contact-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+.contact-form .contact-check { flex-direction: row; align-items: center; gap: 0.6rem; color: var(--paper); }
+.contact-check input { width: 18px; height: 18px; accent-color: var(--shu); }
+
+/* Spam trap: invisible to people, filled in by bots. */
+.contact-trap { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+
+.contact-form .btn { align-self: flex-start; }
+
+/* ---------- Demo video ---------- */
+.demo-video {
+  margin: 2.5rem 0 3rem;
+}
+
+.demo-video video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--ink-1);
+  box-shadow: var(--shadow-soft);
+}
+
+.demo-video figcaption {
+  max-width: 72ch;
+  margin-top: 0.9rem;
+  color: var(--paper-3);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.hero-watch { margin-top: 1.25rem; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1080px) {
   .hero {
@@ -1561,4 +1647,11 @@ h3.minor {
 
 @media (max-width: 560px) {
   .faq { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px) {
+  .contact-forms,
+  .contact-form-row { grid-template-columns: 1fr; }
+  .contact-form { padding: 1.25rem; }
+  .contact-form .btn { align-self: stretch; }
 }

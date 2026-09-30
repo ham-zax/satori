@@ -100,6 +100,25 @@
     select(0, false);
   });
 
+  // Demo video: plays muted while on screen, never autoplays under reduced motion.
+  const video = document.getElementById("demo-video");
+  if (video) {
+    if (!reduceMotion && "IntersectionObserver" in window) {
+      new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) video.play().catch(() => {});
+        else video.pause();
+      }, { threshold: 0.5 }).observe(video);
+    }
+    document.querySelectorAll("[data-play-demo]").forEach((link) => {
+      link.addEventListener("click", () => video.play().catch(() => {}));
+    });
+  }
+
+  // Forms whose endpoint is still a placeholder stay hidden; the mailto links above still work.
+  document.querySelectorAll("[data-configurable-form]").forEach((form) => {
+    if (form.getAttribute("action").includes("REPLACE_WITH")) form.hidden = true;
+  });
+
   // Tiles catch a soft light under the pointer (fine pointers only).
   if (!reduceMotion && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
     document.querySelectorAll(".tile").forEach((tile) => {

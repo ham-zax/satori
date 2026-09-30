@@ -137,6 +137,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The duplicated-declaration-output test resolves project references to built .d.ts files.
+      - name: Build packages
+        run: pnpm build
+
       - name: Run core unit tests
         run: pnpm --filter @satori-code/core test
 

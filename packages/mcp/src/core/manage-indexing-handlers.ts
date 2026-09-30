@@ -7,6 +7,7 @@ import {
     type CustomIndexPolicyUpdate,
 } from "@satori-code/core";
 import type { SyncManager } from "./sync.js";
+import type { TrackedRootFailedIndexOperation } from "./tracked-root-readiness.js";
 import type { ManageIndexAction } from "./manage-types.js";
 import type { CompletionProofValidationResult } from "./completion-proof.js";
 import {
@@ -192,6 +193,29 @@ function formatUnknownError(error: unknown): string {
 }
 
 const FULL_INDEX_NO_PROGRESS_TIMEOUT_MS = 30 * 60 * 1000;
+const FULL_INDEX_NO_PROGRESS_CANCEL_REASON = "full_index_no_progress_timeout";
+
+/**
+ * Terminal create/reindex outcome that readiness must report as a failed index.
+ * A caller-requested cancellation stays "not indexed"; the no-progress watchdog
+ * stopping the worker is a failure, or callers would retry into the same stall.
+ */
+export function failedIndexOperationForReadiness(
+    operation: RootMutationOperation | undefined,
+): TrackedRootFailedIndexOperation | undefined {
+    if (!operation || (operation.action !== "create" && operation.action !== "reindex")) return undefined;
+    const watchdogCancelled = operation.phase === "cancelled"
+        && operation.cancelReason === FULL_INDEX_NO_PROGRESS_CANCEL_REASON;
+    if (operation.phase !== "failed" && !watchdogCancelled) return undefined;
+    const error = watchdogCancelled
+        ? `Indexing made no progress for ${FULL_INDEX_NO_PROGRESS_TIMEOUT_MS / 60_000} minutes and was stopped.`
+        : operation.error;
+    return {
+        ...(error !== undefined ? { error } : {}),
+        ...(operation.progress !== undefined ? { progress: operation.progress } : {}),
+        updatedAt: operation.updatedAt,
+    };
+}
 
 function resolveMutationIndexWorkerPath(): string {
     const built = fileURLToPath(new URL("../server/mutation-index-worker.js", import.meta.url));
@@ -289,7 +313,7 @@ export class ManageIndexingHandlers {
                 onNoProgress: () => {
                     this.host.mutationRuntime.requestCancellation(
                         execution.id,
-                        "full_index_no_progress_timeout",
+                        FULL_INDEX_NO_PROGRESS_CANCEL_REASON,
                     );
                 },
                 onCompleted: (result) => {

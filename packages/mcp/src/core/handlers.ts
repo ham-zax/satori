@@ -106,7 +106,7 @@ import {
 import { prepareRelationshipTraversals } from "./prepared-relationship-traversal.js";
 import { findExactRegistrySymbols } from "./registry-file-outline.js";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
-import { ManageIndexingHandlers } from "./manage-indexing-handlers.js";
+import { ManageIndexingHandlers, failedIndexOperationForReadiness } from "./manage-indexing-handlers.js";
 import type {
     AutomaticReindexReason,
     AutomaticReindexScheduleResult,
@@ -1409,15 +1409,7 @@ export class ToolHandlers {
     }
 
     private getFailedIndexOperationForReadiness(codebasePath: string): TrackedRootFailedIndexOperation | undefined {
-        const operation = this.mutationRuntime.getOperation(codebasePath);
-        if (operation?.phase !== "failed" || (operation.action !== "create" && operation.action !== "reindex")) {
-            return undefined;
-        }
-        return {
-            ...(operation.error !== undefined ? { error: operation.error } : {}),
-            ...(operation.progress !== undefined ? { progress: operation.progress } : {}),
-            updatedAt: operation.updatedAt,
-        };
+        return failedIndexOperationForReadiness(this.mutationRuntime.getOperation(codebasePath));
     }
 
     private hasSearchableGenerationForReadiness(codebasePath: string): boolean {

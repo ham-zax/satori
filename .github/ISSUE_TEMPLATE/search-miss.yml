@@ -1,0 +1,45 @@
+name: Search missed the code
+description: Satori returned the wrong place, or missed the code that owns the behavior.
+title: "Search miss: "
+labels: ["search-quality"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. A miss we can reproduce is the most useful report there is. Public repositories let us reproduce it exactly.
+  - type: input
+    id: repo
+    attributes:
+      label: Repository and commit
+      description: A public URL and commit if possible, otherwise the language and approximate size.
+      placeholder: https://github.com/ollama/ollama @ 1abe35e
+    validations:
+      required: true
+  - type: textarea
+    id: query
+    attributes:
+      label: What you (or your agent) asked
+      description: The exact query passed to search_codebase, including any prefixes such as path:.
+      placeholder: where is the default 5 minute keep alive for loaded models set
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Where the answer actually is
+      description: File and function (and line) that owns the behavior.
+      placeholder: envconfig/config.go, KeepAlive(), line 129
+    validations:
+      required: true
+  - type: textarea
+    id: got
+    attributes:
+      label: What Satori returned
+      description: The top results (file, symbol, span). Pasting the JSON response is fine.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Satori version and client
+      description: Output of `satori doctor` helps; otherwise the version and your agent (Claude Code, Codex, OpenCode).

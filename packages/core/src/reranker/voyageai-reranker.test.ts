@@ -16,9 +16,13 @@ type MockFetch = (
 async function withMockedFetch<T>(mockFetch: MockFetch, fn: () => Promise<T>): Promise<T> {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockFetch as typeof fetch;
+    // A real in-flight fetch holds a socket that keeps the event loop alive; a mocked hung fetch holds nothing,
+    // and Node 22.13's unref'd AbortSignal.timeout alone lets the test runner see a drained loop.
+    const keepAlive = setInterval(() => undefined, 60_000);
     try {
         return await fn();
     } finally {
+        clearInterval(keepAlive);
         globalThis.fetch = originalFetch;
     }
 }

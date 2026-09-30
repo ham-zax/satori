@@ -19,6 +19,10 @@ interface TestServer {
 // Polls until `predicate` holds or `timeoutMs` elapses, so tests can wait for
 // deterministic connection release without fixed sleeps. The caller's
 // assertion reports the actual values when the wait expires.
+// Idle keep-alive connections close on undici's pool timeout: well under 1s on
+// Node 24, ~3s on Node 22.13. Closure checks must outlast it; leaked sockets never close.
+const IDLE_CONNECTION_CLOSE_MS = 5000;
+
 async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (!predicate()) {
@@ -446,7 +450,7 @@ test("repeated oversized responses release every connection instead of accumulat
     // A body abandoned above the byte limit must not keep its connection
     // parked with unread data: every connection that was opened must be
     // released deterministically, otherwise the count below accumulates.
-    await waitUntil(() => server.closedConnectionCount() === server.connectionCount());
+    await waitUntil(() => server.closedConnectionCount() === server.connectionCount(), IDLE_CONNECTION_CLOSE_MS);
     assert.ok(server.connectionCount() >= 2, "the storm must have exercised real connections");
     assert.equal(server.closedConnectionCount(), server.connectionCount());
 });
@@ -598,7 +602,7 @@ test("reuses one connection across successful responses and closes deterministic
 
     // Deterministic closure: no connection may stay open with unread body
     // data, and the server must shut down without hanging on leaked sockets.
-    await waitUntil(() => server.closedConnectionCount() === server.connectionCount());
+    await waitUntil(() => server.closedConnectionCount() === server.connectionCount(), IDLE_CONNECTION_CLOSE_MS);
     assert.equal(server.closedConnectionCount(), server.connectionCount());
     await Promise.race([
         server.close(),

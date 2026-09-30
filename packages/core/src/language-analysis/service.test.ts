@@ -1437,3 +1437,33 @@ test('languages promoted by CBM parity evidence analyze through CBM definition e
     });
     assert.deepEqual(records.filter((record) => record.kind !== 'file').map((record) => record.qualifiedName), ['Registry', 'Registry.add', 'total']);
 });
+
+test('Flow-annotated JavaScript keeps its declarations searchable at symbol level', async () => {
+    const analyzer = createLanguageAnalysisService();
+    const content = [
+        '/** @flow */',
+        "import type {Fiber} from './Fiber';",
+        'export function areEqual(a: ?Fiber, b: ?Fiber): boolean {',
+        '  return a === b;',
+        '}',
+        'export const mount = (fiber: Fiber): number => {',
+        '  const local = 1;',
+        '  return local;',
+        '};',
+        'class Queue {',
+        '  push(item: Fiber): void {}',
+        '}',
+    ].join('\n');
+    const result = await analyzer.analyze({ content, language: 'javascript', relativePath: 'src/flow.js' });
+
+    assert.equal(result.structuralStatus, 'recovered');
+    assert.equal(result.structuralReason, 'syntax_error');
+    const spans = Object.fromEntries(result.symbols.map((symbol) => [symbol.qualifiedName, `${symbol.kind}:${symbol.span.startLine}-${symbol.span.endLine}`]));
+    assert.deepEqual(spans, {
+        areEqual: 'function:3-5',
+        mount: 'function:6-9',
+        Queue: 'class:10-12',
+        'Queue.push': 'method:11-11',
+    });
+    assert.equal(result.callSites.length, 0);
+});

@@ -6,6 +6,8 @@ import type { CallSite, LanguageAnalysisInput, ModuleBinding, ReceiverTypeBindin
 
 const { parseSync } = require('oxc-parser') as typeof import('oxc-parser', { with: { "resolution-mode": "require" } });
 
+const FLOW_UNSUPPORTED_MESSAGE = 'Flow is not supported';
+
 type AstNode = {
     type: string;
     start: number;
@@ -23,6 +25,8 @@ export type OxcEvidence = {
 } | {
     readonly complete: false;
     readonly reason: 'syntax_error';
+    /** Oxc rejected the file as Flow-annotated source rather than as malformed JavaScript. */
+    readonly flowSyntax?: true;
     readonly symbols: readonly [];
     readonly moduleBindings: readonly [];
     readonly callSites: readonly [];
@@ -208,6 +212,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         return {
             complete: false,
             reason: 'syntax_error',
+            ...(parsed.errors.some((error) => error.message === FLOW_UNSUPPORTED_MESSAGE) ? { flowSyntax: true as const } : {}),
             symbols: [],
             moduleBindings: [],
             callSites: [],

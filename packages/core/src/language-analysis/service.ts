@@ -2,6 +2,7 @@ import { buildAnalysisChunks } from './chunks';
 import { isLanguageCapabilitySupportedForLanguage, normalizeLanguageId } from '../language';
 import { analyzeWithCbmDefinitions, supportsCbmDefinitions } from './cbm-definition-adapter';
 import { CbmExtractorUnavailableError } from './cbm-extractor-host';
+import { recoverFlowSymbols } from './flow-recovery';
 import { analyzeWithOxc } from './oxc-adapter';
 import { analyzeWithTreeSitter } from './tree-sitter-adapter';
 import type {
@@ -262,6 +263,29 @@ export function createLanguageAnalysisService(
                     ? analyzeWithOxc(normalizedInput)
                     : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
                 if (!evidence.complete) {
+                    if ('flowSyntax' in evidence && evidence.flowSyntax) {
+                        // Flow-annotated source is valid for its authors; keep its declarations searchable at symbol level.
+                        const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);
+                        if (symbols.length > 0) {
+                            return {
+                                backend: strategy.backend,
+                                structuralStatus: 'recovered',
+                                structuralReason: 'syntax_error',
+                                symbols,
+                                moduleBindings: [],
+                                callSites: [],
+                                receiverTypeBindings: [],
+                                pythonFlowFacts: [],
+                                chunks: buildAnalysisChunks(
+                                    normalizedInput.content,
+                                    normalizedInput.relativePath,
+                                    normalizedInput.language,
+                                    symbols,
+                                    chunkOptions,
+                                ),
+                            };
+                        }
+                    }
                     return fallbackResult(
                         normalizedInput,
                         strategy.backend,

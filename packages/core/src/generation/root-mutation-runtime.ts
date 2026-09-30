@@ -121,8 +121,9 @@ function cancellationReason(reason: unknown): string | undefined {
 
 /**
  * Core-owned process runtime for the durable per-root writer fence and its
- * process-local operation projection. First-party integrations request a root
- * mutation through this owner; raw leases never cross the Core boundary.
+ * live operation projection and durable terminal receipt. First-party
+ * integrations request a root mutation through this owner; raw leases never
+ * cross the Core boundary.
  */
 export class RootMutationRuntime {
     constructor(options: RootMutationRuntimeOptions = {}) {

@@ -58,6 +58,7 @@ interface MutationLeaseState {
     canonicalRoot: string;
     generation: number;
     lease?: RootMutationLease;
+    terminalOperation?: RootMutationOperation;
 }
 
 export interface MutationLeaseCoordinatorOptions {
@@ -285,13 +286,15 @@ export class MutationLeaseCoordinator {
     public getOperation(root: string): RootMutationOperation | undefined {
         const canonicalRoot = canonicalizeRoot(root);
         return this.withRootLock(canonicalRoot, () => {
+            const state = this.readState(canonicalRoot);
             const operation = this.operationsByRoot.get(canonicalRoot);
-            if (!operation) return undefined;
-            if (this.readState(canonicalRoot).generation !== operation.generation) {
-                this.operationsByRoot.delete(canonicalRoot);
-                return undefined;
+            if (operation && state.generation === operation.generation) {
+                return { ...operation };
             }
-            return { ...operation };
+            if (operation) {
+                this.operationsByRoot.delete(canonicalRoot);
+            }
+            return state.terminalOperation ? { ...state.terminalOperation } : undefined;
         });
     }
 
@@ -510,12 +513,21 @@ export class MutationLeaseCoordinator {
             if (state.lease && this.isExecutorLive(state.lease)) {
                 throw new MutationExecutorStillActiveError(state.lease);
             }
+            const operation = this.operationsByRoot.get(lease.canonicalRoot);
+            const terminalOperation = operation
+                && operation.id === lease.operationId
+                && operation.generation === lease.generation
+                && isTerminalMutationOperationPhase(operation.phase)
+                ? operation
+                : undefined;
+            // The lifetime owner publishes the receipt with lease removal only
+            // after the executor is quiescent; a new generation clears it.
             this.writeState({
                 formatVersion: 'v1',
                 canonicalRoot: state.canonicalRoot,
                 generation: state.generation,
+                ...(terminalOperation ? { terminalOperation } : {}),
             });
-            const operation = this.operationsByRoot.get(lease.canonicalRoot);
             if (
                 operation
                 && operation.id === lease.operationId
@@ -597,12 +609,44 @@ export class MutationLeaseCoordinator {
         if (lease !== undefined && !this.isLeaseRecord(lease, canonicalRoot)) {
             throw new Error(`Invalid mutation lease record at ${statePath}`);
         }
+        const terminalOperation = parsed.terminalOperation;
+        if (terminalOperation !== undefined && (
+            lease !== undefined
+            || !this.isTerminalOperationRecord(terminalOperation, canonicalRoot, parsed.generation)
+        )) {
+            throw new Error(`Invalid mutation terminal operation at ${statePath}`);
+        }
         return {
             formatVersion: 'v1',
             canonicalRoot,
             generation: parsed.generation,
             lease,
+            terminalOperation,
         };
+    }
+
+    private isTerminalOperationRecord(
+        value: unknown,
+        canonicalRoot: string,
+        generation: number,
+    ): value is RootMutationOperation {
+        return isRecord(value)
+            && value.canonicalRoot === canonicalRoot
+            && value.generation === generation
+            && generation > 0
+            && typeof value.id === 'string'
+            && ['create', 'reindex', 'sync', 'clear', 'gc'].includes(String(value.action))
+            && ['completed', 'failed', 'blocked', 'cancelled'].includes(String(value.phase))
+            && typeof value.acceptedAt === 'string'
+            && typeof value.updatedAt === 'string'
+            && ['heartbeatAt', 'progressAt', 'error', 'cancelRequestedAt', 'cancelReason']
+                .every((field) => value[field] === undefined || typeof value[field] === 'string')
+            && (value.progress === undefined || (
+                typeof value.progress === 'number'
+                && Number.isFinite(value.progress)
+                && value.progress >= 0
+                && value.progress <= 100
+            ));
     }
 
     private isLeaseRecord(value: unknown, canonicalRoot: string): value is RootMutationLease {

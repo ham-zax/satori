@@ -5,6 +5,7 @@ import type { MutationOperationPhase, RootMutationExecutor } from "@satori-code/
 const MUTATION_OPERATION_ID_ENV = "SATORI_MUTATION_OPERATION_ID";
 const MUTATION_PARENT_PID_ENV = "SATORI_MUTATION_PARENT_PID";
 const DEFAULT_CANCEL_GRACE_MS = 5_000;
+const DEFAULT_TERMINAL_SHUTDOWN_MS = 5_000;
 const PROCESS_GROUP_POLL_MS = 25;
 const PARENT_WATCHDOG_MS = 1_000;
 // Index and sync write and fsync thousands of navigation shards through
@@ -109,6 +110,7 @@ export type SupervisedMutationWorkerOptions = Readonly<{
     signal?: AbortSignal;
     noProgressTimeoutMs?: number;
     cancelGraceMs?: number;
+    terminalShutdownTimeoutMs?: number;
     onHeartbeat?: () => void;
     onProgress?: (progress: MutationWorkerProgress) => void;
     onNoProgress?: () => void;
@@ -265,6 +267,10 @@ export function spawnSupervisedMutationWorker(
     if (!Number.isFinite(cancelGraceMs) || cancelGraceMs < 0) {
         throw new Error("Mutation worker cancelGraceMs must be non-negative.");
     }
+    const terminalShutdownTimeoutMs = options.terminalShutdownTimeoutMs ?? DEFAULT_TERMINAL_SHUTDOWN_MS;
+    if (!Number.isFinite(terminalShutdownTimeoutMs) || terminalShutdownTimeoutMs <= 0) {
+        throw new Error("Mutation worker terminalShutdownTimeoutMs must be positive when provided.");
+    }
 
     const parentStartTime = linuxProcessStartTime(process.pid);
     const worker = fork(options.workerPath, [...(options.workerArgs ?? [])], {
@@ -277,7 +283,9 @@ export function spawnSupervisedMutationWorker(
             [MUTATION_PARENT_PID_ENV]: String(process.pid),
         },
         detached: true,
-        stdio: ["ignore", "inherit", "inherit", "ipc"],
+        // Worker stdout shares the MCP process by default. Send it to the
+        // server's stderr descriptor so logs cannot corrupt JSON-RPC stdout.
+        stdio: ["ignore", 2, "inherit", "ipc"],
         execArgv: process.execArgv.filter((argument) => !argument.startsWith("--input-type")),
     });
     if (!worker.pid) {
@@ -308,11 +316,14 @@ export function spawnSupervisedMutationWorker(
     let cancelRequested = false;
     let cancelReason: string | undefined;
     let forced = false;
+    let terminalShutdownForced = false;
     let containmentViolation = false;
     let terminalMessage: WorkerTerminalMessage | undefined;
     let lastProgressSequence = -1;
     let noProgressTimer: NodeJS.Timeout | undefined;
     let cancelTimer: NodeJS.Timeout | undefined;
+    let terminalShutdownTimer: NodeJS.Timeout | undefined;
+    let terminalCleanupPromise: Promise<void> | undefined;
     let sourceAbortListener: (() => void) | undefined;
     let resolveReady!: () => void;
     let rejectReady!: (error: unknown) => void;
@@ -346,9 +357,19 @@ export function spawnSupervisedMutationWorker(
         clearTimeout(noProgressTimer);
         noProgressTimer = undefined;
     };
+    const clearCancelTimer = (): void => {
+        if (!cancelTimer) return;
+        clearTimeout(cancelTimer);
+        cancelTimer = undefined;
+    };
+    const clearTerminalShutdownTimer = (): void => {
+        if (!terminalShutdownTimer) return;
+        clearTimeout(terminalShutdownTimer);
+        terminalShutdownTimer = undefined;
+    };
     const armNoProgressTimer = (): void => {
         clearNoProgressTimer();
-        if (!started || cancelRequested || options.noProgressTimeoutMs === undefined) return;
+        if (!started || cancelRequested || terminalMessage || options.noProgressTimeoutMs === undefined) return;
         noProgressTimer = setTimeout(() => {
             try {
                 options.onNoProgress?.();
@@ -374,7 +395,7 @@ export function spawnSupervisedMutationWorker(
         }
     };
     const requestCancellation = (reason?: string): boolean => {
-        if (completionSettled) return false;
+        if (completionSettled || terminalMessage) return false;
         if (cancelRequested) return true;
         cancelRequested = true;
         cancelReason = reason;
@@ -393,6 +414,7 @@ export function spawnSupervisedMutationWorker(
     };
 
     worker.on("message", (message: unknown) => {
+        if (terminalMessage) return;
         if (!isWorkerMessage(message) || message.operationId !== options.operationId) {
             requestCancellation("worker_protocol_identity_mismatch");
             return;
@@ -428,6 +450,13 @@ export function spawnSupervisedMutationWorker(
             case "mutation_worker_cancelled":
             case "mutation_worker_failed":
                 terminalMessage = message;
+                clearNoProgressTimer();
+                clearCancelTimer();
+                terminalShutdownTimer = setTimeout(() => {
+                    terminalShutdownForced = true;
+                    terminalCleanupPromise = forceAndProveProcessGroupQuiescence(executor.processGroupId);
+                }, terminalShutdownTimeoutMs);
+                terminalShutdownTimer.unref();
                 return;
         }
     });
@@ -455,13 +484,15 @@ export function spawnSupervisedMutationWorker(
         workerExitSeen = true;
         const exitDetail = signal ? `signal ${signal}` : code === null ? 'unknown exit' : `exit code ${code}`;
         clearNoProgressTimer();
-        if (cancelTimer) clearTimeout(cancelTimer);
+        clearCancelTimer();
+        clearTerminalShutdownTimer();
         if (sourceAbortListener && options.signal) {
             options.signal.removeEventListener("abort", sourceAbortListener);
         }
         void (async () => {
+            if (terminalCleanupPromise) await terminalCleanupPromise;
             if (isProcessGroupLive(executor.processGroupId)) {
-                containmentViolation = !cancelRequested;
+                containmentViolation = !cancelRequested && !terminalShutdownForced;
                 await forceAndProveProcessGroupQuiescence(executor.processGroupId);
             }
             containmentWatchdog.kill("SIGTERM");

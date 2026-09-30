@@ -8,6 +8,7 @@
  * analyze -> resolve -> emit facade and attaches claims to analysis evidence
  * as part of the emit step.
  */
+import { drainResolutionWork, drainResolutionWorkAsync, type RelationshipResolutionWork, type RelationshipResolutionWorkOptions } from './resolution-work';
 import { isLanguageCapabilitySupportedForLanguage } from '../language';
 import type {
     CallSite,
@@ -838,6 +839,13 @@ interface PythonFlowContext {
     readonly callArgumentsByName: ReadonlyMap<string, readonly [string, PythonCallArgumentFact][]>;
     readonly callArgumentsByIndex: ReadonlyMap<number, readonly [string, PythonCallArgumentFact][]>;
     readonly assignmentsByMemberName: ReadonlyMap<string, readonly [string, PythonAssignmentOriginFact][]>;
+    readonly argumentInvocationsByFile: Map<string, WeakMap<PythonCallArgumentFact, PythonArgumentInvocation>>;
+    readonly argumentFactsByParameter: Map<string, Map<number | undefined, readonly [string, PythonCallArgumentFact][]>>;
+}
+
+interface PythonArgumentInvocation {
+    readonly caller?: SymbolRecord;
+    readonly targets: readonly SymbolRecord[];
 }
 
 type PythonCallArgumentFact = Extract<PythonFlowFact, { kind: 'call_argument' }>;
@@ -1315,22 +1323,74 @@ function invocationMatchesParameterOwner(
     });
 }
 
+/** File and object identity retain scope even if an evidence object is shared across files. */
+function pythonArgumentInvocation(
+    context: PythonFlowContext,
+    file: string,
+    fact: PythonCallArgumentFact,
+): PythonArgumentInvocation {
+    let byFact = context.argumentInvocationsByFile.get(file);
+    if (!byFact) {
+        byFact = new WeakMap();
+        context.argumentInvocationsByFile.set(file, byFact);
+    }
+    const cached = byFact.get(fact);
+    if (cached) return cached;
+    const caller = callableForContext(context.registry, file, fact.contextSpan);
+    const invocation = {
+        caller,
+        targets: caller ? exactPythonCallableTargets(context, file, caller, fact.calleeText, fact.span) : [],
+    };
+    // Registry and input facts are fixed for this resolver invocation. These
+    // lookups depend on neither the parameter owner nor the origin recursion
+    // stack; stack-dependent origins are resolved afresh below.
+    byFact.set(fact, invocation);
+    return invocation;
+}
+
 function pythonCallArgumentFactsForParameter(
     context: PythonFlowContext,
     target: SymbolRecord,
     parameterName: string,
 ): readonly [string, PythonCallArgumentFact][] {
     const positionalIndex = positionalArgumentIndexForParameter(context, target, parameterName);
-    return [
-        ...(context.callArgumentsByName.get(parameterName) ?? []),
-        ...(positionalIndex === undefined ? [] : (context.callArgumentsByIndex.get(positionalIndex) ?? [])),
-    ].filter(([file, fact], index, entries) => entries.findIndex(([candidateFile, candidate]) => (
-        candidateFile === file
-        && candidate.span.startByte === fact.span.startByte
-        && candidate.valueText === fact.valueText
-        && candidate.argumentName === fact.argumentName
-        && candidate.argumentIndex === fact.argumentIndex
-    )) === index);
+    let byPosition = context.argumentFactsByParameter.get(parameterName);
+    if (!byPosition) {
+        byPosition = new Map();
+        context.argumentFactsByParameter.set(parameterName, byPosition);
+    }
+    const cached = byPosition.get(positionalIndex);
+    if (cached) return cached;
+    // Each level retains the original strict-equality identity without encoding
+    // optional fields into a string or comparing every preceding argument.
+    type IdentityIndex = Map<unknown, IdentityIndex>;
+    const seen: IdentityIndex = new Map();
+    const result: [string, PythonCallArgumentFact][] = [];
+    const named = context.callArgumentsByName.get(parameterName) ?? [];
+    const positional = positionalIndex === undefined ? [] : (context.callArgumentsByIndex.get(positionalIndex) ?? []);
+    for (const entries of [named, positional]) {
+        for (const entry of entries) {
+            const [file, fact] = entry;
+            const identity = [file, fact.span.startByte, fact.valueText, fact.argumentName, fact.argumentIndex];
+            // Map treats NaN as equal; the original strict-equality comparison
+            // never retained such a fact because even its self-match failed.
+            if (identity.some((part) => typeof part === 'number' && Number.isNaN(part))) continue;
+            let index = seen;
+            let duplicate = true;
+            for (const part of identity) {
+                let next = index.get(part);
+                if (!next) {
+                    next = new Map();
+                    index.set(part, next);
+                    duplicate = false;
+                }
+                index = next;
+            }
+            if (!duplicate) result.push(entry);
+        }
+    }
+    byPosition.set(positionalIndex, result);
+    return result;
 }
 
 function resolvePythonParameterOrigins(
@@ -1347,15 +1407,8 @@ function resolvePythonParameterOrigins(
 
     const origins: PythonValueOrigin[] = [];
     for (const [file, fact] of candidateFacts) {
-        const caller = callableForContext(context.registry, file, fact.contextSpan);
+        const { caller, targets: calledTargets } = pythonArgumentInvocation(context, file, fact);
         if (!caller) continue;
-        const calledTargets = exactPythonCallableTargets(
-            context,
-            file,
-            caller,
-            fact.calleeText,
-            fact.span,
-        );
         if (!invocationMatchesParameterOwner(context, calledTargets, target)) continue;
         const valueOrigins = resolvePythonExpressionOrigins(
             context,
@@ -1801,15 +1854,8 @@ function resolvePythonServiceMemberTarget(input: {
         span: parameterBindings[0].span,
     }];
     for (const [file, fact] of allocationFacts) {
-        const allocationContext = callableForContext(input.context.registry, file, fact.contextSpan);
+        const { caller: allocationContext, targets: calledTargets } = pythonArgumentInvocation(input.context, file, fact);
         if (!allocationContext) continue;
-        const calledTargets = exactPythonCallableTargets(
-            input.context,
-            file,
-            allocationContext,
-            fact.calleeText,
-            fact.span,
-        );
         const invocationMatches = initializer
             ? invocationMatchesParameterOwner(input.context, calledTargets, initializer)
             : calledTargets.some((target) => (
@@ -2388,6 +2434,17 @@ function buildResolutionClaim(input: {
 }
 
 export function resolvePythonRelationships(input: PythonResolutionEngineInput): PythonResolutionResult {
+    return drainResolutionWork(resolvePythonRelationshipsWork(input));
+}
+
+export function resolvePythonRelationshipsAsync(
+    input: PythonResolutionEngineInput,
+    options?: RelationshipResolutionWorkOptions,
+): Promise<PythonResolutionResult> {
+    return drainResolutionWorkAsync(resolvePythonRelationshipsWork(input), options);
+}
+
+export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInput): RelationshipResolutionWork<PythonResolutionResult> {
     const targetIndex = buildTargetIndex(input.registry.symbols);
     const symbolsByFile = input.registry.symbolsByFile;
     const classes = buildClassIndex(input.registry.symbols);
@@ -2419,9 +2476,18 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
         callArgumentsByName: buildPythonCallArgumentIndex(pythonEvidenceEntries),
         callArgumentsByIndex: buildPythonCallArgumentIndexByPosition(pythonEvidenceEntries),
         assignmentsByMemberName: buildPythonAssignmentOriginIndex(pythonEvidenceEntries),
+        argumentInvocationsByFile: new Map(),
+        argumentFactsByParameter: new Map(),
     };
     const recordsByKey = new Map<string, RelationshipRecord>();
     const claimsByFile = new Map<string, ResolutionClaim[]>();
+
+    const totalCalls = input.registry.manifest.files.reduce((total, file) => (
+        file.language === 'python' && (!sourceFiles || sourceFiles.has(file.path))
+            ? total + (getEvidence(input.analysisByFile, file.path)?.callSites.length ?? 0)
+            : total
+    ), 0);
+    let completedCalls = 0;
 
     for (const file of input.registry.manifest.files) {
         if (sourceFiles && !sourceFiles.has(file.path)) continue;
@@ -2431,7 +2497,10 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
         if (!evidence) continue;
         for (const call of evidence.callSites) {
             const source = resolveOwner(symbolsByFile.get(file.path) ?? [], call);
-            if (!source) continue;
+            if (!source) {
+                yield { file: file.path, completedCalls: ++completedCalls, totalCalls };
+                continue;
+            }
             const candidates = targetIndex.get(call.calleeName);
             const evidenceForCall = evidence;
             const flowResolution = source.language === 'python'
@@ -2562,7 +2631,10 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
             if (resolutionClaim) {
                 appendClaim(claimsByFile, file.path, resolutionClaim);
             }
-            if (!target) continue;
+            if (!target) {
+                yield { file: file.path, completedCalls: ++completedCalls, totalCalls };
+                continue;
+            }
             const record: RelationshipRecord = {
                 sourceKey: source.symbolKey,
                 sourceInstanceId: source.symbolInstanceId,
@@ -2589,6 +2661,7 @@ export function resolvePythonRelationships(input: PythonResolutionEngineInput): 
                 };
                 recordsByKey.set(relationshipKey(testRecord), testRecord);
             }
+            yield { file: file.path, completedCalls: ++completedCalls, totalCalls };
         }
     }
 

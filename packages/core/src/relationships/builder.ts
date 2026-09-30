@@ -1,3 +1,4 @@
+import { drainResolutionWork, drainResolutionWorkAsync, type RelationshipResolutionWork, type RelationshipResolutionWorkOptions } from './resolution-work';
 import { isLanguageCapabilitySupportedForLanguage } from '../language';
 import type { LanguageAnalysisResult } from '../language-analysis';
 import type { RelationshipRecord, SymbolRecord, SymbolRegistry } from '../symbols';
@@ -144,6 +145,17 @@ export {
 } from './admission';
 
 export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsForRegistryInput): RelationshipRecord[] {
+    return drainResolutionWork(buildCallRelationshipsForRegistryWork(input));
+}
+
+export function buildCallRelationshipsForRegistryAsync(
+    input: BuildCallRelationshipsForRegistryInput,
+    options?: RelationshipResolutionWorkOptions,
+): Promise<RelationshipRecord[]> {
+    return drainResolutionWorkAsync(buildCallRelationshipsForRegistryWork(input), options);
+}
+
+function* buildCallRelationshipsForRegistryWork(input: BuildCallRelationshipsForRegistryInput): RelationshipResolutionWork<RelationshipRecord[]> {
     const semanticRegistry = input.semanticRegistry ?? defaultSemanticLanguageRegistry;
     const strategyRegistry = input.strategyRegistry ?? (input.semanticRegistry ? new DefaultLanguageResolutionStrategyRegistry(undefined, semanticRegistry) : defaultResolutionStrategyRegistry);
     const recordsByKey = new Map<string, RelationshipRecord>();
@@ -181,7 +193,7 @@ export function buildCallRelationshipsForRegistry(input: BuildCallRelationshipsF
             for (const f of files) pythonFiles.add(f);
         }
         if (pythonFiles.size > 0) {
-            const pythonResult = pythonResolutionContributionEngine.resolveCalls({
+            const pythonResult = yield* pythonResolutionContributionEngine.resolveCallsWork({
                 registry: input.registry,
                 analysisByFile: input.analysisByFile,
                 sourceFiles: pythonFiles,
@@ -381,10 +393,21 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
 }
 
 export function buildRelationshipsForRegistry(input: BuildRelationshipsForRegistryInput): RelationshipRecord[] {
+    return drainResolutionWork(buildRelationshipsForRegistryWork(input));
+}
+
+export function buildRelationshipsForRegistryAsync(
+    input: BuildRelationshipsForRegistryInput,
+    options?: RelationshipResolutionWorkOptions,
+): Promise<RelationshipRecord[]> {
+    return drainResolutionWorkAsync(buildRelationshipsForRegistryWork(input), options);
+}
+
+function* buildRelationshipsForRegistryWork(input: BuildRelationshipsForRegistryInput): RelationshipResolutionWork<RelationshipRecord[]> {
     const recordsByKey = new Map<string, RelationshipRecord>();
     for (const record of [
         ...buildImportExportRelationshipsForRegistry(input),
-        ...buildCallRelationshipsForRegistry(input),
+        ...(yield* buildCallRelationshipsForRegistryWork(input)),
     ]) {
         recordsByKey.set(relationshipKey(record), record);
     }
@@ -392,6 +415,17 @@ export function buildRelationshipsForRegistry(input: BuildRelationshipsForRegist
 }
 
 export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): BuildRelationshipDeltaResult {
+    return drainResolutionWork(buildRelationshipDeltaWork(input));
+}
+
+export function buildRelationshipDeltaAsync(
+    input: BuildRelationshipDeltaInput,
+    options?: RelationshipResolutionWorkOptions,
+): Promise<BuildRelationshipDeltaResult> {
+    return drainResolutionWorkAsync(buildRelationshipDeltaWork(input), options);
+}
+
+function* buildRelationshipDeltaWork(input: BuildRelationshipDeltaInput): RelationshipResolutionWork<BuildRelationshipDeltaResult> {
     const affectedFiles = new Set(input.changedFiles);
     const changedTargetNames = new Set<string>();
     const previousFilesByPath = new Map(
@@ -491,7 +525,7 @@ export function buildRelationshipDelta(input: BuildRelationshipDeltaInput): Buil
     }
 
     const retained = input.existingRecords.filter((record) => !affectedFiles.has(record.file));
-    const rebuilt = buildRelationshipsForRegistry({
+    const rebuilt = yield* buildRelationshipsForRegistryWork({
         registry: input.registry,
         analysisByFile: input.analysisByFile,
         sourceFiles: affectedFiles,

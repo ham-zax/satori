@@ -1192,14 +1192,6 @@ export class SearchRequestCoordinator {
                     indexedRoot: effectiveRoot,
                     requestedPath: absolutePath,
                 });
-            const encoderProviderName = this.environment.getEmbeddingProviderName();
-                const rootTag = `[SEARCH][root=${effectiveRoot}]`;
-                const requestId = crypto.randomUUID();
-                console.log(`${rootTag} Searching (requestedPath='${absolutePath}')`);
-                console.log(`${rootTag} Query metadata: length=${input.query.length}, requestId=${requestId}`);
-                console.log(`${rootTag} Indexing status: Completed`);
-                console.log(`${rootTag} 🧠 Using embedding provider: ${encoderProviderName} for search`);
-
                 const semanticQuery = parsedOperators.semanticQuery;
                 const queryPlan = this.searchQuerySupport.buildSearchQueryPlan(semanticQuery, parsedOperators);
                 const entrypointOwnerSeeking = queryPlan.entrypointIntent.kinds.some((kind) => (

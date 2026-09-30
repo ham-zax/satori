@@ -24,7 +24,8 @@ import type {
     ResolutionProjectEvidence,
 } from '../relationships';
 import { perfSpan, perfTrace } from '../utils/perf-trace';
-import { buildRelationshipDelta, buildRelationshipsForRegistry } from '../relationships';
+import { relationshipIndexingProgress } from '../relationships/resolution-work';
+import { buildRelationshipDeltaAsync, buildRelationshipsForRegistryAsync, type RelationshipResolutionProgress } from '../relationships';
 import type {
     SemanticAuxiliaryFile,
     SemanticProjectAnalyzer,
@@ -393,6 +394,7 @@ export class IndexGenerationWorkflow {
         suppliedAnalysisByFile?: Map<string, RelationshipAnalysisEvidence>,
         indexPolicy?: ResolvedIndexPolicy,
         capturedSources?: readonly IndexedSourceFileObservation[],
+        onRelationshipProgress?: (progress: RelationshipResolutionProgress) => void,
     ): Promise<StagedPublicationNavigation | undefined> {
         if (indexPolicy) {
             this.ports.assertResolvedIndexPolicyRoot(codebasePath, indexPolicy);
@@ -604,13 +606,13 @@ export class IndexGenerationWorkflow {
             }
         }
 
-        const relationshipRecords = await perfSpan('navigation.relationships', () => buildRelationshipsForRegistry({
+        const relationshipRecords = await perfSpan('navigation.relationships', () => buildRelationshipsForRegistryAsync({
             registry,
             analysisByFile,
             semanticRegistry: this.ports.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry,
             semanticEvidenceByLanguage,
             resolutionEvidenceByLanguage,
-        }));
+        }, { assertCurrent: assertMutationCurrent, onProgress: onRelationshipProgress }));
 
         assertMutationCurrent?.();
         const result = await perfSpan('navigation.stage', () => stagePublicationNavigation({
@@ -778,7 +780,7 @@ export class IndexGenerationWorkflow {
         scanFilesMs = Date.now() - scanStartedAt;
         console.log(`[Context] 📁 Found ${codeFiles.length} searchable code files`);
         const indexingStartPercentage = 10;
-        const indexingEndPercentage = 100;
+        const indexingEndPercentage = 90;
         const indexingRange = indexingEndPercentage - indexingStartPercentage;
 
         let navigationCandidate: StagedPublicationNavigation | undefined;
@@ -795,7 +797,6 @@ export class IndexGenerationWorkflow {
                     // Calculate progress percentage
                     const progressPercentage = indexingStartPercentage + (fileIndex / totalFiles) * indexingRange;
 
-                    console.log(`[Context] 📊 Processed ${fileIndex}/${totalFiles} files`);
                     progressCallback?.({
                         phase: `Processing files (${fileIndex}/${totalFiles})...`,
                         current: fileIndex,
@@ -874,6 +875,7 @@ export class IndexGenerationWorkflow {
                     result.analysisByFile,
                     indexPolicy,
                     result.sourceFiles,
+                    (progress) => progressCallback?.(relationshipIndexingProgress(progress)),
                 );
                 navigationMs = Date.now() - navigationStartedAt;
                 await payloadDrain;
@@ -1346,7 +1348,7 @@ export class IndexGenerationWorkflow {
                                     phase: `Indexed ${filePath}`,
                                     current: processedChanges,
                                     total: totalChanges,
-                                    percentage: Math.round((processedChanges / totalChanges) * 100),
+                                    percentage: Math.round((processedChanges / totalChanges) * 80),
                                 });
                             },
                             candidateCollectionName,
@@ -1397,6 +1399,7 @@ export class IndexGenerationWorkflow {
                     indexedDelta.analysisByFile,
                     reusableNavigationState,
                     input.options.onPhaseTiming,
+                    (progress) => input.progressCallback?.(relationshipIndexingProgress(progress)),
                 ),
             ).then((result) => {
                 if (!result.candidate) {
@@ -1808,6 +1811,7 @@ export class IndexGenerationWorkflow {
         analysisByFile?: Map<string, RelationshipAnalysisEvidence>,
         existingRelationshipState?: CachedNavigationDeltaState,
         onPhaseTiming?: ReindexByChangeOptions['onPhaseTiming'],
+        onRelationshipProgress?: (progress: RelationshipResolutionProgress) => void,
     ): Promise<NavigationDeltaBuildResult> {
         const measurePhase = async <T>(
             phase:
@@ -2048,7 +2052,7 @@ export class IndexGenerationWorkflow {
 
             const relationshipDelta = await measurePhase(
                 'publication_relationship_delta',
-                () => buildRelationshipDelta({
+                () => buildRelationshipDeltaAsync({
                     previousRegistry: existingRegistry,
                     registry,
                     existingRecords: existingRelationships.records,
@@ -2058,7 +2062,7 @@ export class IndexGenerationWorkflow {
                     semanticRegistry,
                     semanticEvidenceByLanguage,
                     resolutionEvidenceByLanguage,
-                }),
+                }, { assertCurrent: assertMutationCurrent, onProgress: onRelationshipProgress }),
             );
             assertMutationCurrent?.();
             const candidate = await measurePhase(

@@ -79,6 +79,7 @@ test("supervised candidate cancellation preserves the previous publication lifec
 
 test("parent lifecycle accepts a bounded supervised candidate result", async () => {
     const phases: string[] = [];
+    const writingProgress: number[] = [];
     let current = publication("old", "collection-old", 4);
     let stats: { indexedFiles: number; totalChunks: number } | null = null;
     const next = publication("op-reindex", "collection-new", 8);
@@ -95,8 +96,9 @@ test("parent lifecycle accepts a bounded supervised candidate result", async () 
             assertCurrent: () => undefined,
             isCurrent: () => true,
             getCurrentOperation: () => ({ id: "op-reindex" }),
-            updateCurrentOperation: (_root: string, phase: string) => {
+            updateCurrentOperation: (_root: string, phase: string, update: { progress?: number }) => {
                 phases.push(phase);
+                if (phase === 'writing' && update.progress !== undefined) writingProgress.push(update.progress);
                 return { id: "op-reindex", phase };
             },
         },
@@ -110,12 +112,14 @@ test("parent lifecycle accepts a bounded supervised candidate result", async () 
         },
         buildCollectionLimitMessage: async () => "limit",
     } as never, async (input) => {
-        input.onProgress({
-            phase: "writing",
-            current: 50,
-            total: 100,
-            percentage: 50,
-        });
+        for (const percentage of [90, 94, 98]) {
+            input.onProgress({
+                phase: "Resolving Python calls...",
+                current: percentage,
+                total: 100,
+                percentage,
+            });
+        }
         current = next;
         return {
             indexedFiles: 1,
@@ -129,6 +133,7 @@ test("parent lifecycle accepts a bounded supervised candidate result", async () 
     await operation.run({ codebasePath: "/repo", forceReindex: true });
 
     assert.deepEqual(stats, { indexedFiles: 1, totalChunks: 8 });
+    assert.deepEqual(writingProgress, [90, 94, 98]);
     assert.equal(phases.at(-1), "completed");
     assert.equal(phases.includes("failed"), false);
 });

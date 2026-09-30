@@ -8,9 +8,11 @@ import {
 import type { SymbolRecord, SymbolRegistryManifest } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
 import { getLanguageIdFromFilename } from '../language';
+import { relationshipIndexingProgress } from './resolution-work';
 import { admitAuthoritativeProofBackedCalls } from './admission';
 import {
     resolvePythonRelationships,
+    resolvePythonRelationshipsAsync,
     type PythonResolutionAnalysisInput,
 } from './python-resolution';
 
@@ -615,4 +617,77 @@ test('resolvePythonRelationships maps exact positional constructor arguments int
     assert.equal(claim?.resolutionAuthority, 'origin_flow');
     assert.equal(claim?.flowHops, 2);
     assert.equal(claim?.proofSteps.filter((step) => step.kind === 'flow_hop').length, 2);
+});
+
+
+test('async Python resolution yields after completed calls and preserves complete records and claims', async () => {
+    const input = await buildAnalyzedPythonRegistry({
+        'src/app.py': ['def target(): pass', 'def entry():', ...Array.from({ length: 130 }, () => '    target()')].join('\n'),
+    });
+    const expected = resolvePythonRelationships(input);
+    let eventLoopRan = false;
+    const eventLoopWork = new Promise<void>((resolve) => setImmediate(() => {
+        eventLoopRan = true;
+        resolve();
+    }));
+    const completed: number[] = [];
+    let workerProgress = 90;
+    const workerUpdates: number[] = [];
+    const result = await resolvePythonRelationshipsAsync(input, {
+        onProgress(progress) {
+            assert.equal(progress.totalCalls, 130);
+            assert.ok(progress.completedCalls > (completed.at(-1) ?? 0));
+            completed.push(progress.completedCalls);
+            const mapped = relationshipIndexingProgress(progress);
+            assert.equal(mapped.current, progress.completedCalls);
+            assert.equal(mapped.total, progress.totalCalls);
+            // The supervised index worker retains monotonic progress and caps
+            // it at 98 until candidate construction completes.
+            workerProgress = Math.max(workerProgress, Math.min(98, Math.round(mapped.percentage)));
+            workerUpdates.push(workerProgress);
+            if (progress.completedCalls > 1) assert.equal(eventLoopRan, true);
+        },
+    });
+    await eventLoopWork;
+    assert.equal(eventLoopRan, true);
+    assert.equal(completed[0], 1);
+    assert.equal(completed.at(-1), 130);
+    assert.ok(workerUpdates.some((progress) => progress > 90 && progress < 98));
+    assert.equal(workerUpdates.at(-1), 98);
+    assert.deepEqual(result, expected);
+});
+
+test('argument caches preserve different parameter positions and per-run input scope', async () => {
+    const sources = {
+        'src/app.py': [
+            'def first(): pass',
+            'def second(): pass',
+            'def invoke(callback):',
+            '    callback()',
+            'def invoke_other(value, callback):',
+            '    callback()',
+            'def entry():',
+            '    invoke(first)',
+            '    invoke_other(None, second)',
+        ].join('\n'),
+    };
+    const input = await buildAnalyzedPythonRegistry(sources);
+    const result = resolvePythonRelationships(input);
+    const targets = result.records.filter((record) => (
+        record.type === 'CALLS' && record.resolutionAuthority === 'origin_flow'
+    )).map((record) => [
+        input.registry.symbolsByInstanceId.get(record.sourceInstanceId!)?.name,
+        input.registry.symbolsByInstanceId.get(record.targetInstanceId!)?.name,
+    ]);
+    assert.deepEqual(targets.sort(), [['invoke', 'first'], ['invoke_other', 'second']]);
+
+    const changedInput = await buildAnalyzedPythonRegistry({
+        'src/app.py': sources['src/app.py'].replace('invoke(first)', 'invoke(second)'),
+    });
+    const changed = resolvePythonRelationships(changedInput);
+    const invoke = changed.records.find((record) => (
+        record.type === 'CALLS' && record.resolutionAuthority === 'origin_flow'
+        && changedInput.registry.symbolsByInstanceId.get(record.sourceInstanceId!)?.name === 'invoke'
+    ));
+    assert.equal(changedInput.registry.symbolsByInstanceId.get(invoke?.targetInstanceId ?? '')?.name, 'second');
 });

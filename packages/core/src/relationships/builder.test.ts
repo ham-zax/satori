@@ -12,6 +12,8 @@ import {
     buildCallRelationshipsForRegistry,
     buildRelationshipDelta,
     buildRelationshipsForRegistry,
+    buildRelationshipsForRegistryAsync,
+    buildRelationshipDeltaAsync,
     type RelationshipAnalysisEvidence,
 } from './builder';
 import type { ResolutionClaim } from './resolution';
@@ -2629,3 +2631,55 @@ test('buildRelationshipDelta incrementally rebuilds CBM language relationships w
 
 
 
+
+
+test('async full and delta relationship builders preserve records and attached claims', async () => {
+    const sources = {
+        'src/app.py': ['def target(): pass', 'def entry():', ...Array.from({ length: 130 }, () => '    target()')].join('\n'),
+    };
+    const syncInput = await buildAnalyzedPythonRegistry(sources);
+    const asyncInput = await buildAnalyzedPythonRegistry(sources);
+    const expected = buildRelationshipsForRegistry(syncInput);
+    assert.deepEqual(await buildRelationshipsForRegistryAsync(asyncInput), expected);
+    assert.deepEqual(asyncInput.analysisByFile, syncInput.analysisByFile);
+
+    const deltaInput = {
+        ...asyncInput,
+        previousRegistry: asyncInput.registry,
+        existingRecords: expected,
+        changedFiles: new Set(['src/app.py']),
+    };
+    assert.deepEqual(await buildRelationshipDeltaAsync(deltaInput), buildRelationshipDelta(deltaInput));
+});
+
+test('cancelling yielded relationship work publishes neither records nor partial claims', async () => {
+    for (const delta of [false, true]) {
+        const input = await buildAnalyzedPythonRegistry({
+            'src/app.py': ['def target(): pass', 'def entry():', ...Array.from({ length: 130 }, () => '    target()')].join('\n'),
+        });
+        const originalEvidence = structuredClone(input.analysisByFile);
+        const cancellation = new Error('cancel relationship resolution');
+        let cancelled = false;
+        let completed = 0;
+        let published = false;
+        let scheduledCancellation: Promise<void> | undefined;
+        const options = {
+            assertCurrent() { if (cancelled) throw cancellation; },
+            onProgress(progress: { completedCalls: number }) {
+                completed = progress.completedCalls;
+                scheduledCancellation = new Promise<void>((resolve) => setImmediate(() => {
+                    cancelled = true;
+                    resolve();
+                }));
+            },
+        };
+        const work = delta
+            ? buildRelationshipDeltaAsync({ ...input, previousRegistry: input.registry, existingRecords: [], changedFiles: new Set(['src/app.py']) }, options)
+            : buildRelationshipsForRegistryAsync(input, options);
+        await assert.rejects(work.then(() => { published = true; }), (error) => error === cancellation);
+        await scheduledCancellation;
+        assert.equal(completed, 1);
+        assert.equal(published, false);
+        assert.deepEqual(input.analysisByFile, originalEvidence);
+    }
+});

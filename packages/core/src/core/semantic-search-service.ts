@@ -548,23 +548,12 @@ export class SemanticSearchService {
         const diagnosticLexicalFallbackTerms = candidateTraceOptions.lexicalFallbackTerms;
         const diagnosticLexicalFallbackQuery = diagnosticLexicalFallbackTerms?.join(' ')
             ?? productLexicalFallbackQuery;
-        const searchType = isSparseOnly
-            ? 'sparse search'
-            : isHybrid
-                ? 'hybrid search'
-                : 'semantic search';
-        const requestId = crypto.randomUUID();
-        console.log(
-            `[Context] 🔍 Executing ${searchType}: query_length=${resolvedRequest.query.length}, request_id=${requestId}, root=${codebasePath}`,
-        );
-
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
         const admittedPublication = publication
             && publication.publication.canonicalRoot === canonicalRoot
             && await this.authority.isReadAdmitted(publication)
             ? publication
             : null;
-        console.log(`[Context] 🔍 Using collection: ${admittedPublication?.publication.vector.collectionName ?? null}`);
 
         if (!admittedPublication) {
             console.log(
@@ -729,27 +718,12 @@ export class SemanticSearchService {
             ));
         }
 
-        if (isHybrid) {
-            console.log(
-                `[Context] 🔍 Generating query embedding: query_length=${resolvedRequest.query.length}, request_id=${requestId}`,
-            );
-        }
         const embedding = this.embeddingAccess.getEmbedding();
         this.embeddingAccess.assertEmbeddingIdentityCurrent();
         const queryEmbedding: EmbeddingVector = await embedding.embedQuery(resolvedRequest.query);
         this.embeddingAccess.assertEmbeddingIdentityCurrent();
 
         if (isHybrid) {
-            console.log(
-                `[Context] ✅ Generated embedding vector with dimension: ${queryEmbedding.vector.length}`,
-            );
-            console.log(
-                `[Context] 🔍 Dense candidate request: vector_dim=${queryEmbedding.vector.length}, limit=${resolvedRequest.topK}`,
-            );
-            console.log(
-                `[Context] 🔍 Lexical candidate request: query_length=${resolvedRequest.query.length}, request_id=${requestId}, limit=${resolvedRequest.topK}`,
-            );
-            console.log('[Context] 🔍 Executing hybrid search with RRF reranking...');
             const [productDenseCandidates, productLexicalCandidates] = await Promise.all([
                 vectorDatabase.retrieveDense(collectionName, {
                     vector: queryEmbedding.vector,
@@ -938,7 +912,6 @@ export class SemanticSearchService {
                     ...(traceFallbackTerms ? { terms: [...traceFallbackTerms] } : {}),
                 }] : [])],
             }));
-            console.log(`[Context] 🔍 Raw search results count: ${searchResults.length}`);
             const results = searchResults.map((result) => (
                 toSemanticSearchResult(
                     result,
@@ -950,12 +923,6 @@ export class SemanticSearchService {
                     ),
                 )
             ));
-            console.log(`[Context] ✅ Found ${results.length} relevant hybrid results`);
-            if (results.length > 0) {
-                console.log(
-                    `[Context] 🔍 Top result score: ${results[0].score}, path: ${results[0].relativePath}`,
-                );
-            }
             return results;
         }
 
@@ -1019,7 +986,6 @@ export class SemanticSearchService {
         const results = productResults.map((result) => (
             toSemanticSearchResult(result, 'dense_similarity')
         ));
-        console.log(`[Context] ✅ Found ${results.length} relevant results`);
         return results;
     }
 

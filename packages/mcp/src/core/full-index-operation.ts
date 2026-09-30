@@ -203,7 +203,6 @@ export class FullIndexOperation {
                     this.host.mutationRuntime.assertCurrent(absolutePath);
                     const publicProgress = Math.min(progress.percentage, 99);
                     publishBackgroundPhase("writing", { progress: publicProgress });
-                    console.log(`[BACKGROUND-INDEX] Progress: ${progress.phase} - ${progress.percentage}% (${progress.current}/${progress.total})`);
                 },
             });
             targetCollectionName = stats.collectionName;

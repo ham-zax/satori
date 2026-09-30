@@ -121,3 +121,40 @@ test('stageSymbolRegistryForCompletedIndex fails closed when navigation source d
         /Source changed before navigation publication for 'src\/foo\.ts'\./,
     );
 });
+
+
+test('full file processing reserves progress for relationship resolution', async () => {
+    const stopped = new Error('stop after file progress');
+    const percentages: number[] = [];
+    const ports: Partial<IndexGenerationWorkflowPorts> = {
+        embedding: {} as IndexGenerationWorkflowPorts['embedding'],
+        vectorDatabase: {
+            dropCollection: async () => undefined,
+            hasCollection: async () => false,
+        } as unknown as IndexGenerationWorkflowPorts['vectorDatabase'],
+        canonicalizeCodebasePath: (root) => root,
+        getIsHybrid: () => false,
+        assertResolvedIndexPolicyRoot: () => undefined,
+        setIndexProfileForCodebase: () => undefined,
+        resolvePublicationCollectionName: () => 'candidate',
+        reserveIndexCandidate: () => undefined,
+        prepareCollection: async () => undefined,
+        markIndexCandidateCollectionCreated: () => undefined,
+        getCodeFiles: async () => ['/mock/repo/app.py'],
+        normalizeRelativePathForCodebase: () => 'app.py' as ReturnType<IndexGenerationWorkflowPorts['normalizeRelativePathForCodebase']>,
+        processFileList: async (_files, _root, onProgress) => {
+            onProgress?.('/mock/repo/app.py', 1, 1);
+            throw stopped;
+        },
+        discardUnpublishedPublication: () => undefined,
+        clearIndexCandidate: () => undefined,
+    };
+    const workflow = new IndexGenerationWorkflow(ports as IndexGenerationWorkflowPorts);
+    await assert.rejects(workflow.indexCodebase('/mock/repo', (progress) => {
+        percentages.push(progress.percentage);
+    }, {
+        rootMutationLease: { canonicalRoot: '/mock/repo', operationId: 'candidate' } as never,
+        indexPolicy: { profile: 'default' } as never,
+    }), (error) => error === stopped);
+    assert.equal(percentages.at(-1), 90);
+});

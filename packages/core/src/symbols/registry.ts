@@ -706,6 +706,8 @@ export function computeSymbolRegistryManifestHash(manifest: SymbolRegistryManife
                 language: file.language,
                 symbolCount: file.symbolCount,
                 definitionStatus: file.definitionStatus,
+                ...(file.structuralStatus ? { structuralStatus: file.structuralStatus } : {}),
+                ...(file.structuralReason ? { structuralReason: file.structuralReason } : {}),
             }))
             .sort((a, b) => compareStrings(a.path, b.path)),
     };

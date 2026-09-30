@@ -119,3 +119,16 @@ test('symbol kinds have one canonical runtime contract', () => {
     assert.equal(isSymbolKind('method'), true);
     assert.equal(isSymbolKind('procedure'), false);
 });
+
+test('published structural outcomes validate reasons and permit absent legacy evidence', async () => {
+    const { isPublishedStructuralOutcome } = await import('./contracts.js');
+    for (const outcome of [{}, { structuralStatus: 'complete' },
+        { structuralStatus: 'recovered', structuralReason: 'syntax_error' },
+        { structuralStatus: 'recovered', structuralReason: 'parser_unavailable' },
+        { structuralStatus: 'unsupported', structuralReason: 'unsupported_language' },
+    ]) assert.equal(isPublishedStructuralOutcome(outcome), true);
+    for (const outcome of [{ structuralStatus: 'complete', structuralReason: 'syntax_error' },
+        { structuralStatus: 'recovered' }, { structuralStatus: 'recovered', structuralReason: 'made_up' },
+        { structuralStatus: 'unsupported', structuralReason: 'syntax_error' }, { structuralReason: 'syntax_error' },
+    ]) assert.equal(isPublishedStructuralOutcome(outcome), false);
+});

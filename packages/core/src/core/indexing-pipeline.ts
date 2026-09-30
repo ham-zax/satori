@@ -67,6 +67,7 @@ export interface AnalyzedIndexedFile {
     readonly sourceStat: SnapshotFileStatSignature;
     readonly language: string;
     readonly structuralStatus: LanguageAnalysisResult['structuralStatus'];
+    readonly structuralReason?: LanguageAnalysisResult['structuralReason'];
     readonly chunks: CodeChunk[];
     readonly extractedSymbols: LanguageAnalysisResult['symbols'];
     readonly moduleBindings: LanguageAnalysisResult['moduleBindings'];
@@ -404,6 +405,7 @@ export class IndexingPipeline {
             sourceStat: sourceObservation.sourceStat,
             language,
             structuralStatus: analysis.structuralStatus,
+            ...(analysis.structuralReason ? { structuralReason: analysis.structuralReason } : {}),
             chunks: chunksWithTrustedRelativePath(analysis.chunks, relativePath),
             extractedSymbols: analysis.symbols,
             moduleBindings: analysis.moduleBindings,
@@ -439,6 +441,8 @@ export class IndexingPipeline {
                 language: analyzed.language,
                 symbolCount: symbolRecords.length,
                 definitionStatus,
+                structuralStatus: analyzed.structuralStatus,
+                ...(analyzed.structuralReason ? { structuralReason: analyzed.structuralReason } : {}),
             },
             relationshipEvidence: {
                 moduleBindings: analyzed.moduleBindings,
@@ -1002,18 +1006,7 @@ export class IndexingPipeline {
         performance?: IndexingPipelineMetrics,
     ): Promise<IndexedVectorDocument[]> {
         if (chunkBuffer.length === 0) return [];
-        const chunks = chunkBuffer.map((item) => item.chunk);
         const codebasePath = chunkBuffer[0].codebasePath;
-        const estimatedTokens = chunkBuffer.reduce(
-            (sum, { projections }) => (
-                sum + estimateEmbeddingTokens(projections.embeddingText)
-            ),
-            0,
-        );
-        const searchType = this.isHybridEnabled() ? 'hybrid' : 'regular';
-        console.log(
-            `[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`,
-        );
         return this.embedChunkBatch(
             chunkBuffer,
             codebasePath,

@@ -1,3 +1,4 @@
+import type { StructuralStatus, StructuralReason } from '../language-analysis/types';
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { ResolutionAuthority } from '../relationships/resolution';
 import {
@@ -101,12 +102,24 @@ export function isStructuralDefinitionStatus(value: unknown): value is Structura
     return typeof value === 'string' && STRUCTURAL_DEFINITION_STATUS_SET.has(value);
 }
 
+/** Validates optional published parser evidence without inventing legacy outcomes. */
+export function isPublishedStructuralOutcome(file: Record<string, unknown>): boolean {
+    if (file.structuralStatus === undefined) return file.structuralReason === undefined;
+    if (file.structuralStatus === 'complete') return file.structuralReason === undefined;
+    if (file.structuralStatus === 'unsupported') return file.structuralReason === 'unsupported_language';
+    return file.structuralStatus === 'recovered'
+        && ['syntax_error', 'parser_unavailable', 'analysis_failure'].includes(String(file.structuralReason));
+}
+
 export interface SymbolRegistryManifestFile {
     path: string;
     hash: string;
     language: string;
     symbolCount: number;
     definitionStatus: StructuralDefinitionStatus;
+    /** Absent in older Publications; absence does not establish parser quality. */
+    structuralStatus?: StructuralStatus;
+    structuralReason?: StructuralReason;
 }
 
 export interface SymbolRegistryManifest {
@@ -233,6 +246,7 @@ export function isSymbolRegistryManifest(value: unknown): value is SymbolRegistr
         && isNonEmptyString(file.language)
         && isNonNegativeInteger(file.symbolCount)
         && isStructuralDefinitionStatus(file.definitionStatus)
+        && isPublishedStructuralOutcome(file)
         && !seenPaths.has(file.path)
         && Boolean(seenPaths.add(file.path))
     ));

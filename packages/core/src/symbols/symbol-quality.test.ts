@@ -150,3 +150,25 @@ test('formatSymbolQualityMarker is deterministic compact form', () => {
         'symbolQuality=symbol_rich',
     );
 });
+
+test('published parser degradation stays visible with recovered symbols and legacy unknown evidence', () => {
+    const summary = computeSymbolQualitySummary({
+        files: [
+            { path: 'complete.ts', language: 'typescript', structuralStatus: 'complete' },
+            { path: 'recovered.ts', language: 'typescript', structuralStatus: 'recovered', structuralReason: 'syntax_error' },
+            { path: 'empty.ts', language: 'typescript', structuralStatus: 'recovered', structuralReason: 'syntax_error' },
+            { path: 'missing.py', language: 'python', structuralStatus: 'recovered', structuralReason: 'parser_unavailable' },
+            { path: 'failed.go', language: 'go', structuralStatus: 'recovered', structuralReason: 'analysis_failure' },
+            { path: 'readme.md', language: 'markdown', structuralStatus: 'unsupported', structuralReason: 'unsupported_language' },
+            { path: 'legacy.ts', language: 'typescript' },
+        ], symbols: [{ file: 'recovered.ts', kind: 'function' }],
+    });
+    assert.equal(summary.filesWithNonFileSymbols, 1);
+    assert.deepEqual(summary.structuralAnalysis, {
+        completeFiles: 1, recoveredFiles: 4, unsupportedFiles: 1, unknownFiles: 1,
+        reasons: [
+            { reason: 'analysis_failure', files: 1 }, { reason: 'parser_unavailable', files: 1 },
+            { reason: 'syntax_error', files: 2 }, { reason: 'unsupported_language', files: 1 },
+        ],
+    });
+});

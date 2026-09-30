@@ -227,6 +227,7 @@ export {
 } from './symbols/sidecar-reads';
 export {
     computeSymbolQualitySummaryFromSidecarRead,
+    computeSymbolQualitySummaryFromRegistry,
     formatSymbolQualityMarker,
     unknownSymbolQualitySummary,
 } from './symbols/symbol-quality';

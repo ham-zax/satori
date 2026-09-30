@@ -798,6 +798,8 @@ export interface IndexingFailureMetadata {
 }
 
 interface SearchBaseResponseEnvelope {
+    /** Published parser outcomes; absent when registry evidence is unavailable. */
+    structuralAnalysis?: import("@satori-code/core").SymbolQualitySummary["structuralAnalysis"];
     formatVersion: typeof SEARCH_RESPONSE_FORMAT_VERSION;
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";
     reason?: NonOkReason;

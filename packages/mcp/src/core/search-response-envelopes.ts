@@ -38,6 +38,7 @@ export type SearchResponseCommonInput = {
     freshnessDecision: FreshnessDecision;
     freshnessSummary: SearchFreshnessSummary;
     warnings: string[];
+    structuralAnalysis?: SearchResponseEnvelope["structuralAnalysis"];
     debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
     debugSearch?: SearchDebugHint | SearchRankingDebugHint | SearchFreshnessDebugHint | SearchPassFailureDebugHint;
     proofDebugHint?: CompletionProbeDebugHint;
@@ -212,6 +213,7 @@ export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
     return {
         formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
         status: "ok",
+        ...(input.structuralAnalysis ? { structuralAnalysis: input.structuralAnalysis } : {}),
         path: input.absolutePath,
         codebaseRoot: input.codebaseRoot,
         query: input.query,
@@ -250,6 +252,7 @@ export function buildRawSearchEnvelope(input: SearchResponseCommonInput & {
     return {
         formatVersion: SEARCH_RESPONSE_FORMAT_VERSION,
         status: "ok",
+        ...(input.structuralAnalysis ? { structuralAnalysis: input.structuralAnalysis } : {}),
         path: input.absolutePath,
         codebaseRoot: input.codebaseRoot,
         query: input.query,

@@ -731,6 +731,7 @@ export class ManageMaintenanceHandlers {
                                 basis: symbolQuality.basis,
                                 message: symbolQuality.message,
                                 evidenceAvailability: symbolQuality.evidenceAvailability,
+                                structuralAnalysis: symbolQuality.structuralAnalysis,
                             },
                     } : {}),
                     ...(languageCapabilities ? { languageCapabilities } : {}),

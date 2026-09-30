@@ -620,3 +620,20 @@ test("grouped v2 response budgets bound structural and preview overhead", () => 
     ));
     assert.equal(byteLength(debugEnvelope) <= 48_000, true, `${byteLength(debugEnvelope)} debug bytes`);
 });
+
+test('normal raw and grouped search envelopes serialize published parser degradation', () => {
+    const structuralAnalysis = {
+        completeFiles: 1, recoveredFiles: 1, unsupportedFiles: 0, unknownFiles: 1,
+        reasons: [{ reason: 'syntax_error' as const, files: 1 }],
+    };
+    const common = {
+        codebaseRoot: ROOT, absolutePath: ROOT, query: 'broken', scope: 'mixed' as const,
+        groupBy: 'symbol' as const, limit: 1, debugMode: 'none' as const,
+        freshnessDecision: FRESHNESS_DECISION, freshnessSummary: FRESHNESS_SUMMARY,
+        warnings: [], structuralAnalysis,
+    };
+    for (const envelope of [
+        buildRawSearchEnvelope({ ...common, results: [] }),
+        buildGroupedSearchEnvelope({ ...common, results: [makeGroup(0)] }),
+    ]) assert.deepEqual(JSON.parse(JSON.stringify(envelope)).structuralAnalysis, structuralAnalysis);
+});

@@ -1,7 +1,8 @@
 /**
  * Observed symbol-quality gauge from registry evidence (F9 Phase 1).
- * Does not claim parser/fallback cause; does not re-run parsers or splitters.
+ * Parser outcomes come only from published manifest evidence; no parser is re-run.
  */
+import type { StructuralReason } from '../language-analysis/types';
 import { getLanguageCapabilityDeclaration } from '../languages/capabilities';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifestFile } from './contracts';
 import type { SymbolRegistry } from './registry';
@@ -24,7 +25,16 @@ export interface SymbolQualityLanguageBreakdown {
     status: SymbolQualityStatus;
 }
 
+export interface PublishedStructuralAnalysisSummary {
+    completeFiles: number;
+    recoveredFiles: number;
+    unsupportedFiles: number;
+    unknownFiles: number;
+    reasons: { reason: StructuralReason; files: number }[];
+}
+
 export interface SymbolQualitySummary {
+    structuralAnalysis: PublishedStructuralAnalysisSummary;
     status: SymbolQualityStatus;
     basis: SymbolQualityBasis;
     eligibleFiles: number;
@@ -39,11 +49,30 @@ export interface SymbolQualitySummary {
 export interface SymbolQualityFileInput {
     path: string;
     language: string;
+    structuralStatus?: SymbolRegistryManifestFile['structuralStatus'];
+    structuralReason?: StructuralReason;
 }
 
 export interface SymbolQualitySymbolInput {
     file: string;
     kind: string;
+}
+
+/** One summary owner for durable parser evidence in status and search responses. */
+export function summarizePublishedStructuralAnalysis(files: readonly SymbolQualityFileInput[]): PublishedStructuralAnalysisSummary {
+    const summary: PublishedStructuralAnalysisSummary = {
+        completeFiles: 0, recoveredFiles: 0, unsupportedFiles: 0, unknownFiles: 0, reasons: [],
+    };
+    const reasons = new Map<StructuralReason, number>();
+    for (const file of files) {
+        if (file.structuralStatus === 'complete') summary.completeFiles++;
+        else if (file.structuralStatus === 'recovered') summary.recoveredFiles++;
+        else if (file.structuralStatus === 'unsupported') summary.unsupportedFiles++;
+        else summary.unknownFiles++;
+        if (file.structuralReason) reasons.set(file.structuralReason, (reasons.get(file.structuralReason) ?? 0) + 1);
+    }
+    summary.reasons = [...reasons].sort(([a], [b]) => compareAsc(a, b)).map(([reason, files]) => ({ reason, files }));
+    return summary;
 }
 
 const RICH_THRESHOLD = 0.60;
@@ -226,6 +255,7 @@ export function computeSymbolQualitySummary(input: {
     return {
         status,
         basis: 'symbol_registry',
+        structuralAnalysis: summarizePublishedStructuralAnalysis(input.files),
         eligibleFiles,
         filesWithNonFileSymbols,
         fileOwnerOnlyFiles,
@@ -241,6 +271,8 @@ export function computeSymbolQualitySummaryFromRegistry(registry: SymbolRegistry
         files: registry.manifest.files.map((file: SymbolRegistryManifestFile) => ({
             path: file.path,
             language: file.language,
+            structuralStatus: file.structuralStatus,
+            structuralReason: file.structuralReason,
         })),
         symbols: registry.symbols.map((symbol: SymbolRecord) => ({
             file: symbol.file,
@@ -256,6 +288,7 @@ export function unknownSymbolQualitySummary(
     return {
         status: 'unknown',
         basis: 'symbol_registry',
+        structuralAnalysis: summarizePublishedStructuralAnalysis([]),
         eligibleFiles: 0,
         filesWithNonFileSymbols: 0,
         fileOwnerOnlyFiles: 0,

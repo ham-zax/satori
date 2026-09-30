@@ -239,3 +239,27 @@ test('getCodeFiles keeps built-in denylisted files excluded despite policy re-in
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('IndexingPipeline publishes the analyzer outcome without losing recovery reasons', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-index-parser-outcome-'));
+    try {
+        const file = path.join(root, 'broken.ts');
+        fs.writeFileSync(file, 'export function broken(');
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: createMockVectorDb,
+            languageAnalyzer: { getDescription: () => 'fixture', getStrategyForLanguage: () => ({ backend: 'bounded_text', structural: false }), analyze: async () => ({ backend: 'bounded_text', structuralStatus: 'recovered', structuralReason: 'syntax_error', symbols: [], chunks: [], moduleBindings: [], callSites: [], receiverTypeBindings: [] }) },
+            semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+            assertEmbeddingIdentityCurrent: () => ({ provider: 'test', model: 'test', dimension: 768, artifactDigest: null, normalizationPolicy: 'none' }),
+            isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+            normalizeRelativePathForCodebase: (base, p) => path.relative(base, p) as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'extractor-v1',
+        });
+        const analyzed = await pipeline.analyzeIndexedFile(file, root);
+        assert.ok(analyzed);
+        const facts = pipeline.buildAnalyzedFileSymbolFacts(analyzed);
+        assert.equal(facts.manifestFile.definitionStatus, 'structural_unavailable');
+        assert.equal(facts.manifestFile.structuralStatus, 'recovered');
+        assert.equal(facts.manifestFile.structuralReason, 'syntax_error');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

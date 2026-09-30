@@ -1,3 +1,4 @@
+import { computeSymbolQualitySummaryFromRegistry } from "@satori-code/core";
 import type { SymbolRegistry } from "@satori-code/core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
@@ -517,6 +518,9 @@ export async function finalizeSearchResults(
         return {
             kind: "ok",
             envelope: buildRawSearchEnvelopeHelper({
+                ...(input.navigationAuthority === "valid" && input.searchSymbolRegistry ? {
+                    structuralAnalysis: computeSymbolQualitySummaryFromRegistry(input.searchSymbolRegistry).structuralAnalysis,
+                } : {}),
                 codebaseRoot: input.effectiveRoot,
                 absolutePath: input.absolutePath,
                 query: input.query,
@@ -705,6 +709,9 @@ export async function finalizeSearchResults(
             const mustConstraintHint = buildMustConstraintHint();
             const envelope = buildGroupedSearchEnvelopeHelper({
                 actionIntent: input.queryPlan,
+                ...(searchSymbolRegistry ? {
+                    structuralAnalysis: computeSymbolQualitySummaryFromRegistry(searchSymbolRegistry).structuralAnalysis,
+                } : {}),
                 codebaseRoot: input.effectiveRoot,
                 absolutePath: input.absolutePath,
                 query: input.query,

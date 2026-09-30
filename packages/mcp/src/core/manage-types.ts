@@ -72,7 +72,7 @@ export interface ManageIndexToolHint {
 
 export type ManageCompactSymbolQuality = Pick<
     SymbolQualitySummary,
-    "status" | "basis" | "message" | "evidenceAvailability"
+    "status" | "basis" | "message" | "evidenceAvailability" | "structuralAnalysis"
 >;
 
 export interface IndexPublicationReceipt {
@@ -138,7 +138,7 @@ export interface ManageIndexResponseEnvelope {
     sourceFreshness?: ManageSourceFreshness;
     /** Exact live sync state when a previous completed Publication remains readable. */
     pendingSync?: ManagePendingSync;
-    /** Observed symbol quality from registry (F9); not parser-cause diagnosis. */
+    /** Observed symbol quality from registry (F9); includes published parser evidence. */
     symbolQuality?: SymbolQualitySummary | ManageCompactSymbolQuality;
     /** Declared claims combined with compatible per-language navigation evidence. */
     languageCapabilities?: LanguageCapabilityEvidenceSummary;

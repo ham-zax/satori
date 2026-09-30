@@ -1,0 +1,469 @@
+{
+  "schemaVersion": 1,
+  "topK": 10,
+  "scoring": "rank = position (1-based) of the first top-10 result whose path matches an acceptable pathRegex and whose symbol name matches symbolRegex (or symbolRegex is null, or the result is a whole-file result on a matching path). strictRank additionally requires a symbol-level result when symbolRegex is set. Tags: T=test lexical competitor, tests-ask, tooling-ask, lang, generated, rust-vs-py, py-owned.",
+  "repos": [
+    {
+      "name": "react",
+      "url": "https://github.com/facebook/react",
+      "commit": "7c6ac13e19fe",
+      "queries": [
+        {
+          "id": "r1",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does React run the cleanup function of useEffect",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitEffects\\.js$",
+              "symbolRegex": "^(commitHookEffectListUnmount|safelyCallDestroy)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberCommitEffects.js:248 commitHookEffectListUnmount(flags, finishedWork, nearestMountedAncestor); :907 safelyCallDestroy(current, nearestMountedAncestor, destroy)"
+            }
+          ],
+          "justification": "Effect destroy functions are invoked from commitHookEffectListUnmount/safelyCallDestroy; findings file names ReactFiberCommitEffects.js as the owner."
+        },
+        {
+          "id": "r2",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does useState schedule a re-render when you call the setter",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^(dispatchSetState|dispatchSetStateInternal)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:3626 dispatchSetState (requestUpdateLane then dispatchSetStateInternal); :3656 dispatchSetStateInternal"
+            }
+          ],
+          "justification": "dispatchSetState is the bound setter; it requests a lane and enqueues/schedules the update."
+        },
+        {
+          "id": "r3",
+          "tags": [
+            "findings"
+          ],
+          "query": "where are useEffect dependencies compared",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^areHookInputsEqual$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:456 function areHookInputsEqual("
+            }
+          ],
+          "justification": "areHookInputsEqual compares nextDeps with prevDeps."
+        },
+        {
+          "id": "r4",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does React warn about a missing key prop",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactChildFiber\\.js$",
+              "symbolRegex": "^(warnForMissingKey|warnOnInvalidKey)$",
+              "evidence": "packages/react-reconciler/src/ReactChildFiber.js:151 DEV warnForMissingKey assignment; :1107 warnOnInvalidKey delegates to it"
+            },
+            {
+              "pathRegex": "^packages/react-server/src/React(?:Flight|Fizz)Server\\.js$",
+              "symbolRegex": "^warnForMissingKey$",
+              "evidence": "packages/react-server/src/ReactFlightServer.js:1993 and ReactFizzServer.js:3855 warnForMissingKey"
+            }
+          ],
+          "justification": "Missing-key warnings are implemented in the reconciler and both server renderers."
+        },
+        {
+          "id": "r5",
+          "tags": [
+            "T"
+          ],
+          "query": "where does React flush passive effects after a commit",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberWorkLoop\\.js$",
+              "symbolRegex": "^(flushPassiveEffects|flushPassiveEffectsImpl|flushPendingEffects|flushPendingEffectsDelayed)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberWorkLoop.js:4655 flushPendingEffectsDelayed delegates through flushPendingEffects to flushPassiveEffects; :4728 flushPassiveEffectsImpl"
+            }
+          ],
+          "justification": "Runtime owner of passive-effect flushing; many tests call flushPassiveEffects."
+        },
+        {
+          "id": "r6",
+          "tags": [
+            "tooling-ask"
+          ],
+          "query": "where does the eslint plugin check exhaustive deps for hooks",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps\\.ts$",
+              "symbolRegex": null,
+              "evidence": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts:43 const rule = { meta ... create(context) at :79"
+            }
+          ],
+          "justification": "The query names the eslint plugin, so the tooling rule is the correct owner (guards against demoting tooling)."
+        },
+        {
+          "id": "r7",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for useEffect",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/__tests__/(ReactHooksWithNoopRenderer-test\\.js|ReactHooks-test\\.internal\\.js)$",
+              "symbolRegex": null,
+              "evidence": "packages/react-reconciler/src/__tests__/ReactHooksWithNoopRenderer-test.js:969,:1003 useEffect(...) tests; ReactHooks-test.internal.js exists"
+            }
+          ],
+          "justification": "Explicitly asks for tests; the hooks test files are correct."
+        },
+        {
+          "id": "r8",
+          "tags": [
+            "T"
+          ],
+          "query": "where does React bail out of re-rendering a component whose props did not change",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberBeginWork\\.js$",
+              "symbolRegex": "^(bailoutOnAlreadyFinishedWork|updateMemoComponent|updateSimpleMemoComponent)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberBeginWork.js:3823 bailoutOnAlreadyFinishedWork; :478 updateMemoComponent; :546 updateSimpleMemoComponent"
+            }
+          ],
+          "justification": "Approved set from coordinator."
+        },
+        {
+          "id": "r9",
+          "tags": [
+            "T",
+            "tooling-competitor"
+          ],
+          "query": "where does React throw when a hook is called outside a component",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^throwInvalidHookError$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:445 function throwInvalidHookError()"
+            },
+            {
+              "pathRegex": "^packages/react/src/ReactHooks\\.js$",
+              "symbolRegex": "^resolveDispatcher$",
+              "evidence": "packages/react/src/ReactHooks.js:24 function resolveDispatcher()"
+            }
+          ],
+          "justification": "Approved owner: throwInvalidHookError / resolveDispatcher; eslint RulesOfHooks and compiler validators are competitors."
+        }
+      ]
+    },
+    {
+      "name": "polars",
+      "url": "https://github.com/pola-rs/polars",
+      "commit": "74dd736d655c",
+      "queries": [
+        {
+          "id": "p1",
+          "tags": [
+            "rust-vs-py"
+          ],
+          "query": "where does polars parse a CSV file into a DataFrame",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-io/src/csv/read|polars-stream/src/nodes/io_sources/csv)/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-io/src/csv/read/read_impl.rs:105 struct CoreReader, :327 parse_csv, :530 finish; crates/polars-stream/src/nodes/io_sources/csv/ (streaming source)"
+            }
+          ],
+          "justification": "Owner is the Rust CSV reader; py-polars/src/polars/io/csv/functions.py:74 read_csv is only the wrapper that delegates (not acceptable)."
+        },
+        {
+          "id": "p2",
+          "tags": [
+            "rust-vs-py"
+          ],
+          "query": "where does polars sort a DataFrame by multiple columns",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-core/src/(frame/mod\\.rs|chunked_array/ops/sort/)",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/frame/mod.rs:1427 sort_impl, :1647 sort; crates/polars-core/src/chunked_array/ops/sort/mod.rs:283,:341,:396,:479 arg_sort_multiple*"
+            }
+          ],
+          "justification": "Owner is Rust core; py-polars/src/polars/dataframe/frame.py:6046 DataFrame.sort is only the wrapper (not acceptable)."
+        },
+        {
+          "id": "p3",
+          "tags": [
+            "T"
+          ],
+          "query": "where does polars cast a column to a different dtype",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-core/src/chunked_array/cast\\.rs$",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/chunked_array/cast.rs:75 cast_impl_inner, :126 cast_impl, :218/:257/:365 cast_with_options"
+            }
+          ],
+          "justification": "Core cast implementation; py-polars unit tests cast heavily."
+        },
+        {
+          "id": "p4",
+          "tags": [
+            "T",
+            "rust-vs-py"
+          ],
+          "query": "how does polars compute a rolling mean",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-compute/src/rolling|polars-time/src/chunkedarray/rolling_window|polars-expr/src/dispatch/rolling)",
+              "symbolRegex": null,
+              "evidence": "crates/polars-compute/src/rolling/{no_nulls,nulls}/mean.rs; crates/polars-time/src/chunkedarray/rolling_window/dispatch.rs; crates/polars-expr/src/dispatch/rolling.rs"
+            }
+          ],
+          "justification": "Computation is Rust; py-polars/src/polars/expr/expr.py:9196 Expr.rolling_mean is a wrapper (not acceptable)."
+        },
+        {
+          "id": "p5",
+          "tags": [],
+          "query": "where does polars push a filter predicate down in the lazy query optimizer",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-plan/src/plans/optimizer/predicate_pushdown/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/mod.rs:249 fn push_down"
+            }
+          ],
+          "justification": "Predicate pushdown optimizer."
+        },
+        {
+          "id": "p6",
+          "tags": [
+            "T",
+            "rust-vs-py"
+          ],
+          "query": "where does polars read a Parquet file",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-io/src/parquet/read|polars-parquet/src/arrow/read|polars-stream/src/nodes/io_sources/parquet)/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-io/src/parquet/read/reader.rs:33 impl ParquetReader; crates/polars-io/src/parquet/read/read_impl.rs"
+            }
+          ],
+          "justification": "Rust Parquet readers; python read_parquet wrapper not acceptable."
+        },
+        {
+          "id": "p7",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for rolling window aggregations",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/tests/unit/operations/rolling/",
+              "symbolRegex": null,
+              "evidence": "py-polars/tests/unit/operations/rolling/{test_rolling.py,test_rolling_fixed.py,test_rolling_min_by_max_by.py,test_map.py}"
+            }
+          ],
+          "justification": "Explicitly asks for tests."
+        },
+        {
+          "id": "p8",
+          "tags": [
+            "rust-vs-py"
+          ],
+          "query": "where does the Python Series get converted to a numpy array",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/src/polars/series/series\\.py$",
+              "symbolRegex": "^(Series\\.)?to_numpy$",
+              "evidence": "py-polars/src/polars/series/series.py:5063 def to_numpy"
+            },
+            {
+              "pathRegex": "^crates/polars-python/src/interop/numpy/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-python/src/interop/numpy/to_numpy_series.rs"
+            }
+          ],
+          "justification": "Ambiguous by design (coordinator): Python Series.to_numpy and the Rust binding in polars-python are both acceptable."
+        },
+        {
+          "id": "p9",
+          "tags": [
+            "py-owned"
+          ],
+          "query": "where does polars render a DataFrame as HTML in a Jupyter notebook",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/src/polars/dataframe/(_html|frame)\\.py$",
+              "symbolRegex": "^(_repr_html_|DataFrame\\._repr_html_|HTMLFormatter|NotebookFormatter|render|NotebookFormatter\\.render)$",
+              "evidence": "py-polars/src/polars/dataframe/frame.py:1577 DataFrame._repr_html_; py-polars/src/polars/dataframe/_html.py:137 render, :162 class NotebookFormatter, :181 render"
+            }
+          ],
+          "justification": "Python-owned formatter; guards against Rust always winning."
+        }
+      ]
+    },
+    {
+      "name": "flatbuffers",
+      "url": "https://github.com/google/flatbuffers",
+      "commit": "b8431fbcd7a5",
+      "queries": [
+        {
+          "id": "f1",
+          "tags": [
+            "generated"
+          ],
+          "query": "where does the FlatBufferBuilder finish a buffer",
+          "acceptable": [
+            {
+              "pathRegex": "^(include/flatbuffers|python/flatbuffers|go|java/src/main|net/FlatBuffers|kotlin/flatbuffers-kotlin/src|php|dart/lib|lua/flatbuffers|rust/flatbuffers/src|ts|swift/Sources/FlatBuffers|lobster|nim)/(?!.*(flex|generated))",
+              "symbolRegex": "^(Finish|finish|__Finish)$",
+              "evidence": "include/flatbuffers/flatbuffer_builder.h:1263,:1293 Finish; python/flatbuffers/builder.py:612 __Finish,:642 Finish; go/builder.go:635 Finish; net/FlatBuffers/FlatBufferBuilder.cs:918,:1015 Finish; kotlin FlatBufferBuilder.kt:996 finish; php/FlatbufferBuilder.php:906 finish; dart/lib/flat_buffers.dart:365 finish; lua/flatbuffers/builder.lua:299 finish"
+            }
+          ],
+          "justification": "Coordinator: runtime Finish in any language; generated Finish<Root>Buffer helpers (e.g. goldens/, tests/*_generated.*) not acceptable."
+        },
+        {
+          "id": "f2",
+          "tags": [
+            "generated"
+          ],
+          "query": "where does the verifier check a table",
+          "acceptable": [
+            {
+              "pathRegex": "(^|/)([Vv]erifier|TableVerifier|Verifiable)\\.(h|rs|swift|cs|java|kt|ts|go|py)$",
+              "symbolRegex": null,
+              "evidence": "include/flatbuffers/verifier.h:119 VerifyTable, :185 VerifyTableStart; rust/flatbuffers/src/verifier.rs; swift/Sources/FlatBuffers/TableVerifier.swift"
+            }
+          ],
+          "justification": "Coordinator: runtime verifier table verification; generated Verify() methods not acceptable."
+        },
+        {
+          "id": "f3",
+          "tags": [
+            "lang"
+          ],
+          "query": "in the Python builder where is a vector started",
+          "acceptable": [
+            {
+              "pathRegex": "^python/flatbuffers/builder\\.py$",
+              "symbolRegex": "^(Builder\\.)?StartVector$",
+              "evidence": "python/flatbuffers/builder.py:425 def StartVector(self, elemSize, numElems, alignment)"
+            }
+          ],
+          "justification": "Python runtime builder; other languages' StartVector compete (go/builder.go:305, java, ts, ...)."
+        },
+        {
+          "id": "f4",
+          "tags": [
+            "lang"
+          ],
+          "query": "in the Go builder where is the vtable written",
+          "acceptable": [
+            {
+              "pathRegex": "^go/builder\\.go$",
+              "symbolRegex": "^(\\(\\*?Builder\\)\\.|Builder\\.)?WriteVtable$",
+              "evidence": "go/builder.go:119 func (b *Builder) WriteVtable() (n UOffsetT); called from EndObject :208"
+            }
+          ],
+          "justification": "Go runtime builder WriteVtable."
+        },
+        {
+          "id": "f5",
+          "tags": [],
+          "query": "where does flatc parse a schema file",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_parser\\.cpp$",
+              "symbolRegex": "^(Parser::)?(DoParse|Parse|ParseDecl)$",
+              "evidence": "src/idl_parser.cpp:3777 Parser::DoParse (schema entry), :2869 Parser::ParseDecl"
+            }
+          ],
+          "justification": "Schema parser in src/idl_parser.cpp."
+        },
+        {
+          "id": "f6",
+          "tags": [
+            "T"
+          ],
+          "query": "where does the C++ generator emit code for a table",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_gen_cpp\\.cpp$",
+              "symbolRegex": "GenTable",
+              "evidence": "src/idl_gen_cpp.cpp:132 class CppGenerator; :3046 void GenTable(const StructDef&)"
+            }
+          ],
+          "justification": "C++ generator table emission."
+        },
+        {
+          "id": "f7",
+          "tags": [
+            "T"
+          ],
+          "query": "where does flatc resolve a union type when parsing",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_parser\\.cpp$",
+              "symbolRegex": "^(Parser::)?(ParseAnyValue|ParseField|ParseEnum)$",
+              "evidence": "src/idl_parser.cpp:1362 Parser::ParseAnyValue (case BASE_TYPE_UNION at :1367); :967 union type field handling in ParseField-region; :2552 ParseEnum(is_union)"
+            }
+          ],
+          "justification": "Union value/type resolution during parsing is in ParseAnyValue; acceptable set is my judgment (three close symbols in the same parser)."
+        },
+        {
+          "id": "f8",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for the FlatBuffer verifier",
+          "acceptable": [
+            {
+              "pathRegex": "^tests/(swift/Tests/Flatbuffers/FlatbuffersVerifierTests\\.swift|fuzzer/flatbuffers_verifier_fuzzer\\.cc|rust_usage_test/tests/integration_test\\.rs)$",
+              "symbolRegex": null,
+              "evidence": "tests/swift/Tests/Flatbuffers/FlatbuffersVerifierTests.swift; tests/fuzzer/flatbuffers_verifier_fuzzer.cc; tests/rust_usage_test/tests/integration_test.rs:411 verifier_one_byte_errors_do_not_crash, :438 verifier_too_many_tables"
+            }
+          ],
+          "justification": "Explicitly asks for tests; these are the verifier-specific test files."
+        },
+        {
+          "id": "f9",
+          "tags": [
+            "lang",
+            "fallback-extractor"
+          ],
+          "query": "in the Swift library where does the builder add a string",
+          "acceptable": [
+            {
+              "pathRegex": "^swift/Sources/FlatBuffers/FlatBufferBuilder\\.swift$",
+              "symbolRegex": "create",
+              "evidence": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift:707 mutating public func create(string str: String?) -> Offset"
+            }
+          ],
+          "justification": "Coordinator-approved: Swift FlatBufferBuilder create(string:)."
+        },
+        {
+          "id": "f10",
+          "tags": [
+            "lang",
+            "fallback-extractor"
+          ],
+          "query": "in the Kotlin runtime where does the builder grow its buffer",
+          "acceptable": [
+            {
+              "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/FlatBufferBuilder\\.kt$",
+              "symbolRegex": "^(FlatBufferBuilder\\.)?prep$",
+              "evidence": "FlatBufferBuilder.kt:106-125 prep(): while (space < ...) calls buffer.moveWrittenDataToEnd"
+            },
+            {
+              "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers\\.kt$",
+              "symbolRegex": "^(ArrayReadWriteBuffer\\.)?(requestCapacity|moveWrittenDataToEnd)$",
+              "evidence": "Buffers.kt:632 requestCapacity, :664 moveWrittenDataToEnd = requestCapacity(capacity, true) (declared :198,:393)"
+            }
+          ],
+          "justification": "Coordinator-approved set {prep, requestCapacity, moveWrittenDataToEnd}: no function named grow exists at the pinned commit."
+        }
+      ]
+    }
+  ]
+}

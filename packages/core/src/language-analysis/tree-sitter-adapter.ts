@@ -347,6 +347,16 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         parentNode?: Node,
         semanticContainer: 'module' | 'class' | 'callable' = 'module',
     ): void => {
+        // A malformed definition cannot supply a trustworthy identity or owner for descendants.
+        if (node.isError || node.isMissing || (node.hasError && (
+            declarations[node.type]
+            || node.type === 'decorated_definition'
+            || node.type === 'impl_item'
+            || (language === 'python' && node.type === 'assignment')
+            || (language === 'cpp' && (
+                node.type === 'declaration' || node.type === 'field_declaration'
+            ))
+        ))) return;
         let kind: ExtractedSymbolKind | undefined = declarations[node.type];
         if (language === 'go') kind = goSymbolKind(node, kind);
         if (language === 'go' && node.type === 'type_spec' && semanticContainer === 'callable') {
@@ -1498,7 +1508,7 @@ export async function analyzeWithTreeSitter(
 } | {
     complete: false;
     reason: 'syntax_error' | 'parser_unavailable' | 'analysis_failure';
-    symbols: readonly [];
+    symbols: readonly ExtractedSymbol[];
     moduleBindings: readonly [];
     callSites: readonly [];
     receiverTypeBindings: readonly [];
@@ -1563,19 +1573,19 @@ export async function analyzeWithTreeSitter(
     }
     try {
         try {
+            const sourceMap = new Utf8SourceMap(input.content);
+            const symbols = extractSymbols(tree.rootNode, input.language, sourceMap);
             if (tree.rootNode.hasError) {
                 return {
                     complete: false,
                     reason: 'syntax_error',
-                    symbols: [],
+                    symbols,
                     moduleBindings: [],
                     callSites: [],
                     receiverTypeBindings: [],
                     pythonFlowFacts: [],
                 };
             }
-            const sourceMap = new Utf8SourceMap(input.content);
-            const symbols = extractSymbols(tree.rootNode, input.language, sourceMap);
             return {
                 complete: true,
                 symbols,

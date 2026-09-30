@@ -1397,6 +1397,48 @@ test('malformed structural source remains searchable without authoritative symbo
     assert.ok(result.chunks.length > 0);
 });
 
+for (const fixture of [
+    {
+        language: 'python',
+        relativePath: 'src/recovered.py',
+        content: 'def intact():\n    return helper()\n\ndef broken(:\n    return 1\n',
+    },
+    {
+        language: 'go',
+        relativePath: 'src/recovered.go',
+        content: 'package main\nfunc intact() int { return helper() }\nfunc broken( { return 1 }\n',
+    },
+    {
+        language: 'cpp',
+        relativePath: 'src/recovered.h',
+        content: '#define API_EXPORT __declspec(dllexport)\nint intact() { return helper(); }\nint broken( { return 1; }\n',
+    },
+]) {
+    test(`Tree-sitter recovers intact ${fixture.language} siblings without relationship evidence`, async () => {
+        const result = await createLanguageAnalysisService().analyze(fixture);
+
+        assert.equal(result.structuralStatus, 'recovered');
+        assert.equal(result.structuralReason, 'syntax_error');
+        assert.deepEqual(result.symbols.map((symbol) => symbol.name), ['intact']);
+        assert.ok(result.chunks.some((chunk) => chunk.content.includes('intact')));
+        assert.deepEqual(result.moduleBindings, []);
+        assert.deepEqual(result.callSites, []);
+        assert.deepEqual(result.receiverTypeBindings, []);
+        assert.deepEqual(result.pythonFlowFacts, []);
+    });
+}
+
+test('Tree-sitter excludes declarations with broken bodies and definitions inside error nodes', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        language: 'python',
+        relativePath: 'src/broken_body.py',
+        content: 'def intact():\n    return 1\n\ndef broken():\n    if :\n        def nested():\n            return 2\n\nbroken_binding = [1,,2]\n',
+    });
+
+    assert.equal(result.structuralStatus, 'recovered');
+    assert.deepEqual(result.symbols.map((symbol) => symbol.name), ['intact']);
+});
+
 test('unsupported languages use bounded search-only fallback', async () => {
     const analyzer = createLanguageAnalysisService();
     const result = await analyzer.analyze({

@@ -263,6 +263,25 @@ export function createLanguageAnalysisService(
                     ? analyzeWithOxc(normalizedInput)
                     : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
                 if (!evidence.complete) {
+                    if (evidence.symbols.length > 0) {
+                        return {
+                            backend: strategy.backend,
+                            structuralStatus: 'recovered',
+                            structuralReason: evidence.reason,
+                            symbols: evidence.symbols,
+                            moduleBindings: [],
+                            callSites: [],
+                            receiverTypeBindings: [],
+                            pythonFlowFacts: [],
+                            chunks: buildAnalysisChunks(
+                                normalizedInput.content,
+                                normalizedInput.relativePath,
+                                normalizedInput.language,
+                                evidence.symbols,
+                                chunkOptions,
+                            ),
+                        };
+                    }
                     if ('flowSyntax' in evidence && evidence.flowSyntax) {
                         // Flow-annotated source is valid for its authors; keep its declarations searchable at symbol level.
                         const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);

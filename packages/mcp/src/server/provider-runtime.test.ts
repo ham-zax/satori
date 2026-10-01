@@ -10,6 +10,7 @@ import {
     buildRuntimeIndexFingerprint,
     ContextMcpConfig,
     resolveVectorStoreConfig,
+    summarizeIndexFingerprint,
 } from "../config.js";
 import type { ToolContext } from "../tools/types.js";
 import { WorkspaceAuthorizationError } from "../core/session-workspace-policy.js";
@@ -108,6 +109,12 @@ test("runtime fingerprint seals analysis and projection versions", () => {
     assert.equal(fingerprint.relationshipVersion, RELATIONSHIP_BUILDER_VERSION);
     assert.equal(fingerprint.embeddingProjectionVersion, EMBEDDING_PROJECTION_VERSION);
     assert.equal(fingerprint.lexicalProjectionVersion, LEXICAL_PROJECTION_VERSION);
+});
+
+test("runtime fingerprint invalidates indexes built before Flow and callback extraction", () => {
+    const current = buildRuntimeIndexFingerprint(baseConfig(), 1024);
+    const previous = { ...current, extractorVersion: `language-analysis-v17+${LANGUAGE_PARSER_VERSION}` };
+    assert.notEqual(summarizeIndexFingerprint(current), summarizeIndexFingerprint(previous));
 });
 
 test("vector-store configuration defaults to LanceDB while preserving explicit Milvus", () => {

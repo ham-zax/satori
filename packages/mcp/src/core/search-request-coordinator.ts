@@ -1015,7 +1015,17 @@ export class SearchRequestCoordinator {
                         if (watcherObservation.coverage !== 'ready') {
                             await this.readiness.touchWatchedCodebaseBestEffort(effectiveRoot);
                         }
-                        const effectiveWatcherObservation = this.readiness.getWatcherObservation(effectiveRoot);
+                        let effectiveWatcherObservation = this.readiness.getWatcherObservation(effectiveRoot);
+                        if (effectiveWatcherObservation.coverage === 'starting') {
+                            const deadline = Date.now() + 1500;
+                            while (Date.now() < deadline) {
+                                await new Promise((resolve) => setTimeout(resolve, 50));
+                                effectiveWatcherObservation = this.readiness.getWatcherObservation(effectiveRoot);
+                                if (effectiveWatcherObservation.coverage === 'ready') {
+                                    break;
+                                }
+                            }
+                        }
                         const fullSourceComparisonRequired = effectiveWatcherObservation.coverage !== 'ready'
                             || effectiveWatcherObservation.pending;
                         const changedFilesState = this.readiness.getChangedFilesForCodebase(

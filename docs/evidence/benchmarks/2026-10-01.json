@@ -1,0 +1,614 @@
+{
+  "benchmark": "satori-vs-cbm",
+  "formatVersion": 1,
+  "generatedAt": "2026-10-01T17:09:44.952Z",
+  "environment": {
+    "satoriCommit": "3a438a96f8407f653a23222e01a034052aa7bce8",
+    "satoriSourceDiffSha256": "2fc08bf8ff8cecf64aec0cd067e76f4ec4fc26f06a87ca5d5c309a447e052448",
+    "cbmVersion": "0.11.0",
+    "node": "v24.19.0",
+    "cpu": "AMD Ryzen 7 3800X 8-Core Processor",
+    "cpuCount": 16,
+    "totalMemoryGb": 8.7,
+    "platform": "linux 6.18.40.1-microsoft-standard-WSL2"
+  },
+  "method": {
+    "querySymbols": "20 callables per repository with a unique name and at least one caller in CBM's graph, ordered by sha256(name)",
+    "lookup": "Satori search_codebase(name, limit 5) vs CBM search_graph(name_pattern ^name$, limit 5); hit = a same-name definition in the defining file among results (CBM merges overloads into one node)",
+    "callers": "Satori call_graph(callers, depth 1) from the lookup hit vs CBM trace_path(inbound, depth 1); unsupported Satori responses are counted separately and excluded from latency",
+    "definitionRecall": "CBM Function/Method/Class/Interface/Struct/Enum/Trait/Type definitions in 30 hash-ordered files matched by Satori file_outline (same name, span contains CBM start line); covers every language, including ones Satori leaves search-only",
+    "oneFileEdit": "append one comment line to the first query symbol's file; Satori manage_index sync until the next generation publishes vs CBM index_repository",
+    "memory": "Satori: RSS of the MCP server process tree during indexing (fresh process per run). CBM: RSS of the shared account daemon (it also serves other sessions); delta = peak minus pre-index baseline"
+  },
+  "repositories": [
+    {
+      "name": "satori",
+      "language": "typescript",
+      "url": "https://github.com/zokizuan/satori",
+      "rev": "b76d89b6ad951d26b43a7546d29e03e1cfbffc10",
+      "trackedFiles": 1315,
+      "querySymbols": [
+        "packages/core/src/languages/capabilities.ts:463:getLanguageCapabilityDeclaration",
+        "packages/mcp/src/core/vector-backend-maintenance.ts:226:parseTimestampMs",
+        "packages/mcp/src/core/bounded-source-selector.ts:391:capCandidateSpan",
+        "third_party/cbm-semantic/languages/cpp/c_lsp.c:117:c_add_using_decl",
+        "packages/mcp/src/core/call-graph-evidence-projection.ts:46:serializeCursor",
+        "scripts/archive/ranking-v3/satori-search-ranking-r3-score.mjs:1157:resolveLateOnScoreOutcome",
+        "packages/core/src/core/context.ts:1380:refreshRuntimePolicyAuthority",
+        "packages/core/src/relationships/python-resolution.ts:870:spanIdentity",
+        "packages/mcp/src/core/search-rerank-projection-primitives.ts:81:sourceLines",
+        "packages/core/src/relationships/go-call-qualification.test.ts:65:functionSymbol",
+        "packages/mcp/src/core/navigation-path-scope.ts:11:matchesPrefix",
+        "packages/mcp/src/core/search-rerank-structural-context.ts:53:referenceFor",
+        "third_party/cbm-extractor/internal/cbm/extract_defs.c:250:resolve_julia_func_name",
+        "docs/evidence/symbol-analysis-release-a-20260726/qualify-symbol-analysis-release-a.mjs:195:resolveSymbol",
+        "packages/mcp/src/core/search-disclosure.ts:63:orderedReasons",
+        "docs/architecture/satori-architecture.html:11972:syncSemantic",
+        "packages/core/src/semantic/descriptor.ts:248:matchAuxiliaries",
+        "packages/core/src/sync/sync-scan.ts:95:isPathWithinPrefix",
+        "scripts/release-workspace.mjs:18:assertReleaseWorkspaceLinks",
+        "packages/mcp/src/core/search-rerank-request-contract.ts:199:createContractSymbol"
+      ],
+      "editedFile": "packages/core/src/languages/capabilities.ts",
+      "runs": [
+        {
+          "cbm": {
+            "indexMs": 19743.1,
+            "peakRssMb": 1704.5,
+            "peakRssDeltaMb": 1696.4,
+            "definitions": 10208,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 29.5,
+              "p95Ms": 31.1,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 19.7,
+              "p95Ms": 20.9
+            },
+            "oneFileEditReindexMs": 12749.5
+          },
+          "satori": {
+            "indexMs": 46155.1,
+            "peakRssMb": 3613.7,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 10.8,
+              "p95Ms": 296.9,
+              "hitRate": 0.85
+            },
+            "callers": {
+              "count": 17,
+              "p50Ms": 24,
+              "p95Ms": 1251,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.8485,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 297
+            },
+            "oneFileEditSyncMs": 13162.7
+          }
+        },
+        {
+          "cbm": {
+            "indexMs": 20391.8,
+            "peakRssMb": 1850.8,
+            "peakRssDeltaMb": 1842.6,
+            "definitions": 10208,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 29,
+              "p95Ms": 30.1,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 19.8,
+              "p95Ms": 20.8
+            },
+            "oneFileEditReindexMs": 13110.2
+          },
+          "satori": {
+            "indexMs": 41664.1,
+            "peakRssMb": 3785.7,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 10.9,
+              "p95Ms": 308.7,
+              "hitRate": 0.85
+            },
+            "callers": {
+              "count": 17,
+              "p50Ms": 20.9,
+              "p95Ms": 1336.8,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.8485,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 297
+            },
+            "oneFileEditSyncMs": 13132.9
+          }
+        }
+      ]
+    },
+    {
+      "name": "trufflehog",
+      "language": "go",
+      "url": "https://github.com/trufflesecurity/trufflehog.git",
+      "rev": "bcfcf73aaf4759d4dadc2783177c245a02792318",
+      "trackedFiles": 3489,
+      "querySymbols": [
+        "pkg/pb/custom_detectorspb/custom_detectors.pb.go:191:GetValidations",
+        "pkg/pb/detectorspb/detectors.pb.go:517:file_detectors_proto_rawDescGZIP",
+        "scripts/install.sh:298:hash_sha256",
+        "pkg/detectors/accuweather/v1/accuweather.go:53:ProcessMatches",
+        "pkg/sources/github/github.go:1439:handleRateLimitWithUnitReporter",
+        "pkg/detectors/boostnote/boostnote.go:71:verifyBoostnote",
+        "pkg/detectors/netsuite/netsuite.go:282:netsuiteNonce",
+        "pkg/analyzer/analyzers/mysql/mysql.go:560:processGrant",
+        "pkg/sources/github/github.go:122:setScanOptions",
+        "pkg/detectors/twitch/twitch.go:93:verifyTwitch",
+        "pkg/decoders/html.go:210:emitAttributes",
+        "pkg/detectors/twitterconsumerkey/twitterconsumerkey.go:121:fetchBearerToken",
+        "pkg/sources/github_experimental/object_discovery.go:296:processCommits",
+        "pkg/analyzer/analyzers/openai/openai.go:185:analyzeScopes",
+        "pkg/gitparse/gitparse.go:869:pathFromToFileLine",
+        "pkg/sources/gcs/gcs_manager.go:571:bucketObjects",
+        "pkg/gitparse/gitparse.go:83:newDiff",
+        "pkg/analyzer/analyzers/mysql/mysql.go:754:getGlobalAllPrivileges",
+        "pkg/sources/github/urls.go:53:wikiWebURLForRepoCloneURL",
+        "pkg/analyzer/analyzers/ngrok/requests.go:354:createBotUserResource"
+      ],
+      "editedFile": "pkg/pb/custom_detectorspb/custom_detectors.pb.go",
+      "runs": [
+        {
+          "cbm": {
+            "indexMs": 9191.9,
+            "peakRssMb": 798.3,
+            "peakRssDeltaMb": 789.6,
+            "definitions": 14002,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 17.4,
+              "p95Ms": 21.8,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 15.3,
+              "p95Ms": 16.5
+            },
+            "oneFileEditReindexMs": 24398
+          },
+          "satori": {
+            "indexMs": 41718.7,
+            "peakRssMb": 2447.8,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 23.2,
+              "p95Ms": 455,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 30.3,
+              "p95Ms": 3177.3,
+              "unsupportedCount": 1
+            },
+            "definitionRecall": 0.9,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 150
+            },
+            "oneFileEditSyncMs": 18834.1
+          }
+        },
+        {
+          "cbm": {
+            "indexMs": 8894.2,
+            "peakRssMb": 774.6,
+            "peakRssDeltaMb": 764.1,
+            "definitions": 14002,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 17.6,
+              "p95Ms": 18.3,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 15.2,
+              "p95Ms": 16.7
+            },
+            "oneFileEditReindexMs": 31854.4
+          },
+          "satori": {
+            "indexMs": 54821.5,
+            "peakRssMb": 2428.1,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 22.3,
+              "p95Ms": 469.9,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 28.5,
+              "p95Ms": 3173.4,
+              "unsupportedCount": 1
+            },
+            "definitionRecall": 0.9,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 150
+            },
+            "oneFileEditSyncMs": 19246.1
+          }
+        }
+      ]
+    },
+    {
+      "name": "ripgrep",
+      "language": "rust",
+      "url": "https://github.com/BurntSushi/ripgrep.git",
+      "rev": "4649aa9700619f94cf9c66876e9549d83420e16c",
+      "trackedFiles": 213,
+      "querySymbols": [
+        "crates/cli/src/human.rs:79:parse_human_readable_size",
+        "tests/util.rs:207:link_dir",
+        "crates/pcre2/src/matcher.rs:286:max_jit_stack_size",
+        "tests/util.rs:503:strip_jemalloc_nonsense",
+        "crates/searcher/src/searcher/mod.rs:492:memory_map",
+        "benchsuite/benchsuite:925:samples_for",
+        "crates/searcher/src/testutil.rs:468:minimal_heap_limit",
+        "crates/searcher/src/line_buffer.rs:568:replace_str",
+        "crates/ignore/src/gitignore.rs:245:matched_stripped",
+        "crates/ignore/src/dir.rs:148:is_root",
+        "crates/searcher/src/searcher/core.rs:160:detect_binary",
+        "crates/ignore/src/walk.rs:1729:send_quit",
+        "crates/regex/src/literal.rs:529:max_union_len",
+        "crates/printer/src/util.rs:237:original_matches",
+        "crates/searcher/src/searcher/core.rs:605:is_line_by_line_fast",
+        "crates/searcher/src/searcher/mod.rs:112:convert_byte",
+        "crates/cli/src/process.rs:310:stderr_to_command_error",
+        "crates/cli/src/wtr.rs:54:stdout_buffered_block",
+        "crates/core/flags/doc/version.rs:171:sign",
+        "crates/core/flags/doc/version.rs:83:runtime_cpu_features"
+      ],
+      "editedFile": "crates/cli/src/human.rs",
+      "runs": [
+        {
+          "cbm": {
+            "indexMs": 2813.7,
+            "peakRssMb": 221.3,
+            "peakRssDeltaMb": 210.6,
+            "definitions": 3216,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 13.1,
+              "p95Ms": 13.7,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 13,
+              "p95Ms": 19.1
+            },
+            "oneFileEditReindexMs": 2171.6
+          },
+          "satori": {
+            "indexMs": 5824,
+            "peakRssMb": 1918.4,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 8.3,
+              "p95Ms": 153.7,
+              "hitRate": 0.9
+            },
+            "callers": {
+              "count": 18,
+              "p50Ms": 135.9,
+              "p95Ms": 171.9,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.9298,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 627
+            },
+            "oneFileEditSyncMs": 3278.5
+          }
+        },
+        {
+          "cbm": {
+            "indexMs": 2850.9,
+            "peakRssMb": 225.7,
+            "peakRssDeltaMb": 215.1,
+            "definitions": 3216,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 13.1,
+              "p95Ms": 13.7,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 12.7,
+              "p95Ms": 13.3
+            },
+            "oneFileEditReindexMs": 2137.7
+          },
+          "satori": {
+            "indexMs": 5809.1,
+            "peakRssMb": 1932.3,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 9.1,
+              "p95Ms": 144.7,
+              "hitRate": 0.9
+            },
+            "callers": {
+              "count": 18,
+              "p50Ms": 146.1,
+              "p95Ms": 163.1,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.9298,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 627
+            },
+            "oneFileEditSyncMs": 3283
+          }
+        }
+      ]
+    },
+    {
+      "name": "kotlinpoet",
+      "language": "kotlin",
+      "url": "https://github.com/square/kotlinpoet.git",
+      "rev": "d43826762d8d1ea8781091499671dc03fd0b205a",
+      "trackedFiles": 192,
+      "querySymbols": [
+        "kotlinpoet/src/jvmTest/kotlin/com/squareup/kotlinpoet/AnnotationSpecTest.kt:164:emptyArray",
+        "kotlinpoet/src/wasmJsMain/kotlin/com/squareup/kotlinpoet/Util.wasmJs.kt:40:reset",
+        "kotlinpoet/src/commonMain/kotlin/com/squareup/kotlinpoet/NameAllocator.kt:157:toJavaIdentifier",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt:696:suggestedTypeImports",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/TypeSpec.kt:624:checkCanHaveSuperclass",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/TypeSpec.kt:411:isPropertyInitializerConstructorParameter",
+        "kotlinpoet/src/commonMain/kotlin/com/squareup/kotlinpoet/KModifier.kt:75:checkTarget",
+        "interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/JvmDescriptorUtils.kt:151:jvmMethodSignature",
+        "interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ClassInspectorUtil.kt:85:filterOutNullabilityAnnotations",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/FunSpec.kt:447:returns",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt:248:emitCode",
+        "interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/ReflectiveClassInspector.kt:205:methodJvmModifiers",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/TypeVariableName.kt:284:asTypeVariableName",
+        "interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/classinspectors/JvmDescriptorUtils.kt:136:descriptor",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/AnnotationSpec.kt:130:addMember",
+        "interop/ksp/test-processor/src/main/kotlin/com/squareup/kotlinpoet/ksp/test/processor/TypeAliasUnwrapping.kt:58:unwrapTypeAlias",
+        "interop/kotlin-metadata/src/main/kotlin/com/squareup/kotlinpoet/metadata/specs/KotlinPoetMetadataSpecs.kt:879:safeCapitalize",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/CodeWriter.kt:229:emitWhereBlock",
+        "kotlinpoet/src/jvmTest/kotlin/com/squareup/kotlinpoet/FunSpecTest.kt:61:findFirst",
+        "kotlinpoet/src/jvmMain/kotlin/com/squareup/kotlinpoet/Util.jvm.kt:31:ensureEndsWithNewLine"
+      ],
+      "editedFile": "kotlinpoet/src/jvmTest/kotlin/com/squareup/kotlinpoet/AnnotationSpecTest.kt",
+      "runs": [
+        {
+          "cbm": {
+            "indexMs": 2756.1,
+            "peakRssMb": 189.1,
+            "peakRssDeltaMb": 178.5,
+            "definitions": 2029,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 12.9,
+              "p95Ms": 13.9,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 12.7,
+              "p95Ms": 13.2
+            },
+            "oneFileEditReindexMs": 2210.6
+          },
+          "satori": {
+            "indexMs": 5862.1,
+            "peakRssMb": 2053.9,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 8.6,
+              "p95Ms": 1070.7,
+              "hitRate": 0.95
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 172.3,
+              "p95Ms": 252.3,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 1,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 614
+            },
+            "oneFileEditSyncMs": 3336.8
+          }
+        },
+        {
+          "cbm": {
+            "indexMs": 2748.9,
+            "peakRssMb": 217.3,
+            "peakRssDeltaMb": 206.7,
+            "definitions": 2029,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 13,
+              "p95Ms": 14,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 12.7,
+              "p95Ms": 15.9
+            },
+            "oneFileEditReindexMs": 2109.6
+          },
+          "satori": {
+            "indexMs": 6657.9,
+            "peakRssMb": 1948.1,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 8.9,
+              "p95Ms": 1188.2,
+              "hitRate": 0.95
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 171.3,
+              "p95Ms": 221.8,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 1,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 614
+            },
+            "oneFileEditSyncMs": 3373.4
+          }
+        }
+      ]
+    },
+    {
+      "name": "fastapi-template",
+      "language": "mixed (python, typescript)",
+      "url": "https://github.com/fastapi/full-stack-fastapi-template.git",
+      "rev": "cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7",
+      "trackedFiles": 252,
+      "querySymbols": [
+        "frontend/src/hooks/useAuth.ts:56:logout",
+        "frontend/src/client/client/utils.gen.ts:86:setAuthParams",
+        "frontend/src/components/ui/table.tsx:79:TableCell",
+        "backend/tests/api/routes/test_items.py:142:test_delete_item_not_found",
+        "frontend/src/components/ui/sheet.tsx:117:SheetDescription",
+        "backend/tests/api/routes/test_items.py:82:test_update_item",
+        "frontend/src/client/core/pathSerializer.gen.ts:54:separatorObjectExplode",
+        "frontend/src/components/ui/select.tsx:19:SelectValue",
+        "backend/tests/api/routes/test_users.py:319:test_register_user",
+        "frontend/src/client/sdk.gen.ts:293:readItems",
+        "frontend/tests/utils/user.ts:19:logInUser",
+        "frontend/src/client/core/queryKeySerializer.gen.ts:59:serializeSearchParams",
+        "frontend/src/client/client/utils.gen.ts:146:mergeConfigs",
+        "backend/app/utils.py:25:render_email_template",
+        "frontend/src/components/ui/label.tsx:8:Label",
+        "frontend/src/components/ui/dropdown-menu.tsx:146:DropdownMenuLabel",
+        "frontend/src/components/ui/sidebar.tsx:54:SidebarProvider",
+        "backend/tests/api/routes/test_items.py:129:test_delete_item",
+        "frontend/src/components/ui/pagination.tsx:45:PaginationLink",
+        "backend/tests/utils/user.py:30:authentication_token_from_email"
+      ],
+      "editedFile": "frontend/src/hooks/useAuth.ts",
+      "runs": [
+        {
+          "cbm": {
+            "indexMs": 2177.1,
+            "peakRssMb": 143.6,
+            "peakRssDeltaMb": 132.9,
+            "definitions": 784,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 12.4,
+              "p95Ms": 12.8,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 12.3,
+              "p95Ms": 12.7
+            },
+            "oneFileEditReindexMs": 2029.5
+          },
+          "satori": {
+            "indexMs": 5947.4,
+            "peakRssMb": 1999.7,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 7.6,
+              "p95Ms": 17.1,
+              "hitRate": 0.95
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 192.2,
+              "p95Ms": 250.4,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.7586,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 116
+            },
+            "oneFileEditSyncMs": 3882.8
+          }
+        },
+        {
+          "cbm": {
+            "indexMs": 2211.2,
+            "peakRssMb": 161.7,
+            "peakRssDeltaMb": 144.4,
+            "definitions": 784,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 12.6,
+              "p95Ms": 13.1,
+              "hitRate": 1
+            },
+            "callers": {
+              "count": 20,
+              "p50Ms": 12.3,
+              "p95Ms": 13.4
+            },
+            "oneFileEditReindexMs": 1974.2
+          },
+          "satori": {
+            "indexMs": 8034.2,
+            "peakRssMb": 2006.2,
+            "lookup": {
+              "count": 20,
+              "p50Ms": 8,
+              "p95Ms": 16.9,
+              "hitRate": 0.95
+            },
+            "callers": {
+              "count": 19,
+              "p50Ms": 189.3,
+              "p95Ms": 217.2,
+              "unsupportedCount": 0
+            },
+            "definitionRecall": 0.7586,
+            "definitionRecallSample": {
+              "files": 30,
+              "definitions": 116
+            },
+            "oneFileEditSyncMs": 3991.4
+          }
+        }
+      ]
+    }
+  ],
+  "agreement": {
+    "maxSpread": 0.2597,
+    "worst": {
+      "repo": "fastapi-template",
+      "metric": "satori.indexMs",
+      "spread": 0.2597
+    },
+    "withinTenPercent": false
+  }
+}

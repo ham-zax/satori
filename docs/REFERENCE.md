@@ -325,17 +325,22 @@ Measured with the repository's own benchmark script; raw results are committed.
 
 ### Satori versus codebase-memory-mcp
 
-Five pinned repositories, two sequential runs each, measured with `scripts/bench-vs-cbm.mjs` against codebase-memory-mcp 0.11.0 on the same machine (Satori `52b59d76`, offline Potion + LanceDB + LateOn). Ranges are the two runs; 20 unique called functions per repository.
+Five pinned repositories, two sequential runs each, measured with `scripts/bench-vs-cbm.mjs` against codebase-memory-mcp 0.11.0 on the same machine (Satori `3a438a96`, offline Potion + LanceDB + LateOn). Ranges are the two runs; 20 unique called functions per repository.
 
-| Repository | Index (Satori / CBM) | Symbol lookup p50 | Callers p50 | One-file edit (Satori sync / CBM reindex) |
-|---|---:|---:|---:|---:|
-| satori (TypeScript) | 76–77 s / 20 s | 39–50 / 31 ms | 46–61 / 21 ms | 20–27 s / 13 s |
-| trufflehog (Go) | 67–71 s / 9–10 s | 59–65 / 19 ms | 64–69 / 16 ms | 15–16 s / 23–27 s |
-| ripgrep (Rust) | 9.3–9.4 s / 2.7–4.6 s | 14–16 / 13 ms | 141–147 / 12 ms | 2.2 s / 2.1–2.6 s |
-| kotlinpoet (Kotlin) | 7.8–8.1 s / 2.6–2.7 s | 18–19 / 13 ms | 181–183 / 12 ms | 2.6–3.1 s / 2.2 s |
-| fastapi-template (Python + TS) | 6.5 s / 2.1–2.2 s | 16 / 12 ms | 206–207 / 12 ms | 3.8–4.0 s / 2.0 s |
+| Repository | System | Full index | Symbol lookup (p50) | Callers (p50) | One-file edit |
+|:---|:---|---:|---:|---:|---:|
+| **satori** (TypeScript) | **Satori** | 42–46 s | **11 ms** | 21–24 ms | **13 s** |
+| | CBM 0.11 | **20 s** | 29–30 ms | **20 ms** | 13 s |
+| **trufflehog** (Go) | **Satori** | 42–55 s | 22–23 ms | 29–30 ms | **19 s** |
+| | CBM 0.11 | **8.9–9.2 s** | **17–18 ms** | **15 ms** | 24–32 s |
+| **ripgrep** (Rust) | **Satori** | 5.8 s | **8–9 ms** | 136–146 ms | 3.3 s |
+| | CBM 0.11 | **2.8–2.9 s** | 13 ms | **13 ms** | **2.1–2.2 s** |
+| **kotlinpoet** (Kotlin) | **Satori** | 5.9–6.7 s | **8.6–8.9 ms** | 171–172 ms | 3.3–3.4 s |
+| | CBM 0.11 | **2.7–2.8 s** | 13 ms | **12.7 ms** | **2.1–2.2 s** |
+| **fastapi-template** (Python + TS) | **Satori** | 5.9–8.0 s | **7.6–8.0 ms** | 189–192 ms | 3.9–4.0 s |
+| | CBM 0.11 | **2.2 s** | 12.5 ms | **12.3 ms** | **2.0 s** |
 
-Satori found a same-name definition in the defining file for 80–100% of lookups, and its file outlines covered 76–100% of CBM's definitions in 30 sampled files per repository. Satori indexes slower because it also builds embeddings, a vector index, and publication proofs; CBM builds a graph only. Satori's peak RSS during indexing was 1.2–3.1 GB (whole process tree) versus 0.1–2.2 GB for CBM's shared daemon. Satori's index timings agreed within 10% across runs; CBM's shared-daemon timings and Satori's edit sync on two repositories did not, so treat those as indicative. Raw results: [`docs/evidence/benchmarks/2026-09-28-final.json`](./evidence/benchmarks/2026-09-28-final.json).
+Satori found a same-name definition in the defining file for 80–100% of lookups, and its file outlines covered 76–100% of CBM's definitions in 30 sampled files per repository. Satori indexes slower because it also builds embeddings, a vector index, and publication proofs; CBM builds a graph only. Satori's peak RSS during indexing was 1.9–3.8 GB (whole process tree) versus 0.1–1.7 GB for CBM's shared daemon. Raw results: [`docs/evidence/benchmarks/2026-10-01.json`](./evidence/benchmarks/2026-10-01.json).
 
 </details>
 

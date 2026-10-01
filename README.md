@@ -131,7 +131,7 @@ Satori combines embeddings with BM25 and exact matches, maps hits to the symbols
 
 ## Benchmarks
 
-**The offline stack.** [Potion](https://huggingface.co/minishlab/potion-code-16M-v2) is a 16M-parameter static code embedding, fast enough to embed a whole repository on a laptop CPU. BM25 and exact matching catch the identifiers it misses. [LateOn](https://huggingface.co/lightonai/LateOn-Code-edge) is a 17M-parameter late-interaction code model. It is too costly to run over everything, so Satori uses it only to rerank the top 32 candidates, together with each candidate's role, callers, callees, and tests.
+**The offline stack.** [Potion](https://huggingface.co/minishlab/potion-code-16M-v2) is a 16M-parameter static code embedding, fast enough to embed a whole repository on a laptop CPU. BM25 and exact matching catch the identifiers it misses. [LateOn](https://huggingface.co/lightonai/LateOn-Code-edge) is a 17M-parameter late-interaction code model. It is too costly to run over everything, so Satori uses it only to rerank the top candidates (budget 64), together with each candidate's role, callers, callees, and tests.
 
 **What reranking adds.** 36 owner-finding tasks across 6 repositories, where "owner at 1" means the right symbol comes first:
 
@@ -140,17 +140,29 @@ Satori combines embeddings with BM25 and exact matches, maps hits to the symbols
 | Potion + BM25 + exact | 0.19 | 0.36 | 0.29 |
 | + LateOn reranking (depth 32) | **0.39** | **0.64** | **0.50** |
 
-Tuning-set results, measured on an earlier prompt projection; the held-out run is still pending. [Evidence and limits](docs/evidence/lateon-quality-20260804/).
+Tuning-set results, measured on an earlier prompt projection; the held-out run is still pending. [Evidence and limits](docs/evidence/lateon-quality-20260804/). On the current build (budget 64), baseline reaches 0.44 owner@1 and 0.78 owner@10 across 18 judged real-repo tasks.
+
+**Search latency.** Measured on React (6,918 files, 36,233 chunks) with the offline CPU stack:
+
+| Phase / Mode | Median latency | Notes |
+|---|---:|---|
+| Fast retrieval (Potion + BM25) | **178 ms** | Dense vector search and lexical candidate fusion |
+| + LateOn reranking (budget 64, CPU FP32) | **2.5–3.1 s** | Full cross-attention reranking of top 64 code passages |
+| Fast mode (`--reranker none`) | **~200 ms** | Disables LateOn; pure embedding + BM25 search |
+| Cold query with filesystem watcher | **< 1 s** | Bounded watcher settle; avoids recursive directory stat scan |
 
 **Against [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 0.11.0.** Same machine, 5 public repositories; each range spans two runs:
 
-| Repository | Index | Symbol lookup p50 | Callers p50 | One-file edit |
-|---|---:|---:|---:|---:|
-| ripgrep (Rust) | 9 s vs 3–5 s | 14–16 vs 13 ms | 141–147 vs 12 ms | 2.2 s vs 2.1–2.6 s |
-| trufflehog (Go) | 67–71 s vs 9–10 s | 59–65 vs 19 ms | 64–69 vs 16 ms | 15–16 s vs 23–27 s |
-| satori (TypeScript) | 76–77 s vs 20 s | 39–50 vs 31 ms | 46–61 vs 21 ms | 20–27 s vs 13 s |
+| Repository | System | Full index | Symbol lookup (p50) | Callers (p50) | One-file edit |
+|:---|:---|---:|---:|---:|---:|
+| **ripgrep** (Rust) | **Satori** | 5.8 s | **8–9 ms** | 136–146 ms | 3.3 s |
+| | CBM 0.11 | **2.8–2.9 s** | 13 ms | **13 ms** | **2.1–2.2 s** |
+| **trufflehog** (Go) | **Satori** | 42–55 s | 22–23 ms | 29–30 ms | **19 s** |
+| | CBM 0.11 | **8.9–9.2 s** | **17–18 ms** | **15 ms** | 24–32 s |
+| **satori** (TypeScript) | **Satori** | 42–46 s | **11 ms** | 21–24 ms | **13 s** |
+| | CBM 0.11 | **20 s** | 29–30 ms | **20 ms** | 13 s |
 
-Satori is first in each pair. codebase-memory-mcp builds only a graph, so it indexes and answers caller queries faster. Satori also builds embeddings, which is what lets it answer plain-English "where is this behavior" questions that a graph cannot. [All 5 repositories and the raw results](docs/REFERENCE.md#satori-versus-codebase-memory-mcp).
+codebase-memory-mcp builds only a graph, so it indexes and answers caller queries faster. Satori also builds embeddings and a vector index, which is what lets it answer plain-English "where is this behavior" questions that a graph cannot. [All 5 repositories and the raw results](docs/REFERENCE.md#satori-versus-codebase-memory-mcp).
 
 ## Languages
 

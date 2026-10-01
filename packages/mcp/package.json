@@ -21,13 +21,13 @@
     "satori": "dist/index.js"
   },
   "scripts": {
-    "build": "pnpm clean && tsc --build && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
-    "build:runtime": "pnpm clean && tsc --build && pnpm fix:bin-perms",
+    "build": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms && pnpm docs:generate && pnpm manifest:generate",
+    "build:runtime": "pnpm clean && node ../../node_modules/typescript7/bin/tsc --build && pnpm fix:bin-perms",
     "dev": "tsx --watch src/index.ts",
     "clean": "rimraf dist tsconfig.tsbuildinfo .tsbuildinfo",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "typecheck": "tsc --build",
+    "typecheck": "node ../../node_modules/typescript7/bin/tsc --build",
     "start": "tsx src/index.ts",
     "start:with-env": "OPENAI_API_KEY=${OPENAI_API_KEY:-your-api-key-here} VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=${MILVUS_ADDRESS:-localhost:19530} tsx src/index.ts",
     "docs:generate": "tsx scripts/generate-docs.ts",

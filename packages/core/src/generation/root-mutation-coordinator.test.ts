@@ -103,3 +103,43 @@ test('durable terminal receipt rejects malformed data and mismatched ownership',
     assert.equal(new RootMutationRuntime({ stateDir }).getOperation(root), undefined);
     await new RootMutationRuntime({ stateDir }).run(root, 'reindex', () => undefined);
 });
+
+test('lease state honours SATORI_STATE_ROOT when no stateDir is given', (t) => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fake-home-'));
+    const configuredRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-configured-state-'));
+    const rootBase = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-lease-root-'));
+    const previousHome = process.env.HOME;
+    const previousStateRoot = process.env.SATORI_STATE_ROOT;
+    process.env.HOME = fakeHome;
+    process.env.SATORI_STATE_ROOT = configuredRoot;
+    t.after(() => {
+        if (previousHome === undefined) {
+            delete process.env.HOME;
+        } else {
+            process.env.HOME = previousHome;
+        }
+        if (previousStateRoot === undefined) {
+            delete process.env.SATORI_STATE_ROOT;
+        } else {
+            process.env.SATORI_STATE_ROOT = previousStateRoot;
+        }
+        fs.rmSync(fakeHome, { recursive: true, force: true });
+        fs.rmSync(configuredRoot, { recursive: true, force: true });
+        fs.rmSync(rootBase, { recursive: true, force: true });
+    });
+    const root = path.join(rootBase, 'repo');
+    fs.mkdirSync(root);
+    const coordinator = new MutationLeaseCoordinator();
+    const acquired = coordinator.acquire(root, 'create');
+    assert.ok(acquired.acquired);
+    assert.equal(coordinator.release(acquired.lease), true);
+    const canonicalRoot = fs.realpathSync(root);
+    const leaseFile = path.join(
+        configuredRoot,
+        'runtime',
+        'mutation-leases',
+        `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`,
+    );
+    assert.ok(fs.existsSync(leaseFile), `expected lease file at ${leaseFile}`);
+    assert.deepEqual(fs.readdirSync(fakeHome), []);
+});

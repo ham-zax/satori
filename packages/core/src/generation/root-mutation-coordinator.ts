@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { resolveSatoriStateRoot } from '../config/runtime-state-root';
 
 export type MutationLeaseAction = 'create' | 'reindex' | 'sync' | 'clear' | 'gc';
 export type MutationOperationPhase = 'accepted' | 'preflight' | 'scanning' | 'writing' | 'proving' | 'publishing' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'blocked';
@@ -187,7 +188,15 @@ export class MutationLeaseCoordinator {
     private readonly operationsByRoot = new Map<string, RootMutationOperation>();
 
     constructor(options: MutationLeaseCoordinatorOptions = {}) {
-        this.stateDir = options.stateDir || path.join(os.homedir(), '.satori', 'runtime', 'mutation-leases');
+        this.stateDir = options.stateDir
+            || path.join(
+                resolveSatoriStateRoot({
+                    configured: process.env.SATORI_STATE_ROOT,
+                    homeDir: os.homedir(),
+                }),
+                'runtime',
+                'mutation-leases',
+            );
         this.processInspector = options.processInspector || new DefaultMutationLeaseProcessInspector();
         this.currentProcess = options.currentProcess
             || this.processInspector.inspect(process.pid)

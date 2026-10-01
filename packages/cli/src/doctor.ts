@@ -5,7 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ResolvedOllamaModelIdentity } from "@satori-code/core";
-import { assertLocalOnlyEndpoint } from "./local-runtime-contract.js";
+import { assertLocalOnlyEndpoint, resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
     readManagedRuntimeRelease,
     resolveCliPackageJsonPath,
@@ -828,7 +828,14 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         appendMutationLeaseChecks(
             checks,
             nextSteps,
-            options.mutationLeasesPath || path.join(homeDir, ".satori", "runtime", "mutation-leases"),
+            options.mutationLeasesPath || path.join(
+                resolveSatoriStateRoot({
+                    configured: runtimeEnv.SATORI_STATE_ROOT,
+                    homeDir,
+                }),
+                "runtime",
+                "mutation-leases",
+            ),
             inspectProcess,
         );
     }

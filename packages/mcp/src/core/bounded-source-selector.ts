@@ -1,3 +1,5 @@
+import { isUtf8 } from "node:buffer";
+
 import { compareContractStrings } from "@satori-code/core";
 
 export const BOUNDED_SOURCE_SELECTION_POLICY_VERSION = "bounded_source_selection_v2" as const;
@@ -111,7 +113,6 @@ interface PhysicalLine {
     line: number;
     startByte: number;
     contentEndByte: number;
-    text: string;
 }
 
 interface CandidateRange extends SourceLineSpan {
@@ -154,34 +155,40 @@ function validateBudgets(budgets: BoundedSourceBudgets): void {
     }
 }
 
-function readPhysicalLines(sourceBytes: Buffer): PhysicalLine[] {
-    new TextDecoder("utf-8", { fatal: true }).decode(sourceBytes);
+/**
+ * Splits physical lines (LF, CR, CRLF) up to `lastLine`; later lines are never consulted, so
+ * a span past the end of the source still yields fewer lines than it asks for.
+ */
+function readPhysicalLines(sourceBytes: Buffer, lastLine: number): PhysicalLine[] {
+    if (!isUtf8(sourceBytes)) {
+        // Throws the established fatal-decoder error for invalid UTF-8.
+        new TextDecoder("utf-8", { fatal: true }).decode(sourceBytes);
+    }
     const lines: PhysicalLine[] = [];
     let startByte = 0;
-    for (let index = 0; index < sourceBytes.length; index += 1) {
-        const byte = sourceBytes[index];
-        if (byte !== 0x0a && byte !== 0x0d) continue;
-        const lineEndByte = byte === 0x0d && sourceBytes[index + 1] === 0x0a
+    let nextLf = sourceBytes.indexOf(0x0a);
+    let nextCr = sourceBytes.indexOf(0x0d);
+    while (lines.length < lastLine && (nextLf >= 0 || nextCr >= 0)) {
+        const index = nextLf < 0 ? nextCr : nextCr < 0 ? nextLf : Math.min(nextLf, nextCr);
+        const lineEndByte = index === nextCr && sourceBytes[index + 1] === 0x0a
             ? index + 2
             : index + 1;
-        lines.push({
-            line: lines.length + 1,
-            startByte,
-            contentEndByte: index,
-            text: sourceBytes.subarray(startByte, index).toString("utf8"),
-        });
+        lines.push({ line: lines.length + 1, startByte, contentEndByte: index });
         startByte = lineEndByte;
-        index = lineEndByte - 1;
+        if (nextLf >= 0 && nextLf < lineEndByte) nextLf = sourceBytes.indexOf(0x0a, lineEndByte);
+        if (nextCr >= 0 && nextCr < lineEndByte) nextCr = sourceBytes.indexOf(0x0d, lineEndByte);
     }
-    if (startByte <= sourceBytes.length) {
-        lines.push({
-            line: lines.length + 1,
-            startByte,
-            contentEndByte: sourceBytes.length,
-            text: sourceBytes.subarray(startByte).toString("utf8"),
-        });
+    if (lines.length < lastLine) {
+        lines.push({ line: lines.length + 1, startByte, contentEndByte: sourceBytes.length });
     }
     return lines;
+}
+
+function lineText(sourceBytes: Buffer, lines: readonly PhysicalLine[], line: number): string {
+    const physicalLine = lines[line - 1];
+    return physicalLine
+        ? sourceBytes.subarray(physicalLine.startByte, physicalLine.contentEndByte).toString("utf8")
+        : "";
 }
 
 function validateSymbolSpan(span: SourceLineSpan, lineCount: number): void {
@@ -252,6 +259,7 @@ function includesTokenSequence(tokens: readonly string[], phrase: readonly strin
 }
 
 function buildQueryCandidates(input: {
+    sourceBytes: Buffer;
     lines: readonly PhysicalLine[];
     symbolSpan: SourceLineSpan;
     query?: string;
@@ -263,7 +271,7 @@ function buildQueryCandidates(input: {
     const phraseTerms = lexicalTokens(trimmedQuery);
     const candidates: CandidateRange[] = [];
     for (let line = input.symbolSpan.startLine; line <= input.symbolSpan.endLine; line += 1) {
-        const lineTerms = lexicalTokens(input.lines[line - 1]?.text || "");
+        const lineTerms = lexicalTokens(lineText(input.sourceBytes, input.lines, line));
         const lineTermSet = new Set(lineTerms);
         const matchedTerms = terms.filter((term) => lineTermSet.has(term));
         const phraseScore = includesTokenSequence(lineTerms, phraseTerms) ? 10_000 : 0;
@@ -302,6 +310,7 @@ function anchorPriority(kind: SourceStructuralAnchorKind): number {
 }
 
 function buildOrderedCandidates(input: {
+    sourceBytes: Buffer;
     lines: readonly PhysicalLine[];
     symbolSpan: SourceLineSpan;
     query?: string;
@@ -349,7 +358,7 @@ function buildOrderedCandidates(input: {
 
     let terminalLine = input.symbolSpan.endLine;
     for (let line = input.symbolSpan.endLine; line >= input.symbolSpan.startLine; line -= 1) {
-        if (/\b(return|throw|raise|panic|fail(?:ure)?|abort)\b/i.test(input.lines[line - 1]?.text || "")) {
+        if (/\b(return|throw|raise|panic|fail(?:ure)?|abort)\b/i.test(lineText(input.sourceBytes, input.lines, line))) {
             terminalLine = line;
             break;
         }
@@ -533,7 +542,7 @@ export function selectBoundedSource(
     if (selectionPolicyVersion !== BOUNDED_SOURCE_SELECTION_POLICY_VERSION) {
         throw new TypeError("Unsupported bounded source selection policy version.");
     }
-    const lines = readPhysicalLines(sourceBytes);
+    const lines = readPhysicalLines(sourceBytes, input.symbolSpan.endLine);
     validateSymbolSpan(input.symbolSpan, lines.length);
     const fullSpan = byteRangeForLines(lines, input.symbolSpan.endLine, input.symbolSpan);
     const totalLines = input.symbolSpan.endLine - input.symbolSpan.startLine + 1;
@@ -578,6 +587,7 @@ export function selectBoundedSource(
     }
 
     const candidates = buildOrderedCandidates({
+        sourceBytes,
         lines,
         symbolSpan: input.symbolSpan,
         query: input.query,

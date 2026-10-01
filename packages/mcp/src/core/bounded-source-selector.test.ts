@@ -317,3 +317,21 @@ test("bounded source selector is byte-identical across repeated equivalent input
     const second = selectBoundedSource(input);
     assert.equal(JSON.stringify(first), JSON.stringify(second));
 });
+
+test("bounded source selector ignores lines after the symbol but still validates the whole file", () => {
+    const symbol = ["function run() {", "  return deps;", "}"];
+    const select = (source: Buffer, endLine = 3) => selectBoundedSource({
+        sourceBytes: source,
+        symbolSpan: { startLine: 1, endLine },
+        query: "deps",
+        budgets: budgets({ maxSourceLines: 2, maxExcerptLines: 1 }),
+        capabilities,
+    });
+    const alone = select(Buffer.from(symbol.join("\r\n"), "utf8"));
+    for (const trailer of ["\r\n", "\r\nconst after = 1;\rmore\n", "\n\n\n"]) {
+        assert.deepEqual(select(Buffer.from(symbol.join("\r\n") + trailer, "utf8")), alone, JSON.stringify(trailer));
+    }
+    assert.throws(() => select(Buffer.from(symbol.join("\n"), "utf8"), 4), RangeError);
+    const invalidAfterSymbol = Buffer.concat([Buffer.from(`${symbol.join("\n")}\n`, "utf8"), Buffer.from([0xff])]);
+    assert.throws(() => select(invalidAfterSymbol), TypeError);
+});

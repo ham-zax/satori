@@ -38,6 +38,8 @@ Authorization covers all internal batches necessary to complete the explicitly r
 
 Do not expand a bounded task into cleanup, redesign, unrelated refactoring, speculative compatibility, generalized hardening, release preparation, observability work, dependency upgrades, performance optimization, or adjacent defect fixing.
 
+When the request is performance or robustness work, the measured bottleneck or demonstrated failure defines the scope, wherever it lives; see "Performance and robustness".
+
 The task boundary applies equally to investigation, implementation, testing, documentation, recommendations, and proposed next steps.
 
 Before proposing or performing anything outside scope, require:
@@ -187,7 +189,7 @@ Reuse a passing result while its relevant code, configuration, fixtures, environ
 
 After a repair, rerun the failed check and only downstream checks invalidated by the repair.
 
-Run broader package, integration, repository, security, performance, or release checks only when explicitly required, required by repository policy, invalidated by the changed boundary, or necessary to disprove a directly implicated failure.
+Run broader package, integration, repository, security, performance, or release checks only when explicitly required, required by repository policy, invalidated by the changed boundary, required because the change touches a hot path (search, indexing, admission, sync, publication), or necessary to disprove a directly implicated failure.
 
 Difficulty, caution, proximity to release, model uncertainty, or desire for extra confidence are not sufficient reasons.
 
@@ -204,6 +206,18 @@ Optimizations, refactors, fast paths, caches, and concurrency changes promise th
 * Code that starts background work (promise chains, workers, queues) must not return or throw while that work is in flight unless ownership is explicitly handed off. Check every `return` and `throw` path, including failures unrelated to the new work.
 * Write failure-path tests before the fix, using deterministic fault injection rather than sleeps or timing. Assert the real invariant (for example, cleanup completed and nothing published), and confirm the test fails on the broken code.
 * One change at a time: equivalence test, then measurement, then commit. Measure with medians of at least three runs, including peak memory, and record machine load.
+
+## Performance and robustness
+
+Satori must be fast on every request and correct under concurrent writers, crashes, and partial failure. Neither goal is optional polish.
+
+* Profile before optimizing. Find the dominant cost with a CPU profile, phase timings, or argument-size logging on a realistic repository; do not guess. Rank remaining costs after each change.
+* Work that is constant per session, per publication, or per unchanged file must not be repeated per request. Cache it behind a witness that proves the input is unchanged (stat signature, content hash, or the identity of a frozen immutable value) and fall back to the uncached path whenever the witness is missing or uncertain.
+* Redundant checks may be consolidated when a held invariant already guarantees what they re-check (for example, a lease that prevents collection during a read). Name the invariant in a comment where the remaining check lives. Never remove a check whose guarantee nothing else provides.
+* For performance work, architecture changes are in scope when the profile points there, including moving work to another owner, process, or worker and using all cores. Ownership rules still apply to where the new code lives.
+* Every cache, fast path, or consolidated check needs a differential test against the uncached or old path, and a mutation check: break the witness or key, confirm the test fails, then restore.
+* Robustness means bounded resources and clean failure: bounded batch, list, and filter sizes; cancellation and timeouts that release leases and stop background work; no partial publication on failure; deterministic ordering for equal scores.
+* Report performance results as before and after medians of at least three runs on the same input, with the command used.
 
 ## Repository safety
 

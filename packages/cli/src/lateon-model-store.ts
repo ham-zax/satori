@@ -11,14 +11,14 @@ import {
 } from "./model-store.js";
 
 /**
- * Managed D32 profile identity used for planning and install checks.
+ * Managed D128 profile identity used for planning and install checks.
  * Real installation still binds the target MCP package's frozen authority.
  */
-export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v5_d32_v1";
-export const LATEON_D32_ACTIVATION_POLICY = "lateon_context_v5_d32_owner_default_v1";
+export const DEFAULT_LATEON_PROFILE_ID = "lateon_offline_quality_projection_v6_d128_v1";
+export const DEFAULT_LATEON_ACTIVATION_POLICY = "lateon_context_v6_d128_owner_default_v1";
 
-const LATEON_PROFILE_FILE = "runtime-profile-v5-d32.json";
-const LATEON_ACQUISITION_FILE = "runtime-profile-v5-d32.acquisition.json";
+const LATEON_PROFILE_FILE = "runtime-profile-v6-d128.json";
+const LATEON_ACQUISITION_FILE = "runtime-profile-v6-d128.acquisition.json";
 const ACQUISITION_SCHEMA_VERSION = "satori_lateon_acquisition_v1";
 // 71,577,202 bytes at approximately 128 KiB/s takes about 546 seconds, leaving
 // roughly 54 seconds of the ten-minute deadline for requests and redirects.
@@ -27,8 +27,6 @@ const MAX_REDIRECTS = 5;
 const DISK_HEADROOM_FRACTION = 0.1;
 const DISK_HEADROOM_FORMULA =
     "totalExpectedArtifactBytes + ceil(totalExpectedArtifactBytes * diskHeadroomFraction)";
-const FROZEN_LATEON_D32_PROFILE_SHA256 =
-    "2957cec1aabc1790e6c58d9e02ae2829cbda9b9ae3b176e9a22363b3fbf688f4";
 const DEFAULT_LATEON_REPOSITORY = "lightonai/LateOn-Code-edge";
 const DEFAULT_LATEON_REVISION = "07ef20f406c86badca122464808f4cac2f6e4b25";
 
@@ -38,7 +36,7 @@ type LateOnProfileArtifact = Readonly<{
 }>;
 
 type LateOnRuntimeProfile = Readonly<{
-    schemaVersion: "satori_lateon_runtime_profile_v5";
+    schemaVersion: "satori_lateon_runtime_profile_v6";
     profileId: string;
     qualificationStatus?: string;
     identity: Readonly<{
@@ -110,7 +108,7 @@ export type EnsureLateOnModelInput = Readonly<{
     /** Test seams for stalled and retried downloads. */
     stallTimeoutMs?: number;
     retryDelaysMs?: readonly number[];
-    /** Structural test seam; the production default binds the frozen digest. */
+    /** Structural test seam; the production default verifies the target MCP acquisition authority. */
     authorityLoader?: LateOnAuthorityLoader;
     /** Test seam for proving the destination-appears-before-rename race. */
     renameImpl?: (from: string, to: string) => void;
@@ -152,23 +150,23 @@ export function loadAcquisitionAuthority(runtimePackageRoot: string): LateOnAcqu
         manifest = readJson(acquisitionPath) as Partial<LateOnAcquisitionManifest>;
     } catch {
         throw new Error(
-            `The installed MCP package must contain the frozen LateOn D32 profile and acquisition manifest at '${path.dirname(profilePath)}'.`,
+            `The installed MCP package must contain the frozen LateOn D128 profile and acquisition manifest at '${path.dirname(profilePath)}'.`,
         );
     }
 
     const runtimeProfileSha256 = sha256Bytes(profileBytes);
     if (
-        profile.schemaVersion !== "satori_lateon_runtime_profile_v5"
+        profile.schemaVersion !== "satori_lateon_runtime_profile_v6"
         || typeof profile.profileId !== "string"
         || profile.profileId.length === 0
         || profile.identity?.repository !== DEFAULT_LATEON_REPOSITORY
         || profile.identity.revision !== DEFAULT_LATEON_REVISION
         || profile.identity.license !== "Apache-2.0"
-        || profile.inference?.candidateDepth !== 32
+        || profile.inference?.candidateDepth !== 128
         || !Array.isArray(profile.artifacts)
         || profile.artifacts.length === 0
     ) {
-        throw new Error("The installed MCP package does not contain the pinned LateOn D32 profile.");
+        throw new Error("The installed MCP package does not contain the pinned LateOn D128 profile.");
     }
     if (
         manifest.schemaVersion !== ACQUISITION_SCHEMA_VERSION
@@ -265,19 +263,8 @@ export function calculateRequiredLateOnFreeBytes(
     return required;
 }
 
-function frozenAcquisitionAuthority(runtimePackageRoot: string): LateOnAcquisitionAuthority {
-    const authority = loadAcquisitionAuthority(runtimePackageRoot);
-    if (authority.runtimeProfileSha256 !== FROZEN_LATEON_D32_PROFILE_SHA256) {
-        throw new Error(
-            "The shipped LateOn D32 runtime profile is not the frozen profile "
-            + `(expected sha256 ${FROZEN_LATEON_D32_PROFILE_SHA256}).`,
-        );
-    }
-    return authority;
-}
-
 export function readLateOnAcquisitionAuthority(runtimePackageRoot: string): LateOnAcquisitionAuthority {
-    return frozenAcquisitionAuthority(runtimePackageRoot);
+    return loadAcquisitionAuthority(runtimePackageRoot);
 }
 
 function lateOnModelSpec(authority: LateOnAcquisitionAuthority): ModelSpec {
@@ -303,10 +290,10 @@ export function resolveDefaultLateOnModelDirectory(homeDir: string): string {
 export function verifyLateOnModelDirectory(input: Readonly<{
     modelDirectory: string;
     runtimePackageRoot: string;
-    /** Structural test seam; the production default binds the frozen digest. */
+    /** Structural test seam; the production default verifies the target MCP acquisition authority. */
     authorityLoader?: LateOnAuthorityLoader;
 }>): VerifiedLateOnModel {
-    const authority = (input.authorityLoader ?? frozenAcquisitionAuthority)(input.runtimePackageRoot);
+    const authority = (input.authorityLoader ?? loadAcquisitionAuthority)(input.runtimePackageRoot);
     const modelDirectory = path.resolve(input.modelDirectory);
     verifyModelDirectory(modelDirectory, lateOnModelSpec(authority));
     return Object.freeze({
@@ -319,7 +306,7 @@ export function verifyLateOnModelDirectory(input: Readonly<{
 export async function ensureDefaultLateOnModel(
     input: EnsureLateOnModelInput,
 ): Promise<VerifiedLateOnModel> {
-    const authority = (input.authorityLoader ?? frozenAcquisitionAuthority)(input.runtimePackageRoot);
+    const authority = (input.authorityLoader ?? loadAcquisitionAuthority)(input.runtimePackageRoot);
     const { modelDirectory } = await ensureModel({
         homeDir: input.homeDir,
         spec: lateOnModelSpec(authority),

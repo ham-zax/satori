@@ -332,8 +332,8 @@ function assertPackedLateOnAcquisitionAuthority(packedMcpRoot: string, packedCli
         ? fs.readdirSync(assetsRoot).sort()
         : [];
     for (const requiredFile of [
-        "runtime-profile-v5-d32.json",
-        "runtime-profile-v5-d32.acquisition.json",
+        "runtime-profile-v6-d128.json",
+        "runtime-profile-v6-d128.acquisition.json",
     ]) {
         if (!shippedFiles.includes(requiredFile)) {
             throw new Error(
@@ -387,14 +387,13 @@ function assertPackedCliLateOnAcquisition(packedCliRoot: string): void {
         throw new Error("Packed CLI must ship the LateOn acquisition module.");
     }
     const storeSource = fs.readFileSync(storePath, "utf8");
-    const policyMissing = !storeSource.includes("lateon_context_v5_d32_owner_default_v1");
-    const frozenDigestMissing = !storeSource.includes("2957cec1aabc1790e6c58d9e02ae2829cbda9b9ae3b176e9a22363b3fbf688f4");
+    const policyMissing = !storeSource.includes("lateon_context_v6_d128_owner_default_v1");
     const installSource = fs.readFileSync(installPath, "utf8");
     const resolutionMissing = !installSource.includes("resolveVerifiedLateOnModel");
-    if (policyMissing || frozenDigestMissing || resolutionMissing) {
+    if (policyMissing || resolutionMissing) {
         throw new Error(
-            "Packed CLI acquisition flow must carry the frozen D32 identity "
-            + `(policy=${!policyMissing}, frozenDigest=${!frozenDigestMissing}, resolver=${!resolutionMissing}).`,
+            "Packed CLI acquisition flow must carry the frozen D128 identity "
+            + `(policy=${!policyMissing}, resolver=${!resolutionMissing}).`,
         );
     }
 }
@@ -596,7 +595,7 @@ async function main(): Promise<void> {
         await assertPackedPotionExecutionCapability(smokeExecDir, packed.packedMcpRoot);
         const doctorEnv = packedPotionSmokeEnv(baseEnv, packed.packedMcpRoot, smokeHomeDir);
         assertPackedDoctorReportsNotInstalled(packed.cliEntry, smokeExecDir, doctorEnv);
-        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, and D32 acquisition authority passed.");
+        console.log("[release:smoke] Lightweight bootstrap CLI, packed MCP/Core closure, offline Potion runtime, LateOn native runtime, and D128 acquisition authority passed.");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = error instanceof Error ? npmOutput(error) : "";

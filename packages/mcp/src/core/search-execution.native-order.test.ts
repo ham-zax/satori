@@ -144,6 +144,93 @@ test("native execution publishes complete provider order without score blending"
     );
 });
 
+test("scope constrains retrieval before topK so excluded hits cannot exhaust the candidate budget", async () => {
+    const input = buildInput("where is the documentation for cache invalidation");
+    input.scope = "docs";
+    input.retrievalFilter = { kind: "in", field: "relativePath", values: ["docs/cache.md"] };
+    const runtime = Array.from({ length: 100 }, (_, i) => candidate(`src/runtime${i}.ts`, 0.99));
+    const doc = candidate("docs/cache.md", 0.5);
+    const host = buildHost([], null);
+    const filters: unknown[] = [];
+    host.semanticSearch = async (request) => {
+        filters.push(request.filter);
+        const eligible = request.filter ? [doc] : [...runtime, doc];
+        return eligible.slice(0, request.topK);
+    };
+    const outcome = await run(input, host);
+    assert.equal(outcome.kind, "ok");
+    assert.deepEqual(outcome.scored.map((entry) => entry.result.relativePath), ["docs/cache.md"]);
+    assert.ok(filters.length > 0);
+    assert.ok(filters.every((filter) => filter === input.retrievalFilter));
+});
+
+test("missing source-backed functions reach the bounded reranker and retain the shared scope filters", async () => {
+    const input = buildInput("where are useEffect dependencies compared");
+    const results = Array.from({ length: 35 }, (_, i) => ({
+        ...candidate("src/hooks.ts", 0.9), startLine: i * 10 + 1, endLine: i * 10 + 4,
+    }));
+    const correct = {
+        ...candidate("src/hooks.ts", 0), startLine: 501, endLine: 510,
+        symbolLabel: "areHookInputsEqual", content: "function areHookInputsEqual() { compareDependencies(); }",
+    };
+    let providerDocuments = 0;
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "test", model: "test", profile: "test" }),
+        getMaxDocuments: () => 32,
+        rerank: async (_query, documents) => {
+            providerDocuments = documents.length;
+            return documents.map((document, index) => ({
+                index, relevanceScore: document.includes("areHookInputsEqual") ? 1 : 0,
+            })).sort((a, b) => b.relevanceScore - a.relevanceScore);
+        },
+    };
+    const host = buildHost(results, reranker);
+    host.supplementCandidates = async () => [correct, candidate("docs/hooks.md", 0)];
+    const outcome = await run(input, host);
+    assert.equal(outcome.kind, "ok");
+    assert.equal(providerDocuments, 32);
+    assert.equal(outcome.scored[0]?.result.symbolLabel, "areHookInputsEqual");
+    assert.equal(outcome.scored.some((entry) => entry.result.relativePath === "docs/hooks.md"), false);
+    assert.equal(outcome.scored.length, 36);
+});
+
+test("validated symbol evidence admits an existing deep retrieval hit without duplicating it", async () => {
+    const results = Array.from({ length: 40 }, (_, index) => candidate(`src/owner${index}.ts`, 1 - index / 100));
+    const correct = results[39];
+    correct.symbolLabel = "exportToBlob";
+    correct.content = "export function exportToBlob() { return canvas.toBlob(); }";
+    let providerDocuments = 0;
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "test", model: "test", profile: "test" }),
+        getMaxDocuments: () => 32,
+        rerank: async (_query, documents) => {
+            providerDocuments = documents.length;
+            return documents.map((document, index) => ({
+                index, relevanceScore: document.includes("exportToBlob") ? 1 : 0,
+            })).sort((a, b) => b.relevanceScore - a.relevanceScore);
+        },
+    };
+    const host = buildHost(results, reranker);
+    host.supplementCandidates = async () => [correct];
+    const outcome = await run(buildInput(), host);
+    assert.equal(outcome.kind, "ok");
+    assert.equal(providerDocuments, 32);
+    assert.equal(outcome.scored[0]?.result.symbolLabel, "exportToBlob");
+    assert.equal(outcome.scored.length, 40);
+    assert.equal(outcome.scored.filter((entry) => entry.result === correct).length, 1);
+});
+
+test("serving a previous publication never starts live source refinement", async () => {
+    const input = buildInput();
+    input.freshnessMode = "served_previous_generation";
+    const host = buildHost([candidate("src/run.ts", 0.9)], rerankerReturning([]));
+    host.supplementCandidates = async () => { throw new Error("live source must not be read"); };
+    const outcome = await run(input, host);
+    assert.equal(outcome.kind, "ok");
+    assert.equal(outcome.scored.length, 1);
+    assert.equal(outcome.rerankerAttempted, false);
+});
+
 test("native execution surfaces qualified reranker deadline diagnostics", async () => {
     const results = [candidate("a.ts", 0.90), candidate("b.ts", 0.80), candidate("c.ts", 0.70)];
     const diagnostics = {

@@ -68,6 +68,29 @@ const candidateId = searchRerankCandidateId({
     endLine: 4,
 });
 
+test("publication-bound projection adds same-file textual references without published CALLS", async () => {
+    const current = `${source}\nfunction useEffect() { return owner(); }`;
+    const hash = crypto.createHash("sha256").update(current).digest("hex");
+    const base = registry();
+    const currentOwner = { ...owner, fileHash: hash };
+    const caller = { ...currentOwner, name: "useEffect", qualifiedName: "useEffect", label: "function useEffect",
+        symbolKey: "useEffect", symbolInstanceId: "effect", span: { startLine: 5, endLine: 5 } };
+    const currentRegistry = buildSymbolRegistry({ manifest: { ...base.manifest,
+        files: [{ ...base.manifest.files[0], hash, symbolCount: 2 }] }, symbols: [currentOwner, caller] });
+    const outcome = await projectPublicationBoundSearchRerankDocument({
+        candidateId, codebaseRoot: "/repo", semanticQuery: "useEffect owner", result: ownedResult(),
+        registry: currentRegistry, relationships: [],
+        readSourceEvidence: async () => evidence({ source: current, sourceBytes: Buffer.from(current), observedHash: hash }),
+    });
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    const document = JSON.parse(outcome.document);
+    assert.deepEqual(document.structural_context.direct_callers, []);
+    assert.deepEqual(document.source_references, [{ repository_relative_path: owner.file,
+        containing_symbol_label: "function useEffect", source_line: 5,
+        reference_source_excerpt: "function useEffect() { return owner(); }" }]);
+});
+
 function ownedResult(overrides: Partial<SearchResultLike> = {}): SearchResultLike {
     return {
         content: source,

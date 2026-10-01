@@ -753,7 +753,7 @@ test("offline install defaults to the integrity- and capability-verified bundled
     }
 });
 
-test("offline install plan composes Potion embeddings with LateOn D32 reranking", async () => {
+test("offline install plan composes Potion embeddings with LateOn D128 reranking", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-lateon-preflight-"));
     const lateOnModelPath = path.join(homeDir, ".satori", "models", "lateon", "model");
     try {
@@ -779,11 +779,11 @@ test("offline install plan composes Potion embeddings with LateOn D32 reranking"
         assert.equal(result.runtimeEnvironment.SATORI_LATEON_MODEL_PATH, lateOnModelPath);
         assert.equal(
             result.runtimeEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(
             result.runtimeEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -823,7 +823,7 @@ test("bundled Potion verification rejects missing artifact when manifest is vali
     }
 });
 
-test("new offline install persists Potion embeddings and LateOn D32 in the managed launcher", async () => {
+test("new offline install persists Potion embeddings and LateOn D128 in the managed launcher", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-install-"));
     const fixture = fixtureLateOnRuntime(homeDir);
     try {
@@ -857,11 +857,11 @@ test("new offline install persists Potion embeddings and LateOn D32 in the manag
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
         const expectedModelDirectory = path.join(
             homeDir,
@@ -973,7 +973,7 @@ test("managed offline install acquires the pinned LateOn closure before activati
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
         assert.equal(fs.existsSync(launcherEnvironment.SATORI_LATEON_MODEL_PATH), true);
     } finally {
@@ -1361,7 +1361,7 @@ test("managed D16 + env provider none without a CLI flag rejects with reinstall 
     }
 });
 
-test("managed D16 + CLI --reranker lateon migrates to D32", async () => {
+test("managed D16 + CLI --reranker lateon migrates to D128", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-d16-cli-migrate-"));
     const launcherPath = writeHistoricalD16Launcher(homeDir);
     writeLateOnModelDirectory(path.join(homeDir, "lateon-d16-model"));
@@ -1393,11 +1393,11 @@ test("managed D16 + CLI --reranker lateon migrates to D32", async () => {
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1458,7 +1458,7 @@ test("managed D16 without CLI or environment rejects with reinstall guidance", a
     }
 });
 
-test("Linux x64 with implicit Potion defaults to LateOn D32", async () => {
+test("Linux x64 with implicit Potion defaults to LateOn D128", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-potion-d32-"));
     try {
         const result = await executeInstallCommand({
@@ -1475,14 +1475,14 @@ test("Linux x64 with implicit Potion defaults to LateOn D32", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
 });
 
-test("Linux x64 with implicit Ollama defaults to LateOn D32", async () => {
+test("Linux x64 with implicit Ollama defaults to LateOn D128", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-ollama-d32-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
@@ -1514,7 +1514,7 @@ test("Linux x64 with implicit Ollama defaults to LateOn D32", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, "nomic-embed-text:latest");
     } finally {
@@ -1573,7 +1573,7 @@ test("non-Linux-x64 with explicit lateon rejects", async () => {
             env: {},
             platform: "darwin",
             architecture: "arm64",
-        }), /LateOn D32 is supported only on Linux x64\/WSL2; received darwin arm64/);
+        }), /LateOn D128 is supported only on Linux x64\/WSL2; received darwin arm64/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1611,7 +1611,7 @@ test("existing managed none stays none", async () => {
     }
 });
 
-test("existing managed D32 stays D32", async () => {
+test("existing managed D128 stays D128", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-d32-stays-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
@@ -1623,7 +1623,7 @@ test("existing managed D32 stays D32", async () => {
             VECTOR_STORE_PROVIDER: "LanceDB",
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
         },
     }), "utf8");
     try {
@@ -1641,11 +1641,11 @@ test("existing managed D32 stays D32", async () => {
         assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(
             result.runtimeEnvironment?.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -1967,7 +1967,7 @@ function seedManagedLateOnInstallation(homeDir: string): ManagedLateOnSnapshot {
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
         },
     }), "utf8");
     return {
@@ -2011,7 +2011,7 @@ function failingOfflineLateOnReinstall(
                 fixture.mcpRoot,
                 "assets",
                 "lateon",
-                "runtime-profile-v5-d32.acquisition.json",
+                "runtime-profile-v6-d128.acquisition.json",
             ),
             { force: true },
         );
@@ -2042,7 +2042,7 @@ test("acquisition network failure leaves the managed installation byte-identical
                     throw new Error("network down");
                 }) as typeof fetch,
             }),
-            /LateOn D32 model preflight failed: .*network down/,
+            /LateOn D128 model preflight failed: .*network down/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2074,7 +2074,7 @@ test("LateOn model acquisition runs while the managed-runtime mutation lock is h
         await started;
         assert.equal(fs.existsSync(mutationLockPath), true);
         releaseAcquisition();
-        await assert.rejects(reinstall, /LateOn D32 model preflight failed: .*network down/);
+        await assert.rejects(reinstall, /LateOn D128 model preflight failed: .*network down/);
         assert.equal(fs.existsSync(mutationLockPath), false);
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2120,7 +2120,7 @@ test("missing runtime profile leaves the managed installation byte-identical", a
         const snapshot = seedManagedLateOnInstallation(homeDir);
         await assert.rejects(
             failingOfflineLateOnReinstall(homeDir, { removeAssets: "all" }),
-            /must contain the frozen LateOn D32 profile and acquisition manifest/,
+            /must contain the frozen LateOn D128 profile and acquisition manifest/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {
@@ -2134,7 +2134,7 @@ test("missing acquisition manifest leaves the managed installation byte-identica
         const snapshot = seedManagedLateOnInstallation(homeDir);
         await assert.rejects(
             failingOfflineLateOnReinstall(homeDir, { removeAssets: "acquisition" }),
-            /must contain the frozen LateOn D32 profile and acquisition manifest/,
+            /must contain the frozen LateOn D128 profile and acquisition manifest/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
     } finally {

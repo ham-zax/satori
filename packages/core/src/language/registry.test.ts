@@ -59,7 +59,7 @@ test('language registry routes modern module and systems extensions through qual
     assert.equal(isLanguageCapabilitySupportedForExtension('.cc', 'owner'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'search'), true);
     assert.equal(isLanguageCapabilitySupportedForExtension('.kts', 'owner'), true);
-    assert.equal(isLanguageCapabilitySupportedForExtension('.swift', 'owner'), false);
+    assert.equal(isLanguageCapabilitySupportedForExtension('.swift', 'owner'), true);
 });
 
 test('language capability tiers expose promoted calls without promoting unrelated graph surfaces', () => {
@@ -80,15 +80,12 @@ test('language capability tiers expose promoted calls without promoting unrelate
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
-    // PHP, Ruby, and Kotlin get symbols through CBM parity evidence (PHP and Kotlin also calls); Swift does not.
-    for (const language of ['php', 'ruby', 'kotlin']) {
+    // PHP, Ruby, Kotlin, and Swift get symbols through CBM parity evidence (PHP and Kotlin also calls).
+    for (const language of ['php', 'ruby', 'kotlin', 'swift']) {
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'symbols'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'owner'), true, language);
         assert.equal(isLanguageCapabilitySupportedForLanguage(language, 'fileOutline'), true, language);
     }
-    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'symbols'), false);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'owner'), false);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
 
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraphBuild'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'callGraphQuery'), true);
@@ -115,7 +112,7 @@ test('declared parser catalog entries do not claim executable AST splitter suppo
     // even where the semantic engine also resolves their calls.
     assert.equal(isLanguageCapabilitySupportedForLanguage('kotlin', 'astSplitter'), false);
     assert.equal(isLanguageCapabilitySupportedForLanguage('kotlin', 'fileOutline'), true);
-    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), false);
+    assert.equal(isLanguageCapabilitySupportedForLanguage('swift', 'fileOutline'), true);
 
     assert.equal(isLanguageCapabilitySupportedForLanguage('typescript', 'astSplitter'), true);
     assert.equal(isLanguageCapabilitySupportedForLanguage('go', 'astSplitter'), true);

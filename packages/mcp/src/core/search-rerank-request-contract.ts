@@ -74,9 +74,10 @@ export type SearchRerankRequestContractFixtures = Readonly<{
     answerFocusResolution: Record<string, string>;
     queryProjectionV2: Record<string, string>;
     candidateRoleClassification: Record<string, string>;
-    documentProjectionV4: string;
-    documentProjectionV4Structural: string;
-    documentProjectionV4SourceFirst: string;
+    documentProjectionV5: string;
+    documentProjectionV5SourceReferences: string;
+    documentProjectionV5Structural: string;
+    documentProjectionV5SourceFirst: string;
     sourceSelectionPolicyIdentity: string;
     canonicalJsonIdentity: string;
     structuralContext: typeof SEARCH_RERANK_STRUCTURAL_CONTEXT_POLICY;
@@ -88,8 +89,21 @@ export type SearchRerankRequestContractFixtures = Readonly<{
 export type SearchRerankRequestContractManifest = Readonly<{
     schemaVersion: typeof SEARCH_RERANK_REQUEST_CONTRACT_SCHEMA_VERSION;
     contractSha256: string;
-    fixtures: SearchRerankRequestContractFixtures;
+    fixtures: SearchRerankPayloadContractFixtures;
 }>;
+
+type SearchRerankPayloadContractFixtures = Omit<SearchRerankRequestContractFixtures,
+    "partialProjectionSemantics" | "partialProjectionBehavior">;
+
+function payloadContractFixtures(fixtures: SearchRerankRequestContractFixtures | SearchRerankPayloadContractFixtures): SearchRerankPayloadContractFixtures {
+    // Admission, failure handling and debug ordering have their own regression
+    // oracles. They do not change canonical query/document bytes and must not
+    // force a model profile identity update when search policy changes.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { partialProjectionSemantics, partialProjectionBehavior, ...payload } =
+        fixtures as SearchRerankRequestContractFixtures;
+    return payload;
+}
 
 const FOCUS_FIXTURE_QUESTIONS: Record<string, string> = {
     implementation: "how does Shariah compliance checking block trades",
@@ -324,17 +338,17 @@ function buildPartialProjectionBehaviorFixture() {
             ownerSymbolInstanceId: `owner-${index + 1}`,
         },
     }));
-    const admissionSelection = (count: number, providerMaximumDocuments?: number) => (
+    const admissionSelection = (count: number, providerMaximumDocuments?: number, requestedLimit = 2) => (
         selectRerankCandidates({
             candidates: buildAdmissionCandidates(count),
-            requestedLimit: 2,
+            requestedLimit,
             ...(providerMaximumDocuments === undefined ? {} : { providerMaximumDocuments }),
         })
     );
     const providerCapacityAdmission = admissionSelection(16, 32);
     const legacyAdmission = admissionSelection(16);
     const providerBoundAdmission = admissionSelection(40, 32);
-    const globalBoundAdmission = admissionSelection(60, 80);
+    const globalBoundAdmission = admissionSelection(150, 160, 64);
     const invalidCapacityAdmission = admissionSelection(30, 0);
     return {
         providerCallByProjectedCandidateCount: {
@@ -401,11 +415,17 @@ export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestC
         answerFocusResolution,
         queryProjectionV2,
         candidateRoleClassification,
-        documentProjectionV4: buildSearchRerankDocument(DOCUMENT_PROJECTION_FIXTURE).text,
-        documentProjectionV4Structural: buildSearchRerankDocument(
+        documentProjectionV5: buildSearchRerankDocument(DOCUMENT_PROJECTION_FIXTURE).text,
+        documentProjectionV5SourceReferences: buildSearchRerankDocument({
+            ...DOCUMENT_PROJECTION_FIXTURE,
+            sourceReferences: [{ repository_relative_path: "src/core/veto.ts",
+                containing_symbol_label: "function submit_trade", source_line: 4,
+                reference_source_excerpt: "function submit_trade(order) { return validate_order(order); }" }],
+        }).text,
+        documentProjectionV5Structural: buildSearchRerankDocument(
             DOCUMENT_PROJECTION_STRUCTURAL_FIXTURE,
         ).text,
-        documentProjectionV4SourceFirst: buildSearchRerankDocument(
+        documentProjectionV5SourceFirst: buildSearchRerankDocument(
             DOCUMENT_PROJECTION_SOURCE_FIRST_FIXTURE,
         ).text,
         sourceSelectionPolicyIdentity: serializeCanonicalJson({
@@ -421,15 +441,15 @@ export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestC
 }
 
 export function computeSearchRerankRequestContractSha256(
-    fixtures: SearchRerankRequestContractFixtures,
+    fixtures: SearchRerankRequestContractFixtures | SearchRerankPayloadContractFixtures,
 ): string {
     return crypto.createHash("sha256")
-        .update(serializeCanonicalJson(fixtures), "utf8")
+        .update(serializeCanonicalJson(payloadContractFixtures(fixtures)), "utf8")
         .digest("hex");
 }
 
 export function buildSearchRerankRequestContractManifest(): SearchRerankRequestContractManifest {
-    const fixtures = buildSearchRerankRequestContractFixtures();
+    const fixtures = payloadContractFixtures(buildSearchRerankRequestContractFixtures());
     return {
         schemaVersion: SEARCH_RERANK_REQUEST_CONTRACT_SCHEMA_VERSION,
         contractSha256: computeSearchRerankRequestContractSha256(fixtures),
@@ -473,11 +493,10 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
         "answerFocusResolution",
         "candidateRoleClassification",
         "canonicalJsonIdentity",
-        "documentProjectionV4",
-        "documentProjectionV4SourceFirst",
-        "documentProjectionV4Structural",
-        "partialProjectionBehavior",
-        "partialProjectionSemantics",
+        "documentProjectionV5",
+        "documentProjectionV5SourceFirst",
+        "documentProjectionV5SourceReferences",
+        "documentProjectionV5Structural",
         "queryProjectionV2",
         "sourceSelectionPolicyIdentity",
         "structuralContext",
@@ -503,34 +522,17 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
     ) {
         throw new Error("Rerank request contract structural-context behavior drifted from runtime owners.");
     }
-    const partialProjection = requireRecord(
-        fixturesRecord.partialProjectionSemantics,
-        "fixtures.partialProjectionSemantics",
-    );
-    if (
-        serializeCanonicalJson(partialProjection)
-        !== serializeCanonicalJson(SEARCH_RERANK_PARTIAL_PROJECTION_SEMANTICS)
-    ) {
-        throw new Error("Rerank request contract partial-projection semantics drifted from the runtime policy.");
+    if (typeof fixturesRecord.documentProjectionV5 !== "string") {
+        throw new Error("Rerank request contract document projection v5 fixture must be a string.");
     }
-    const partialProjectionBehavior = requireRecord(
-        fixturesRecord.partialProjectionBehavior,
-        "fixtures.partialProjectionBehavior",
-    );
-    if (
-        serializeCanonicalJson(partialProjectionBehavior)
-        !== serializeCanonicalJson(buildPartialProjectionBehaviorFixture())
-    ) {
-        throw new Error("Rerank request contract partial-projection behavior drifted from runtime owners.");
+    if (typeof fixturesRecord.documentProjectionV5SourceReferences !== "string") {
+        throw new Error("Rerank request contract textual source reference fixture must be a string.");
     }
-    if (typeof fixturesRecord.documentProjectionV4 !== "string") {
-        throw new Error("Rerank request contract document projection v4 fixture must be a string.");
+    if (typeof fixturesRecord.documentProjectionV5Structural !== "string") {
+        throw new Error("Rerank request contract structural document projection v5 fixture must be a string.");
     }
-    if (typeof fixturesRecord.documentProjectionV4Structural !== "string") {
-        throw new Error("Rerank request contract structural document projection v4 fixture must be a string.");
-    }
-    if (typeof fixturesRecord.documentProjectionV4SourceFirst !== "string") {
-        throw new Error("Rerank request contract source-first document projection v4 fixture must be a string.");
+    if (typeof fixturesRecord.documentProjectionV5SourceFirst !== "string") {
+        throw new Error("Rerank request contract source-first document projection v5 fixture must be a string.");
     }
     if (typeof fixturesRecord.sourceSelectionPolicyIdentity !== "string") {
         throw new Error("Rerank request contract source-selection identity must be a string.");
@@ -561,15 +563,14 @@ export function parseSearchRerankRequestContract(raw: unknown): SearchRerankRequ
                 "fixtures.queryProjectionV2",
             ),
             candidateRoleClassification,
-            documentProjectionV4: fixturesRecord.documentProjectionV4,
-            documentProjectionV4Structural: fixturesRecord.documentProjectionV4Structural,
-            documentProjectionV4SourceFirst: fixturesRecord.documentProjectionV4SourceFirst,
+            documentProjectionV5: fixturesRecord.documentProjectionV5,
+            documentProjectionV5Structural: fixturesRecord.documentProjectionV5Structural,
+            documentProjectionV5SourceReferences: fixturesRecord.documentProjectionV5SourceReferences,
+            documentProjectionV5SourceFirst: fixturesRecord.documentProjectionV5SourceFirst,
             sourceSelectionPolicyIdentity: fixturesRecord.sourceSelectionPolicyIdentity,
             canonicalJsonIdentity: fixturesRecord.canonicalJsonIdentity,
             structuralContext: SEARCH_RERANK_STRUCTURAL_CONTEXT_POLICY,
             structuralContextBehavior: buildStructuralContextBehaviorFixture(),
-            partialProjectionSemantics: SEARCH_RERANK_PARTIAL_PROJECTION_SEMANTICS,
-            partialProjectionBehavior: buildPartialProjectionBehaviorFixture(),
         },
     };
     if (computeSearchRerankRequestContractSha256(manifest.fixtures) !== manifest.contractSha256) {

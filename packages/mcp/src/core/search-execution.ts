@@ -486,9 +486,11 @@ export type SearchExecutionHost = {
         retrievalMode: "dense" | "lexical" | "hybrid";
         lexicalMatchMode?: "all_terms" | "any_terms";
         lexicalFallbackTerms?: string[];
+        filter?: import("@satori-code/core").SemanticSearchRequest["filter"];
         scorePolicy: { kind: "topk_only" } | { kind: "dense_similarity_min"; min: number };
     }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: Reranker | null;
+    supplementCandidates?: (candidates: readonly SearchResultLike[]) => Promise<SearchResultLike[]>;
     buildRerankDocument?: (
         rerankQuery: string,
         result: SearchResultLike,
@@ -523,6 +525,7 @@ export type SearchExecutionInput = {
     retrievalPolicy: ResolvedSearchPolicy;
     entrypointOwnerEvidence?: EntrypointOwnerEvidenceResolution;
     requestedSubdirectory?: RequestedSearchSubdirectory | null;
+    retrievalFilter?: import("@satori-code/core").SemanticSearchRequest["filter"];
 };
 
 type RerankPhaseResult = {
@@ -598,6 +601,9 @@ async function rerankSearchCandidates(
                 : [];
             const selection = selectRerankCandidates({
                 candidates: rerankInputCandidates,
+                preferredCandidates: rerankInputCandidates.filter((candidate) => (
+                    candidate.retrievalPasses.includes("file_symbols")
+                )),
                 requestedLimit: input.retrievalPolicy.rerankerResultLimit,
                 providerMaximumDocuments: host.reranker.getMaxDocuments?.(),
             });
@@ -1086,6 +1092,7 @@ export async function runSearchExecution(
                     topK: candidateLimit,
                     retrievalMode: input.queryPlan.retrievalMode,
                     scorePolicy,
+                    ...(input.retrievalFilter ? { filter: input.retrievalFilter } : {}),
                     ...(lexicalFallbackTerms.length > 0
                         ? { lexicalFallbackTerms }
                         : {}),
@@ -1554,6 +1561,7 @@ export async function runSearchExecution(
                         // all-terms matching or reject the request explicitly.
                         lexicalMatchMode: "all_terms",
                         scorePolicy: { kind: "topk_only" },
+                        ...(input.retrievalFilter ? { filter: input.retrievalFilter } : {}),
                     }),
                 );
                 laneResults = Array.isArray(laneResponse)
@@ -1628,6 +1636,38 @@ export async function runSearchExecution(
         );
         exactMatchPinningApplied = nativeOrder.exactMatchPinningApplied || exactMatchPinningApplied;
         rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
+        const finishAttempt = input.parsedOperators.must.length === 0
+            || scored.length >= input.retrievalPolicy.retrievalResultLimit
+            || attempt === maxAttempts - 1
+            || candidateLimit >= retrievalPolicy.maxCandidateLimit;
+        if (finishAttempt && host.supplementCandidates && host.reranker
+            && input.queryPlan.rerankAllowed && input.answerFocus === "implementation"
+            && !publicationOnlyStaleRead) {
+            const supplements = await host.measureSearchPhase("trackedLexical", () => (
+                host.supplementCandidates!(scored.map((candidate) => candidate.result))
+            ));
+            const candidatesById = new Map(scored.map((candidate) => [searchCandidateIdentity(candidate.result).candidateId, candidate]));
+            for (const result of supplements) {
+                const candidateId = searchCandidateIdentity(result).candidateId;
+                const existing = candidatesById.get(candidateId);
+                if (existing) {
+                    // Validated whole-symbol evidence also reserves a provider
+                    // slot for an owner that retrieval already found deeper down.
+                    if (!existing.retrievalPasses.includes("file_symbols")) {
+                        existing.retrievalPasses.push("file_symbols");
+                    }
+                    continue;
+                }
+                const candidate = createCandidate(result, 0, ["file_symbols"]);
+                if (!evaluateCandidate(candidate, attemptFilterSummary, recordFilterRemoval)) continue;
+                // Preserve retrieval slots; the provider can promote this exact
+                // source evidence through the bounded refinement reservation.
+                scored.push(candidate);
+                candidatesById.set(candidateId, candidate);
+            }
+            searchDiagnostics.resultsBeforeFilter += supplements.length;
+            searchDiagnostics.resultsAfterFilter = scored.length;
+        }
         if (candidateSurvival) {
             appendSearchCandidateStage(
                 candidateSurvival,
@@ -1729,12 +1769,7 @@ export async function runSearchExecution(
             }
         }
 
-        if (
-            input.parsedOperators.must.length === 0
-            || scored.length >= input.retrievalPolicy.retrievalResultLimit
-            || attempt === maxAttempts - 1
-            || candidateLimit >= retrievalPolicy.maxCandidateLimit
-        ) {
+        if (finishAttempt) {
             break;
         }
 
@@ -1798,6 +1833,7 @@ export async function runSearchExecution(
     searchDiagnostics.candidatesWithCurrentSourceEvidence = scored.filter((candidate) => (
         candidate.retrievalPasses.includes("dirty_overlay")
         || candidate.retrievalPasses.includes("live_path")
+        || candidate.retrievalPasses.includes("file_symbols")
     )).length;
     rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === "primary" || passId === "expanded").sort();
     rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path" || passId === "dirty_overlay" || passId === "must_lane").sort();

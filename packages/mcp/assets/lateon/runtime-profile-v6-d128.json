@@ -1,15 +1,15 @@
 {
-  "schemaVersion": "satori_lateon_runtime_profile_v5",
-  "profileId": "lateon_offline_quality_projection_v5_d32_v1",
+  "schemaVersion": "satori_lateon_runtime_profile_v6",
+  "profileId": "lateon_offline_quality_projection_v6_d128_v1",
   "qualificationStatus": "owner_activated_not_held_out",
   "identity": {
     "repository": "lightonai/LateOn-Code-edge",
     "revision": "07ef20f406c86badca122464808f4cac2f6e4b25",
     "license": "Apache-2.0",
-    "projectionVersion": "search_rerank_document_v4",
-    "projectionSha256": "f7cee836ca9dac7ae02eaa8384cccb8d51114c66027536366223f59264c2c5b4",
+    "projectionVersion": "search_rerank_document_v5",
+    "projectionSha256": "b9131931424dae9430e0f954af1f79dec1b12fed76dc785bb9b73351fff7f712",
     "queryProjectionVersion": "search_rerank_query_v2",
-    "requestContractSha256": "8a9446037885a539199079e158c7e03493bedb1b07cc48e774b3c506c1f1fa01"
+    "requestContractSha256": "9abf24a29ff1801340b590cf835e9efa304866d64c46eaf0af7107db37ef0147"
   },
   "artifacts": [
     {
@@ -84,7 +84,7 @@
       94,
       95
     ],
-    "candidateDepth": 32,
+    "candidateDepth": 128,
     "documentBatchSize": 1,
     "interOpThreads": 1
   },
@@ -96,7 +96,7 @@
     "queryBatchSize": 1,
     "documentEncoding": "serial",
     "tokenizerParallelism": false,
-    "aggregateRequestTokenLimit": 65792,
+    "aggregateRequestTokenLimit": 262400,
     "padding": "none_single_sequence",
     "truncationSide": "right",
     "truncationStrategy": "longest_suffix_discarded",

@@ -154,7 +154,7 @@ Satori is first in each pair. codebase-memory-mcp builds only a graph, so it ind
 
 ## Languages
 
-Call graphs for TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, Scala, Kotlin, and PHP. Symbols and outlines for 87 more languages. Semantic search across about 140. [Details](docs/REFERENCE.md#language-support).
+Call graphs for TypeScript, JavaScript, Python, Go, Java, C#, C++, Rust, Scala, Kotlin, and PHP. Symbols and outlines for 88 more languages. Semantic search across about 140. [Details](docs/REFERENCE.md#language-support).
 
 ## Commands
 

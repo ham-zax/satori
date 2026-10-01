@@ -533,23 +533,23 @@ export function createMcpConfig(): ContextMcpConfig {
     const lateOnProfileRaw = rerankerProvider === 'lateon'
         ? envManager.get('SATORI_LATEON_PROFILE')
         : undefined;
-    if (lateOnProfileRaw && lateOnProfileRaw !== LATEON_RUNTIME_PROFILE_IDS.contextV5D32) {
+    if (lateOnProfileRaw && lateOnProfileRaw !== LATEON_RUNTIME_PROFILE_IDS.contextV6D128) {
         throw new Error(
-            `Invalid SATORI_LATEON_PROFILE '${lateOnProfileRaw}'. Expected ${LATEON_RUNTIME_PROFILE_IDS.contextV5D32}; reinstall is required.`,
+            `Invalid SATORI_LATEON_PROFILE '${lateOnProfileRaw}'. Expected ${LATEON_RUNTIME_PROFILE_IDS.contextV6D128}; reinstall is required.`,
         );
     }
     const lateOnProfileId = rerankerProvider === 'lateon'
         ? (lateOnProfileRaw as LateOnRuntimeProfileId | undefined)
-            ?? LATEON_RUNTIME_PROFILE_IDS.contextV5D32
+            ?? LATEON_RUNTIME_PROFILE_IDS.contextV6D128
         : undefined;
     const lateOnActivationPolicyRaw = envManager.get('SATORI_LATEON_ACTIVATION_POLICY');
     if (
         lateOnActivationPolicyRaw
-        && lateOnActivationPolicyRaw !== LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5
+        && lateOnActivationPolicyRaw !== LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
     ) {
         throw new Error(
             `Invalid SATORI_LATEON_ACTIVATION_POLICY '${lateOnActivationPolicyRaw}'. `
-            + `Expected ${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5}; reinstall is required.`,
+            + `Expected ${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6}; reinstall is required.`,
         );
     }
     if (lateOnActivationPolicyRaw && rerankerProvider !== 'lateon') {
@@ -560,7 +560,7 @@ export function createMcpConfig(): ContextMcpConfig {
     }
     const lateOnActivationPolicy = (
         rerankerProvider === 'lateon' && lateOnProfileRaw === undefined
-            ? lateOnActivationPolicyRaw ?? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5
+            ? lateOnActivationPolicyRaw ?? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
             : lateOnActivationPolicyRaw
     ) as LateOnActivationPolicyId | undefined;
 

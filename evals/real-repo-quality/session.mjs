@@ -21,6 +21,20 @@ function installedOfflineEnvironment(home) {
     return JSON.parse(line.slice('const managedEnv = '.length, -1));
 }
 
+/** Bind the local build's profile identities while reusing installed model artifacts. */
+export async function localOfflineEnvironment(home = os.homedir()) {
+    const env = installedOfflineEnvironment(home);
+    if (env.SATORI_RERANKER_PROVIDER === 'lateon') {
+        const { DEFAULT_LATEON_PROFILE_ID, DEFAULT_LATEON_ACTIVATION_POLICY } = await import(
+            pathToFileURL(path.join(workspaceRoot, 'packages/cli/dist/lateon-model-store.js')).href
+        );
+        if (!DEFAULT_LATEON_PROFILE_ID || !DEFAULT_LATEON_ACTIVATION_POLICY) throw new Error('Build the current CLI profile constants before benchmarking the local runtime.');
+        env.SATORI_LATEON_PROFILE = DEFAULT_LATEON_PROFILE_ID;
+        env.SATORI_LATEON_ACTIVATION_POLICY = DEFAULT_LATEON_ACTIVATION_POLICY;
+    }
+    return env;
+}
+
 export async function openLocalSession({ stateRoot, roots, home = os.homedir() }) {
     const { Client } = await sdk('client/index.js');
     const { StdioClientTransport } = await sdk('client/stdio.js');
@@ -29,7 +43,7 @@ export async function openLocalSession({ stateRoot, roots, home = os.homedir() }
     if (!fs.existsSync(modelsLink)) fs.symlinkSync(path.join(home, '.satori', 'models'), modelsLink);
     const env = {
         ...process.env,
-        ...installedOfflineEnvironment(home),
+        ...await localOfflineEnvironment(home),
         SATORI_STATE_ROOT: stateRoot,
         SATORI_SESSION_ROOTS_JSON: JSON.stringify(roots),
         LANCEDB_PATH: path.join(stateRoot, 'vector', 'lancedb'),
@@ -62,6 +76,7 @@ export async function openLocalSession({ stateRoot, roots, home = os.homedir() }
         }
     });
     return {
+        processId: transport._process?.pid,
         stderr,
         protocolErrors,
         async call(name, args) {

@@ -32,9 +32,9 @@ test("retired search_rerank_document_v1 identity is rejected", () => {
     );
 });
 
-test("search_rerank_document_v4 identity resolves to the canonical projector identity", () => {
+test("search_rerank_document_v5 identity resolves to the canonical projector identity", () => {
     assert.equal(
-        resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v4"),
-        "search_rerank_document_v4",
+        resolveSearchRerankDocumentProjectionIdentity("search_rerank_document_v5"),
+        "search_rerank_document_v5",
     );
 });

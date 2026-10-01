@@ -43,6 +43,8 @@ function ensureClone(repo) {
     }
     const head = execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     if (!head.startsWith(repo.commit)) throw new Error(`${dir} is at ${head}, expected ${repo.commit}`);
+    const dirty = execFileSync('git', ['-C', dir, 'status', '--short'], { encoding: 'utf8' }).trim();
+    if (dirty) throw new Error(`${dir} has local changes; pinned-repository evidence requires a clean checkout.`);
     return { dir, head };
 }
 
@@ -243,7 +245,7 @@ async function main() {
                     hits,
                     score: scoreQuery(query, hits),
                 });
-                log(`  ${query.id} status=${response.json?.status} rank=${entry.queries.at(-1).score.rank} focus=${focus.focus} elapsedMs=${elapsedMs.toFixed(1)}`);
+                log(`  ${query.id} status=${response.json?.status} rank=${entry.queries.at(-1).score.rank} strict=${entry.queries.at(-1).score.strictRank} top=${hits[0]?.symbol ?? '(file)'} focus=${focus.focus} elapsedMs=${elapsedMs.toFixed(1)}`);
             }
         } finally {
             entry.serverStderr = session.stderr;

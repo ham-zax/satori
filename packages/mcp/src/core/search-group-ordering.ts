@@ -197,3 +197,20 @@ export function collapseEquivalentImplementationGroups<T extends SearchGroupResu
     }
     return deduped;
 }
+
+export function collapseSupersededFileGroups<T extends SearchGroupResult>(groups: T[]): T[] {
+    const preciseByFile = new Map<string, T[]>();
+    for (const group of groups) {
+        if (group.__sourceBackedQueryEvidence && group.__symbolInstanceId
+            && group.target.symbolId && group.quality.owner === "high"
+            && ["function", "method"].includes(group.symbolKind ?? "")) {
+            preciseByFile.set(group.target.file, [...(preciseByFile.get(group.target.file) ?? []), group]);
+        }
+    }
+    return groups.filter((group) => !["file", "module"].includes(group.symbolKind ?? "")
+        || !(preciseByFile.get(group.target.file) ?? []).some((precise) =>
+            (group.__declarationSpan ?? group.target.span).startLine
+                <= (precise.__declarationSpan ?? precise.target.span).startLine
+            && (precise.__declarationSpan ?? precise.target.span).endLine
+                <= (group.__declarationSpan ?? group.target.span).endLine));
+}

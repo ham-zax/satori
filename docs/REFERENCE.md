@@ -195,7 +195,7 @@ Index /absolute/path/to/repo with Satori, then find where auth refresh is handle
 That is the complete local path. Satori installs a stable launcher under `~/.satori/`; your agent does not download the server again on every startup.
 
 On Linux x64 and WSL2, the default offline Potion + LanceDB runtime uses LateOn
-D32 as its query-time reranker and is shared
+D128 as its query-time reranker and is shared
 behind that launcher. Multiple compatible Codex, Claude Code, OpenCode, or
 subagent sessions attach as independent MCP sessions to one private local host,
 shared provider/LanceDB state, and one Potion worker. The host uses a user-only
@@ -509,8 +509,9 @@ Incremental synchronization scans for source changes, embeds changed chunks only
 ## Offline Local Reranking
 
 Offline install defaults to reranking eligible candidates with the Apache-2.0
-`lightonai/LateOn-Code-edge` FP32 ONNX checkpoint under the managed v5 D32
-profile. Its semantic rerank projection remains projection-v4; v5 pins the
+`lightonai/LateOn-Code-edge` FP32 ONNX checkpoint under the managed v6 D128
+profile. Its rerank document projection is projection-v5, including bounded,
+source-validated textual references distinct from proven callers. The profile pins the
 model, artifacts, projection, candidate depth, and sequential CPU execution
 semantics without encoding machine-speed assumptions such as queue wait,
 scoring latency, or a fixed CPU thread count. Model weights are not bundled in
@@ -547,8 +548,8 @@ SATORI_LATEON_MODEL_PATH=/absolute/path/to/LateOn-Code-edge
 The current managed profile is:
 
 ```text
-SATORI_LATEON_PROFILE=lateon_offline_quality_projection_v5_d32_v1
-SATORI_LATEON_ACTIVATION_POLICY=lateon_context_v5_d32_owner_default_v1
+SATORI_LATEON_PROFILE=lateon_offline_quality_projection_v6_d128_v1
+SATORI_LATEON_ACTIVATION_POLICY=lateon_context_v6_d128_owner_default_v1
 ```
 
 Any other LateOn profile ID is rejected and cannot execute; reinstall the
@@ -617,11 +618,11 @@ Structural definition coverage is intentionally language-specific:
 
 Kotlin and PHP take their symbols from the CBM definition extractors below and add conservative `calls_v0` call graphs from CBM's semantic resolvers: exact package, import, and companion calls in Kotlin; `use`, namespace, global, and explicit `Class::method()` calls in PHP. Receiver dispatch abstains in both.
 
-Eighty-seven more languages are **symbol-only**, including Ruby, Dart, Elixir, Erlang, Haskell, Lua, Perl, R, Zig, Julia, OCaml, F#, Clojure, Groovy, Solidity, Crystal, Odin, Hare, Verilog/VHDL, Bash/Fish/PowerShell, and build files (CMake, Makefile, Bazel/Starlark, justfile). Their definitions, owners, `file_outline`, and exact symbol search come from codebase-memory-mcp's own definition extractor, compiled per language to WebAssembly; they have no call graph. A language is promoted only after Satori reproduces the definitions of the codebase-memory-mcp binary (recall and precision ≥ 0.95 on CBM's per-grammar fixtures plus pinned public repositories; see [`docs/evidence/language-parity/`](./evidence/language-parity/)). Names and spans follow CBM, so overloads and multi-clause functions are listed once per clause, and some definitions span only their value (R `f <- function() …`).
+Eighty-eight more languages are **symbol-only**, including Swift, Ruby, Dart, Elixir, Erlang, Haskell, Lua, Perl, R, Zig, Julia, OCaml, F#, Clojure, Groovy, Solidity, Crystal, Odin, Hare, Verilog/VHDL, Bash/Fish/PowerShell, and build files (CMake, Makefile, Bazel/Starlark, justfile). Their definitions, owners, `file_outline`, and exact symbol search come from codebase-memory-mcp's own definition extractor, compiled per language to WebAssembly; they have no call graph. A language is promoted only after Satori reproduces the definitions of the codebase-memory-mcp binary (recall and precision ≥ 0.95 on CBM's per-grammar fixtures plus pinned public repositories; see [`docs/evidence/language-parity/`](./evidence/language-parity/)). Names and spans follow CBM, so overloads and multi-clause functions are listed once per clause, and some definitions span only their value (R `f <- function() …`).
 
 Twenty-nine of the 89 extractors (Kotlin and PHP among them) ship inside the npm package. The other sixty are an extended pack (about 100 MB) that `satori install` downloads from [`zokizuan/satori-cbm-extractors`](https://huggingface.co/zokizuan/satori-cbm-extractors) at a pinned revision and verifies file by file, eight files at a time (resume, retry, and `HF_ENDPOINT` mirrors work as for the embedding model). If that download fails, installation still succeeds with a warning, and those languages stay searchable but report `structural_evidence_unavailable` until a later install fetches the pack.
 
-Every other language in the catalog is search-only: its files are indexed for semantic search and bounded reads, with no symbols, outline, or call graph. The catalog follows codebase-memory-mcp's extension and filename table (about 140 languages in all; search-only ones include Swift, Vue, Svelte, HTML, CSS, SQL, and XML). Scripts with an unrecognized or missing extension are routed by their shebang (`python`, `node`, `bash`/`sh`, `zsh`, `ruby`, `perl`, `php`, `lua`), and `.m` files are classified as Objective-C, Magma, or MATLAB by content. Other files outside the catalog are skipped under the `default` and `minimal` profiles; `all-text` indexes any bounded UTF-8 file as plain text. `manage_index status` reports each indexed language's effective capabilities.
+Every other language in the catalog is search-only: its files are indexed for semantic search and bounded reads, with no symbols, outline, or call graph. The catalog follows codebase-memory-mcp's extension and filename table (about 140 languages in all; search-only ones include Vue, Svelte, HTML, CSS, SQL, and XML). Scripts with an unrecognized or missing extension are routed by their shebang (`python`, `node`, `bash`/`sh`, `zsh`, `ruby`, `perl`, `php`, `lua`), and `.m` files are classified as Objective-C, Magma, or MATLAB by content. Other files outside the catalog are skipped under the `default` and `minimal` profiles; `all-text` indexes any bounded UTF-8 file as plain text. `manage_index status` reports each indexed language's effective capabilities.
 
 `.c` and `.h` files currently use the C++ parser for a proven common-C subset; Satori does not claim a native C parser or independent C type system. `CALLS v0` for that routed subset is limited to exact same-translation-unit direct bindings that survive the C++ semantic gate.
 

@@ -1,7 +1,7 @@
 /**
  * Phase 9.2 review repair — document projection routing.
  *
- * One executable document projection (`search_rerank_document_v4`) plus the
+ * One executable document projection (`search_rerank_document_v5`) plus the
  * raw fallback identity (`semantic_document_raw_v1`). Retired v1/v2/v3
  * identities fail closed before any provider call — symmetrically with query
  * routing — so an advertised identity can never name different document bytes

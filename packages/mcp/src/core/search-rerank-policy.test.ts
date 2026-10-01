@@ -12,6 +12,26 @@ type TestCandidate = RerankCandidateLike & {
     score: number;
 };
 
+test("preferred source symbols reserve bounded slots while preserving candidate order", () => {
+    const original = Array.from({ length: 32 }, (_, index) => candidate({ id: `original-${index}` }));
+    const refined = Array.from({ length: 20 }, (_, index) => candidate({ id: `refined-${index}` }));
+    const selection = selectRerankCandidates({ candidates: [...original, ...refined],
+        preferredCandidates: refined, requestedLimit: 10, providerMaximumDocuments: 32 });
+    assert.equal(selection.selected.length, 32);
+    assert.deepEqual(selection.selected, [...original.slice(0, 16), ...refined.slice(0, 16)]);
+});
+
+test("preferred complete source evidence survives the ordinary family chunk cap", () => {
+    const partial = Array.from({ length: 4 }, (_, index) => candidate({ id: `partial-${index}`,
+        ownerInstanceId: "same-owner", relativePath: "src/owner.ts", startLine: 10 + index * 10 }));
+    const full = candidate({ id: "complete", ownerInstanceId: "same-owner", relativePath: "src/owner.ts" });
+    const candidates = [...partial, full];
+    const selection = selectRerankCandidates({ candidates, preferredCandidates: [full], requestedLimit: 10 });
+    assert.ok(selection.selected.includes(full));
+    assert.deepEqual(selectRerankCandidates({ candidates, requestedLimit: 10, preferredCandidates: [] }),
+        selectRerankCandidates({ candidates, requestedLimit: 10 }));
+});
+
 function candidate(input: {
     id: string;
     score?: number;
@@ -283,17 +303,30 @@ test("advertised provider and global capacities report the binding admission own
     assert.equal(providerBound.selected.length, 32);
     assert.equal(providerBound.budgetReason, "provider_limit");
 
-    const sixty = Array.from({ length: 60 }, (_, index) => candidate({
+    const many = Array.from({ length: 200 }, (_, index) => candidate({
         id: `global-${index}`,
         ownerInstanceId: `global-owner-${index}`,
     }));
     const globallyBound = selectRerankCandidates({
-        candidates: sixty,
-        requestedLimit: 2,
-        providerMaximumDocuments: 80,
+        candidates: many,
+        requestedLimit: 100,
+        providerMaximumDocuments: 256,
     });
-    assert.equal(globallyBound.selected.length, 50);
+    assert.equal(globallyBound.selected.length, 128);
     assert.equal(globallyBound.budgetReason, "global_limit");
+});
+
+test("larger native capacity admits 64 candidates by default and scales to 128 for broader requests", () => {
+    const candidates = Array.from({ length: 150 }, (_, index) => candidate({
+        id: `deep-${index}`, ownerInstanceId: `owner-${index}`,
+    }));
+    const narrow = selectRerankCandidates({ candidates, requestedLimit: 10, providerMaximumDocuments: 128 });
+    assert.equal(narrow.selected.length, 64);
+    assert.equal(narrow.selected[49]?.id, "deep-49");
+    assert.equal(narrow.budgetReason, "family_ambiguity");
+    const broad = selectRerankCandidates({ candidates, requestedLimit: 40, providerMaximumDocuments: 128 });
+    assert.equal(broad.selected.length, 128);
+    assert.equal(broad.budgetReason, "global_limit");
 });
 
 test("missing or invalid provider capacity preserves default adaptive admission", () => {

@@ -54,6 +54,7 @@ test('buildSearchProjections produces byte-stable text from canonical chunk inpu
         chunk.content,
         `metadata:${metadata}`,
         'identifier-components:["parser","utils","parse","HTTP","Response","raw","value","Result","Type"]',
+        'identifier-aliases:["Pars","Parse","parseHTTPResponse","pars","Resp","Respo","Respon","Respons","rawvalue","valu","ResultType","Resu","Resul"]',
     ].join('\n'));
     assert.ok(!first.embeddingText.includes('ignored-identity-field'));
     assert.ok(!first.lexicalText.includes('ignored-relationship-field'));
@@ -73,8 +74,8 @@ test('buildSearchProjections preserves original source and identifiers in lexica
     assert.ok(projections.lexicalText.includes('snake_case'));
     assert.ok(projections.lexicalText.includes('camelCaseIdentifier'));
     assert.ok(projections.lexicalText.includes('HTTPServer2'));
-    assert.ok(projections.lexicalText.endsWith(
-        'identifier-components:["snake","case","camel","Case","Identifier","HTTP","Server2"]',
+    assert.ok(projections.lexicalText.includes(
+        'identifier-components:["snake","case","camel","Case","Identifier","HTTP","Server2"]\n',
     ));
 });
 

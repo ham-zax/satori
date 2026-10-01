@@ -39,8 +39,33 @@ function ref(relation: SearchRerankStructuralReference["relation"], index: numbe
     };
 }
 
-test("canonical policy carries the frozen v4 contract identity", () => {
-    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v4");
+test("canonical policy carries the frozen v5 contract identity", () => {
+    assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v5");
+});
+
+test("v5 keeps textual source references distinct from trusted structural relationships", () => {
+    const sourceReference = { repository_relative_path: "src/veto.ts", containing_symbol_label: "function useEffect",
+        source_line: 7, reference_source_excerpt: "return validate_order(order);" };
+    const result = buildSearchRerankDocument(baseInput({ sourceReferences: [sourceReference] }));
+    const parsed = JSON.parse(result.text);
+    assert.deepEqual(parsed.source_references, [sourceReference]);
+    assert.deepEqual(parsed.structural_context.direct_callers, []);
+    assert.equal(result.sourceReferencesTruncated, false);
+    assert.throws(() => buildSearchRerankDocument(baseInput({ sourceReferences: [{ ...sourceReference,
+        reference_source_excerpt: "x".repeat(401) }] })), /reference_source_excerpt/);
+});
+
+test("textual references never displace primary source when the document budget is full", () => {
+    const baseline = buildSearchRerankDocument(baseInput());
+    const result = buildSearchRerankDocument(baseInput({ sourceReferences: [1, 2, 3].map((line) => ({
+        repository_relative_path: "src/veto.ts", containing_symbol_label: "x".repeat(4_000),
+        source_line: line, reference_source_excerpt: "validate_order(order);",
+    })) }));
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.query_relevant_source_excerpt, JSON.parse(baseline.text).query_relevant_source_excerpt);
+    assert.deepEqual(parsed.source_references, []);
+    assert.equal(result.sourceReferencesTruncated, true);
+    assert.ok(result.utf8Bytes <= 4_000);
 });
 
 test("canonical projection carries the answer-packet shape with bounded structural context", () => {
@@ -51,7 +76,7 @@ test("canonical projection carries the answer-packet shape with bounded structur
             supportingTests: [ref("test_support", 4)],
         },
     }));
-    assert.equal(result.version, "search_rerank_document_v4");
+    assert.equal(result.version, "search_rerank_document_v5");
     assert.equal(result.utf8Bytes <= 4_000, true);
     const parsed = JSON.parse(result.text);
     assert.equal(parsed.repository_relative_path, "src/veto.ts");

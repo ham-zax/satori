@@ -323,7 +323,7 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D32 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
+            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
             "version (-v, --version)",
             "upgrade",
             "terminate",

@@ -84,7 +84,7 @@ import { terminateSatoriServers } from "./terminate.js";
 import { resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
-    LATEON_D32_ACTIVATION_POLICY,
+    DEFAULT_LATEON_ACTIVATION_POLICY,
     resolveDefaultLateOnModelDirectory,
     type VerifiedLateOnModel,
 } from "./lateon-model-store.js";
@@ -196,7 +196,7 @@ export async function executeInstallCommand(
                     ...(reranker === "lateon"
                         ? {
                             lateOnProfileId: DEFAULT_LATEON_PROFILE_ID,
-                            lateOnActivationPolicy: LATEON_D32_ACTIVATION_POLICY,
+                            lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
                         }
                         : {}),
                     potionAssetsRoot,
@@ -280,7 +280,7 @@ export async function executeInstallCommand(
                                 ? {
                                     lateOnModelPath: lateOnModel.modelDirectory,
                                     lateOnProfileId: lateOnModel.profileId,
-                                    lateOnActivationPolicy: LATEON_D32_ACTIVATION_POLICY,
+                                    lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
                                 }
                                 : {}),
                             potionAssetsRoot,

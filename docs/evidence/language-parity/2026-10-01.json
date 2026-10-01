@@ -1,0 +1,34 @@
+{
+  "cbmVersion": "0.11.0",
+  "cbmCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
+  "extractorManifestSha256": "8058f792f6bd67318eb754e77aea5df2a9b2f2dbfa26daf3815ba24dcf449a5d",
+  "satoriCommit": "7dc7e5d9d86f9552a6b1adef3ba47b4394094d04-dirty",
+  "maxFilesPerLanguage": 200,
+  "corpus": [
+    {
+      "repo": "codebase-memory-mcp:tests/test_grammar_regression.c",
+      "rev": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d"
+    },
+    {
+      "repo": "https://github.com/Alamofire/Alamofire.git",
+      "rev": "bda9ed57d72988a3a2ada33d824583541f86eac6"
+    }
+  ],
+  "languages": {
+    "swift": {
+      "files": 102,
+      "cbmDefinitions": 1934,
+      "satoriDefinitions": 2414,
+      "matched": 1934,
+      "recall": 1,
+      "precision": 0.9933,
+      "pass": true,
+      "collapsedByCbm": 467,
+      "sampleExtra": [
+        "Alamofire-Alamofire:Source/Core/AFError.swift:100:ResponseValidationFailureReason",
+        "Alamofire-Alamofire:Source/Core/AFError.swift:117:ResponseSerializationFailureReason",
+        "Alamofire-Alamofire:Source/Core/AFError.swift:35:MultipartEncodingFailureReason"
+      ]
+    }
+  }
+}

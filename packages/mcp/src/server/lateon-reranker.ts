@@ -46,8 +46,8 @@ export class LateOnOperationalError extends Error {
 }
 
 const PROFILE_PATHS: Readonly<Partial<Record<LateOnRuntimeProfileId, string>>> = Object.freeze({
-    [LATEON_RUNTIME_PROFILE_IDS.contextV5D32]: fileURLToPath(
-        new URL("../../assets/lateon/runtime-profile-v5-d32.json", import.meta.url),
+    [LATEON_RUNTIME_PROFILE_IDS.contextV6D128]: fileURLToPath(
+        new URL("../../assets/lateon/runtime-profile-v6-d128.json", import.meta.url),
     ),
 });
 
@@ -116,7 +116,7 @@ function validateCommonProfile(profile: Partial<LateOnRuntimeProfile>): void {
 }
 
 export function loadLateOnRuntimeProfile(
-    profileIdOrPath: LateOnRuntimeProfileId | string = LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
+    profileIdOrPath: LateOnRuntimeProfileId | string = LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
 ): LateOnRuntimeProfile {
     const profilePath = PROFILE_PATHS[profileIdOrPath as LateOnRuntimeProfileId]
         ?? (path.isAbsolute(profileIdOrPath) ? profileIdOrPath : undefined);
@@ -127,23 +127,23 @@ export function loadLateOnRuntimeProfile(
     }
     const parsed = JSON.parse(fs.readFileSync(profilePath, "utf8")) as Partial<LateOnRuntimeProfile>;
     validateCommonProfile(parsed);
-    if (parsed.schemaVersion !== "satori_lateon_runtime_profile_v5") {
+    if (parsed.schemaVersion !== "satori_lateon_runtime_profile_v6") {
         throw new Error("LateOn runtime profile schema is retired or unsupported.");
     }
     if (
-        parsed.profileId !== LATEON_RUNTIME_PROFILE_IDS.contextV5D32
-        || parsed.identity?.projectionVersion !== "search_rerank_document_v4"
+        parsed.profileId !== LATEON_RUNTIME_PROFILE_IDS.contextV6D128
+        || parsed.identity?.projectionVersion !== "search_rerank_document_v5"
         || !/^[a-f0-9]{64}$/.test(parsed.identity?.projectionSha256 ?? "")
         || parsed.identity?.queryProjectionVersion !== "search_rerank_query_v2"
         || parsed.identity?.requestContractSha256
             !== loadSearchRerankRequestContract().contractSha256
         || parsed.qualificationStatus !== "owner_activated_not_held_out"
     ) {
-        throw new Error("LateOn v5 runtime profile is malformed or unsupported.");
+        throw new Error("LateOn v6 runtime profile is malformed or unsupported.");
     }
     validateExecutionContract(parsed);
-    if (parsed.inference?.candidateDepth !== 32) {
-        throw new Error(`LateOn ${parsed.profileId} must use candidate depth 32.`);
+    if (parsed.inference?.candidateDepth !== 128) {
+        throw new Error(`LateOn ${parsed.profileId} must use candidate depth 128.`);
     }
     return parsed as LateOnRuntimeProfile;
 }
@@ -213,7 +213,7 @@ export class LateOnReranker implements Reranker {
 
     constructor(config: LateOnRerankerConfig) {
         this.profile = loadLateOnRuntimeProfile(
-            config.profileId ?? LATEON_RUNTIME_PROFILE_IDS.contextV5D32,
+            config.profileId ?? LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
         );
         this.rawProfileDigest = profileDigest(this.profile);
         this.modelDirectory = path.resolve(config.modelDirectory);

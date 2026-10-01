@@ -398,11 +398,12 @@ const SATORI_DECLARATIONS: readonly LanguageCapabilityDeclaration[] = [
 // Languages whose symbols come from codebase-memory-mcp's own definition
 // extractor (language-analysis/cbm-definition-adapter.ts). A language is listed
 // only when the extractor manifest has its module and it passes the parity gate
-// in CBM_PARITY_EVIDENCE (recall and precision >= 0.95, at least one matched
+// in CBM_PARITY_EVIDENCE_FILES (recall and precision >= 0.95, at least one matched
 // definition, no extractor errors); capabilities.test.ts recomputes this list
 // from that evidence and the manifest. Extended-pack modules arrive with
 // `satori install`; without them those languages degrade to searchable text.
 export const CBM_PARITY_EVIDENCE = 'docs/evidence/language-parity/2026-09-27.json';
+export const CBM_PARITY_EVIDENCE_FILES = [CBM_PARITY_EVIDENCE, 'docs/evidence/language-parity/2026-10-01.json'] as const;
 export const CBM_SYMBOL_LANGUAGE_IDS: readonly string[] = [
     'ada', 'agda', 'apex', 'arkts', 'assembly', 'awk', 'bash', 'cairo', 'capnp', 'cfml', 'cfscript',
     'chialisp', 'clojure', 'cmake', 'commonlisp', 'crystal', 'cuda', 'dart', 'dlang', 'elixir', 'elm',
@@ -411,7 +412,7 @@ export const CBM_SYMBOL_LANGUAGE_IDS: readonly string[] = [
     'kotlin', 'lean', 'lua', 'luau', 'magma', 'makefile', 'matlab', 'mojo', 'move', 'ocaml', 'odin',
     'pascal', 'perl', 'php', 'pine', 'pony', 'powershell', 'prisma', 'protobuf', 'puppet',
     'purescript', 'qml', 'r', 'racket', 'rescript', 'ruby', 'scheme', 'slang', 'smali', 'smithy',
-    'solidity', 'squirrel', 'starlark', 'sway', 'tablegen', 'tcl', 'teal', 'templ', 'thrift',
+    'solidity', 'squirrel', 'starlark', 'sway', 'swift', 'tablegen', 'tcl', 'teal', 'templ', 'thrift',
     'tlaplus', 'toml', 'verilog', 'vhdl', 'wgsl', 'wit', 'wolfram', 'zig',
 ];
 const CBM_SYMBOL_LANGUAGES: ReadonlySet<string> = new Set(CBM_SYMBOL_LANGUAGE_IDS);
@@ -425,7 +426,7 @@ function cbmSymbolLanguage(searchOnly: LanguageCapabilityDeclaration): LanguageC
         ownerExtractionCapability: PRODUCTION_READY,
         publicClaim: 'symbol_only',
         fixtures: {
-            navigation: [CBM_PARITY_EVIDENCE],
+            navigation: [searchOnly.languageId === 'swift' ? CBM_PARITY_EVIDENCE_FILES[1] : CBM_PARITY_EVIDENCE],
             symbols: ['packages/core/src/language-analysis/service.test.ts'],
             ownerMetadata: ['packages/core/src/language-analysis/cbm-definition-adapter.test.ts'],
             fileOutline: ['packages/mcp/src/core/current-source-symbols.test.ts'],

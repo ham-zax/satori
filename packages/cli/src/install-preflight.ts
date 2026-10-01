@@ -612,7 +612,7 @@ function planProviderRuntimeEnvironment(
             throw new Error("LateOn reranking requires the target MCP package profile ID.");
         }
         if (!activationPolicy) {
-            throw new Error("Managed LateOn D32 reranking requires an activation policy identity.");
+            throw new Error("Managed LateOn D128 reranking requires an activation policy identity.");
         }
         lateOnEnvironment = {
             SATORI_RERANKER_PROVIDER: "lateon",

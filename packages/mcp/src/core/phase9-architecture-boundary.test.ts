@@ -172,7 +172,7 @@ test("Phase 9 architecture boundary: synthetic retired LateOn profile branch fai
 test("Phase 9 architecture boundary: current versioned identities are accepted without violations", () => {
     const currentCode = `
         import type { SearchGroupedResultV2 } from "./search-types.js";
-        const docProjection = "search_rerank_document_v4";
+        const docProjection = "search_rerank_document_v5";
         const queryProjection = "search_rerank_query_v2";
         const sourceSelection = "bounded_source_selection_v2";
         const indexPolicy = "satori_index_policy_v5";

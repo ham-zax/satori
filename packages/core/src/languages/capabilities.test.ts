@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-    CBM_PARITY_EVIDENCE,
+    CBM_PARITY_EVIDENCE_FILES,
     CBM_CALLS_LANGUAGE_IDS,
     CBM_SYMBOL_LANGUAGE_IDS,
     getLanguageCapabilityDeclaration,
@@ -217,8 +217,8 @@ test('CMM-derived broad catalog stays tiered: symbol support only where CBM pari
     assert.deepEqual(symbolOnlyLanguages, CBM_SYMBOL_LANGUAGE_IDS.filter((id) => !CBM_CALLS_LANGUAGE_IDS.includes(id)).sort());
     assert.deepEqual(callGraphLanguages, ['cpp', 'csharp', 'go', 'java', 'javascript', 'kotlin', 'php', 'python', 'rust', 'scala', 'typescript']);
 
-    // Swift fails the parity gate; XML definitions are markup; YAML has no definitions.
-    for (const language of ['swift', 'xml', 'yaml']) {
+    // XML definitions are markup; YAML has no definitions.
+    for (const language of ['xml', 'yaml']) {
         const declaration = getLanguageCapabilityDeclaration(language);
         assert.equal(declaration?.searchEligibility, 'production_ready', language);
         assert.equal(declaration?.parserCapability, 'declared', language);
@@ -258,14 +258,18 @@ test('tiered catalog counts are computed from the Satori matrix', () => {
 });
 
 test('CBM symbol languages are exactly the manifest languages that pass the parity evidence', () => {
-    const evidence = JSON.parse(fs.readFileSync(resolveRepoPath(CBM_PARITY_EVIDENCE), 'utf8')) as {
-        languages: Record<string, { pass: boolean; matched: number; extractorErrors?: number }>;
-    };
+    const languages: Record<string, { pass: boolean; matched: number; extractorErrors?: number }> = {};
+    for (const evidenceFile of CBM_PARITY_EVIDENCE_FILES) {
+        const evidence = JSON.parse(fs.readFileSync(resolveRepoPath(evidenceFile), 'utf8')) as {
+            languages: typeof languages;
+        };
+        Object.assign(languages, evidence.languages);
+    }
     const manifest = JSON.parse(fs.readFileSync(resolveRepoPath('packages/core/assets/cbm-extractor/manifest.json'), 'utf8')) as {
         modules: { satoriLanguageId: string; pack: 'core' | 'extended' }[];
     };
     const withModule = new Set(manifest.modules.map((entry) => entry.satoriLanguageId));
-    const passing = Object.entries(evidence.languages)
+    const passing = Object.entries(languages)
         .filter(([language, row]) => withModule.has(language) && row.pass && row.matched > 0 && !row.extractorErrors)
         .map(([language]) => language)
         .sort();

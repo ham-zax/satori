@@ -363,8 +363,8 @@ function satoriEnv(home, lateonModel) {
         POTION_REQUEST_TIMEOUT_MS: '5000',
         SATORI_RERANKER_PROVIDER: 'lateon',
         SATORI_LATEON_MODEL_PATH: lateonModel,
-        SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v5_d32_v1',
-        SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v5_d32_owner_default_v1',
+        SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v6_d128_v1',
+        SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v6_d128_owner_default_v1',
     };
 }
 

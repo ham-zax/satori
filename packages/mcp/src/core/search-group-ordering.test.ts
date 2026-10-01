@@ -3,12 +3,59 @@ import assert from "node:assert/strict";
 import {
     collapseDuplicateDeclarationGroups,
     collapseEquivalentImplementationGroups,
+    collapseSupersededFileGroups,
     sortNativeGroupedSearchResults,
 } from "./search-group-ordering.js";
 import { applyGroupDiversity } from "./search-grouping.js";
+import { rankAndDiversifySearchGroups } from "./search-group-results.js";
 import type { SearchGroupResult } from "./search-types.js";
 
 type Sortable = SearchGroupResult & { __exactLexicalMatch: boolean };
+
+test("source-proven query evidence replaces a containing file group without reordering symbol peers", () => {
+    const broad = group({ file: "export.ts", displayLabel: "file export.ts", symbolKind: "file",
+        span: { startLine: 1, endLine: 225 } });
+    const precise = group({ file: "export.ts", displayLabel: "function exportToBlob", symbolKind: "function",
+        symbolId: "blob", __symbolInstanceId: "blob", span: { startLine: 106, endLine: 168 } });
+    precise.quality.owner = "high";
+    precise.__sourceBackedQueryEvidence = true;
+    const peer = group({ file: "other.ts", displayLabel: "function peer", symbolKind: "function" });
+    assert.deepEqual(collapseSupersededFileGroups([broad, peer, precise]), [peer, precise]);
+    broad.__declarationSpan = { startLine: 1, endLine: 225 };
+    broad.target.span = { startLine: 1, endLine: 40 };
+    assert.deepEqual(collapseSupersededFileGroups([broad, peer, precise]), [peer, precise]);
+});
+
+test("file evidence remains when a precise target lacks source proof or lies outside the broad span", () => {
+    const broad = group({ file: "export.ts", displayLabel: "file export.ts", symbolKind: "file" });
+    const precise = group({ file: "export.ts", displayLabel: "function exportToBlob", symbolKind: "function",
+        symbolId: "blob", __symbolInstanceId: "blob", span: { startLine: 2, endLine: 5 } });
+    precise.quality.owner = "high";
+    assert.deepEqual(collapseSupersededFileGroups([broad, precise]), [broad, precise]);
+    precise.__sourceBackedQueryEvidence = true;
+    precise.quality.owner = "medium";
+    assert.deepEqual(collapseSupersededFileGroups([broad, precise]), [broad, precise]);
+    precise.quality.owner = "high";
+    precise.target.span = { startLine: 20, endLine: 30 };
+    assert.deepEqual(collapseSupersededFileGroups([broad, precise]), [broad, precise]);
+});
+
+test("reference and neutral grouped requests retain broad file evidence", () => {
+    const broad = group({ file: "export.ts", displayLabel: "file export.ts", symbolKind: "file",
+        __authoritativeRank: 1, span: { startLine: 1, endLine: 225 } });
+    const precise = group({ file: "export.ts", displayLabel: "function exportToBlob", symbolKind: "function",
+        symbolId: "blob", __symbolInstanceId: "blob", __authoritativeRank: 2,
+        span: { startLine: 106, endLine: 168 } });
+    precise.quality.owner = "high";
+    precise.__sourceBackedQueryEvidence = true;
+    const input = { groupedResults: [broad, precise], collapseDuplicateDeclarations: false,
+        exactMatchPinningEnabled: false, behavioralOwnerSeeking: false, limit: 10,
+        groupBy: "symbol" as const, orderAuthority: "reranker_order" as const };
+    assert.deepEqual(rankAndDiversifySearchGroups({ ...input, implementationSeeking: false }).visibleResults,
+        [broad, precise]);
+    assert.deepEqual(rankAndDiversifySearchGroups({ ...input, implementationSeeking: true }).visibleResults,
+        [precise]);
+});
 type GroupInput = Partial<SearchGroupResult> & {
     file: string;
     displayLabel: string;

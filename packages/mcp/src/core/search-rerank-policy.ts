@@ -1,7 +1,9 @@
 import type { SemanticSearchResult } from "@satori-code/core";
 import {
+    SEARCH_DEFAULT_DISCLOSURE_LIMIT,
     SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
+    SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH,
     SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
     SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_TOP_K,
@@ -113,9 +115,15 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
     candidates: readonly T[];
     requestedLimit: number;
     providerMaximumDocuments?: number;
+    preferredCandidates?: readonly T[];
 }): RerankCandidateSelection<T> {
     const pool = buildRerankCandidatePool(input.candidates);
     const candidatePool = [...pool.candidates];
+    const available = new Set(input.candidates);
+    const preferred = [...new Set(input.preferredCandidates ?? [])].filter((candidate) => available.has(candidate));
+    for (const candidate of preferred) {
+        if (!candidatePool.includes(candidate)) candidatePool.push(candidate);
+    }
     const providerMaximumDocuments = Number.isSafeInteger(input.providerMaximumDocuments)
         && (input.providerMaximumDocuments as number) > 0
         ? input.providerMaximumDocuments as number
@@ -124,13 +132,20 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
     let budgetReason: RerankBudgetReason;
     if (providerMaximumDocuments !== undefined) {
         const capacity = Math.min(SEARCH_RERANK_TOP_K, providerMaximumDocuments);
-        budget = Math.min(candidatePool.length, capacity);
-        if (candidatePool.length <= capacity) {
+        const requestedDepth = Math.max(
+            SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH,
+            Math.ceil(Math.max(1, Math.floor(input.requestedLimit))
+                * SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH / SEARCH_DEFAULT_DISCLOSURE_LIMIT),
+        );
+        budget = Math.min(candidatePool.length, capacity, requestedDepth);
+        if (candidatePool.length <= budget) {
             budgetReason = "complete_family_pool";
-        } else {
+        } else if (capacity <= requestedDepth) {
             budgetReason = providerMaximumDocuments < SEARCH_RERANK_TOP_K
                 ? "provider_limit"
                 : "global_limit";
+        } else {
+            budgetReason = "family_ambiguity";
         }
     } else {
         const requestedLimit = Math.max(1, Math.floor(input.requestedLimit));
@@ -151,10 +166,19 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
         }
     }
 
+    let selected = candidatePool.slice(0, budget);
+    if (preferred.length > 0) {
+        const selectedSet = new Set(preferred.slice(0, Math.floor(budget / 2)));
+        for (const candidate of candidatePool) {
+            if (selectedSet.size >= budget) break;
+            selectedSet.add(candidate);
+        }
+        selected = input.candidates.filter((candidate) => selectedSet.has(candidate));
+    }
     return {
-        selected: candidatePool.slice(0, budget),
+        selected,
         familyCount: pool.familyCount,
-        supplementalCandidateCount: pool.supplementalCandidateCount,
+        supplementalCandidateCount: pool.supplementalCandidateCount + candidatePool.length - pool.candidates.length,
         candidatePoolCount: candidatePool.length,
         budget,
         budgetReason,

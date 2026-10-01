@@ -16,6 +16,7 @@ import {
 import {
     collapseDuplicateDeclarationGroups,
     collapseEquivalentImplementationGroups,
+    collapseSupersededFileGroups,
     sortNativeGroupedSearchResults,
 } from "./search-group-ordering.js";
 import type { SearchOrderAuthority } from "./search-order-policy.js";
@@ -155,7 +156,7 @@ export function rankAndDiversifySearchGroups<
         ? collapseDuplicateDeclarationGroups(input.groupedResults)
         : input.groupedResults;
     const rankedResults = input.implementationSeeking
-        ? collapseEquivalentImplementationGroups(declarationGroups)
+        ? collapseSupersededFileGroups(collapseEquivalentImplementationGroups(declarationGroups))
         : declarationGroups;
     const exactMatchPinningApplied = sortNativeGroupedSearchResults(
         rankedResults,
@@ -594,6 +595,7 @@ export function buildGroupedSymbolSearchResult(input: {
             : {}),
         ...(registrySymbol?.symbolKey ? { __symbolKey: registrySymbol.symbolKey } : {}),
         ...(registrySymbol?.symbolInstanceId ? { __symbolInstanceId: registrySymbol.symbolInstanceId } : {}),
+        ...(registrySymbol ? { __declarationSpan: target.span } : {}),
         __exactLexicalMatch: input.representative.exactLexicalMatch,
         ...(input.debugMode === "ranking" || input.debugMode === "full" ? {
             debug: {
@@ -822,6 +824,8 @@ export function buildVisibleGroupedSearchResults(input: {
             orderAuthority: input.orderAuthority,
         });
         if (groupedResult) {
+            groupedResult.__sourceBackedQueryEvidence = group.validatedOwnerChunkCount > 0
+                && group.chunks.some((chunk) => chunk.retrievalPasses.includes("file_symbols"));
             groupedResults.push(groupedResult);
         } else {
             spanWarningCodes.add(WARNING_CODES.SEARCH_INVALID_GROUP_TARGET_OMITTED);

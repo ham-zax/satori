@@ -67,7 +67,7 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
         configuration.embeddingDimension ?? "—",
         configuration.rerankerProvider === "lateon"
             ? configuration.rerankerProfile === DEFAULT_LATEON_PROFILE_ID
-                ? "LateOn · Code-edge D32"
+                ? "LateOn · Code-edge D128"
                 : "LateOn · profile unknown"
             : configuration.rerankerProvider ?? "—",
         configuration.vectorStore ?? "—",

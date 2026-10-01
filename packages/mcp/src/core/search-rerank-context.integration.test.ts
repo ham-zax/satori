@@ -112,7 +112,7 @@ function typedProjection(result: FixtureCandidate): SearchRerankProjectionResult
         utf8Bytes: Buffer.byteLength(document, "utf8"),
         sha256: crypto.createHash("sha256").update(document, "utf8").digest("hex"),
         candidateRole,
-        projectionIdentity: "search_rerank_document_v4",
+        projectionIdentity: "search_rerank_document_v5",
     };
 }
 
@@ -191,7 +191,7 @@ test("survival metadata carries answer focus and query projection identity", asy
     for (const occurrence of rerankInputStage!.candidates) {
         assert.equal(occurrence.rerankInput?.answerFocus, "implementation");
         assert.equal(occurrence.rerankInput?.queryProjectionIdentity, "search_rerank_query_v2");
-        assert.equal(occurrence.rerankInput?.projectionIdentity, "search_rerank_document_v4");
+        assert.equal(occurrence.rerankInput?.projectionIdentity, "search_rerank_document_v5");
     }
 });
 

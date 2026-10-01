@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { extractWithBaselineChild } from './cbm-extractor-child';
 
 // Owns loading of the per-language CBM definition extractor modules built by
 // scripts/build-cbm-extractors.mjs. One Emscripten instance per language is
@@ -115,6 +116,15 @@ class CbmExtractorHost {
     }
 
     async extract(language: string, relativePath: string, source: string): Promise<CbmDefinitionRecord[]> {
+        // Swift's generated lexer makes V8's optimizing compiler exceed 2 GiB
+        // even for tiny files. Keep its baseline-only policy outside this process.
+        if (language === 'swift') {
+            return extractWithBaselineChild(this.assetRoot, language, relativePath, source);
+        }
+        return this.extractInProcess(language, relativePath, source);
+    }
+
+    async extractInProcess(language: string, relativePath: string, source: string): Promise<CbmDefinitionRecord[]> {
         const module = await this.instance(language);
         const sourceBytes = Buffer.from(source, 'utf8');
         const pathBytes = Buffer.from(`${relativePath}\0`, 'utf8');

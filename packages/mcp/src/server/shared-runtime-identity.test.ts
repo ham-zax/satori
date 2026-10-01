@@ -93,11 +93,11 @@ test("shared runtime identity is exact, non-secret, and bounded to eligible Linu
     });
     assert.equal(
         lateOnDefaultIdentity.lateOnProfile,
-        "lateon_offline_quality_projection_v5_d32_v1",
+        "lateon_offline_quality_projection_v6_d128_v1",
     );
     assert.equal(
         lateOnDefaultIdentity.lateOnActivationPolicy,
-        "lateon_context_v5_d32_owner_default_v1",
+        "lateon_context_v6_d128_owner_default_v1",
     );
     assert.notEqual(lateOnDefaultIdentity.hash, lateOnD32Identity.hash);
     const lateOnV3Identity = buildSharedRuntimeIdentity(runtimeEntry, {

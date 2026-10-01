@@ -57,17 +57,19 @@ test("request contract fixtures bind focus, query, role, and document projection
         [...SEARCH_CANDIDATE_ROLES].sort(),
         "every runtime candidate role must be behaviorally bound",
     );
-    assert.ok(fixtures.documentProjectionV4.includes('"candidate_role":"implementation"'));
+    assert.ok(fixtures.documentProjectionV5.includes('"candidate_role":"implementation"'));
     assert.ok(
-        fixtures.documentProjectionV4.includes(
+        fixtures.documentProjectionV5.includes(
             '"structural_context":{"direct_callees":[],"direct_callers":[],"supporting_tests":[]}',
         ),
-        "v4 fixture must carry the empty answer-packet structural context",
+        "v5 fixture must carry the empty answer-packet structural context",
     );
-    assert.ok(fixtures.documentProjectionV4Structural.includes('"TradingCore.__init__"'));
-    assert.ok(fixtures.documentProjectionV4Structural.includes('"relation":"test_support"'));
-    assert.ok(fixtures.documentProjectionV4SourceFirst.includes('validate_order_for_exact_question'));
-    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("search_rerank_document_v4"));
+    assert.ok(fixtures.documentProjectionV5Structural.includes('"TradingCore.__init__"'));
+    assert.ok(fixtures.documentProjectionV5Structural.includes('"relation":"test_support"'));
+    assert.ok(fixtures.documentProjectionV5SourceFirst.includes('validate_order_for_exact_question'));
+    assert.ok(fixtures.documentProjectionV5SourceReferences.includes('"containing_symbol_label":"function submit_trade"'));
+    assert.ok(fixtures.documentProjectionV5SourceReferences.includes('"source_references":[{'));
+    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("search_rerank_document_v5"));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("bounded_source_selection_v2"));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("source_before_references_v1"));
     assert.equal(
@@ -115,8 +117,8 @@ test("request contract fixtures bind focus, query, role, and document projection
         reason: "provider_limit",
     });
     assert.deepEqual(fixtures.partialProjectionBehavior.candidateAdmission.globalCapacityBound, {
-        selectedCandidateIds: Array.from({ length: 50 }, (_, index) => `candidate-${index + 1}`),
-        budget: 50,
+        selectedCandidateIds: Array.from({ length: 128 }, (_, index) => `candidate-${index + 1}`),
+        budget: 128,
         reason: "global_limit",
     });
     assert.deepEqual(fixtures.partialProjectionBehavior.candidateAdmission.invalidProviderCapacity, {
@@ -126,7 +128,7 @@ test("request contract fixtures bind focus, query, role, and document projection
     });
 });
 
-test("any fixture behavior change moves the request contract digest", () => {
+test("payload changes move the request contract digest while admission policy remains independent", () => {
     const baseline = buildSearchRerankRequestContractFixtures();
     const mutatedQuery = {
         ...baseline,
@@ -136,10 +138,10 @@ test("any fixture behavior change moves the request contract digest", () => {
         ...baseline,
         candidateRoleClassification: { ...baseline.candidateRoleClassification, "tests/veto.test.ts|typescript": "implementation" },
     };
-    const mutatedDocument = { ...baseline, documentProjectionV4: `${baseline.documentProjectionV4}x` };
+    const mutatedDocument = { ...baseline, documentProjectionV5: `${baseline.documentProjectionV5}x` };
     const mutatedV4Structural = {
         ...baseline,
-        documentProjectionV4Structural: `${baseline.documentProjectionV4Structural}x`,
+        documentProjectionV5Structural: `${baseline.documentProjectionV5Structural}x`,
     };
     const mutatedStructuralBehavior = {
         ...baseline,
@@ -166,7 +168,10 @@ test("any fixture behavior change moves the request contract digest", () => {
     assert.notEqual(computeSearchRerankRequestContractSha256(mutatedDocument), baselineDigest);
     assert.notEqual(computeSearchRerankRequestContractSha256(mutatedV4Structural), baselineDigest);
     assert.notEqual(computeSearchRerankRequestContractSha256(mutatedStructuralBehavior), baselineDigest);
-    assert.notEqual(computeSearchRerankRequestContractSha256(mutatedPartialBehavior), baselineDigest);
+    assert.equal(computeSearchRerankRequestContractSha256(mutatedPartialBehavior), baselineDigest);
+    const manifest = buildSearchRerankRequestContractManifest();
+    assert.equal("partialProjectionBehavior" in manifest.fixtures, false);
+    assert.equal("partialProjectionSemantics" in manifest.fixtures, false);
 });
 
 test("contract parser rejects malformed and drifted manifests", () => {
@@ -214,14 +219,14 @@ test("contract parser rejects malformed and drifted manifests", () => {
 test("resolveSearchRerankRequestIdentity binds current provider projections and the contract digest", () => {
     const identity = resolveSearchRerankRequestIdentity(fakeReranker({
         getQueryProjectionVersion: () => "search_rerank_query_v2",
-        getDocumentProjectionVersion: () => "search_rerank_document_v4",
+        getDocumentProjectionVersion: () => "search_rerank_document_v5",
     }));
     assert.deepEqual(
         { provider: identity.provider, model: identity.model, profile: identity.profile },
         { provider: "lateon", model: "LateOn-Code-edge", profile: "lateon_offline_quality_projection_v3_d32_v1" },
     );
     assert.equal(identity.queryProjectionIdentity, "search_rerank_query_v2");
-    assert.equal(identity.documentProjectionIdentity, "search_rerank_document_v4");
+    assert.equal(identity.documentProjectionIdentity, "search_rerank_document_v5");
     assert.equal(identity.requestContractSha256, loadSearchRerankRequestContract().contractSha256);
 });
 

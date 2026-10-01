@@ -375,7 +375,11 @@ export class Client {
     }
 });
 
-test('production indexing preserves exact TypeScript target references without fabricating anonymous caller edges', async () => {
+for (const registration of [
+    { name: 'named registration callback', expression: 'scenario', owner: 'scenario() callback' },
+    { name: 'anonymous callback without a stable registration', expression: '(choose ? scenario : otherScenario)', owner: undefined },
+]) {
+test(`production indexing preserves exact TypeScript targets for ${registration.name}`, async () => {
     const fixture = await createFixture({
         'tsconfig.json': tsconfig(),
         'src/worker.ts': `
@@ -387,8 +391,10 @@ export class Worker {
 import { Worker } from './worker';
 
 declare function scenario(callback: () => void): void;
+declare function otherScenario(callback: () => void): void;
+declare const choose: boolean;
 
-scenario(() => {
+${registration.expression}(() => {
     const client = new Worker();
     client.request();
 });
@@ -402,9 +408,17 @@ scenario(() => {
 
         assert.ok(requestClaim);
         assert.equal(requestClaim.decision, 'resolved');
-        assert.equal(requestClaim.relationshipType, 'REFERENCES');
+        assert.equal(requestClaim.relationshipType, registration.owner ? 'CALLS' : 'REFERENCES');
         assert.equal(requestClaim.resolutionAuthority, 'direct_binding');
-        assert.equal(requestClaim.sourceInstanceId, undefined);
+        if (registration.owner) {
+            const caller = state.registry.symbolsByInstanceId.get(requestClaim.sourceInstanceId!);
+            assert.equal(caller?.qualifiedName, registration.owner);
+            assert.equal(caller?.kind, 'function');
+            assert.equal(caller?.span.startLine, 8);
+            assert.equal(caller?.span.endLine, 11);
+        } else {
+            assert.equal(requestClaim.sourceInstanceId, undefined);
+        }
         assert.equal(requestClaim.targetSymbol, 'Worker.request');
         assert.equal(typeof requestClaim.targetInstanceId, 'string');
 
@@ -414,12 +428,13 @@ scenario(() => {
                 target.qualifiedName === 'Worker.request'
                 && record.file === 'src/cases.test.ts'
             )),
-            false,
+            Boolean(registration.owner),
         );
     } finally {
         await fixture.close();
     }
 });
+}
 
 test('one TypeScript source edit rewrites an unchanged dependent caller but shares unrelated relationship owners', async () => {
     const fixture = await createFixture({

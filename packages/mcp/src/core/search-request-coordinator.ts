@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { supplementSearchFileSymbols } from "./search-file-symbol-supplement.js";
 import {
     COLLECTION_LIMIT_MESSAGE,
     type PublicationLease,
@@ -66,6 +67,7 @@ import {
 } from "./search-response-helpers.js";
 import { runSearchFrontDoor, type SearchFrontDoorReady } from "./search-frontdoor.js";
 import { resolveRequestedSearchSubdirectory } from "./search-requested-scope.js";
+import { buildSearchRetrievalScope } from "./search-retrieval-scope.js";
 import {
     isWriterActionTerm as isWriterActionTermHelper,
 } from "./search-ranking-policy.js";
@@ -1606,6 +1608,27 @@ export class SearchRequestCoordinator {
                 );
                 const wantsStructuralContext = rerankerDocumentProjectionIdentity
                     === SEARCH_RERANK_DOCUMENT_POLICY.id;
+                if (!searchSymbolRegistry && navigationStatus === "valid" && navigationAddress) {
+                    const registryState = await this.preparedRead.loadPreparedNavigationManifest(
+                        preparedReadState,
+                        readinessDebug.operations,
+                    );
+                    if (registryState?.status === "ok") {
+                        searchSymbolRegistry = registryState.registry;
+                        searchSymbolRegistryManifestHash = registryState.manifestHash;
+                    }
+                }
+                const retrievalFilter = searchSymbolRegistry
+                    ? buildSearchRetrievalScope({
+                        files: searchSymbolRegistry.manifest.files,
+                        scope: input.scope,
+                        parsedOperators,
+                        requestedSubdirectory,
+                        matchesPath: (relativePath, patterns) => (
+                            this.searchQuerySupport.pathMatchesAnyPattern(relativePath, patterns)
+                        ),
+                    })
+                    : undefined;
                 const execution = await runSearchExecution({
                     effectiveRoot,
                     scope: input.scope,
@@ -1627,8 +1650,19 @@ export class SearchRequestCoordinator {
                     entrypointOwnerEvidence,
                     requestedSubdirectory,
                     dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
+                    retrievalFilter,
                 }, {
                     searchQuerySupport: this.searchQuerySupport,
+                    supplementCandidates: async (candidates) => {
+                        if (answerFocus !== "implementation" || !searchSymbolRegistry
+                            || freshnessDecision.mode === "served_previous_generation") return [];
+                        return supplementSearchFileSymbols({
+                            candidates,
+                            lexicalTerms: queryPlan.lexicalTerms,
+                            registry: searchSymbolRegistry,
+                            codebaseRoot: effectiveRoot,
+                        });
+                    },
                     semanticSearch: (request) => {
                         if (
                             debugMode === 'full'

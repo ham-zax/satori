@@ -1457,7 +1457,10 @@ test('unsupported languages use bounded search-only fallback', async () => {
 test('languages promoted by CBM parity evidence analyze through CBM definition extractors', async () => {
     const analyzer = createLanguageAnalysisService();
     assert.deepEqual(analyzer.getStrategyForLanguage('kotlin'), { backend: 'cbm_definitions', structural: true });
-    assert.equal(analyzer.getStrategyForLanguage('swift').backend, 'bounded_text');
+    assert.deepEqual(analyzer.getStrategyForLanguage('swift'), { backend: 'cbm_definitions', structural: true });
+    const swift = await analyzer.analyze({ content: 'struct Registry { func add() {} }', relativePath: 'Registry.swift', language: 'swift' });
+    assert.equal(swift.structuralStatus, 'complete');
+    assert.deepEqual(swift.symbols.map((symbol) => symbol.qualifiedName), ['Registry', 'Registry.add']);
 
     const content = 'package shop\n\nclass Registry {\n    fun add(item: String) { println(item) }\n}\n\nfun total(): Int = 1\n';
     const analysis = await analyzer.analyze({ content, relativePath: 'src/Registry.kt', language: 'kotlin' });

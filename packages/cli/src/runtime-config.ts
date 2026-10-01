@@ -3,7 +3,7 @@ import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { satoriCliCommand } from "./cli-command.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
-    LATEON_D32_ACTIVATION_POLICY,
+    DEFAULT_LATEON_ACTIVATION_POLICY,
 } from "./lateon-model-store.js";
 
 export type RuntimeConfigCheckStatus = "ok" | "error";
@@ -202,7 +202,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 nextStep: "Set SATORI_LATEON_MODEL_PATH to the pinned shared model directory.",
             });
         const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-        if (activationPolicy && activationPolicy !== LATEON_D32_ACTIVATION_POLICY) {
+        if (activationPolicy && activationPolicy !== DEFAULT_LATEON_ACTIVATION_POLICY) {
             checks.push({
                 name: "lateon_activation_policy",
                 status: "error",
@@ -220,7 +220,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 : {
                     name: "lateon_activation_policy",
                     status: "error",
-                    message: `SATORI_LATEON_ACTIVATION_POLICY=${LATEON_D32_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
+                    message: `SATORI_LATEON_ACTIVATION_POLICY=${DEFAULT_LATEON_ACTIVATION_POLICY} requires SATORI_LATEON_PROFILE=${DEFAULT_LATEON_PROFILE_ID}; received ${lateOnProfileId}.`,
                     nextStep: `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
                 });
         } else {
@@ -247,7 +247,7 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
 
     const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
     if (activationPolicy && rerankerProvider !== "lateon") {
-        const knownPolicy = activationPolicy === LATEON_D32_ACTIVATION_POLICY;
+        const knownPolicy = activationPolicy === DEFAULT_LATEON_ACTIVATION_POLICY;
         checks.push({
             name: "lateon_activation_policy",
             status: "error",

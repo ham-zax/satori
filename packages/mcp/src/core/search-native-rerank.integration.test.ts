@@ -1010,7 +1010,7 @@ test("incompatible structural context keeps candidates and emits a dedicated int
                 utf8Bytes: Buffer.byteLength(`document ${result.relativePath}`, "utf8"),
                 sha256: "0".repeat(64),
                 candidateRole: "implementation",
-                projectionIdentity: "search_rerank_document_v4",
+                projectionIdentity: "search_rerank_document_v5",
                 structuralContextStatus: "incompatible",
             }),
         }),

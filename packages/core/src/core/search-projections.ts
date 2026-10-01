@@ -3,7 +3,7 @@ import { validateRepositoryRelativePath } from '../paths/repository-path';
 import type { SearchProjections } from '../vectordb/types';
 
 export const EMBEDDING_PROJECTION_VERSION = 'embedding_projection_v3' as const;
-export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v1' as const;
+export const LEXICAL_PROJECTION_VERSION = 'lexical_projection_v2' as const;
 
 export interface SearchProjectionInput {
     readonly chunk: CodeChunk;
@@ -32,6 +32,29 @@ function buildAdditiveLexicalTerms(values: readonly string[]): string[] {
     return [...terms];
 }
 
+function buildLexicalIdentifierAliases(identityValues: readonly string[], content: string): string[] {
+    const aliases = new Set<string>();
+    const add = (token: string): void => {
+        const components = splitIdentifierComponents(token);
+        if (components.length > 1) aliases.add(components.join(''));
+        for (const component of components) {
+            // Short prefixes are too broad to identify an owner. Keep exact
+            // terms as well; aliases never change literal/exact-match evidence.
+            for (let length = 4; length < component.length; length++) {
+                aliases.add(component.slice(0, length));
+            }
+        }
+    };
+    for (const value of identityValues) {
+        for (const token of value.match(IDENTIFIER_TOKEN_PATTERN) ?? []) add(token);
+    }
+    // Source contributes compound identifiers, not prefixes of every prose word.
+    for (const token of content.match(IDENTIFIER_TOKEN_PATTERN) ?? []) {
+        if (splitIdentifierComponents(token).length > 1) add(token);
+    }
+    return [...aliases];
+}
+
 /**
  * Builds backend-neutral search text from information available on every
  * indexing path. Adapters must not reconstruct or enrich these values.
@@ -51,6 +74,10 @@ export function buildSearchProjections(input: SearchProjectionInput): SearchProj
         ...metadataValues,
         chunk.content,
     ]);
+    const lexicalIdentifierAliases = buildLexicalIdentifierAliases([
+        metadata.symbolLabel ?? '',
+        ...(metadata.breadcrumbs ?? []),
+    ], chunk.content);
     const projectionMetadata = JSON.stringify({
         path: relativePath,
         ...(metadata.language ? { language: metadata.language } : {}),
@@ -78,7 +105,7 @@ export function buildSearchProjections(input: SearchProjectionInput): SearchProj
 
     return {
         embeddingText: `search-identity:\n${semanticIdentity}\n${contentSection}`,
-        lexicalText: `${contentSection}\nmetadata:${projectionMetadata}\nidentifier-components:${JSON.stringify(additiveLexicalTerms)}`,
+        lexicalText: `${contentSection}\nmetadata:${projectionMetadata}\nidentifier-components:${JSON.stringify(additiveLexicalTerms)}\nidentifier-aliases:${JSON.stringify(lexicalIdentifierAliases)}`,
         embeddingVersion: EMBEDDING_PROJECTION_VERSION,
         lexicalVersion: LEXICAL_PROJECTION_VERSION,
     };

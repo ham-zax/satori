@@ -1277,7 +1277,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
             EMBEDDING_PROVIDER: "Potion",
             SATORI_RERANKER_PROVIDER: "lateon",
-            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
+            SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
         });
         const originalLauncher = readFile(launcherPath(homeDir));
         const originalConfig = readFile(path.join(homeDir, ".codex", "config.toml"));
@@ -1304,7 +1304,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
                     runtimeEnvironment: Object.freeze({}),
                 }),
             }),
-            /LateOn D32 model preflight failed: .*network down/,
+            /LateOn D128 model preflight failed: .*network down/,
         );
 
         assert.equal(readFile(launcherPath(homeDir)), originalLauncher);
@@ -1320,7 +1320,7 @@ test("managed runtime upgrade acquisition failure leaves the managed installatio
     });
 });
 
-test("legacy no-provider upgrade defaults to LateOn D32", async () => {
+test("legacy no-provider upgrade defaults to LateOn D128", async () => {
     await withTempHome(async (homeDir) => {
         await installUpgradeSourceRuntime(homeDir, {
             SATORI_RUNTIME_PROFILE: "offline",
@@ -1377,17 +1377,17 @@ test("legacy no-provider upgrade defaults to LateOn D32", async () => {
         });
 
         assert.equal(observedReranker, "lateon");
-        assert.equal(observedProfile, "lateon_offline_quality_projection_v5_d32_v1");
-        assert.equal(observedPolicy, "lateon_context_v5_d32_owner_default_v1");
+        assert.equal(observedProfile, "lateon_offline_quality_projection_v6_d128_v1");
+        assert.equal(observedPolicy, "lateon_context_v6_d128_owner_default_v1");
         const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
-            "lateon_offline_quality_projection_v5_d32_v1",
+            "lateon_offline_quality_projection_v6_d128_v1",
         );
         assert.equal(
             launcherEnvironment.SATORI_LATEON_ACTIVATION_POLICY,
-            "lateon_context_v5_d32_owner_default_v1",
+            "lateon_context_v6_d128_owner_default_v1",
         );
     });
 });
@@ -2860,8 +2860,8 @@ test("OpenCode install removes stale launcher-owned runtime identity while prese
                         SATORI_RUNTIME_PROFILE: "offline",
                         EMBEDDING_PROVIDER: "Potion",
                         SATORI_RERANKER_PROVIDER: "lateon",
-                        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v5_d32_v1",
-                        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v5_d32_owner_default_v1",
+                        SATORI_LATEON_PROFILE: "lateon_offline_quality_projection_v6_d128_v1",
+                        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
                         VOYAGEAI_API_KEY: "{env:VOYAGEAI_API_KEY}",
                     },
                 },

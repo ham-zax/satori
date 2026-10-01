@@ -1,12 +1,12 @@
 export const LATEON_RUNTIME_PROFILE_IDS = Object.freeze({
-    contextV5D32: "lateon_offline_quality_projection_v5_d32_v1",
+    contextV6D128: "lateon_offline_quality_projection_v6_d128_v1",
 } as const);
 
 export type LateOnRuntimeProfileId =
     typeof LATEON_RUNTIME_PROFILE_IDS[keyof typeof LATEON_RUNTIME_PROFILE_IDS];
 
 export const LATEON_ACTIVATION_POLICY_IDS = Object.freeze({
-    ownerDefaultContextV5: "lateon_context_v5_d32_owner_default_v1",
+    ownerDefaultContextV6: "lateon_context_v6_d128_owner_default_v1",
 } as const);
 
 export type LateOnActivationPolicyId =
@@ -26,7 +26,7 @@ type LateOnRuntimeProfileBase = Readonly<{
             | "search_rerank_document_v1"
             | "search_rerank_document_v2"
             | "search_rerank_document_v3"
-            | "search_rerank_document_v4";
+            | "search_rerank_document_v5";
         projectionSha256?: string;
     }>;
     artifacts: readonly LateOnArtifactContract[];
@@ -54,12 +54,12 @@ type LateOnRuntimeProfileBase = Readonly<{
     }>;
 }>;
 
-export type LateOnRuntimeProfileV5 = LateOnRuntimeProfileBase & Readonly<{
-    schemaVersion: "satori_lateon_runtime_profile_v5";
-    profileId: typeof LATEON_RUNTIME_PROFILE_IDS.contextV5D32;
+export type LateOnRuntimeProfileV6 = LateOnRuntimeProfileBase & Readonly<{
+    schemaVersion: "satori_lateon_runtime_profile_v6";
+    profileId: typeof LATEON_RUNTIME_PROFILE_IDS.contextV6D128;
     qualificationStatus: "owner_activated_not_held_out";
     identity: LateOnRuntimeProfileBase["identity"] & Readonly<{
-        projectionVersion: "search_rerank_document_v4";
+        projectionVersion: "search_rerank_document_v5";
         projectionSha256: string;
         queryProjectionVersion: "search_rerank_query_v2";
         requestContractSha256: string;
@@ -80,7 +80,7 @@ export type LateOnRuntimeProfileV5 = LateOnRuntimeProfileBase & Readonly<{
     }>;
 }>;
 
-export type LateOnRuntimeProfile = LateOnRuntimeProfileV5;
+export type LateOnRuntimeProfile = LateOnRuntimeProfileV6;
 
 export type LateOnWorkerRequest =
     | Readonly<{

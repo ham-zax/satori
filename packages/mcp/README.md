@@ -171,7 +171,7 @@ its results are advisory and do not establish complete impact coverage.
   the direct per-client lifecycle.
 - LateOn projection-v4 D32 is the semantic reranking contract whenever LateOn
   is selected. Managed offline installs bind
-  `lateon_offline_quality_projection_v5_d32_v1` automatically. The v5 profile
+  `lateon_offline_quality_projection_v6_d128_v1` automatically. The v6 profile
   pins the model, artifacts, projection, candidate depth, and sequential CPU
   execution semantics, but does not encode machine-speed assumptions such as
   queue wait, scoring latency, or a fixed CPU thread count. One local worker

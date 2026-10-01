@@ -3,7 +3,7 @@
  *
  * One production projector. `SEARCH_RERANK_DOCUMENT_POLICY` carries the full
  * frozen policy semantics of the current contract identity
- * (`search_rerank_document_v4`); `buildSearchRerankDocument` is its single
+ * (`search_rerank_document_v5`); `buildSearchRerankDocument` is its single
  * executable implementation. Historical V2/V3 builders are retired, and their
  * fixture material survives only as inert contract evidence in
  * `search-rerank-request-contract.ts`.
@@ -18,6 +18,11 @@ import type {
     SearchRerankStructuralContext,
     SearchRerankStructuralReference,
 } from "./search-rerank-structural-context.js";
+import {
+    SEARCH_RERANK_SOURCE_REFERENCE_LIMIT,
+    SEARCH_RERANK_SOURCE_REFERENCE_MAX_BYTES,
+    type SearchRerankSourceReference,
+} from "./search-rerank-source-references.js";
 import {
     BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
     type SourceLineSpan,
@@ -39,11 +44,15 @@ import {
 } from "./search-rerank-projection-primitives.js";
 
 export const SEARCH_RERANK_DOCUMENT_POLICY = Object.freeze({
-    id: "search_rerank_document_v4",
+    id: "search_rerank_document_v5",
     maximumUtf8Bytes: 4_000,
     serialization: "canonical_json_utf8",
     serializedKeyOrder: "lexicographic_recursive_canonical_json_v1",
-    addedField: "structural_context",
+    addedField: "source_references",
+    sourceReferenceSemantics: "textual_occurrence_in_hash_validated_symbol_span_v1",
+    sourceReferenceLimit: SEARCH_RERANK_SOURCE_REFERENCE_LIMIT,
+    sourceReferenceExcerptMaximumBytes: SEARCH_RERANK_SOURCE_REFERENCE_MAX_BYTES,
+    sourceReferenceOrder: "query_tokens_then_source_line_v1",
     fieldSetDecision: {
         language: "intentionally_omitted_v1",
         documentationExcerpt: "intentionally_removed_v1",
@@ -69,6 +78,7 @@ export interface SearchRerankDocumentInput {
     readonly query?: string;
     readonly evidenceSpans?: readonly SourceLineSpan[];
     readonly structuralContext?: SearchRerankStructuralContext;
+    readonly sourceReferences?: readonly SearchRerankSourceReference[];
 }
 
 export interface SearchRerankDocumentResult {
@@ -80,6 +90,7 @@ export interface SearchRerankDocumentResult {
     readonly sourceTruncated: boolean;
     readonly selectionAttemptCount: number;
     readonly structuralContextTruncated: boolean;
+    readonly sourceReferencesTruncated: boolean;
 }
 
 interface SearchRerankDocumentProjection {
@@ -94,6 +105,27 @@ interface SearchRerankDocumentProjection {
         readonly direct_callees: readonly SearchRerankStructuralReference[];
         readonly supporting_tests: readonly SearchRerankStructuralReference[];
     };
+    readonly source_references: readonly SearchRerankSourceReference[];
+}
+
+function normalizeSourceReferences(value: unknown): SearchRerankSourceReference[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw new TypeError("sourceReferences must be an array.");
+    return value.map((entry, index) => {
+        if (!isRecord(entry)) throw new TypeError(`sourceReferences[${index}] must be an object.`);
+        requireOnlyKeys(entry, "source reference", ["repository_relative_path", "containing_symbol_label",
+            "source_line", "reference_source_excerpt"]);
+        if (!Number.isSafeInteger(entry.source_line) || (entry.source_line as number) < 1) {
+            throw new TypeError("source reference source_line must be a positive integer.");
+        }
+        return {
+            repository_relative_path: requireSafeRelativePath(entry.repository_relative_path),
+            containing_symbol_label: requireString(entry.containing_symbol_label, "containing_symbol_label"),
+            source_line: entry.source_line as number,
+            reference_source_excerpt: requireBoundedPhysicalLine(entry.reference_source_excerpt,
+                "reference_source_excerpt", SEARCH_RERANK_SOURCE_REFERENCE_MAX_BYTES),
+        };
+    }).slice(0, SEARCH_RERANK_SOURCE_REFERENCE_LIMIT);
 }
 
 type StructuralContextNormalization = Readonly<{
@@ -263,6 +295,7 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
         "query",
         "evidenceSpans",
         "structuralContext",
+        "sourceReferences",
     ]);
     const candidateRole = requireString(rawInput.candidateRole, "candidateRole");
     if (!isSearchCandidateRole(candidateRole)) {
@@ -298,6 +331,7 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
             MAXIMUM_DECLARATION_UTF8_BYTES,
         );
     const structural = normalizeStructuralContext(rawInput);
+    const sourceReferences = normalizeSourceReferences(rawInput.sourceReferences);
     const normalized: NormalizedProjectionInput = {
         relativePath,
         language,
@@ -317,6 +351,7 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
     const buildProjectionText = (
         context: SearchRerankStructuralContext,
         queryRelevantSourceExcerpt: string,
+        references: readonly SearchRerankSourceReference[] = [],
     ): string => {
         const projection: SearchRerankDocumentProjection = {
             repository_relative_path: relativePath,
@@ -330,6 +365,7 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
                 direct_callees: context.directCallees,
                 supporting_tests: context.supportingTests,
             },
+            source_references: references,
         };
         return serializeCanonicalJson(projection);
     };
@@ -353,7 +389,11 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
         queryRelevantSourceExcerpt,
         buildProjectionText,
     });
-    const text = buildProjectionText(bounded.context, queryRelevantSourceExcerpt);
+    const admittedReferences = [...sourceReferences];
+    while (admittedReferences.length > 0 && Buffer.byteLength(
+        buildProjectionText(bounded.context, queryRelevantSourceExcerpt, admittedReferences), "utf8",
+    ) > SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes) admittedReferences.pop();
+    const text = buildProjectionText(bounded.context, queryRelevantSourceExcerpt, admittedReferences);
 
     return {
         version: SEARCH_RERANK_DOCUMENT_POLICY.id,
@@ -364,5 +404,7 @@ export function buildSearchRerankDocument(rawInput: unknown): SearchRerankDocume
         sourceTruncated: sourceSelection.selectedSource?.truncated ?? content.length > 0,
         selectionAttemptCount: sourceSelection.selectionAttemptCount,
         structuralContextTruncated: structural.truncated || bounded.truncated,
+        sourceReferencesTruncated: admittedReferences.length < sourceReferences.length
+            || (Array.isArray(rawInput.sourceReferences) && rawInput.sourceReferences.length > sourceReferences.length),
     };
 }

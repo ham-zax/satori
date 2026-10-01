@@ -661,7 +661,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
         });
 
         assert.equal(exitCode, 1);
-        assert.match(io.read().stderr, /LateOn D32 model preflight failed: acquisition unavailable/);
+        assert.match(io.read().stderr, /LateOn D128 model preflight failed: acquisition unavailable/);
         assert.match(
             io.read().stderr,
             /Retry: npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal$/m,

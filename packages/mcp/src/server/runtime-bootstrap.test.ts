@@ -278,8 +278,8 @@ test('offline config selects the shared LateOn model without machine-speed overr
         const parsed = createMcpConfig();
         assert.equal(parsed.rerankerProvider, 'lateon');
         assert.equal(parsed.lateOnModelPath, '/opt/satori/models/lateon-code-edge');
-        assert.equal(parsed.lateOnProfileId, 'lateon_offline_quality_projection_v5_d32_v1');
-        assert.equal(parsed.lateOnActivationPolicy, 'lateon_context_v5_d32_owner_default_v1');
+        assert.equal(parsed.lateOnProfileId, 'lateon_offline_quality_projection_v6_d128_v1');
+        assert.equal(parsed.lateOnActivationPolicy, 'lateon_context_v6_d128_owner_default_v1');
     } finally {
         for (const key of keys) {
             const value = previous[key];
@@ -320,15 +320,15 @@ test('LateOn config selects the current profile and rejects any other profile or
         const current = createMcpConfig();
         assert.equal(
             current.lateOnProfileId,
-            'lateon_offline_quality_projection_v5_d32_v1',
+            'lateon_offline_quality_projection_v6_d128_v1',
         );
-        assert.equal(current.lateOnActivationPolicy, 'lateon_context_v5_d32_owner_default_v1');
+        assert.equal(current.lateOnActivationPolicy, 'lateon_context_v6_d128_owner_default_v1');
 
-        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v5_d32_v1';
-        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v5_d32_owner_default_v1';
+        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v6_d128_v1';
+        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1';
         assert.equal(
             createMcpConfig().lateOnActivationPolicy,
-            'lateon_context_v5_d32_owner_default_v1',
+            'lateon_context_v6_d128_owner_default_v1',
         );
 
         // Any profile or policy other than the current one is rejected.
@@ -336,14 +336,14 @@ test('LateOn config selects the current profile and rejects any other profile or
         delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
         assert.throws(
             createMcpConfig,
-            /Invalid SATORI_LATEON_PROFILE 'lateon_offline_quality_projection_v4_d32_v1'[\s\S]*lateon_offline_quality_projection_v5_d32_v1; reinstall is required/,
+            /Invalid SATORI_LATEON_PROFILE 'lateon_offline_quality_projection_v4_d32_v1'[\s\S]*lateon_offline_quality_projection_v6_d128_v1; reinstall is required/,
         );
 
-        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v5_d32_v1';
+        process.env.SATORI_LATEON_PROFILE = 'lateon_offline_quality_projection_v6_d128_v1';
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v4_d32_owner_default_v1';
         assert.throws(
             createMcpConfig,
-            /Invalid SATORI_LATEON_ACTIVATION_POLICY 'lateon_context_v4_d32_owner_default_v1'[\s\S]*lateon_context_v5_d32_owner_default_v1; reinstall is required/,
+            /Invalid SATORI_LATEON_ACTIVATION_POLICY 'lateon_context_v4_d32_owner_default_v1'[\s\S]*lateon_context_v6_d128_owner_default_v1; reinstall is required/,
         );
 
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'untrusted_policy_v1';
@@ -351,7 +351,7 @@ test('LateOn config selects the current profile and rejects any other profile or
         delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
 
         process.env.SATORI_RERANKER_PROVIDER = 'none';
-        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v5_d32_owner_default_v1';
+        process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1';
         assert.throws(
             createMcpConfig,
             /SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; received none/,

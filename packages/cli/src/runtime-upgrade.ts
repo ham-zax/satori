@@ -56,7 +56,7 @@ import {
     type InstallPreflightDependencies,
 } from "./install-preflight.js";
 import { assertFileContentUnchanged, readTextIfExists } from "./client-config-mutations.js";
-import { LATEON_D32_ACTIVATION_POLICY } from "./lateon-model-store.js";
+import { DEFAULT_LATEON_ACTIVATION_POLICY } from "./lateon-model-store.js";
 import {
     managedRuntimeClosureMatches,
     type ManagedRuntimeClosure,
@@ -328,7 +328,7 @@ export async function executeManagedRuntimeUpgrade(
                 ? {
                     lateOnModelPath: lateOnModel.modelDirectory,
                     lateOnProfileId: lateOnModel.profileId,
-                    lateOnActivationPolicy: LATEON_D32_ACTIVATION_POLICY,
+                    lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
                 }
                 : {}),
             potionAssetsRoot,

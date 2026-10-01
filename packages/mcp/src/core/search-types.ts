@@ -219,6 +219,10 @@ export interface SearchGroupResult extends SearchGroupedResultV2 {
     __candidateIds: string[];
     /** Complete original declaration content, never a preview or evidence fragment. */
     __implementationContent?: string;
+    /** Publication-matching source refinement with verified symbol containment. */
+    __sourceBackedQueryEvidence?: boolean;
+    /** Canonical declaration before the public evidence target is bounded. */
+    __declarationSpan?: SearchSpan;
     __exactLexicalMatch: boolean;
     /** Internal immutable order position assigned before grouping. */
     __authoritativeRank?: number;

@@ -173,11 +173,11 @@ export function buildSharedRuntimeIdentity(
             : "",
         lateOnProfile: env.SATORI_LATEON_PROFILE
             ?? (env.SATORI_RERANKER_PROVIDER === "lateon"
-                ? LATEON_RUNTIME_PROFILE_IDS.contextV5D32
+                ? LATEON_RUNTIME_PROFILE_IDS.contextV6D128
                 : ""),
         lateOnActivationPolicy: env.SATORI_LATEON_ACTIVATION_POLICY
             ?? (env.SATORI_RERANKER_PROVIDER === "lateon" && env.SATORI_LATEON_PROFILE === undefined
-                ? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV5
+                ? LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
                 : ""),
         lateOnRequestContractSha256: resolveLateOnRequestContractDigest(env),
         vectorStoreProvider: env.VECTOR_STORE_PROVIDER ?? "",

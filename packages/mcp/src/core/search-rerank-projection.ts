@@ -11,6 +11,7 @@ import {
     RootBoundFileWindowLimitError,
 } from "@satori-code/core";
 import { readCurrentSourceEvidence } from "./current-source-symbols.js";
+import { buildSearchRerankSourceReferences } from "./search-rerank-source-references.js";
 import { READ_FILE_MAX_BYTES_DEFAULT } from "./published-source-reader.js";
 import { resolveSearchCandidateRole } from "./search-candidate-role.js";
 import type { SearchCandidateRole } from "./search-rerank-context.js";
@@ -262,6 +263,14 @@ export async function projectPublicationBoundSearchRerankDocument(input: {
             symbolSpan: localCandidateSpan({ result: input.result, evidence: resolved.evidence }),
             query: input.semanticQuery,
             structuralContext,
+            sourceReferences: buildSearchRerankSourceReferences({
+                owner: resolveCanonicalOwner(input.result, input.registry),
+                registry: input.registry,
+                source: resolved.evidence.source,
+                sourceStartLine: resolved.evidence.sourceStartLine,
+                observedHash: resolved.evidence.observedHash,
+                query: input.semanticQuery,
+            }),
         }).text;
     } catch {
         return failure(candidateId, "projection_contract_failed");

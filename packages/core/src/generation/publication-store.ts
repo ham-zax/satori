@@ -269,6 +269,17 @@ export type CurrentPublicationState =
     | { kind: 'incompatible'; publicationId: PublicationId }
     | { kind: 'missing' };
 
+// Enough for the source and ownership files of a few resident roots.
+const IMMUTABLE_FILE_CACHE_ENTRIES = 8;
+
+function deepFreeze<T>(value: T): T {
+    if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+        Object.freeze(value);
+        for (const child of Object.values(value)) deepFreeze(child);
+    }
+    return value;
+}
+
 export class PublicationStore {
     private readonly stateRoot: string;
     private readonly publicationsRoot: string;
@@ -276,6 +287,7 @@ export class PublicationStore {
     private readonly singleRuntimeReaderCoordination: boolean;
     private readonly readLeasesByRoot = new Map<string, Map<PublicationId, number>>();
     private readonly retiringPublicationIdsByRoot = new Map<string, Set<PublicationId>>();
+    private readonly immutableFileCache = new Map<string, { signature: string; value: unknown }>();
 
     constructor(options: PublicationStoreOptions) {
         this.stateRoot = resolveStateRoot(options.stateRoot);
@@ -540,28 +552,52 @@ export class PublicationStore {
     getSourceCheckpoint(root: string, id: PublicationId): PublicationSourceCheckpoint | null {
         const canonicalRoot = canonicalizeRoot(root);
         assertPublicationId(id);
-        const sourcePath = this.sourceCheckpointPath(canonicalRoot, id);
-        try {
-            return parsePublicationSourceCheckpoint(fs.readFileSync(sourcePath, 'utf8'), canonicalRoot);
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-            throw error;
-        }
+        return this.readImmutableFile(
+            this.sourceCheckpointPath(canonicalRoot, id),
+            (content) => parsePublicationSourceCheckpoint(content, canonicalRoot),
+        );
     }
 
     getPackageOwnership(root: string, id: PublicationId): PublicationPackageOwnership | null {
         const canonicalRoot = canonicalizeRoot(root);
         assertPublicationId(id);
-        const ownershipPath = this.packageOwnershipPath(canonicalRoot, id);
+        return this.readImmutableFile(
+            this.packageOwnershipPath(canonicalRoot, id),
+            (content) => parsePublicationPackageOwnership(content, canonicalRoot),
+        );
+    }
+
+    /**
+     * Reads a write-once Publication file (staged with 'wx', removed only by GC).
+     * Search admission reads these several times per request, so the parsed value
+     * is reused while the file's identity and timestamps are unchanged. The value
+     * is frozen because every caller shares it.
+     */
+    private readImmutableFile<T>(filePath: string, parse: (content: string) => T): T | null {
+        let content: string;
+        let signature: string;
         try {
-            return parsePublicationPackageOwnership(
-                fs.readFileSync(ownershipPath, 'utf8'),
-                canonicalRoot,
-            );
+            const stat = fs.statSync(filePath, { bigint: true });
+            signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+            const cached = this.immutableFileCache.get(filePath);
+            if (cached?.signature === signature) {
+                this.immutableFileCache.delete(filePath);
+                this.immutableFileCache.set(filePath, cached);
+                return cached.value as T;
+            }
+            content = fs.readFileSync(filePath, 'utf8');
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
             throw error;
         }
+        const value = deepFreeze(parse(content));
+        this.immutableFileCache.delete(filePath);
+        this.immutableFileCache.set(filePath, { signature, value });
+        for (const key of this.immutableFileCache.keys()) {
+            if (this.immutableFileCache.size <= IMMUTABLE_FILE_CACHE_ENTRIES) break;
+            this.immutableFileCache.delete(key);
+        }
+        return value;
     }
 
     getCurrentSourceCheckpoint(root: string): {

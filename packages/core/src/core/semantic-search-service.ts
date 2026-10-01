@@ -562,13 +562,6 @@ export class SemanticSearchService {
         }
 
         const collectionName = admittedPublication.publication.vector.collectionName;
-        const assertCandidateReadAuthorityUnchanged = async (
-            errorMessage: string,
-        ): Promise<void> => {
-            if (!await this.authority.isReadAdmitted(admittedPublication)) {
-                throw new Error(errorMessage);
-            }
-        };
 
         if (isSparseOnly) {
             const productSearchResults = await vectorDatabase.retrieveLexical(collectionName, {
@@ -579,9 +572,6 @@ export class SemanticSearchService {
                     ? { matchMode: effectivePrimaryMatchMode }
                     : {}),
             });
-            await assertCandidateReadAuthorityUnchanged(
-                'Index generation changed during lexical retrieval.',
-            );
             const productLexicalFallbackAttempted = productSearchResults.length < resolvedRequest.topK
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
@@ -593,9 +583,6 @@ export class SemanticSearchService {
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
                     });
-                    await assertCandidateReadAuthorityUnchanged(
-                        'Index generation changed during lexical fallback retrieval.',
-                    );
                 } catch (error) {
                     console.warn(
                         '[Context] Lexical fallback retrieval failed; preserving the primary lexical result.',
@@ -640,11 +627,6 @@ export class SemanticSearchService {
                 }));
             }
             const diagnosticOutcomes = await Promise.all(diagnosticRequests);
-            if (diagnosticOutcomes.length > 0) {
-                await assertCandidateReadAuthorityUnchanged(
-                    'Index generation changed during diagnostic lexical retrieval.',
-                );
-            }
             const diagnosticLexical = diagnosticOutcomes.find(
                 (outcome) => outcome.retrieval.arm === 'precise_lexical',
             )?.candidates;
@@ -731,9 +713,6 @@ export class SemanticSearchService {
                         : {}),
                 }),
             ]);
-            await assertCandidateReadAuthorityUnchanged(
-                'Index generation changed during hybrid retrieval.',
-            );
             const productLexicalFallbackAttempted = productLexicalCandidates.length < resolvedRequest.topK
                 && productLexicalFallbackEligible;
             let productLexicalFallback: VectorCandidate[] = [];
@@ -745,9 +724,6 @@ export class SemanticSearchService {
                         filter: resolvedRequest.filter,
                         matchMode: 'any_terms',
                     });
-                    await assertCandidateReadAuthorityUnchanged(
-                        'Index generation changed during hybrid lexical fallback retrieval.',
-                    );
                 } catch (error) {
                     console.warn(
                         '[Context] Hybrid lexical fallback retrieval failed; preserving dense retrieval.',
@@ -802,11 +778,6 @@ export class SemanticSearchService {
                 }));
             }
             const diagnosticOutcomes = await Promise.all(diagnosticRequests);
-            if (diagnosticOutcomes.length > 0) {
-                await assertCandidateReadAuthorityUnchanged(
-                    'Index generation changed during hybrid diagnostic retrieval.',
-                );
-            }
             const diagnosticDense = diagnosticOutcomes.find(
                 (outcome) => outcome.retrieval.arm === 'dense',
             )?.candidates;
@@ -908,9 +879,6 @@ export class SemanticSearchService {
             minimumScore: denseThreshold,
             filter: resolvedRequest.filter,
         });
-        await assertCandidateReadAuthorityUnchanged(
-            'Index generation changed during dense retrieval.',
-        );
         const productResults = productSearchResults.slice(0, resolvedRequest.topK);
         const diagnosticOutcome = diagnosticCandidateRetrievalLimit > resolvedRequest.topK
             ? await retrieveDiagnosticCandidates({
@@ -924,11 +892,6 @@ export class SemanticSearchService {
                 }),
             })
             : undefined;
-        if (diagnosticOutcome) {
-            await assertCandidateReadAuthorityUnchanged(
-                'Index generation changed during diagnostic dense retrieval.',
-            );
-        }
         const diagnosticDense = diagnosticOutcome?.candidates;
         diagnosticCandidateArmsConsumer?.(
             diagnosticOutcome

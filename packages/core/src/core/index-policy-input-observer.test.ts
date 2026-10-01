@@ -212,3 +212,62 @@ test('.git/info/exclude is read only when .git is a directory and the file is re
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('reused control observations match a fresh observation after every kind of control-input change', async (t) => {
+    // Freezing the clock ahead makes every write look settled, so observations
+    // are cached; a fresh copy of the tree has no cache entry and is the oracle.
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 30_000 });
+    const root = createRoot();
+    const copies: string[] = [];
+    const outcome = async (target: string) => {
+        try {
+            const observed = await observeIndexPolicyInputs(target);
+            return { signature: observed.controlSignature, patterns: observed.fileBasedIgnorePatterns };
+        } catch (error) {
+            return { error: (error as Error).message };
+        }
+    };
+    const expectFresh = async (step: string) => {
+        const copy = createRoot();
+        copies.push(copy);
+        fs.cpSync(root, copy, { recursive: true, verbatimSymlinks: true });
+        const expected = await outcome(copy);
+        assert.deepEqual(await outcome(root), expected, step);
+        assert.deepEqual(await outcome(root), expected, `${step} (reused)`);
+    };
+    try {
+        write(root, '.gitignore', 'node_modules/\n');
+        write(root, 'src/.gitignore', 'gen-a/\n');
+        write(root, 'src/a/value.ts', 'export {};\n');
+        write(root, 'node_modules/pkg/.gitignore', 'hidden/\n');
+        await expectFresh('initial');
+
+        write(root, 'src/.gitignore', 'gen-b/\n');
+        await expectFresh('nested .gitignore edited in place');
+        write(root, 'src/b/.gitignore', 'out/\n');
+        await expectFresh('new directory with a .gitignore');
+        write(root, 'src/a/.gitignore', '*.log\n');
+        await expectFresh('.gitignore added to a walked directory');
+        fs.rmSync(path.join(root, 'src/.gitignore'));
+        await expectFresh('nested .gitignore deleted');
+        fs.mkdirSync(path.join(root, '.git'));
+        await expectFresh('.git directory created');
+        write(root, '.git/info/exclude', 'secret/\n');
+        await expectFresh('.git/info/exclude added');
+        write(root, '.git/info/exclude', 'public/\n');
+        await expectFresh('.git/info/exclude edited');
+        write(root, '.satoriignore', 'data/\n');
+        await expectFresh('root .satoriignore added');
+        write(root, '.gitignore', 'dist/\n');
+        await expectFresh('root .gitignore stops pruning a directory');
+        fs.renameSync(path.join(root, 'src/b'), path.join(root, 'src/c'));
+        await expectFresh('directory renamed');
+        fs.rmSync(path.join(root, 'src/c/.gitignore'));
+        fs.symlinkSync(path.join(root, '.gitignore'), path.join(root, 'src/c/.gitignore'));
+        await expectFresh('nested .gitignore replaced by a symlink');
+        fs.rmSync(path.join(root, 'src/c/.gitignore'));
+        await expectFresh('symlink removed');
+    } finally {
+        for (const directory of [root, ...copies]) fs.rmSync(directory, { recursive: true, force: true });
+    }
+});

@@ -114,6 +114,7 @@ async function observeNestedGitignores(
     canonicalRoot: string,
     lowPatterns: readonly string[],
     satoriignorePatterns: readonly string[],
+    visitDirectory?: (directory: string) => void,
 ): Promise<NestedGitignore[]> {
     const found: NestedGitignore[] = [];
 
@@ -122,6 +123,7 @@ async function observeNestedGitignores(
         ancestorNested: readonly string[],
         parentMatcher: ReturnType<typeof createIndexIgnoreMatcher>,
     ): Promise<void> => {
+        visitDirectory?.(directory);
         let entries;
         try {
             entries = await readdir(path.join(canonicalRoot, directory), { withFileTypes: true });
@@ -179,6 +181,8 @@ async function observeNestedGitignores(
 export async function observeIgnoreFileInputs(
     canonicalRoot: string,
     rootFiles: Readonly<{ gitignore: Buffer | null; satoriignore: Buffer | null }>,
+    /** Receives every root-relative directory whose entries the walk reads. */
+    visitDirectory?: (directory: string) => void,
 ): Promise<ObservedIgnoreFileInputs> {
     const parse = (content: Buffer | null): string[] => (
         content === null ? [] : parseIgnorePatterns(content.toString('utf8'))
@@ -186,7 +190,7 @@ export async function observeIgnoreFileInputs(
     const infoExclude = await observeInfoExclude(canonicalRoot);
     const lowPatterns = [...parse(infoExclude?.content ?? null), ...parse(rootFiles.gitignore)];
     const satoriignorePatterns = parse(rootFiles.satoriignore);
-    const nested = await observeNestedGitignores(canonicalRoot, lowPatterns, satoriignorePatterns);
+    const nested = await observeNestedGitignores(canonicalRoot, lowPatterns, satoriignorePatterns, visitDirectory);
 
     const nestedPatterns = nested.flatMap(({ directory, content }) => (
         translateNestedGitignorePatterns(directory, parseIgnorePatterns(content.toString('utf8')))

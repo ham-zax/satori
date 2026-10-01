@@ -56,6 +56,8 @@ import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typ
 import { ThreadedWasmSemanticProjectAnalyzer, type SemanticProjectAnalyzer } from '../semantic';
 import {
     PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+    manifestFilesMatchOwnedPaths,
+    ownedPathsAgreeingWithCheckpoint,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
 
@@ -1091,30 +1093,11 @@ export class Context {
             const checkpoint = this.getPublicationSourceCheckpoint(publication);
             if (!ownership || !checkpoint || !publication.publication.packageOwnership) return false;
 
-            const sourceHashes = new Map(checkpoint.fileHashes);
-            const controlPaths = new Set<string>();
-            for (const [controlPath, expectedHash] of ownership.controlFiles) {
-                if (sourceHashes.get(controlPath) !== expectedHash) return false;
-                controlPaths.add(controlPath);
-            }
-
-            if (
-                ownership.workspace?.kind === 'pnpm'
-                && sourceHashes.has('package.json')
-                && !ownership.packages.some((pkg) => pkg.root === '')
-            ) {
-                return false;
-            }
-
             if (ownership.files.length !== publication.publication.vector.indexedFiles) {
                 return false;
             }
-            const ownershipPaths = new Set(ownership.files.map((file) => file.path));
-            for (const filePath of ownershipPaths) {
-                if (!sourceHashes.has(filePath) || controlPaths.has(filePath)) {
-                    return false;
-                }
-            }
+            const ownershipPaths = ownedPathsAgreeingWithCheckpoint(ownership, checkpoint.fileHashes);
+            if (!ownershipPaths) return false;
 
             if (publication.publication.status === 'complete') {
                 const navigation = this.getPublicationNavigationAddress(publication);
@@ -1126,8 +1109,7 @@ export class Context {
                 });
                 if (
                     registry.status !== 'ok'
-                    || registry.registry.manifest.files.length !== ownershipPaths.size
-                    || registry.registry.manifest.files.some((file) => !ownershipPaths.has(file.path))
+                    || !manifestFilesMatchOwnedPaths(registry.registry.manifest.files, ownershipPaths)
                 ) {
                     return false;
                 }

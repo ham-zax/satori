@@ -929,3 +929,75 @@ export function buildPublicationPackageOwnership(
     };
     return parsePublicationPackageOwnership(JSON.stringify(snapshot), canonicalRoot);
 }
+
+const ownedPathsByCheckpoint = new WeakMap<
+    PublicationPackageOwnership,
+    WeakMap<readonly (readonly [string, string])[], ReadonlySet<string> | null>
+>();
+
+/**
+ * Returns the owned file paths when ownership agrees with the source
+ * checkpoint's hashes, or null. Admission asks this on every search; the
+ * stores hand out frozen parsed values, so the verdict is memoized per pair.
+ */
+export function ownedPathsAgreeingWithCheckpoint(
+    ownership: PublicationPackageOwnership,
+    checkpointFileHashes: readonly (readonly [string, string])[],
+): ReadonlySet<string> | null {
+    let byCheckpoint = ownedPathsByCheckpoint.get(ownership);
+    if (!byCheckpoint) {
+        byCheckpoint = new WeakMap();
+        ownedPathsByCheckpoint.set(ownership, byCheckpoint);
+    }
+    if (byCheckpoint.has(checkpointFileHashes)) return byCheckpoint.get(checkpointFileHashes) ?? null;
+    const verdict = computeOwnedPathsAgreeingWithCheckpoint(ownership, checkpointFileHashes);
+    byCheckpoint.set(checkpointFileHashes, verdict);
+    return verdict;
+}
+
+function computeOwnedPathsAgreeingWithCheckpoint(
+    ownership: PublicationPackageOwnership,
+    checkpointFileHashes: readonly (readonly [string, string])[],
+): ReadonlySet<string> | null {
+    const sourceHashes = new Map(checkpointFileHashes);
+    const controlPaths = new Set<string>();
+    for (const [controlPath, expectedHash] of ownership.controlFiles) {
+        if (sourceHashes.get(controlPath) !== expectedHash) return null;
+        controlPaths.add(controlPath);
+    }
+
+    if (
+        ownership.workspace?.kind === 'pnpm'
+        && sourceHashes.has('package.json')
+        && !ownership.packages.some((pkg) => pkg.root === '')
+    ) {
+        return null;
+    }
+
+    const ownershipPaths = new Set(ownership.files.map((file) => file.path));
+    for (const filePath of ownershipPaths) {
+        if (!sourceHashes.has(filePath) || controlPaths.has(filePath)) return null;
+    }
+    return ownershipPaths;
+}
+
+const manifestAgreement = new WeakMap<readonly { path: string }[], WeakMap<ReadonlySet<string>, boolean>>();
+
+/** True when the navigation manifest lists exactly the owned paths; memoized like the checkpoint verdict. */
+export function manifestFilesMatchOwnedPaths(
+    manifestFiles: readonly { path: string }[],
+    ownedPaths: ReadonlySet<string>,
+): boolean {
+    let byPaths = manifestAgreement.get(manifestFiles);
+    if (!byPaths) {
+        byPaths = new WeakMap();
+        manifestAgreement.set(manifestFiles, byPaths);
+    }
+    let verdict = byPaths.get(ownedPaths);
+    if (verdict === undefined) {
+        verdict = manifestFiles.length === ownedPaths.size
+            && manifestFiles.every((file) => ownedPaths.has(file.path));
+        byPaths.set(ownedPaths, verdict);
+    }
+    return verdict;
+}

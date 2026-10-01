@@ -7,7 +7,11 @@ import * as path from 'node:path';
 import {
     buildPublicationPackageOwnership,
     discoverPackageOwnership,
+    manifestFilesMatchOwnedPaths,
+    ownedPathsAgreeingWithCheckpoint,
+    PACKAGE_OWNERSHIP_SCHEMA_VERSION,
     parsePublicationPackageOwnership,
+    type PublicationPackageOwnership,
 } from './ownership';
 import { IndexFormatIncompatibleError } from '../generation/errors';
 
@@ -381,5 +385,73 @@ test('unsafe workspace glob expansion is rejected before filesystem globbing', (
     } finally {
         mutableFs.globSync = originalGlobSync;
         fixture.cleanup();
+    }
+});
+
+// The pre-memoization admission logic, kept as the oracle.
+function referenceOwnedPaths(
+    ownership: PublicationPackageOwnership,
+    fileHashes: readonly (readonly [string, string])[],
+): string[] | null {
+    const sourceHashes = new Map(fileHashes);
+    const controlPaths = new Set<string>();
+    for (const [controlPath, expectedHash] of ownership.controlFiles) {
+        if (sourceHashes.get(controlPath) !== expectedHash) return null;
+        controlPaths.add(controlPath);
+    }
+    if (ownership.workspace?.kind === 'pnpm' && sourceHashes.has('package.json')
+        && !ownership.packages.some((pkg) => pkg.root === '')) return null;
+    const paths = new Set(ownership.files.map((file) => file.path));
+    for (const filePath of paths) {
+        if (!sourceHashes.has(filePath) || controlPaths.has(filePath)) return null;
+    }
+    return [...paths].sort();
+}
+
+test('memoized ownership agreement matches the uncached check for every rejection reason', () => {
+    const owned = (files: { path: string }[], overrides: Partial<PublicationPackageOwnership> = {}) => ({
+        schemaVersion: PACKAGE_OWNERSHIP_SCHEMA_VERSION,
+        canonicalRoot: '/repo',
+        workspace: null,
+        cargoWorkspaces: [],
+        packages: [],
+        controlFiles: [['package.json', 'h-pkg']],
+        ...overrides,
+        files: files.map((file) => ({ ...file, packageRoot: '' })),
+    }) as unknown as PublicationPackageOwnership;
+    const base: [string, string][] = [['package.json', 'h-pkg'], ['src/a.ts', 'h-a'], ['src/b.ts', 'h-b']];
+    const cases: Array<[string, PublicationPackageOwnership, [string, string][]]> = [
+        ['agrees', owned([{ path: 'src/a.ts' }, { path: 'src/b.ts' }]), base],
+        ['control hash differs', owned([{ path: 'src/a.ts' }]), [['package.json', 'other'], ['src/a.ts', 'h-a']]],
+        ['control file missing', owned([{ path: 'src/a.ts' }]), [['src/a.ts', 'h-a']]],
+        ['owned file not in checkpoint', owned([{ path: 'src/c.ts' }]), base],
+        ['control file owned as source', owned([{ path: 'package.json' }]), base],
+        ['pnpm without a root package', owned([{ path: 'src/a.ts' }], {
+            workspace: { kind: 'pnpm' } as PublicationPackageOwnership['workspace'],
+        }), base],
+    ];
+    for (const [name, ownership, fileHashes] of cases) {
+        const expected = referenceOwnedPaths(ownership, fileHashes);
+        for (const pass of ['first', 'memoized']) {
+            const actual = ownedPathsAgreeingWithCheckpoint(ownership, fileHashes);
+            assert.deepEqual(actual ? [...actual].sort() : null, expected, `${name} (${pass})`);
+        }
+    }
+
+    // A different checkpoint for the same ownership gets its own verdict.
+    const ownership = cases[0][1];
+    assert.ok(ownedPathsAgreeingWithCheckpoint(ownership, base));
+    assert.equal(ownedPathsAgreeingWithCheckpoint(ownership, base.slice(0, 2)), null);
+
+    const paths = ownedPathsAgreeingWithCheckpoint(ownership, base)!;
+    const manifests: Array<[{ path: string }[], boolean]> = [
+        [[{ path: 'src/b.ts' }, { path: 'src/a.ts' }], true],
+        [[{ path: 'src/a.ts' }], false],
+        [[{ path: 'src/a.ts' }, { path: 'src/c.ts' }], false],
+        [[{ path: 'src/a.ts' }, { path: 'src/b.ts' }, { path: 'src/c.ts' }], false],
+    ];
+    for (const [files, expected] of manifests) {
+        assert.equal(manifestFilesMatchOwnedPaths(files, paths), expected);
+        assert.equal(manifestFilesMatchOwnedPaths(files, paths), expected, 'memoized');
     }
 });

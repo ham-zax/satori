@@ -2020,8 +2020,8 @@ export class ToolHandlers {
         return this.manageIndexingHandlers.startAutomaticReindex(codebasePath);
     }
 
-    public async handleSearchCode(args: ToolArgs): Promise<SearchToolTextResponse> {
-        return this.searchRequestCoordinator.attempt(args, 0);
+    public async handleSearchCode(args: ToolArgs, signal?: AbortSignal): Promise<SearchToolTextResponse> {
+        return this.searchRequestCoordinator.attempt(args, 0, signal);
     }
 
     public async handleContinueSearch(args: ToolArgs) {

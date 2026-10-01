@@ -506,6 +506,8 @@ export type SearchExecutionHost = {
 
 export type SearchExecutionInput = {
     effectiveRoot: string;
+    /** Request cancellation: aborting rejects with the signal reason and never publishes fallback order. */
+    signal?: AbortSignal;
     scope: SearchScope;
     rankingMode: SearchRankingMode;
     resultMode: SearchResultMode;
@@ -774,6 +776,7 @@ async function rerankSearchCandidates(
                 byteSelectionInputBytes = byteSelection.inputBytes;
                 rerankerByteBudgetOmittedCandidates = byteSelection.omittedCandidateCount;
             }
+            input.signal?.throwIfAborted();
             const rerankCount = rerankSlice.length;
             rerankerCandidatesReranked = rerankCount;
             if (candidateSurvival) {
@@ -823,6 +826,7 @@ async function rerankSearchCandidates(
                     () => host.reranker!.rerank(input.rerankQuery, rerankDocuments, {
                         topK: rerankCount,
                         truncation: true,
+                        ...(input.signal ? { signal: input.signal } : {}),
                         returnDocuments: false,
                         identities: rerankSlice.map((candidate) => (
                             searchCandidateIdentity(candidate.result).candidateId
@@ -919,6 +923,9 @@ async function rerankSearchCandidates(
                 rerankerOperationalReason = "lateon_applied";
             }
         } catch {
+            // Cancellation is not a reranker failure: reject instead of
+            // publishing the retrieval-order fallback.
+            input.signal?.throwIfAborted();
             rerankerFailurePhase ||= 'parse_results';
             // Every terminal reranker failure -- api_call, document
             // projection, parse/invalid results -- counts exactly once here.
@@ -1788,6 +1795,7 @@ export async function runSearchExecution(
     }
     freshnessSummary.changedFilesBoostApplied = boostedCandidates > 0;
 
+    input.signal?.throwIfAborted();
     const rerankPhase = await rerankSearchCandidates(
         input,
         host,

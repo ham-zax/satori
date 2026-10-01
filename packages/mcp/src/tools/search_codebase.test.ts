@@ -61,6 +61,53 @@ function captureTelemetry(run: () => Promise<void>): Promise<string[]> {
     }).then(() => lines);
 }
 
+test('search_codebase forwards cancellation through provider acquisition and execution', async () => {
+    const controller = new AbortController();
+    const observed: Array<AbortSignal | undefined> = [];
+    const ctx = {
+        capabilities: new CapabilityResolver(buildConfig()),
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        requestSignal: controller.signal,
+        toolHandlers: {
+            handleSearchCode: async (_args: unknown, signal?: AbortSignal) => {
+                observed.push(signal);
+                controller.abort(new Error('cancel search'));
+                signal?.throwIfAborted();
+                return { content: [{ type: 'text', text: '{}' }] };
+            },
+        },
+        providerRuntime: {
+            requireToolContext: async (_operation: string, request?: { signal?: AbortSignal }) => {
+                observed.push(request?.signal);
+                return ctx;
+            },
+        },
+    } as unknown as ToolContext;
+    await assert.rejects(searchCodebaseTool.execute({ path: '/repo', query: 'cache invalidation' }, ctx),
+        /cancel search/);
+    assert.deepEqual(observed, [controller.signal, controller.signal]);
+});
+
+test('search_codebase does not execute after cancellation during provider acquisition', async () => {
+    const controller = new AbortController();
+    let executed = false;
+    const ctx = {
+        capabilities: new CapabilityResolver(buildConfig()),
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        requestSignal: controller.signal,
+        toolHandlers: { handleSearchCode: async () => { executed = true; return {}; } },
+        providerRuntime: {
+            requireToolContext: async () => {
+                controller.abort(new Error('cancel acquisition'));
+                return ctx;
+            },
+        },
+    } as unknown as ToolContext;
+    await assert.rejects(searchCodebaseTool.execute({ path: '/repo', query: 'cache invalidation' }, ctx),
+        /cancel acquisition/);
+    assert.equal(executed, false);
+});
+
 test('search_codebase rejects relative path without CWD resolve', async () => {
     const capabilities = new CapabilityResolver(buildConfig());
     const ctx = {

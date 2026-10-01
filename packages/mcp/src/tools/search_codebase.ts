@@ -394,7 +394,7 @@ export const searchCodebaseTool: McpTool = {
         let executionContext: ToolContext | MissingProviderConfigIssue;
         try {
             executionContext = ctx.providerRuntime
-                ? await ctx.providerRuntime.requireToolContext(providerOperation)
+                ? await ctx.providerRuntime.requireToolContext(providerOperation, { signal: ctx.requestSignal })
                 : ctx;
         } catch (error) {
             const diagnostic = classifyVectorBackendError(error);
@@ -417,6 +417,7 @@ export const searchCodebaseTool: McpTool = {
             });
             return response;
         }
+        ctx.requestSignal?.throwIfAborted();
         if (isMissingProviderConfigIssue(executionContext)) {
             const response = formatSearchProviderConfigError({
                 ...input,
@@ -455,7 +456,7 @@ export const searchCodebaseTool: McpTool = {
             response = await executionContext.toolHandlers.handleSearchCode({
                 ...input,
                 limit
-            });
+            }, ctx.requestSignal);
         } catch (error) {
             const diagnostic = classifyVectorBackendError(error);
             if (!diagnostic) {

@@ -766,13 +766,15 @@ export class SearchRequestCoordinator {
     public async attempt(
         args: ToolArgs,
         sourceDriftRetryCount: 0 | 1 = 0,
+        signal?: AbortSignal,
     ): Promise<SearchToolTextResponse> {
         return perfSpan('search.coordinator_total', async () => {
+            signal?.throwIfAborted();
             const request = this.validateSearchRequest(args);
             if ('content' in request) return request;
             for (const retryCount of [0, 1] as const) {
                 if (retryCount < sourceDriftRetryCount) continue;
-                const response = await this.executeSearchAttempt(request, retryCount);
+                const response = await this.executeSearchAttempt(request, retryCount, signal);
                 if (response) return response;
             }
             throw new Error('Search exhausted its source-drift retry without a response.');
@@ -877,6 +879,7 @@ export class SearchRequestCoordinator {
     private async executeSearchAttempt(
         request: ValidatedSearchRequest,
         sourceDriftRetryCount: 0 | 1,
+        signal?: AbortSignal,
     ): Promise<SearchToolTextResponse | undefined> {
         const { input, parsedOperators } = request;
         const { debugMode } = input;
@@ -1631,6 +1634,7 @@ export class SearchRequestCoordinator {
                     : undefined;
                 const execution = await runSearchExecution({
                     effectiveRoot,
+                    ...(signal ? { signal } : {}),
                     scope: input.scope,
                     rankingMode: input.rankingMode,
                     resultMode: input.resultMode,

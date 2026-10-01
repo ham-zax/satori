@@ -121,6 +121,35 @@ async function run(
     return runSearchExecution(input, host, {} as SearchDiagnostics);
 }
 
+test("cancellation after retrieval prevents projection and reranking", async () => {
+    const controller = new AbortController();
+    const input = { ...buildInput(), signal: controller.signal };
+    let reranked = false;
+    const reranker = rerankerReturning([]);
+    reranker.rerank = async () => { reranked = true; return []; };
+    const host = buildHost([], reranker);
+    host.semanticSearch = async () => {
+        controller.abort(new Error('cancel retrieval'));
+        return [candidate('a.ts', 0.9)];
+    };
+    await assert.rejects(run(input, host), /cancel retrieval/);
+    assert.equal(reranked, false);
+});
+
+test("reranker receives cancellation and cancellation does not publish fallback results", async () => {
+    const controller = new AbortController();
+    let observed: AbortSignal | undefined;
+    const reranker = rerankerReturning([]);
+    reranker.rerank = async (_query, _documents, options) => {
+        observed = options?.signal;
+        controller.abort(new Error('cancel reranking'));
+        throw new Error('provider cancelled');
+    };
+    await assert.rejects(run({ ...buildInput(), signal: controller.signal },
+        buildHost([candidate('a.ts', 0.9)], reranker)), /cancel reranking/);
+    assert.equal(observed, controller.signal);
+});
+
 test("native execution publishes complete provider order without score blending", async () => {
     const results = [candidate("a.ts", 0.90), candidate("b.ts", 0.80), candidate("c.ts", 0.70)];
     const reranker = rerankerReturning([

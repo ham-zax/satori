@@ -71,6 +71,7 @@ export function upgradeRuntimeSelection(
     env: NodeJS.ProcessEnv,
     platform: NodeJS.Platform | undefined,
     architecture: string | undefined,
+    rerankerOverride?: InstallOfflineReranker,
 ): {
     runtime: InstallRuntime;
     vectorStore: InstallVectorStore;
@@ -87,10 +88,11 @@ export function upgradeRuntimeSelection(
             client: "all",
             dryRun: false,
             runtime: "offline",
+            ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
         };
         const ollamaModel = resolveOfflineOllamaModel(command, managedEnvironment, env);
         const reranker = resolveOfflineReranker(command, managedEnvironment, env, platform, architecture);
-        assertDefaultLateOnProfile(reranker, env);
+        assertDefaultLateOnProfile(reranker, env, rerankerOverride !== undefined);
         const lateOnModelPath = configuredLateOnModelPath(reranker, managedEnvironment, env);
         return {
             runtime: "offline",
@@ -100,6 +102,13 @@ export function upgradeRuntimeSelection(
             ...(lateOnModelPath ? { lateOnModelPath } : {}),
             effectiveEnv,
         };
+    }
+    if (rerankerOverride) {
+        throw new CliError(
+            "E_USAGE",
+            `Reranker selection applies only to the offline runtime. Rerun \`${satoriCliCommand("install --runtime offline")}\` first.`,
+            2,
+        );
     }
     if (profile !== undefined && profile !== "connected") {
         throw new CliError(
@@ -126,20 +135,21 @@ export function upgradeRuntimeSelection(
     };
 }
 
-export async function executeManagedRuntimeUpgrade(
-    target: SatoriUpgradeTarget,
-    options: InstallCommandOptions = {},
-): Promise<ManagedRuntimeUpgradeResult> {
-    const homeDir = options.homeDir ?? os.homedir();
-    const env = options.env ?? process.env;
+export interface InstalledManagedRuntime {
+    launcherPath: string;
+    launcherContent: string;
+    managedEnv: Readonly<Record<string, string>>;
+    runtimeRoot: string;
+    mcpVersion: string;
+    coreVersion: string;
+}
+
+/** Reads and validates the managed launcher and the runtime package closure it targets. */
+export function readInstalledManagedRuntime(homeDir: string, missingMessage: string): InstalledManagedRuntime {
     const launcherPath = resolveLauncherPath(homeDir);
     const launcherContent = readTextIfExists(launcherPath);
     if (launcherContent === null) {
-        throw new CliError(
-            "E_USAGE",
-            `Satori has no managed runtime to upgrade. Run \`${satoriCliCommand("install --client all")}\` first.`,
-            2,
-        );
+        throw new CliError("E_USAGE", missingMessage, 2);
     }
 
     let descriptor: {
@@ -180,15 +190,15 @@ export async function executeManagedRuntimeUpgrade(
     }
 
     const mcpIdentity = readContainingPackageIdentity(runtimeEntry, "@satori-code/mcp");
-    const currentRuntimeRoot = mcpIdentity
+    const runtimeRoot = mcpIdentity
         ? resolveContainingManagedRuntimeRoot(homeDir, mcpIdentity.packageRoot)
         : null;
-    const coreIdentity = currentRuntimeRoot
-        ? readRuntimeDependency(runtimeEntry, CORE_PACKAGE_NAME, currentRuntimeRoot)
+    const coreIdentity = runtimeRoot
+        ? readRuntimeDependency(runtimeEntry, CORE_PACKAGE_NAME, runtimeRoot)
         : null;
     if (
         !mcpIdentity
-        || !currentRuntimeRoot
+        || !runtimeRoot
         || !isPathWithin(mcpIdentity.packageRoot, runtimeEntry)
         || !coreIdentity
     ) {
@@ -198,10 +208,180 @@ export async function executeManagedRuntimeUpgrade(
             2,
         );
     }
-    const fromMcpVersion = mcpIdentity.version;
-    const fromCoreVersion = coreIdentity.version;
-    parseStableVersion(fromMcpVersion, "Installed MCP version");
-    parseStableVersion(fromCoreVersion, "Installed Core version");
+    parseStableVersion(mcpIdentity.version, "Installed MCP version");
+    parseStableVersion(coreIdentity.version, "Installed Core version");
+    return {
+        launcherPath,
+        launcherContent,
+        managedEnv: descriptor.managedEnv,
+        runtimeRoot,
+        mcpVersion: mcpIdentity.version,
+        coreVersion: coreIdentity.version,
+    };
+}
+
+export type ManagedRuntimeSelection = ReturnType<typeof upgradeRuntimeSelection>;
+
+export function managedRuntimeClosureFor(
+    selection: ManagedRuntimeSelection,
+    options: InstallCommandOptions,
+): ManagedRuntimeClosure {
+    return {
+        vectorStore: selection.vectorStore,
+        lateOn: selection.reranker === "lateon",
+        platform: options.platform,
+        architecture: options.architecture,
+        libc: options.libc,
+    };
+}
+
+/**
+ * Installs (or reuses) the runtime closure for `selection`, verifies its models, preflights and
+ * probes it, then retires running servers and rewrites the launcher. A newly installed candidate
+ * is removed when any step fails, so the previous launcher stays authoritative.
+ */
+export async function activateManagedRuntimeSelection(input: {
+    homeDir: string;
+    options: InstallCommandOptions;
+    installed: InstalledManagedRuntime;
+    mcpPackageSpecifier: string;
+    mcpVersion: string;
+    coreVersion: string;
+    selection: ManagedRuntimeSelection;
+    failureLabel: string;
+}): Promise<void> {
+    const { homeDir, options, installed, selection } = input;
+    if (selection.runtime === "offline" && !selection.ollamaModel) {
+        assertSupportedPotionPlatform({
+            platform: options.platform,
+            architecture: options.architecture,
+        });
+    }
+
+    const releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
+    try {
+        let candidate: ManagedRuntimeCandidate | undefined;
+        try {
+            options.onUpgradeProgress?.("installing");
+            const installedCandidate = installManagedRuntimeCandidate(
+                homeDir,
+                input.mcpPackageSpecifier,
+                options.execFileSyncImpl ?? execFileSync,
+                input.coreVersion,
+                managedRuntimeClosureFor(selection, options),
+            );
+            candidate = installedCandidate;
+            options.onUpgradeProgress?.("verifying");
+            const potionAssetsRoot = options.potionAssetsRoot
+                ?? resolvePotionAssetsRoot(installedCandidate.packageRoot);
+            const potionModelPath = selection.runtime === "offline" && !selection.ollamaModel
+                ? options.potionModelPath ?? await resolveVerifiedPotionModel(
+                    homeDir,
+                    potionAssetsRoot,
+                    options.fetchImpl,
+                    options.modelProgress,
+                    options.installRetryCommand,
+                    selection.effectiveEnv,
+                    options.modelRetryDelaysMs,
+                )
+                : undefined;
+            const lateOnModel = selection.runtime === "offline" && selection.reranker === "lateon"
+                ? await resolveVerifiedLateOnModel(
+                    homeDir,
+                    installedCandidate.packageRoot,
+                    options.lateOnModelPath ?? selection.lateOnModelPath,
+                    options.fetchImpl,
+                    options.lateOnAuthorityLoader,
+                    options.modelProgress,
+                    options.installRetryCommand,
+                    options.modelRetryDelaysMs,
+                )
+                : undefined;
+            const cbmExtendedPath = await resolveCbmExtendedPath({
+                homeDir,
+                runtimePackageRoot: installedCandidate.packageRoot,
+                env: selection.effectiveEnv,
+                options,
+            });
+            const preflightDependencies: InstallPreflightDependencies = {
+                ...exactRuntimePreflightDependencies(installedCandidate.command),
+                ...options.preflightDependencies,
+            };
+            const preflight = await (options.preflightRunner ?? runInstallPreflight)({
+                runtime: selection.runtime,
+                homeDir,
+                env: selection.effectiveEnv,
+                vectorStore: selection.vectorStore,
+                ollamaModel: selection.ollamaModel,
+                reranker: selection.reranker,
+                ...(lateOnModel
+                    ? {
+                        lateOnModelPath: lateOnModel.modelDirectory,
+                        lateOnProfileId: lateOnModel.profileId,
+                        lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
+                    }
+                    : {}),
+                potionAssetsRoot,
+                potionModelPath,
+                cbmExtendedPath,
+                platform: options.platform,
+                architecture: options.architecture,
+            }, preflightDependencies);
+            await (preflightDependencies.probeCandidateRuntime ?? probeManagedRuntimeCandidate)({
+                runtimeCommand: installedCandidate.command,
+                runtimeEnvironment: preflight.runtimeEnvironment,
+                inheritedEnvironment: selection.effectiveEnv,
+                homeDir,
+                expectedVersion: input.mcpVersion,
+            });
+
+            assertFileContentUnchanged(installed.launcherPath, installed.launcherContent);
+            options.onUpgradeProgress?.("activating");
+            await activateAfterRetiringManagedRuntime({
+                homeDir,
+                env: selection.effectiveEnv,
+                terminateRunner: options.terminateRunner,
+            }, () => {
+                const launcherMutation = prepareLauncherInstall(
+                    homeDir,
+                    installedCandidate.command,
+                    preflight.runtimeEnvironment,
+                );
+                launcherMutation.assertUnchanged?.();
+                launcherMutation.apply();
+            });
+            pruneManagedRuntimeAfterActivation(
+                homeDir,
+                installedCandidate.runtimeRoot,
+                { ...selection.effectiveEnv, ...preflight.runtimeEnvironment },
+            );
+        } catch (error) {
+            if (candidate?.newlyInstalled) {
+                fs.rmSync(candidate.runtimeRoot, { recursive: true, force: true });
+            }
+            if (error instanceof CliError) {
+                throw error;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            throw new CliError("E_INSTALL_PREFLIGHT", `${input.failureLabel} failed: ${message}`, 1);
+        }
+    } finally {
+        releaseRuntimeMutationLock();
+    }
+}
+
+export async function executeManagedRuntimeUpgrade(
+    target: SatoriUpgradeTarget,
+    options: InstallCommandOptions = {},
+): Promise<ManagedRuntimeUpgradeResult> {
+    const homeDir = options.homeDir ?? os.homedir();
+    const env = options.env ?? process.env;
+    const installed = readInstalledManagedRuntime(
+        homeDir,
+        `Satori has no managed runtime to upgrade. Run \`${satoriCliCommand("install --client all")}\` first.`,
+    );
+    const fromMcpVersion = installed.mcpVersion;
+    const fromCoreVersion = installed.coreVersion;
 
     const configuredClients = inspectManagedClientConfigurations(homeDir, env)
         .filter((proof) => proof.usesManagedLauncher)
@@ -224,169 +404,44 @@ export async function executeManagedRuntimeUpgrade(
     }
     const selection = upgradeRuntimeSelection(
         homeDir,
-        descriptor.managedEnv,
+        installed.managedEnv,
         env,
         options.platform,
         options.architecture,
     );
-    const runtimeClosure: ManagedRuntimeClosure = {
-        vectorStore: selection.vectorStore,
-        lateOn: selection.reranker === "lateon",
-        platform: options.platform,
-        architecture: options.architecture,
-        libc: options.libc,
-    };
+    const result = {
+        action: "upgrade",
+        fromMcpVersion,
+        toMcpVersion: target.mcpVersion,
+        fromCoreVersion,
+        toCoreVersion: target.coreVersion,
+        packageSpecifier: target.mcpPackageSpecifier,
+        configuredClients,
+    } as const;
     if (
         mcpComparison === 0
         && fromCoreVersion === target.coreVersion
-        && managedRuntimeClosureMatches(currentRuntimeRoot, runtimeClosure)
+        && managedRuntimeClosureMatches(installed.runtimeRoot, managedRuntimeClosureFor(selection, options))
     ) {
         const releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
         try {
-            assertFileContentUnchanged(launcherPath, launcherContent);
-            pruneManagedRuntimeAfterActivation(homeDir, currentRuntimeRoot, selection.effectiveEnv);
-            return {
-                action: "upgrade",
-                status: "up_to_date",
-                fromMcpVersion,
-                toMcpVersion: target.mcpVersion,
-                fromCoreVersion,
-                toCoreVersion: target.coreVersion,
-                packageSpecifier: target.mcpPackageSpecifier,
-                configuredClients,
-                restartRequired: false,
-            };
+            assertFileContentUnchanged(installed.launcherPath, installed.launcherContent);
+            pruneManagedRuntimeAfterActivation(homeDir, installed.runtimeRoot, selection.effectiveEnv);
+            return { ...result, status: "up_to_date", restartRequired: false };
         } finally {
             releaseRuntimeMutationLock();
         }
     }
 
-    if (selection.runtime === "offline" && !selection.ollamaModel) {
-        assertSupportedPotionPlatform({
-            platform: options.platform,
-            architecture: options.architecture,
-        });
-    }
-
-    const releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
-    try {
-        let candidate: ManagedRuntimeCandidate | undefined;
-        try {
-        options.onUpgradeProgress?.("installing");
-        const installedCandidate = installManagedRuntimeCandidate(
-            homeDir,
-            target.mcpPackageSpecifier,
-            options.execFileSyncImpl ?? execFileSync,
-            target.coreVersion,
-            runtimeClosure,
-        );
-        candidate = installedCandidate;
-        options.onUpgradeProgress?.("verifying");
-        const potionAssetsRoot = options.potionAssetsRoot
-            ?? resolvePotionAssetsRoot(installedCandidate.packageRoot);
-        const potionModelPath = selection.runtime === "offline" && !selection.ollamaModel
-            ? options.potionModelPath ?? await resolveVerifiedPotionModel(
-                homeDir,
-                potionAssetsRoot,
-                options.fetchImpl,
-                options.modelProgress,
-                options.installRetryCommand,
-                selection.effectiveEnv,
-                options.modelRetryDelaysMs,
-            )
-            : undefined;
-        const lateOnModel = selection.runtime === "offline" && selection.reranker === "lateon"
-            ? await resolveVerifiedLateOnModel(
-                homeDir,
-                installedCandidate.packageRoot,
-                options.lateOnModelPath ?? selection.lateOnModelPath,
-                options.fetchImpl,
-                options.lateOnAuthorityLoader,
-                options.modelProgress,
-                options.installRetryCommand,
-                options.modelRetryDelaysMs,
-            )
-            : undefined;
-        const cbmExtendedPath = await resolveCbmExtendedPath({
-            homeDir,
-            runtimePackageRoot: installedCandidate.packageRoot,
-            env: selection.effectiveEnv,
-            options,
-        });
-        const preflightDependencies: InstallPreflightDependencies = {
-            ...exactRuntimePreflightDependencies(installedCandidate.command),
-            ...options.preflightDependencies,
-        };
-        const preflight = await (options.preflightRunner ?? runInstallPreflight)({
-            runtime: selection.runtime,
-            homeDir,
-            env: selection.effectiveEnv,
-            vectorStore: selection.vectorStore,
-            ollamaModel: selection.ollamaModel,
-            reranker: selection.reranker,
-            ...(lateOnModel
-                ? {
-                    lateOnModelPath: lateOnModel.modelDirectory,
-                    lateOnProfileId: lateOnModel.profileId,
-                    lateOnActivationPolicy: DEFAULT_LATEON_ACTIVATION_POLICY,
-                }
-                : {}),
-            potionAssetsRoot,
-            potionModelPath,
-            cbmExtendedPath,
-            platform: options.platform,
-            architecture: options.architecture,
-        }, preflightDependencies);
-        await (preflightDependencies.probeCandidateRuntime ?? probeManagedRuntimeCandidate)({
-            runtimeCommand: installedCandidate.command,
-            runtimeEnvironment: preflight.runtimeEnvironment,
-            inheritedEnvironment: selection.effectiveEnv,
-            homeDir,
-            expectedVersion: target.mcpVersion,
-        });
-
-        assertFileContentUnchanged(launcherPath, launcherContent);
-        options.onUpgradeProgress?.("activating");
-        await activateAfterRetiringManagedRuntime({
-            homeDir,
-            env: selection.effectiveEnv,
-            terminateRunner: options.terminateRunner,
-        }, () => {
-            const launcherMutation = prepareLauncherInstall(
-                homeDir,
-                installedCandidate.command,
-                preflight.runtimeEnvironment,
-            );
-            launcherMutation.assertUnchanged?.();
-            launcherMutation.apply();
-        });
-        pruneManagedRuntimeAfterActivation(
-                homeDir,
-                installedCandidate.runtimeRoot,
-                { ...selection.effectiveEnv, ...preflight.runtimeEnvironment },
-            );
-        } catch (error) {
-            if (candidate?.newlyInstalled) {
-                fs.rmSync(candidate.runtimeRoot, { recursive: true, force: true });
-            }
-            if (error instanceof CliError) {
-                throw error;
-            }
-            const message = error instanceof Error ? error.message : String(error);
-            throw new CliError("E_INSTALL_PREFLIGHT", `Satori runtime upgrade failed: ${message}`, 1);
-        }
-        return {
-            action: "upgrade",
-            status: "upgraded",
-            fromMcpVersion,
-            toMcpVersion: target.mcpVersion,
-            fromCoreVersion,
-            toCoreVersion: target.coreVersion,
-            packageSpecifier: target.mcpPackageSpecifier,
-            configuredClients,
-            restartRequired: true,
-        };
-    } finally {
-        releaseRuntimeMutationLock();
-    }
+    await activateManagedRuntimeSelection({
+        homeDir,
+        options,
+        installed,
+        mcpPackageSpecifier: target.mcpPackageSpecifier,
+        mcpVersion: target.mcpVersion,
+        coreVersion: target.coreVersion,
+        selection,
+        failureLabel: "Satori runtime upgrade",
+    });
+    return { ...result, status: "upgraded", restartRequired: true };
 }

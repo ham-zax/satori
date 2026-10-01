@@ -199,7 +199,7 @@ test("runCli defaults to human help and preserves structured help on request", a
     assert.match(io.read().stdout, /^Satori\n[\s\S]*Get started \(no global install required\):\n {2}npx -y @satori-code\/cli@latest install/m);
     assert.doesNotMatch(io.read().stdout, /--install-guidance-hook/);
     assert.match(io.read().stdout, /Index \/absolute\/path\/to\/repo with Satori/);
-    assert.match(io.read().stdout, /install --runtime offline --reranker none/);
+    assert.match(io.read().stdout, /reranker disable/);
     assert.match(io.read().stdout, /npm install -g @satori-code\/cli@latest/);
     assert.match(io.read().stdout, /-v, --version\s+Show installed CLI, MCP, and Core versions/);
     assert.match(io.read().stdout, /terminate\s+Stop all running Satori MCP servers/);

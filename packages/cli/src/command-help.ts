@@ -46,6 +46,16 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
         summary: "Stop all running Satori MCP servers.",
         examples: ["satori terminate"],
     },
+    reranker: {
+        usage: ["satori reranker enable", "satori reranker disable [--purge]", "satori reranker status"],
+        summary: "Turn LateOn reranking on or off for the installed offline runtime.",
+        examples: [
+            "satori reranker status",
+            "satori reranker disable",
+            "satori reranker disable --purge",
+            "satori reranker enable",
+        ],
+    },
     version: {
         usage: ["satori version", "satori -v", "satori --version"],
         summary: "Show installed CLI, MCP, and Core versions.",

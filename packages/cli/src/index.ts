@@ -45,6 +45,7 @@ import { resolveInstalledPackageVersions, resolveRuntimeVersionState, runDoctor 
 import type { DoctorPackageVersion, DoctorResult, RuntimeVersionState } from "./doctor.js";
 import { emitDoctorText } from "./doctor-format.js";
 import { emitInstallText } from "./install-format.js";
+import { executeManagedRerankerCommand, formatRerankerText } from "./runtime-reranker.js";
 import { SATORI_CLI_NPX_COMMAND, satoriCliCommand } from "./cli-command.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 import {
@@ -327,6 +328,7 @@ function buildHelpPayload() {
             "version (-v, --version)",
             "upgrade",
             "terminate",
+            "reranker enable|disable|status [--purge] (switch LateOn reranking for the installed offline runtime; disable --purge also deletes the LateOn model files)",
             "uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
             "tools list",
@@ -366,14 +368,15 @@ function formatHelpText(): string {
         "  version       Show installed CLI, MCP, and Core versions",
         "  upgrade       Update the CLI and its compatible MCP/Core runtime",
         "  terminate     Stop all running Satori MCP servers",
+        "  reranker      Enable, disable, or show LateOn reranking (offline runtime)",
         "  doctor        Check installation, runtime, and client configuration",
         "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",
         "  tools list    List the available MCP tools",
         "  tool call     Call an MCP tool from the terminal",
         "",
         "Common runtime changes:",
-        `  ${satoriCliCommand("install --runtime offline --reranker none")}  Disable LateOn`,
-        `  ${satoriCliCommand("install --runtime offline --reranker lateon")}  Enable LateOn`,
+        `  ${satoriCliCommand("reranker disable")}  Disable LateOn (add --purge to delete its model)`,
+        `  ${satoriCliCommand("reranker enable")}  Enable LateOn`,
         `  ${satoriCliCommand("install --runtime offline --ollama-model <model>")}  Select Ollama embeddings`,
         "  Restart configured clients after changing the runtime.",
         "",
@@ -698,6 +701,37 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                 emitJson(writers, result);
             } else {
                 writers.writeStdout(formatUpgradeText(result));
+            }
+            return 0;
+        }
+
+        if (parsed.command.kind === "reranker") {
+            const wantsJson = parsed.globals.formatExplicit && parsed.globals.format === "json";
+            const result = await executeManagedRerankerCommand(parsed.command, {
+                homeDir,
+                env: effectiveEnv,
+                preflightDependencies: options.installPreflightDependencies,
+                preflightRunner: options.installPreflightRunner,
+                lateOnAuthorityLoader: options.installLateOnAuthorityLoader,
+                potionModelPath: options.installPotionModelPath,
+                cbmExtendedPath: options.installCbmExtendedPath,
+                onUpgradeProgress: wantsJson
+                    ? undefined
+                    : (phase: ManagedRuntimeUpgradePhase) => {
+                        const messages: Record<ManagedRuntimeUpgradePhase, string> = {
+                            installing: "Preparing runtime for the new reranker setting...",
+                            verifying: "Verifying candidate runtime...",
+                            activating: "Activating verified runtime...",
+                        };
+                        writers.writeStderr(`${messages[phase]}\n`);
+                    },
+                modelProgress: wantsJson ? undefined : createModelProgressReporter(writers),
+                installRetryCommand: satoriCliCommand(`reranker ${parsed.command.operation}`),
+            });
+            if (wantsJson) {
+                emitJson(writers, result);
+            } else {
+                writers.writeStdout(formatRerankerText(result));
             }
             return 0;
         }

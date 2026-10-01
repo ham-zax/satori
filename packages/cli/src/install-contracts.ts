@@ -5,6 +5,7 @@ import type {
     InstallProfile,
     InstallRuntime,
     InstallVectorStore,
+    RerankerOperation,
 } from "./args.js";
 import type {
     InstallPreflightDependencies,
@@ -195,6 +196,20 @@ export interface ManagedRuntimeUpgradeResult {
     toCoreVersion: string;
     packageSpecifier: string;
     configuredClients: ClientName[];
+    restartRequired: boolean;
+}
+
+export interface ManagedRerankerResult {
+    action: "reranker";
+    operation: RerankerOperation;
+    /** `current` for status; `unchanged` when the launcher already used the requested reranker. */
+    status: "current" | "changed" | "unchanged";
+    runtime: InstallRuntime;
+    /** Null for the connected runtime, whose reranker is not installer-managed. */
+    reranker: InstallOfflineReranker | null;
+    modelPath: string | null;
+    managedModelsPresent: boolean;
+    purgedModelPath: string | null;
     restartRequired: boolean;
 }
 

@@ -21,6 +21,7 @@ export type HelpTopic =
     | "doctor"
     | "upgrade"
     | "terminate"
+    | "reranker"
     | "version"
     | "tools-list"
     | "tool-call";
@@ -31,6 +32,7 @@ export type ParsedCommand =
     | { kind: "doctor"; json: boolean; verbose: boolean }
     | { kind: "upgrade" }
     | { kind: "terminate" }
+    | { kind: "reranker"; operation: RerankerOperation; purge: boolean }
     | {
         kind: "install";
         client: InstallClient;
@@ -70,6 +72,7 @@ export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
 export type InstallOfflineReranker = "lateon" | "none";
+export type RerankerOperation = "enable" | "disable" | "status";
 
 export interface CommandOptionSpec {
     flag: string;
@@ -110,6 +113,9 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
     ],
     upgrade: [],
     terminate: [],
+    reranker: [
+        { flag: "--purge", description: "With disable: also delete the downloaded LateOn model files" },
+    ],
     version: [],
     "tools-list": [],
     "tool-call": [
@@ -124,6 +130,7 @@ const HELP_TOPIC_BY_COMMAND: Readonly<Record<string, HelpTopic>> = {
     doctor: "doctor",
     upgrade: "upgrade",
     terminate: "terminate",
+    reranker: "reranker",
     version: "version",
     tools: "tools-list",
     tool: "tool-call",
@@ -139,6 +146,7 @@ const RESERVED_SUBCOMMANDS = new Set([
     "uninstall",
     "upgrade",
     "terminate",
+    "reranker",
 ]);
 const PRIMITIVE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 
@@ -461,6 +469,25 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
         return {
             globals,
             command: parseInstallCommand("uninstall", rest.slice(1))
+        };
+    }
+
+    if (rest[0] === "reranker") {
+        const operation = rest[1];
+        if (operation !== "enable" && operation !== "disable" && operation !== "status") {
+            throw new CliError("E_USAGE", "reranker requires one of: enable, disable, status.", 2);
+        }
+        let purge = false;
+        for (const token of rest.slice(2)) {
+            if (operation === "disable" && token === "--purge") {
+                purge = true;
+                continue;
+            }
+            throw new CliError("E_USAGE", `Unknown argument for reranker ${operation}: ${token}`, 2);
+        }
+        return {
+            globals,
+            command: { kind: "reranker", operation, purge }
         };
     }
 

@@ -207,10 +207,27 @@ export function collapseSupersededFileGroups<T extends SearchGroupResult>(groups
             preciseByFile.set(group.target.file, [...(preciseByFile.get(group.target.file) ?? []), group]);
         }
     }
-    return groups.filter((group) => !["file", "module"].includes(group.symbolKind ?? "")
-        || !(preciseByFile.get(group.target.file) ?? []).some((precise) =>
-            (group.__declarationSpan ?? group.target.span).startLine
-                <= (precise.__declarationSpan ?? precise.target.span).startLine
-            && (precise.__declarationSpan ?? precise.target.span).endLine
-                <= (group.__declarationSpan ?? group.target.span).endLine));
+    const span = (group: T) => group.__declarationSpan ?? group.target.span;
+    // The precise function takes over the superseded file's position: the file
+    // ranked there on evidence from the same source, so dropping it must not
+    // also drop the file below results it outranked.
+    const promoted = new Map<T, T>();
+    const kept = groups.filter((group) => {
+        if (!["file", "module"].includes(group.symbolKind ?? "")) return true;
+        const contained = (preciseByFile.get(group.target.file) ?? []).filter((precise) =>
+            span(group).startLine <= span(precise).startLine && span(precise).endLine <= span(group).endLine);
+        if (contained.length === 0) return true;
+        const best = contained.reduce((left, right) =>
+            compareAuthoritativeRanks(promoted.get(right) ?? right, promoted.get(left) ?? left) < 0 ? right : left);
+        const current = promoted.get(best) ?? best;
+        if (compareAuthoritativeRanks(group, current) < 0) {
+            promoted.set(best, {
+                ...current,
+                __authoritativeRank: group.__authoritativeRank,
+                __candidateIds: Array.from(new Set([...current.__candidateIds, ...group.__candidateIds])).sort(),
+            });
+        }
+        return false;
+    });
+    return kept.map((group) => promoted.get(group) ?? group);
 }

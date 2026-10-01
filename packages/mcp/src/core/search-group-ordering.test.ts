@@ -40,6 +40,23 @@ test("file evidence remains when a precise target lacks source proof or lies out
     assert.deepEqual(collapseSupersededFileGroups([broad, precise]), [broad, precise]);
 });
 
+test("a superseding function inherits the rank of the file group it replaces", () => {
+    const broad = group({ file: "export.ts", displayLabel: "file export.ts", symbolKind: "file",
+        __authoritativeRank: 3, span: { startLine: 1, endLine: 225 } });
+    const peer = group({ file: "other.ts", displayLabel: "function peer", symbolKind: "function",
+        __authoritativeRank: 4 });
+    const precise = group({ file: "export.ts", displayLabel: "function exportToBlob", symbolKind: "function",
+        symbolId: "blob", __symbolInstanceId: "blob", __authoritativeRank: 16,
+        span: { startLine: 106, endLine: 168 } });
+    precise.quality.owner = "high";
+    precise.__sourceBackedQueryEvidence = true;
+    const visible = rankAndDiversifySearchGroups({ groupedResults: [broad, peer, precise],
+        collapseDuplicateDeclarations: false, exactMatchPinningEnabled: false, behavioralOwnerSeeking: false,
+        limit: 10, groupBy: "symbol", orderAuthority: "reranker_order", implementationSeeking: true }).visibleResults;
+    assert.deepEqual(visible.map((result) => [result.displayLabel, result.__authoritativeRank]),
+        [["function exportToBlob", 3], ["function peer", 4]]);
+});
+
 test("reference and neutral grouped requests retain broad file evidence", () => {
     const broad = group({ file: "export.ts", displayLabel: "file export.ts", symbolKind: "file",
         __authoritativeRank: 1, span: { startLine: 1, endLine: 225 } });
@@ -54,7 +71,8 @@ test("reference and neutral grouped requests retain broad file evidence", () => 
     assert.deepEqual(rankAndDiversifySearchGroups({ ...input, implementationSeeking: false }).visibleResults,
         [broad, precise]);
     assert.deepEqual(rankAndDiversifySearchGroups({ ...input, implementationSeeking: true }).visibleResults,
-        [precise]);
+        [{ ...precise, __authoritativeRank: 1,
+            __candidateIds: [...broad.__candidateIds, ...precise.__candidateIds].sort() }]);
 });
 type GroupInput = Partial<SearchGroupResult> & {
     file: string;

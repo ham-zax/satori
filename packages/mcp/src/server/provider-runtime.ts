@@ -629,6 +629,7 @@ export class ProviderRuntime {
                     throw new Error(
                         `${error instanceof Error ? error.message : String(error)} `
                         + `(resolved through ${moduleSpecifier})`,
+                        { cause: error },
                     );
                 }
                 return new LanceDbVectorDatabase({

@@ -612,7 +612,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 console.error(`[MilvusDB] ❌ Failed to load collection '${collectionName}' on attempt ${attempt}:`, error);
 
                 if (attempt === maxRetries) {
-                    throw new Error(`Failed to load collection '${collectionName}' after ${maxRetries} attempts: ${error}`);
+                    throw new Error(`Failed to load collection '${collectionName}' after ${maxRetries} attempts: ${error}`, { cause: error });
                 }
 
                 // Wait with exponential backoff before retry
@@ -1155,7 +1155,7 @@ export class MilvusVectorDatabase implements VectorDatabase {
                 return false;
             }
             // Re-throw with useful details instead of generic [object Object]
-            throw new Error(errorMessage);
+            throw new Error(errorMessage, { cause: error });
         }
     }
 }

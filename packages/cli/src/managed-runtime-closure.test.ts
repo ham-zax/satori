@@ -38,7 +38,7 @@ test("resolves the exact WSL Linux GNU LanceDB native package", () => {
             architecture: "x64",
             libc: "gnu",
         }),
-        "@lancedb/lancedb-linux-x64-gnu@0.31.0",
+        "@lancedb/lancedb-linux-x64-gnu@0.39.0",
     );
 });
 
@@ -50,7 +50,7 @@ test("resolves supported Linux musl and Windows architectures deterministically"
             architecture: "arm64",
             libc: "musl",
         }),
-        "@lancedb/lancedb-linux-arm64-musl@0.31.0",
+        "@lancedb/lancedb-linux-arm64-musl@0.39.0",
     );
     assert.equal(
         resolveLanceDbNativePackage({
@@ -58,7 +58,7 @@ test("resolves supported Linux musl and Windows architectures deterministically"
             platform: "win32",
             architecture: "x64",
         }),
-        "@lancedb/lancedb-win32-x64-msvc@0.31.0",
+        "@lancedb/lancedb-win32-x64-msvc@0.39.0",
     );
 });
 
@@ -135,8 +135,8 @@ test("resolves the exact host-native Sharp closure required by LateOn", () => {
             libc: "gnu",
         }),
         [
-            "@img/sharp-linux-x64@0.33.5",
-            "@img/sharp-libvips-linux-x64@1.0.4",
+            "@img/sharp-linux-x64@0.35.5",
+            "@img/sharp-libvips-linux-x64@1.3.4",
         ],
     );
     assert.deepEqual(resolveLateOnNativePackages({
@@ -202,8 +202,8 @@ test("closure identity pins the oxc-parser native binding", () => {
         assert.equal(manifest.formatVersion, 3);
         assert.equal(manifest.oxcParserNativePackage, `@oxc-parser/binding-linux-x64-gnu@${oxcParserVersion}`);
         assert.deepEqual(manifest.lateOnNativePackages, [
-            "@img/sharp-linux-x64@0.33.5",
-            "@img/sharp-libvips-linux-x64@1.0.4",
+            "@img/sharp-linux-x64@0.35.5",
+            "@img/sharp-libvips-linux-x64@1.3.4",
         ]);
         assert.equal(managedRuntimeClosureMatches(runtimeRoot, closure), true);
 

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import { architectureOverviewTool } from "./architecture_overview.js";
 import { manageIndexTool } from "./manage_index.js";
 import { searchCodebaseTool } from "./search_codebase.js";
@@ -36,10 +35,11 @@ export const toolRegistry: Record<string, McpTool> = Object.fromEntries(
     toolList.map((tool) => [tool.name, tool])
 );
 
-function toJsonSchema(schema: z.ZodTypeAny): JsonSchemaObject {
-    const jsonSchema = zodToJsonSchema(schema, {
-        target: 'jsonSchema7',
-        $refStrategy: 'none',
+function toJsonSchema(schema: z.ZodType): JsonSchemaObject {
+    const jsonSchema = z.toJSONSchema(schema, {
+        target: 'draft-7',
+        io: 'input',
+        reused: 'inline',
     }) as JsonSchemaObject;
 
     // MCP doesn't need draft metadata in the tool schema payload.

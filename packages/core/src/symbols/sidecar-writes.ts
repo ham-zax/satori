@@ -535,7 +535,7 @@ async function writeRelationshipSidecarInternal(
         }
     }
 
-    let manifestHash = '';
+    let manifestHash: string;
     try {
         await fs.promises.mkdir(rootPath, { recursive: true });
         await fs.promises.mkdir(relationshipByFileDir, { recursive: true });

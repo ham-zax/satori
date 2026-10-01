@@ -34,8 +34,8 @@
     }
   ],
   "runtime": {
-    "transformersJs": "3.0.2",
-    "onnxruntimeNode": "1.19.2",
+    "transformersJs": "4.3.0",
+    "onnxruntimeNode": "1.30.0",
     "executionProvider": "cpu"
   },
   "inference": {

@@ -787,7 +787,7 @@ export class RuntimeOwnerRegistry implements RuntimeOwnerMutationGate {
     }
 
     private shouldBreakLock(lockPath: string): boolean {
-        let ageMs = 0;
+        let ageMs: number;
         try {
             ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
         } catch {

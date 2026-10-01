@@ -143,10 +143,13 @@ export function hasExactSymbolMarker(value: unknown): boolean {
 function flattenZodIssues(issues: readonly z.ZodIssue[]): z.ZodIssue[] {
     const flattened: z.ZodIssue[] = [];
     for (const issue of issues) {
-        const unionErrors = (issue as { unionErrors?: readonly z.ZodError[] }).unionErrors;
-        if (issue.code === z.ZodIssueCode.invalid_union && unionErrors && unionErrors.length > 0) {
-            for (const unionError of unionErrors) {
-                flattened.push(...flattenZodIssues(unionError.issues));
+        if (issue.code === "invalid_union" && issue.errors.length > 0) {
+            // Union branch issues carry paths relative to the union itself.
+            for (const branchIssues of issue.errors) {
+                flattened.push(...flattenZodIssues(branchIssues.map((branchIssue) => ({
+                    ...branchIssue,
+                    path: [...issue.path, ...branchIssue.path],
+                }))));
             }
         } else {
             flattened.push(issue);

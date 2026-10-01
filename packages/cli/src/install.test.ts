@@ -785,7 +785,7 @@ test("successful runtime upgrade switches the launcher only after candidate pref
             return ((command: string, args: string[]) => {
                 assert.equal(
                     args.some((argument) => (
-                        argument === "@lancedb/lancedb-linux-x64-gnu@0.31.0"
+                        argument === "@lancedb/lancedb-linux-x64-gnu@0.39.0"
                     )),
                     true,
                 );

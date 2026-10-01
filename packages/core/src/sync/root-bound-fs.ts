@@ -124,7 +124,7 @@ export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: 
     try {
         openedPath = await fsp.readlink(link);
     } catch (error: unknown) {
-        throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`);
+        throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`, { cause: error });
     }
 
     if (!path.isAbsolute(openedPath) || openedPath.endsWith(' (deleted)')) {

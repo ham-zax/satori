@@ -28,9 +28,9 @@ export const callGraphSymbolRefSchema: z.ZodType<CallGraphSymbolRef> = z.object(
 export const callGraphInputSchema = z.object({
     path: absoluteFilesystemPathSchema('ABSOLUTE filesystem path to the indexed codebase root or subdirectory (relative paths are rejected).'),
     symbolRef: callGraphSymbolRefSchema.describe('Pass a graph-ready grouped search result target directly.'),
-    direction: z.enum(['callers', 'callees', 'both']).default('both').optional().describe('Traversal direction from the starting symbol. both unions separate caller and callee traversals within the shared edge limit.'),
-    depth: z.number().int().min(1).max(3).default(1).optional().describe('Traversal depth (max 3).'),
-    limit: z.number().int().positive().default(20).optional().describe('Maximum number of returned edges.'),
+    direction: z.enum(['callers', 'callees', 'both']).optional().meta({ default: 'both' }).describe('Traversal direction from the starting symbol. both unions separate caller and callee traversals within the shared edge limit.'),
+    depth: z.number().int().min(1).max(3).optional().meta({ default: 1 }).describe('Traversal depth (max 3).'),
+    limit: z.number().int().positive().optional().meta({ default: 20 }).describe('Maximum number of returned edges.'),
     evidence: z.object({
         kind: z.enum([
             'exact_references',
@@ -41,7 +41,7 @@ export const callGraphInputSchema = z.object({
             'edge_arguments',
         ]).describe('One evidence class to disclose in a bounded page. Omit evidence for the default summary-only response.'),
         cursor: z.string().min(1).max(1024).optional().describe('Publication- and requested-path-scope-bound continuation returned by a previous call_graph evidence page.'),
-        limit: z.number().int().positive().max(50).default(10).optional().describe('Maximum evidence items returned in this page.'),
+        limit: z.number().int().positive().max(50).optional().meta({ default: 10 }).describe('Maximum evidence items returned in this page.'),
     }).strict().optional().describe('Progressively disclose one bounded evidence table while keeping the graph and evidence counts in the response.'),
 });
 

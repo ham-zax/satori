@@ -426,6 +426,7 @@ async function connectOrStart(options: SharedRuntimeClientOptions): Promise<net.
                         if (!socket.isSocket()) {
                             throw new Error(
                                 `Shared runtime path '${paths.socketPath}' is not a Unix-domain socket.`,
+                                { cause: error },
                             );
                         }
                         fs.unlinkSync(paths.socketPath);

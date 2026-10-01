@@ -500,7 +500,7 @@ export class SearchQuerySupport {
                 continue;
             }
             const language = detectLanguageId(relativePath, content);
-            let chunks: Awaited<ReturnType<typeof analyzer.analyze>>["chunks"] = [];
+            let chunks: Awaited<ReturnType<typeof analyzer.analyze>>["chunks"];
             const parserStartedAt = performance.now();
             let parserOutcome: "success" | "failed" = "failed";
             try {

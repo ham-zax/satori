@@ -55,14 +55,14 @@
     "findings:check": "node scripts/check-piolium-findings.mjs --head HEAD --root piolium/findings"
   },
   "devDependencies": {
-    "@eslint/js": "^9.28.0",
-    "@types/node": "^20.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.19.0",
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
     "assert": "^2.1.0",
     "ajv": "^8.20.0",
     "browserify-zlib": "^0.2.0",
-    "eslint": "^9.28.0",
+    "eslint": "^10.11.0",
     "https-browserify": "^1.0.0",
     "os-browserify": "^0.3.0",
     "rimraf": "^6.1.3",

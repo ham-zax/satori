@@ -174,10 +174,9 @@ async function initialize(
     process.env.TOKENIZERS_PARALLELISM = "false";
     transformers.env.allowRemoteModels = false;
     transformers.env.allowLocalModels = true;
-    transformers.env.localModelPath = `${path.dirname(request.modelDirectory)}${path.sep}`;
-    const tokenizer = await transformers.AutoTokenizer.from_pretrained(
-        path.basename(request.modelDirectory),
-    );
+    // An absolute directory is loaded as a local path; Transformers.js v4 rejects
+    // revision-pinned basenames (`name@sha`) as model ids.
+    const tokenizer = await transformers.AutoTokenizer.from_pretrained(request.modelDirectory);
     (tokenizer as unknown as { truncation_side: "right" }).truncation_side = "right";
     const session = await onnxRuntime.InferenceSession.create(
         path.join(request.modelDirectory, request.profile.inference.modelPath),

@@ -700,7 +700,7 @@ export class ManageIndexingHandlers {
                 mutationStart = mutation;
             },
         );
-        let accepted = false;
+        let accepted: boolean;
         try {
             const payload = JSON.parse(response.content[0]?.text ?? "{}") as { status?: unknown };
             accepted = payload.status === "ok";

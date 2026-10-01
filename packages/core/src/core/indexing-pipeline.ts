@@ -556,6 +556,7 @@ export class IndexingPipeline {
                 pendingVectorWrites = [];
                 throw new Error(
                     `Failed to persist ${failureContext} for ${searchType}: ${describeError(error)}`,
+                    { cause: error },
                 );
             }
         };

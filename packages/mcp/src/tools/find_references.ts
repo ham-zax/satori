@@ -30,7 +30,7 @@ export const findReferencesInputSchema = z.object({
     excludePaths: z.array(repoRelativePathPrefixSchema(
         "Repo-relative file or subtree prefix to exclude deterministically.",
     )).max(64).optional(),
-    limit: z.number().int().min(1).max(500).default(100).optional().describe(
+    limit: z.number().int().min(1).max(500).optional().meta({ default: 100 }).describe(
         "Maximum returned occurrences. All eligible published files are still inspected before this output limit is applied; truncation makes coverage partial.",
     ),
 }).strict();

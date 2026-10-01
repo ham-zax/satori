@@ -269,7 +269,7 @@ function collectLeaseProtectedRoots(
             lease = null;
         }
         if (!lease) {
-            let oldEnoughToRecover = false;
+            let oldEnoughToRecover: boolean;
             try {
                 oldEnoughToRecover = Date.now() - fs.statSync(leasePath).mtimeMs >= METADATALESS_LOCK_STALE_MS;
             } catch {

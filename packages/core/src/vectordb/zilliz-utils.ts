@@ -234,7 +234,7 @@ export class ClusterManager {
             // Log the original error for more details, especially for fetch errors.
             // BoundedHttpError messages (kind/status/attempts) carry no token.
             console.error('[ZillizUtils] ❌ Original error in makeRequest:', error);
-            throw new Error(`Zilliz API request failed: ${errorMessage(error)}`);
+            throw new Error(`Zilliz API request failed: ${errorMessage(error)}`, { cause: error });
         }
     }
 
@@ -435,7 +435,7 @@ export class ClusterManager {
                 return createResponse.clusterDetails.connectAddress;
             }
         } catch (error: unknown) {
-            throw new Error(`Failed to get address from token: ${errorMessage(error)}`);
+            throw new Error(`Failed to get address from token: ${errorMessage(error)}`, { cause: error });
         }
     }
 }

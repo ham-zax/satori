@@ -167,7 +167,7 @@ test('search_codebase rejects the retired debug selector', async () => {
     }, { capabilities } as unknown as ToolContext);
 
     assert.equal(response.isError, true);
-    assert.match(response.content[0]?.text || '', /Unrecognized key\(s\).*debug/i);
+    assert.match(response.content[0]?.text || '', /Unrecognized key.*debug/i);
 });
 
 test('search_codebase accepts bounded diagnostic candidate depth only with full diagnostics', async () => {

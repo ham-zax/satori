@@ -83,6 +83,6 @@ test("continue_search accepts the frozen maximum and rejects offsets above it", 
 
     assert.equal(accepted.isError, undefined);
     assert.equal(response.isError, true);
-    assert.match(response.content[0]?.text ?? "", /less than or equal to 200/);
+    assert.match(response.content[0]?.text ?? "", /expectedOffset: Too big: expected number to be <=200/);
     assert.equal(calls, 1);
 });

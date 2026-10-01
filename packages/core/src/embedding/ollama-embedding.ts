@@ -251,7 +251,7 @@ export class OllamaEmbedding extends Embedding {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             console.error(`[OllamaEmbedding] Failed to detect dimension: ${errorMessage}`);
-            throw new Error(`Failed to detect Ollama embedding dimension: ${errorMessage}`);
+            throw new Error(`Failed to detect Ollama embedding dimension: ${errorMessage}`, { cause: error });
         }
     }
 }

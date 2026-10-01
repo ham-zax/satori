@@ -866,7 +866,7 @@ async function rerankSearchCandidates(
                         }
                     }
                 }
-                throw new Error('reranker_api_call_failed');
+                throw new Error('reranker_api_call_failed', { cause: error });
             }
 
             try {

@@ -685,7 +685,7 @@ export function buildVisibleGroupedSearchResults(input: {
                 },
             };
         const safeResult = safeCandidate.result as SearchResultLike;
-        let groupKey = "";
+        let groupKey: string;
         const ownerResolution = input.groupBy === "symbol"
             ? input.resolveOwner(safeResult)
             : {};

@@ -708,8 +708,8 @@ export class IndexGenerationWorkflow {
         const operationStartedAt = Date.now();
         const embeddingMetricsBefore = this.ports.embedding.getOperationMetricsSnapshot?.() ?? null;
         const vectorWriteMetricsBefore = this.ports.vectorDatabase.getWriteMetricsSnapshot?.() ?? null;
-        let prepareCollectionMs = 0;
-        let scanFilesMs = 0;
+        let prepareCollectionMs: number;
+        let scanFilesMs: number;
         let payloadPipelineMs = 0;
         let finalizeCollectionMs = 0;
         let navigationMs = 0;

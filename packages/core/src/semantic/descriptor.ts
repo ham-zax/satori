@@ -186,7 +186,7 @@ function loadDefaultLanguagesConfig(): { languages: SemanticLanguageDescriptor[]
     try {
         parsed = JSON.parse(content);
     } catch (e) {
-        throw new Error(`Malformed JSON in semantic language descriptor configuration at ${jsonPath}: ${(e as Error).message}`);
+        throw new Error(`Malformed JSON in semantic language descriptor configuration at ${jsonPath}: ${(e as Error).message}`, { cause: e });
     }
     return validateSemanticLanguagesConfig(parsed);
 }

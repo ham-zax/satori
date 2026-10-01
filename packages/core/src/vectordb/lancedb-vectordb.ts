@@ -109,7 +109,7 @@ async function resolveCurrentManifestFileName(collectionPath: string): Promise<s
     try {
         parsed = JSON.parse(hintBefore.toString('utf8')) as { version?: unknown };
     } catch (error) {
-        throw new Error(`LanceDB candidate source has a malformed latest-version hint: ${String(error)}`);
+        throw new Error(`LanceDB candidate source has a malformed latest-version hint: ${String(error)}`, { cause: error });
     }
     if (!Number.isSafeInteger(parsed.version) || Number(parsed.version) < 0) {
         throw new Error('LanceDB candidate source has an invalid latest-version hint.');

@@ -98,7 +98,7 @@ export function verifyManagedClientTarget(
     expected: ManagedRuntimeCommand,
     inheritedEnv: NodeJS.ProcessEnv = process.env,
 ): ManagedClientConfigProof {
-    let matches = false;
+    let matches: boolean;
     let disabled = false;
     let usesManagedLauncher: boolean | undefined;
     let runtimeEnvironment: Readonly<Record<string, string>> | undefined;

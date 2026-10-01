@@ -2080,7 +2080,7 @@ export class SearchRequestCoordinator {
         }
 
         const entry = lookup.entry;
-        let bindingValid = false;
+        let bindingValid: boolean;
         try {
             const rerankerIdentity = resolveSearchRerankerBindingIdentity(
                 this.reranker,

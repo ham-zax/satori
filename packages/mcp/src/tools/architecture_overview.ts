@@ -15,10 +15,10 @@ const architectureOverviewInputSchema = z.object({
     path: absoluteFilesystemPathSchema(
         "ABSOLUTE filesystem path to the indexed codebase root.",
     ),
-    scope: z.enum(["runtime", "all"]).default("runtime").optional().describe(
+    scope: z.enum(["runtime", "all"]).optional().meta({ default: "runtime" }).describe(
         "runtime excludes tests, documentation, generated/fixture/artifact paths, scripts/tooling, examples, benchmarks, and experiments. all includes every published non-file symbol.",
     ),
-    limit: z.number().int().min(1).max(50).default(15).optional().describe(
+    limit: z.number().int().min(1).max(50).optional().meta({ default: 15 }).describe(
         "Maximum rows returned for each bounded section: areas, boundaries, fan-in, fan-out, hotspots, entry candidates, cycles, packages, package boundaries, package fan-in/fan-out, and package cycles.",
     ),
     subtree: repoRelativePathPrefixSchema(

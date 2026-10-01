@@ -40,25 +40,25 @@
   "satoriManagedRuntime": {
     "mcp": "0.8.1",
     "core": "0.5.0",
-    "lanceDb": "0.31.0",
-    "oxcParser": "0.139.0",
+    "lanceDb": "0.39.0",
+    "oxcParser": "0.152.0",
     "lateOn": {
-      "transformers": "3.0.2",
-      "onnxruntimeNode": "1.19.2",
+      "transformers": "4.3.0",
+      "onnxruntimeNode": "1.30.0",
       "sharpNativePackages": {
         "linux-x64-gnu": [
-          "@img/sharp-linux-x64@0.33.5",
-          "@img/sharp-libvips-linux-x64@1.0.4"
+          "@img/sharp-linux-x64@0.35.5",
+          "@img/sharp-libvips-linux-x64@1.3.4"
         ],
         "linux-x64-musl": [
-          "@img/sharp-linuxmusl-x64@0.33.5",
-          "@img/sharp-libvips-linuxmusl-x64@1.0.4"
+          "@img/sharp-linuxmusl-x64@0.35.5",
+          "@img/sharp-libvips-linuxmusl-x64@1.3.4"
         ]
       }
     }
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.19.0",
     "@satori-code/core": "workspace:*",
     "@satori-code/mcp": "workspace:*",
     "tsx": "^4.22.4",

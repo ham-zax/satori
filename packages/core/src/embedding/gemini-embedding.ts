@@ -78,7 +78,7 @@ export class GeminiEmbedding extends Embedding {
                 dimension: response.embeddings[0].values.length
             };
         } catch (error) {
-            throw new Error(`Gemini embedding failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw new Error(`Gemini embedding failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
         }
     }
 
@@ -109,7 +109,7 @@ export class GeminiEmbedding extends Embedding {
                 };
             });
         } catch (error) {
-            throw new Error(`Gemini batch embedding failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw new Error(`Gemini batch embedding failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { cause: error });
         }
     }
 

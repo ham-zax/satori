@@ -44,18 +44,17 @@
     "test:raw": "node --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=8 \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@huggingface/transformers": "3.0.2",
+    "@huggingface/transformers": "4.3.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@satori-code/core": "workspace:*",
     "chokidar": "^5.0.0",
     "ignore": "^7.0.11",
     "jsonc-parser": "^3.3.1",
-    "onnxruntime-node": "1.19.2",
-    "zod": "^3.25.55",
-    "zod-to-json-schema": "^3.25.2"
+    "onnxruntime-node": "1.30.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.19.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   },

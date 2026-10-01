@@ -395,7 +395,7 @@ export async function probeManagedRuntimeCandidate(
             stderrText: stderrCollector.text(),
             expectedVersion: input.expectedVersion,
             failure: error,
-        }));
+        }), { cause: error });
     } finally {
         if (session) {
             await session.close();

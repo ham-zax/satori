@@ -152,7 +152,7 @@ async function waitForOwnerExit(
 ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() <= deadline) {
-        let registered = true;
+        let registered: boolean;
         try {
             registered = readOwners(registryPath).some((entry) => entry.ownerId === owner.ownerId);
         } catch {

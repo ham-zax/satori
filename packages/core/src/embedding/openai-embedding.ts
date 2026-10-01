@@ -45,11 +45,11 @@ export class OpenAIEmbedding extends Embedding {
 
             // Re-throw authentication errors
             if (errorMessage.includes('API key') || errorMessage.includes('unauthorized') || errorMessage.includes('authentication')) {
-                throw new Error(`Failed to detect dimension for model ${model}: ${errorMessage}`);
+                throw new Error(`Failed to detect dimension for model ${model}: ${errorMessage}`, { cause: error });
             }
 
             // For other errors, throw exception instead of using fallback
-            throw new Error(`Failed to detect dimension for model ${model}: ${errorMessage}`);
+            throw new Error(`Failed to detect dimension for model ${model}: ${errorMessage}`, { cause: error });
         }
     }
 
@@ -80,7 +80,7 @@ export class OpenAIEmbedding extends Embedding {
             };
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            throw new Error(`Failed to generate OpenAI embedding: ${errorMessage}`);
+            throw new Error(`Failed to generate OpenAI embedding: ${errorMessage}`, { cause: error });
         }
     }
 
@@ -110,7 +110,7 @@ export class OpenAIEmbedding extends Embedding {
             }));
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            throw new Error(`Failed to generate OpenAI batch embeddings: ${errorMessage}`);
+            throw new Error(`Failed to generate OpenAI batch embeddings: ${errorMessage}`, { cause: error });
         }
     }
 

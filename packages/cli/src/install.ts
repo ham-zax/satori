@@ -359,7 +359,6 @@ export async function executeInstallCommand(
             fs.rmSync(managedRuntimeCandidate.runtimeRoot, { recursive: true, force: true });
         }
         releaseRuntimeMutationLock?.();
-        releaseRuntimeMutationLock = undefined;
         throw error;
     }
     try {

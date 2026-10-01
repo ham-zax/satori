@@ -61,7 +61,7 @@ function resolveTypedMemberTarget(input: {
     ));
     if (imports.length > 1) return undefined;
 
-    let classCandidates: SymbolRecord[] = [];
+    let classCandidates: SymbolRecord[];
     if (imports.length === 1) {
         const importedFile = resolveRelativeModulePath(
             input.source.file,

@@ -375,7 +375,7 @@ async function scanDirectory(
         openedDirectory = await openDirectoryInsideRoot(directoryPath, context.rootDir);
     } catch (error: unknown) {
         if (!relativeDirectoryPath) {
-            throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`);
+            throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`, { cause: error });
         }
         markUnscannedDir(relativeDirectoryPath, result);
         console.warn(`[Synchronizer] Cannot open directory ${directoryPath}: ${errorMessage(error)}`);
@@ -399,7 +399,7 @@ async function scanDirectory(
             entries = await fsp.readdir(openedDirectory.descriptorPath, { withFileTypes: true });
         } catch (error: unknown) {
             if (!relativeDirectoryPath) {
-                throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`);
+                throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`, { cause: error });
             }
             markUnscannedDir(relativeDirectoryPath, result);
             console.warn(`[Synchronizer] Cannot read directory ${directoryPath}: ${errorMessage(error)}`);

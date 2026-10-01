@@ -12,7 +12,7 @@ import {
 } from "@satori-code/core";
 import {
     BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
-    selectBoundedSource,
+    createBoundedSourceSelector,
     type BoundedSourceSelectionPolicyVersion,
     type SelectedSourceProjection,
     type SourceLineSpan,
@@ -228,10 +228,9 @@ export function selectSource(
     input: NormalizedProjectionInput,
     maxSourceBytes: number,
     selectionPolicyVersion: BoundedSourceSelectionPolicyVersion = BOUNDED_SOURCE_SELECTION_POLICY_VERSION,
+    select: ReturnType<typeof createBoundedSourceSelector>,
 ) {
-    return selectBoundedSource({
-        sourceBytes: Buffer.from(input.content, "utf8"),
-        symbolSpan: input.symbolSpan,
+    return select({
         budgets: {
             maxSourceBytes,
             maxSourceLines: MAXIMUM_LINES,
@@ -269,6 +268,10 @@ export function selectRerankSourceWithinBudget(input: {
     let selectedSource: SelectedSourceProjection | undefined;
     let text = input.minimumText;
     let selectionAttemptCount = 0;
+    const select = createBoundedSourceSelector({
+        sourceBytes: Buffer.from(input.normalized.content, "utf8"),
+        symbolSpan: input.normalized.symbolSpan,
+    });
     for (
         let attempt = 0;
         attempt < MAXIMUM_SELECTION_ATTEMPTS && lowerBudget <= upperBudget;
@@ -280,6 +283,7 @@ export function selectRerankSourceWithinBudget(input: {
             input.normalized,
             sourceBudget,
             input.selectionPolicyVersion,
+            select,
         );
         if (selection.status !== "selected") {
             lowerBudget = sourceBudget + 1;

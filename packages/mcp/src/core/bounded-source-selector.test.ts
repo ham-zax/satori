@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     selectBoundedSource,
+    createBoundedSourceSelector,
     type BoundedSourceBudgets,
     type SourceSelectionCapabilities,
 } from "./bounded-source-selector.js";
@@ -25,6 +26,46 @@ function budgets(overrides: Partial<BoundedSourceBudgets> = {}): BoundedSourceBu
         ...overrides,
     };
 }
+
+test("prepared source selection matches fresh selection across budgets and evidence", () => {
+    const bodies = ["", "function café() {", "  // 😀 dependencies", "  return compare(deps);", "}"];
+    for (const newline of ["\n", "\r\n", "\r"]) {
+        for (const content of ["", bodies.join(newline), `${bodies.join(newline)}${newline}`,
+            `function run() {${newline}${"x".repeat(5_000)}${newline}}`]) {
+            const sourceBytes = Buffer.from(content);
+            const symbolSpan = { startLine: 1, endLine: content.split(newline).length };
+            const select = createBoundedSourceSelector({ sourceBytes, symbolSpan });
+            for (const maximum of [1, 40, 200, 4_000, 12_000]) {
+                for (const evidence of [false, true]) {
+                    const options = {
+                        budgets: budgets({ maxSourceBytes: maximum, maxExcerptBytes: maximum,
+                            maxSerializedSourceBytes: maximum }),
+                        capabilities,
+                        query: evidence ? "compare dependencies" : "",
+                        ...(evidence ? { evidenceSpans: [{ startLine: 1, endLine: 1 }],
+                            structuralAnchors: [{ kind: "declaration" as const, span: { startLine: 1, endLine: 1 } }] } : {}),
+                    };
+                    assert.deepEqual(select(options), selectBoundedSource({ sourceBytes, symbolSpan, ...options }));
+                }
+            }
+        }
+    }
+});
+
+test("prepared selection owns its bytes and span rather than retaining mutable inputs", () => {
+    const sourceBytes = Buffer.from("function run() { return true; }");
+    const symbolSpan = { startLine: 1, endLine: 1 };
+    const options = { budgets: budgets(), capabilities };
+    const select = createBoundedSourceSelector({ sourceBytes, symbolSpan });
+    const expected = selectBoundedSource({ sourceBytes, symbolSpan, ...options });
+    sourceBytes.fill(120);
+    assert.notDeepEqual(selectBoundedSource({ sourceBytes, symbolSpan, ...options }), expected);
+    symbolSpan.startLine = 10;
+    assert.deepEqual(select(options), expected);
+    const result = select(options);
+    if (result.status === "selected") result.source.excerpts[0].content = "changed result";
+    assert.deepEqual(select(options), expected);
+});
 
 test("bounded source selector returns complete UTF-8 source when all caps fit", () => {
     const content = "function café() {\r\n  return \"ok\";\r\n}";

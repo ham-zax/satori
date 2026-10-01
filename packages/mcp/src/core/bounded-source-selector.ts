@@ -544,6 +544,35 @@ export function selectBoundedSource(
     }
     const lines = readPhysicalLines(sourceBytes, input.symbolSpan.endLine);
     validateSymbolSpan(input.symbolSpan, lines.length);
+    return selectPreparedBoundedSource({ ...input, selectionPolicyVersion }, sourceBytes, lines);
+}
+
+/** Own a private source/span snapshot; repeated budgets cannot observe caller mutations. */
+export function createBoundedSourceSelector(
+    input: Pick<BoundedSourceSelectionInput, "sourceBytes" | "symbolSpan">,
+): (options: Omit<BoundedSourceSelectionInput, "sourceBytes" | "symbolSpan">) => BoundedSourceSelectionResult {
+    const sourceBytes = Buffer.from(input.sourceBytes);
+    const symbolSpan = { ...input.symbolSpan };
+    const lines = readPhysicalLines(sourceBytes, symbolSpan.endLine);
+    validateSymbolSpan(symbolSpan, lines.length);
+    return (options) => {
+        validateBudgets(options.budgets);
+        const selectionPolicyVersion = options.selectionPolicyVersion ?? BOUNDED_SOURCE_SELECTION_POLICY_VERSION;
+        if (selectionPolicyVersion !== BOUNDED_SOURCE_SELECTION_POLICY_VERSION) {
+            throw new TypeError("Unsupported bounded source selection policy version.");
+        }
+        return selectPreparedBoundedSource({ ...options, symbolSpan, selectionPolicyVersion }, sourceBytes, lines);
+    };
+}
+
+function selectPreparedBoundedSource(
+    input: Omit<BoundedSourceSelectionInput, "sourceBytes"> & {
+        selectionPolicyVersion: BoundedSourceSelectionPolicyVersion;
+    },
+    sourceBytes: Buffer,
+    lines: PhysicalLine[],
+): BoundedSourceSelectionResult {
+    const selectionPolicyVersion = input.selectionPolicyVersion;
     const fullSpan = byteRangeForLines(lines, input.symbolSpan.endLine, input.symbolSpan);
     const totalLines = input.symbolSpan.endLine - input.symbolSpan.startLine + 1;
     const totalBytes = fullSpan.endByte - fullSpan.startByte;

@@ -43,6 +43,18 @@ test("canonical policy carries the frozen v5 contract identity", () => {
     assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v5");
 });
 
+test("canonical projection encodes the source once across budget attempts", (t) => {
+    const original = Buffer.from;
+    let encodings = 0;
+    t.mock.method(Buffer, "from", (...args: Parameters<typeof Buffer.from>) => {
+        if (args[0] === CONTENT) encodings++;
+        return Reflect.apply(original, Buffer, args);
+    });
+    const result = buildSearchRerankDocument(baseInput());
+    assert.ok(result.selectionAttemptCount > 1);
+    assert.equal(encodings, 1);
+});
+
 test("v5 keeps textual source references distinct from trusted structural relationships", () => {
     const sourceReference = { repository_relative_path: "src/veto.ts", containing_symbol_label: "function useEffect",
         source_line: 7, reference_source_excerpt: "return validate_order(order);" };

@@ -537,6 +537,26 @@ test("LateOn cancellation removes queued work and terminates executing work", as
     await reranker.waitUntilReady();
 });
 
+test("LateOn cancellation during worker startup rejects before readiness without failing other waiters", async (t) => {
+    const reranker = new LateOnReranker({
+        modelDirectory: "/unused/by/fake-worker",
+        profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+        workerPath: createFakeWorker(t, { readyDelayMilliseconds: 500 }),
+    });
+    t.after(() => reranker.close());
+
+    const controller = new AbortController();
+    const cancelled = reranker.rerank("find owner", ["cancelled"], {
+        signal: controller.signal,
+    } as Parameters<LateOnReranker["rerank"]>[2]);
+    const waiter = reranker.rerank("find owner", ["document"]);
+    controller.abort();
+    await assertOperationalReason(cancelled, "lateon_cancelled");
+    assert.equal(reranker.getOperationalState(), "loading");
+    assert.deepEqual(await waiter, [{ index: 0, relevanceScore: 8 }]);
+    assert.equal(reranker.getOperationalState(), "ready");
+});
+
 test("LateOn close rejects active and queued work and joins its worker", async (t) => {
     const reranker = new LateOnReranker({
         modelDirectory: "/unused/by/fake-worker",

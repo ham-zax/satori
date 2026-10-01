@@ -302,6 +302,26 @@ export class LateOnReranker implements Reranker {
         this.scheduleIdleShutdown();
     }
 
+    // Worker startup stays owned by the shared readiness promise; only this
+    // caller's wait is abandoned on abort, so other waiters still see readiness.
+    private async waitUntilReadyOrCancelled(signal: AbortSignal | undefined): Promise<void> {
+        const ready = this.waitUntilReady();
+        if (!signal) return ready;
+        let onAbort!: () => void;
+        const cancelled = new Promise<never>((_resolve, reject) => {
+            onAbort = () => reject(operationalError("lateon_cancelled", "LateOn rerank was cancelled."));
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+        });
+        // An abandoned wait must not surface its later outcome as unhandled.
+        ready.catch(() => {});
+        try {
+            await Promise.race([ready, cancelled]);
+        } finally {
+            signal.removeEventListener("abort", onAbort);
+        }
+    }
+
     private async ensureWorkerStarted(): Promise<void> {
         this.clearIdleShutdown();
         if (this.workerState !== "idle") return;
@@ -383,10 +403,7 @@ export class LateOnReranker implements Reranker {
             if (this.terminalBootstrapFailure) {
                 throw this.terminalBootstrapFailure;
             }
-            await this.waitUntilReady();
-            if (signal?.aborted) {
-                throw operationalError("lateon_cancelled", "LateOn rerank was cancelled.");
-            }
+            await this.waitUntilReadyOrCancelled(signal);
         }
         if (this.active && this.queue.length >= LATEON_MAXIMUM_QUEUED_REQUESTS) {
             throw operationalError(

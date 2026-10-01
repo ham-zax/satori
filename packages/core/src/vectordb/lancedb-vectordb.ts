@@ -21,7 +21,12 @@ import {
 } from 'apache-arrow';
 
 import { compareContractStrings } from '../utils/compare-contract-strings';
-import { serializeLanceDbFilter } from './filters';
+import {
+    compileVectorFilterPredicate,
+    countVectorFilterLiterals,
+    serializeLanceDbFilter,
+    validateVectorFilter,
+} from './filters';
 import {
     type CollectionCreateOptions,
     type CollectionDetails,
@@ -45,6 +50,15 @@ const DEFAULT_MAX_WRITE_BATCH_SIZE = 512;
 const DEFAULT_WRITE_AGGREGATION_BATCH_SIZE = 256;
 const STABLE_TIE_INITIAL_MULTIPLIER = 2;
 const STABLE_TIE_MINIMUM_FETCH = 32;
+/**
+ * LanceDB plans every filter literal on each query and count (about 0.2 ms per
+ * literal), so a scope listing thousands of files costs far more than the
+ * search. Above this size the scope is applied in memory to an unfiltered,
+ * score-ordered window instead; the window grows to at most the fetch cap, and
+ * a scope too selective to fill it falls back to the pushed-down filter.
+ */
+const POST_FILTER_MINIMUM_LITERALS = 256;
+const POST_FILTER_MAXIMUM_FETCH = 4096;
 const COLLECTION_IO_CONCURRENCY = 64;
 /**
  * Identity of the FTS analyzer below. Lexical terms reach the index lowercased
@@ -697,12 +711,46 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     private async retrieveStableCandidates(
         table: Table,
         limit: number,
-        filter: string,
-        fetch: (fetchLimit: number) => Promise<VectorCandidate[]>,
+        filter: VectorFilter | undefined,
+        fetch: (fetchLimit: number, where: string) => Promise<VectorCandidate[]>,
         minimumScore?: number,
     ): Promise<VectorCandidate[]> {
         if (limit === 0) return [];
-        const rowCount = await table.countRows(filter || undefined);
+        const validated = filter ? validateVectorFilter(filter) : undefined;
+        if (validated && countVectorFilterLiterals(validated) > POST_FILTER_MINIMUM_LITERALS) {
+            const admit = compileVectorFilterPredicate(validated);
+            const postFiltered = await this.retrieveStableWindow(table, limit, '', fetch, minimumScore, {
+                admit: (candidate) => admit(candidate.document),
+                maximumFetch: POST_FILTER_MAXIMUM_FETCH,
+            });
+            if (postFiltered) return postFiltered;
+        }
+        const pushedDown = await this.retrieveStableWindow(
+            table,
+            limit,
+            validated ? serializeLanceDbFilter(validated) : '',
+            fetch,
+            minimumScore,
+        );
+        return pushedDown ?? [];
+    }
+
+    /**
+     * Fetch a score-ordered window until it provably holds the top `limit`
+     * candidates, including every tie at the boundary. With `admit`, rows are
+     * filtered after fetching; termination still reads the unfiltered window,
+     * because unfetched rows score no higher than its last row. Returns
+     * undefined when the window would exceed `maximumFetch`.
+     */
+    private async retrieveStableWindow(
+        table: Table,
+        limit: number,
+        where: string,
+        fetch: (fetchLimit: number, where: string) => Promise<VectorCandidate[]>,
+        minimumScore: number | undefined,
+        postFilter?: { admit: (candidate: VectorCandidate) => boolean; maximumFetch: number },
+    ): Promise<VectorCandidate[] | undefined> {
+        const rowCount = await table.countRows(where || undefined);
         if (rowCount === 0) return [];
         let fetchLimit = Math.min(
             rowCount,
@@ -710,10 +758,12 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         );
 
         for (;;) {
-            const fetched = (await fetch(fetchLimit)).sort(candidateOrder);
+            if (postFilter && fetchLimit > postFilter.maximumFetch) return undefined;
+            const fetched = (await fetch(fetchLimit, where)).sort(candidateOrder);
+            const admitted = postFilter ? fetched.filter(postFilter.admit) : fetched;
             const accepted = minimumScore === undefined
-                ? fetched
-                : fetched.filter((candidate) => candidate.score >= minimumScore);
+                ? admitted
+                : admitted.filter((candidate) => candidate.score >= minimumScore);
             const boundary = accepted[limit - 1]?.score;
             const worstFetched = fetched[fetched.length - 1]?.score;
             const exhausted = fetched.length < fetchLimit || fetchLimit >= rowCount;
@@ -746,8 +796,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             if (request.vector.length !== dimension) {
                 throw new Error(`Dense query vector dimension does not match table dimension ${dimension}.`);
             }
-            const filter = serializeLanceDbFilter(request.filter);
-            return this.retrieveStableCandidates(table, request.limit, filter, async (fetchLimit) => {
+            return this.retrieveStableCandidates(table, request.limit, request.filter, async (fetchLimit, filter) => {
                 let query = table.query()
                     .nearestTo([...request.vector])
                     .distanceType('cosine')
@@ -775,8 +824,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         if (request.query.trim().length === 0 || request.limit === 0) return [];
         const connection = await this.getConnection();
         return withTable(connection, collectionName, async (table) => {
-            const filter = serializeLanceDbFilter(request.filter);
-            return this.retrieveStableCandidates(table, request.limit, filter, async (fetchLimit) => {
+            return this.retrieveStableCandidates(table, request.limit, request.filter, async (fetchLimit, filter) => {
                 let query = table.query().fullTextSearch(new MatchQuery(
                     request.query,
                     'lexicalText',

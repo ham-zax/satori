@@ -153,3 +153,35 @@ function serializeValidatedLanceDbFilter(filter: VectorFilter): string {
 export function serializeLanceDbFilter(filter?: VectorFilter): string {
     return filter ? serializeValidatedLanceDbFilter(validateVectorFilter(filter)) : '';
 }
+
+/** Number of literal values a filter carries; large literal lists are costly for engines to plan. */
+export function countVectorFilterLiterals(filter: VectorFilter): number {
+    switch (filter.kind) {
+        case 'comparison':
+            return 1;
+        case 'in':
+            return filter.values.length;
+        case 'and':
+            return filter.operands.reduce((total, operand) => total + countVectorFilterLiterals(operand), 0);
+    }
+}
+
+/** Build an in-memory predicate with the same semantics as the serialized engine filters. */
+export function compileVectorFilterPredicate(
+    filter: VectorFilter,
+): (fields: Readonly<Record<VectorFilterField, string>>) => boolean {
+    switch (filter.kind) {
+        case 'comparison':
+            return filter.operator === 'eq'
+                ? (fields) => fields[filter.field] === filter.value
+                : (fields) => fields[filter.field] !== filter.value;
+        case 'in': {
+            const values = new Set(filter.values);
+            return (fields) => values.has(fields[filter.field]);
+        }
+        case 'and': {
+            const operands = filter.operands.map(compileVectorFilterPredicate);
+            return (fields) => operands.every((operand) => operand(fields));
+        }
+    }
+}

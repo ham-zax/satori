@@ -164,7 +164,8 @@ export type SearchExpansionReason =
     | "primary_candidate_pool_small"
     | "primary_failed_fallback"
     | "primary_terminal_provider_failure"
-    | "caller_alt_terms";
+    | "caller_alt_terms"
+    | "repository_vocabulary";
 
 export type SearchExpansionDecision = {
     expand: boolean;
@@ -173,6 +174,7 @@ export type SearchExpansionDecision = {
     termsEmitted?: string[];
     /** Caller terms rejected by the alt_terms cap; absent when none were dropped. */
     termsDropped?: string[];
+    repositoryVocabulary?: import('@satori-code/core').RepositoryVocabularyResult;
 };
 
 export type SearchProviderWorkDiagnostics = SearchProviderWorkDebugHint & {
@@ -546,6 +548,7 @@ export type SearchExecutionInput = {
     alt_terms?: string[] | string;
     /** Resolved with the provider query by the request coordinator. */
     resolvedAltTerms?: ResolvedSearchAltTerms;
+    repositoryVocabulary?: import('@satori-code/core').RepositoryVocabularyResult;
     reservation_policy?: string;
 };
 
@@ -1202,8 +1205,9 @@ export async function runSearchExecution(
             expand: shouldExpand,
             attempted: shouldExpand,
             reason: shouldRunCallerExpansion
-                ? "caller_alt_terms"
+                ? input.repositoryVocabulary?.status === 'ok' ? "repository_vocabulary" : "caller_alt_terms"
                 : expansionDecision.reason,
+            ...(input.repositoryVocabulary ? { repositoryVocabulary: input.repositoryVocabulary } : {}),
             ...(callerExpansionQuery ? {
                 termsEmitted: callerAltTerms,
             } : {}),

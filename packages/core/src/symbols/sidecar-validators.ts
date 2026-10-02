@@ -1,4 +1,5 @@
 import { isRepositoryRelativePath } from '../paths/repository-path';
+import { isVocabularyEvidence } from '../vocabulary/contracts';
 import type { PythonFlowFact } from '../language-analysis';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import {
@@ -148,6 +149,7 @@ export function isSymbolRecord(value: unknown): value is SymbolRecord {
     if (value.ontologyTags !== undefined && (!Array.isArray(value.ontologyTags) || !value.ontologyTags.every(isNonEmptyString))) {
         return false;
     }
+    if (value.vocabulary !== undefined && !isVocabularyEvidence(value.vocabulary)) return false;
     return true;
 }
 

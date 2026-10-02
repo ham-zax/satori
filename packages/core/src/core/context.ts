@@ -32,6 +32,8 @@ import {
 } from '../config/repo-config';
 import { JsonNavigationStore } from '../navigation/store';
 
+import { RepositoryVocabularyService } from '../vocabulary/service';
+import type { RepositoryVocabularyResult, RepositoryVocabularyFilter } from '../vocabulary/contracts';
 import type {
     SymbolRecord,
     SymbolRegistryManifestFile,
@@ -342,6 +344,7 @@ export class Context {
     private indexGenerationWorkflow: IndexGenerationWorkflow;
     private readonly indexTeardownWorkflow: IndexTeardownWorkflow;
     private readonly semanticSearchService: SemanticSearchService;
+    private readonly repositoryVocabularyService: RepositoryVocabularyService;
     private readonly indexingPipeline: IndexingPipeline;
     private readonly ignoreRuleService: IgnoreRuleService;
     private readonly semanticAnalyzer?: SemanticProjectAnalyzer;
@@ -616,6 +619,10 @@ export class Context {
             getSymbolExtractorVersion: () => this.getSymbolExtractorVersion(),
         });
 
+        this.repositoryVocabularyService = new RepositoryVocabularyService({
+            isReadAdmitted: (publication) => this.isPublicationReadAdmitted(publication),
+            getNavigationAddress: (publication) => this.getPublicationNavigationAddress(publication),
+        });
         this.semanticSearchService = new SemanticSearchService({
             getVectorDatabase: () => this.vectorDatabase,
             embeddingAccess: {
@@ -1294,6 +1301,12 @@ export class Context {
         request: SemanticSearchRequest,
     ): Promise<SemanticSearchResult[]> {
         return this.semanticSearchService.searchInPublication(publication, request);
+    }
+
+    public lookupRepositoryVocabularyInPublication(
+        publication: PublicationRef, query: string, limit = 4, accepts?: RepositoryVocabularyFilter,
+    ): Promise<RepositoryVocabularyResult> {
+        return this.repositoryVocabularyService.lookup(publication, query, limit, accepts);
     }
 
     public async semanticSearchWithCandidateTraceInPublication(

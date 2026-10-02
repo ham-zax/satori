@@ -114,6 +114,33 @@ test('every provenance field is present on a record', () => {
     assert.equal(record.provenance.altTermsModel, 'claude-sonnet');
 });
 
+test('latency reports aggregate retrieval and leaves unmeasured phases unavailable', () => {
+    const response = responseWithExpansion();
+    response.hints.debugSearch.phaseTimingsMs = { semanticSearch: 19.6, rerank: 4.4 };
+    const record = build({ response });
+    assert.deepEqual(record.latency, {
+        retrievalMs: 20,
+        primaryPassMs: null,
+        expandedPassMs: null,
+        fusionMs: null,
+        rerankMs: 4,
+        totalElapsedMs: 26,
+    });
+});
+
+test('missing phase timings are unavailable while measured zero remains zero', () => {
+    const response = responseWithExpansion();
+    delete response.hints.debugSearch.phaseTimingsMs;
+    const missing = build({ response });
+    assert.equal(missing.latency.retrievalMs, null);
+    assert.equal(missing.latency.rerankMs, null);
+    response.hints.debugSearch.phaseTimingsMs = { semanticSearch: 0, rerank: 0 };
+    const measured = build({ response });
+    assert.equal(measured.latency.retrievalMs, 0);
+    assert.equal(measured.latency.rerankMs, 0);
+    assert.equal(measured.latency.primaryPassMs, null);
+});
+
 test('the record config carries the resolved flags and the alt_terms cap', () => {
     const record = build();
     assert.deepEqual(record.config.flags, PROVENANCE.resolvedFlags);

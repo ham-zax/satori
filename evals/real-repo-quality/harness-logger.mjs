@@ -207,10 +207,13 @@ export function buildQueryHarnessRecord({
             matchedTarget: scoreResult?.matched ?? null,
         },
         latency: {
-            primaryPassMs: Math.round(timings.semanticSearch ?? 0),
-            expandedPassMs: Math.round(timings.expandedSearch ?? 0),
-            fusionMs: Math.round(timings.mcpFusion ?? 0),
-            rerankMs: Math.round(timings.rerank ?? 0),
+            // semanticSearch accumulates all retrieval passes; the runtime does
+            // not measure the individual passes or MCP fusion separately.
+            retrievalMs: Number.isFinite(timings.semanticSearch) ? Math.round(timings.semanticSearch) : null,
+            primaryPassMs: null,
+            expandedPassMs: null,
+            fusionMs: null,
+            rerankMs: Number.isFinite(timings.rerank) ? Math.round(timings.rerank) : null,
             totalElapsedMs: Math.round(elapsedMs),
         },
     };

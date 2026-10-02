@@ -1,4 +1,6 @@
 export type SearchFlags = {
+    /** Use generation-bound source vocabulary when the caller does not supply alt_terms. */
+    repo_vocab?: boolean;
     compound_join?: boolean;
     dealias?: boolean;
     /**
@@ -21,6 +23,7 @@ export type SearchFlags = {
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
 export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
+    repo_vocab: false,
     compound_join: true,
     path_demotion: true,
     dealias: false,

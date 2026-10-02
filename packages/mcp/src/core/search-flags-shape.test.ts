@@ -103,3 +103,21 @@ test('SATORI_SEARCH_FLAGS is still the one string-encoded path', () => {
         else process.env.SATORI_SEARCH_FLAGS = previous;
     }
 });
+
+test('repository vocabulary is opt-in and explicit flags override the environment', () => {
+    const previous = process.env.SATORI_SEARCH_FLAGS;
+    try {
+        delete process.env.SATORI_SEARCH_FLAGS;
+        assert.equal(resolveSearchFlags().repo_vocab, false);
+        process.env.SATORI_SEARCH_FLAGS = 'no-repo_vocab';
+        assert.equal(resolveSearchFlags().repo_vocab, false);
+        assert.equal(resolveSearchFlags({ repo_vocab: true }).repo_vocab, true);
+        process.env.SATORI_SEARCH_FLAGS = 'repo_vocab';
+        assert.equal(resolveSearchFlags({ repo_vocab: false }).repo_vocab, false);
+        process.env.SATORI_SEARCH_FLAGS = 'baseline';
+        assert.equal(resolveSearchFlags().repo_vocab, false);
+    } finally {
+        if (previous === undefined) delete process.env.SATORI_SEARCH_FLAGS;
+        else process.env.SATORI_SEARCH_FLAGS = previous;
+    }
+});

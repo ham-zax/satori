@@ -43,6 +43,7 @@ import type {
 } from '../vectordb';
 import { envManager } from '../utils/env-manager';
 import { compareContractStrings } from '../utils/compare-contract-strings';
+import { withSourceVocabulary } from '../vocabulary/extract';
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
@@ -418,7 +419,7 @@ export class IndexingPipeline {
     buildAnalyzedFileSymbolFacts(
         analyzed: AnalyzedIndexedFile,
     ): AnalyzedFileSymbolFacts {
-        const symbolRecords = buildSymbolRecordsForFile({
+        const symbolRecords = withSourceVocabulary(buildSymbolRecordsForFile({
             relativePath: analyzed.relativePath,
             language: analyzed.language,
             content: analyzed.source,
@@ -426,7 +427,7 @@ export class IndexingPipeline {
             extractorVersion: this.getSymbolExtractorVersion(),
             extractedSymbols: analyzed.extractedSymbols,
             chunks: analyzed.chunks,
-        });
+        }), analyzed.source);
         const hasDefinitions = symbolRecords.some((symbol) => symbol.kind !== 'file');
         const definitionStatus = analyzed.structuralStatus !== 'complete'
             ? 'structural_unavailable'

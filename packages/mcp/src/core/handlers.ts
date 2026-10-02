@@ -216,6 +216,10 @@ type IndexProfileView = {
 };
 
 type ContextLifecycleCapabilities = PublicationAuthorityContext & {
+    lookupRepositoryVocabularyInPublication?: (
+        publication: PublicationRef, query: string, limit?: number,
+        accepts?: import('@satori-code/core').RepositoryVocabularyFilter,
+    ) => Promise<import('@satori-code/core').RepositoryVocabularyResult>;
     resolveCollectionName?: (codebasePath: string) => string;
     loadIndexProfileForCodebase?: (codebasePath: string) => IndexProfileView;
     getActiveIgnorePatterns?: (codebasePath?: string) => string[];
@@ -724,6 +728,14 @@ export class ToolHandlers {
                 parseIndexedAtMs: (indexedAt) => this.parseIndexedAtMs(indexedAt),
                 getEmbeddingProviderName: () => this.context.getEmbeddingEngine().getProvider(),
                 semanticSearch: (request: import("@satori-code/core").SemanticSearchRequest) => this.context.semanticSearch(request),
+                get lookupRepositoryVocabularyInPublication() {
+                    const implementation = getSearchContextLifecycle().lookupRepositoryVocabularyInPublication;
+                    return typeof implementation === 'function'
+                        ? (publication: PublicationRef, query: string, limit?: number,
+                            accepts?: import('@satori-code/core').RepositoryVocabularyFilter) => (
+                            implementation.call(searchContext, publication, query, limit, accepts)
+                        ) : undefined;
+                },
                 get semanticSearchInPublication() {
                     const implementation = getSearchContextLifecycle().semanticSearchInPublication;
                     return typeof implementation === 'function'

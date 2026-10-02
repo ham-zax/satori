@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { supplementSearchFileSymbols } from "./search-file-symbol-supplement.js";
+import { resolveSearchFlags } from './search-flags.js';
+import { allowsRepositoryVocabulary, buildRepositoryVocabularyFilter, resolveRepositorySearchTerms } from './search-repository-vocabulary.js';
 import {
     COLLECTION_LIMIT_MESSAGE,
     type PublicationLease,
@@ -147,7 +149,6 @@ import {
 import { resolveSearchRerankStructuralContextStatus } from "./search-rerank-structural-status.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
 import { buildSearchRerankQuery } from "./search-rerank-query.js";
-import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import { resolveSearchRerankQuery } from "./search-rerank-query-routing.js";
 import {
     resolveSearchRerankRequestIdentity,
@@ -557,6 +558,10 @@ export interface SearchFreshnessCollaborator {
 }
 
 export interface SearchEnvironmentCollaborator {
+    lookupRepositoryVocabularyInPublication?: (
+        publication: PublicationRef, query: string, limit?: number,
+        accepts?: import('@satori-code/core').RepositoryVocabularyFilter,
+    ) => Promise<import('@satori-code/core').RepositoryVocabularyResult>;
     now(): number;
 
     getCapabilities(): CapabilityResolver;
@@ -1621,7 +1626,31 @@ export class SearchRequestCoordinator {
                 }
 
                 const answerFocus = resolveSearchAnswerFocus(queryPlan, input.flags).focus;
-                const resolvedAltTerms = resolveSearchAltTerms(input.alt_terms);
+                if (!searchSymbolRegistry && navigationStatus === "valid" && navigationAddress) {
+                    const registryState = await this.preparedRead.loadPreparedNavigationManifest(
+                        preparedReadState,
+                        readinessDebug.operations,
+                    );
+                    if (registryState?.status === "ok") {
+                        searchSymbolRegistry = registryState.registry;
+                        searchSymbolRegistryManifestHash = registryState.manifestHash;
+                    }
+                }
+                const vocabularyFilter = this.searchQuerySupport.buildExactRegistrySymbolFilter({
+                    scope: input.scope, parsedOperators, requestedSubdirectory,
+                });
+                const vocabularyTerms = await resolveRepositorySearchTerms({
+                    publication: lease, semanticQuery: parsedOperators.semanticQuery, callerTerms: input.alt_terms,
+                    enabled: Boolean(resolveSearchFlags(input.flags).repo_vocab) && navigationStatus === 'valid'
+                        && allowsRepositoryVocabulary(queryPlan) && Boolean(searchSymbolRegistry)
+                        && parsedOperators.must.length === 0 && parsedOperators.exclude.length === 0,
+                    accepts: searchSymbolRegistry
+                        ? buildRepositoryVocabularyFilter(searchSymbolRegistry, vocabularyFilter)
+                        : undefined,
+                    lookup: this.environment.lookupRepositoryVocabularyInPublication,
+                });
+                const resolvedAltTerms = vocabularyTerms.resolved;
+                const repositoryVocabulary = vocabularyTerms.vocabulary;
                 const resolvedRerankQuery = resolveSearchRerankQuery({
                     semanticQuery: parsedOperators.semanticQuery,
                     focusedQueryV2: buildSearchRerankQuery({
@@ -1636,16 +1665,6 @@ export class SearchRequestCoordinator {
                 );
                 const wantsStructuralContext = rerankerDocumentProjectionIdentity
                     === SEARCH_RERANK_DOCUMENT_POLICY.id;
-                if (!searchSymbolRegistry && navigationStatus === "valid" && navigationAddress) {
-                    const registryState = await this.preparedRead.loadPreparedNavigationManifest(
-                        preparedReadState,
-                        readinessDebug.operations,
-                    );
-                    if (registryState?.status === "ok") {
-                        searchSymbolRegistry = registryState.registry;
-                        searchSymbolRegistryManifestHash = registryState.manifestHash;
-                    }
-                }
                 const retrievalFilter = searchSymbolRegistry
                     ? buildSearchRetrievalScope({
                         files: searchSymbolRegistry.manifest.files,
@@ -1683,6 +1702,7 @@ export class SearchRequestCoordinator {
                     flags: input.flags,
                     alt_terms: input.alt_terms,
                     resolvedAltTerms,
+                    repositoryVocabulary,
                     ...(input.reservation_policy !== undefined ? { reservation_policy: input.reservation_policy } : {}),
                 }, {
                     searchQuerySupport: this.searchQuerySupport,

@@ -5,6 +5,7 @@ import {
     isRelationshipManifest,
 } from './contracts';
 import type { RelationshipRecord } from './contracts';
+import { stageRepositoryVocabularyIndex } from '../vocabulary/storage';
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { SymbolRegistry } from './registry';
 import type { RelationshipAnalysisEvidence } from '../relationships';
@@ -278,6 +279,11 @@ export async function stagePublicationNavigation(
             providerCoverage: input.providerCoverage,
         }, reuse?.relationships);
 
+        await stageRepositoryVocabularyIndex({
+            navigationRoot: buildRoot, registry: input.registry, records: input.records,
+            publicationId: input.publicationId, symbolManifestHash: symbolResult.manifestHash,
+            relationshipManifestHash: relationshipResult.manifestHash,
+        });
         const physical = await fsyncDirectoryTree(buildRoot, reuse?.symbols.sharedFileSizes);
         await fs.promises.mkdir(path.dirname(navigationRoot), { recursive: true });
         await fs.promises.rename(buildRoot, navigationRoot);

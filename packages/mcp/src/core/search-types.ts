@@ -472,9 +472,11 @@ export interface SearchDebugHint {
             | "primary_candidate_pool_small"
             | "primary_failed_fallback"
             | "primary_terminal_provider_failure"
-            | "caller_alt_terms";
+            | "caller_alt_terms"
+            | "repository_vocabulary";
         primaryScopedCandidateCount: number;
         termsEmitted?: string[];
+        repositoryVocabulary?: import('@satori-code/core').RepositoryVocabularyResult;
         /** Caller terms rejected by the alt_terms cap; absent when none were dropped. */
         termsDropped?: string[];
     };

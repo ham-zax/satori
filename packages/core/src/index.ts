@@ -77,6 +77,7 @@ export type {
     PublicationRef,
 } from './generation/contracts';
 export { RuntimeArtifactMissingError } from './utils/worker-threads';
+export type { RepositoryVocabularyResult, RepositoryVocabularyMatch, RepositoryVocabularyFilter } from './vocabulary/contracts';
 export {
     AtomicIncrementalPublicationUnsupportedError,
     IndexFormatIncompatibleError,

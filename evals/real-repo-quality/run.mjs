@@ -289,8 +289,17 @@ async function main() {
         result.repos = previous.repos.filter((r) => !wanted.has(r.name));
         result.previousGeneratedAt = previous.generatedAt;
     }
-    const harnessRecords = [];
-    const fusedPools = {};
+    const harnessLogPath = path.join(outDir, 'harness-log.json');
+    const previousRecords = fs.existsSync(harnessLogPath)
+        ? JSON.parse(fs.readFileSync(harnessLogPath, 'utf8'))
+        : [];
+    const harnessRecords = previousRecords.filter(record => !wanted.has(record.repo));
+    const fusedPoolPath = path.join(outDir, 'fused-pool.json');
+    const previousPools = fs.existsSync(fusedPoolPath)
+        ? JSON.parse(fs.readFileSync(fusedPoolPath, 'utf8')).queries
+        : {};
+    const fusedPools = Object.fromEntries(Object.entries(previousPools)
+        .filter(([, record]) => !wanted.has(record.repo)));
     for (const repo of cases.repos.filter((r) => wanted.has(r.name))) {
         log(`== ${repo.name}`);
         const entry = { name: repo.name, url: repo.url, commit: repo.commit };
@@ -298,10 +307,13 @@ async function main() {
         const { dir, head } = ensureClone(repo);
         entry.path = dir;
         entry.head = head;
-        const targetChunksMap = await resolveRepoTargetChunkIds(stateRoot, dir, repo.queries);
         const session = await openLocalSession({ stateRoot, roots: [reposDir] });
         try {
             entry.indexing = await indexRepo(session, dir, log);
+            if (!entry.indexing.succeeded) {
+                throw new Error(`Cannot resolve evaluation targets: indexing did not succeed for ${repo.name}.`);
+            }
+            const targetChunksMap = await resolveRepoTargetChunkIds(stateRoot, dir, repo.queries);
             const manifest = readManifestFiles(dir);
             if (manifest) {
                 entry.manifestPath = manifest.manifestPath;
@@ -362,6 +374,8 @@ async function main() {
                 fusedPools[query.id] = {
                     query_id: query.id,
                     repo: repo.name,
+                    // Retained pools may come from earlier invocations.
+                    provenance,
                     reservation_policy: reservationPolicyOpt,
                     pool: buildFusedPoolEntries(response.json, query.id),
                 };
@@ -391,10 +405,10 @@ async function main() {
         }
     }
     const harnessReport = computeSummaryReport(harnessRecords, baselineMap);
-    fs.writeFileSync(path.join(outDir, 'harness-log.json'), JSON.stringify(harnessRecords, null, 2) + '\n');
+    fs.writeFileSync(harnessLogPath, JSON.stringify(harnessRecords, null, 2) + '\n');
     fs.writeFileSync(path.join(outDir, 'harness-summary.md'), generateHarnessSummaryMarkdown(harnessRecords, harnessReport) + '\n');
     fs.writeFileSync(
-        path.join(outDir, 'fused-pool.json'),
+        fusedPoolPath,
         JSON.stringify({ provenance, queries: fusedPools }, null, 2) + '\n',
     );
     log(`wrote ${outDir}/result.json, summary.md, harness-log.json, fused-pool.json, and harness-summary.md`);

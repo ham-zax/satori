@@ -1,6 +1,7 @@
 import type { StructuralStatus, StructuralReason } from '../language-analysis/types';
 import { isRepositoryRelativePath } from '../paths/repository-path';
 import type { ResolutionAuthority } from '../relationships/resolution';
+import type { RepositoryVocabularyEvidence } from '../vocabulary/contracts';
 import {
     SEMANTIC_PROVIDER_COVERAGE_STATUSES,
     type SemanticProviderCoverage,
@@ -86,6 +87,7 @@ export interface SymbolRecord {
     fileHash: string;
     extractorVersion: string;
     ontologyTags?: RepositoryOntologyTag[];
+    vocabulary?: RepositoryVocabularyEvidence;
 }
 
 export const STRUCTURAL_DEFINITION_STATUSES = [

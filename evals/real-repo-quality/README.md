@@ -15,7 +15,12 @@ Requires the offline runtime installed (`satori install --runtime offline`): the
 model paths and provider settings from `~/.satori/bin/satori-mcp.js`, but runs the local MCP build
 with its own state root (default `~/.cache/satori-eval-state`, models symlinked) and clones the repos
 into `~/.cache/satori-eval-repos/<name>@<sha12>` (checks out the pinned commit and verifies it).
-Results go to `~/.cache/satori-eval-results/<timestamp>/{result.json,summary.md}`, outside the repo.
+Results go to `~/.cache/satori-eval-results/<timestamp>/`, outside the repo: `result.json`,
+`harness-log.json`, `fused-pool.json`, and Markdown summaries. Sequential `--repos` runs into
+the same `--out` retain earlier repositories in all three JSON files; rerunning a repository
+replaces its records. Each harness record and fused-pool query retains its own run provenance.
+Harness latency records expose aggregate retrieval time as `retrievalMs`. Individual retrieval
+passes and MCP fusion are unmeasured and recorded as `null`; missing timings are also `null`.
 The client drains the server's stderr; an undrained pipe blocks the index worker on exit.
 
 For publishable quality and latency evidence, use a fresh task-owned state directory after building:

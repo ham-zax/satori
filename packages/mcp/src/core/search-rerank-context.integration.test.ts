@@ -17,6 +17,7 @@ import {
     SEARCH_RERANK_QUERY_PROJECTION_IDENTITY,
 } from "./search-rerank-query.js";
 import { resolveSearchRerankQuery } from "./search-rerank-query-routing.js";
+import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import { resolveSearchCandidateRole } from "./search-candidate-role.js";
 import { resolveSearchPolicy } from "./search-policy.js";
 import type { SearchRerankProjectionResult } from "./search-rerank-projection-result.js";
@@ -67,10 +68,11 @@ function buildSupport(reranker: Reranker | null): SearchQuerySupport {
     });
 }
 
-function buildInput(query: string): SearchExecutionInput {
+function buildInput(query: string, altTerms?: string[] | string): SearchExecutionInput {
     const parsedOperators = parseSearchOperators(query);
     const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
     const answerFocus = resolveSearchAnswerFocus(queryPlan).focus;
+    const resolvedAltTerms = resolveSearchAltTerms(altTerms);
     return {
         effectiveRoot: "/repo",
         scope: "runtime",
@@ -83,6 +85,7 @@ function buildInput(query: string): SearchExecutionInput {
         rerankQuery: buildSearchRerankQuery({
             semanticQuery: parsedOperators.semanticQuery,
             answerFocus,
+            callerTerms: resolvedAltTerms.termsEmitted,
         }),
         rerankQueryProjectionIdentity: SEARCH_RERANK_QUERY_PROJECTION_IDENTITY,
         parsedOperators,
@@ -93,6 +96,7 @@ function buildInput(query: string): SearchExecutionInput {
         observedChangedFilesState: { available: false, files: new Set() },
         dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({ resultLimit: 3, hasMustOperators: false }),
+        resolvedAltTerms,
     };
 }
 
@@ -213,7 +217,7 @@ test("explicit historical reranker profile receives the raw question byte-exact"
             })) satisfies RerankResult[];
         },
     };
-    const base = buildInput(question);
+    const base = buildInput(question, ["destroy", "unmount"]);
     const resolved = resolveSearchRerankQuery({
         semanticQuery: base.semanticQuery,
         focusedQueryV2: base.rerankQuery,
@@ -242,6 +246,41 @@ test("explicit historical reranker profile receives the raw question byte-exact"
     for (const occurrence of rerankInputStage!.candidates) {
         assert.equal(occurrence.rerankInput?.queryProjectionIdentity, "semantic_query_raw_v1");
     }
+});
+
+test("provider sees the same accepted vocabulary as expanded retrieval while source selection keeps the original question", async () => {
+    const question = "where is cleanup invoked";
+    const captured: { query?: string } = {};
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "lateon", model: "test", profile: "context-v6" }),
+        getQueryProjectionVersion: () => "search_rerank_query_v2",
+        rerank: async (query, _documents, options) => {
+            captured.query = query;
+            return (options?.identities ?? []).map((_identity, index) => ({ index, relevanceScore: 1 - index / 10 }));
+        },
+    };
+    const input = buildInput(question, "destroy,unmount,effect,teardown,dispose");
+    const results = [candidate("a", "src/effects.ts", 0.9), candidate("b", "src/other.ts", 0.8)];
+    const host = buildHost(results, reranker);
+    const retrievalQueries: string[] = [];
+    const sourceQueries: string[] = [];
+    host.semanticSearch = async (request) => {
+        retrievalQueries.push(request.query);
+        return results;
+    };
+    host.buildRerankDocument = async (query, result) => {
+        sourceQueries.push(query);
+        return typedProjection(result as FixtureCandidate);
+    };
+    const outcome = await runSearchExecution(input, host, buildDiagnostics());
+    assert.equal(outcome.kind, "ok");
+    assert.deepEqual(retrievalQueries, [question, "destroy unmount effect teardown"]);
+    assert.ok(captured.query?.includes(`${question} (destroy, unmount, effect, teardown)`));
+    assert.ok(!captured.query?.includes("dispose"));
+    assert.deepEqual(sourceQueries, [question, question]);
+    if (outcome.kind !== "ok") return;
+    assert.deepEqual(outcome.semanticExpansion.termsEmitted, input.resolvedAltTerms?.termsEmitted);
+    assert.deepEqual(outcome.semanticExpansion.termsDropped, ["dispose"]);
 });
 
 test("source excerpt projection receives the exact semantic question rather than the expanded provider query", async () => {

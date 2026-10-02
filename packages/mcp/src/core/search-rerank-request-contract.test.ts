@@ -32,6 +32,10 @@ test("committed rerank request contract matches runtime fixture recomputation", 
 
 test("request contract fixtures bind focus, query, role, and document projection behavior", () => {
     const fixtures = buildSearchRerankRequestContractFixtures();
+    assert.equal(fixtures.queryProjectionV2.implementation_caller_terms, [
+        "Question:", "where is the cleanup function invoked (destroy, unmount, effect, teardown)",
+        "", "Requested answer type:", "production implementation, control flow, and integration path",
+    ].join("\n"));
     assert.equal(
         fixtures.answerFocusResolution["how does Shariah compliance checking block trades"],
         "implementation",

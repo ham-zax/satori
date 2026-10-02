@@ -19,7 +19,12 @@ import {
     buildSearchQueryPlan,
     parseSearchOperators,
 } from "../core/search-query-planning.js";
-import { SEARCH_MAX_DIAGNOSTIC_CANDIDATES } from "../core/search-constants.js";
+import {
+    SEARCH_ALT_TERMS_MAX,
+    SEARCH_ALT_TERMS_STRING_MAX_CHARS,
+    SEARCH_ALT_TERMS_TERM_MAX_CHARS,
+    SEARCH_MAX_DIAGNOSTIC_CANDIDATES,
+} from "../core/search-constants.js";
 import {
     WorkspaceAuthorizationError,
     type AuthorizedWorkspacePath,
@@ -269,6 +274,9 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     includeResultIndex: z.boolean().optional().describe("Optional grouped-mode compact index over the frozen ranked results. Defaults to false when omitted."),
     debugMode: z.enum(["summary", "ranking", "freshness", "full"]).optional().describe("Bounded diagnostic projection."),
     debugCandidateLimit: z.number().int().positive().max(SEARCH_MAX_DIAGNOSTIC_CANDIDATES).optional().describe("Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings."),
+    flags: z.record(z.string(), z.boolean()).optional().describe("Experimental search flags for candidate expansion or retrieval ablation."),
+    alt_terms: z.array(z.string().max(SEARCH_ALT_TERMS_TERM_MAX_CHARS)).max(SEARCH_ALT_TERMS_MAX).or(z.string().max(SEARCH_ALT_TERMS_STRING_MAX_CHARS)).optional().describe(`Optional alternative technical terms or likely code identifiers expected in the target implementation (e.g. ['destroy', 'unmount'] for a cleanup query). At most ${SEARCH_ALT_TERMS_MAX} terms. Arrays exceeding the count or ${SEARCH_ALT_TERMS_TERM_MAX_CHARS} characters per term are rejected; string input is split on commas or whitespace, with excess terms dropped and reported as termsDropped. Used in an isolated expanded retrieval pass fused via reciprocal rank fusion, and included with the original question for contextual reranking.`),
+    reservation_policy: z.enum(["cap55", "cap64", "off"]).optional().describe("Primary-slot reservation policy for the caller-expansion pass. cap55 reserves up to 55 primary slots (default, current behavior); cap64 reserves up to 64; off disables the reservation so the pool keeps fused-score order."),
 }).strict().superRefine((value, refinementContext) => {
     if (value.debugCandidateLimit !== undefined && value.debugMode !== "full") {
         refinementContext.addIssue({

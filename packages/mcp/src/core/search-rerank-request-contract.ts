@@ -22,6 +22,7 @@ import {
 } from "./search-rerank-document.js";
 import { resolveSearchRerankDocumentProjectionIdentity } from "./search-rerank-document-routing.js";
 import { buildSearchRerankQuery } from "./search-rerank-query.js";
+import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
 import { SEARCH_RERANK_QUERY_RAW_IDENTITY } from "./search-rerank-query-routing.js";
 import {
@@ -410,6 +411,11 @@ export function buildSearchRerankRequestContractFixtures(): SearchRerankRequestC
             answerFocus,
         });
     }
+    queryProjectionV2.implementation_caller_terms = buildSearchRerankQuery({
+        semanticQuery: "where is the cleanup function invoked",
+        answerFocus: "implementation",
+        callerTerms: resolveSearchAltTerms(" destroy, unmount effect teardown dispose ").termsEmitted,
+    });
     const candidateRoleClassification = buildCandidateRoleClassificationFixture();
     return {
         answerFocusResolution,

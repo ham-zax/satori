@@ -1,6 +1,6 @@
 {
   "schemaVersion": "satori_rerank_request_contract_v1",
-  "contractSha256": "9abf24a29ff1801340b590cf835e9efa304866d64c46eaf0af7107db37ef0147",
+  "contractSha256": "c794b9254d8b8bfedf86dbc6705a2c0b7cf44f7bce74c1c288ef9c1e3bb48022",
   "fixtures": {
     "answerFocusResolution": {
       "how does Shariah compliance checking block trades": "implementation",
@@ -16,7 +16,8 @@
       "documentation": "Question:\nwhat do the docs say about order validation\n\nRequested answer type:\ndocumentation that directly explains the requested topic",
       "configuration": "Question:\nwhere is the risk threshold configured\n\nRequested answer type:\nactive configuration declarations and the code that applies them",
       "references": "Question:\nwho calls validate_order\n\nRequested answer type:\ndirect callers, callees, references, and integration sites",
-      "neutral": "Question:\norder validation overview\n\nRequested answer type:\nthe most direct answer to the question"
+      "neutral": "Question:\norder validation overview\n\nRequested answer type:\nthe most direct answer to the question",
+      "implementation_caller_terms": "Question:\nwhere is the cleanup function invoked (destroy, unmount, effect, teardown)\n\nRequested answer type:\nproduction implementation, control flow, and integration path"
     },
     "candidateRoleClassification": {
       "src/core/veto.ts|typescript": "implementation",

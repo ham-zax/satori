@@ -1,5 +1,6 @@
 import { normalizeLanguageId } from "@satori-code/core";
 import { SEARCH_OPERATOR_PREFIX_MAX_CHARS } from "./search-constants.js";
+import { DEFAULT_SEARCH_FLAGS } from "./search-flags.js";
 import type {
     SearchIntentConfidence,
     EntrypointQueryIntent,
@@ -313,12 +314,54 @@ function tokenizeLexicalTerms(tokens: string[]): SearchLexicalTerm[] {
     return Array.from(terms.values());
 }
 
-export function buildSearchLexicalFallbackTerms(semanticQuery: string): string[] {
+const KNOWN_COMPOUND_PAIRS: Array<[string, string, string]> = [
+    ["bail", "out", "bailout"],
+    ["clean", "up", "cleanup"],
+    ["tear", "down", "teardown"],
+    ["set", "up", "setup"],
+    ["shut", "down", "shutdown"],
+    ["fall", "back", "fallback"],
+    ["roll", "back", "rollback"],
+    ["hook", "up", "hookup"],
+    ["look", "up", "lookup"],
+    ["build", "out", "buildout"],
+    ["work", "around", "workaround"],
+    ["time", "out", "timeout"],
+];
+
+/**
+ * Build the lexical fallback terms for a query.
+ *
+ * `options.compoundJoin` is the ONLY input. This function used to fall back to
+ * resolveSearchFlags(), which reads process.env.SATORI_SEARCH_FLAGS, so its
+ * behavior depended on ambient process state that no caller passed in and that
+ * no caller could see. Every production caller now passes the flag explicitly
+ * (search-execution.ts), so the env read is gone: a missing option means "use
+ * the flag's default", not "use whatever the environment happens to say".
+ */
+export function buildSearchLexicalFallbackTerms(
+    semanticQuery: string,
+    options?: { compoundJoin?: boolean },
+): string[] {
+    const enableCompoundJoin = options?.compoundJoin ?? DEFAULT_SEARCH_FLAGS.compound_join;
     const tokens = semanticQuery
         .split(/\s+/)
         .map((token) => token.trim())
         .filter((token) => token.length > 0);
-    const ranked = tokenizeLexicalTerms(tokens)
+    const rawTokens = [...tokens];
+    if (enableCompoundJoin) {
+        const lowerTokens = tokens.map((t) => t.toLowerCase().replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, ""));
+        for (let i = 0; i < lowerTokens.length; i++) {
+            for (const [w1, w2, joined] of KNOWN_COMPOUND_PAIRS) {
+                if (lowerTokens[i] === w1 && lowerTokens[i + 1] === w2) {
+                    rawTokens.push(joined);
+                } else if (lowerTokens[i] === joined) {
+                    rawTokens.push(w1);
+                }
+            }
+        }
+    }
+    const ranked = tokenizeLexicalTerms(rawTokens)
         .map((term, index) => ({
             index,
             value: term.value

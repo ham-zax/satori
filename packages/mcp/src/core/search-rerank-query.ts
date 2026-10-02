@@ -20,6 +20,7 @@ const ANSWER_TYPE: Record<SearchAnswerFocus, string> = {
 export function buildSearchRerankQuery(input: {
     semanticQuery: string;
     answerFocus: SearchAnswerFocus;
+    callerTerms?: readonly string[];
 }): string {
     const semanticQuery = input.semanticQuery.trim();
     if (semanticQuery.length === 0) {
@@ -27,7 +28,10 @@ export function buildSearchRerankQuery(input: {
     }
     return [
         "Question:",
-        semanticQuery,
+        // The caller supplies alternative terminology for this same question.
+        // Keep it attached during reranking so an admitted destroy/unmount
+        // implementation can be recognized as the answer to a cleanup query.
+        input.callerTerms?.length ? `${semanticQuery} (${input.callerTerms.join(", ")})` : semanticQuery,
         "",
         "Requested answer type:",
         ANSWER_TYPE[input.answerFocus],

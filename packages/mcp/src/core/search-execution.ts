@@ -93,6 +93,16 @@ import type {
     SearchRerankStructuralContextStatus,
 } from "./search-rerank-projection-result.js";
 import { sortNativeRetrievalCandidates } from "./search-retrieval-order.js";
+import { resolveSearchFlags } from "./search-flags.js";
+// Re-exported so the built dist keeps a single stable import path for this
+// predicate (scripts/offline-prf-ladder.mjs imports it from here).
+export { isNonProductionDistractor } from "./search-non-production-path.js";
+import { isNonProductionDistractor } from "./search-non-production-path.js";
+import {
+    resolveExpansionReservationPolicy,
+    reservePrimaryCandidateSlots,
+} from "./search-expansion-reservation.js";
+import { resolveSearchAltTerms, type ResolvedSearchAltTerms } from "./search-expansion-terms.js";
 
 type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
@@ -153,12 +163,16 @@ export type SearchExpansionReason =
     | "primary_candidate_pool_sufficient"
     | "primary_candidate_pool_small"
     | "primary_failed_fallback"
-    | "primary_terminal_provider_failure";
+    | "primary_terminal_provider_failure"
+    | "caller_alt_terms";
 
 export type SearchExpansionDecision = {
     expand: boolean;
     reason: SearchExpansionReason;
     primaryScopedCandidateCount: number;
+    termsEmitted?: string[];
+    /** Caller terms rejected by the alt_terms cap; absent when none were dropped. */
+    termsDropped?: string[];
 };
 
 export type SearchProviderWorkDiagnostics = SearchProviderWorkDebugHint & {
@@ -528,6 +542,11 @@ export type SearchExecutionInput = {
     entrypointOwnerEvidence?: EntrypointOwnerEvidenceResolution;
     requestedSubdirectory?: RequestedSearchSubdirectory | null;
     retrievalFilter?: import("@satori-code/core").SemanticSearchRequest["filter"];
+    flags?: Record<string, boolean>;
+    alt_terms?: string[] | string;
+    /** Resolved with the provider query by the request coordinator. */
+    resolvedAltTerms?: ResolvedSearchAltTerms;
+    reservation_policy?: string;
 };
 
 type RerankPhaseResult = {
@@ -885,8 +904,25 @@ async function rerankSearchCandidates(
                     candidateIds: selectedCandidateIds,
                     results: rerankResults,
                 });
+                const executionFlags = resolveSearchFlags(input.flags);
+                let itemsForPolicy = [...validatedItems];
+                if (executionFlags.rerank_blend) {
+                    // originalIndex indexes rerankSlice, not the full fused pool,
+                    // so these are ranks WITHIN the rerank window. The blend
+                    // therefore weighs the provider rank against the candidate's
+                    // position in the slice the provider was handed, not its
+                    // position in the pool it was drawn from.
+                    itemsForPolicy.sort((a, b) => {
+                        const aSliceRank = a.originalIndex + 1;
+                        const bSliceRank = b.originalIndex + 1;
+                        const aBlend = 0.5 * a.providerRank + 0.5 * aSliceRank;
+                        const bBlend = 0.5 * b.providerRank + 0.5 * bSliceRank;
+                        if (aBlend !== bBlend) return aBlend - bBlend;
+                        return a.providerRank - b.providerRank;
+                    });
+                }
                 const effectiveRerankItems = preferImplementationCandidates({
-                    candidates: validatedItems,
+                    candidates: itemsForPolicy,
                     relativePath: (item) => rerankSlice[item.originalIndex]!.result.relativePath,
                     answerFocus: input.answerFocus,
                     queryPlan: input.queryPlan,
@@ -995,12 +1031,28 @@ function buildNativeProviderRerankDocument(result: SearchResultLike): string {
     return `${relativePath}\n${language}\n${symbolLabel}\n${normalizedContent}`;
 }
 
+export function hasTestOrDocIntent(queryPlan: SearchQueryPlan, queryText: string): boolean {
+    if (queryPlan.testSeeking || queryPlan.documentationSeeking) return true;
+    return /\b(tests?|specs?|docs?|documentation|changelog|examples?|benchmarks?|mocks?)\b/i.test(queryText);
+}
+
 export async function runSearchExecution(
     input: SearchExecutionInput,
     host: SearchExecutionHost,
     searchDiagnostics: SearchDiagnostics,
 ): Promise<SearchExecutionOutcome> {
-    const expandedQuery = `${input.semanticQuery}\nimplementation runtime source entrypoint`;
+    const flags = resolveSearchFlags(input.flags);
+    // Terms past the cap are dropped, not silently ignored: the caller's intent
+    // is recorded in the expansion trace so a capped request is diagnosable.
+    const callerTerms = input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms);
+    const callerAltTerms = callerTerms.termsEmitted;
+    const callerAltTermsDropped = callerTerms.termsDropped;
+    const callerExpansionQuery = callerTerms.query;
+    // Absent or unknown input stays on the default, so default behavior is unchanged.
+    const reservationPolicy = resolveExpansionReservationPolicy(input.reservation_policy);
+    const expandedQuery = callerExpansionQuery
+        ? callerExpansionQuery
+        : `${input.semanticQuery}\nimplementation runtime source entrypoint`;
     const candidateSurvival = input.debugMode === "full"
         ? createSearchCandidateSurvivalTrace()
         : undefined;
@@ -1092,7 +1144,7 @@ export async function runSearchExecution(
                     : { kind: "dense_similarity_min" as const, min: 0.3 };
                 const lexicalFallbackTerms = input.queryPlan.retrievalMode === "dense"
                     ? []
-                    : buildSearchLexicalFallbackTerms(pass.query);
+                    : buildSearchLexicalFallbackTerms(pass.query, { compoundJoin: Boolean(flags.compound_join) });
                 return host.semanticSearch({
                     codebasePath: input.effectiveRoot,
                     query: pass.query,
@@ -1143,15 +1195,27 @@ export async function runSearchExecution(
             primaryFailed: primaryResult.status === "rejected",
             primaryFailureRetryable: primaryEmbeddingDiagnostic?.retryable,
         });
+        const shouldRunCallerExpansion = Boolean(callerExpansionQuery);
+        const shouldExpand = shouldRunCallerExpansion || expansionDecision.expand;
         semanticExpansion = {
             ...expansionDecision,
-            attempted: expansionDecision.expand,
+            expand: shouldExpand,
+            attempted: shouldExpand,
+            reason: shouldRunCallerExpansion
+                ? "caller_alt_terms"
+                : expansionDecision.reason,
+            ...(callerExpansionQuery ? {
+                termsEmitted: callerAltTerms,
+            } : {}),
+            ...(callerAltTermsDropped.length > 0 ? {
+                termsDropped: callerAltTermsDropped,
+            } : {}),
         };
-        searchDiagnostics.semanticExpansionAttempted ||= expansionDecision.expand;
-        searchDiagnostics.semanticExpansionReason = expansionDecision.reason;
+        searchDiagnostics.semanticExpansionAttempted ||= shouldExpand;
+        searchDiagnostics.semanticExpansionReason = semanticExpansion.reason;
         const passDescriptors: Array<{ id: SearchPassId; query: string }> = [primaryDescriptor];
         const passSettled = [...primarySettled];
-        if (expansionDecision.expand) {
+        if (shouldExpand) {
             const expandedDescriptor = { id: "expanded" as const, query: expandedQuery };
             passDescriptors.push(expandedDescriptor);
             passSettled.push(...await runPasses([expandedDescriptor]));
@@ -1265,6 +1329,17 @@ export async function runSearchExecution(
                 retrievalPasses,
             };
         };
+        const testOrDocIntent = hasTestOrDocIntent(input.queryPlan, input.semanticQuery);
+        const hasPathConstraint = input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null;
+        const plan = input.queryPlan;
+        const skipPathDemotion = testOrDocIntent
+            || hasPathConstraint
+            || input.answerFocus !== "implementation"
+            || plan.referenceSeeking
+            || plan.route.kind === "exact_path"
+            || plan.route.kind === "configuration"
+            || plan.route.kind === "references";
+        const pathDemotionEligible = flags.path_demotion && !skipPathDemotion;
         const addPass = (results: SearchResultLike[], passId: string, passWeight = 1) => {
             for (let i = 0; i < results.length; i++) {
                 const result = results[i];
@@ -1291,17 +1366,22 @@ export async function runSearchExecution(
                 }
                 const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || "unknown"}`;
                 const rank = i + 1;
-                const rrf = passWeight * (1 / (SEARCH_RRF_K + rank));
+                const pathMult = (pathDemotionEligible && isNonProductionDistractor(result.relativePath)) ? 0.7 : 1.0;
+                const rrf = passWeight * (1 / (SEARCH_RRF_K + rank)) * pathMult;
                 const existing = byChunkKey.get(key);
                 if (!existing) {
                     const backendScoreKind = typeof result.backendScoreKind === "string"
                         ? result.backendScoreKind as BackendScoreKind
                         : "unknown";
                     backendScoreKinds.add(backendScoreKind);
-                    byChunkKey.set(key, createCandidate(result, rrf, [passId]));
+                    const candidate = createCandidate(result, rrf, [passId]);
+                    candidate.pathMultiplier = pathMult;
+                    byChunkKey.set(key, candidate);
                 } else {
+                    const isTrueExpansionPass = shouldRunCallerExpansion;
                     const semanticPassDuplicate = (
-                        (passId === "primary" || passId === "expanded")
+                        !isTrueExpansionPass
+                        && (passId === "primary" || passId === "expanded")
                         && existing.retrievalPasses.some((existingPassId) => (
                             existingPassId === "primary" || existingPassId === "expanded"
                         ))
@@ -1309,6 +1389,9 @@ export async function runSearchExecution(
                     existing.fusionScore = semanticPassDuplicate
                         ? Math.max(existing.fusionScore, rrf)
                         : existing.fusionScore + rrf;
+                    if (pathMult < existing.pathMultiplier) {
+                        existing.pathMultiplier = pathMult;
+                    }
                     const nextScore = typeof result.backendScore === "number"
                         ? result.backendScore
                         : (typeof result.score === "number" ? result.score : undefined);
@@ -1414,22 +1497,6 @@ export async function runSearchExecution(
             }
         }
 
-        if (candidateSurvival) {
-            const fusedForTrace = [...byChunkKey.values()].sort((left, right) => {
-                const scoreOrder = right.fusionScore - left.fusionScore;
-                if (scoreOrder !== 0) return scoreOrder;
-                const leftId = searchCandidateIdentity(left.result).candidateId;
-                const rightId = searchCandidateIdentity(right.result).candidateId;
-                return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
-            });
-            appendSearchCandidateStage(
-                candidateSurvival,
-                "mcp_fusion",
-                fusedForTrace,
-                `attempt:${attempt + 1}`,
-            );
-        }
-
         let scoredAttempt: SearchCandidate[] = [];
         const evaluateCandidate = (
             candidate: SearchCandidate,
@@ -1495,7 +1562,9 @@ export async function runSearchExecution(
             }
 
             candidate.pathCategory = category;
-            candidate.pathMultiplier = 1;
+            if (!flags.path_demotion) {
+                candidate.pathMultiplier = 1;
+            }
             candidate.changedFilesMultiplier = 1;
             candidate.agentFitMultiplier = 1;
             candidate.agentFitReason = "not_used_for_ranking";
@@ -1634,6 +1703,17 @@ export async function runSearchExecution(
         filterSummary = attemptFilterSummary;
         scored = scoredAttempt;
 
+        if (shouldRunCallerExpansion) {
+            sortNativeRetrievalCandidates(
+                scored,
+                {
+                    exactMatchFirst: input.queryPlan.exactMatchPinningEnabled,
+                    mustMatchesFirst: input.parsedOperators.must.length > 0,
+                },
+            );
+            scored = reservePrimaryCandidateSlots(scored, candidateLimit, reservationPolicy);
+        }
+
         const nativeOrder = sortNativeRetrievalCandidates(
             scored,
             {
@@ -1643,6 +1723,12 @@ export async function runSearchExecution(
         );
         exactMatchPinningApplied = nativeOrder.exactMatchPinningApplied || exactMatchPinningApplied;
         rankingProvenance.exactMatchPinningApplied = exactMatchPinningApplied;
+        if (candidateSurvival) {
+            // Observe the admitted pool after constraints and reservation.
+            // A separate pre-filter reservation could claim a target survived
+            // even when the real path rejected it or reserved different IDs.
+            appendSearchCandidateStage(candidateSurvival, "mcp_fusion", scored, `attempt:${attempt + 1}`);
+        }
         const finishAttempt = input.parsedOperators.must.length === 0
             || scored.length >= input.retrievalPolicy.retrievalResultLimit
             || attempt === maxAttempts - 1

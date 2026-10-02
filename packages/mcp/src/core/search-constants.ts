@@ -1,3 +1,19 @@
+/**
+ * Hard cap on caller-supplied `alt_terms`, in both the array and string forms.
+ *
+ * The expanded pass is a separate retrieval pass fused by RRF. Every term the
+ * caller adds competes with the primary pass for the same candidate budget, so
+ * an unbounded list is a silent retrieval-quality lever. One constant owns the
+ * cap for the zod schema, the tool description, the runtime slice, and the
+ * alt_terms generator script.
+ */
+export const SEARCH_ALT_TERMS_MAX = 4;
+/** Generous per-term character budget, used only to derive the string-form cap. */
+export const SEARCH_ALT_TERMS_TERM_MAX_CHARS = 128;
+/** Cap on the space- or comma-separated string form: N terms plus N-1 separators. */
+export const SEARCH_ALT_TERMS_STRING_MAX_CHARS =
+    SEARCH_ALT_TERMS_MAX * SEARCH_ALT_TERMS_TERM_MAX_CHARS + (SEARCH_ALT_TERMS_MAX - 1);
+
 export const SEARCH_RRF_K = 60;
 export const SEARCH_MAX_CANDIDATES = 80;
 export const SEARCH_MAX_DIAGNOSTIC_CANDIDATES = 160;

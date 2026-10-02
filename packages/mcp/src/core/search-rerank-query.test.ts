@@ -32,3 +32,22 @@ test("query requires a non-empty semantic query", () => {
         /non-empty semantic query/,
     );
 });
+
+test("caller implementation terminology stays attached to the original question", () => {
+    const input = {
+        semanticQuery: "where is the cleanup function invoked",
+        answerFocus: "implementation" as const,
+        callerTerms: ["destroy", "unmount"],
+    };
+    assert.equal(buildSearchRerankQuery(input), [
+        "Question:",
+        "where is the cleanup function invoked (destroy, unmount)",
+        "",
+        "Requested answer type:",
+        "production implementation, control flow, and integration path",
+    ].join("\n"));
+    assert.equal(
+        buildSearchRerankQuery({ ...input, callerTerms: [] }),
+        buildSearchRerankQuery({ semanticQuery: input.semanticQuery, answerFocus: input.answerFocus }),
+    );
+});

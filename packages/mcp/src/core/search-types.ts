@@ -471,8 +471,12 @@ export interface SearchDebugHint {
             | "primary_candidate_pool_sufficient"
             | "primary_candidate_pool_small"
             | "primary_failed_fallback"
-            | "primary_terminal_provider_failure";
+            | "primary_terminal_provider_failure"
+            | "caller_alt_terms";
         primaryScopedCandidateCount: number;
+        termsEmitted?: string[];
+        /** Caller terms rejected by the alt_terms cap; absent when none were dropped. */
+        termsDropped?: string[];
     };
     rankingProvenance: {
         semanticPassesUsed: string[];
@@ -951,6 +955,9 @@ export interface SearchRequestInput {
     includeResultIndex?: boolean;
     debugMode?: SearchDebugMode;
     debugCandidateLimit?: number;
+    flags?: Record<string, boolean>;
+    alt_terms?: string[] | string;
+    reservation_policy?: string;
 }
 
 export interface FileOutlineInput {

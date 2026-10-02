@@ -147,6 +147,7 @@ import {
 import { resolveSearchRerankStructuralContextStatus } from "./search-rerank-structural-status.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
 import { buildSearchRerankQuery } from "./search-rerank-query.js";
+import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import { resolveSearchRerankQuery } from "./search-rerank-query-routing.js";
 import {
     resolveSearchRerankRequestIdentity,
@@ -816,6 +817,18 @@ export class SearchRequestCoordinator {
             debugMode,
             ...(Number.isFinite(rawDebugCandidateLimit)
                 ? { debugCandidateLimit: Math.max(1, rawDebugCandidateLimit) }
+                : {}),
+            // An array is not a valid flag shape: the tool schema rejects it and
+            // resolveSearchFlags throws on it, so it must not be forwarded as
+            // if it were a record.
+            ...(args.flags !== undefined && typeof args.flags === 'object' && !Array.isArray(args.flags)
+                ? { flags: args.flags as Record<string, boolean> }
+                : {}),
+            ...(args.alt_terms !== undefined && (Array.isArray(args.alt_terms) || typeof args.alt_terms === 'string')
+                ? { alt_terms: args.alt_terms }
+                : {}),
+            ...(args.reservation_policy === 'cap55' || args.reservation_policy === 'cap64' || args.reservation_policy === 'off'
+                ? { reservation_policy: args.reservation_policy }
                 : {}),
         };
 
@@ -1607,12 +1620,14 @@ export class SearchRequestCoordinator {
                     }
                 }
 
-                const answerFocus = resolveSearchAnswerFocus(queryPlan).focus;
+                const answerFocus = resolveSearchAnswerFocus(queryPlan, input.flags).focus;
+                const resolvedAltTerms = resolveSearchAltTerms(input.alt_terms);
                 const resolvedRerankQuery = resolveSearchRerankQuery({
                     semanticQuery: parsedOperators.semanticQuery,
                     focusedQueryV2: buildSearchRerankQuery({
                         semanticQuery: parsedOperators.semanticQuery,
                         answerFocus,
+                        callerTerms: resolvedAltTerms.termsEmitted,
                     }),
                     projectionIdentity: this.reranker?.getQueryProjectionVersion?.(),
                 });
@@ -1665,6 +1680,10 @@ export class SearchRequestCoordinator {
                     requestedSubdirectory,
                     dirtyFilesNotFreshened: initialDirtyFilesNotFreshened,
                     retrievalFilter,
+                    flags: input.flags,
+                    alt_terms: input.alt_terms,
+                    resolvedAltTerms,
+                    ...(input.reservation_policy !== undefined ? { reservation_policy: input.reservation_policy } : {}),
                 }, {
                     searchQuerySupport: this.searchQuerySupport,
                     supplementCandidates: async (candidates) => {

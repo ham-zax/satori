@@ -85,6 +85,7 @@ function buildInput(query = "where find the relevant implementation"): SearchExe
         observedChangedFilesState: { available: false, files: new Set() },
         dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({ resultLimit: 3, hasMustOperators: false }),
+        flags: { path_demotion: false },
     };
 }
 

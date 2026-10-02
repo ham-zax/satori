@@ -1,6 +1,6 @@
 {
   "schemaVersion": "satori_lateon_acquisition_v1",
-  "runtimeProfileSha256": "e3a0ae2d73b9d4b3dee0225557614276bfb11471d90abec09e53a5cac737afa5",
+  "runtimeProfileSha256": "4cd4ec2e4c9c60484fd102291807984396ef73e12fa05fd579aa5fb32236dbc5",
   "artifacts": [
     {
       "path": "model.onnx",

@@ -1,5 +1,6 @@
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
+import { resolveSearchFlags, type SearchFlags } from "./search-flags.js";
 export type { SearchAnswerFocus } from "./search-rerank-context.js";
 
 export type SearchAnswerFocusResolution = Readonly<{
@@ -7,7 +8,21 @@ export type SearchAnswerFocusResolution = Readonly<{
     reasons: readonly string[];
 }>;
 
-const IMPLEMENTATION_QUESTION_CUE = /\bhow\s+(?:does|do|is|are)\b|\bwhere\s+is\b.*\bimplemented\b|\bwhat\s+(?:blocks|prevents|validates|gates|controls)\b/;
+/**
+ * Default implementation-question cue. Requires the question to name the
+ * implementation, so an ordinary "where is X called" reference question is not
+ * reclassified as an implementation question.
+ */
+const IMPLEMENTATION_QUESTION_CUE =
+    /\bhow\s+(?:does|do|is|are)\b|\bwhere\s+is\b.*\bimplemented\b|\bwhat\s+(?:blocks|prevents|validates|gates|controls)\b/;
+
+/**
+ * Widened implementation-question cue, behind the `focus_cue_wide` flag.
+ * Any "where is|does|do|are" question fires, which also captures reference and
+ * conceptual questions. Off by default.
+ */
+const IMPLEMENTATION_QUESTION_CUE_WIDE =
+    /\bhow\s+(?:does|do|is|are)\b|\bwhere\s+(?:does|do|is|are)\b|\bwhat\s+(?:blocks|prevents|validates|gates|controls)\b/;
 
 const SEARCH_MECHANISM_CUES = [
     /\bcandidates?\b/,
@@ -32,7 +47,12 @@ function hasSearchMechanismImplementationCue(query: string): boolean {
 
 export function resolveSearchAnswerFocus(
     plan: SearchQueryPlan,
+    flags?: Record<string, boolean> | null,
 ): SearchAnswerFocusResolution {
+    const resolved: SearchFlags = resolveSearchFlags(flags);
+    const implementationCue = resolved.focus_cue_wide
+        ? IMPLEMENTATION_QUESTION_CUE_WIDE
+        : IMPLEMENTATION_QUESTION_CUE;
     if (plan.testSeeking) {
         return { focus: "tests", reasons: ["test_seeking_query"] };
     }
@@ -51,7 +71,7 @@ export function resolveSearchAnswerFocus(
     if (plan.implementationSeeking) {
         return { focus: "implementation", reasons: ["implementation_seeking_query"] };
     }
-    if (IMPLEMENTATION_QUESTION_CUE.test(plan.semanticQuery.toLowerCase())) {
+    if (implementationCue.test(plan.semanticQuery.toLowerCase())) {
         return { focus: "implementation", reasons: ["implementation_question_cue"] };
     }
     if (hasSearchMechanismImplementationCue(plan.semanticQuery.toLowerCase())) {

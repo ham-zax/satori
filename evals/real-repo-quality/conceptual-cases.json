@@ -1,0 +1,911 @@
+{
+  "schemaVersion": 1,
+  "topK": 10,
+  "scoring": "rank = position (1-based) of the first top-10 result whose path matches an acceptable pathRegex and whose symbol name matches symbolRegex (or symbolRegex is null, or the result is a whole-file result on a matching path). strictRank additionally requires a symbol-level result when symbolRegex is set. Variants: original, rewritten, fresh. Splits: tune (react, polars), heldout (flatbuffers). Cohorts: gap, control.",
+  "repos": [
+    {
+      "name": "react",
+      "url": "https://github.com/facebook/react",
+      "commit": "7c6ac13e19fe",
+      "split": "tune",
+      "queries": [
+        {
+          "id": "r1",
+          "variant": "original",
+          "cohort": "gap",
+          "tags": [
+            "findings",
+            "gap"
+          ],
+          "query": "where does React run the cleanup function of useEffect",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitEffects\\.js$",
+              "symbolRegex": "^(commitHookEffectListUnmount|safelyCallDestroy)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberCommitEffects.js:248 commitHookEffectListUnmount(flags, finishedWork, nearestMountedAncestor); :907 safelyCallDestroy(current, nearestMountedAncestor, destroy)"
+            },
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitWork\\.js$",
+              "symbolRegex": "^(commitHookEffectListUnmount|commitPassiveUnmountEffects|commitHookPassiveUnmountEffects|safelyCallDestroy)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberCommitWork.js commitPassiveUnmountEffects invokes passive hook unmounts in React 18/19"
+            }
+          ],
+          "justification": "Effect destroy functions are invoked from commitHookEffectListUnmount/safelyCallDestroy."
+        },
+        {
+          "id": "r8",
+          "variant": "original",
+          "cohort": "gap",
+          "tags": [
+            "T",
+            "gap"
+          ],
+          "query": "where does React bail out of re-rendering a component whose props did not change",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberBeginWork\\.js$",
+              "symbolRegex": "^(bailoutOnAlreadyFinishedWork|updateMemoComponent|updateSimpleMemoComponent)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberBeginWork.js:3823 bailoutOnAlreadyFinishedWork; :478 updateMemoComponent; :546 updateSimpleMemoComponent"
+            }
+          ],
+          "justification": "Approved set from coordinator: bailoutOnAlreadyFinishedWork, updateMemoComponent, updateSimpleMemoComponent."
+        },
+        {
+          "id": "r2_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r2",
+          "cohort": "gap",
+          "tags": [
+            "findings",
+            "control"
+          ],
+          "query": "where is a new render pass scheduled after updating component state",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^(dispatchSetState|dispatchSetStateInternal)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:3626 dispatchSetState; :3656 dispatchSetStateInternal"
+            }
+          ],
+          "justification": "dispatchSetState requests an update lane and schedules re-render."
+        },
+        {
+          "id": "r3_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r3",
+          "cohort": "gap",
+          "tags": [
+            "findings",
+            "control"
+          ],
+          "query": "where does the reconciler compare input lists between renders to decide if an action should re-run",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^areHookInputsEqual$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:456 function areHookInputsEqual"
+            }
+          ],
+          "justification": "areHookInputsEqual compares nextDeps with prevDeps."
+        },
+        {
+          "id": "r4_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r4",
+          "cohort": "control",
+          "tags": [
+            "findings",
+            "control"
+          ],
+          "query": "where is a warning issued when children in an iterable lack unique list item identifiers",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactChildFiber\\.js$",
+              "symbolRegex": "^(warnForMissingKey|warnOnInvalidKey)$",
+              "evidence": "packages/react-reconciler/src/ReactChildFiber.js:151 DEV warnForMissingKey; :1107 warnOnInvalidKey"
+            },
+            {
+              "pathRegex": "^packages/react-server/src/React(?:Flight|Fizz)Server\\.js$",
+              "symbolRegex": "^warnForMissingKey$",
+              "evidence": "packages/react-server/src/ReactFlightServer.js:1993 and ReactFizzServer.js:3855 warnForMissingKey"
+            }
+          ],
+          "justification": "Missing key warning in reconciler and server renderers."
+        },
+        {
+          "id": "r5_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r5",
+          "cohort": "control",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where are deferred post-render side effects flushed after changes are applied",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberWorkLoop\\.js$",
+              "symbolRegex": "^(flushPassiveEffects|flushPassiveEffectsImpl|flushPendingEffects|flushPendingEffectsDelayed|flushLayoutEffects|flushAfterMutationEffects)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberWorkLoop.js:4655 flushPendingEffectsDelayed; :4728 flushPassiveEffectsImpl; flushLayoutEffects"
+            }
+          ],
+          "justification": "flushPendingEffectsDelayed delegates to flushPassiveEffects."
+        },
+        {
+          "id": "r6_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r6",
+          "cohort": "control",
+          "tags": [
+            "tooling-ask",
+            "control"
+          ],
+          "query": "where does the static analysis rule verify that all captured outer variables are declared in the dependency array",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps\\.ts$",
+              "symbolRegex": null,
+              "evidence": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts:43 const rule = { meta ... create(context) at :79"
+            }
+          ],
+          "justification": "Tooling rule for exhaustive dependencies check."
+        },
+        {
+          "id": "r7_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r7",
+          "cohort": "control",
+          "tags": [
+            "tests-ask",
+            "control"
+          ],
+          "query": "where are the automated tests verifying the behavior of deferred render side effects",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/__tests__/(ReactHooksWithNoopRenderer-test\\.js|ReactHooks-test\\.internal\\.js)$",
+              "symbolRegex": null,
+              "evidence": "packages/react-reconciler/src/__tests__/ReactHooksWithNoopRenderer-test.js:969,:1003 tests"
+            }
+          ],
+          "justification": "Explicitly asks for tests verifying hook side effects."
+        },
+        {
+          "id": "r9_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "r9",
+          "cohort": "gap",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where is an error thrown when calling state primitives outside of an active render context",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^throwInvalidHookError$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:445 function throwInvalidHookError"
+            },
+            {
+              "pathRegex": "^packages/react/src/ReactHooks\\.js$",
+              "symbolRegex": "^resolveDispatcher$",
+              "evidence": "packages/react/src/ReactHooks.js:24 function resolveDispatcher"
+            }
+          ],
+          "justification": "throwInvalidHookError and resolveDispatcher enforce active render dispatcher."
+        },
+        {
+          "id": "fresh_r1",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are browser interaction events caught at the root container and dispatched to component hierarchies",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-dom-bindings/src/events/DOMPluginEventSystem\\.js$",
+              "symbolRegex": "^(dispatchEventForPluginEventSystem|listenToAllSupportedEvents)$",
+              "evidence": "packages/react-dom-bindings/src/events/DOMPluginEventSystem.js:125 dispatchEventForPluginEventSystem; :298 listenToAllSupportedEvents"
+            }
+          ],
+          "justification": "DOMPluginEventSystem handles container event listening and synthetic event dispatch."
+        },
+        {
+          "id": "fresh_r2",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where is execution yielded back to the browser when scheduled background work exceeds time slicing deadlines",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/scheduler/src/forks/Scheduler\\.js$",
+              "symbolRegex": "^(shouldYieldToHost|workLoop)$",
+              "evidence": "packages/scheduler/src/forks/Scheduler.js:475 shouldYieldToHost; :242 workLoop"
+            }
+          ],
+          "justification": "Scheduler workLoop checks shouldYieldToHost to yield to the main thread."
+        },
+        {
+          "id": "fresh_r3",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are rendered component nodes converted into binary chunks for network response streaming",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-server/src/ReactServerStreamConfigNode\\.js$",
+              "symbolRegex": "^(stringToChunk|byteLength)$",
+              "evidence": "packages/react-server/src/ReactServerStreamConfigNode.js:28 stringToChunk; :35 byteLength"
+            }
+          ],
+          "justification": "Stream config converts strings to binary byte chunks for Node streaming."
+        },
+        {
+          "id": "fresh_r4",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are update priority levels represented as bit flags and combined to determine what runs next",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberLane\\.js$",
+              "symbolRegex": "^(getHighestPriorityLane|mergeLanes|getNextLanes)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberLane.js:203 getHighestPriorityLane; :842 mergeLanes; getNextLanes"
+            }
+          ],
+          "justification": "Lane priority bitmask arithmetic."
+        },
+        {
+          "id": "fresh_r5",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where does the browser inspection extension hook into runtime instances to track component trees",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-devtools-shared/src/backend/renderer\\.js$",
+              "symbolRegex": "^(attach|findNativeNodesForFiberID)$",
+              "evidence": "packages/react-devtools-shared/src/backend/renderer.js:169 attach; :450 findNativeNodesForFiberID"
+            }
+          ],
+          "justification": "DevTools renderer attachment."
+        },
+        {
+          "id": "fresh_r6",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh",
+            "tests-ask"
+          ],
+          "query": "where are the automated tests checking fallback display when asynchronous resource loading delays rendering",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/__tests__/ReactSuspense-test\\.internal\\.js$",
+              "symbolRegex": null,
+              "evidence": "packages/react-reconciler/src/__tests__/ReactSuspense-test.internal.js"
+            }
+          ],
+          "justification": "Test suite for suspense fallback rendering."
+        }
+      ]
+    },
+    {
+      "name": "polars",
+      "url": "https://github.com/pola-rs/polars",
+      "commit": "74dd736d655c",
+      "split": "tune",
+      "queries": [
+        {
+          "id": "p1_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p1",
+          "cohort": "control",
+          "tags": [
+            "rust-vs-py",
+            "control"
+          ],
+          "query": "where are comma separated text files ingested into tabular data structures in memory",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-io/src/csv/read|polars-stream/src/nodes/io_sources/csv)/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-io/src/csv/read/read_impl.rs:105 struct CoreReader, :327 parse_csv, :530 finish"
+            }
+          ],
+          "justification": "Rust CSV core reader."
+        },
+        {
+          "id": "p2_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p2",
+          "cohort": "control",
+          "tags": [
+            "rust-vs-py",
+            "control"
+          ],
+          "query": "where is tabular row ordering computed across multiple table columns",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-core/src/(frame/mod\\.rs|chunked_array/ops/sort/)",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/frame/mod.rs:1427 sort_impl; crates/polars-core/src/chunked_array/ops/sort/mod.rs:283 arg_sort_multiple"
+            }
+          ],
+          "justification": "Rust core multi-column sort implementation."
+        },
+        {
+          "id": "p3_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p3",
+          "cohort": "gap",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where are column elements converted from one data type to another",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-core/src/chunked_array/cast\\.rs$",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/chunked_array/cast.rs:75 cast_impl_inner, :126 cast_impl"
+            }
+          ],
+          "justification": "Core cast implementation."
+        },
+        {
+          "id": "p4_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p4",
+          "cohort": "control",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where is the sliding window moving average computed over sequential values",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-compute/src/rolling|polars-time/src/chunkedarray/rolling_window|polars-expr/src/dispatch/rolling)",
+              "symbolRegex": null,
+              "evidence": "crates/polars-compute/src/rolling/{no_nulls,nulls}/mean.rs"
+            }
+          ],
+          "justification": "Rust rolling mean computation."
+        },
+        {
+          "id": "p5_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p5",
+          "cohort": "control",
+          "tags": [
+            "control"
+          ],
+          "query": "where does the query optimizer shift filter conditions closer to data sources",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-plan/src/plans/optimizer/predicate_pushdown/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/mod.rs:249 fn push_down"
+            }
+          ],
+          "justification": "Predicate pushdown optimizer."
+        },
+        {
+          "id": "p6_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p6",
+          "cohort": "control",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where is columnar binary file storage read and decoded into memory",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/(polars-io/src/parquet/read|polars-parquet/src/arrow/read|polars-stream/src/nodes/io_sources/parquet)/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-io/src/parquet/read/reader.rs:33 impl ParquetReader"
+            }
+          ],
+          "justification": "Rust Parquet reader."
+        },
+        {
+          "id": "p7_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p7",
+          "cohort": "control",
+          "tags": [
+            "tests-ask",
+            "control"
+          ],
+          "query": "where are the test suites verifying sliding window aggregations",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/tests/unit/operations/rolling/",
+              "symbolRegex": null,
+              "evidence": "py-polars/tests/unit/operations/rolling/{test_rolling.py,test_rolling_fixed.py}"
+            }
+          ],
+          "justification": "Tests for rolling aggregations."
+        },
+        {
+          "id": "p8_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p8",
+          "cohort": "gap",
+          "tags": [
+            "rust-vs-py",
+            "control"
+          ],
+          "query": "where is a single column data sequence exported into a numerical array structure",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/src/polars/series/series\\.py$",
+              "symbolRegex": "^(Series\\.)?to_numpy$",
+              "evidence": "py-polars/src/polars/series/series.py:5063 def to_numpy"
+            },
+            {
+              "pathRegex": "^crates/polars-python/src/interop/numpy/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-python/src/interop/numpy/to_numpy_series.rs"
+            }
+          ],
+          "justification": "Exporting Series to numpy array."
+        },
+        {
+          "id": "p9_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "p9",
+          "cohort": "control",
+          "tags": [
+            "py-owned",
+            "control"
+          ],
+          "query": "where is tabular data formatted into markup for display in interactive notebook cells",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/src/polars/dataframe/(_html|frame)\\.py$",
+              "symbolRegex": "^(_repr_html_|DataFrame\\._repr_html_|HTMLFormatter|NotebookFormatter|render|NotebookFormatter\\.render)$",
+              "evidence": "py-polars/src/polars/dataframe/frame.py:1577 DataFrame._repr_html_; py-polars/src/polars/dataframe/_html.py:137 render"
+            }
+          ],
+          "justification": "HTML formatting for notebooks."
+        },
+        {
+          "id": "fresh_p1",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are distinct values identified and extracted from a sequence of column entries",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-ops/src/series/ops/various\\.rs$",
+              "symbolRegex": "^(unique|n_unique)$",
+              "evidence": "crates/polars-ops/src/series/ops/various.rs:74 unique"
+            }
+          ],
+          "justification": "Series unique and n_unique operations."
+        },
+        {
+          "id": "fresh_p2",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are successive optimization rules repeatedly applied to transform the symbolic query tree",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-plan/src/plans/optimizer/mod\\.rs$",
+              "symbolRegex": "^(optimize|optimize_with_rules)$",
+              "evidence": "crates/polars-plan/src/plans/optimizer/mod.rs:88 optimize"
+            },
+            {
+              "pathRegex": "^crates/polars-plan/src/plans/optimizer/stack_opt\\.rs$",
+              "symbolRegex": "^(optimize_loop|OptimizationRule)$",
+              "evidence": "crates/polars-plan/src/plans/optimizer/stack_opt.rs:16 optimize_loop"
+            }
+          ],
+          "justification": "Logical plan optimization loop."
+        },
+        {
+          "id": "fresh_p3",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where are lines of structured text records parsed from streams into memory tables",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-io/src/ndjson/buffer\\.rs$",
+              "symbolRegex": null,
+              "evidence": "crates/polars-io/src/ndjson/buffer.rs"
+            }
+          ],
+          "justification": "Newline-delimited JSON record reader."
+        },
+        {
+          "id": "fresh_p4",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where is an in-memory hash join executed between two tabular datasets matching on key columns",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-core/src/frame/hash_join/",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/frame/hash_join/mod.rs"
+            }
+          ],
+          "justification": "Hash join algorithm in Polars core."
+        },
+        {
+          "id": "fresh_p5",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where is table orientation restructured by turning row values into column headers",
+          "acceptable": [
+            {
+              "pathRegex": "^crates/polars-ops/src/pivot/",
+              "symbolRegex": "^pivot",
+              "evidence": "crates/polars-ops/src/pivot/mod.rs"
+            }
+          ],
+          "justification": "Pivot operation implementation."
+        },
+        {
+          "id": "fresh_p6",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh",
+            "tests-ask"
+          ],
+          "query": "where are the unit tests verifying string parsing and regular expression extraction",
+          "acceptable": [
+            {
+              "pathRegex": "^py-polars/tests/unit/operations/strings/",
+              "symbolRegex": null,
+              "evidence": "py-polars/tests/unit/operations/strings/test_extract.py"
+            }
+          ],
+          "justification": "Test suite for string regex extraction."
+        }
+      ]
+    },
+    {
+      "name": "flatbuffers",
+      "url": "https://github.com/google/flatbuffers",
+      "commit": "b8431fbcd7a5",
+      "split": "heldout",
+      "queries": [
+        {
+          "id": "f1_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f1",
+          "cohort": "control",
+          "tags": [
+            "generated",
+            "control"
+          ],
+          "query": "where is binary buffer serialization completed with the root offset written",
+          "acceptable": [
+            {
+              "pathRegex": "^(include/flatbuffers|python/flatbuffers|go|java/src/main|net/FlatBuffers|kotlin/flatbuffers-kotlin/src|php|dart/lib|lua/flatbuffers|rust/flatbuffers/src|ts|swift/Sources/FlatBuffers|lobster|nim)/(?!.*(flex|generated))",
+              "symbolRegex": "^(Finish|finish|__Finish)$",
+              "evidence": "include/flatbuffers/flatbuffer_builder.h:1263,:1293 Finish; python/flatbuffers/builder.py:612 __Finish,:642 Finish; go/builder.go:635 Finish"
+            }
+          ],
+          "justification": "Runtime Finish in any language."
+        },
+        {
+          "id": "f2_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f2",
+          "cohort": "control",
+          "tags": [
+            "generated",
+            "control"
+          ],
+          "query": "where are internal offsets and structural boundaries of serialized records validated",
+          "acceptable": [
+            {
+              "pathRegex": "(^|/)([Vv]erifier|TableVerifier|Verifiable)\\.(h|rs|swift|cs|java|kt|ts|go|py)$",
+              "symbolRegex": null,
+              "evidence": "include/flatbuffers/verifier.h:119 VerifyTable, :185 VerifyTableStart"
+            }
+          ],
+          "justification": "Runtime table verification."
+        },
+        {
+          "id": "f3_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f3",
+          "cohort": "control",
+          "tags": [
+            "lang",
+            "control"
+          ],
+          "query": "where does the scripting language serializer initialize contiguous element sequence allocation",
+          "acceptable": [
+            {
+              "pathRegex": "^python/flatbuffers/builder\\.py$",
+              "symbolRegex": "^(Builder\\.)?StartVector$",
+              "evidence": "python/flatbuffers/builder.py:425 def StartVector"
+            }
+          ],
+          "justification": "Python runtime builder StartVector."
+        },
+        {
+          "id": "f4_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f4",
+          "cohort": "gap",
+          "tags": [
+            "lang",
+            "control"
+          ],
+          "query": "where are field offset tables encoded and deduplicated during message construction in the compiled runtime",
+          "acceptable": [
+            {
+              "pathRegex": "^go/builder\\.go$",
+              "symbolRegex": "^(\\(\\*?Builder\\)\\.|Builder\\.)?WriteVtable$",
+              "evidence": "go/builder.go:119 func (b *Builder) WriteVtable"
+            }
+          ],
+          "justification": "Go runtime builder WriteVtable."
+        },
+        {
+          "id": "f5_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f5",
+          "cohort": "control",
+          "tags": [
+            "control"
+          ],
+          "query": "where does the compiler ingest interface definition declarations from source text",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_parser\\.cpp$",
+              "symbolRegex": "^(Parser::)?(DoParse|Parse|ParseDecl)$",
+              "evidence": "src/idl_parser.cpp:3777 Parser::DoParse; :2869 Parser::ParseDecl"
+            }
+          ],
+          "justification": "Schema parser in src/idl_parser.cpp."
+        },
+        {
+          "id": "f6_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f6",
+          "cohort": "control",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where does the code generator produce native language classes for structured record definitions",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_gen_cpp\\.cpp$",
+              "symbolRegex": "GenTable",
+              "evidence": "src/idl_gen_cpp.cpp:132 class CppGenerator; :3046 void GenTable"
+            }
+          ],
+          "justification": "C++ generator table emission."
+        },
+        {
+          "id": "f7_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f7",
+          "cohort": "gap",
+          "tags": [
+            "T",
+            "control"
+          ],
+          "query": "where does the compiler resolve polymorphic sum types during declaration analysis",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_parser\\.cpp$",
+              "symbolRegex": "^(Parser::)?(ParseAnyValue|ParseField|ParseEnum)$",
+              "evidence": "src/idl_parser.cpp:1362 Parser::ParseAnyValue; :967 ParseField; :2552 ParseEnum"
+            }
+          ],
+          "justification": "Union value/type resolution during parsing."
+        },
+        {
+          "id": "f8_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f8",
+          "cohort": "gap",
+          "tags": [
+            "tests-ask",
+            "control"
+          ],
+          "query": "where are the test cases checking corrupted input detection and validation safety",
+          "acceptable": [
+            {
+              "pathRegex": "^tests/(swift/Tests/Flatbuffers/FlatbuffersVerifierTests\\.swift|fuzzer/flatbuffers_verifier_fuzzer\\.cc|rust_usage_test/tests/integration_test\\.rs)$",
+              "symbolRegex": null,
+              "evidence": "tests/swift/Tests/Flatbuffers/FlatbuffersVerifierTests.swift; tests/fuzzer/flatbuffers_verifier_fuzzer.cc"
+            }
+          ],
+          "justification": "Verifier safety tests."
+        },
+        {
+          "id": "f9_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f9",
+          "cohort": "gap",
+          "tags": [
+            "lang",
+            "fallback-extractor",
+            "control"
+          ],
+          "query": "where is textual character data encoded and appended to the binary stream in the mobile client runtime",
+          "acceptable": [
+            {
+              "pathRegex": "^swift/Sources/FlatBuffers/FlatBufferBuilder\\.swift$",
+              "symbolRegex": "create",
+              "evidence": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift:707 mutating public func create(string str: String?) -> Offset"
+            }
+          ],
+          "justification": "Swift FlatBufferBuilder create(string:)."
+        },
+        {
+          "id": "f10_rewritten",
+          "variant": "rewritten",
+          "sourceQueryId": "f10",
+          "cohort": "control",
+          "tags": [
+            "lang",
+            "fallback-extractor",
+            "control"
+          ],
+          "query": "where does the buffer expand its internal memory allocation when capacity is exceeded in the modern virtual machine library",
+          "acceptable": [
+            {
+              "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/FlatBufferBuilder\\.kt$",
+              "symbolRegex": "^(FlatBufferBuilder\\.)?prep$",
+              "evidence": "FlatBufferBuilder.kt:106-125 prep(): while (space < ...) calls buffer.moveWrittenDataToEnd"
+            },
+            {
+              "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers\\.kt$",
+              "symbolRegex": "^(ArrayReadWriteBuffer\\.)?(requestCapacity|moveWrittenDataToEnd)$",
+              "evidence": "Buffers.kt:632 requestCapacity, :664 moveWrittenDataToEnd"
+            }
+          ],
+          "justification": "Kotlin buffer growth implementation."
+        },
+        {
+          "id": "fresh_f1",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where does dynamic binary reflection inspect field types without compile time code generation",
+          "acceptable": [
+            {
+              "pathRegex": "^src/reflection\\.cpp$",
+              "symbolRegex": null,
+              "evidence": "src/reflection.cpp"
+            },
+            {
+              "pathRegex": "^src/binary_annotator\\.h$",
+              "symbolRegex": null,
+              "evidence": "src/binary_annotator.h dynamically inspects binary schema/types"
+            }
+          ],
+          "justification": "Binary reflection inspection."
+        },
+        {
+          "id": "fresh_f2",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where does the compiler convert interface definitions into web validation schema representations",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_gen_json_schema\\.cpp$",
+              "symbolRegex": null,
+              "evidence": "src/idl_gen_json_schema.cpp"
+            }
+          ],
+          "justification": "JSON schema generator from IDL."
+        },
+        {
+          "id": "fresh_f3",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where is binary data serialized in a self-describing schemaless format without upfront declarations",
+          "acceptable": [
+            {
+              "pathRegex": "^include/flatbuffers/flexbuffers\\.h$",
+              "symbolRegex": null,
+              "evidence": "include/flatbuffers/flexbuffers.h"
+            },
+            {
+              "pathRegex": "^java/com/google/flatbuffers/FlexBuffers\\.java$",
+              "symbolRegex": null,
+              "evidence": "java/com/google/flatbuffers/FlexBuffers.java schemaless serialization"
+            }
+          ],
+          "justification": "FlexBuffers schemaless serialization."
+        },
+        {
+          "id": "fresh_f4",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh"
+          ],
+          "query": "where does the compiler generate zero-copy borrowing accessor code for systems language targets",
+          "acceptable": [
+            {
+              "pathRegex": "^src/idl_gen_rust\\.cpp$",
+              "symbolRegex": null,
+              "evidence": "src/idl_gen_rust.cpp"
+            }
+          ],
+          "justification": "Rust code generator with zero-copy borrows."
+        },
+        {
+          "id": "fresh_f5",
+          "variant": "fresh",
+          "cohort": "control",
+          "tags": [
+            "fresh",
+            "tests-ask"
+          ],
+          "query": "where are randomized fuzzing inputs generated to test binary decoder crash resistance",
+          "acceptable": [
+            {
+              "pathRegex": "^tests/fuzzer/flatbuffers_verifier_fuzzer\\.cc$",
+              "symbolRegex": null,
+              "evidence": "tests/fuzzer/flatbuffers_verifier_fuzzer.cc"
+            }
+          ],
+          "justification": "Verifier fuzzing target."
+        },
+        {
+          "id": "fresh_f6",
+          "variant": "fresh",
+          "cohort": "gap",
+          "tags": [
+            "fresh",
+            "docs-ask"
+          ],
+          "query": "where is the internal binary layout specification and memory alignment design documented",
+          "acceptable": [
+            {
+              "pathRegex": "^docs/source/(WhitePaper|FlatBuffers)\\.md$",
+              "symbolRegex": null,
+              "evidence": "docs/source/WhitePaper.md"
+            }
+          ],
+          "justification": "WhitePaper detailing wire format and memory alignment."
+        }
+      ]
+    }
+  ]
+}

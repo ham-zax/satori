@@ -1,0 +1,450 @@
+[
+  {
+    "query_id": "r1",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": false
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "r2",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+        "symbol": "dispatchSetStateInternal",
+        "owner": "^packages/react-reconciler/src/ReactFiberHooks\\.js$"
+      }
+    }
+  },
+  {
+    "query_id": "r3",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "r4",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 11,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 2,
+      "matchedTarget": {
+        "path": "packages/react-server/src/ReactFlightServer.js",
+        "symbol": "warnForMissingKey",
+        "owner": "^packages/react-server/src/React(?:Flight|Fizz)Server\\.js$"
+      }
+    }
+  },
+  {
+    "query_id": "r5",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 4,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+        "symbol": "flushPendingEffectsDelayed",
+        "owner": "^packages/react-reconciler/src/ReactFiberWorkLoop\\.js$"
+      }
+    }
+  },
+  {
+    "query_id": "r6",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 12,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts",
+        "symbol": "visitCallExpression",
+        "owner": "^packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps\\.ts$"
+      }
+    }
+  },
+  {
+    "query_id": "r7",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 35,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 4,
+      "matchedTarget": {
+        "path": "packages/react-reconciler/src/__tests__/ReactHooksWithNoopRenderer-test.js",
+        "symbol": "useEffect",
+        "owner": "^packages/react-reconciler/src/__tests__/(ReactHooksWithNoopRenderer-test\\.js|ReactHooks-test\\.internal\\.js)$"
+      }
+    }
+  },
+  {
+    "query_id": "r8",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": false
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "r9",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 7,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 2,
+      "matchedTarget": {
+        "path": "packages/react/src/ReactHooks.js",
+        "symbol": "resolveDispatcher",
+        "owner": "^packages/react/src/ReactHooks\\.js$"
+      }
+    }
+  },
+  {
+    "query_id": "p1",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 27,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "crates/polars-io/src/csv/read/read_impl.rs",
+        "symbol": null,
+        "owner": "^crates/(polars-io/src/csv/read|polars-stream/src/nodes/io_sources/csv)/"
+      }
+    }
+  },
+  {
+    "query_id": "p2",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 1,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 4,
+      "matchedTarget": {
+        "path": "crates/polars-core/src/frame/mod.rs",
+        "symbol": "sort_impl",
+        "owner": "^crates/polars-core/src/(frame/mod\\.rs|chunked_array/ops/sort/)"
+      }
+    }
+  },
+  {
+    "query_id": "p3",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 80,
+      "in_top80": true,
+      "in_rerank_window": false
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "p4",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 1,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "crates/polars-compute/src/rolling/mean.rs",
+        "symbol": null,
+        "owner": "^crates/(polars-compute/src/rolling|polars-time/src/chunkedarray/rolling_window|polars-expr/src/dispatch/rolling)"
+      }
+    }
+  },
+  {
+    "query_id": "p5",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 4,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 2,
+      "matchedTarget": {
+        "path": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/mod.rs",
+        "symbol": "pushdown_and_continue",
+        "owner": "^crates/polars-plan/src/plans/optimizer/predicate_pushdown/"
+      }
+    }
+  },
+  {
+    "query_id": "p6",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 4,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "crates/polars-stream/src/nodes/io_sources/parquet/metadata_utils.rs",
+        "symbol": null,
+        "owner": "^crates/(polars-io/src/parquet/read|polars-parquet/src/arrow/read|polars-stream/src/nodes/io_sources/parquet)/"
+      }
+    }
+  },
+  {
+    "query_id": "p7",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 1,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 8,
+      "matchedTarget": {
+        "path": "py-polars/tests/unit/operations/rolling/test_rolling.py",
+        "symbol": "test_rolling_skew_window_offset",
+        "owner": "^py-polars/tests/unit/operations/rolling/"
+      }
+    }
+  },
+  {
+    "query_id": "p8",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 1,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "crates/polars-python/src/interop/numpy/to_numpy_series.rs",
+        "symbol": "series_to_numpy",
+        "owner": "^crates/polars-python/src/interop/numpy/"
+      }
+    }
+  },
+  {
+    "query_id": "p9",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 1,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "py-polars/src/polars/dataframe/_html.py",
+        "symbol": "NotebookFormatter",
+        "owner": "^py-polars/src/polars/dataframe/(_html|frame)\\.py$"
+      }
+    }
+  },
+  {
+    "query_id": "f1",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 4,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 5,
+      "matchedTarget": {
+        "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+        "symbol": null,
+        "owner": "^(include/flatbuffers|python/flatbuffers|go|java/src/main|net/FlatBuffers|kotlin/flatbuffers-kotlin/src|php|dart/lib|lua/flatbuffers|rust/flatbuffers/src|ts|swift/Sources/FlatBuffers|lobster|nim)/(?!.*(flex|generated))"
+      }
+    }
+  },
+  {
+    "query_id": "f2",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 12,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 4,
+      "matchedTarget": {
+        "path": "swift/Sources/FlatBuffers/Verifier.swift",
+        "symbol": "Verifier",
+        "owner": "(^|/)([Vv]erifier|TableVerifier|Verifiable)\\.(h|rs|swift|cs|java|kt|ts|go|py)$"
+      }
+    }
+  },
+  {
+    "query_id": "f3",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 45,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "f4",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 3,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "go/builder.go",
+        "symbol": "WriteVtable",
+        "owner": "^go/builder\\.go$"
+      }
+    }
+  },
+  {
+    "query_id": "f5",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": false
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "f6",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 3,
+      "matchedTarget": {
+        "path": "src/idl_gen_cpp.cpp",
+        "symbol": "GenTablePost",
+        "owner": "^src/idl_gen_cpp\\.cpp$"
+      }
+    }
+  },
+  {
+    "query_id": "f7",
+    "targets": [],
+    "fusion": {
+      "fused_rank": null,
+      "in_top80": false,
+      "in_rerank_window": false
+    },
+    "final": {
+      "final_rank": null,
+      "matchedTarget": null
+    }
+  },
+  {
+    "query_id": "f8",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 3,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "tests/swift/Tests/Flatbuffers/FlatbuffersVerifierTests.swift",
+        "symbol": "testFullVerifier",
+        "owner": "^tests/(swift/Tests/Flatbuffers/FlatbuffersVerifierTests\\.swift|fuzzer/flatbuffers_verifier_fuzzer\\.cc|rust_usage_test/tests/integration_test\\.rs)$"
+      }
+    }
+  },
+  {
+    "query_id": "f9",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 6,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 1,
+      "matchedTarget": {
+        "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+        "symbol": null,
+        "owner": "^swift/Sources/FlatBuffers/FlatBufferBuilder\\.swift$"
+      }
+    }
+  },
+  {
+    "query_id": "f10",
+    "targets": [],
+    "fusion": {
+      "fused_rank": 8,
+      "in_top80": true,
+      "in_rerank_window": true
+    },
+    "final": {
+      "final_rank": 7,
+      "matchedTarget": {
+        "path": "kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers.kt",
+        "symbol": "requestCapacity",
+        "owner": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers\\.kt$"
+      }
+    }
+  }
+]

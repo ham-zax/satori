@@ -6,8 +6,19 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { openLocalSession } from './session.mjs';
+import { DistStaleError, assertRuntimeDistFresh, importFreshDist } from './dist-freshness.mjs';
+import {
+    buildFusedPoolEntries,
+    buildQueryHarnessRecord,
+    computeSummaryReport,
+    generateHarnessSummaryMarkdown,
+    resolveRepoTargetChunkIds,
+    setDistractorPathClassifier,
+    sha256File,
+    sha256String,
+} from './harness-logger.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(here, '../..');
@@ -24,14 +35,78 @@ const indexTimeoutMs = Number(opt('index-timeout-min', '30')) * 60_000;
 const reuseIndex = args.includes('--reuse-index');
 const pollMs = 5_000;
 
-const cases = JSON.parse(fs.readFileSync(path.join(here, 'cases.json'), 'utf8'));
+const casesFile = opt('cases', path.join(here, 'cases.json'));
+const cases = JSON.parse(fs.readFileSync(path.resolve(workspaceRoot, casesFile), 'utf8'));
+const baselinePath = opt('baseline', null);
+const altTermsFilePath = opt('alt-terms-file', null);
+const altTermsMap = altTermsFilePath
+    ? JSON.parse(fs.readFileSync(path.resolve(workspaceRoot, altTermsFilePath), 'utf8'))
+    : null;
+const flagsOpt = opt('flags', '');
+const passedFlags = Object.fromEntries(flagsOpt.split(',').filter(Boolean).map((f) => [f, true]));
+if (flagsOpt) process.env.SATORI_SEARCH_FLAGS = flagsOpt;
+const reservationPolicyOpt = opt('reservation-policy', 'cap55');
+if (!['cap55', 'cap64', 'off'].includes(reservationPolicyOpt)) {
+    throw new Error(`--reservation-policy must be cap55, cap64, or off; received ${reservationPolicyOpt}`);
+}
 const wanted = new Set((opt('repos', cases.repos.map((r) => r.name).join(','))).split(','));
 
 const now = () => new Date().toISOString();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Imports from packages/*/dist, which is what the harness scores. A src edit
+// that was never built would otherwise be evaluated invisibly and reported under
+// the current commit's SHA, so freshness is checked at the import itself rather
+// than from a list that could drift out of sync with the call sites.
 async function dist(rel) {
-    const ns = await import(pathToFileURL(path.join(workspaceRoot, rel)).href);
-    return ns.default && Object.keys(ns).length <= 1 ? ns.default : ns;
+    return importFreshDist(workspaceRoot, rel);
+}
+
+const gitOut = (...args) => execFileSync('git', args, { encoding: 'utf8', cwd: workspaceRoot }).trim();
+const fileSha256 = (relative) => sha256File(path.resolve(workspaceRoot, relative));
+
+/**
+ * The RESOLVED flag set, read from the same module the production path uses.
+ * Recording the flags the caller passed understates the run: a partial object
+ * leaves every unnamed flag at its default, so `--flags rerank_blend` was
+ * recorded as compound_join=false, path_demotion=false when both were on.
+ */
+function buildProvenance(resolveSearchFlags, constants, reservation) {
+    const resolvedFlags = resolveSearchFlags(passedFlags);
+    const gitSha = gitOut('rev-parse', 'HEAD');
+    const dirtyDiff = execFileSync('git', ['diff', 'HEAD'], { encoding: 'utf8', cwd: workspaceRoot });
+    const untracked = gitOut('ls-files', '--others', '--exclude-standard');
+    return {
+        gitSha,
+        // sha256 of the exact bytes `git diff HEAD` prints, which covers staged
+        // and unstaged tracked changes but not untracked files. Those are listed
+        // by path below because their content is not in the diff.
+        dirtyTreeHash: dirtyDiff.length > 0 || untracked.length > 0
+            ? sha256String(dirtyDiff)
+            : null,
+        dirtyTreeUntrackedPaths: untracked.length > 0 ? untracked.split('\n') : [],
+        resolvedFlags,
+        reservation: {
+            enabled: reservationPolicyOpt !== 'off',
+            cap: reservation.reservationCapForPolicy(reservationPolicyOpt),
+        },
+        reservation_policy: reservationPolicyOpt,
+        altTermsCap: constants.SEARCH_ALT_TERMS_MAX,
+        judgeFileSha256: fileSha256(path.relative(workspaceRoot, path.resolve(workspaceRoot, casesFile))),
+        altTermsFileSha256: altTermsFilePath ? fileSha256(altTermsFilePath) : null,
+        altTermsModel: altTermsMap ? readAltTermsModel(altTermsFilePath) : null,
+    };
+}
+
+/** The frozen alt-terms file records the model that produced each entry. */
+function readAltTermsModel(relativePath) {
+    const models = new Set();
+    for (const entry of Object.values(altTermsMap)) {
+        if (entry && typeof entry === 'object' && typeof entry.model_id === 'string') {
+            models.add(entry.model_id);
+        }
+    }
+    if (models.size === 0) return null;
+    return [...models].sort().join(',');
 }
 
 function ensureClone(repo) {
@@ -183,12 +258,22 @@ function extractHits(json) {
 }
 
 async function main() {
+    assertRuntimeDistFresh(workspaceRoot);
     fs.mkdirSync(outDir, { recursive: true });
     const log = (line) => process.stderr.write(`${line}\n`);
     const { buildSearchQueryPlan } = await dist('packages/mcp/dist/core/search-query-planning.js');
     const { resolveSearchAnswerFocus } = await dist('packages/mcp/dist/core/search-answer-focus.js');
     const { classifyPathCategory } = await dist('packages/mcp/dist/core/search-ranking-policy.js');
+    // The harness must classify non-production paths exactly as production
+    // does, so it uses the production predicate rather than a local copy.
+    const { isNonProductionDistractor } = await dist('packages/mcp/dist/core/search-non-production-path.js');
+    setDistractorPathClassifier(isNonProductionDistractor);
+    const { resolveSearchFlags } = await dist('packages/mcp/dist/core/search-flags.js');
+    const searchConstants = await dist('packages/mcp/dist/core/search-constants.js');
+    const reservation = await dist('packages/mcp/dist/core/search-expansion-reservation.js');
+    const provenance = buildProvenance(resolveSearchFlags, searchConstants, reservation);
     const { scoreQuery, normalizeHit } = await import('./score.mjs');
+    log(`provenance gitSha=${provenance.gitSha} dirtyTreeHash=${provenance.dirtyTreeHash ?? 'clean'} flags=${JSON.stringify(provenance.resolvedFlags)}`);
 
     const result = {
         generatedAt: now(),
@@ -204,6 +289,8 @@ async function main() {
         result.repos = previous.repos.filter((r) => !wanted.has(r.name));
         result.previousGeneratedAt = previous.generatedAt;
     }
+    const harnessRecords = [];
+    const fusedPools = {};
     for (const repo of cases.repos.filter((r) => wanted.has(r.name))) {
         log(`== ${repo.name}`);
         const entry = { name: repo.name, url: repo.url, commit: repo.commit };
@@ -211,6 +298,7 @@ async function main() {
         const { dir, head } = ensureClone(repo);
         entry.path = dir;
         entry.head = head;
+        const targetChunksMap = await resolveRepoTargetChunkIds(stateRoot, dir, repo.queries);
         const session = await openLocalSession({ stateRoot, roots: [reposDir] });
         try {
             entry.indexing = await indexRepo(session, dir, log);
@@ -222,14 +310,25 @@ async function main() {
             }
             entry.queries = [];
             for (const query of repo.queries) {
-                const callArgs = { path: dir, query: query.query, limit: cases.topK };
+                const altTermsForQuery = altTermsMap?.[query.id]?.alt_terms || altTermsMap?.[query.id];
+                const callArgs = {
+                    path: dir,
+                    query: query.query,
+                    limit: cases.topK,
+                    debugMode: 'full',
+                    debugCandidateLimit: 80,
+                    ...(Object.keys(passedFlags).length > 0 ? { flags: passedFlags } : {}),
+                    ...(altTermsForQuery && altTermsForQuery.length > 0 ? { alt_terms: altTermsForQuery } : {}),
+                    ...(reservationPolicyOpt !== 'cap55' ? { reservation_policy: reservationPolicyOpt } : {}),
+                };
                 const at = now();
                 const queryStartedAt = performance.now();
                 const response = await session.call('search_codebase', callArgs);
                 const elapsedMs = performance.now() - queryStartedAt;
                 const plan = buildSearchQueryPlan(query.query, true);
-                const focus = resolveSearchAnswerFocus(plan);
+                const focus = resolveSearchAnswerFocus(plan, provenance.resolvedFlags);
                 const hits = extractHits(response.json).slice(0, cases.topK).map((hit) => normalizeHit(hit, classifyPathCategory));
+                const scoreResult = scoreQuery(query, hits);
                 entry.queries.push({
                     id: query.id,
                     tags: query.tags,
@@ -243,8 +342,29 @@ async function main() {
                     answerFocus: focus.focus,
                     answerFocusReasons: focus.reasons,
                     hits,
-                    score: scoreQuery(query, hits),
+                    score: scoreResult,
                 });
+                const harnessRecord = buildQueryHarnessRecord({
+                    query,
+                    repoName: repo.name,
+                    commit: repo.commit,
+                    response: response.json,
+                    elapsedMs,
+                    scoreResult,
+                    targetChunkIds: targetChunksMap.get(query.id) ?? new Set(),
+                    flags: provenance.resolvedFlags,
+                    workspaceHead: result.workspaceHead,
+                    provenance,
+                });
+                harnessRecords.push(harnessRecord);
+                // Fail loudly when the fused pool is absent: a run without it
+                // must abort rather than write a sidecar with a silent gap.
+                fusedPools[query.id] = {
+                    query_id: query.id,
+                    repo: repo.name,
+                    reservation_policy: reservationPolicyOpt,
+                    pool: buildFusedPoolEntries(response.json, query.id),
+                };
                 log(`  ${query.id} status=${response.json?.status} rank=${entry.queries.at(-1).score.rank} strict=${entry.queries.at(-1).score.strictRank} top=${hits[0]?.symbol ?? '(file)'} focus=${focus.focus} elapsedMs=${elapsedMs.toFixed(1)}`);
             }
         } finally {
@@ -259,7 +379,25 @@ async function main() {
     const json = JSON.stringify(result, null, 2).replace(/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})|(?<!\\ud[89ab][0-9a-f]{2})\\ud[c-f][0-9a-f]{2}/gi, '\\ufffd');
     fs.writeFileSync(path.join(outDir, 'result.json'), `${json}\n`);
     fs.writeFileSync(path.join(outDir, 'summary.md'), summarize(result));
-    log(`wrote ${outDir}/result.json and summary.md`);
+
+    let baselineMap = null;
+    if (baselinePath && fs.existsSync(baselinePath)) {
+        try {
+            const baseJson = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+            const baseList = Array.isArray(baseJson) ? baseJson : (baseJson.records || []);
+            baselineMap = new Map(baseList.map((r) => [r.query_id, r]));
+        } catch {
+            // baseline parse error ignored
+        }
+    }
+    const harnessReport = computeSummaryReport(harnessRecords, baselineMap);
+    fs.writeFileSync(path.join(outDir, 'harness-log.json'), JSON.stringify(harnessRecords, null, 2) + '\n');
+    fs.writeFileSync(path.join(outDir, 'harness-summary.md'), generateHarnessSummaryMarkdown(harnessRecords, harnessReport) + '\n');
+    fs.writeFileSync(
+        path.join(outDir, 'fused-pool.json'),
+        JSON.stringify({ provenance, queries: fusedPools }, null, 2) + '\n',
+    );
+    log(`wrote ${outDir}/result.json, summary.md, harness-log.json, fused-pool.json, and harness-summary.md`);
 }
 
 function summarizeProtocolErrors(errors) {
@@ -310,4 +448,14 @@ function summarize(result) {
     return lines.join('\n');
 }
 
-await main();
+try {
+    await main();
+} catch (err) {
+    // A stale build is a harness-configuration failure, not a crash: report it
+    // as a single clear line and a non-zero exit rather than a bare stack.
+    if (err instanceof DistStaleError) {
+        process.stderr.write(`FATAL: ${err.message}\n`);
+        process.exit(1);
+    }
+    throw err;
+}

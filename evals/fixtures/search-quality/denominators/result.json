@@ -1,0 +1,3014 @@
+{
+  "source": {
+    "commit": "84bfedc08b64a8330d5a2380f262927af72d3eec",
+    "path": "evals/real-repo-quality/results-factorial-c0-defaults-conceptual/result.json",
+    "sha256": "1383c9dbff7ad2af226cb0b0da2f4b9291a2cd716fc700eb64c038ca6f519ef9"
+  },
+  "repos": [
+    {
+      "name": "react",
+      "queries": [
+        {
+          "id": "r1",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "imperativeHandleEffect",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-devtools-shell/src/app/InspectableElements/UseEffectEvent.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-devtools-shell/src/app/InspectableElements/UseEffectEvent.js",
+              "symbol": "useEffectEvent",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "compiler/crates/react_compiler_validation/src/validate_no_derived_computations_in_effects.rs",
+              "symbol": "validate_effect",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react/src/ReactHooks.js",
+              "symbol": "useEffect",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react/src/ReactHooks.js",
+              "symbol": "useLayoutEffect",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "warnInvalidHookAccess",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-devtools-shell/src/app/InspectableElements/UseEffectEvent.js",
+              "symbol": "UseEffectEvent",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react/src/ReactHooks.js",
+              "symbol": "useInsertionEffect",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/eslint-plugin-react-hooks/src/rules/RulesOfHooks.ts",
+              "symbol": "useEffectEventError",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r8",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberBeginWork.js",
+              "symbol": "updateOffscreenComponent",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/ReactFiberBeginWork.js",
+              "symbol": "beginWork",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "renderWithHooks",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "dispatchSetStateInternal",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "renderWithHooksAgain",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-reconciler/src/ReactFiberBeginWork.js",
+              "symbol": "updateSimpleMemoComponent",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/use-sync-external-store/src/useSyncExternalStoreShimClient.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 8,
+              "path": "compiler/packages/react-mcp-server/src/index.ts",
+              "symbol": "server.prompt(\"review-react-code\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "compiler/packages/react-mcp-server/src/index.ts",
+              "symbol": "server.tool(\"compile\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "compiler/packages/react-mcp-server/src/index.ts",
+              "symbol": "errors.map() callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r2_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "renderWithHooksAgain",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-server/src/ReactFizzHooks.js",
+              "symbol": "dispatchAction",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "enqueueRenderPhaseUpdate",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-server/src/ReactFizzHooks.js",
+              "symbol": "finishHooks",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "dispatchSetStateInternal",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-server/src/ReactFizzHooks.js",
+              "symbol": "useReducer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalScheduling-test.js",
+              "symbol": "componentDidUpdate",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalScheduling-test.js",
+              "symbol": "Foo",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncremental-test.js",
+              "symbol": "LifeCycle",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalScheduling-test.js",
+              "symbol": "componentDidUpdate",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r3_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "ActionStateQueue",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "rerenderActionState",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "areHookInputsEqual",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-refresh/src/ReactFreshRuntime.js",
+              "symbol": "canPreserveStateBetween",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-server/src/ReactFizzHooks.js",
+              "symbol": "useReducer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-reconciler/src/ReactFiberShellHydration.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "compiler/packages/snap/src/runner-watch.ts",
+              "symbol": "subscribeKeyEvents",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-devtools-shared/src/attachRenderer.js",
+              "symbol": "attachRenderer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-reconciler/src/ReactFiberBeginWork.js",
+              "symbol": "validateRevealOrder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/eslint-plugin-react-hooks/src/shared/RunReactCompiler.ts",
+              "symbol": "runReactCompiler",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r4_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-client/src/__tests__/ReactFlight-test.js",
+              "symbol": "it(\"should warn in DEV a child is missing keys on server component\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react/src/__tests__/ReactChildren-test.js",
+              "symbol": "it(\"warns for mapped list children without keys\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react/src/__tests__/ReactChildren-test.js",
+              "symbol": "it(\"should be called for each child in an iterable without keys\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-server/src/ReactFlightServer.js",
+              "symbol": "logKeyError",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-server/src/ReactFizzServer.js",
+              "symbol": "renderSuspenseList",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react/src/__tests__/ReactChildren-test.js",
+              "symbol": "it(\"warns for flattened list children without keys\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react/src/__tests__/ReactJSXElementValidator-test.js",
+              "symbol": "describe(\"ReactJSXElementValidator\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-dom/src/__tests__/ReactChildReconciler-test.js",
+              "symbol": "it(\"warns for duplicated iterable keys\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-client/src/__tests__/ReactFlight-test.js",
+              "symbol": "describe(\"ReactFlight\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react/src/__tests__/ReactJSXElementValidator-test.js",
+              "symbol": "it(\"warns for keys for iterables of elements in rest args\") callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r5_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+              "symbol": "flushAfterMutationEffects",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "updateEffectImpl",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+              "symbol": "flushPendingEffects",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+              "symbol": "onErrorOrWarning",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+              "symbol": "flushPendingEffectsDelayed",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "isRenderingDeferredWork",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/ReactFiberHooks.js",
+              "symbol": "mountDeferredValueImpl",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-reconciler/src/ReactFiberReconciler.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-reconciler/src/ReactProfilerTimer.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-reconciler/src/ReactFiberCompleteWork.js",
+              "symbol": "completeWork",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r6_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts",
+              "symbol": "visitFunctionWithDependencies",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/HIR/PropagateScopeDependenciesHIR.ts",
+              "symbol": "DependencyCollectionContext",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts",
+              "symbol": "scanForConstructions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "compiler/crates/react_compiler_validation/src/validate_exhaustive_dependencies.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/HIR/CollectHoistablePropertyLoads.ts",
+              "symbol": "CollectHoistablePropertyLoadsContext",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/HIR/PropagateScopeDependenciesHIR.ts",
+              "symbol": "declarations",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/HIR/BuildHIR.ts",
+              "symbol": "gatherCapturedContext",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "compiler/crates/react_compiler_validation/src/validate_exhaustive_dependencies.rs",
+              "symbol": "InferredDependency",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/eslint-plugin-react-hooks/__tests__/ESLintRuleExhaustiveDeps-test.js",
+              "symbol": "tests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+              "symbol": "visitCandidateDependency",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r7_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalSideEffects-test.js",
+              "symbol": "Baz",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalSideEffects-test.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalSideEffects-test.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-reconciler/src/__tests__/ReactDeferredValue-test.js",
+              "symbol": "act() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-dom/src/__tests__/ReactDOMServerIntegrationHooks-test.js",
+              "symbol": "it(\"verifies yields in order\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "scripts/rollup/modules.js",
+              "symbol": "HAS_NO_SIDE_EFFECTS_ON_IMPORT",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-test-renderer/src/__tests__/ReactTestRendererAct-test.js",
+              "symbol": "describe(\"ReactTestRenderer.act()\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/internal-test-utils/__tests__/ReactInternalTestUtils-test.js",
+              "symbol": "describe(\"assertConsoleErrorDev\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-dom/src/__tests__/ReactCompositeComponent-test.js",
+              "symbol": "it(\"should return error if render is not defined\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-reconciler/src/__tests__/ReactHooksWithNoopRenderer-test.js",
+              "symbol": "act() callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "r9_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/__tests__/ActivityErrorHandling-test.js",
+              "symbol": "it() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalErrorHandling-test.internal.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalErrorHandling-test.internal.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncrementalErrorHandling-test.internal.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-reconciler/src/__tests__/ActivityErrorHandling-test.js",
+              "symbol": "describe(\"Activity error handling\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-devtools-shared/src/__tests__/treeContext-test.js",
+              "symbol": "describe(\"inline errors/warnings state\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/__tests__/ReactIncremental-test.js",
+              "symbol": "it(\"maintains the correct context when unwinding due to an error in render\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-reconciler/src/__tests__/ReactNewContext-test.js",
+              "symbol": "it(\"warns when reading context inside render phase class setState updater\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-devtools-shared/src/__tests__/treeContext-test.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-reconciler/src/__tests__/ReactNewContext-test.js",
+              "symbol": "describe(\"readContext\") callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r1",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/internal-test-utils/simulateBrowserEventDispatch.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-native-renderer/src/__tests__/ResponderEventPlugin-test.internal.js",
+              "symbol": "run",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-dom/src/__tests__/ReactDOMEventListener-test.js",
+              "symbol": "describe(\"ReactDOMEventListener\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-dom/src/__tests__/ReactEventIndependence-test.js",
+              "symbol": "it(\"does not when event fired on unmounted tree\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-dom/src/events/plugins/__tests__/SimpleEventPlugin-test.js",
+              "symbol": "describe(\"interactive events, in concurrent mode\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-dom/src/events/__tests__/DOMPluginEventSystem-test.internal.js",
+              "symbol": "withEnableLegacyFBSupport",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-dom/src/events/__tests__/getEventKey-test.js",
+              "symbol": "describe(\"getEventKey\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-dom/src/events/plugins/__tests__/SimpleEventPlugin-test.js",
+              "symbol": "it(\"adds a local click listener to non-interactive elements\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-dom/src/__tests__/InvalidEventListeners-test.js",
+              "symbol": "describe(\"InvalidEventListeners\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-dom/src/events/plugins/__tests__/SimpleEventPlugin-test.js",
+              "symbol": "it(\"flushes pending interactive work before exiting event handler\") callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r2",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/scheduler/src/forks/Scheduler.js",
+              "symbol": "workLoop",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/scheduler/src/forks/SchedulerPostTask.js",
+              "symbol": "deadline",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/scheduler/src/__tests__/Scheduler-test.js",
+              "symbol": "describe(\"SchedulerBrowser\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/scheduler/src/forks/SchedulerPostTask.js",
+              "symbol": "runTask",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/scheduler/src/forks/SchedulerPostTask.js",
+              "symbol": "unstable_shouldYield",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/scheduler/src/forks/Scheduler.js",
+              "symbol": "shouldYieldToHost",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+              "symbol": "performWorkOnRoot",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/scheduler/src/__tests__/SchedulerPostTask-test.js",
+              "symbol": "describe(\"SchedulerPostTask\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/scheduler/src/forks/Scheduler.js",
+              "symbol": "performWorkUntilDeadline",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/scheduler/src/__tests__/SchedulerPostTask-test.js",
+              "symbol": "it(\"task that finishes before deadline\") callback",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r3",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-server-dom-esm/src/client/ReactFlightDOMClientBrowser.js",
+              "symbol": "processBinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-server/src/forks/ReactServerStreamConfig.noop.js",
+              "symbol": "BinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-server-dom-webpack/src/client/ReactFlightDOMClientBrowser.js",
+              "symbol": "processBinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-server-dom-turbopack/src/client/ReactFlightDOMClientBrowser.js",
+              "symbol": "processBinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-flight-server-fb/src/client/ReactFlightDOMClientBrowser.js",
+              "symbol": "processBinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-server/src/ReactServerStreamConfigNode.js",
+              "symbol": "byteLengthOfBinaryChunk",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-server-dom-unbundled/src/client/ReactFlightDOMClientNode.js",
+              "symbol": "startReadingFromStream",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-server-dom-parcel/src/client/ReactFlightDOMClientNode.js",
+              "symbol": "startReadingFromStream",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-server-dom-turbopack/src/client/ReactFlightDOMClientNode.js",
+              "symbol": "startReadingFromStream",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-server-dom-webpack/src/client/ReactFlightDOMClientNode.js",
+              "symbol": "startReadingFromStream",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r4",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/ReactFiberClassUpdateQueue.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "packages/scheduler/src/SchedulerProfiling.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "packages/scheduler/src/__tests__/SchedulerMock-test.js",
+              "symbol": "runWithPriority() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "flow-typed/environments/node.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "packages/scheduler/src/__tests__/SchedulerMock-test.js",
+              "symbol": "runWithPriority() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "scripts/jest/config.build.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "packages/scheduler/src/SchedulerProfiling.js",
+              "symbol": "markTaskRun",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "compiler/packages/babel-plugin-react-compiler/src/Inference/InferMutationAliasingEffects.ts",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "packages/scheduler/src/SchedulerProfiling.js",
+              "symbol": "markTaskStart",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/scheduler/src/forks/SchedulerMock.js",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r5",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-devtools-shared/src/devtools/views/Components/InspectedElementHooksTree.js",
+              "symbol": "InnerHooksTreeViewProps",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-devtools-shared/src/devtools/views/Components/InspectedElementHooksTree.js",
+              "symbol": "HooksTreeViewProps",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-devtools-shared/src/frontend/hooks/useExtensionComponentsPanelVisibility.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-debug-tools/src/ReactDebugHooks.js",
+              "symbol": "HooksTree",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-devtools-shared/src/devtools/views/Components/Tree.js",
+              "symbol": "Tree",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-devtools-shared/src/devtools/views/DevTools.js",
+              "symbol": "Props",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-devtools-shared/src/devtools/views/Components/InspectedElementHooksTree.js",
+              "symbol": "InnerHooksTreeView",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-devtools-extensions/src/main/index.js",
+              "symbol": "render",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-devtools-shared/src/devtools/views/Components/TreeContext.js",
+              "symbol": "getInitialState",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-devtools-extensions/flow-typed/npm/react-test-renderer_v16.x.x.js",
+              "symbol": "ReactTestRendererTree",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_r6",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "packages/react-reconciler/src/__tests__/ReactUse-test.js",
+              "symbol": "it(\"does not prevent a Suspense fallback from showing if it's a new boundary, even during a transition\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "packages/react-reconciler/src/__tests__/ReactSuspenseList-test.js",
+              "symbol": "it(\"displays each items in \\\"backwards\\\" order\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "packages/react-reconciler/src/__tests__/ReactSuspenseList-test.js",
+              "symbol": "it(\"displays each items in \\\"forwards\\\" order\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "packages/react-dom/src/__tests__/ReactDOMFizzServer-test.js",
+              "symbol": "act() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "packages/react-reconciler/src/__tests__/ReactSuspenseWithNoopRenderer-test.js",
+              "symbol": "it() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "packages/react-reconciler/src/__tests__/ReactSuspenseList-test.js",
+              "symbol": "it(\"displays all \\\"together\\\"\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "packages/react-reconciler/src/__tests__/ReactUse-test.js",
+              "symbol": "describe(\"ReactUse\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "packages/react-dom/src/__tests__/ReactDOMFizzServer-test.js",
+              "symbol": "it(\"should asynchronously load the suspense boundary\") callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "packages/react-dom/src/__tests__/ReactDOMSuspensePlaceholder-test.js",
+              "symbol": "it() callback",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "packages/react-reconciler/src/__tests__/ReactSuspense-test.internal.js",
+              "symbol": "it(\"pushes out siblings that render faster than throttle\") callback",
+              "granularity": "symbol"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "polars",
+      "queries": [
+        {
+          "id": "p1_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-compute/src/approx_quantile.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-plan/src/utils.rs",
+              "symbol": "comma_delimited",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-plan/src/utils.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars-io/src/csv/write/options.rs",
+              "symbol": "SerializeOptions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/src/polars/io/csv/functions.py",
+              "symbol": "read_csv",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars/tests/it/io/csv.rs",
+              "symbol": "test_comma_separated_field_in_tsv",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-io/src/csv/read/options.rs",
+              "symbol": "CsvParseOptions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars/tests/it/io/csv.rs",
+              "symbol": "test_whitespace_separators",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-sql/src/context.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-io/src/parquet/write/batched_writer.rs",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "p2_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/tests/unit/sql/test_distinct.py",
+              "symbol": "test_distinct_basic_multiple_columns",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/tests/unit/io/test_parquet.py",
+              "symbol": "test_multiple_sorting_columns",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/tests/unit/sql/test_correlated_subqueries.py",
+              "symbol": "test_correlated_equality_across_tables",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/src/polars/expr/expr.py",
+              "symbol": "Expr",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/src/polars/lazyframe/frame.py",
+              "symbol": "join",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-row/src/encode.rs",
+              "symbol": "convert_columns_no_order",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/src/polars/expr/expr.py",
+              "symbol": "sort_by",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "write_excel",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-stream/src/nodes/io_sources/multi_scan/reader_interface/mod.rs",
+              "symbol": "BeginReadArgs",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "join",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p3_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/tests/unit/datatypes/test_datatypes.py",
+              "symbol": "test_conversion_dtype",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-plan/src/plans/conversion/type_coercion/mod.rs",
+              "symbol": "optimize_expr",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-parquet/src/parquet/schema/types/converted_type.rs",
+              "symbol": "PrimitiveConvertedType",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars/tests/it/io/parquet/read/mod.rs",
+              "symbol": "columns_to_array",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-parquet/src/parquet/schema/io_thrift/from_thrift.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-parquet/src/parquet/schema/types/converted_type.rs",
+              "symbol": "from",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-parquet/src/parquet/schema/types/converted_type.rs",
+              "symbol": "try_from",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/src/polars/series/series.py",
+              "symbol": "_comp",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-io/src/catalog/unity/schema.rs",
+              "symbol": "dtype_to_type_json",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-parquet/src/arrow/write/schema.rs",
+              "symbol": "convert_dtype",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p4_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-compute/src/rolling/no_nulls/rank.rs",
+              "symbol": "RankWindowAvg",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-compute/src/rolling/nulls/rank.rs",
+              "symbol": "RankWindowAvg",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/src/polars/series/series.py",
+              "symbol": "Series",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/src/polars/expr/expr.py",
+              "symbol": "Expr",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/src/polars/series/series.py",
+              "symbol": "rolling_rank",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/src/polars/expr/expr.py",
+              "symbol": "rolling_rank",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-compute/src/rolling/rank.rs",
+              "symbol": "RankPolicyAverage",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/src/polars/expr/expr.py",
+              "symbol": "rolling_rank_by",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/src/polars/series/series.py",
+              "symbol": "rolling_mean",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-compute/src/rolling/nulls/mean.rs",
+              "symbol": "rolling_mean",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p5_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-lazy/src/tests/queries.rs",
+              "symbol": "test_lazy_shift_operation_no_filter",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-lazy/src/tests/queries.rs",
+              "symbol": "test_filter_after_shift_in_groups",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "shift",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/mod.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/join/predicate_pruning.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/tests/unit/operations/test_group_by.py",
+              "symbol": "test_group_by_shift_filter_23910",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/dynamic.rs",
+              "symbol": "filters_rows",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/tests/unit/lazyframe/test_predicates.py",
+              "symbol": "test_no_predicate_pushdown_with_non_elementwise_predicate_29456",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-lazy/src/tests/queries.rs",
+              "symbol": "test_lazy_query_7",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/dynamic.rs",
+              "symbol": "filters_rows",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p6_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-stream/src/nodes/columnar_function.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-parquet/src/arrow/read/deserialize/fixed_size_binary.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-stream/src/nodes/columnar_function.rs",
+              "symbol": "ColumnarFunctionNode",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars/tests/it/io/parquet/read/row_group.rs",
+              "symbol": "_read_single_column",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-parquet/src/arrow/read/deserialize/binview/mod.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-python/src/file.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-parquet/src/arrow/read/deserialize/binary/mod.rs",
+              "symbol": "BinaryDecoder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-parquet/src/arrow/read/deserialize/binary/mod.rs",
+              "symbol": "DecodedStateTuple",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-io/src/utils/compression.rs",
+              "symbol": "ByteSourceReader",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-parquet/src/arrow/read/deserialize/binview/optional.rs",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "p7_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-lazy/src/tests/aggregations.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-time/src/chunkedarray/rolling_window/rolling_kernels/shared.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-compute/src/rolling/window.rs",
+              "symbol": "SortedBuf",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/tests/unit/operations/test_group_by.py",
+              "symbol": "test_grouped_agg_parametric",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/tests/unit/sql/test_grouping_sets.py",
+              "symbol": "test_window_over_selected_aggregate",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/tests/unit/sql/test_window_functions.py",
+              "symbol": "test_window_over_aggregate",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/tests/unit/streaming/test_streaming_window.py",
+              "symbol": "_assert_unordered_window",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/tests/unit/sql/test_window_functions.py",
+              "symbol": "test_window_over_aggregate_having",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/tests/unit/sql/test_window_functions.py",
+              "symbol": "test_window_over_aggregate_partition_by_subset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-compute/src/rolling/window.rs",
+              "symbol": "SortedBufNulls",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p8_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "to_jax",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "to_numpy",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-core/src/chunked_array/ndarray.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/src/polars/series/list.py",
+              "symbol": "to_array",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/src/polars/expr/list.py",
+              "symbol": "to_array",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-sql/src/functions.rs",
+              "symbol": "PolarsSQLFunctions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/src/polars/io/_utils.py",
+              "symbol": "parse_columns_arg",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/src/polars/expr/array.py",
+              "symbol": "ExprArrayNameSpace",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/tests/unit/interop/numpy/test_to_numpy_df.py",
+              "symbol": "test_to_numpy_structured",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-ffi/src/version_0.rs",
+              "symbol": "export_column",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "p9_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "DataFrame",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/src/polars/dataframe/_html.py",
+              "symbol": "NotebookFormatter",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/src/polars/_utils/various.py",
+              "symbol": "_in_marimo_notebook",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "show",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/tests/unit/utils/test_utils.py",
+              "symbol": "test_in_notebook",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/tests/unit/dataframe/test_show.py",
+              "symbol": "test_df_show_fmt_table_cell_list_len",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/src/polars/config.py",
+              "symbol": "set_fmt_table_cell_list_len",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-core/src/fmt.rs",
+              "symbol": "test",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/src/polars/config.py",
+              "symbol": "set_tbl_column_data_type_inline",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "py-polars/src/polars/lazyframe/query_result.py",
+              "symbol": "_repr_html_",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p1",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/tests/unit/sql/test_distinct.py",
+              "symbol": "test_distinct_with_expressions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/tests/unit/sql/test_distinct_on.py",
+              "symbol": "test_distinct_on_single_column",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/tests/unit/sql/test_distinct.py",
+              "symbol": "test_distinct_with_where_filter",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/tests/unit/sql/test_distinct.py",
+              "symbol": "test_distinct_basic_single_column",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/src/polars/io/_utils.py",
+              "symbol": "_ensure_columns_are_unique",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/tests/unit/sql/test_distinct_on.py",
+              "symbol": "test_distinct_on_with_ordering",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-plan/src/plans/optimizer/join_runtime_filter.rs",
+              "symbol": "add",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-python/src/conversion/any_value.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/tests/unit/sql/test_agg_semantics.py",
+              "symbol": "test_sum_avg_distinct_dedup",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "py-polars/tests/unit/sql/test_distinct_on.py",
+              "symbol": "test_distinct_on_multiple_columns",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p2",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-plan/src/plans/optimizer/mod.rs",
+              "symbol": "optimize",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-plan/src/plans/optimizer/stack_opt.rs",
+              "symbol": "optimize_loop",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/src/polars/lazyframe/opt_flags.py",
+              "symbol": "simplify_expression",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars-stream/src/physical_plan/lower_expr.rs",
+              "symbol": "lower_exprs_with_ctx",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-plan/src/frame/opt_state.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-utils/src/order_statistic_tree.rs",
+              "symbol": "get",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-plan/src/plans/optimizer/stack_opt.rs",
+              "symbol": "optimize_expr",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-utils/src/order_statistic_tree.rs",
+              "symbol": "OrderStatisticTree",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/src/polars/lazyframe/frame.py",
+              "symbol": "explain",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "py-polars/tests/unit/streaming/test_join_runtime_filter.py",
+              "symbol": "test_repeated_build_key",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p3",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-stream/src/nodes/io_sources/csv/line_batch_source.rs",
+              "symbol": "LineBatchProducer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-stream/src/nodes/io_sources/csv/line_batch_source.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-stream/src/utils/mod.rs",
+              "symbol": "in_memory_linearize",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars-stream/src/nodes/io_sources/ndjson/line_batch_distributor.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-arrow/src/io/ipc/read/stream.rs",
+              "symbol": "StreamReader",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-arrow/src/io/ipc/read/stream.rs",
+              "symbol": "read_next",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-io/src/csv/read/parser.rs",
+              "symbol": "LineStats",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-stream/src/nodes/io_sources/csv/mod.rs",
+              "symbol": "begin_read",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "crates/polars-io/src/ipc/ipc_stream.rs",
+              "symbol": "next_record_batch",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-stream/src/nodes/io_sources/ndjson/chunk_reader.rs",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p4",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "crates/polars-stream/src/nodes/joins/equi_join.rs",
+              "symbol": "select_keys_with_columns",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "crates/polars-expr/src/key_rows/map.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "crates/polars-expr/src/idx_table/key_rows.rs",
+              "symbol": "probe_subset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "crates/polars-expr/src/key_rows/keys.rs",
+              "symbol": "from_columns",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-expr/src/idx_table/key_rows.rs",
+              "symbol": "insert_keys_subset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "join",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "crates/polars-stream/src/nodes/joins/runtime_filter.rs",
+              "symbol": "extend",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/src/polars/lazyframe/frame.py",
+              "symbol": "join",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "DataFrame",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-expr/src/hash_keys.rs",
+              "symbol": "for_each_hash_subset",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p5",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/src/polars/exceptions.py",
+              "symbol": "DataOrientationWarning",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "glimpse",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/tests/unit/datatypes/test_object.py",
+              "symbol": "test_object_row_construction",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/src/polars/dataframe/frame.py",
+              "symbol": "show",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "crates/polars-core/src/fmt.rs",
+              "symbol": "fmt",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "crates/polars-row/src/encode.rs",
+              "symbol": "convert_columns_no_order",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/src/polars/_utils/construction/dataframe.py",
+              "symbol": "_sequence_of_sequence_to_pydf",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "crates/polars-stream/src/nodes/window.rs",
+              "symbol": "SortedPartition",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/tests/unit/dataframe/test_df.py",
+              "symbol": "test_from_rows",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "crates/polars-row/src/lib.rs",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "fresh_p6",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "py-polars/tests/unit/operations/namespaces/string/test_string.py",
+              "symbol": "test_extract_regex",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "py-polars/tests/unit/operations/namespaces/string/test_string.py",
+              "symbol": "test_extract_binary",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "py-polars/tests/unit/operations/namespaces/string/test_string.py",
+              "symbol": "test_extract",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "py-polars/tests/unit/io/test_iceberg.py",
+              "symbol": "test_parse_eq",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "py-polars/tests/unit/utils/parse/test_expr.py",
+              "symbol": "test_parse_into_expression_str_as_lit",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "py-polars/tests/unit/utils/parse/test_expr.py",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "py-polars/tests/unit/io/test_iceberg.py",
+              "symbol": "test_parse_lteq",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "py-polars/tests/unit/operations/test_comparison.py",
+              "symbol": "test_total_ordering_string_series",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "py-polars/tests/unit/io/test_iceberg.py",
+              "symbol": "test_parse_gteq",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "py-polars/tests/unit/utils/parse/test_expr.py",
+              "symbol": "test_parse_into_expression_col",
+              "granularity": "symbol"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "flatbuffers",
+      "queries": [
+        {
+          "id": "f1_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "include/flatbuffers/flatbuffer_builder.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/FlatBufferBuilder.kt",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "src/binary_annotator.cpp",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "rust/flatbuffers/src/builder.rs",
+              "symbol": "finish_with_opts",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "include/flatbuffers/flexbuffers.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/FlexBuffersBuilder.kt",
+              "symbol": "finish",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "_WriteOffset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "java/src/main/java/com/google/flatbuffers/FlatBufferBuilder.java",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "java/src/main/java/com/google/flatbuffers/FlexBuffersBuilder.java",
+              "symbol": "finish",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f2_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "src/binary_annotator.h",
+              "symbol": "IsValidOffset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "tests/swift/fuzzer/CodeGenerationTests/test_import_generated.swift",
+              "symbol": "Message",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "net/FlatBuffers/FlatBufferVerify.cs",
+              "symbol": "CheckIndirectOffset",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "tests/swift/Wasm.tests/Tests/FlatBuffers.Test.Swift.WasmTests/monster_test_generated.swift",
+              "symbol": "MyGame_Example_TestSimpleTableWithEnum",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "java/src/main/java/com/google/flatbuffers/FlatBufferBuilder.java",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "net/FlatBuffers/FlatBufferBuilder.cs",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "tests/swift/Tests/Flatbuffers/monster_test_generated.swift",
+              "symbol": "MyGame_Example_TestSimpleTableWithEnum",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "include/flatbuffers/flatbuffer_builder.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "net/FlatBuffers/FlatBufferVerify.cs",
+              "symbol": "Verifier",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "tests/swift/fuzzer/CodeGenerationTests/test_import_generated.swift",
+              "symbol": "MessageT",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f3_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "rust/flatbuffers/src/builder.rs",
+              "symbol": "tests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "include/flatbuffers/vector_downward.h",
+              "symbol": "vector_downward",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "include/flatbuffers/flatbuffer_builder.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 4,
+              "path": "include/flatbuffers/allocator.h",
+              "symbol": "Allocator",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "swift/Sources/FlatBuffers/NativeObject.swift",
+              "symbol": "NativeObject",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "tests/swift/Tests/Flatbuffers/monster_test.grpc.swift",
+              "symbol": "FlatBuffersMessageSerializer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "VectorFromElements",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "Builder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "include/flatbuffers/vector_downward.h",
+              "symbol": "swap",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "grpc/examples/swift/Greeter/Sources/Models/greeter_v2.grpc.swift",
+              "symbol": "FlatBuffersMessageSerializer",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f4_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "tests/py_test.py",
+              "symbol": "test_vtable_deduplication",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "tests/rust_usage_test/tests/integration_test.rs",
+              "symbol": "vtable_deduplication",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "java/src/main/java/com/google/flatbuffers/FlatBufferBuilder.java",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "tests/py_test.py",
+              "symbol": "_checkTable",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "tests/rust_usage_test/tests/integration_test.rs",
+              "symbol": "flatbuffers_tests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "tests/rust_usage_test/tests/integration_test.rs",
+              "symbol": "two_empty_tables_are_deduplicated",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "src/binary_annotator.h",
+              "symbol": "VTable",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "dart/lib/flat_buffers.dart",
+              "symbol": "Builder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "tests/py_test.py",
+              "symbol": "test_vtable_deduplication_respects_object_size",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "include/flatbuffers/flatbuffer_builder.h",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "f5_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": "Printer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": "File",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "grpc/src/compiler/ts_generator.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "swift/Sources/FlatBuffers/NativeObject.swift",
+              "symbol": "NativeObject",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "grpc/examples/ts/greeter/src/greeter_grpc.d.ts",
+              "symbol": "IGreeterService",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "grpc/examples/ts/greeter/src/greeter_grpc.d.ts",
+              "symbol": "IGreeterService_ISayHello",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "grpc/src/compiler/ts_generator.cc",
+              "symbol": "Printer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "swift/Sources/FlatBuffers/Enum.swift",
+              "symbol": "UnionEnum",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "src/idl_gen_ts.cpp",
+              "symbol": "import_set",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f6_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "src/idl_gen_go.cpp",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 2,
+              "path": "src/idl_gen_ts.cpp",
+              "symbol": "ts",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "src/idl_gen_cpp.cpp",
+              "symbol": "CppGenerator",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "src/idl_gen_cpp.cpp",
+              "symbol": "generate",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "src/flatc.cpp",
+              "symbol": "GenerateCode",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "include/flatbuffers/code_generator.h",
+              "symbol": "LanguageName",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "src/idl_gen_cpp.cpp",
+              "symbol": "GenNativeTable",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "tests/swift/fuzzer/CodeGenerationTests/test_import_generated.swift",
+              "symbol": "MessageT",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "src/idl_gen_text.h",
+              "symbol": "flatbuffers",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "include/flatbuffers/code_generator.h",
+              "symbol": "Language",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f7_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "grpc/src/compiler/java_generator.cc",
+              "symbol": "Printer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "IsFixedTypedVector",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "grpc/src/compiler/go_generator.cc",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 4,
+              "path": "grpc/src/compiler/java_generator.cc",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "IsFixedTypedVectorElementType",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "benchmarks/cpp/benchmark_main.cpp",
+              "symbol": "State",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "dart/lib/src/types.dart",
+              "symbol": "isFixedTypedVector",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "include/flatbuffers/flatbuffers.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "dart/analysis_options.yaml",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 10,
+              "path": "tests/ts/reflection/schema-file.js",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "f8_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "tests/union_value_collsion/union_value_collision_generated.cs",
+              "symbol": "CollideVerify",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "tests/FlatBuffers.Test/FlatBuffersExampleTests.cs",
+              "symbol": "Test",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "tests/type_field_collsion/Collision.cs",
+              "symbol": "CollisionVerify",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "tests/union_value_collsion/union_value_collision_generated.cs",
+              "symbol": "CollisionVerify",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "src/binary_annotator.cpp",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "tests/FlatBuffers.Test/FlatBuffersExampleTests.cs",
+              "symbol": "FlatBuffersExampleTests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "tests/KeywordTest/KeywordsInTable.cs",
+              "symbol": "KeywordsInTableVerify",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "tests/FlatBuffers.Test/FlatBuffersExampleTests.cs",
+              "symbol": "TestVerifyingUnions",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "tests/union_value_collsion/union_value_collision_generated.cs",
+              "symbol": "Verify",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "rust/reflection/src/lib.rs",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "f9_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "Builder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "Blob",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "python/flatbuffers/flexbuffers.py",
+              "symbol": "String",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "tests/swift/Tests/Flexbuffers/FlexBuffersStringTests.swift",
+              "symbol": "FlexBuffersStringTests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "tests/swift/Wasm.tests/Tests/FlexBuffers.Test.Swift.WasmTests/FlexBuffersStringTests.swift",
+              "symbol": "FlexBuffersStringTests",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "java/src/main/java/com/google/flatbuffers/Utf8Old.java",
+              "symbol": "Utf8Old",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "grpc/flatbuffers-java-grpc/src/main/java/com/google/flatbuffers/grpc/FlatbuffersUtils.java",
+              "symbol": "extract",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "src/annotated_binary_text_gen.cpp",
+              "symbol": "flatbuffers",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "grpc/flatbuffers-java-grpc/src/main/java/com/google/flatbuffers/grpc/FlatbuffersUtils.java",
+              "symbol": "FBExtactor",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "tests/swift/Tests/Flatbuffers/FlatBuffersUnionTests.swift",
+              "symbol": "FlatBuffersUnionTests",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "f10_rewritten",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "swift/Sources/FlexBuffers/_InternalByteBuffer.swift",
+              "symbol": "Storage",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "java/src/main/java/com/google/flatbuffers/ArrayReadWriteBuf.java",
+              "symbol": "requestCapacity",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "rust/flatbuffers/src/builder.rs",
+              "symbol": "Allocator",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "swift/Sources/FlatBuffers/_InternalByteBuffer.swift",
+              "symbol": "Storage",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+              "symbol": "FlatBufferBuilder",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "swift/Sources/FlexBuffers/_InternalByteBuffer.swift",
+              "symbol": "_InternalByteBuffer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "rust/flatbuffers/src/builder.rs",
+              "symbol": "from_vec_with_internal_capacity",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "include/flatbuffers/grpc.h",
+              "symbol": "dealloc",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "swift/Sources/FlatBuffers/_InternalByteBuffer.swift",
+              "symbol": "ensureSpace",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers.kt",
+              "symbol": "requestCapacity",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f1",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "src/binary_annotator.h",
+              "symbol": "Field",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "src/binary_annotator.h",
+              "symbol": "VTable",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "src/binary_annotator.h",
+              "symbol": "Field",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "src/binary_annotator.cpp",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "include/flatbuffers/reflection.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "src/bfbs_gen.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "tests/ts/reflection/field.js",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 8,
+              "path": "python/flatbuffers/reflection/Field.py",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "src/idl_gen_cpp.cpp",
+              "symbol": "GenKeyFieldMethods",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "src/idl_gen_java.cpp",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f2",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": "string",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 3,
+              "path": "grpc/src/compiler/schema_interface.h",
+              "symbol": "Printer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "grpc/src/compiler/ts_generator.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 5,
+              "path": "python/flatbuffers/reflection/Schema.py",
+              "symbol": "SchemaStartEnumsVector",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "python/flatbuffers/reflection/Schema.py",
+              "symbol": "SchemaStartFbsFilesVector",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "tests/ts/reflection/schema.d.ts",
+              "symbol": "startSchema",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "include/flatbuffers/registry.h",
+              "symbol": "Schema",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "tests/test.cpp",
+              "symbol": "EmbeddedSchemaAccessByType",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "python/flatbuffers/reflection/Schema.py",
+              "symbol": "SchemaEnd",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f3",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "src/idl_parser.cpp",
+              "symbol": "Serialize",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "java/src/main/java/com/google/flatbuffers/reflection/Schema.java",
+              "symbol": "getRootAsSchema",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "src/idl_parser.cpp",
+              "symbol": "Serialize",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "include/flatbuffers/registry.h",
+              "symbol": "Schema",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "rust/flexbuffers/src/lib.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 6,
+              "path": "src/flatc.cpp",
+              "symbol": "Compile",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "src/idl_parser.cpp",
+              "symbol": "Serialize",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "src/flatc.cpp",
+              "symbol": "AnnotateBinaries",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": "java/src/main/java/com/google/flatbuffers/reflection/SchemaFile.java",
+              "symbol": "getRootAsSchemaFile",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "src/flatc.cpp",
+              "symbol": "GetUsageString",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f4",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "include/flatbuffers/code_generator.h",
+              "symbol": "CodeGenerator",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "include/flatbuffers/code_generator.h",
+              "symbol": "flatbuffers",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "src/flatc.cpp",
+              "symbol": "GenerateCode",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "rust/flexbuffers/src/buffer.rs",
+              "symbol": "Buffer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "src/flatc.cpp",
+              "symbol": "RegisterCodeGenerator",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "grpc/src/compiler/cpp_generator.cc",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 7,
+              "path": "grpc/src/compiler/cpp_generator.h",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 8,
+              "path": "grpc/src/compiler/go_generator.cc",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "src/flatc.cpp",
+              "symbol": "Compile",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "include/flatbuffers/code_generator.h",
+              "symbol": "LanguageName",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f5",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "tests/fuzzer/scalar_debug.cpp",
+              "symbol": "main",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "tests/fuzzer/monster_debug.cpp",
+              "symbol": "main",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "tests/go_test.go",
+              "symbol": "checkFuzz",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "tests/ts/JavaScriptTest.js",
+              "symbol": "fuzzTest1",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "tests/fuzzer/flexbuffers_verifier_fuzzer.cc",
+              "symbol": "LLVMFuzzerTestOneInput",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "tests/ts/JavaScriptTestv1.cjs",
+              "symbol": "fuzzTest1",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "tests/fuzz_test.cpp",
+              "symbol": "FuzzTest1",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "tests/py_test.py",
+              "symbol": "TestFuzz",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 9,
+              "path": ".github/workflows/main.yml",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 10,
+              "path": "tests/fuzz_test.h",
+              "symbol": "FuzzTest1",
+              "granularity": "symbol"
+            }
+          ]
+        },
+        {
+          "id": "fresh_f6",
+          "hits": [
+            {
+              "rank": 1,
+              "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+              "symbol": "refer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 2,
+              "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+              "symbol": "push",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 3,
+              "path": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+              "symbol": "preAlign",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 4,
+              "path": "swift/Sources/FlatBuffers/Verifier.swift",
+              "symbol": "Verifier",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 5,
+              "path": "swift/Sources/FlatBuffers/Verifier.swift",
+              "symbol": "isAligned",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 6,
+              "path": "swift/Sources/FlatBuffers/Verifier.swift",
+              "symbol": "inBuffer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 7,
+              "path": "swift/Sources/FlexBuffers/Writer/FlexBuffersWriter.swift",
+              "symbol": "Stack",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 8,
+              "path": "rust/flatbuffers/src/verifier.rs",
+              "symbol": null,
+              "granularity": "file"
+            },
+            {
+              "rank": 9,
+              "path": "swift/Sources/FlexBuffers/_InternalByteBuffer.swift",
+              "symbol": "_InternalByteBuffer",
+              "granularity": "symbol"
+            },
+            {
+              "rank": 10,
+              "path": "swift/Sources/FlexBuffers/ByteBuffer.swift",
+              "symbol": null,
+              "granularity": "file"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

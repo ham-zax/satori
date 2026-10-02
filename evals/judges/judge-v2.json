@@ -1,0 +1,1477 @@
+{
+  "judgeVersion": "v2",
+  "description": "Granularity-explicit, adjudicated judge. Every acceptable entry carries granularity: \"symbol\" (a symbolRegex is set and must match) or \"path\" (a whole-file result on a matching path is accepted). Built from the 54 entries of conceptual-cases.json, minus every entry the blind adjudicator judged `no`, with every remaining symbolRegex:null entry either replaced by a symbol-level entry or explicitly marked path-level.",
+  "portability": "path-and-symbol",
+  "portabilityNote": "Unlike judge-v1 this judge is not bound to one index state: it is expressed as path/symbol regexes, so it can be re-applied to any log that carries a result.json with per-hit path, symbol and granularity. It IS bound to the pinned source commits recorded in `repos` below.",
+  "repos": [
+    {
+      "name": "react",
+      "commit": "7c6ac13e19fe",
+      "split": "tune"
+    },
+    {
+      "name": "polars",
+      "commit": "74dd736d655c",
+      "split": "tune"
+    },
+    {
+      "name": "flatbuffers",
+      "commit": "b8431fbcd7a5",
+      "split": "heldout"
+    }
+  ],
+  "scoring": "rank = position (1-based) of the first top-10 result whose path matches an acceptable pathRegex and whose symbol name matches symbolRegex (or symbolRegex is null, or the result is a whole-file result on a matching path). strictRank additionally requires a symbol-level result when symbolRegex is set. Variants: original, rewritten, fresh. Splits: tune (react, polars), heldout (flatbuffers). Cohorts: gap, control.",
+  "strictVsLenient": "STRICT counts only entries with granularity \"symbol\": a hit needs a symbol-level result whose symbol matches that entry's symbolRegex. LENIENT counts symbol-level and path-level entries, so a whole-file result on a path-level entry's path also scores. The two columns diverge exactly on queries that have at least one path-level entry. Under judge-v1 the two columns are identical by construction, because chunk IDs carry no granularity.",
+  "denominatorRule": "Hit@k and MRR divide by every query in the log, unanswerable ones included, matching what the historical v1-era scorecard did. The unanswerable count is printed in its own column so the fair-test denominator (n - unanswerable) is one subtraction away and nothing is silently dropped or silently absorbed into a miss.",
+  "derivedFrom": {
+    "source": "evals/real-repo-quality/conceptual-cases.json",
+    "sourceSha256": "53a18cacde7be210ed041efef5e549e2802dcb0164e6d0acadfd3d68b8245477",
+    "adjudication": "evals/judges/v2-adjudication.md",
+    "adjudicationSha256": "51e55b70dd058393a834afafab97543ea266a67784eccfdb2f6a23c2eb836edb",
+    "blinding": "The adjudication was produced under strict blinding: the adjudicator read only query texts, the `acceptable` entries and the pinned clones (react 7c6ac13e19, polars 74dd736d655c, flatbuffers b8431fbcd7a5). It opened no harness-log, no result.json, no *alt-terms*.json, no improvement doc and no prior transcript, and ran no git command inside this repo. Its totals: 54 entries -> 24 yes / 10 no / 20 path-only, 6 pathRegexes matching zero files, 8 path-only entries needing narrowing. See v2-adjudication.md \"Blinding attestation\".",
+    "removals": [
+      {
+        "key": "r1:1",
+        "repo": "react",
+        "split": "tune",
+        "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitWork\\.js$",
+        "symbolRegex": "^(commitHookEffectListUnmount|commitPassiveUnmountEffects|commitHookPassiveUnmountEffects|safelyCallDestroy)$",
+        "reason": "ReactFiberCommitWork.js holds the passive-unmount traversal, not the destroy invocation; 3 of its 4 regex names are bare import lines."
+      },
+      {
+        "key": "r9_rewritten:1",
+        "repo": "react",
+        "split": "tune",
+        "pathRegex": "^packages/react/src/ReactHooks\\.js$",
+        "symbolRegex": "^resolveDispatcher$",
+        "reason": "packages/react/src/ReactHooks.js:24 resolveDispatcher deliberately does not throw (\"We intentionally don't throw our own error because this is in a hot path\"); it console.errors and returns null."
+      },
+      {
+        "key": "fresh_r5:0",
+        "repo": "react",
+        "split": "tune",
+        "pathRegex": "^packages/react-devtools-shared/src/backend/renderer\\.js$",
+        "symbolRegex": "^(attach|findNativeNodesForFiberID)$",
+        "reason": "pathRegex matches 0 files at this SHA (renderer lives at backend/fiber/renderer.js)."
+      },
+      {
+        "key": "fresh_p1:0",
+        "repo": "polars",
+        "split": "tune",
+        "pathRegex": "^crates/polars-ops/src/series/ops/various\\.rs$",
+        "symbolRegex": "^(unique|n_unique)$",
+        "reason": "Neither `unique` nor `n_unique` exists in various.rs; the only hit is the word \"unique\" in a doc comment at :14."
+      },
+      {
+        "key": "fresh_p4:0",
+        "repo": "polars",
+        "split": "tune",
+        "pathRegex": "^crates/polars-core/src/frame/hash_join/",
+        "symbolRegex": null,
+        "reason": "pathRegex matches 0 files at this SHA (hash join lives under crates/polars-ops/src/frame/join/hash_join/)."
+      },
+      {
+        "key": "fresh_p5:0",
+        "repo": "polars",
+        "split": "tune",
+        "pathRegex": "^crates/polars-ops/src/pivot/",
+        "symbolRegex": "^pivot",
+        "reason": "pathRegex matches 0 files at this SHA, and `^pivot` is a name prefix rather than a symbol name."
+      },
+      {
+        "key": "fresh_p6:0",
+        "repo": "polars",
+        "split": "tune",
+        "pathRegex": "^py-polars/tests/unit/operations/strings/",
+        "symbolRegex": null,
+        "reason": "pathRegex matches 0 files at this SHA (string tests are at py-polars/tests/unit/operations/namespaces/string/test_string.py)."
+      },
+      {
+        "key": "f1_rewritten:0",
+        "repo": "flatbuffers",
+        "split": "heldout",
+        "pathRegex": "^(include/flatbuffers|python/flatbuffers|go|java/src/main|net/FlatBuffers|kotlin/flatbuffers-kotlin/src|php|dart/lib|lua/flatbuffers|rust/flatbuffers/src|ts|swift/Sources/FlatBuffers|lobster|nim)/(?!.*(flex|generated))",
+        "symbolRegex": "^(Finish|finish|__Finish)$",
+        "reason": "13-port alternation matches 225 files, only 26 of which define a `Finish`; the case-sensitive (?!flex) guard still admits FlexBuffers.java."
+      },
+      {
+        "key": "fresh_f3:1",
+        "repo": "flatbuffers",
+        "split": "heldout",
+        "pathRegex": "^java/com/google/flatbuffers/FlexBuffers\\.java$",
+        "symbolRegex": null,
+        "reason": "pathRegex matches 0 files at this SHA (the path omits `src/main`)."
+      },
+      {
+        "key": "fresh_f6:0",
+        "repo": "flatbuffers",
+        "split": "heldout",
+        "pathRegex": "^docs/source/(WhitePaper|FlatBuffers)\\.md$",
+        "symbolRegex": null,
+        "reason": "pathRegex matches 0 files at this SHA: there is no WhitePaper.md and no FlatBuffers.md (the real file is docs/source/white_paper.md)."
+      }
+    ],
+    "counts": {
+      "sourceEntries": 54,
+      "removed": 10,
+      "kept": 45,
+      "symbolLevel": 32,
+      "pathLevel": 13,
+      "queries": 46,
+      "unanswerable": 7
+    },
+    "rule": "A REMOVE verdict is applied literally: the entry is dropped and no replacement regex is substituted for it. A query left with zero entries is marked unanswerable:true rather than deleted, so it is excluded from the strict/lenient denominators instead of silently counting as a retrieval miss. NARROW verdicts ARE applied, because step 2 of the brief asks for exactly that replacement, and the adjudicator supplied the replacement regex."
+  },
+  "unanswerableQueries": {
+    "fresh_r5": {
+      "reason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (renderer lives at backend/fiber/renderer.js). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "fresh_p1": {
+      "reason": "every acceptable entry was adjudicated `no`: Neither `unique` nor `n_unique` exists in various.rs; the only hit is the word \"unique\" in a doc comment at :14. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "fresh_p4": {
+      "reason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (hash join lives under crates/polars-ops/src/frame/join/hash_join/). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "fresh_p5": {
+      "reason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA, and `^pivot` is a name prefix rather than a symbol name. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "fresh_p6": {
+      "reason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (string tests are at py-polars/tests/unit/operations/namespaces/string/test_string.py). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "f1_rewritten": {
+      "reason": "every acceptable entry was adjudicated `no`: 13-port alternation matches 225 files, only 26 of which define a `Finish`; the case-sensitive (?!flex) guard still admits FlexBuffers.java. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "Same shape as fresh_f6: the concept is real, the entry as written does not answer it."
+    },
+    "fresh_f6": {
+      "reason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA: there is no WhitePaper.md and no FlatBuffers.md (the real file is docs/source/white_paper.md). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator.",
+      "adjudicatorNote": "The adjudicator recorded the PREMISE as sound and only the filename as wrong (the real file is docs/source/white_paper.md, not FlatBuffers.md). Per the brief the entry is still removed, so the query is marked unanswerable rather than repaired. Repairing it would require a new verdict."
+    }
+  },
+  "cohortAudit": {
+    "rule": "The `cohort` field is authoritative; the `tags` array is stale on 14 of 46 queries. Corroborated three ways: (1) the improvement doc's \"15-Query Tune Gap Analysis Table\" (:292) plus its 8 held-out FlatBuffers gap queries is exactly the 23 the `cohort` field marks; (2) the harness binds cohorts to the frozen case labels and every committed log records the same 23/23 split; (3) in the plain no-flag Baseline, all 23 gap queries are unrecovered in the fused pool by the dense lane (lanes.dense_primary.targetRank = null) while all 23 control queries are recovered by it. r3_rewritten and r8 are the two gap queries whose target still reached the fused pool (#53 and #1), and the doc reports both as gap.",
+    "staleTagQueries": [
+      {
+        "query_id": "r2_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "findings",
+          "control"
+        ]
+      },
+      {
+        "query_id": "r9_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "p3_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "p8_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "rust-vs-py",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f4_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "lang",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f7_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f8_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "tests-ask",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f9_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "lang",
+          "fallback-extractor",
+          "control"
+        ]
+      }
+    ],
+    "tagFixedHere": [
+      "r3_rewritten"
+    ],
+    "queriesWithoutCohortTag": [
+      {
+        "query_id": "r2_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "findings",
+          "control"
+        ]
+      },
+      {
+        "query_id": "r3_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "findings",
+          "failure-category:distractor-collision"
+        ]
+      },
+      {
+        "query_id": "r9_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "fresh_r1",
+        "cohort": "control",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_r2",
+        "cohort": "control",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_r3",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_r4",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_r5",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_r6",
+        "cohort": "control",
+        "tags": [
+          "fresh",
+          "tests-ask"
+        ]
+      },
+      {
+        "query_id": "p3_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "p8_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "rust-vs-py",
+          "control"
+        ]
+      },
+      {
+        "query_id": "fresh_p1",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_p2",
+        "cohort": "control",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_p3",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_p4",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_p5",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_p6",
+        "cohort": "gap",
+        "tags": [
+          "fresh",
+          "tests-ask"
+        ]
+      },
+      {
+        "query_id": "f4_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "lang",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f7_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "T",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f8_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "tests-ask",
+          "control"
+        ]
+      },
+      {
+        "query_id": "f9_rewritten",
+        "cohort": "gap",
+        "tags": [
+          "lang",
+          "fallback-extractor",
+          "control"
+        ]
+      },
+      {
+        "query_id": "fresh_f1",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_f2",
+        "cohort": "control",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_f3",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_f4",
+        "cohort": "gap",
+        "tags": [
+          "fresh"
+        ]
+      },
+      {
+        "query_id": "fresh_f5",
+        "cohort": "control",
+        "tags": [
+          "fresh",
+          "tests-ask"
+        ]
+      },
+      {
+        "query_id": "fresh_f6",
+        "cohort": "gap",
+        "tags": [
+          "fresh",
+          "docs-ask"
+        ]
+      }
+    ]
+  },
+  "queryCount": 46,
+  "queries": {
+    "r1": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "original",
+      "query": "where does React run the cleanup function of useEffect",
+      "intent": "implementation",
+      "tags": [
+        "findings",
+        "gap"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitEffects\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberCommitEffects.js:248 commitHookEffectListUnmount(flags, finishedWork, nearestMountedAncestor); :907 safelyCallDestroy(current, nearestMountedAncestor, destroy)",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(commitHookEffectListUnmount|safelyCallDestroy)$"
+        }
+      ]
+    },
+    "r8": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "original",
+      "query": "where does React bail out of re-rendering a component whose props did not change",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "gap"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberBeginWork\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberBeginWork.js:3823 bailoutOnAlreadyFinishedWork; :478 updateMemoComponent; :546 updateSimpleMemoComponent",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(bailoutOnAlreadyFinishedWork|updateMemoComponent|updateSimpleMemoComponent)$"
+        }
+      ]
+    },
+    "r2_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where is a new render pass scheduled after updating component state",
+      "intent": "implementation",
+      "tags": [
+        "findings",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:3626 dispatchSetState; :3656 dispatchSetStateInternal",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(dispatchSetState|dispatchSetStateInternal)$"
+        }
+      ]
+    },
+    "r3_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where does the reconciler compare input lists between renders to decide if an action should re-run",
+      "intent": "implementation",
+      "tags": [
+        "findings",
+        "failure-category:distractor-collision"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:456 function areHookInputsEqual",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^areHookInputsEqual$"
+        }
+      ],
+      "tagFix": "cohort `gap` is correct and unchanged; the `control` tag was stale. See cohortAudit in this file.",
+      "cohortNote": {
+        "cohort": "gap",
+        "decision": "KEEP gap",
+        "reason": "On the merits: the query text (\"where does the reconciler compare input lists between renders to decide if an action should re-run\") names no identifier, and the target is areHookInputsEqual. In the plain no-flag Baseline the dense lane never surfaced the target (lanes.dense_primary.targetRank = null, distractorShareTop10 0.30) and the fused pool only reached it at #53; only rerank lifted it into the top 10. The improvement doc tables it under \"(c) Distractor collision\" in its 15-Query Tune GAP analysis table, alongside fresh_p4 and fresh_p6, both unambiguously gap. Category (c) is a gap taxonomy, not a control one.",
+        "corroboration": "docs/improvements/vocabulary-gap-resolution.md:292 (\"15-Query Tune Gap Analysis Table\") lists r3_rewritten as a gap row with \"Fused In Top 80: YES (#53)\"; :315 counts it in the 3/15 distractor-collision bucket; :558/:598 count 15 tune gap + 8 held-out gap = the 23 the `cohort` field marks.",
+        "auditPremiseCorrection": "The audit brief said the doc records r3_rewritten \"with 0 recovery\". The doc records the opposite: :299 \"YES (#53)\" and :602 \"1 of 3 (r3_rewritten: #13)\". The doc does not contradict cohort `gap`; the contradicting field is the stale `control` entry in `tags`, which is what this build drops.",
+        "whatChanged": "cohort unchanged (`gap`); `tags` control removed, failure-category added. No log, denominator or aggregate moves."
+      }
+    },
+    "r4_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is a warning issued when children in an iterable lack unique list item identifiers",
+      "intent": "implementation",
+      "tags": [
+        "findings",
+        "control"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactChildFiber\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactChildFiber.js:151 DEV warnForMissingKey; :1107 warnOnInvalidKey",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(warnForMissingKey|warnOnInvalidKey)$"
+        },
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-server/src/React(?:Flight|Fizz)Server\\.js$",
+          "evidence": "packages/react-server/src/ReactFlightServer.js:1993 and ReactFizzServer.js:3855 warnForMissingKey",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^warnForMissingKey$"
+        }
+      ]
+    },
+    "r5_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where are deferred post-render side effects flushed after changes are applied",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberWorkLoop\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberWorkLoop.js:4655 flushPendingEffectsDelayed; :4662 flushPendingEffects; :4691 flushPassiveEffects; :4728 flushPassiveEffectsImpl",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(flushPassiveEffects|flushPassiveEffectsImpl|flushPendingEffects|flushPendingEffectsDelayed)$",
+          "change": "Tightening applied: flushLayoutEffects and flushAfterMutationEffects are the synchronous layout/mutation phases, not the deferred passive phase the query asks for, so both are dropped from the alternation."
+        }
+      ]
+    },
+    "r6_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the static analysis rule verify that all captured outer variables are declared in the dependency array",
+      "intent": "implementation",
+      "tags": [
+        "tooling-ask",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps\\.ts$",
+          "evidence": "packages/eslint-plugin-react-hooks/src/rules/ExhaustiveDeps.ts:43 const rule = { meta ... create(context) at :79; :1535 function collectRecommendations -> {suggestedDependencies, unnecessaryDependencies, missingDependencies}, gated on missingDependencies.size > 0 at :994, :1132, :1186",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(rule|collectRecommendations)$",
+          "change": "REQUIRED narrowing applied: symbolRegex added, so the 2138-line file is no longer accepted wholesale. Adjudicator named ^(rule|collectRecommendations)$."
+        }
+      ]
+    },
+    "r7_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where are the automated tests verifying the behavior of deferred render side effects",
+      "intent": "tests",
+      "tags": [
+        "tests-ask",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^packages/react-reconciler/src/__tests__/(ReactHooksWithNoopRenderer-test\\.js|ReactHooks-test\\.internal\\.js)$",
+          "evidence": "packages/react-reconciler/src/__tests__/ReactHooksWithNoopRenderer-test.js:969,:1003 tests",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "r9_rewritten": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where is an error thrown when calling state primitives outside of an active render context",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:445 function throwInvalidHookError",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^throwInvalidHookError$"
+        }
+      ]
+    },
+    "fresh_r1": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where are browser interaction events caught at the root container and dispatched to component hierarchies",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-dom-bindings/src/events/DOMPluginEventSystem\\.js$",
+          "evidence": "packages/react-dom-bindings/src/events/DOMPluginEventSystem.js:125 dispatchEventForPluginEventSystem; :298 listenToAllSupportedEvents",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(dispatchEventForPluginEventSystem|listenToAllSupportedEvents)$"
+        }
+      ]
+    },
+    "fresh_r2": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where is execution yielded back to the browser when scheduled background work exceeds time slicing deadlines",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/scheduler/src/forks/Scheduler\\.js$",
+          "evidence": "packages/scheduler/src/forks/Scheduler.js:475 shouldYieldToHost; :242 workLoop",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(shouldYieldToHost|workLoop)$"
+        }
+      ]
+    },
+    "fresh_r3": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where are rendered component nodes converted into binary chunks for network response streaming",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-server/src/ReactServerStreamConfigNode\\.js$",
+          "evidence": "packages/react-server/src/ReactServerStreamConfigNode.js:199 export function stringToChunk (TextEncoder().encode -> Uint8Array chunk)",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^stringToChunk$",
+          "change": "Cleanup applied: the dead `byteLength` alternative is removed (the real names are byteLengthOfChunk:224 / byteLengthOfBinaryChunk:230, neither of which answers the query). Evidence line corrected from :28/:35 to :199."
+        }
+      ]
+    },
+    "fresh_r4": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where are update priority levels represented as bit flags and combined to determine what runs next",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^packages/react-reconciler/src/ReactFiberLane\\.js$",
+          "evidence": "packages/react-reconciler/src/ReactFiberLane.js:249 getNextLanes; :756 getHighestPriorityLane; :792 mergeLanes (a | b)",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(getHighestPriorityLane|mergeLanes|getNextLanes)$",
+          "change": "Evidence line numbers corrected (:203 -> :756 getHighestPriorityLane, :842 -> :792 mergeLanes). All three symbols are real; the entry is unchanged."
+        }
+      ]
+    },
+    "fresh_r5": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where does the browser inspection extension hook into runtime instances to track component trees",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (renderer lives at backend/fiber/renderer.js). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "fresh_r6": {
+      "repo": "react",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where are the automated tests checking fallback display when asynchronous resource loading delays rendering",
+      "intent": "tests",
+      "tags": [
+        "fresh",
+        "tests-ask"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^packages/react-reconciler/src/__tests__/ReactSuspense-test\\.internal\\.js$",
+          "evidence": "packages/react-reconciler/src/__tests__/ReactSuspense-test.internal.js",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "p1_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where are comma separated text files ingested into tabular data structures in memory",
+      "intent": "implementation",
+      "tags": [
+        "rust-vs-py",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/(polars-io/src/csv/read/(read_impl|reader|parser)|polars-stream/src/nodes/io_sources/csv/(chunk_reader|line_batch_source))\\.rs$",
+          "evidence": "crates/polars-io/src/csv/read/read_impl.rs:105 struct CoreReader, :327 fn parse_csv, :530 pub fn finish; crates/polars-stream/src/nodes/io_sources/csv/chunk_reader.rs:17 struct ChunkReader",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(CoreReader|parse_csv|finish|ChunkReader)$",
+          "change": "REQUIRED narrowing applied: 14 files -> 5 files, plus a symbolRegex. options.rs, splitfields.rs, utils.rs, schema_inference.rs and both builder.rs files no longer match."
+        }
+      ]
+    },
+    "p2_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is tabular row ordering computed across multiple table columns",
+      "intent": "implementation",
+      "tags": [
+        "rust-vs-py",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/polars-core/src/(frame/mod\\.rs|chunked_array/ops/sort/(mod|arg_sort_multiple)\\.rs)$",
+          "evidence": "crates/polars-core/src/frame/mod.rs:1427 pub fn sort_impl; crates/polars-core/src/chunked_array/ops/sort/mod.rs:341 fn arg_sort_multiple; crates/polars-core/src/chunked_array/ops/sort/arg_sort_multiple.rs:24 pub(crate) fn arg_sort_multiple_impl",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(sort_impl|arg_sort_multiple|arg_sort_multiple_impl)$",
+          "change": "REQUIRED narrowing applied: 7 files -> 3 files plus a symbolRegex, so all 3011 lines of frame/mod.rs and the single-column arg_sort.rs / arg_bottom_k.rs / options.rs no longer match."
+        }
+      ]
+    },
+    "p3_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where are column elements converted from one data type to another",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^crates/polars-core/src/chunked_array/cast\\.rs$",
+          "evidence": "crates/polars-core/src/chunked_array/cast.rs:75 cast_impl_inner, :126 cast_impl",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "p4_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is the sliding window moving average computed over sequential values",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/(polars-compute/src/rolling/(no_nulls/|nulls/)?mean\\.rs|polars-time/src/chunkedarray/rolling_window/dispatch\\.rs)$",
+          "evidence": "crates/polars-compute/src/rolling/mean.rs:6 pub struct MeanWindow, impl RollingAggWindowNoNulls; crates/polars-time/src/chunkedarray/rolling_window/dispatch.rs:239 fn rolling_mean, :224 fn rolling_mean_by",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(MeanWindow|rolling_mean|rolling_mean_by)$",
+          "change": "REQUIRED narrowing applied: 30 files -> 4 files plus a symbolRegex. min/max/sum/rank/quantile/moment and grouped rolling_by files no longer match. The adjudicator's alternation also named rolling_window/mod.rs, which was dropped: at this SHA that file only holds `mod dispatch; pub use dispatch::*;` and owns no symbol. The third original alternation (polars-expr/src/dispatch/rolling) named a nonexistent directory and matched only by filename prefix, and is gone."
+        }
+      ]
+    },
+    "p5_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the query optimizer shift filter conditions closer to data sources",
+      "intent": "implementation",
+      "tags": [
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^crates/polars-plan/src/plans/optimizer/predicate_pushdown/",
+          "evidence": "crates/polars-plan/src/plans/optimizer/predicate_pushdown/mod.rs:249 fn push_down",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "p6_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is columnar binary file storage read and decoded into memory",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/(polars-io/src/parquet/read/(reader|read_impl|mmap|async_impl)|polars-stream/src/nodes/io_sources/parquet/(row_group_decode|row_group_data_fetch))\\.rs$",
+          "evidence": "crates/polars-io/src/parquet/read/reader.rs:18 pub struct ParquetReader, :203 fn finish; crates/polars-io/src/parquet/read/read_impl.rs:55 pub fn to_deserializer; crates/polars-io/src/parquet/read/async_impl.rs:19 pub struct ParquetObjectStore",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(ParquetReader|finish|to_deserializer|ParquetObjectStore|row_group_decode|row_group_data_fetch)$",
+          "change": "REQUIRED narrowing applied: 57 files -> 6 files plus a symbolRegex. Both README.md files, options.rs, statistics*, projection.rs, metadata_utils.rs, builder.rs and polars-parquet/src/arrow/read/** no longer match."
+        }
+      ]
+    },
+    "p7_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where are the test suites verifying sliding window aggregations",
+      "intent": "tests",
+      "tags": [
+        "tests-ask",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^py-polars/tests/unit/operations/rolling/",
+          "evidence": "py-polars/tests/unit/operations/rolling/{test_rolling.py,test_rolling_fixed.py}",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "p8_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where is a single column data sequence exported into a numerical array structure",
+      "intent": "implementation",
+      "tags": [
+        "rust-vs-py",
+        "control"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^py-polars/src/polars/series/series\\.py$",
+          "evidence": "py-polars/src/polars/series/series.py:5063 def to_numpy",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(Series\\.)?to_numpy$"
+        },
+        {
+          "granularity": "path",
+          "pathRegex": "^crates/polars-python/src/interop/numpy/",
+          "evidence": "crates/polars-python/src/interop/numpy/to_numpy_series.rs",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "p9_rewritten": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is tabular data formatted into markup for display in interactive notebook cells",
+      "intent": "implementation",
+      "tags": [
+        "py-owned",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^py-polars/src/polars/dataframe/(_html|frame)\\.py$",
+          "evidence": "py-polars/src/polars/dataframe/frame.py:1577 DataFrame._repr_html_; py-polars/src/polars/dataframe/_html.py:137 render",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(_repr_html_|DataFrame\\._repr_html_|HTMLFormatter|NotebookFormatter|render|NotebookFormatter\\.render)$"
+        }
+      ]
+    },
+    "fresh_p1": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where are distinct values identified and extracted from a sequence of column entries",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: Neither `unique` nor `n_unique` exists in various.rs; the only hit is the word \"unique\" in a doc comment at :14. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "fresh_p2": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where are successive optimization rules repeatedly applied to transform the symbolic query tree",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/polars-plan/src/plans/optimizer/mod\\.rs$",
+          "evidence": "crates/polars-plan/src/plans/optimizer/mod.rs:88 optimize",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(optimize|optimize_with_rules)$"
+        },
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/polars-plan/src/plans/optimizer/stack_opt\\.rs$",
+          "evidence": "crates/polars-plan/src/plans/optimizer/stack_opt.rs:16 optimize_loop",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(optimize_loop|OptimizationRule)$"
+        }
+      ]
+    },
+    "fresh_p3": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where are lines of structured text records parsed from streams into memory tables",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/polars-io/src/ndjson/buffer\\.rs$",
+          "evidence": "crates/polars-io/src/ndjson/buffer.rs:26 pub(crate) struct Buffer, :41 pub(crate) fn add, :216 fn deserialize_all, :33 pub fn into_series",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(Buffer|add|deserialize_all|into_series)$",
+          "change": "REQUIRED narrowing applied: symbolRegex added so the per-dtype deserialize_all specializations are no longer accepted wholesale. The adjudicator's real fix was to WIDE, and the widen half is applied as a second entry (fresh_p3:1, see entriesBelow)."
+        },
+        {
+          "granularity": "symbol",
+          "pathRegex": "^crates/polars-io/src/ndjson/core\\.rs$",
+          "symbolRegex": "^parse_ndjson$",
+          "evidence": "crates/polars-io/src/ndjson/core.rs:256 pub fn parse_ndjson (line splitting + entry point, calling estimate_n_lines_in_chunk / init_buffers / parse_lines)",
+          "adjudicatedBy": "NARROW / fresh_p3: \"Better fix is to widen, not narrow: add crates/polars-io/src/ndjson/core.rs (^parse_ndjson$) so both halves count\""
+        }
+      ]
+    },
+    "fresh_p4": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where is an in-memory hash join executed between two tabular datasets matching on key columns",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (hash join lives under crates/polars-ops/src/frame/join/hash_join/). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "fresh_p5": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where is table orientation restructured by turning row values into column headers",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA, and `^pivot` is a name prefix rather than a symbol name. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "fresh_p6": {
+      "repo": "polars",
+      "split": "tune",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where are the unit tests verifying string parsing and regular expression extraction",
+      "intent": "implementation",
+      "tags": [
+        "fresh",
+        "tests-ask"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: pathRegex matches 0 files at this SHA (string tests are at py-polars/tests/unit/operations/namespaces/string/test_string.py). The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "f1_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where is binary buffer serialization completed with the root offset written",
+      "intent": "implementation",
+      "tags": [
+        "generated",
+        "control"
+      ],
+      "entryCount": 0,
+      "entries": [],
+      "unanswerable": true,
+      "unanswerableReason": "every acceptable entry was adjudicated `no`: 13-port alternation matches 225 files, only 26 of which define a `Finish`; the case-sensitive (?!flex) guard still admits FlexBuffers.java. The concept the query names is real, but no entry for it is satisfiable at the pinned commit, so this query was never a fair test. evals/score.mjs reports it in its own unanswerable column instead of letting it be absorbed into a retrieval miss. The denominator still counts it, because that is what reproduces the historical scorecard; subtract the unanswerable column for a fair-test denominator."
+    },
+    "f2_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where are internal offsets and structural boundaries of serialized records validated",
+      "intent": "implementation",
+      "tags": [
+        "generated",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "(^|/)([Vv]erifier|TableVerifier|Verifiable)\\.(h|rs|swift|cs|java|kt|ts|go|py)$",
+          "evidence": "include/flatbuffers/verifier.h:119 VerifyTable, :185 VerifyTableStart",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "f3_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the scripting language serializer initialize contiguous element sequence allocation",
+      "intent": "implementation",
+      "tags": [
+        "lang",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^python/flatbuffers/builder\\.py$",
+          "evidence": "python/flatbuffers/builder.py:425 def StartVector",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(Builder\\.)?StartVector$"
+        }
+      ]
+    },
+    "f4_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where are field offset tables encoded and deduplicated during message construction in the compiled runtime",
+      "intent": "implementation",
+      "tags": [
+        "lang",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^go/builder\\.go$",
+          "evidence": "go/builder.go:119 func (b *Builder) WriteVtable",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(\\(\\*?Builder\\)\\.|Builder\\.)?WriteVtable$"
+        }
+      ]
+    },
+    "f5_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the compiler ingest interface definition declarations from source text",
+      "intent": "implementation",
+      "tags": [
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^src/idl_parser\\.cpp$",
+          "evidence": "src/idl_parser.cpp:3777 Parser::DoParse; :2869 Parser::ParseDecl",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(Parser::)?(DoParse|Parse|ParseDecl)$"
+        }
+      ]
+    },
+    "f6_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the code generator produce native language classes for structured record definitions",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^src/idl_gen_cpp\\.cpp$",
+          "evidence": "src/idl_gen_cpp.cpp:132 class CppGenerator; :3046 void GenTable",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "GenTable"
+        }
+      ]
+    },
+    "f7_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where does the compiler resolve polymorphic sum types during declaration analysis",
+      "intent": "implementation",
+      "tags": [
+        "T",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^src/idl_parser\\.cpp$",
+          "evidence": "src/idl_parser.cpp:1362 Parser::ParseAnyValue; :967 ParseField; :2552 ParseEnum",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(Parser::)?(ParseAnyValue|ParseField|ParseEnum)$"
+        }
+      ]
+    },
+    "f8_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where are the test cases checking corrupted input detection and validation safety",
+      "intent": "tests",
+      "tags": [
+        "tests-ask",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^tests/(swift/Tests/Flatbuffers/FlatbuffersVerifierTests\\.swift|fuzzer/flatbuffers_verifier_fuzzer\\.cc)$",
+          "evidence": "tests/swift/Tests/Flatbuffers/FlatbuffersVerifierTests.swift; tests/fuzzer/flatbuffers_verifier_fuzzer.cc",
+          "adjudicatedVerdict": "path-only",
+          "change": "REQUIRED narrowing applied: the rust_usage_test/tests/integration_test.rs alternation is dropped. It is a 3697-line round-trip suite whose 12 #[should_panic] cases are builder misuse, not corrupted input. Kept path-level: a symbolRegex cannot name the other 6 correct Swift verifier tests alongside LLVMFuzzerTestOneInput without listing every test by hand."
+        }
+      ]
+    },
+    "f9_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "rewritten",
+      "query": "where is textual character data encoded and appended to the binary stream in the mobile client runtime",
+      "intent": "implementation",
+      "tags": [
+        "lang",
+        "fallback-extractor",
+        "control"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^swift/Sources/FlatBuffers/FlatBufferBuilder\\.swift$",
+          "evidence": "swift/Sources/FlatBuffers/FlatBufferBuilder.swift:707 mutating public func create(string str: String?) -> Offset",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "create"
+        }
+      ]
+    },
+    "f10_rewritten": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "rewritten",
+      "query": "where does the buffer expand its internal memory allocation when capacity is exceeded in the modern virtual machine library",
+      "intent": "implementation",
+      "tags": [
+        "lang",
+        "fallback-extractor",
+        "control"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "symbol",
+          "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/FlatBufferBuilder\\.kt$",
+          "evidence": "FlatBufferBuilder.kt:106-125 prep(): while (space < ...) calls buffer.moveWrittenDataToEnd",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(FlatBufferBuilder\\.)?prep$"
+        },
+        {
+          "granularity": "symbol",
+          "pathRegex": "^kotlin/flatbuffers-kotlin/src/commonMain/kotlin/com/google/flatbuffers/kotlin/Buffers\\.kt$",
+          "evidence": "Buffers.kt:632 requestCapacity, :664 moveWrittenDataToEnd",
+          "adjudicatedVerdict": "yes",
+          "symbolRegex": "^(ArrayReadWriteBuffer\\.)?(requestCapacity|moveWrittenDataToEnd)$"
+        }
+      ]
+    },
+    "fresh_f1": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where does dynamic binary reflection inspect field types without compile time code generation",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^src/reflection\\.cpp$",
+          "evidence": "src/reflection.cpp",
+          "adjudicatedVerdict": "yes"
+        },
+        {
+          "granularity": "symbol",
+          "pathRegex": "^src/binary_annotator\\.h$",
+          "evidence": "src/binary_annotator.h:38 enum class BinaryRegionType, :282 class BinaryAnnotator (walks a buffer through reflection::Schema)",
+          "adjudicatedVerdict": "path-only",
+          "symbolRegex": "^(BinaryAnnotator|BinaryRegionType|GetRoot|GetTypeTable|GetAnyFieldS)$",
+          "change": "REQUIRED narrowing applied: symbolRegex added per the adjudicator's second option. The adjudicator's first option was to drop this entry and keep src/reflection.cpp alone; the symbolRegex option was taken so coverage is not lost, and the entry now no longer accepts a chunk that does not touch the reflection walk."
+        }
+      ]
+    },
+    "fresh_f2": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where does the compiler convert interface definitions into web validation schema representations",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^src/idl_gen_json_schema\\.cpp$",
+          "evidence": "src/idl_gen_json_schema.cpp",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "fresh_f3": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where is binary data serialized in a self-describing schemaless format without upfront declarations",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 2,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^include/flatbuffers/flexbuffers\\.h$",
+          "evidence": "include/flatbuffers/flexbuffers.h",
+          "adjudicatedVerdict": "yes"
+        },
+        {
+          "granularity": "path",
+          "pathRegex": "^java/src/main/java/com/google/flatbuffers/FlexBuffers\\.java$",
+          "evidence": "java/src/main/java/com/google/flatbuffers/FlexBuffers.java",
+          "adjudicatedVerdict": "yes",
+          "pathRepair": "C4: original pathRegex ^java/com/google/flatbuffers/FlexBuffers\\.java$ matched 0 files at b8431fbcd7a5 (missing src/main). Corrected to the regex the blind adjudicator itself proposed in v2-adjudication.md (Repair 2). Path correction, not a re-judgement. Resolves to 126 indexed chunks."
+        }
+      ],
+      "repair": {
+        "task": "C4",
+        "kind": "path-correction",
+        "originalPathRegex": "^java/com/google/flatbuffers/FlexBuffers\\.java$",
+        "blindVerdict": "no -- pathRegex matches zero files; src/main missing from the path",
+        "sourceCommitChecked": "b8431fbcd7a5c71817f314e18b332c0648554efa",
+        "vectorTable": "hybrid_code_chunks_3893deca__gen_76912084_1ea8_4a63_95de_7d364e47ac8e",
+        "resolvedChunks": 126,
+        "originalPathChunks": 0,
+        "adjudication": "evals/judges/v2-adjudication.md section \"Post-adjudication path repairs (C4)\" -> Repair 2"
+      }
+    },
+    "fresh_f4": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where does the compiler generate zero-copy borrowing accessor code for systems language targets",
+      "intent": "implementation",
+      "tags": [
+        "fresh"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^src/idl_gen_rust\\.cpp$",
+          "evidence": "src/idl_gen_rust.cpp",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "fresh_f5": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "control",
+      "variant": "fresh",
+      "query": "where are randomized fuzzing inputs generated to test binary decoder crash resistance",
+      "intent": "tests",
+      "tags": [
+        "fresh",
+        "tests-ask"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^tests/fuzzer/flatbuffers_verifier_fuzzer\\.cc$",
+          "evidence": "tests/fuzzer/flatbuffers_verifier_fuzzer.cc",
+          "adjudicatedVerdict": "yes"
+        }
+      ]
+    },
+    "fresh_f6": {
+      "repo": "flatbuffers",
+      "split": "heldout",
+      "cohort": "gap",
+      "variant": "fresh",
+      "query": "where is the internal binary layout specification and memory alignment design documented",
+      "intent": "docs",
+      "tags": [
+        "fresh",
+        "docs-ask"
+      ],
+      "entryCount": 1,
+      "entries": [
+        {
+          "granularity": "path",
+          "pathRegex": "^docs/source/white_paper\\.md$",
+          "evidence": "docs/source/white_paper.md",
+          "adjudicatedVerdict": "yes",
+          "pathRepair": "C4: original pathRegex ^docs/source/(WhitePaper|FlatBuffers)\\.md$ matched 0 files at b8431fbcd7a5. Corrected to the regex the blind adjudicator itself proposed in v2-adjudication.md (Repair 1). Path correction, not a re-judgement. Resolves to 3 indexed chunks."
+        }
+      ],
+      "repair": {
+        "task": "C4",
+        "kind": "path-correction",
+        "originalPathRegex": "^docs/source/(WhitePaper|FlatBuffers)\\.md$",
+        "blindVerdict": "no -- pathRegex matches zero files; no WhitePaper.md and no FlatBuffers.md exist",
+        "sourceCommitChecked": "b8431fbcd7a5c71817f314e18b332c0648554efa",
+        "vectorTable": "hybrid_code_chunks_3893deca__gen_76912084_1ea8_4a63_95de_7d364e47ac8e",
+        "resolvedChunks": 3,
+        "originalPathChunks": 0,
+        "adjudication": "evals/judges/v2-adjudication.md section \"Post-adjudication path repairs (C4)\" -> Repair 1"
+      }
+    }
+  },
+  "revisionNote": "v2 repaired at C4: two pathRegexes corrected where the blind adjudicator had already recorded the correct file and the corrected regex. No verdict was revisited; see evals/judges/v2-adjudication.md \"Post-adjudication path repairs (C4)\"."
+}

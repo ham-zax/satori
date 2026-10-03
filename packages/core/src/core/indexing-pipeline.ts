@@ -44,6 +44,7 @@ import type {
 import { envManager } from '../utils/env-manager';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { withSourceVocabulary } from '../vocabulary/extract';
+import { resolveRepositoryVocabularyIndexingEnabled } from '../vocabulary/config';
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
@@ -161,6 +162,7 @@ type IndexingPipelineConfig = Readonly<{
         matcher?: IndexIgnoreMatcher,
     ) => boolean;
     getSymbolExtractorVersion: () => string;
+    repositoryVocabularyEnabled?: boolean;
 }>;
 
 
@@ -229,6 +231,7 @@ export class IndexingPipeline {
     ) => string[];
     private readonly matchesIgnorePattern: IndexingPipelineConfig['matchesIgnorePattern'];
     private readonly getSymbolExtractorVersion: () => string;
+    private readonly repositoryVocabularyEnabled: boolean;
 
     constructor(config: IndexingPipelineConfig) {
         this.getVectorDatabase = config.getVectorDatabase;
@@ -243,6 +246,12 @@ export class IndexingPipeline {
         this.getIndexedExtensionsForCodebase = config.getIndexedExtensionsForCodebase;
         this.matchesIgnorePattern = config.matchesIgnorePattern;
         this.getSymbolExtractorVersion = config.getSymbolExtractorVersion;
+        this.repositoryVocabularyEnabled = config.repositoryVocabularyEnabled
+            ?? resolveRepositoryVocabularyIndexingEnabled();
+    }
+
+    isRepositoryVocabularyIndexingEnabled(): boolean {
+        return this.repositoryVocabularyEnabled;
     }
 
 
@@ -419,7 +428,7 @@ export class IndexingPipeline {
     buildAnalyzedFileSymbolFacts(
         analyzed: AnalyzedIndexedFile,
     ): AnalyzedFileSymbolFacts {
-        const symbolRecords = withSourceVocabulary(buildSymbolRecordsForFile({
+        const baseSymbols = buildSymbolRecordsForFile({
             relativePath: analyzed.relativePath,
             language: analyzed.language,
             content: analyzed.source,
@@ -427,7 +436,10 @@ export class IndexingPipeline {
             extractorVersion: this.getSymbolExtractorVersion(),
             extractedSymbols: analyzed.extractedSymbols,
             chunks: analyzed.chunks,
-        }), analyzed.source);
+        });
+        const symbolRecords = this.repositoryVocabularyEnabled
+            ? withSourceVocabulary(baseSymbols, analyzed.source)
+            : baseSymbols;
         const hasDefinitions = symbolRecords.some((symbol) => symbol.kind !== 'file');
         const definitionStatus = analyzed.structuralStatus !== 'complete'
             ? 'structural_unavailable'

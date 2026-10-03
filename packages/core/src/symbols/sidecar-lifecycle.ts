@@ -53,6 +53,7 @@ export class PublicationNavigationStagingCleanupError extends Error {
 }
 
 export interface StagePublicationNavigationInput {
+    repositoryVocabularyEnabled?: boolean;
     publicationId: string;
     navigationRoot: string;
     registry: SymbolRegistry;
@@ -279,11 +280,13 @@ export async function stagePublicationNavigation(
             providerCoverage: input.providerCoverage,
         }, reuse?.relationships);
 
-        await stageRepositoryVocabularyIndex({
-            navigationRoot: buildRoot, registry: input.registry, records: input.records,
-            publicationId: input.publicationId, symbolManifestHash: symbolResult.manifestHash,
-            relationshipManifestHash: relationshipResult.manifestHash,
-        });
+        if (input.repositoryVocabularyEnabled === true) {
+            await stageRepositoryVocabularyIndex({
+                navigationRoot: buildRoot, registry: input.registry, records: input.records,
+                publicationId: input.publicationId, symbolManifestHash: symbolResult.manifestHash,
+                relationshipManifestHash: relationshipResult.manifestHash,
+            });
+        }
         const physical = await fsyncDirectoryTree(buildRoot, reuse?.symbols.sharedFileSizes);
         await fs.promises.mkdir(path.dirname(navigationRoot), { recursive: true });
         await fs.promises.rename(buildRoot, navigationRoot);

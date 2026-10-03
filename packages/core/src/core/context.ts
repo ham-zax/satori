@@ -471,6 +471,7 @@ export class Context {
         this.resolutionAnalyzer = resolutionAnalyzer;
 
         this.indexGenerationWorkflow = new IndexGenerationWorkflow({
+            isRepositoryVocabularyIndexingEnabled: () => this.indexingPipeline.isRepositoryVocabularyIndexingEnabled(),
             activatePublication: (publication, lease) => this.publicationStore.activate(publication, lease),
             getCurrentPublicationSourceCheckpoint: (canonicalRoot) => (
                 this.publicationStore.getCurrentSourceCheckpoint(canonicalRoot)

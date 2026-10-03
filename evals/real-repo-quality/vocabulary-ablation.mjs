@@ -10,6 +10,9 @@ import { assertRuntimeDistFresh, importFreshDist } from './dist-freshness.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const reposDir = path.join(os.homedir(), '.cache/satori-eval-repos');
+if (process.env.SATORI_REPOSITORY_VOCABULARY_INDEX !== '1') {
+  throw new Error('Set SATORI_REPOSITORY_VOCABULARY_INDEX=1 to run the opt-in vocabulary indexing experiment.');
+}
 assertRuntimeDistFresh(root);
 const { DEFAULT_SEARCH_FLAGS } = await importFreshDist(root, 'packages/mcp/dist/core/search-flags.js');
 const { resolvePublicationNavigationRoot } = await importFreshDist(root, 'packages/core/dist/generation/publication-store.js');
@@ -18,6 +21,8 @@ const oracleFile = `${root}/evals/real-repo-quality/conceptual-cases.json`;
 const cases = JSON.parse(fs.readFileSync(oracleFile, 'utf8'));
 const ids = new Set(['r1', 'r8', 'r3_rewritten', 'fresh_r1', 'p3_rewritten', 'p5_rewritten', 'p8_rewritten', 'f2_rewritten', 'f4_rewritten', 'f5_rewritten', 'f10_rewritten']);
 const runtimeFiles = ['packages/core/dist/vocabulary/service.js', 'packages/core/dist/vocabulary/extract.js', 'packages/core/dist/vocabulary/build.js', 'packages/core/dist/vocabulary/codec.js', 'packages/core/dist/vocabulary/storage.js', 'packages/core/dist/core/context.js', 'packages/core/dist/core/indexing-pipeline.js', 'packages/mcp/dist/core/handlers.js', 'packages/mcp/dist/core/search-flags.js', 'packages/mcp/dist/core/search-repository-vocabulary.js', 'packages/mcp/dist/core/search-request-coordinator.js', 'packages/mcp/dist/core/search-execution.js', 'packages/mcp/dist/core/search-rerank-query.js', 'packages/mcp/assets/lateon/rerank-request-contract-v1.json', 'packages/mcp/assets/lateon/runtime-profile-v6-d128.json'];
+runtimeFiles.push('packages/core/dist/vocabulary/config.js', 'packages/core/dist/generation/index-generation-workflow.js',
+  'packages/core/dist/symbols/sidecar-lifecycle.js');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const runtimeHash = () => hash(Buffer.concat(runtimeFiles.map(file => fs.readFileSync(path.join(root, file)))));
 const startedRuntimeHash = runtimeHash();

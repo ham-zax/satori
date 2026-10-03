@@ -10,6 +10,7 @@ import { noopSemanticProjectAnalyzer } from '../semantic/noop-analyzer';
 import type { SemanticProjectAnalyzer, SemanticProjectInput, SemanticProjectEvidence } from '../semantic';
 import type { VectorDatabase } from '../vectordb/types';
 import type { Embedding } from '../embedding';
+import { buildSymbolRecordsForFile } from '../symbols/registry';
 
 function createMockVectorDb(): VectorDatabase {
     return {
@@ -262,4 +263,54 @@ test('IndexingPipeline publishes the analyzer outcome without losing recovery re
         assert.equal(facts.manifestFile.structuralStatus, 'recovered');
         assert.equal(facts.manifestFile.structuralReason, 'syntax_error');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('IndexingPipeline vocabulary is default-off and preserves legacy symbol bytes', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-index-vocabulary-policy-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const previous = process.env.SATORI_REPOSITORY_VOCABULARY_INDEX;
+    delete process.env.SATORI_REPOSITORY_VOCABULARY_INDEX;
+    t.after(() => {
+        if (previous === undefined) delete process.env.SATORI_REPOSITORY_VOCABULARY_INDEX;
+        else process.env.SATORI_REPOSITORY_VOCABULARY_INDEX = previous;
+    });
+    const languageAnalyzer = createLanguageAnalysisService();
+    t.after(() => languageAnalyzer.dispose?.());
+    const createPipeline = (repositoryVocabularyEnabled?: boolean) => new IndexingPipeline({
+        getVectorDatabase: createMockVectorDb, languageAnalyzer,
+        semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+        assertEmbeddingIdentityCurrent: () => ({ provider: 'test', model: 'test', dimension: 768,
+            artifactDigest: null, normalizationPolicy: 'none' }),
+        isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (base, p) => path.relative(base, p) as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'extractor-v1', repositoryVocabularyEnabled,
+    });
+    const file = path.join(root, 'effects.ts');
+    fs.writeFileSync(file, '// Release subscriptions during cleanup.\nfunction releaseSubscription() {}\n');
+    const defaultPipeline = createPipeline();
+    const analyzed = await defaultPipeline.analyzeIndexedFile(file, root);
+    assert.ok(analyzed);
+    const legacy = buildSymbolRecordsForFile({ relativePath: analyzed.relativePath,
+        language: analyzed.language, content: analyzed.source, fileHash: analyzed.sourceHash,
+        extractorVersion: 'extractor-v1', extractedSymbols: analyzed.extractedSymbols,
+        chunks: analyzed.chunks });
+    for (const pipeline of [defaultPipeline, createPipeline(false)]) {
+        const facts = pipeline.buildAnalyzedFileSymbolFacts(analyzed);
+        assert.equal(JSON.stringify(facts.symbolRecords), JSON.stringify(legacy));
+        assert.ok(facts.symbolRecords.every(symbol => !('vocabulary' in symbol)));
+    }
+    const enabled = createPipeline(true).buildAnalyzedFileSymbolFacts(analyzed);
+    assert.ok(enabled.symbolRecords.some(symbol => symbol.vocabulary?.terms.length));
+    assert.deepEqual(enabled.manifestFile, defaultPipeline.buildAnalyzedFileSymbolFacts(analyzed).manifestFile);
+    assert.deepEqual(enabled.relationshipEvidence, defaultPipeline.buildAnalyzedFileSymbolFacts(analyzed).relationshipEvidence);
+    process.env.SATORI_REPOSITORY_VOCABULARY_INDEX = '1';
+    const optedIn = createPipeline();
+    const forcedOff = createPipeline(false);
+    process.env.SATORI_REPOSITORY_VOCABULARY_INDEX = '0';
+    assert.equal(optedIn.isRepositoryVocabularyIndexingEnabled(), true,
+        'the policy is captured at startup, not re-read for every file');
+    assert.ok(optedIn.buildAnalyzedFileSymbolFacts(analyzed).symbolRecords.some(symbol => symbol.vocabulary));
+    assert.equal(forcedOff.isRepositoryVocabularyIndexingEnabled(), false);
+    assert.equal(JSON.stringify(forcedOff.buildAnalyzedFileSymbolFacts(analyzed).symbolRecords), JSON.stringify(legacy));
 });

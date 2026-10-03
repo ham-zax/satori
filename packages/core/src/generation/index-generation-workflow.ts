@@ -179,6 +179,7 @@ const NAVIGATION_DELTA_STATE_IDLE_MS = 2 * 60_000;
 
 // ---- Narrow dependency ports ----
 export interface IndexGenerationWorkflowPorts {
+    isRepositoryVocabularyIndexingEnabled?: () => boolean;
     activatePublication(publication: Publication, lease: RootMutationLease): PublicationRef;
     reserveIndexCandidate(
         canonicalRoot: string,
@@ -616,6 +617,7 @@ export class IndexGenerationWorkflow {
 
         assertMutationCurrent?.();
         const result = await perfSpan('navigation.stage', () => stagePublicationNavigation({
+            repositoryVocabularyEnabled: this.ports.isRepositoryVocabularyIndexingEnabled?.() ?? false,
             publicationId,
             navigationRoot,
             registry,
@@ -2068,6 +2070,7 @@ export class IndexGenerationWorkflow {
             const candidate = await measurePhase(
                 'publication_sidecar_stage',
                 () => stagePublicationNavigation({
+                    repositoryVocabularyEnabled: this.ports.isRepositoryVocabularyIndexingEnabled?.() ?? false,
                     publicationId,
                     navigationRoot,
                     registry,

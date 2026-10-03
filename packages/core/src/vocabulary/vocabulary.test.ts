@@ -24,7 +24,8 @@ function releaseSubscription() { destroyBuffer(); }
 function destroyBuffer() { return null; }
 `;
 
-async function stage(root: string, id: string, content = source, confidence: RelationshipRecord['confidence'] = 'high') {
+async function stage(root: string, id: string, content = source, confidence: RelationshipRecord['confidence'] = 'high',
+    options: { repositoryVocabularyEnabled?: boolean } = { repositoryVocabularyEnabled: true }) {
     const analyzer = createLanguageAnalysisService();
     const analysis = await analyzer.analyze({ content, relativePath: 'effects.ts', language: 'typescript' });
     await analyzer.dispose?.();
@@ -46,7 +47,7 @@ async function stage(root: string, id: string, content = source, confidence: Rel
         sourceKey: caller.symbolKey, sourceInstanceId: caller.symbolInstanceId,
         targetKey: callee.symbolKey, targetInstanceId: callee.symbolInstanceId }];
     const navigationRoot = path.join(root, id, 'navigation');
-    await stagePublicationNavigation({ publicationId: id, navigationRoot, registry, records,
+    await stagePublicationNavigation({ publicationId: id, navigationRoot, registry, records, ...options,
         analysisByFile: new Map([['effects.ts', { moduleBindings: analysis.moduleBindings,
             callSites: analysis.callSites, receiverTypeBindings: analysis.receiverTypeBindings }]]) });
     return { registry, navigationRoot, ref: { id, publication: { canonicalRoot: root } } as PublicationRef };
@@ -178,6 +179,7 @@ test('synthetic display names are not automatic aliases and do not crowd out val
     }, symbols });
     const navigationRoot = path.join(root, 'first', 'navigation');
     await stagePublicationNavigation({ publicationId: 'first', navigationRoot, registry, records: [],
+        repositoryVocabularyEnabled: true,
         analysisByFile: new Map([['dashboard.js', { moduleBindings: analysis.moduleBindings,
             callSites: analysis.callSites, receiverTypeBindings: analysis.receiverTypeBindings }]]) });
     const ref = { id: 'first', publication: { canonicalRoot: root } } as PublicationRef;
@@ -204,4 +206,24 @@ test('a vocabulary write failure cleans staging and cannot publish partial navig
     await assert.rejects(stage(root, 'failed'), /injected vocabulary write failure/);
     assert.ok(!fs.existsSync(path.join(root, 'failed', 'navigation')));
     assert.deepEqual(fs.existsSync(path.join(root, 'failed')) ? fs.readdirSync(path.join(root, 'failed')) : [], []);
+});
+
+test('default-off vocabulary publication never writes an artifact, even with existing evidence', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-vocab-disabled-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const writeFile = fs.promises.writeFile.bind(fs.promises);
+    const injected = t.mock.method(fs.promises, 'writeFile', async (...args: Parameters<typeof fs.promises.writeFile>) => {
+        if (String(args[0]).endsWith(VOCABULARY_FILE)) throw new Error('disabled vocabulary writer ran');
+        return writeFile(...args);
+    });
+    for (const [id, options] of [['default', {}], ['explicit-off', { repositoryVocabularyEnabled: false }]] as const) {
+        const fixture = await stage(root, id, source, 'high', options);
+        assert.equal(fs.existsSync(path.join(fixture.navigationRoot, VOCABULARY_FILE)), false);
+        const read = await readSymbolRegistrySidecar({ normalizedRootPath: root, publicationId: id,
+            navigationRoot: fixture.navigationRoot });
+        assert.equal(read.status, 'ok');
+        if (read.status === 'ok') assert.deepEqual(read.registry.symbols, fixture.registry.symbols);
+        assert.equal((await service(root).lookup(fixture.ref, 'cleanup subscriptions')).status, 'missing');
+    }
+    injected.mock.restore();
 });

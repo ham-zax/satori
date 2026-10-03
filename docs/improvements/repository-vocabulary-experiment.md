@@ -30,9 +30,25 @@ model configuration, and machine-load observation.
   repository scope. Caller-provided `alt_terms` takes precedence. Explicit
   `flags: { repo_vocab: true }` enables the experiment.
 
-Full reindexing builds vocabulary for all symbols. Legacy metadata without
-vocabulary remains valid. The artifact is built during indexing even though
-automatic query expansion defaults off; indexing-cost equivalence is not claimed.
+Vocabulary indexing is now **off by default** too. Start the indexer with
+`SATORI_REPOSITORY_VOCABULARY_INDEX=1` and fully reindex to opt in. The policy
+is captured once by the indexing pipeline and shared with full and incremental
+navigation publication. Without the opt-in, source vocabulary is not extracted
+and no vocabulary artifact is built, encoded, hashed, or written. Search's
+`repo_vocab` flag alone does not enable indexing.
+
+The initial experiment built the artifact unconditionally; that behavior was
+removed after the user raised the indexing-cost concern. Historical artifacts
+and evidence already present in immutable publications are preserved and follow
+ordinary publication retention. New default indexing adds no vocabulary
+metadata or artifact, regardless of repository size. Legacy indexes remain valid.
+
+The opt-in experiment's 100,000-document and 64 MiB limits bound the returned
+artifact, not peak construction work: relationship filtering/sorting precedes
+the document limit, and byte rejection follows encoding/serialization. These
+are known limitations of explicitly enabled indexing, not costs incurred by
+the default-off path. No claim of bounded peak memory for the opt-in builder
+or measured end-to-end indexing-speed equivalence is established here.
 
 React's final artifact contains 63,586 documents in 36,073,357 bytes. The first
 object-encoded attempt exceeded the 64 MiB artifact budget and produced no
@@ -116,7 +132,7 @@ The normal real-repository harness populates that repository cache.
 
 ```sh
 node node_modules/typescript7/bin/tsc --build packages/cli --force
-VOCABULARY_EVAL_OUTPUT=/tmp/satori-vocabulary-ablation.json node evals/real-repo-quality/vocabulary-ablation.mjs
+SATORI_REPOSITORY_VOCABULARY_INDEX=1 VOCABULARY_EVAL_OUTPUT=/tmp/satori-vocabulary-ablation.json node evals/real-repo-quality/vocabulary-ablation.mjs
 ```
 
 `VOCABULARY_EVAL_REPO=react` selects one repository. Each invocation owns its
@@ -142,3 +158,15 @@ Verification performed:
 
 The portable reproduction script was syntax-checked after saving; the entire
 46-query experiment was not repeated solely for relocating that script.
+
+### Indexing default-off follow-up, 2026-10-03
+
+The extraction-equivalence and disabled-publication regressions failed on
+the unconditional implementation before the gate was added. After the repair,
+the forced CLI TypeScript build and all 630 core tests (94 files) passed;
+all 964 MCP tests passed with one skipped (129 files). Disabled extraction
+preserves legacy symbol bytes, and disabled publication succeeds even when
+the vocabulary writer is fault-injected to fail. Explicit opt-in still builds
+the artifact, and environment changes do not alter an already-created
+pipeline's policy. The reproduction script's syntax and refusal to run without
+the indexing opt-in were verified. Historical benchmark JSON was preserved.

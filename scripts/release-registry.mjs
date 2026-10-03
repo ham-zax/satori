@@ -178,7 +178,7 @@ export async function verifyReleaseRegistry(options = {}) {
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      for (const key of RELEASE_ORDER) {
+      for (const key of options.packageKeys ?? RELEASE_ORDER) {
         const packageName = RELEASE_PACKAGES[key].name;
         const version = localVersions[key];
         const exactVersion = registry.viewVersion(packageName, version);

@@ -9,12 +9,9 @@ const packageJson = JSON.parse(
   fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8'),
 );
 
-test('release package scripts cannot bypass graph publication', () => {
-  for (const key of ['release:core', 'release:mcp', 'release:cli']) {
-    const command = packageJson.scripts[key];
-    assert.equal(typeof command, 'string');
-    assert.match(command, /pnpm run release:all/);
-    assert.doesNotMatch(command, /(?:npm|pnpm)[^\n]*publish/);
+test('release package scripts use the graph publisher with an explicit package', () => {
+  for (const key of ['core', 'mcp', 'cli']) {
+    assert.equal(packageJson.scripts[`release:${key}`], `node scripts/publish-release-graph.mjs ${key}`);
   }
 });
 

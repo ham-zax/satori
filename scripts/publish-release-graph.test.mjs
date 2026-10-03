@@ -161,6 +161,43 @@ test('all-unpublished graph publishes Core, MCP, CLI in order', async () => {
   assert.deepEqual(result.skipped, []);
 });
 
+test('a package release publishes only its selected package', async () => {
+  for (const packageKey of ['core', 'mcp', 'cli']) {
+    const options = runnerOptions();
+    options.packageKey = packageKey;
+    const result = await publishReleaseGraph(options);
+    assert.deepEqual(options.records.publishCalls, [NAMES[packageKey]]);
+    assert.deepEqual(result.published.map((entry) => entry.key), [packageKey]);
+    assert.deepEqual(options.records.skippedLatestCalls[0].packageKeys, []);
+  }
+});
+
+test('a package release refuses missing prerequisites before publishing', async () => {
+  for (const packageKey of ['mcp', 'cli']) {
+    const options = runnerOptions({
+      viewVersionImpl: (name, version) => name === NAMES.core ? null : version,
+    });
+    options.packageKey = packageKey;
+    await assert.rejects(publishReleaseGraph(options), /prerequisite @satori-code\/core.*must already be published/);
+    assert.deepEqual(options.records.publishCalls, []);
+  }
+});
+
+test('a CLI release refuses an incompatible published MCP before publishing', async () => {
+  const options = runnerOptions({ viewDependenciesImpl: () => ({ '@satori-code/core': '0.0.1' }) });
+  options.packageKey = 'cli';
+  await assert.rejects(publishReleaseGraph(options), /Published MCP does not pin the selected Core version/);
+  assert.deepEqual(options.records.publishCalls, []);
+});
+
+test('an unknown package is rejected before source or registry operations', async () => {
+  const options = runnerOptions();
+  options.packageKey = 'unknown';
+  await assert.rejects(publishReleaseGraph(options), /Unknown release package/);
+  assert.deepEqual(options.records.fetchCalls, []);
+  assert.deepEqual(options.records.publishCalls, []);
+});
+
 test('published-identical Core is skipped while MCP/CLI publish', async () => {
   const options = runnerOptions({
     checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'unpublished', cli: 'unpublished' }),

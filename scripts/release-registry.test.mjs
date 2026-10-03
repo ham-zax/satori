@@ -11,6 +11,28 @@ import {
 
 const LOCAL_VERSIONS = Object.freeze({ core: '3.6.1', mcp: '6.8.2', cli: '1.9.3' });
 
+test('package registry verification checks only the selected latest tag and metadata', async () => {
+  const names = { core: '@satori-code/core', mcp: '@satori-code/mcp', cli: '@satori-code/cli' };
+  for (const key of ['core', 'mcp', 'cli']) {
+    const calls = [];
+    await verifyReleaseRegistry({
+      localGraph: {},
+      localVersions: LOCAL_VERSIONS,
+      packageKeys: [key],
+      registryClient: {
+        viewVersion(name, version) {
+          calls.push([name, version]);
+          assert.equal(name, names[key]);
+          return LOCAL_VERSIONS[key];
+        },
+        viewDependencies: () => ({ '@satori-code/core': LOCAL_VERSIONS.core }),
+        viewManagedRuntime: () => ({ core: LOCAL_VERSIONS.core, mcp: LOCAL_VERSIONS.mcp }),
+      },
+    });
+    assert.deepEqual(calls, [[names[key], LOCAL_VERSIONS[key]], [names[key], 'latest']]);
+  }
+});
+
 test('registry client pins production registry and returns sorted stable versions', () => {
   const calls = [];
   const client = createReleaseRegistryClient({

@@ -193,6 +193,10 @@ function validateVerifiedTarballs(report, toPublish) {
 }
 
 export async function publishReleaseGraph(options = {}) {
+  if (options.packageKey !== undefined && !RELEASE_ORDER.includes(options.packageKey)) {
+    throw new Error(`Unknown release package ${JSON.stringify(options.packageKey)}; expected core, mcp, or cli.`);
+  }
+  const packageKeys = options.packageKey === undefined ? RELEASE_ORDER : [options.packageKey];
   const cwd = options.cwd || process.cwd();
   const log = options.log || ((line) => console.log(line));
   const execFileSyncImpl = options.execFileSyncImpl || execFileSync;
@@ -265,6 +269,7 @@ export async function publishReleaseGraph(options = {}) {
   const verifyReleaseImpl = options.verifyReleaseImpl
     || ((localVersions) => verifyReleaseRegistry({
       localVersions,
+      packageKeys,
       registryClient,
       attempts: REGISTRY_POLL_ATTEMPTS,
       sleepImpl,
@@ -301,7 +306,7 @@ export async function publishReleaseGraph(options = {}) {
         const localVersions = Object.fromEntries(
           RELEASE_ORDER.map((key) => [key, graph.packages[key].versionString]),
         );
-        const published = RELEASE_ORDER.every((key) => {
+        const published = packageKeys.every((key) => {
           try {
             return viewVersionImpl(RELEASE_PACKAGES[key].name, localVersions[key]) === localVersions[key];
           } catch {
@@ -312,12 +317,13 @@ export async function publishReleaseGraph(options = {}) {
       });
   const publishedVersions = alreadyPublishedImpl?.();
   if (publishedVersions) {
+    verifyPrerequisites(publishedVersions);
     log('All local versions are already published; skipping qualification and verifying the registry.');
     await verifyReleaseImpl(publishedVersions);
     log('Release graph verified.');
     return {
       published: Object.freeze([]),
-      skipped: Object.freeze([...RELEASE_ORDER]),
+      skipped: Object.freeze([...packageKeys]),
       publishCommandSucceeded: Object.freeze([]),
       registryVerified: Object.freeze([]),
     };
@@ -336,8 +342,9 @@ export async function publishReleaseGraph(options = {}) {
     const localVersions = Object.freeze(
       Object.fromEntries(RELEASE_ORDER.map((key) => [key, report.packages[key].localVersion]))
     );
-    const toPublish = RELEASE_ORDER.filter((key) => report.packages[key].status === 'unpublished');
-    const toSkip = RELEASE_ORDER.filter((key) => report.packages[key].status === 'published-identical');
+    const toPublish = packageKeys.filter((key) => report.packages[key].status === 'unpublished');
+    const toSkip = packageKeys.filter((key) => report.packages[key].status === 'published-identical');
+    verifyPrerequisites(localVersions);
 
     if (toPublish.length > 0) {
       verifySkippedLatestImpl(toSkip, localVersions);
@@ -401,6 +408,27 @@ export async function publishReleaseGraph(options = {}) {
     };
   } finally {
     fs.rmSync(publisherTempRoot, { recursive: true, force: true });
+  }
+
+  function verifyPrerequisites(localVersions) {
+    for (const key of packageKeys) {
+      for (const dependency of RELEASE_PACKAGES[key].dependencies) {
+        if (packageKeys.includes(dependency)) continue;
+        const name = RELEASE_PACKAGES[dependency].name;
+        const version = localVersions[dependency];
+        try {
+          if (viewVersionImpl(name, version) !== version) {
+            throw new Error('Exact version is not published.');
+          }
+          if (dependency === 'mcp'
+            && viewDependenciesImpl(name, version)?.[RELEASE_PACKAGES.core.name] !== localVersions.core) {
+            throw new Error('Published MCP does not pin the selected Core version.');
+          }
+        } catch (error) {
+          throw new Error(`Cannot release ${RELEASE_PACKAGES[key].name}: prerequisite ${name}@${version} must already be published and valid. ${errorMessage(error)}`);
+        }
+      }
+    }
   }
 }
 
@@ -504,12 +532,13 @@ async function verifyPublished(key, version, localVersions, impls) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2);
   const allowUnpushedHead = args.includes('--allow-unpushed-head');
-  if (args.some((arg) => arg !== '--allow-unpushed-head')) {
-    console.error('Usage: node scripts/publish-release-graph.mjs [--allow-unpushed-head]');
+  const positional = args.filter((arg) => arg !== '--allow-unpushed-head' && arg !== '--');
+  if (positional.length > 1 || (positional.length === 1 && !RELEASE_ORDER.includes(positional[0]))) {
+    console.error('Usage: node scripts/publish-release-graph.mjs [core|mcp|cli] [--allow-unpushed-head]');
     process.exit(2);
   }
   try {
-    await publishReleaseGraph({ allowUnpushedHead });
+    await publishReleaseGraph({ allowUnpushedHead, packageKey: positional[0] });
   } catch (error) {
     console.error(error.message);
     process.exit(1);

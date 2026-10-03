@@ -225,7 +225,7 @@ Plain `pnpm release` remains publish-only, as does `pnpm run release:all`.
 
 ### `pnpm run release:all`
 
-The single supported publication path. It runs:
+The coordinated publication path for all three packages. It runs:
 
 1. the same complete qualification owned by `release:check`;
 2. publication of only the retained, already-verified tarballs in Core -> MCP
@@ -264,8 +264,9 @@ All registry probes, tarball downloads, and publication commands are pinned to
 `--access public`. Package `publishConfig` repeats those constraints as
 defense-in-depth.
 
-The individual package publish scripts are deliberately disabled. Publication
-must use `release:all`:
+### Package-specific publication
+
+Publish only one package through the same qualification and graph publisher:
 
 ```bash
 pnpm run release:core
@@ -273,8 +274,17 @@ pnpm run release:mcp
 pnpm run release:cli
 ```
 
-Each command exits nonzero with a message directing the operator to
-`pnpm run release:all`.
+These commands retain the clean-tree, canonical-master, authentication, packed
+graph, and full qualification checks. Only the selected package is published,
+and only its exact version, `latest` tag, and dependency metadata are verified
+at the end. Other packages are not published automatically.
+
+For MCP, the exact local Core version must already be published. For CLI, the
+exact local Core and MCP versions must already be published, and that MCP must
+pin the same Core. Missing or incompatible prerequisites stop the command before
+any publication. Prepare a coherent version graph with `release:bump` first;
+publish prerequisites individually in Core -> MCP -> CLI order, or use
+`release:all` for the coordinated release.
 
 ### `pnpm run release:verify`
 

@@ -507,6 +507,7 @@ export type SearchExecutionHost = {
     }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: Reranker | null;
     supplementCandidates?: (candidates: readonly SearchResultLike[]) => Promise<SearchResultLike[]>;
+    symbolMetadataSearch?: () => Promise<SearchResultLike[]>;
     buildRerankDocument?: (
         rerankQuery: string,
         result: SearchResultLike,
@@ -931,6 +932,7 @@ async function rerankSearchCandidates(
                     queryPlan: input.queryPlan,
                     hasPathConstraint: input.parsedOperators.path.length > 0
                         || input.requestedSubdirectory != null,
+                    neutralPrefersImplementation: executionFlags.neutral_owner_preference === true,
                 });
                 const reordered = applyNativeRerankToSelectedSlots({
                     allCandidates: scored,
@@ -1701,6 +1703,27 @@ export async function runSearchExecution(
                     };
         }
 
+        if (flags.symbol_metadata_bm25 && host.symbolMetadataSearch
+            && !publicationOnlyStaleRead && input.scope !== "docs"
+            && (input.queryPlan.route.kind === "conceptual" || input.queryPlan.route.kind === "mixed")
+            && !input.queryPlan.testSeeking && !input.queryPlan.documentationSeeking
+            && !input.queryPlan.referenceSeeking && input.parsedOperators.must.length === 0
+            && input.parsedOperators.path.length === 0 && input.requestedSubdirectory == null) {
+            input.signal?.throwIfAborted();
+            const metadataResults = await host.measureSearchPhase("trackedLexical", () => (
+                host.symbolMetadataSearch!()
+            ));
+            input.signal?.throwIfAborted();
+            if (candidateSurvival) {
+                appendSearchCandidatePass(candidateSurvival, metadataResults,
+                    `attempt:${attempt + 1}/symbol_metadata_bm25`, 1);
+            }
+            addPass(metadataResults, "symbol_metadata_bm25", 1);
+            passesUsed.add("symbol_metadata_bm25");
+            attemptFilterSummary = buildEmptyFilterSummary();
+            evaluateAllCandidates();
+        }
+
         const beforeFilter = byChunkKey.size;
         searchDiagnostics.resultsBeforeFilter = beforeFilter;
         searchDiagnostics.resultsAfterFilter = scoredAttempt.length;
@@ -1924,6 +1947,7 @@ export async function runSearchExecution(
         : scored.filter((candidate) => candidate.retrievalPasses.some((pass) => remotePassIds.has(pass))).length;
     searchDiagnostics.candidatesWithLexicalEvidence = scored.filter((candidate) => (
         candidate.retrievalPasses.includes("lexical_files")
+        || candidate.retrievalPasses.includes("symbol_metadata_bm25")
         || candidate.retrievalPasses.includes("must_lane")
         || (input.queryPlan.retrievalMode === "lexical"
             && candidate.retrievalPasses.some((pass) => remotePassIds.has(pass)))
@@ -1932,9 +1956,10 @@ export async function runSearchExecution(
         candidate.retrievalPasses.includes("dirty_overlay")
         || candidate.retrievalPasses.includes("live_path")
         || candidate.retrievalPasses.includes("file_symbols")
+        || candidate.retrievalPasses.includes("symbol_metadata_bm25")
     )).length;
     rankingProvenance.semanticPassesUsed = Array.from(passesUsed).filter((passId) => passId === "primary" || passId === "expanded").sort();
-    rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path" || passId === "dirty_overlay" || passId === "must_lane").sort();
+    rankingProvenance.lexicalPassesUsed = Array.from(passesUsed).filter((passId) => passId === "lexical_files" || passId === "live_path" || passId === "dirty_overlay" || passId === "must_lane" || passId === "symbol_metadata_bm25").sort();
     rankingProvenance.livePathSupplementUsed = passesUsed.has("live_path");
     rankingProvenance.lexicalFileScanUsed = passesUsed.has("lexical_files");
     rankingProvenance.rerankApplied = rerankerApplied;

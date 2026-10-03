@@ -181,16 +181,25 @@ export function buildSearchCandidateProvenance(
     };
 }
 
-/** Apply answer intent without blending relevance scores or reordering peers. */
+/**
+ * Apply answer intent without blending relevance scores or reordering peers.
+ *
+ * `neutralPrefersImplementation` extends the implementation role split to
+ * neutral answer focus. It never overrides an explicit test, documentation,
+ * configuration, reference, exact-path or path-constrained request.
+ */
 export function preferImplementationCandidates<T>(input: {
     candidates: readonly T[];
     relativePath: (candidate: T) => string;
     answerFocus: SearchAnswerFocus;
     queryPlan: Pick<SearchQueryPlan, "route" | "testSeeking" | "documentationSeeking" | "referenceSeeking" | "lexicalTerms">;
     hasPathConstraint: boolean;
+    neutralPrefersImplementation?: boolean;
 }): T[] {
     const plan = input.queryPlan;
-    if (input.answerFocus !== "implementation" || input.hasPathConstraint
+    const prefersImplementation = input.answerFocus === "implementation"
+        || (input.neutralPrefersImplementation === true && input.answerFocus === "neutral");
+    if (!prefersImplementation || input.hasPathConstraint
         || plan.testSeeking || plan.documentationSeeking || plan.referenceSeeking
         || plan.route.kind === "exact_path" || plan.route.kind === "configuration"
         || plan.route.kind === "references") {

@@ -59,7 +59,10 @@ function buildSupport(reranker: Reranker | null): SearchQuerySupport {
     });
 }
 
-function buildInput(query = "where find the relevant implementation"): SearchExecutionInput {
+function buildInput(
+    query = "where find the relevant implementation",
+    flags: Record<string, boolean> = {},
+): SearchExecutionInput {
     const parsedOperators = parseSearchOperators(query);
     const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
     const answerFocus = resolveSearchAnswerFocus(queryPlan).focus;
@@ -85,7 +88,7 @@ function buildInput(query = "where find the relevant implementation"): SearchExe
         observedChangedFilesState: { available: false, files: new Set() },
         dirtyFilesNotFreshened: false,
         retrievalPolicy: resolveSearchPolicy({ resultLimit: 3, hasMustOperators: false }),
-        flags: { path_demotion: false },
+        flags: { path_demotion: false, ...flags },
     };
 }
 
@@ -303,6 +306,76 @@ test("implementation focus puts runtime owners before tests and unrelated adapte
     ]);
     assert.equal(outcome.orderAuthority, "reranker_order");
     assert.deepEqual(outcome.scored.map((entry) => entry.rerankerRank), [3, 4, 2, 1]);
+});
+
+test("neutral focus keeps provider order unless neutral_owner_preference is enabled", async () => {
+    const results = [candidate("tests/cleanup.test.ts", 0.95), candidate("src/core/cleanup.ts", 0.80)];
+    const reranker = rerankerReturning([{ index: 0, relevanceScore: 0.9 }, { index: 1, relevanceScore: 0.8 }]);
+    const query = "stale cleanup effects";
+    assert.equal(buildInput(query).answerFocus, "neutral");
+    const byDefault = await run(buildInput(query), buildHost(results, reranker));
+    const preferred = await run(
+        buildInput(query, { neutral_owner_preference: true }),
+        buildHost(results, reranker),
+    );
+    assert.equal(byDefault.kind, "ok");
+    assert.equal(preferred.kind, "ok");
+    assert.deepEqual(byDefault.scored.map((entry) => entry.result.relativePath), [
+        "tests/cleanup.test.ts", "src/core/cleanup.ts",
+    ]);
+    assert.deepEqual(preferred.scored.map((entry) => entry.result.relativePath), [
+        "src/core/cleanup.ts", "tests/cleanup.test.ts",
+    ]);
+});
+
+test("symbol metadata BM25 is default-off and its enabled candidates reach fusion and reranking", async () => {
+    const query = "click executor state signature legal target validation";
+    const primary = candidate("src/content/action-guide.ts", 0.9);
+    const owner = candidate("engine/crates/catan-core/src/state.rs", 5);
+    owner.symbolLabel = "legal_actions";
+    owner.content = "pub fn legal_actions() {}";
+    const build = () => {
+        let laneCalls = 0;
+        let ownerReachedProvider = false;
+        const reranker: Reranker = {
+            getIdentity: () => ({ provider: "test", model: "test", profile: "test" }),
+            rerank: async (_query, documents) => {
+                ownerReachedProvider = documents.some((document) => document.includes("legal_actions"));
+                return documents.map((_document, index) => ({ index, relevanceScore: 1 - index / 10 }));
+            },
+        };
+        const host = buildHost([primary], reranker);
+        host.symbolMetadataSearch = async () => { laneCalls++; return [owner]; };
+        return { host, calls: () => laneCalls, reached: () => ownerReachedProvider };
+    };
+    const baseline = build();
+    const off = await run(buildInput(query), baseline.host);
+    assert.equal(off.kind, "ok");
+    assert.equal(baseline.calls(), 0);
+    assert.equal(baseline.reached(), false);
+    assert.deepEqual(off.scored.map((entry) => entry.result.relativePath), [primary.relativePath]);
+
+    const experiment = build();
+    const on = await run(buildInput(query, { symbol_metadata_bm25: true }), experiment.host);
+    assert.equal(on.kind, "ok");
+    assert.equal(experiment.calls(), 1);
+    assert.equal(experiment.reached(), true);
+    assert.ok(on.scored.some((entry) => entry.result === owner));
+    assert.deepEqual(on.rankingProvenance.lexicalPassesUsed, ["symbol_metadata_bm25"]);
+});
+
+test("symbol metadata BM25 preserves explicit-intent and previous-publication search paths", async () => {
+    for (const query of ["tests for stale cleanup effects", "configuration for cleanup effects",
+        "callers of cleanup", "path:src/core/cleanup.ts stale cleanup effects"]) {
+        const host = buildHost([candidate("src/core/cleanup.ts", 0.9)], null);
+        host.symbolMetadataSearch = async () => { throw new Error("metadata lane must stay off"); };
+        assert.equal((await run(buildInput(query, { symbol_metadata_bm25: true }), host)).kind, "ok");
+    }
+    const input = buildInput("click executor state signature legal target validation", { symbol_metadata_bm25: true });
+    input.freshnessMode = "served_previous_generation";
+    const host = buildHost([candidate("src/core/cleanup.ts", 0.9)], null);
+    host.symbolMetadataSearch = async () => { throw new Error("previous publication cannot read live source"); };
+    assert.equal((await run(input, host)).kind, "ok");
 });
 
 test("explicit tests, configuration, references, and qualified paths retain provider order", async () => {

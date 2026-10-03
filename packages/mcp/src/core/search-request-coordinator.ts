@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { supplementSearchFileSymbols } from "./search-file-symbol-supplement.js";
+import { retrieveSymbolMetadataBm25Candidates } from "./search-symbol-metadata-bm25.js";
 import { resolveSearchFlags } from './search-flags.js';
 import { allowsRepositoryVocabulary, buildRepositoryVocabularyFilter, resolveRepositorySearchTerms } from './search-repository-vocabulary.js';
 import {
@@ -1706,6 +1707,18 @@ export class SearchRequestCoordinator {
                     ...(input.reservation_policy !== undefined ? { reservation_policy: input.reservation_policy } : {}),
                 }, {
                     searchQuerySupport: this.searchQuerySupport,
+                    symbolMetadataSearch: async () => {
+                        if (!searchSymbolRegistry || !searchSymbolRegistryManifestHash
+                            || freshnessDecision.mode === "served_previous_generation") return [];
+                        return retrieveSymbolMetadataBm25Candidates({
+                            registry: searchSymbolRegistry,
+                            registryManifestHash: searchSymbolRegistryManifestHash,
+                            query: parsedOperators.semanticQuery,
+                            codebaseRoot: effectiveRoot,
+                            accepts: vocabularyFilter,
+                            ...(signal ? { signal } : {}),
+                        });
+                    },
                     supplementCandidates: async (candidates) => {
                         if (answerFocus !== "implementation" || !searchSymbolRegistry
                             || freshnessDecision.mode === "served_previous_generation") return [];

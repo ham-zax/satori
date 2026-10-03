@@ -68,3 +68,29 @@ test("implementation preference preserves explicit intent and provider order wit
     }
     assert.deepEqual(prefer("how does cleanup work", true), candidates);
 });
+
+test("neutral owner preference splits neutral queries by role without overriding explicit intent", () => {
+    const candidates = ["tests/a.test.ts", "tools/a.ts", "src/core/b.ts", "src/core/a.ts", "tests/b.test.ts"];
+    const prefer = (query: string, neutralPrefersImplementation: boolean, hasPathConstraint = false) => {
+        const parsed = parseSearchOperators(query);
+        const plan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
+        const answerFocus = resolveSearchAnswerFocus(plan).focus;
+        return {
+            answerFocus,
+            ordered: preferImplementationCandidates({
+                candidates, relativePath: (path) => path,
+                answerFocus, queryPlan: plan, hasPathConstraint, neutralPrefersImplementation,
+            }),
+        };
+    };
+    const enabled = prefer("cleanup", true);
+    assert.equal(enabled.answerFocus, "neutral");
+    assert.deepEqual(enabled.ordered, [
+        "src/core/b.ts", "src/core/a.ts", "tools/a.ts", "tests/a.test.ts", "tests/b.test.ts",
+    ]);
+    assert.deepEqual(prefer("cleanup", false).ordered, candidates);
+    for (const query of ["tests for cleanup", "documentation for cleanup", "configuration for cleanup", "callers of cleanup"]) {
+        assert.deepEqual(prefer(query, true).ordered, candidates, query);
+    }
+    assert.deepEqual(prefer("cleanup", true, true).ordered, candidates);
+});

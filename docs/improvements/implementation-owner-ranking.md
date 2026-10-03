@@ -1,6 +1,17 @@
 # Implementation ownership in default code discovery
 
-Status: proposed; not implemented. Recorded 2026-10-03.
+Status: proposed. A first step is implemented behind the off-by-default
+`neutral_owner_preference` search flag. A paired evaluation on clean
+`colonist-assistant` commit `40a7c12` did not restore the missing owners to the
+disclosed top 10; the flag remains off by default. A separate
+[`symbol_metadata_bm25` experiment](q5-retrieval-investigation.md#paired-result-of-the-metadata-experiment)
+now recovers the missing Q5 owners into the reranker, but they finish at ranks
+34 and 55 and remain undisclosed. It also stays off by default. Recorded 2026-10-03.
+
+The [consolidated investigation](reranker-owner-investigation.md) records the
+later reranker labs and their negative results. Ownership remains a
+relevance-qualified goal, not a justification for the unsuccessful blanket
+path partition. Wrapper removal and windowed ranking are not accepted repairs.
 
 ## Decision being proposed
 
@@ -108,6 +119,11 @@ candidate-survival and phase diagnostics. The complete Q2–Q5 strings were
 available; Q1 was abbreviated, so its original query was not replayed exactly.
 These observations are session evidence, not newly committed evaluation
 fixtures.
+
+File-level ranks can select different candidates at different stages. In the
+later captured-pool lab, the best tracker-path document improved from reranker
+input position 62 to rank 8. The table below records the earlier probe and must
+not be generalized into a claim that all tracker evidence was demoted.
 
 | Query | Observed failure | Implication |
 |---|---|---|

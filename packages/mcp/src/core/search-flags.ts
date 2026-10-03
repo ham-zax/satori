@@ -19,6 +19,17 @@ export type SearchFlags = {
      * outright.
      */
     rerank_blend?: boolean;
+    /**
+     * Applies the implementation role preference (implementation, then
+     * adapters, then tests/docs/fixtures) to reranked results when the answer
+     * focus is neutral, which is the default for descriptive discovery
+     * queries. Explicit test, documentation, configuration, reference and
+     * path-constrained requests keep their own ordering. Off by default until
+     * it is compared against the current ordering on the same publication.
+     */
+    neutral_owner_preference?: boolean;
+    /** Adds a bounded published-symbol metadata BM25 arm before reranking. Experimental; off by default. */
+    symbol_metadata_bm25?: boolean;
 };
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
@@ -30,6 +41,8 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     focus_cue_wide: false,
     prf: false,
     rerank_blend: false,
+    neutral_owner_preference: false,
+    symbol_metadata_bm25: false,
 };
 
 /**

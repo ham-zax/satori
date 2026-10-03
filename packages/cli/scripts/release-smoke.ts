@@ -21,9 +21,9 @@ import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 // Optional native packages remain omitted; required host-native LanceDB,
 // oxc-parser, and LateOn/Sharp packages are installed explicitly and measured
-// by the gate below. The budget keeps ~13 MiB of headroom over the measured
-// closure (707 MiB with the CBM language extractors, Potion model not bundled).
-const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 720 * 1024 * 1024;
+// by the gate below. The temporary 960 MiB budget covers the measured 901 MiB
+// closure after dependency upgrades; the deferred size investigation is in docs/RELEASING.md.
+const MAX_LINUX_X64_MANAGED_RUNTIME_BYTES = 960 * 1024 * 1024;
 
 interface PackageManifest {
     name?: unknown;

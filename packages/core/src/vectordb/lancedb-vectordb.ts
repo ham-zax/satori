@@ -12,6 +12,7 @@ import {
     type Table,
 } from '@lancedb/lancedb';
 import {
+    DataType,
     Field,
     FixedSizeList,
     Float32,
@@ -655,7 +656,8 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     private async vectorDimension(table: Table): Promise<number> {
         const schema = await table.schema();
         const vectorField = schema.fields.find((field) => field.name === 'vector');
-        if (!vectorField || !(vectorField.type instanceof FixedSizeList)) {
+        // npm may resolve a separate Arrow package for LanceDB's peer dependency.
+        if (!vectorField || !DataType.isFixedSizeList(vectorField.type)) {
             throw new Error(`LanceDB table '${table.name}' has no fixed-size vector column.`);
         }
         return vectorField.type.listSize;

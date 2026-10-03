@@ -16,6 +16,7 @@ import {
     readLateOnAcquisitionAuthority,
 } from "../src/lateon-model-store.js";
 import { assertPackedDoctorReport } from "../src/release-smoke-report.js";
+import { probeLanceDbRuntime } from "../src/install-preflight.js";
 import { assertReleaseWorkspaceLinks } from "../../../scripts/release-workspace.mjs";
 
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
@@ -588,6 +589,10 @@ async function main(): Promise<void> {
             baseEnv,
         );
         assertManagedRuntimeSizeBudget(smokeExecDir);
+        const packedCoreRequire = createRequire(path.join(smokeExecDir, "node_modules", "@satori-code", "core", "package.json"));
+        await probeLanceDbRuntime(path.join(smokeExecDir, "preflight-db"), {
+            loadLanceDb: async () => packedCoreRequire("@satori-code/core/lancedb"),
+        });
         assertPackedLateOnAcquisitionAuthority(packed.packedMcpRoot, packed.packedCliRoot);
         assertPackedLateOnNativeRuntime(packed.packedMcpRoot);
         assertPackedCliLateOnAcquisition(packed.packedCliRoot);

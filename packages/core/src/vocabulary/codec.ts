@@ -58,6 +58,10 @@ export function decodeRepositoryVocabularyIndex(value: unknown): RepositoryVocab
             term: index.dictionary[word]!, kind: kind === 0 ? 'identifier' : 'source', line,
         })) });
     }
-    const { encoding: _encoding, dictionary: _dictionary, ...metadata } = index;
-    return { ...metadata, documents };
+    const decoded: RepositoryVocabularyIndex & Partial<Pick<EncodedRepositoryVocabularyIndex, 'encoding' | 'dictionary'>> = {
+        ...index, documents,
+    };
+    delete decoded.encoding;
+    delete decoded.dictionary;
+    return decoded;
 }

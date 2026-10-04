@@ -1,8 +1,9 @@
 # Implementation-owner discovery: investigation and current decision
 
 Updated 2026-10-04. This consolidates the Colonist investigation, the two
-default-off experiments, the subsequent offline reranker labs and the default
-definition-discovery repair. It supersedes the labs' intermediate recommendations
+default-off experiments, the subsequent offline reranker labs, the default
+definition-discovery repair and the corrected four-repository reranker comparison.
+It supersedes the labs' intermediate recommendations
 where later evidence contradicted them. The new path
 improves the measured Colonist discovery results and is enabled by default.
 
@@ -17,6 +18,11 @@ improves the measured Colonist discovery results and is enabled by default.
   model. Definition evidence now participates in ranking; wrapper removal,
   plain-text projection, blending and mechanical split-query replacement are
   not part of the repair.
+- Retain LateOn with definition discovery for implementation discovery. The
+  corrected four-repository comparison supports better top-rank results at a
+  substantial latency cost, with unchanged aggregate named-symbol recall at ten.
+  It measures the combined pipeline, not LateOn alone. Neither the definition
+  signal nor fusion guarantees that every relevant owner retains its rank.
 - Do not implement windowed supplemental discovery from these results. Under
   a fixed sixteen-result budget it added one strict owner in twenty-four
   development cases, at the final slot, while displacing other evidence.
@@ -54,6 +60,8 @@ Exact identifiers, explicit tests/docs/configuration/references, `must:` and
 path-constrained requests retain their established paths. There is still one
 LateOn request, with unchanged query/document projections and model assets.
 File fallbacks remain file targets; the engine does not invent symbol identity.
+Bypassing definition discovery does not necessarily bypass LateOn: explicit
+test questions can still be reranked under their existing policy.
 
 The new `definition_fusion_order` has its own frozen ranking-policy identity.
 Grouping preserves its authoritative order, and continuation verification
@@ -110,6 +118,119 @@ The standalone `symbol_metadata_bm25` and `neutral_owner_preference`
 experiments remain disabled. The default engine reuses the metadata producer
 without enabling blanket path partitioning or adding another persistent
 index, dependency, model, LLM call, or multi-query protocol.
+
+### Four-repository reranker comparison
+
+The later lab at `/tmp/satori-rerank-comparison-emj45E/` compared the current
+workspace runtime at Satori commit `fff97388`, not an installed or `npx`
+distribution. Dist freshness passed. It used 28 questions, three repeats per
+arm and 168 measured samples, with no tool errors or reranker fallbacks and
+identical visible results across repeats. Each repository retained one
+publication shared by sequential ON/OFF sessions. Three dirty repositories
+were evaluated through clean disposable clones at HEAD; uncommitted work was
+excluded. The questions were authored before observing rankings. The eight
+Colonist questions were new; this lab did not replay the earlier Q2–Q5 strings
+or the focused legality controls, whose results remain a separate experiment.
+
+| Repository | Evaluated commit | Questions | Named-symbol questions |
+|---|---|---:|---:|
+| Colonist Assistant | `40a7c1261a2af2df901d8e85bcbd538306c66805` | 8 | 6 |
+| Learning OS | `40216abf36451eb7bf01d27a46307a7461d0f53a` | 7 | 5 |
+| WebHarness | `8b2e483d8e7e9461eedd3efd18379a7191d8c229` | 7 | 4 |
+| Codebase Memory MCP | `11b662f9f7fba92012b872dd4fcaef7ee0c1300d` | 6 | 4 |
+
+ON configured `SATORI_RERANKER_PROVIDER=lateon` with the current local profile
+and activation policy. OFF configured `none` and removed
+`SATORI_LATEON_ACTIVATION_POLICY`, applying overrides after the managed
+environment was constructed. Both kept `definition_discovery=true`, identical
+embeddings and grouped-by-symbol requests with ten visible results and full
+debug. ON attempted and applied reranking on all 75 eligible samples: 57 ended
+in `definition_fusion_order`, 18 in `reranker_order`. Nine samples from three
+configuration/reference questions correctly skipped it. OFF made no reranker calls.
+
+**These are whole-pipeline arms.** The definition admission arm remains eligible
+in both, but definition fusion and selection within a file run inside the
+successful rerank path. Disabling the provider therefore also bypasses those
+ranking steps. Disabling `definition_discovery` while retaining LateOn, as in
+the earlier paired engine experiment, is a different comparison. Native LateOn
+scores and order were not captured here, so this lab cannot isolate how much
+of the gain comes from the model versus definition fusion or selection.
+
+#### Corrected metrics
+
+The original report's 28-question "strict-symbol" aggregate mixed nine
+path-only oracles with nineteen named-symbol oracles. `scoreQuery` intentionally
+accepts a matching path when no symbol regex is supplied; that result is valid
+for the path question but must not enter a strict-symbol denominator. Recomputing
+from saved responses and normalized symbol labels gives:
+
+| Metric | ON | OFF | Denominator |
+|---|---:|---:|---|
+| Named-symbol owner@1 | **68.4% (13/19)** | 21.1% (4/19) | Nineteen named-symbol questions |
+| Named-symbol owner@5 | **78.9% (15/19)** | 63.2% (12/19) | Nineteen named-symbol questions |
+| Named-symbol owner@10 | 78.9% (15/19) | 78.9% (15/19) | Nineteen named-symbol questions |
+| Named-symbol MRR@10 | **0.728** | 0.376 | Nineteen named-symbol questions |
+| File-path recall@10 | 82.1% (23/28) | 82.1% (23/28) | All questions; path match regardless of symbol |
+| Path-only oracle owner@10 | 55.6% (5/9) | 66.7% (6/9) | Nine path-only questions |
+
+The original 0.500/0.250 owner@1, 0.580/0.395 MRR and 0.714/0.750 owner@10
+are reproducible mixed-oracle metrics, not strict-symbol metrics. Its 0.750
+"file recall" also required a symbol match or file-level fallback when a
+named-symbol oracle existed; direct path matching yields 23/28 in both arms.
+Among named-symbol questions there were ten wins, two losses and seven unchanged
+results. Among path-only questions there were one win, three losses and five
+unchanged results. Three repeats establish stability here, not 168 independent
+quality observations.
+
+#### Latency and observed regressions
+
+| Repository | ON median request, ms | OFF median request, ms |
+|---|---:|---:|
+| Colonist Assistant | 3,416 | 189 |
+| Learning OS | 2,257 | 201 |
+| WebHarness | 2,132 | 158 |
+| Codebase Memory MCP | 3,117 | 397 |
+
+These medians cover each repository's measured requests across three rounds,
+including its skipped queries; they are not medians of startup time. The
+combined pipeline improved first-result discovery while costing seconds per
+eligible request. Aggregate symbol recall at ten was unchanged, with individual
+gains and losses cancelling out. No bulk-triage or universal quality claim follows.
+
+The two named-symbol losses were WebHarness `w4`, the wake-proxy question
+(accepted symbol at OFF rank 6, absent from ON's visible ten), and Codebase
+Memory `b2`, lexical-scope management (1→2). ON placed other symbols from the
+correct wake-proxy file at rank 1, which is file success but not the judged
+owner. These are implementation questions, not explicit test questions.
+
+The path-only losses were Colonist `c7`, dice-history tests (1→2), Learning OS
+`l6`, attempt-subquestion tests (1→3), and WebHarness `w5`, publication lifecycle
+(1→outside ten). However, `w5` asks where the harness tracks lifecycle and judges
+`tests/publication.sh`, a test script; that oracle needs source-backed review
+before treating the loss as a missing implementation owner. WebHarness's
+explicit wake-proxy test question `w6` improved (3→1), so the sample does not
+justify blanket test-query bypass. Configuration/reference queries `l7`, `w7`
+and `b6` already skipped reranking; another bypass would not repair their misses.
+
+#### Limits of the stage diagnoses and retained decision
+
+The lab's `scripts/deepdive.mjs` computes `poolBestRank` using only
+`relativePath`, ignoring the acceptable symbol regex and canonical owner ID.
+Its claimed owner promotions, admissions and disclosure losses are therefore
+file-based observations. In particular, a wake-proxy file candidate at pool
+rank 1 does not prove `createWakeProxy` or `runBackendControl` survived at that
+rank. Absence from a bounded rerank window also does not establish absence
+from every retrieval arm. The report's "25/28 admitted" and exact-owner
+retrieval-versus-grouping classifications remain unverified.
+
+Retain the current implementation-discovery default on the strength of the
+visible-result gain, with the latency and remaining misses explicit. No blanket
+test bypass, new config bypass or ranking change is adopted from this lab.
+The concrete unresolved diagnostic is `w4`: match its exact canonical symbol
+IDs through complete retrieval, rerank and grouped-disclosure stages before
+assigning a repair to ranking or selection. Review questionable oracles first.
+This is evidence from four local repositories and handwritten development
+questions, not held-out proof or a guarantee that the reranker cannot demote owners.
 
 ### What the ten upstream repositories contributed
 
@@ -464,6 +585,8 @@ The later lab scripts and raw captures remain local, unversioned artifacts:
 | `/tmp/satori-upstream-research-20261004/live-definition-final.json` | Three-repeat paired Colonist product results and latency medians |
 | `/tmp/satori-upstream-research-20261004/cross-repo-check.json` | Sixteen paired development queries, with separate accepted and strict-symbol oracles |
 | `/tmp/satori-upstream-research-20261004/default-live-check.json` | Actual default versus explicit opt-out, plus continuation in default and full debug modes |
+| `/tmp/satori-rerank-comparison-emj45E/cases.json`, `captures/`, `reports/metrics.json` | Four-repository ON/OFF source responses and case oracles; apply the named-symbol/path corrections above |
+| `/tmp/satori-rerank-comparison-emj45E/REPORT.md`, `reports/disagreements.json`, `scripts/deepdive.mjs` | Original lab narrative and path-only stage analysis; strict-symbol and stage claims are superseded by this document's audit |
 
 This document preserves the numerical findings and corrections without
 requiring those temporary files. The labs are not yet a portable committed

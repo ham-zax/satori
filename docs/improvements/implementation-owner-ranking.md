@@ -12,6 +12,14 @@ within ten visible results, with tracker judged by path. This is not a general
 recall guarantee. The cross-repository check preserved accepted owners within
 ten results, but includes two head-rank regressions and remaining retrieval misses.
 
+The later [four-repository reranker comparison](reranker-owner-investigation.md#four-repository-reranker-comparison)
+supports retaining the combined default for implementation discovery: among
+nineteen named-symbol questions, owner@1 was 68.4% with the pipeline enabled
+versus 21.1% with the reranker disabled; owner@10 was 78.9% in both arms.
+That gain costs seconds per eligible query. The comparison also disables
+definition fusion in its OFF arm, so it does not isolate LateOn's contribution.
+Exact owners can still be demoted or omitted, even when their file ranks first.
+
 The earlier first step is implemented behind the off-by-default
 `neutral_owner_preference` search flag. A paired evaluation on clean
 `colonist-assistant` commit `40a7c12` did not restore the missing owners to the
@@ -25,7 +33,7 @@ later reranker labs and their negative results. Ownership remains a
 relevance-qualified goal, not a justification for the unsuccessful blanket
 path partition. Wrapper removal and windowed ranking are not accepted repairs.
 
-## Decision being proposed
+## Ownership policy and adopted implementation
 
 **Make implementation ownership the primary ranking policy for default code
 discovery, and let the reranker order candidates within that policy.**
@@ -37,11 +45,13 @@ behavior. Tests, callers, examples and explanatory comments remain useful
 evidence, but should not displace that boundary merely by describing it more
 fluently.
 
-The implemented experiment retains LateOn as one ranking signal. Definitions
+The implemented engine retains LateOn as one ranking signal. Definitions
 receive a separate query-matching metadata signal; tests and fixtures retain
 their semantic evidence. Explicit test, documentation, configuration, reference
-and constrained-path requests bypass the experiment. Default adoption remains
-undecided because the cross-repository controls include ranking regressions.
+and constrained-path requests bypass the definition engine; they do not all
+bypass LateOn. Default adoption is complete, with measured gains and known
+regressions documented. Neither definition fusion nor this policy pins every
+owner above every supporting result.
 
 The qualification matters: ownership preference applies among relevant
 candidates. An unrelated production function must not outrank a directly

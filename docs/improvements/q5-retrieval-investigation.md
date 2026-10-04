@@ -7,6 +7,13 @@ to ranks 4 and 8; `validatedClick` remains visible at rank 1. Both narrower
 legality queries retain their owner at rank 1. See the
 [engine results and limits](reranker-owner-investigation.md#definition-discovery-engine).
 
+The later [four-repository reranker comparison](reranker-owner-investigation.md#four-repository-reranker-comparison)
+used fresh Colonist questions rather than this Q5 wording or its focused
+controls. It supports the combined default's top-rank gain, but does not
+supersede the Q5 replay or guarantee owner visibility on other questions.
+Its stage diagnostics matched file paths only; an exact owner's admission or
+disclosure loss requires canonical symbol identity, not a same-file candidate.
+
 The earlier symbol-metadata BM25 retrieval
 experiment, behind the off-by-default `symbol_metadata_bm25` flag,
 recovers both missing Q5 candidates but alone does not improve the disclosed

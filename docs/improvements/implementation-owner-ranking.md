@@ -1,11 +1,23 @@
 # Implementation ownership in default code discovery
 
-Status: proposed. A first step is implemented behind the off-by-default
+Status: definition discovery implemented, evaluated and enabled by default on
+2026-10-04. Set `flags: { definition_discovery: false }` to compare the baseline.
+The new path admits
+published symbol metadata, combines definition BM25 with LateOn order, and
+selects the most specific query-matching definition within each file's
+existing slots. It retains one reranker call and the existing result budget.
+The [current results and limitations](reranker-owner-investigation.md#definition-discovery-engine)
+include recovery of the judged targets from the four replayed Colonist queries
+within ten visible results, with tracker judged by path. This is not a general
+recall guarantee. The cross-repository check preserved accepted owners within
+ten results, but includes two head-rank regressions and remaining retrieval misses.
+
+The earlier first step is implemented behind the off-by-default
 `neutral_owner_preference` search flag. A paired evaluation on clean
 `colonist-assistant` commit `40a7c12` did not restore the missing owners to the
 disclosed top 10; the flag remains off by default. A separate
 [`symbol_metadata_bm25` experiment](q5-retrieval-investigation.md#paired-result-of-the-metadata-experiment)
-now recovers the missing Q5 owners into the reranker, but they finish at ranks
+recovers the missing Q5 owners into the reranker, but alone they finish at ranks
 34 and 55 and remain undisclosed. It also stays off by default. Recorded 2026-10-03.
 
 The [consolidated investigation](reranker-owner-investigation.md) records the
@@ -25,9 +37,11 @@ behavior. Tests, callers, examples and explanatory comments remain useful
 evidence, but should not displace that boundary merely by describing it more
 fluently.
 
-This is a proposal about ranking authority, not a decision to remove LateOn,
-exclude all tests, or add a new response API. It needs a controlled evaluation
-before implementation is adopted.
+The implemented experiment retains LateOn as one ranking signal. Definitions
+receive a separate query-matching metadata signal; tests and fixtures retain
+their semantic evidence. Explicit test, documentation, configuration, reference
+and constrained-path requests bypass the experiment. Default adoption remains
+undecided because the cross-repository controls include ranking regressions.
 
 The qualification matters: ownership preference applies among relevant
 candidates. An unrelated production function must not outrank a directly

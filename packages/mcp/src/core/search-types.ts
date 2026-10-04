@@ -611,7 +611,7 @@ export interface SearchDebugHint {
         enabledByPolicy: boolean;
         skippedByScopeDocs: boolean;
         skippedByIdentifierIntent: boolean;
-        orderAuthority: "retrieval_order" | "reranker_order";
+        orderAuthority: import("./search-order-policy.js").SearchOrderAuthority;
         /** True when top scored hit is already an exact lexical pin / must-satisfied exact match. */
         skippedByExactPin?: boolean;
         capabilityPresent: boolean;

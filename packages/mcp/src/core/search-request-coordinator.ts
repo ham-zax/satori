@@ -140,9 +140,11 @@ import {
 } from "./search-rerank-document-routing.js";
 import {
     projectPublicationBoundSearchRerankDocument,
+    resolveCanonicalOwner,
     searchRerankCandidateId,
 } from "./search-rerank-projection.js";
 import type { SearchRerankProjectionResult } from "./search-rerank-projection-result.js";
+import { SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID } from "./search-order-policy.js";
 import {
     prepareSearchRerankStructuralRelationships,
     type PreparedSearchRerankStructuralRelationships,
@@ -1757,6 +1759,15 @@ export class SearchRequestCoordinator {
                     reranker: staleWhileSync ? null : this.reranker,
                     ...(!staleWhileSync && rerankerDocumentProjectionIdentity === SEARCH_RERANK_DOCUMENT_POLICY.id
                         ? {
+                            definitionMetadata: (result) => {
+                                if (!searchSymbolRegistry || navigationStatus !== "valid") return undefined;
+                                const owner = resolveCanonicalOwner(result, searchSymbolRegistry);
+                                if (owner?.file === result.relativePath) return owner;
+                                // Manifest-backed file fallback remains a file target.
+                                if (result.symbolKind !== "file") return undefined;
+                                return searchSymbolRegistry.symbolsByFile.get(result.relativePath)
+                                    ?.find(symbol => symbol.kind === "file");
+                            },
                             buildRerankDocument: async (
                                 rerankQuery: string,
                                 result: SearchResultLike,
@@ -2171,9 +2182,11 @@ export class SearchRequestCoordinator {
                         rerankerProjectionIdentity,
                         rerankerRequestIdentity,
                         rankingPolicyIdentity: resolveSearchRankingPolicyIdentity({
-                            orderAuthority: entry.rankedSetBinding.rerankerIdentity.kind === "provider"
-                                ? "reranker_order"
-                                : "retrieval_order",
+                            orderAuthority: entry.rankedSetBinding.rankingPolicyIdentity === SEARCH_DEFINITION_DISCOVERY_ORDER_POLICY_ID
+                                ? "definition_fusion_order"
+                                : entry.rankedSetBinding.rerankerIdentity.kind === "provider"
+                                    ? "reranker_order"
+                                    : "retrieval_order",
                         }),
                         orderedResults: entry.orderedResults,
                         recommendedActions: entry.recommendedActions,

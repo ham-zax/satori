@@ -18,7 +18,7 @@ const repo = { name: 'colonist-assistant', commit: '40a7c12' };
 const dir = path.join(reposDir, `${repo.name}@${repo.commit}`);
 const output = process.env.OWNER_PREFERENCE_EVAL_OUTPUT ?? path.join(os.tmpdir(), 'satori-neutral-owner-preference.json');
 const comparedFlag = process.env.OWNER_PREFERENCE_EVAL_FLAG ?? 'neutral_owner_preference';
-if (!['neutral_owner_preference', 'symbol_metadata_bm25'].includes(comparedFlag)) throw new Error(`Unsupported comparison flag: ${comparedFlag}`);
+if (!['neutral_owner_preference', 'symbol_metadata_bm25', 'definition_discovery'].includes(comparedFlag)) throw new Error(`Unsupported comparison flag: ${comparedFlag}`);
 const repeats = Number(process.env.OWNER_PREFERENCE_EVAL_REPEATS ?? 2);
 if (!Number.isInteger(repeats) || repeats < 2 || repeats > 3) throw new Error('Comparison requires two or three repeats per arm');
 
@@ -43,6 +43,8 @@ const missCases = [
     // A relevant execution guard, reported separately so it is not counted as noise.
     guards: [{ label: 'validatedClick', file: /src\/content\/action-guide\.ts$/, symbol: /\bvalidatedClick\b/, path: 'src/content/action-guide.ts', decl: /^\s*const validatedClick\b/ }],
   },
+  { id: 'focused_click', query: 'validate next click against current board legal targets', owners: [{ label: 'nextClickStillLegal', file: /src\/content\/overlay\.ts$/, symbol: /\bnextClickStillLegal\b/, path: 'src/content/overlay.ts', decl: /^\s*(?:private\s+)?nextClickStillLegal\s*\(/ }] },
+  { id: 'focused_legal', query: 'generate legal actions for the current game phase', owners: [{ label: 'legal_actions', file: /catan-core\/src\/state\.rs$/, symbol: /\blegal_actions\b/, path: 'engine/crates/catan-core/src/state.rs', decl: /\bfn legal_actions\s*\(/ }] },
 ];
 // Explicit intent must be identical with the flag off and on.
 const intentControls = [
@@ -52,7 +54,7 @@ const intentControls = [
   { id: 'path_trade', query: 'path:src/content/action-guide.ts trade workflow idempotent rejected bundle loop' },
 ];
 
-const runtimeFiles = ['packages/mcp/dist/core/search-flags.js', 'packages/mcp/dist/core/search-ranking-policy.js', 'packages/mcp/dist/core/search-execution.js', 'packages/mcp/dist/core/search-request-coordinator.js', 'packages/mcp/dist/core/search-symbol-metadata-bm25.js'];
+const runtimeFiles = ['packages/mcp/dist/core/search-flags.js', 'packages/mcp/dist/core/search-ranking-policy.js', 'packages/mcp/dist/core/search-execution.js', 'packages/mcp/dist/core/search-request-coordinator.js', 'packages/mcp/dist/core/search-symbol-metadata-bm25.js', 'packages/mcp/dist/core/search-definition-discovery.js', 'packages/mcp/dist/core/search-order-policy.js'];
 const runtimeHash = () => crypto.createHash('sha256').update(Buffer.concat(runtimeFiles.map(file => fs.readFileSync(path.join(root, file))))).digest('hex');
 const startedRuntimeHash = runtimeHash();
 const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-owner-preference-eval-'));
@@ -123,9 +125,10 @@ try {
   const search = async (query, enabled) => {
     const started = performance.now();
     const response = await session.call('search_codebase', {
-      path: dir, query, scope: 'runtime', resultMode: 'grouped', groupBy: 'symbol', limit: 20,
+      path: dir, query, scope: 'runtime', resultMode: 'grouped', groupBy: 'symbol', limit: 10,
       debugMode: 'full', debugCandidateLimit: 160,
-      flags: { ...DEFAULT_SEARCH_FLAGS, [comparedFlag]: enabled },
+      // Isolate the older pilots from the default engine, which reuses metadata admission.
+      flags: { ...DEFAULT_SEARCH_FLAGS, definition_discovery: false, [comparedFlag]: enabled },
     });
     if (response.isError || response.json?.status !== 'ok') throw new Error(`Search failed for "${query}": ${response.text.slice(0, 800)}`);
     const hits = response.json.results.map((raw, index) => {

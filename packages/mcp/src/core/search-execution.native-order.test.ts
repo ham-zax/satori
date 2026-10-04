@@ -328,6 +328,28 @@ test("neutral focus keeps provider order unless neutral_owner_preference is enab
     ]);
 });
 
+test("default definition discovery admits metadata candidates and fuses their definition evidence", async () => {
+    const rows = [candidate("src/noise.ts", 0.95)];
+    const recovered = { ...candidate("src/actions.ts", 0.1), symbolKind: "function", symbolLabel: "function tradeWorkflow" };
+    const input = buildInput("trade workflow rejected bundle loop");
+    let calls = 0;
+    const host = buildHost(rows, {
+        getIdentity: () => ({ provider: "voyage", model: "test", profile: "test" }),
+        rerank: async (_query, documents) => {
+            calls++;
+            return documents.map((_document, index) => ({ index, relevanceScore: 1 - index * 0.1 }));
+        },
+    });
+    host.symbolMetadataSearch = async () => [recovered];
+    host.definitionMetadata = result => ({ name: result.relativePath === "src/actions.ts" ? "tradeWorkflow" : "formatCurrency", qualifiedName: "", file: result.relativePath, kind: "function" });
+    const outcome = await run(input, host);
+    assert.equal(outcome.kind, "ok");
+    assert.equal(outcome.orderAuthority, "definition_fusion_order");
+    assert.equal(outcome.scored[0]?.result.relativePath, "src/actions.ts");
+    assert.ok(outcome.scored.find(entry => entry.result.relativePath === "src/actions.ts")?.retrievalPasses.includes("symbol_metadata_bm25"));
+    assert.equal(calls, 1);
+});
+
 test("symbol metadata BM25 is default-off and its enabled candidates reach fusion and reranking", async () => {
     const query = "click executor state signature legal target validation";
     const primary = candidate("src/content/action-guide.ts", 0.9);

@@ -47,7 +47,7 @@ export function sortNativeGroupedSearchResults<
     exactMatchPinningEnabled: boolean,
     orderAuthority: SearchOrderAuthority = "retrieval_order",
 ): boolean {
-    const shouldPinExactMatch = exactMatchPinningEnabled && orderAuthority !== "reranker_order";
+    const shouldPinExactMatch = exactMatchPinningEnabled && orderAuthority === "retrieval_order";
     const topWithoutPinning = results[0];
     results.sort((a, b) => {
         if (shouldPinExactMatch && a.__exactLexicalMatch !== b.__exactLexicalMatch) {

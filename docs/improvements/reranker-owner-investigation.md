@@ -1,25 +1,139 @@
 # Implementation-owner discovery: investigation and current decision
 
-Recorded 2026-10-03. This consolidates the Colonist investigation, the two
-default-off experiments, and the subsequent offline reranker labs. It
-supersedes the labs' intermediate recommendations where later evidence
-contradicted them. No default ranking repair has been demonstrated.
+Updated 2026-10-04. This consolidates the Colonist investigation, the two
+default-off experiments, the subsequent offline reranker labs and the default
+definition-discovery repair. It supersedes the labs' intermediate recommendations
+where later evidence contradicted them. The new path
+improves the measured Colonist discovery results and is enabled by default.
 
 ## Current decision
 
 - Keep `neutral_owner_preference` and `symbol_metadata_bm25` off by default.
-- Keep the current rerank query wrapper, JSON document projection and main
-  ranking. Wrapper removal, plain-text projection, blending and mechanical
-  split-query replacement each caused a measured regression.
+- Enable `definition_discovery` by default. An explicit
+  `flags: { definition_discovery: false }` restores the baseline for comparison.
+  Default adoption is a bounded engineering decision based on the measured
+  gains below, not a claim that every owner or query is solved.
+- Keep the current rerank query wrapper, JSON document projection and LateOn
+  model. Definition evidence now participates in ranking; wrapper removal,
+  plain-text projection, blending and mechanical split-query replacement are
+  not part of the repair.
 - Do not implement windowed supplemental discovery from these results. Under
   a fixed sixteen-result budget it added one strict owner in twenty-four
   development cases, at the final slot, while displacing other evidence.
-- The demonstrated retrieval improvement is the bounded symbol-metadata
-  arm's admission of two Q5 owners. Whether it generalizes, and how admitted
-  owners survive ranking and disclosure, remain separate open questions.
+- The definition engine combines that admission arm with independent
+  definition evidence and selection within a file. This now gets both Q5
+  owners through ranking and disclosure in the paired Colonist run below.
 
 The practical goal remains finding relevant implementation ownership. A
 production-path preference is insufficient evidence of that ownership.
+
+## Definition-discovery engine
+
+The repair separates three decisions that the earlier experiments mixed:
+
+1. **Admission:** reuse the bounded published-symbol BM25 arm to get definitions
+   into the candidate pool. Its existing hash, root, span, cancellation and
+   excerpt checks remain in force.
+2. **Ordering:** compute BM25 over names, qualified names and paths in the
+   source-validated rerank window, then fuse that rank with LateOn using the
+   existing RRF constant. Supporting test/fixture/docs/generated paths and
+   prose callback labels do not receive the extra implementation-definition
+   vote. They retain their provider evidence. A production path without a
+   metadata match receives no extra vote.
+3. **Selection within a file:** order candidates in that file's existing slots
+   by query-term coverage in their names/qualified names, with fused order as
+   the tie-breaker. This stops a file's generic helpers consuming its diversity
+   allowance before its specific matching definition. It does not raise the
+   result budget or move the file into another file's slots.
+
+The dedicated owner is `search-definition-discovery.ts`; the coordinator
+supplies publication-bound registry metadata. Cached tokenization checks a
+witness of all four metadata fields and invalidates on changed records.
+Conceptual, mixed and descriptive ownership queries can use the engine.
+Exact identifiers, explicit tests/docs/configuration/references, `must:` and
+path-constrained requests retain their established paths. There is still one
+LateOn request, with unchanged query/document projections and model assets.
+File fallbacks remain file targets; the engine does not invent symbol identity.
+
+The new `definition_fusion_order` has its own frozen ranking-policy identity.
+Grouping preserves its authoritative order, and continuation verification
+uses the frozen policy identity rather than assuming every provider-backed
+set has the old provider-only order.
+
+### Paired live Colonist results
+
+Clean commit `40a7c1261a2af2df901d8e85bcbd538306c66805`, publication
+`e5808ff0-2546-4f1b-9177-2b660269aa47`, symbol grouping, ten visible results,
+three alternating repeats per state. All result/stage orders agreed across
+repeats. These are live product results, not an offline best-rank upper bound.
+
+| Evidence | Engine disabled | Engine enabled |
+|---|---:|---:|
+| Tracker path evidence | 7 | 1 |
+| Exact `search_maxn` | 9 | 3 |
+| Exact `tradeWorkflow` | Outside ten | 2 |
+| Exact `nextClickStillLegal`, broad Q5 | Absent | 4 |
+| Exact `legal_actions`, broad Q5 | Absent | 8 |
+| Relevant guard `validatedClick` | 2 | 1 |
+| Focused click-legality owner | 1 | 1 |
+| Focused legal-action owner | 1 | 1 |
+
+All four explicit test/caller/configuration/path controls had identical
+results. Before selection within a file was added, trade reached grouped rank
+8 but was omitted by the diversity cap: `startWorkflow` and `WorkflowStep`
+consumed the file's slots. Fixing that selection boundary produced the final
+visible rank 2 without adding slots.
+
+The four broad queries' before/after latency medians were respectively
+2,539/2,571, 2,414/2,354, 3,043/3,084 and 3,274/3,326 ms. This repairs measured
+quality; natural-language latency still remains in seconds.
+
+### Cross-repository checks and adoption tradeoffs
+
+Sixteen paired development queries on clean pinned React, Polars and
+FlatBuffers publications preserved every previously visible accepted owner
+within ten results. React's missing-key owner moved 2→1, bailout owner 6→2,
+and hook-error owner 2→1; FlatBuffers' finish owner moved 5→1. There were also
+head regressions: React's setter owner moved 1→4 and Polars' CSV path evidence
+1→2. Both remained visible. Explicit React/Polars test questions were unchanged.
+
+This is a tradeoff, not universal superiority. Some oracles are path-only;
+named-symbol and file evidence must be reported separately. The initial
+FlatBuffers vector-start query bypassed the engine because it was routed as
+`ownership`; that descriptive route is now included. Three cases initially
+remained misses in both states, including two React behaviors. Definition
+metadata matches are relevance evidence, not proof of behavioral ownership;
+weak matches can still be promoted. A calling agent must read the returned
+owner and check its contract.
+
+The standalone `symbol_metadata_bm25` and `neutral_owner_preference`
+experiments remain disabled. The default engine reuses the metadata producer
+without enabling blanket path partitioning or adding another persistent
+index, dependency, model, LLM call, or multi-query protocol.
+
+### What the ten upstream repositories contributed
+
+The sources were inspected at pinned revisions. Their ideas were adapted;
+no upstream implementation was copied into Satori.
+
+| Repository | Relevant finding | Decision |
+|---|---|---|
+| [Vera](https://github.com/VeraTools/vera/blob/6cb92d553da58e35062c7ce7148830bc8c11fbaf/crates/vera-core/src/retrieval/ranking/score.rs) | Definition/name priors alongside semantic ranking; optional reranker | Adopt an independent definition signal; keep LateOn |
+| [Codelens](https://github.com/mupozg823/codelens-mcp-plugin/tree/212f33b964b82c8d46bbd407838234d0d4b77f14) | Per-symbol metadata fields and lexical/semantic lanes | Keep definition fields separate from chunk-body vocabulary; its BM25F weights were not copied |
+| [gortex](https://github.com/zzet/gortex/tree/5f1fc3837de42ce2ff561e79ecdd70bc6617c240) | Deterministic ownership/graph evidence and owner recovery | Use specific-owner selection; graph expansion needs separate evidence |
+| [ivygrep](https://github.com/bvolpato/ivygrep/tree/e9c48aa202d12c42a0b1737d489a08a471990dce) | Symbol anchors and learned file ranking | Relevant definition emphasis; do not import an unvalidated learned file policy |
+| [CodeNib](https://github.com/sysevol-ai/CodeNib/tree/4232ddfab2ee0cf08d1649d4e97fa416848873fd) | Graph expansion plus optional embedding/cross-encoder/LLM reranking | No demonstrated repair of this fixed-pool failure; no extra LLM dependency |
+| [kosha](https://github.com/vedicreader/kosha/tree/83d8eaf95e6ae0979cf4f91a783a0fac24b12303) | Optional FlashRank, definition/path boosts and saturation | Keep bounded selection; no evidence justifies a model swap |
+| [SeekStorm](https://github.com/SeekStorm/SeekStorm/tree/50cb0ddffe1e45eb574f927079d1bcffecf8980b) | BM25/vector hybrid retrieval and RRF | Already present in Satori; replacing storage does not repair ranking authority |
+| [supergrep](https://github.com/infino-ai/supergrep/tree/f6a6afd4189cd8a07e56852c9846ace5f231410b) | Hybrid code retrieval | No separate validated definition-owner repair to transplant |
+| [zvec-grep](https://github.com/zvec-ai/zvec-grep/tree/30c316052f4298ff6fac1e71f45ea40606e24723) | Hybrid/entity lanes; reranker placeholder | Useful representation ideas, not an implemented owner-ranking solution |
+| [Stella](https://github.com/macanderson/stella/tree/0ac4c0b63963b231459c0ac090d93bc0ef7d15d2) | Graph-assisted recall, MMR and budget packing | No measured reason to replace this selection policy or copy its AGPL source |
+
+Independent graph expansion, learned weights and model replacement were not
+added because the measured fix lies in admission, ranking authority and
+selection. Breaking internal interfaces was permitted; compatibility did not
+prevent changes. Robustness still requires bounded work, current-publication
+source proof, correct canonical IDs and working frozen-result continuation.
 
 ## Problem and why it matters to a coding agent
 
@@ -210,16 +324,17 @@ work withdrew the former and weakened the latter:
   definitive causal decomposition. A constant additive offset cannot compress
   absolute score gaps or change order. The original incidental-boilerplate
   explanation is unsupported by this analysis.
-- On eighteen React/Polars pools, removing either wrapper form changed the
-  permissive top-1/top-10 counts from 5/11 to 4/10. These were file/module
-  fallback counts, not strict-symbol successes. The regression still argues
-  against removal, and the query projection is versioned and hash-pinned in
-  runtime assets; changing it is more than editing one template.
+- The eighteen-pool wrapper experiment reported permissive top-1/top-10
+  counts of 5/11 versus 4/10. Its matcher did not normalize symbol-kind
+  prefixes, so those totals omit real named-owner matches and cannot support
+  a strict-symbol quality conclusion. The alternative-query orders were not
+  retained for a corrected recount. Wrapper removal remains unadopted; the
+  existing projection is versioned and hash-pinned in runtime assets.
 
-Replacing the ranking with mechanically split score sums also regressed
-React's fallback top-10 count from three to one or two, depending on the arm.
-Plain-text projection regressed trade; blend regressed a focused legal-action
-control. None is a supported default change.
+The earlier React split-query totals share the same oracle limitation and
+must be rescored before claiming a strict-symbol regression. Plain-text
+projection regressed trade; blend regressed a focused legal-action control.
+None is adopted as the repair.
 
 ## Windows: promising upper bounds did not survive an output budget
 
@@ -249,7 +364,7 @@ policy, independently of its weak recovery result.
 | Target or control | A: sixteen baseline documents | B: two-word windows | B: three-word windows |
 |---|---|---|---|
 | Tracker path evidence | 8 | 8 | 8 |
-| `search_maxn` | 13 | 11 | 11 |
+| `search_maxn`, exact wrapper | 13 | 14 | Absent |
 | `tradeWorkflow` | Absent | Absent | Absent |
 | `nextClickStillLegal`, broad Q5 | Absent | Absent | 16 |
 | `legal_actions`, broad Q5 | Absent | Absent | Absent |
@@ -257,8 +372,9 @@ policy, independently of its weak recovery result.
 | Both focused Q5 owners | 1 in their respective queries | 1 | 1 |
 
 Two-word windows added no owner beyond A on any of the twenty-four cases.
-Three-word windows added exactly one: NCL at slot 16. MaxN at slot 11 is
-reprioritization of an already visible A result, not new recovery. React and
+Three-word windows added exactly one: NCL at slot 16. The reported MaxN at
+slot 11 was `search_maxn_bounded`, incorrectly accepted by a substring
+oracle; the exact wrapper regresses under the three-word policy. React and
 Polars had no additional oracle successes. B displaced three to six of A's
 documents per case. The sampled Q5 supplements included relevant neighbors
 as well as unrelated material; every non-owner is not automatically noise.
@@ -269,14 +385,18 @@ No multi-query protocol, grouping API or default ranking change was implemented.
 
 ### Metric corrections and replication limits
 
-- In the eighteen React/Polars captures, none of the canonical labels matched
-  a named-symbol oracle. The successful permissive matches were file/module
-  documents. Some cases have path-only oracles and cannot measure strict-symbol
-  recall at all. File evidence can still contain useful implementation text;
-  its presence does not establish a navigable symbol target.
-- Under the permissive whole-pool matcher, React r1/r4/r5/r8 and Polars p3
-  have no match. React r3 and r9 have matches at ranks 21 and 20. The earlier
-  statement that all seven top-ten misses were retrieval misses was wrong.
+- The earlier claim of zero named owners was incorrect. Labels such as
+  `method legal_actions` and `function dispatchSetStateInternal` require
+  kind-prefix normalization. The repository's official `normalizeHit` and
+  `scoreQuery` already perform it. A corrected audit finds named owners in
+  eight of the eighteen pools; nine cases have named-symbol oracles, while
+  the remaining nine have path-only oracles.
+- In the captured baseline, React r2's owner is rank 4, r4 has accepted
+  symbols at 2 and 7, r5 at 2, r8 at 18, and r9 at 4/5. React r3's
+  `areHookInputsEqual` is present at 41. Polars p8's `to_numpy` is at 19,
+  and p9's `NotebookFormatter` is at 1. React r1 and Polars p3 remain actual
+  whole-pool misses. These distinguish admission loss from ranking loss;
+  they do not imply every other repository target was admitted.
 - The all-window replica matched captured scores within about `6.25e-7` and
   top-ten order in all twenty-four cases. Follow-up 3's saved scores were
   rounded to four decimals: their maximum reported difference is about
@@ -284,7 +404,7 @@ No multi-query protocol, grouping API or default ranking change was implemented.
   Top-sixteen sets agree. These are distinct fidelity checks, not an exact
   full-pipeline replay claim.
 
-## Cost and remaining work
+## Historical lab costs and unresolved coverage
 
 Document encoding dominated the offline replica. On the eighty-eight-document
 Q5 pool, the initial measurement spent about 4,134 ms encoding documents,
@@ -298,14 +418,15 @@ in-process measurements, not production-worker latency or a validated memory
 bound. A production multi-query design would still need protocol and lifecycle
 work; the observed quality gain does not justify it.
 
-If discovery work resumes, first evaluate admission of verified symbol targets
+The default repair above was subsequently evaluated on paired live Colonist
+queries and sixteen cross-repository development queries. Held-out admission
+coverage remains unverified. Further quality claims would require verified symbol targets
 on held-out queries/repos, including whether the metadata arm generalizes.
 Measure strict-symbol presence, identity preservation and actual budgeted
 disclosure separately from file evidence. Retain broad Q5, its focused
 controls, explicit test/configuration/reference questions, and cases where
-reranking already helps. No held-out test or metadata generalization result
-exists in this lab, and admission alone will not fix Q5's demonstrated
-reranker demotions.
+reranking already helps. Admission alone did not fix Q5's demonstrated
+reranker demotions; the default engine also changes ordering and selection.
 
 ## Evidence, verification and reproduction
 
@@ -317,6 +438,20 @@ They require a clean pinned Colonist checkout and a fresh built runtime;
 use an isolated temporary index and compare flag states on one publication.
 See the [Q5 paired-result instructions](q5-retrieval-investigation.md#paired-result-of-the-metadata-experiment).
 
+To reproduce the definition-engine comparison after building the runtime:
+
+```bash
+OWNER_PREFERENCE_EVAL_FLAG=definition_discovery \
+OWNER_PREFERENCE_EVAL_REPEATS=3 \
+OWNER_PREFERENCE_EVAL_OUTPUT=/tmp/satori-definition-discovery.json \
+node evals/real-repo-quality/neutral-owner-preference-ablation.mjs
+```
+
+The harness explicitly disables the default engine before setting the compared
+flag. This keeps the older metadata and role-preference ablations isolated;
+otherwise default metadata admission would make the older retrieval comparison
+a no-op.
+
 The later lab scripts and raw captures remain local, unversioned artifacts:
 
 | Artifact | Purpose |
@@ -326,6 +461,9 @@ The later lab scripts and raw captures remain local, unversioned artifacts:
 | `/tmp/rerank-lab/followup/REPORT.md`, `f2.json`, `f3.json`, `f5-scores.json` | Random splits, token analysis, cross-repo wrapper checks |
 | `/tmp/rerank-lab/followup2/split-sum.json`, `windows-best.json` | Twenty-four-pool replacement and all-window diagnostics |
 | `/tmp/rerank-lab/followup3/REPORT.md`, `eval.json`, `rankings/`, `timing.json` | Budgeted supplementation, per-query orders and offline timings |
+| `/tmp/satori-upstream-research-20261004/live-definition-final.json` | Three-repeat paired Colonist product results and latency medians |
+| `/tmp/satori-upstream-research-20261004/cross-repo-check.json` | Sixteen paired development queries, with separate accepted and strict-symbol oracles |
+| `/tmp/satori-upstream-research-20261004/default-live-check.json` | Actual default versus explicit opt-out, plus continuation in default and full debug modes |
 
 This document preserves the numerical findings and corrections without
 requiring those temporary files. The labs are not yet a portable committed
@@ -333,10 +471,25 @@ benchmark. Their twenty-four cases are reused development data, not held-out
 validation. Handwritten facets and the author's prior exposure limit claims
 of blind evaluation. Earlier live probes also used different source witnesses.
 
-The experimental source passed sixty distinct focused tests covering scoring,
+The earlier experimental source passed sixty distinct focused tests covering scoring,
 filters, cache witnesses, cancellation, source hashes, UTF8/CRLF byte spans,
 fusion wiring, default-off behavior and canonical grouping. Changed-source lint,
 runtime build/typecheck and both harness syntax checks passed. A disposable
 cache-witness mutation failed its regression test as expected. Later lab reviews
-changed no implementation. No watcher/index-stability repair, model change,
+changed no implementation.
+
+The final default engine passed 113 focused tests covering its policy and wiring,
+native reranking, source validation, cache witnesses, order identity, grouping
+and continuation storage. Changed-source lint, runtime build/typecheck, package
+scope validation and harness syntax checks passed. A fresh live run omitted
+flags entirely for the enabled arm: trade was rank 2, broad Q5 owners were
+ranks 4 and 8, and the FlatBuffers Finish symbol was rank 1. Continuation
+returned the next ten results with the same ranked-set digest, both with debug
+omitted and with full debug. The initial cross-repo continuation probe supplied
+an invalid `debugMode: "none"`; this harness error was corrected in the final
+live run by omitting debug mode. All owned index state and processes were
+cleaned up. The FlatBuffers vector-start query still missed after the ownership
+route was enabled; definition admission and fusion are not a coverage guarantee.
+
+No watcher/index-stability repair, model change,
 wrapper removal or windowed product feature is part of this work.

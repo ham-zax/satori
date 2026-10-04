@@ -44,7 +44,7 @@ function splitIdentifierComponents(token: string): string[] {
  * lowercased. Query and document sides share this tokenizer so split-name
  * queries meet split-name metadata without any source-body vocabulary.
  */
-function tokenizeMetadataField(value: string): string[] {
+export function tokenizeMetadataField(value: string): string[] {
     const terms: string[] = [];
     for (const token of value.match(IDENTIFIER_TOKEN_PATTERN) ?? []) {
         const original = token.toLowerCase();

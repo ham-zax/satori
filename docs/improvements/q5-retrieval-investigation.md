@@ -1,8 +1,15 @@
 # Q5: recovering the owners behind click validation
 
-Status: bounded investigation completed. A symbol-metadata BM25 retrieval
-experiment is implemented behind the off-by-default `symbol_metadata_bm25`
-flag. It recovers both missing Q5 candidates but does not improve the disclosed
+Status: retrieval and ranking repair implemented as `definition_discovery` and
+enabled by default on 2026-10-04. In a paired live run on one clean Colonist publication,
+`nextClickStillLegal` and `legal_actions` move from absent in the visible ten
+to ranks 4 and 8; `validatedClick` remains visible at rank 1. Both narrower
+legality queries retain their owner at rank 1. See the
+[engine results and limits](reranker-owner-investigation.md#definition-discovery-engine).
+
+The earlier symbol-metadata BM25 retrieval
+experiment, behind the off-by-default `symbol_metadata_bm25` flag,
+recovers both missing Q5 candidates but alone does not improve the disclosed
 answers; callback-based recovery remains a proposal.
 Recorded 2026-10-03. Complements
 [implementation ownership in discovery](implementation-owner-ranking.md).

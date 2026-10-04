@@ -30,6 +30,8 @@ export type SearchFlags = {
     neutral_owner_preference?: boolean;
     /** Adds a bounded published-symbol metadata BM25 arm before reranking. Experimental; off by default. */
     symbol_metadata_bm25?: boolean;
+    /** Default definition metadata admission and fusion; disable explicitly for baseline comparison. */
+    definition_discovery?: boolean;
 };
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
@@ -43,6 +45,7 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     rerank_blend: false,
     neutral_owner_preference: false,
     symbol_metadata_bm25: false,
+    definition_discovery: true,
 };
 
 /**

@@ -735,7 +735,7 @@ export function buildVisibleGroupedSearchResults(input: {
 
     for (const group of groups.values()) {
         const exactMatchPinningApplies = input.queryPlan.exactMatchPinningEnabled
-            && input.orderAuthority !== "reranker_order";
+            && input.orderAuthority === "retrieval_order";
         const orderedChunks = [...group.chunks].sort((a, b) => {
             if (
                 exactMatchPinningApplies

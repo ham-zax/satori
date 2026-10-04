@@ -33,6 +33,9 @@ import type {
 } from "./search-types.js";
 import type { EntrypointOwnerEvidenceResolution } from "./entrypoint-owner-evidence.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
+import { allowsDefinitionDiscovery, fuseDefinitionDiscovery, type DefinitionDiscoveryMetadata } from "./search-definition-discovery.js";
+import type { SearchOrderAuthority } from "./search-order-policy.js";
+export type { SearchOrderAuthority } from "./search-order-policy.js";
 import type { SearchRerankQueryProjectionIdentity } from "./search-rerank-query-routing.js";
 import {
     appendCoreCandidateTrace,
@@ -107,7 +110,6 @@ import { resolveSearchAltTerms, type ResolvedSearchAltTerms } from "./search-exp
 type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
 type ChangedFilesState = { available: boolean; files: Set<string> };
-export type SearchOrderAuthority = "retrieval_order" | "reranker_order";
 const SEARCH_EXPANSION_MIN_PRIMARY_SCOPED_CANDIDATES = 5;
 const LATEON_OPERATIONAL_REASONS = new Set<SearchRerankerOperationalReason>([
     "lateon_not_ready",
@@ -508,6 +510,7 @@ export type SearchExecutionHost = {
     reranker: Reranker | null;
     supplementCandidates?: (candidates: readonly SearchResultLike[]) => Promise<SearchResultLike[]>;
     symbolMetadataSearch?: () => Promise<SearchResultLike[]>;
+    definitionMetadata?: (result: SearchResultLike) => DefinitionDiscoveryMetadata | undefined;
     buildRerankDocument?: (
         rerankQuery: string,
         result: SearchResultLike,
@@ -910,7 +913,24 @@ async function rerankSearchCandidates(
                 });
                 const executionFlags = resolveSearchFlags(input.flags);
                 let itemsForPolicy = [...validatedItems];
-                if (executionFlags.rerank_blend) {
+                let definitionFusionApplied = false;
+                if (allowsDefinitionDiscovery({
+                    enabled: executionFlags.definition_discovery === true,
+                    queryPlan: input.queryPlan,
+                    answerFocus: input.answerFocus,
+                    scope: input.scope,
+                    hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
+                    hasMustConstraint: input.parsedOperators.must.length > 0,
+                }) && host.definitionMetadata) {
+                    const fusion = fuseDefinitionDiscovery({
+                        items: validatedItems,
+                        query: input.semanticQuery,
+                        metadata: index => host.definitionMetadata!(rerankSlice[index]!.result),
+                    });
+                    itemsForPolicy = fusion.items;
+                    definitionFusionApplied = fusion.applied;
+                }
+                if (executionFlags.rerank_blend && !definitionFusionApplied) {
                     // originalIndex indexes rerankSlice, not the full fused pool,
                     // so these are ranks WITHIN the rerank window. The blend
                     // therefore weighs the provider rank against the candidate's
@@ -947,7 +967,7 @@ async function rerankSearchCandidates(
                     candidate.rerankAdjusted = true;
                 }
                 scored.splice(0, scored.length, ...reordered);
-                orderAuthority = "reranker_order";
+                orderAuthority = definitionFusionApplied ? "definition_fusion_order" : "reranker_order";
                 rerankerApplied = validatedItems.length > 0;
                 if (candidateSurvival) {
                     appendSearchCandidateStage(
@@ -1703,9 +1723,17 @@ export async function runSearchExecution(
                     };
         }
 
-        if (flags.symbol_metadata_bm25 && host.symbolMetadataSearch
+        const definitionMetadataEnabled = host.definitionMetadata && allowsDefinitionDiscovery({
+            enabled: flags.definition_discovery === true,
+            queryPlan: input.queryPlan,
+            answerFocus: input.answerFocus,
+            scope: input.scope,
+            hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
+            hasMustConstraint: input.parsedOperators.must.length > 0,
+        });
+        if ((flags.symbol_metadata_bm25 || definitionMetadataEnabled) && host.symbolMetadataSearch
             && !publicationOnlyStaleRead && input.scope !== "docs"
-            && (input.queryPlan.route.kind === "conceptual" || input.queryPlan.route.kind === "mixed")
+            && (input.queryPlan.route.kind === "conceptual" || input.queryPlan.route.kind === "mixed" || definitionMetadataEnabled)
             && !input.queryPlan.testSeeking && !input.queryPlan.documentationSeeking
             && !input.queryPlan.referenceSeeking && input.parsedOperators.must.length === 0
             && input.parsedOperators.path.length === 0 && input.requestedSubdirectory == null) {

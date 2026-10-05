@@ -350,6 +350,34 @@ test("default definition discovery admits metadata candidates and fuses their de
     assert.equal(calls, 1);
 });
 
+test("default definition alt_terms admit and fuse owners the query vocabulary cannot reach", async () => {
+    const rows = [candidate("src/noise.ts", 0.95)];
+    const recovered = { ...candidate("src/effects.ts", 0.1), symbolKind: "function", symbolLabel: "function commitHookEffectListUnmount" };
+    const runWith = async (flags: Record<string, boolean>) => {
+        const input = { ...buildInput("trade workflow cleanup loop", flags), alt_terms: ["commitHookEffectListUnmount"] };
+        const host = buildHost(rows, {
+            getIdentity: () => ({ provider: "voyage", model: "test", profile: "test" }),
+            rerank: async (_query, documents) => documents.map((_document, index) => ({ index, relevanceScore: 1 - index * 0.1 })),
+        });
+        const metadataQueries: Array<string | undefined> = [];
+        host.symbolMetadataSearch = async query => {
+            metadataQueries.push(query);
+            return query?.includes("commitHookEffectListUnmount") ? [recovered] : [];
+        };
+        host.definitionMetadata = result => ({ name: result.relativePath === "src/effects.ts" ? "commitHookEffectListUnmount" : "formatCurrency", qualifiedName: "", file: result.relativePath, kind: "function" });
+        return { outcome: await run(input, host), metadataQueries };
+    };
+    const enabled = await runWith({});
+    assert.equal(enabled.outcome.kind, "ok");
+    assert.deepEqual(enabled.metadataQueries, [undefined, "commitHookEffectListUnmount"]);
+    assert.equal(enabled.outcome.scored[0]?.result.relativePath, "src/effects.ts");
+    assert.ok(enabled.outcome.scored[0]?.retrievalPasses.includes("symbol_metadata_bm25_alt"));
+    const disabled = await runWith({ definition_alt_terms: false });
+    assert.equal(disabled.outcome.kind, "ok");
+    assert.deepEqual(disabled.metadataQueries, [undefined]);
+    assert.ok(!disabled.outcome.scored.some(entry => entry.retrievalPasses.includes("symbol_metadata_bm25_alt")));
+});
+
 test("symbol metadata BM25 is default-off and its enabled candidates reach fusion and reranking", async () => {
     const query = "click executor state signature legal target validation";
     const primary = candidate("src/content/action-guide.ts", 0.9);

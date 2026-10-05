@@ -32,6 +32,13 @@ export type SearchFlags = {
     symbol_metadata_bm25?: boolean;
     /** Default definition metadata admission and fusion; disable explicitly for baseline comparison. */
     definition_discovery?: boolean;
+    /**
+     * Feeds caller alt_terms into definition admission and fusion. On by
+     * default; it only acts when the caller supplies alt_terms.
+     */
+    definition_alt_terms?: boolean;
+    /** Attaches caller alt_terms to the reranker question. Experimental switch for the wrong-terms control. */
+    rerank_alt_terms?: boolean;
 };
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
@@ -46,6 +53,8 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     neutral_owner_preference: false,
     symbol_metadata_bm25: false,
     definition_discovery: true,
+    definition_alt_terms: true,
+    rerank_alt_terms: true,
 };
 
 /**

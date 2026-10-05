@@ -22,7 +22,10 @@ ownership, behavior location, or related implementation is not yet known.
    use the returned `codebaseRoot` afterwards.
 2. `search_codebase` with a plain-language description of the behavior. Switch
    to exact identifiers, error codes, or `path:`/`lang:`/`must:` prefixes only
-   for proof lookups.
+   for proof lookups. When the description uses words the code likely does
+   not, also pass up to 4 likely identifiers or code terms in `alt_terms`
+   (e.g. `["destroy", "unmount"]` for "cleanup of useEffect"). Keep them
+   grounded in the question; unrelated terms can rank worse than none.
 3. Follow `recommendedNextAction`. It is the ranked next proof step, usually a
    canonical `read_file` request. Do not invent spans.
 4. Use `continue_search` only with a returned continuation handle and its exact

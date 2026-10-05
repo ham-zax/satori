@@ -509,7 +509,7 @@ export type SearchExecutionHost = {
     }) => Promise<SemanticSearchResult[] | SemanticSearchExecutionResult>;
     reranker: Reranker | null;
     supplementCandidates?: (candidates: readonly SearchResultLike[]) => Promise<SearchResultLike[]>;
-    symbolMetadataSearch?: () => Promise<SearchResultLike[]>;
+    symbolMetadataSearch?: (query?: string) => Promise<SearchResultLike[]>;
     definitionMetadata?: (result: SearchResultLike) => DefinitionDiscoveryMetadata | undefined;
     buildRerankDocument?: (
         rerankQuery: string,
@@ -922,9 +922,11 @@ async function rerankSearchCandidates(
                     hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
                     hasMustConstraint: input.parsedOperators.must.length > 0,
                 }) && host.definitionMetadata) {
+                    const definitionAltTerms = executionFlags.definition_alt_terms
+                        ? (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted : [];
                     const fusion = fuseDefinitionDiscovery({
                         items: validatedItems,
-                        query: input.semanticQuery,
+                        query: [input.semanticQuery, ...definitionAltTerms].join(" "),
                         metadata: index => host.definitionMetadata!(rerankSlice[index]!.result),
                     });
                     itemsForPolicy = fusion.items;
@@ -1748,6 +1750,20 @@ export async function runSearchExecution(
             }
             addPass(metadataResults, "symbol_metadata_bm25", 1);
             passesUsed.add("symbol_metadata_bm25");
+            // A separate pass, so caller terms cannot displace owners the
+            // primary query admitted from the bounded metadata window.
+            if (flags.definition_alt_terms && callerAltTerms.length > 0) {
+                const altMetadataResults = await host.measureSearchPhase("trackedLexical", () => (
+                    host.symbolMetadataSearch!(callerAltTerms.join(" "))
+                ));
+                input.signal?.throwIfAborted();
+                if (candidateSurvival) {
+                    appendSearchCandidatePass(candidateSurvival, altMetadataResults,
+                        `attempt:${attempt + 1}/symbol_metadata_bm25_alt`, 1);
+                }
+                addPass(altMetadataResults, "symbol_metadata_bm25_alt", 1);
+                passesUsed.add("symbol_metadata_bm25");
+            }
             attemptFilterSummary = buildEmptyFilterSummary();
             evaluateAllCandidates();
         }

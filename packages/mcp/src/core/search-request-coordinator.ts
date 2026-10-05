@@ -1659,7 +1659,9 @@ export class SearchRequestCoordinator {
                     focusedQueryV2: buildSearchRerankQuery({
                         semanticQuery: parsedOperators.semanticQuery,
                         answerFocus,
-                        callerTerms: resolvedAltTerms.termsEmitted,
+                        callerTerms: resolveSearchFlags(input.flags).rerank_alt_terms
+                            ? resolvedAltTerms.termsEmitted
+                            : [],
                     }),
                     projectionIdentity: this.reranker?.getQueryProjectionVersion?.(),
                 });
@@ -1709,13 +1711,13 @@ export class SearchRequestCoordinator {
                     ...(input.reservation_policy !== undefined ? { reservation_policy: input.reservation_policy } : {}),
                 }, {
                     searchQuerySupport: this.searchQuerySupport,
-                    symbolMetadataSearch: async () => {
+                    symbolMetadataSearch: async (query = parsedOperators.semanticQuery) => {
                         if (!searchSymbolRegistry || !searchSymbolRegistryManifestHash
                             || freshnessDecision.mode === "served_previous_generation") return [];
                         return retrieveSymbolMetadataBm25Candidates({
                             registry: searchSymbolRegistry,
                             registryManifestHash: searchSymbolRegistryManifestHash,
-                            query: parsedOperators.semanticQuery,
+                            query,
                             codebaseRoot: effectiveRoot,
                             accepts: vocabularyFilter,
                             ...(signal ? { signal } : {}),

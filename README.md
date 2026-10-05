@@ -70,7 +70,7 @@ If you are a coding agent setting up or using Satori, follow these steps.
 **Use**
 
 1. Call `list_codebases`. If the repository is not indexed, call `manage_index` with `action="create"` and the repository's absolute `path`. Indexing runs in the background; check it with `action="status"`.
-2. Start every "where is…", "what owns…", or "what calls…" question with `search_codebase`.
+2. Start every "where is…", "what owns…", or "what calls…" question with `search_codebase`. For plain-English questions, pass up to 4 likely code identifiers or terms in `alt_terms`.
 3. Follow `recommendedNextAction` when it is returned. Use `file_outline` to pick a symbol, and `call_graph` or `trace_path` for relationships.
 4. Read the exact code with `read_file` before you claim anything or edit.
 5. After editing files, call `manage_index` with `action="sync"` when you need fresh results.
@@ -141,6 +141,18 @@ Satori combines embeddings with BM25 and exact matches, maps hits to the symbols
 | + LateOn reranking (depth 32) | **0.39** | **0.64** | **0.50** |
 
 Tuning-set results, measured on an earlier prompt projection; the held-out run is still pending. [Evidence and limits](docs/evidence/lateon-quality-20260804/). On the current build (budget 64), baseline reaches 0.44 owner@1 and 0.78 owner@10 across 18 judged real-repo tasks.
+
+On the current default (LateOn reranking plus definition fusion, which runs only with reranking), 19 named-symbol questions across 4 repositories went from 4 to 13 owners at rank 1 against no reranker; owner in the top 10 stayed at 15 either way. [Corrected comparison](docs/improvements/reranker-owner-investigation.md).
+
+**Plain-English questions.** 46 conceptual questions over React, Polars, and FlatBuffers ("cleanup of useEffect" → `commitHookEffectListUnmount`). Agents can pass up to 4 code-vocabulary guesses in `alt_terms`; Satori searches them as separate passes, including definitions, and fuses them with the original question:
+
+| `alt_terms` | Owner at 1 | Owner in top 10 | Median request |
+|---|---:|---:|---:|
+| None | 8 | 16 | 2.7 s |
+| The agent's own guesses | **16** | **34** | 2.9 s |
+| Another question's guesses (stress test) | 1 | 8 | 2.8 s |
+
+Tuning set with seven labels corrected to the pinned commits. Wrong guesses cost more than none; fixes that limited that cost also cost owners with good guesses, so they were rejected. [Details](docs/improvements/agent-alt-terms-definition-discovery.md).
 
 **Search latency.** Measured on React (6,918 files, 36,233 chunks) with the offline CPU stack:
 

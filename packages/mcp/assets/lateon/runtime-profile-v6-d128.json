@@ -90,11 +90,11 @@
   },
   "execution": {
     "workerProcesses": 1,
-    "activeModelSessions": 1,
+    "activeModelSessions": "host_adaptive",
     "executionMode": "sequential",
     "graphOptimizationLevel": "all",
     "queryBatchSize": 1,
-    "documentEncoding": "serial",
+    "documentEncoding": "parallel_sessions",
     "tokenizerParallelism": false,
     "aggregateRequestTokenLimit": 262400,
     "padding": "none_single_sequence",

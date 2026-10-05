@@ -66,11 +66,11 @@ export type LateOnRuntimeProfileV6 = LateOnRuntimeProfileBase & Readonly<{
     }>;
     execution: Readonly<{
         workerProcesses: 1;
-        activeModelSessions: 1;
+        activeModelSessions: "host_adaptive";
         executionMode: "sequential";
         graphOptimizationLevel: "all";
         queryBatchSize: 1;
-        documentEncoding: "serial";
+        documentEncoding: "parallel_sessions";
         tokenizerParallelism: false;
         aggregateRequestTokenLimit: number;
         padding: "none_single_sequence";
@@ -87,6 +87,7 @@ export type LateOnWorkerRequest =
         type: "initialize";
         modelDirectory: string;
         profile: LateOnRuntimeProfile;
+        encoderSessions: number;
         intraOpThreads: number;
     }>
     | Readonly<{
@@ -117,3 +118,28 @@ export type LateOnWorkerResponse =
         requestId?: number;
         message: string;
     }>;
+
+// Messages between the worker process and its encoder threads. Each encoder
+// thread owns one model session and runs one job at a time.
+export type LateOnEncoderRequest =
+    | Readonly<{
+        type: "initialize";
+        modelDirectory: string;
+        profile: LateOnRuntimeProfile;
+        intraOpThreads: number;
+    }>
+    | Readonly<{
+        type: "encode_query";
+        text: string;
+    }>
+    | Readonly<{
+        type: "score_document";
+        text: string;
+        queryVectors: readonly number[][];
+    }>;
+
+export type LateOnEncoderResponse =
+    | Readonly<{ type: "ready" }>
+    | Readonly<{ type: "query"; vectors: number[][]; tokenCount: number }>
+    | Readonly<{ type: "scored"; relevanceScore: number; tokenCount: number }>
+    | Readonly<{ type: "error"; message: string }>;

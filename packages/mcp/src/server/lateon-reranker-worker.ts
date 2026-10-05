@@ -2,40 +2,28 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import * as transformers from "@huggingface/transformers";
-import * as onnxRuntime from "onnxruntime-node";
+import { Worker } from "node:worker_threads";
 import type {
+    LateOnEncoderRequest,
+    LateOnEncoderResponse,
     LateOnRuntimeProfile,
     LateOnWorkerRequest,
     LateOnWorkerResponse,
 } from "./lateon-reranker-protocol.js";
 
-type TokenizedInput = Readonly<{
-    input_ids: Readonly<{
-        data: BigInt64Array;
-        dims: readonly number[];
-    }>;
-    attention_mask: Readonly<{
-        data: BigInt64Array;
-        dims: readonly number[];
-    }>;
-}>;
-
-type EncodedText = Readonly<{
-    vectors: readonly number[][];
-    tokenCount: number;
+type Encoder = Readonly<{
+    request: (message: LateOnEncoderRequest) => Promise<LateOnEncoderResponse>;
+    terminate: () => Promise<number>;
 }>;
 
 type RuntimeState = Readonly<{
     profile: LateOnRuntimeProfile;
-    tokenizer: (
-        text: string,
-        options: { truncation: boolean; max_length: number },
-    ) => TokenizedInput;
-    session: onnxRuntime.InferenceSession;
+    encoders: readonly Encoder[];
 }>;
 
 let runtime: RuntimeState | null = null;
+let encoders: readonly Encoder[] = [];
+let shuttingDown = false;
 let operation: Promise<void> = Promise.resolve();
 
 function send(message: LateOnWorkerResponse): void {
@@ -74,96 +62,56 @@ function assertArtifacts(profile: LateOnRuntimeProfile, modelDirectory: string):
     }
 }
 
-function normalizeVector(vector: number[]): number[] {
-    let squaredNorm = 0;
-    for (const value of vector) squaredNorm += value * value;
-    const norm = Math.sqrt(squaredNorm);
-    if (!Number.isFinite(norm) || norm === 0) {
-        throw new Error("LateOn emitted a non-normalizable token vector.");
-    }
-    return vector.map((value) => value / norm);
-}
-
-function maxSimScore(queryVectors: readonly number[][], documentVectors: readonly number[][]): number {
-    if (queryVectors.length === 0 || documentVectors.length === 0) return 0;
-    let score = 0;
-    for (const queryVector of queryVectors) {
-        let maximum = Number.NEGATIVE_INFINITY;
-        for (const documentVector of documentVectors) {
-            let dotProduct = 0;
-            for (let dimension = 0; dimension < queryVector.length; dimension++) {
-                dotProduct += queryVector[dimension] * documentVector[dimension];
-            }
-            maximum = Math.max(maximum, dotProduct);
+function startEncoder(): Encoder {
+    const thread = new Worker(new URL("./lateon-reranker-encoder.js", import.meta.url));
+    let pending: Readonly<{
+        resolve: (response: LateOnEncoderResponse) => void;
+        reject: (error: Error) => void;
+    }> | null = null;
+    // An encoder that dies mid-run leaves the pool in an unknown state; the parent
+    // treats this process exit as a worker failure and starts a fresh worker.
+    const abandon = (): void => {
+        if (!shuttingDown) process.exit(1);
+    };
+    thread.once("error", abandon);
+    thread.once("exit", abandon);
+    thread.on("message", (response: LateOnEncoderResponse) => {
+        const current = pending;
+        pending = null;
+        if (!current) {
+            abandon();
+            return;
         }
-        score += maximum;
-    }
-    return score;
+        if (response.type === "error") {
+            current.reject(new Error(response.message));
+        } else {
+            current.resolve(response);
+        }
+    });
+    return {
+        request: (message) => new Promise((resolve, reject) => {
+            if (pending) {
+                reject(new Error("LateOn encoder received overlapping jobs."));
+                return;
+            }
+            pending = { resolve, reject };
+            thread.postMessage(message);
+        }),
+        terminate: () => thread.terminate(),
+    };
 }
 
-async function encodeText(
-    state: RuntimeState,
-    text: string,
-    isQuery: boolean,
-): Promise<EncodedText> {
-    const { inference } = state.profile;
-    const normalizedText = inference.lowercase ? text.toLowerCase() : text;
-    const tokenized = state.tokenizer(
-        `${isQuery ? inference.queryPrefix : inference.documentPrefix}${normalizedText}`,
-        {
-            truncation: true,
-            max_length: isQuery
-                ? inference.queryTokenLimit
-                : inference.documentTokenLimit,
-        },
-    );
-    const sequenceLength = tokenized.input_ids.dims[1];
-    if (!Number.isSafeInteger(sequenceLength) || sequenceLength <= 0) {
-        throw new Error("LateOn tokenizer emitted an empty sequence.");
-    }
-    const inputIds = new BigInt64Array(tokenized.input_ids.data);
-    const attentionMask = new BigInt64Array(tokenized.attention_mask.data);
-    const output = await state.session.run({
-        [inference.inputIdsName]: new onnxRuntime.Tensor(
-            "int64",
-            inputIds,
-            [1, sequenceLength],
-        ),
-        [inference.attentionMaskName]: new onnxRuntime.Tensor(
-            "int64",
-            attentionMask,
-            [1, sequenceLength],
-        ),
-    });
-    const tensor = output[inference.outputName];
-    if (
-        !tensor
-        || tensor.type !== "float32"
-        || tensor.dims[0] !== 1
-        || tensor.dims[1] !== sequenceLength
-        || tensor.dims[2] !== inference.embeddingDimensions
-        || !(tensor.data instanceof Float32Array)
-    ) {
-        throw new Error("LateOn model returned an incompatible output tensor.");
-    }
-    const skippedTokens = new Set(inference.documentSkipTokenIds);
-    const vectors: number[][] = [];
-    for (let tokenIndex = 0; tokenIndex < sequenceLength; tokenIndex++) {
-        if (attentionMask[tokenIndex] === 0n) continue;
-        const tokenId = Number(inputIds[tokenIndex]);
-        if (!isQuery && skippedTokens.has(tokenId)) continue;
-        const offset = tokenIndex * inference.embeddingDimensions;
-        vectors.push(normalizeVector(Array.from(
-            tensor.data.slice(offset, offset + inference.embeddingDimensions),
-        )));
-    }
-    return { vectors, tokenCount: sequenceLength };
+function isPositiveInteger(value: unknown): value is number {
+    return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
 async function initialize(
     request: Extract<LateOnWorkerRequest, { type: "initialize" }>,
 ): Promise<void> {
-    if (runtime) throw new Error("LateOn worker is already initialized.");
+    if (runtime || encoders.length > 0) throw new Error("LateOn worker is already initialized.");
+    if (!isPositiveInteger(request.encoderSessions) || !isPositiveInteger(request.intraOpThreads)) {
+        throw new Error("LateOn execution plan is malformed.");
+    }
     if (request.profile.runtime.transformersJs !== resolvePackageVersion("@huggingface/transformers")) {
         throw new Error("Transformers.js version does not match the LateOn profile.");
     }
@@ -171,34 +119,74 @@ async function initialize(
         throw new Error("ONNX Runtime version does not match the LateOn profile.");
     }
     assertArtifacts(request.profile, request.modelDirectory);
+    // Encoder threads copy the environment when they start.
     process.env.TOKENIZERS_PARALLELISM = "false";
-    transformers.env.allowRemoteModels = false;
-    transformers.env.allowLocalModels = true;
-    // An absolute directory is loaded as a local path; Transformers.js v4 rejects
-    // revision-pinned basenames (`name@sha`) as model ids.
-    const tokenizer = await transformers.AutoTokenizer.from_pretrained(request.modelDirectory);
-    (tokenizer as unknown as { truncation_side: "right" }).truncation_side = "right";
-    const session = await onnxRuntime.InferenceSession.create(
-        path.join(request.modelDirectory, request.profile.inference.modelPath),
-        {
-            executionProviders: [request.profile.runtime.executionProvider],
-            intraOpNumThreads: request.intraOpThreads,
-            interOpNumThreads: request.profile.inference.interOpThreads,
-            executionMode: request.profile.execution.executionMode,
-            graphOptimizationLevel: request.profile.execution.graphOptimizationLevel,
-        } as unknown as Parameters<typeof onnxRuntime.InferenceSession.create>[1],
-    );
-    runtime = {
+    encoders = Array.from({ length: request.encoderSessions }, startEncoder);
+    // Wait for every encoder, so no initialization is in flight when this fails.
+    const settled = await Promise.allSettled(encoders.map((encoder) => encoder.request({
+        type: "initialize",
+        modelDirectory: request.modelDirectory,
         profile: request.profile,
-        tokenizer: tokenizer as unknown as RuntimeState["tokenizer"],
-        session,
-    };
+        intraOpThreads: request.intraOpThreads,
+    })));
+    for (const outcome of settled) {
+        if (outcome.status === "rejected") throw outcome.reason;
+        if (outcome.value.type !== "ready") throw new Error("LateOn encoder emitted an unexpected response.");
+    }
+    runtime = { profile: request.profile, encoders };
     send({
         type: "ready",
         modelRevision: request.profile.identity.revision,
         projectionVersion: request.profile.identity.projectionVersion,
         candidateDepth: request.profile.inference.candidateDepth,
     });
+}
+
+async function encodeQuery(
+    state: RuntimeState,
+    query: string,
+): Promise<Extract<LateOnEncoderResponse, { type: "query" }>> {
+    const response = await state.encoders[0].request({ type: "encode_query", text: query });
+    if (response.type !== "query") throw new Error("LateOn encoder emitted an unexpected response.");
+    return response;
+}
+
+async function scoreDocuments(
+    state: RuntimeState,
+    documents: readonly string[],
+    queryVectors: readonly number[][],
+): Promise<Readonly<{ scores: readonly number[]; tokenCount: number }>> {
+    // Longest documents first, so the last job to finish is a short one.
+    const order = documents
+        .map((_, index) => index)
+        .sort((left, right) => documents[right].length - documents[left].length || left - right);
+    const scores = new Array<number>(documents.length);
+    let tokenCount = 0;
+    let next = 0;
+    let failure: { error: unknown } | null = null;
+    // Each encoder takes the next document when it finishes one. After a failure
+    // no new jobs start, and every lane settles before this returns or throws.
+    await Promise.all(state.encoders.map(async (encoder) => {
+        while (!failure && next < order.length) {
+            const index = order[next++];
+            try {
+                const response = await encoder.request({
+                    type: "score_document",
+                    text: documents[index],
+                    queryVectors,
+                });
+                if (response.type !== "scored") {
+                    throw new Error("LateOn encoder emitted an unexpected response.");
+                }
+                scores[index] = response.relevanceScore;
+                tokenCount += response.tokenCount;
+            } catch (error) {
+                failure ??= { error };
+            }
+        }
+    }));
+    if (failure) throw (failure as { error: unknown }).error;
+    return { scores, tokenCount };
 }
 
 async function rerank(
@@ -211,21 +199,19 @@ async function rerank(
     ) {
         throw new Error("LateOn rerank request violates the candidate contract.");
     }
-    const queryEncoding = await encodeText(runtime, request.query, true);
-    let aggregateTokenCount = queryEncoding.tokenCount;
-    const scored: Array<{ index: number; identity: string; relevanceScore: number }> = [];
-    for (let index = 0; index < request.documents.length; index++) {
-        const documentEncoding = await encodeText(runtime, request.documents[index], false);
-        aggregateTokenCount += documentEncoding.tokenCount;
-        if (aggregateTokenCount > runtime.profile.execution.aggregateRequestTokenLimit) {
-            throw new Error("LateOn rerank request exceeds the aggregate token contract.");
-        }
-        scored.push({
-            index,
-            identity: request.identities[index],
-            relevanceScore: maxSimScore(queryEncoding.vectors, documentEncoding.vectors),
-        });
+    const queryEncoding = await encodeQuery(runtime, request.query);
+    const documentScores = await scoreDocuments(runtime, request.documents, queryEncoding.vectors);
+    if (
+        queryEncoding.tokenCount + documentScores.tokenCount
+        > runtime.profile.execution.aggregateRequestTokenLimit
+    ) {
+        throw new Error("LateOn rerank request exceeds the aggregate token contract.");
     }
+    const scored = request.documents.map((_, index) => ({
+        index,
+        identity: request.identities[index],
+        relevanceScore: documentScores.scores[index],
+    }));
     scored.sort((left, right) => (
         right.relevanceScore - left.relevanceScore
         || (left.identity < right.identity ? -1 : left.identity > right.identity ? 1 : 0)
@@ -258,6 +244,9 @@ process.on("message", (message: LateOnWorkerRequest) => {
 process.once("disconnect", () => {
     void operation
         .catch(() => undefined)
-        .then(() => runtime?.session.release())
+        .then(() => {
+            shuttingDown = true;
+            return Promise.all(encoders.map((encoder) => encoder.terminate()));
+        })
         .finally(() => process.exit(0));
 });

@@ -2,7 +2,6 @@ import type { ChildProcess } from "node:child_process";
 import { fork } from "node:child_process";
 import * as crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -13,6 +12,10 @@ import type {
 } from "@satori-code/core";
 import { serializeCanonicalJson } from "../core/canonical-json.js";
 import { loadSearchRerankRequestContract } from "../core/search-rerank-request-contract.js";
+import {
+    resolveHostLateOnExecutionPlan,
+    type LateOnExecutionPlan,
+} from "./lateon-execution-plan.js";
 import type {
     LateOnRuntimeProfile,
     LateOnWorkerRequest,
@@ -74,8 +77,8 @@ type WorkerState = "idle" | "loading" | "ready" | "unhealthy" | "closed";
 
 const MAXIMUM_BOOTSTRAP_ATTEMPTS = 2;
 const LATEON_HARD_OPERATION_TIMEOUT_MS = 300_000;
-const LATEON_MAXIMUM_INTRA_OP_THREADS = 8;
-// The model worker holds a few hundred MB. It starts on first use and is
+// The model worker holds 0.5-1.7 GB depending on the host's execution plan
+// (lateon-execution-plan.ts). It starts on first use and is
 // released after this long without rerank activity.
 const LATEON_DEFAULT_IDLE_SHUTDOWN_MS = 2 * 60_000;
 // Requests queue behind one active execution; beyond this the caller gets a
@@ -88,6 +91,8 @@ export type LateOnRerankerConfig = Readonly<{
     workerPath?: string;
     /** Idle window before the worker process is released. 0 keeps it resident. */
     idleShutdownMs?: number;
+    /** Fixed pool layout; by default each worker start sizes the pool to this host. */
+    executionPlan?: LateOnExecutionPlan;
 }>;
 
 function safeIntegerAtLeast(value: unknown, minimum: number, label: string): number {
@@ -153,11 +158,11 @@ function validateExecutionContract(
 ): void {
     if (
         parsed.execution?.workerProcesses !== 1
-        || parsed.execution.activeModelSessions !== 1
+        || parsed.execution.activeModelSessions !== "host_adaptive"
         || parsed.execution.executionMode !== "sequential"
         || parsed.execution.graphOptimizationLevel !== "all"
         || parsed.execution.queryBatchSize !== 1
-        || parsed.execution.documentEncoding !== "serial"
+        || parsed.execution.documentEncoding !== "parallel_sessions"
         || parsed.execution.tokenizerParallelism !== false
     ) {
         throw new Error("LateOn execution contract is malformed or unsupported.");
@@ -187,7 +192,7 @@ export class LateOnReranker implements Reranker {
     private readonly rawProfileDigest: string;
     private readonly identity: ReturnType<Reranker["getIdentity"]>;
     private readonly modelDirectory: string;
-    private readonly intraOpThreads: number;
+    private readonly resolveExecutionPlan: () => LateOnExecutionPlan;
     private readonly workerPath: string;
     private readonly idleShutdownMs: number;
     private idleShutdownTimer?: NodeJS.Timeout;
@@ -217,7 +222,10 @@ export class LateOnReranker implements Reranker {
         );
         this.rawProfileDigest = profileDigest(this.profile);
         this.modelDirectory = path.resolve(config.modelDirectory);
-        this.intraOpThreads = this.resolveIntraOpThreads();
+        const executionPlan = config.executionPlan;
+        this.resolveExecutionPlan = executionPlan
+            ? () => executionPlan
+            : resolveHostLateOnExecutionPlan;
         this.identity = Object.freeze({
             provider: "lateon",
             model: `${this.profile.identity.repository}@${this.profile.identity.revision}`,
@@ -446,13 +454,6 @@ export class LateOnReranker implements Reranker {
         });
     }
 
-    private resolveIntraOpThreads(): number {
-        return Math.max(
-            1,
-            Math.min(os.availableParallelism(), LATEON_MAXIMUM_INTRA_OP_THREADS),
-        );
-    }
-
     private createReadinessPromise(): Promise<void> {
         const readiness = new Promise<void>((resolve, reject) => {
             this.resolveReadiness = resolve;
@@ -504,11 +505,14 @@ export class LateOnReranker implements Reranker {
             ));
         }, LATEON_HARD_OPERATION_TIMEOUT_MS);
         this.readinessTimer.unref();
+        // Planned per start, so a restarted worker sizes itself to current free memory.
+        const executionPlan = this.resolveExecutionPlan();
         worker.send({
             type: "initialize",
             modelDirectory: this.modelDirectory,
             profile: this.profile,
-            intraOpThreads: this.intraOpThreads,
+            encoderSessions: executionPlan.encoderSessions,
+            intraOpThreads: executionPlan.intraOpThreads,
         } satisfies LateOnWorkerRequest);
     }
 

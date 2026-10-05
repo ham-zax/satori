@@ -711,3 +711,40 @@ test("LateOn v6 accepts query-v2 and the canonical document projection through t
     assert.deepEqual(results.map((result) => result.index).sort(), [0, 1]);
     assert.ok(results.every((result) => Number.isFinite(result.relevanceScore)));
 });
+
+test("LateOn encoder pools return the single-session ranking and scores exactly", {
+    skip: !realLateOnModelDirectory || !fs.existsSync(path.join(realLateOnModelDirectory, "model.onnx")),
+}, async (t) => {
+    const semanticQuery = "where are effect cleanups run when a component unmounts";
+    const query = buildSearchRerankQuery({ semanticQuery, answerFocus: "implementation" });
+    const sources = [
+        "function commitHookEffectListUnmount(flags, finishedWork) {\n    const destroy = effect.destroy;\n    if (destroy !== undefined) safelyCallDestroy(finishedWork, destroy);\n}",
+        "export function useEffect(create, deps) {\n    return mountEffect(create, deps);\n}",
+        "test(\"runs cleanup on unmount\", () => {\n    root.unmount();\n    expect(log).toEqual([\"cleanup\"]);\n});",
+        `${"// scheduler lane bookkeeping\n".repeat(40)}function markRootFinished(root, lanes) {\n    root.pendingLanes = lanes;\n}`,
+        "const NoFlags = 0;",
+    ];
+    const documents = [...sources, sources[1]].map((content, index) => buildSearchRerankDocument({
+        relativePath: `src/effects-${index}.js`,
+        language: "javascript",
+        candidateRole: index === 2 ? "test" : "implementation",
+        symbolKind: "function",
+        canonicalSymbolLabel: `symbol_${index}`,
+        symbolSpan: { startLine: 1, endLine: content.split("\n").length },
+        content,
+        query: semanticQuery,
+    }).text);
+    const rankWith = async (encoderSessions: number, intraOpThreads: number) => {
+        const reranker = new LateOnReranker({
+            modelDirectory: realLateOnModelDirectory as string,
+            profileId: LATEON_RUNTIME_PROFILE_IDS.contextV6D128,
+            executionPlan: { encoderSessions, intraOpThreads },
+        });
+        t.after(async () => reranker.close());
+        return reranker.rerank(query, documents);
+    };
+    const serial = await rankWith(1, 1);
+    assert.equal(serial.length, documents.length);
+    assert.deepEqual(await rankWith(3, 1), serial);
+    assert.deepEqual(await rankWith(4, 2), serial);
+});

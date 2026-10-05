@@ -271,9 +271,9 @@
           "query": "where does the browser inspection extension hook into runtime instances to track component trees",
           "acceptable": [
             {
-              "pathRegex": "^packages/react-devtools-shared/src/backend/renderer\\.js$",
-              "symbolRegex": "^(attach|findNativeNodesForFiberID)$",
-              "evidence": "packages/react-devtools-shared/src/backend/renderer.js:169 attach; :450 findNativeNodesForFiberID"
+              "pathRegex": "^packages/react-devtools-shared/src/backend/fiber/renderer\\.js$",
+              "symbolRegex": "^attach$",
+              "evidence": "packages/react-devtools-shared/src/backend/fiber/renderer.js:375 attach"
             }
           ],
           "justification": "DevTools renderer attachment."
@@ -489,9 +489,9 @@
           "query": "where are distinct values identified and extracted from a sequence of column entries",
           "acceptable": [
             {
-              "pathRegex": "^crates/polars-ops/src/series/ops/various\\.rs$",
-              "symbolRegex": "^(unique|n_unique)$",
-              "evidence": "crates/polars-ops/src/series/ops/various.rs:74 unique"
+              "pathRegex": "^crates/polars-(compute/src/unique/|core/src/chunked_array/ops/unique/)",
+              "symbolRegex": "^(unique|n_unique|arg_unique)$",
+              "evidence": "crates/polars-core/src/chunked_array/ops/unique/mod.rs:95 unique, :139 n_unique; crates/polars-compute/src/unique/mod.rs:11 unique"
             }
           ],
           "justification": "Series unique and n_unique operations."
@@ -545,9 +545,9 @@
           "query": "where is an in-memory hash join executed between two tabular datasets matching on key columns",
           "acceptable": [
             {
-              "pathRegex": "^crates/polars-core/src/frame/hash_join/",
+              "pathRegex": "^crates/polars-ops/src/frame/join/hash_join/",
               "symbolRegex": null,
-              "evidence": "crates/polars-core/src/frame/hash_join/mod.rs"
+              "evidence": "crates/polars-ops/src/frame/join/hash_join/mod.rs"
             }
           ],
           "justification": "Hash join algorithm in Polars core."
@@ -562,9 +562,9 @@
           "query": "where is table orientation restructured by turning row values into column headers",
           "acceptable": [
             {
-              "pathRegex": "^crates/polars-ops/src/pivot/",
+              "pathRegex": "^crates/polars-(lazy/src/frame/mod|plan/src/dsl/builder_dsl)\\.rs$",
               "symbolRegex": "^pivot",
-              "evidence": "crates/polars-ops/src/pivot/mod.rs"
+              "evidence": "crates/polars-lazy/src/frame/mod.rs:1770 pivot; crates/polars-plan/src/dsl/builder_dsl.rs:363 pivot"
             }
           ],
           "justification": "Pivot operation implementation."
@@ -580,9 +580,9 @@
           "query": "where are the unit tests verifying string parsing and regular expression extraction",
           "acceptable": [
             {
-              "pathRegex": "^py-polars/tests/unit/operations/strings/",
+              "pathRegex": "^py-polars/tests/unit/operations/namespaces/string/",
               "symbolRegex": null,
-              "evidence": "py-polars/tests/unit/operations/strings/test_extract.py"
+              "evidence": "py-polars/tests/unit/operations/namespaces/string/test_string.py:1010 test_extract_regex"
             }
           ],
           "justification": "Test suite for string regex extraction."
@@ -845,9 +845,9 @@
               "evidence": "include/flatbuffers/flexbuffers.h"
             },
             {
-              "pathRegex": "^java/com/google/flatbuffers/FlexBuffers\\.java$",
+              "pathRegex": "^java/src/main/java/com/google/flatbuffers/FlexBuffers\\.java$",
               "symbolRegex": null,
-              "evidence": "java/com/google/flatbuffers/FlexBuffers.java schemaless serialization"
+              "evidence": "java/src/main/java/com/google/flatbuffers/FlexBuffers.java schemaless serialization"
             }
           ],
           "justification": "FlexBuffers schemaless serialization."
@@ -898,9 +898,9 @@
           "query": "where is the internal binary layout specification and memory alignment design documented",
           "acceptable": [
             {
-              "pathRegex": "^docs/source/(WhitePaper|FlatBuffers)\\.md$",
+              "pathRegex": "^docs/source/(white_paper|internals)\\.md$",
               "symbolRegex": null,
-              "evidence": "docs/source/WhitePaper.md"
+              "evidence": "docs/source/white_paper.md; docs/source/internals.md:9 Format components"
             }
           ],
           "justification": "WhitePaper detailing wire format and memory alignment."

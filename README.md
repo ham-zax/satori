@@ -34,6 +34,8 @@
 
 ## Start
 
+> **Beta.** Satori supports Linux only for now (x64, including WSL2 on Windows). macOS and native Windows are not supported yet.
+
 Needs Node.js 22.13+ on Linux x64 or WSL2.
 
 ```bash
@@ -159,9 +161,20 @@ Tuning set with seven labels corrected to the pinned commits. Wrong guesses cost
 | Phase / Mode | Median latency | Notes |
 |---|---:|---|
 | Fast retrieval (Potion + BM25) | **178 ms** | Dense vector search and lexical candidate fusion |
-| + LateOn reranking (budget 64, CPU FP32) | **2.5–3.1 s** | Full cross-attention reranking of top 64 code passages |
+| + LateOn reranking (budget 64, CPU FP32) | **2.5–3.1 s** | Full cross-attention reranking of top 64 code passages, one model session |
 | Fast mode (`--reranker none`) | **~200 ms** | Disables LateOn; pure embedding + BM25 search |
 | Cold query with filesystem watcher | **< 1 s** | Bounded watcher settle; avoids recursive directory stat scan |
+
+**Reranking adapts to the machine.** LateOn encodes candidates in parallel model sessions sized from the host's CPUs and free memory: 1 session on 1 CPU, 4 single-threaded sessions on 4–6 CPUs, 4 × 2 threads on 8–16 CPUs, up to 8 × 2 on 32 or more (above 16 CPUs the rule is extrapolated, not measured). Scores are bit-identical to the single-session path. On a Ryzen 7 3800X under WSL2 (15 logical CPUs visible):
+
+| Measurement | One session (1 × 8 threads) | Adaptive pool (4 × 2) |
+|---|---:|---:|
+| Rerank 64 candidates (median of 3 runs) | 1.86 s | **1.22 s** |
+| Plain-English question to ranked owners (46 questions, median) | 2.63 s | **2.24 s** |
+| Rerank phase of those requests (median) | 2.12 s | **1.68 s** |
+| Peak reranker memory | 0.53 GB | 1.64 GB |
+
+Each session needs 1 GiB of free memory at worker start, so memory-limited hosts and containers run fewer sessions with more threads. The worker is released after 2 minutes idle.
 
 **Against [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) 0.11.0.** Same machine, 5 public repositories; each range spans two runs:
 

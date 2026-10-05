@@ -45,6 +45,7 @@ and wrong. Scored with the harness scorer on the corrected labels (below).
 - Turning the flag on is d1 → d2: hit@10 27 → 34, hit@1 12 → 16.
 - React r1 (cleanup → `destroy`): miss in d0, rank 1 in d1 and d2.
 - Median request time: d0 2.7 s (rerun on an idle machine; the first run, 4.2 s, was under load), d1 3.1 s, d2 2.9 s. No index change.
+- Later, with the host-adaptive LateOn encoder pool (4 sessions × 2 threads here), d0 dropped to 2.24 s median (rerank phase 2.12 → 1.68 s). Owner metrics are unchanged because scores are bit-identical.
 - The controls show the cost: with wrong terms the flag hurts (d3 8 vs d4 11),
   and both are below sending nothing (d0 16). The flag amplifies the agent's
   terms in both directions.

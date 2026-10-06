@@ -13,7 +13,6 @@ import {
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
     SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
-    SEARCH_RRF_K,
     type PathCategory,
     type SearchRankingMode,
     type SearchResultMode,
@@ -106,7 +105,11 @@ import { resolveSearchFlags } from "./search-flags.js";
 // Re-exported so the built dist keeps a single stable import path for this
 // predicate (scripts/offline-prf-ladder.mjs imports it from here).
 export { isNonProductionDistractor } from "./search-non-production-path.js";
-import { isNonProductionDistractor } from "./search-non-production-path.js";
+import {
+    createCandidate,
+    fuseCandidateSets,
+    type SearchCandidateFusionPolicy,
+} from "./search-candidate-fusion.js";
 import {
     resolveExpansionReservationPolicy,
     reservePrimaryCandidateSlots,
@@ -1286,41 +1289,6 @@ export async function runSearchExecution(
 
         const byChunkKey = new Map<string, SearchCandidate>();
         let attemptFilterSummary = buildEmptyFilterSummary();
-        const createCandidate = (
-            result: SearchResultLike,
-            fusionScore: number,
-            retrievalPasses: string[],
-        ): SearchCandidate => {
-            const backendScoreKind = typeof result.backendScoreKind === "string"
-                ? result.backendScoreKind as BackendScoreKind
-                : "unknown";
-            const backendScore = typeof result.backendScore === "number"
-                ? result.backendScore
-                : (typeof result.score === "number" ? result.score : 0);
-            return {
-                result,
-                baseScore: backendScore,
-                backendScore,
-                backendScoreKind,
-                backendScoreKindsSeen: [backendScoreKind],
-                fusionScore,
-                lexicalScore: 0,
-                finalScore: 0,
-                pathCategory: "neutral",
-                pathMultiplier: 1.0,
-                changedFilesMultiplier: 1.0,
-                agentFitMultiplier: 1,
-                agentFitReason: "neutral",
-                entrypointOwnerScoreBoost: 0,
-                entrypointOwnerScoreReason: "not_applicable",
-                passesMatchedMust: false,
-                exactLexicalMatch: false,
-                exactMatchPinned: false,
-                rerankAdjusted: false,
-                authoritativeRank: 0,
-                retrievalPasses,
-            };
-        };
         const testOrDocIntent = hasTestOrDocIntent(input.queryPlan, input.semanticQuery);
         const hasPathConstraint = input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null;
         const plan = input.queryPlan;
@@ -1332,76 +1300,35 @@ export async function runSearchExecution(
             || plan.route.kind === "configuration"
             || plan.route.kind === "references";
         const pathDemotionEligible = flags.path_demotion && !skipPathDemotion;
-        const addPass = (results: SearchResultLike[], passId: string, passWeight = 1) => {
-            for (let i = 0; i < results.length; i++) {
-                const result = results[i];
-                if (!result || typeof result.relativePath !== "string") continue;
-                const normalizedResultPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-                if (
-                    dirtyFilesNotFreshened
-                    && passId !== "dirty_overlay"
-                    && normalizedObservedChangedFiles.has(normalizedResultPath)
-                ) {
-                    suppressedDirtyPaths.add(normalizedResultPath);
-                    if (candidateSurvival) {
-                        appendSearchCandidateRemoval(candidateSurvival, {
-                            candidateId: searchCandidateIdentity(result).candidateId,
-                            afterStage: "mcp_filtered",
-                            reason: "dirty_source_suppressed",
-                            passId: `attempt:${attempt + 1}/${passId}`,
-                        });
-                    }
-                    continue;
-                }
-                if (passId === "dirty_overlay") {
-                    representedDirtyPaths.add(normalizedResultPath);
-                }
-                const key = `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || "unknown"}`;
-                const rank = i + 1;
-                const pathMult = (pathDemotionEligible && isNonProductionDistractor(result.relativePath)) ? 0.7 : 1.0;
-                const rrf = passWeight * (1 / (SEARCH_RRF_K + rank)) * pathMult;
-                const existing = byChunkKey.get(key);
-                if (!existing) {
-                    const backendScoreKind = typeof result.backendScoreKind === "string"
-                        ? result.backendScoreKind as BackendScoreKind
-                        : "unknown";
-                    backendScoreKinds.add(backendScoreKind);
-                    const candidate = createCandidate(result, rrf, [passId]);
-                    candidate.pathMultiplier = pathMult;
-                    byChunkKey.set(key, candidate);
-                } else {
-                    const isTrueExpansionPass = shouldRunCallerExpansion;
-                    const semanticPassDuplicate = (
-                        !isTrueExpansionPass
-                        && (passId === "primary" || passId === "expanded")
-                        && existing.retrievalPasses.some((existingPassId) => (
-                            existingPassId === "primary" || existingPassId === "expanded"
-                        ))
-                    );
-                    existing.fusionScore = semanticPassDuplicate
-                        ? Math.max(existing.fusionScore, rrf)
-                        : existing.fusionScore + rrf;
-                    if (pathMult < existing.pathMultiplier) {
-                        existing.pathMultiplier = pathMult;
-                    }
-                    const nextScore = typeof result.backendScore === "number"
-                        ? result.backendScore
-                        : (typeof result.score === "number" ? result.score : undefined);
-                    if (typeof nextScore === "number") {
-                        existing.baseScore = Math.max(existing.baseScore, nextScore);
-                        existing.backendScore = Math.max(existing.backendScore, nextScore);
-                    }
-                    if (typeof result.backendScoreKind === "string") {
-                        backendScoreKinds.add(result.backendScoreKind as BackendScoreKind);
-                        if (!existing.backendScoreKindsSeen.includes(result.backendScoreKind as BackendScoreKind)) {
-                            existing.backendScoreKindsSeen.push(result.backendScoreKind as BackendScoreKind);
-                        }
-                    }
-                    if (!existing.retrievalPasses.includes(passId)) {
-                        existing.retrievalPasses.push(passId);
-                    }
-                }
+        const fusionPolicy: SearchCandidateFusionPolicy = {
+            pathDemotionEligible,
+            isTrueExpansionPass: shouldRunCallerExpansion,
+            dirtyFilesNotFreshened,
+            observedChangedPaths: normalizedObservedChangedFiles,
+            suppressedDirtyPaths,
+            representedDirtyPaths,
+            backendScoreKinds,
+        };
+        // Records fusion-suppressed dirty paths on the survival trace in the
+        // order fusion encountered them.
+        const recordSuppressedDirtyResults = (suppressed: SearchResultLike[], passId: string): void => {
+            if (!candidateSurvival) return;
+            for (const result of suppressed) {
+                appendSearchCandidateRemoval(candidateSurvival, {
+                    candidateId: searchCandidateIdentity(result).candidateId,
+                    afterStage: "mcp_filtered",
+                    reason: "dirty_source_suppressed",
+                    passId: `attempt:${attempt + 1}/${passId}`,
+                });
             }
+        };
+        const fusePass = (results: SearchResultLike[], passId: string, passWeight = 1): void => {
+            const outcome = fuseCandidateSets(
+                byChunkKey,
+                { id: passId, results, weight: passWeight },
+                fusionPolicy,
+            );
+            recordSuppressedDirtyResults(outcome.suppressedDirtyResults, passId);
         };
 
         for (const pass of successfulPasses) {
@@ -1413,7 +1340,7 @@ export async function runSearchExecution(
                     1,
                 );
             }
-            addPass(pass.results, pass.id, 1);
+            fusePass(pass.results, pass.id, 1);
         }
 
         if (dirtyFilesNotFreshened) {
@@ -1434,7 +1361,7 @@ export async function runSearchExecution(
                         1,
                     );
                 }
-                addPass(dirtyOverlayResults, "dirty_overlay", 1);
+                fusePass(dirtyOverlayResults, "dirty_overlay", 1);
                 passesUsed.add("dirty_overlay");
             }
         }
@@ -1460,7 +1387,7 @@ export async function runSearchExecution(
                     1,
                 );
             }
-            addPass(trackedLexical.results, "lexical_files", 1);
+            fusePass(trackedLexical.results, "lexical_files", 1);
             passesUsed.add("lexical_files");
         }
 
@@ -1481,7 +1408,7 @@ export async function runSearchExecution(
                         1,
                     );
                 }
-                addPass(livePathResults, "live_path", 1);
+                fusePass(livePathResults, "live_path", 1);
                 passesUsed.add("live_path");
             }
         }
@@ -1629,7 +1556,7 @@ export async function runSearchExecution(
                         1,
                     );
                 }
-                addPass(laneResults, "must_lane", 1);
+                fusePass(laneResults, "must_lane", 1);
                 passesUsed.add("must_lane");
                 attemptFilterSummary = buildEmptyFilterSummary();
                 evaluateAllCandidates();
@@ -1664,7 +1591,7 @@ export async function runSearchExecution(
                 appendSearchCandidatePass(candidateSurvival, metadataResults,
                     `attempt:${attempt + 1}/symbol_metadata_bm25`, 1);
             }
-            addPass(metadataResults, "symbol_metadata_bm25", 1);
+            fusePass(metadataResults, "symbol_metadata_bm25", 1);
             passesUsed.add("symbol_metadata_bm25");
             // A separate pass, so caller terms cannot displace owners the
             // primary query admitted from the bounded metadata window.
@@ -1674,7 +1601,7 @@ export async function runSearchExecution(
                     appendSearchCandidatePass(candidateSurvival, altMetadataResults,
                         `attempt:${attempt + 1}/symbol_metadata_bm25_alt`, 1);
                 }
-                addPass(altMetadataResults, "symbol_metadata_bm25_alt", 1);
+                fusePass(altMetadataResults, "symbol_metadata_bm25_alt", 1);
                 passesUsed.add("symbol_metadata_bm25");
             }
             attemptFilterSummary = buildEmptyFilterSummary();

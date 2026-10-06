@@ -39,7 +39,7 @@
   },
   "satoriManagedRuntime": {
     "mcp": "0.8.4",
-    "core": "0.6.1",
+    "core": "0.6.2",
     "lanceDb": "0.39.0",
     "oxcParser": "0.152.0",
     "lateOn": {

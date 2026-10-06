@@ -607,7 +607,7 @@ export function extractIdentifierFromSymbolLabel(label: string | null | undefine
     if (!label) {
         return undefined;
     }
-    const kindMatch = label.match(/\b(?:(?:export|default|public|private|protected|static|readonly)\s+)*(?:async\s+)?(?:function|method|def|class|const|let|var|interface|type|symbol)\s+([A-Za-z_$][\w$]*)/);
+    const kindMatch = label.match(/\b(?:(?:export|default|public|private|protected|static|readonly)\s+)*(?:async\s+)?(?:function|method|def|class|const|let|var|variable|interface|type|symbol)\s+([A-Za-z_$][\w$]*)/);
     if (kindMatch) {
         return kindMatch[1];
     }

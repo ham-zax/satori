@@ -27,7 +27,8 @@ import { WARNING_CODES, type WarningCode } from "./warnings.js";
 import {
     preferImplementationCandidates,
 } from "./search-ranking-policy.js";
-import type { SearchResultLike } from "./search-lexical-scoring.js";
+import type { SearchQueryPlan, SearchResultLike } from "./search-lexical-scoring.js";
+import { splitIdentifierComponents } from "./search-symbol-metadata-bm25.js";
 import {
     selectRerankCandidates,
     selectRerankInputWithinUtf8Budget,
@@ -39,6 +40,7 @@ import {
     validateNativeRerankResults,
 } from "./search-native-rerank.js";
 import { resolveRerankBoundary, type RerankBoundaryDecision } from "./search-rerank-boundary.js";
+import { extractIdentifierFromSymbolLabel } from "./search-response-helpers.js";
 import type {
     SearchRerankProjectionFailureReason,
     SearchRerankProjectionResult,
@@ -454,6 +456,42 @@ export async function invokeReranker(args: {
     return rerankResults;
 }
 
+/**
+ * Worst rank a strong first-stage owner may hold after reranking when the
+ * first_stage_owner_floor flag is on. The floor never promotes above rank 3,
+ * so it cannot steal rank 1 from a reranker-preferred owner.
+ */
+const FIRST_STAGE_OWNER_FLOOR_RANK = 3;
+
+/** Minimum fraction of identifier sub-tokens covered by whole query terms. */
+const STRONG_OWNER_QUERY_COVERAGE = 0.5;
+
+/**
+ * A strong first-stage owner declares a symbol whose identifier sub-tokens
+ * are at least half covered by the query's whole lexical terms. File and
+ * symbol-less candidates declare no identifier and are never strong.
+ */
+function isStrongFirstStageOwner(candidate: SearchCandidate, queryPlan: SearchQueryPlan): boolean {
+    const identifier = extractIdentifierFromSymbolLabel(candidate.result.symbolLabel);
+    if (!identifier) return false;
+    const components = new Set(
+        splitIdentifierComponents(identifier)
+            .map((part) => part.toLowerCase())
+            .filter((part) => part.length > 0),
+    );
+    if (components.size === 0) return false;
+    const queryTerms = new Set(
+        queryPlan.lexicalTerms
+            .filter((term) => term.kind === "whole")
+            .map((term) => term.value.toLowerCase()),
+    );
+    let covered = 0;
+    for (const part of components) {
+        if (queryTerms.has(part)) covered += 1;
+    }
+    return covered / components.size >= STRONG_OWNER_QUERY_COVERAGE;
+}
+
 export function applyRerankOrder(args: {
     input: SearchExecutionInput;
     host: SearchExecutionHost;
@@ -528,6 +566,25 @@ export function applyRerankOrder(args: {
             orderedItems: effectiveRerankItems,
             identify: (candidate) => searchCandidateIdentity(candidate.result).candidateId,
         });
+        // scored is still in first-stage order here: a pinned top candidate
+        // kept its slot above, otherwise the top may have been buried by the
+        // provider order. The floor only lifts a strong owner back to rank 3,
+        // preserving the relative order of every other candidate.
+        if (executionFlags.first_stage_owner_floor === true && scored.length > 0) {
+            const firstStageTop = scored[0]!;
+            const floorIndex = FIRST_STAGE_OWNER_FLOOR_RANK - 1;
+            const topId = searchCandidateIdentity(firstStageTop.result).candidateId;
+            const currentIndex = reordered.findIndex((candidate) => (
+                searchCandidateIdentity(candidate.result).candidateId === topId
+            ));
+            if (
+                currentIndex > floorIndex
+                && isStrongFirstStageOwner(firstStageTop, input.queryPlan)
+            ) {
+                const [held] = reordered.splice(currentIndex, 1);
+                reordered.splice(floorIndex, 0, held!);
+            }
+        }
         for (const item of validatedItems) {
             const candidate = rerankSlice[item.originalIndex]!;
             candidate.rerankerRank = item.providerRank;
@@ -583,10 +640,23 @@ export async function rerankSearchCandidates(
     let rerankerByteBudgetOmittedCandidates = 0;
     const phaseWarnings: WarningCode[] = [];
     let projectionSummary: SearchRerankProjectionSummary | undefined;
+    // When the caller's identifier-shaped alt_terms name the symbol declared by
+    // the first-stage #1 candidate, that candidate is the exact owner: pin it
+    // ahead of the rerank slice. The match is whole-identifier and
+    // case-sensitive, so a partial or case-differing term does not pin.
+    // Automatic repository vocabulary resolves through the same field but is
+    // not caller intent, so it must not pin the top candidate out of the
+    // rerank slice.
+    const callerAltTerms = (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted;
+    const pinEligible = input.repositoryVocabulary === undefined;
+    const topOwnerIdentifier = scored.length > 0
+        ? extractIdentifierFromSymbolLabel(scored[0]!.result.symbolLabel)
+        : undefined;
     const rerankBoundary = resolveRerankBoundary({
         candidates: scored,
         exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
         mustTokenCount: input.parsedOperators.must.length,
+        altTermsNameTopOwner: pinEligible && topOwnerIdentifier !== undefined && callerAltTerms.includes(topOwnerIdentifier),
     });
     const skippedByExactPin = rerankBoundary.kind === "skip";
     const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";

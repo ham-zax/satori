@@ -30,7 +30,7 @@ const SHA256_HEX = /^[a-f0-9]{64}$/;
  */
 const IDENTIFIER_TOKEN_PATTERN = /[\p{L}\p{N}_$]+/gu;
 
-function splitIdentifierComponents(token: string): string[] {
+export function splitIdentifierComponents(token: string): string[] {
     return token
         .replace(/([\p{Ll}\p{N}])([\p{Lu}])/gu, "$1 $2")
         .replace(/([\p{Lu}])([\p{Lu}][\p{Ll}])/gu, "$1 $2")

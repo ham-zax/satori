@@ -39,6 +39,14 @@ export type SearchFlags = {
     definition_alt_terms?: boolean;
     /** Attaches caller alt_terms to the reranker question. Experimental switch for the wrong-terms control. */
     rerank_alt_terms?: boolean;
+    /**
+     * Keeps a strong first-stage owner within the top 3 after reranking: when
+     * the first-stage #1 candidate declares a symbol whose identifier
+     * sub-tokens are at least half covered by the query terms, the reranker
+     * may not demote it below rank 3. Off by default until it is compared
+     * against the current ordering on the same publication.
+     */
+    first_stage_owner_floor?: boolean;
 };
 
 /** All flags with their compile-time defaults, before env or explicit overrides. */
@@ -55,6 +63,7 @@ export const DEFAULT_SEARCH_FLAGS: Required<SearchFlags> = {
     definition_discovery: true,
     definition_alt_terms: true,
     rerank_alt_terms: true,
+    first_stage_owner_floor: false,
 };
 
 /**

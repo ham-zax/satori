@@ -459,16 +459,25 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     let visibleImpactedCount = impactedValues.length;
     let visibleSeedCount = seedValues.length;
     let visibleChangedFileCount = changedFiles.length;
+    // Seeds dropped by the 50-seed budget never reach seedValues, so the
+    // byte-budget count below would miss them. Fold them into omitted.seeds
+    // so omitted.seeds + seeds.length always equals the total seed
+    // candidates and matches the seedOmittedFiles list.
+    const seedBudgetOmittedCount = seedOmittedFiles.reduce((sum, entry) => sum + entry.omittedSeedCount, 0);
     const renderPayload = () => {
         const omitted = {
             changedFiles: changedFiles.length - visibleChangedFileCount,
             impacted: impactedValues.length - visibleImpactedCount,
             uncertainCallReferences: uncertainValues.length - visibleUncertainCount,
-            seeds: seedValues.length - visibleSeedCount,
+            seeds: seedBudgetOmittedCount + (seedValues.length - visibleSeedCount),
         };
         const finalWarnings = new Set(warnings);
         let finalTruncated = truncated;
-        if (omitted.impacted > 0 || omitted.uncertainCallReferences > 0 || omitted.seeds > 0 || omitted.changedFiles > 0) {
+        const byteBudgetTrimmed = changedFiles.length - visibleChangedFileCount > 0
+            || impactedValues.length - visibleImpactedCount > 0
+            || uncertainValues.length - visibleUncertainCount > 0
+            || seedValues.length - visibleSeedCount > 0;
+        if (byteBudgetTrimmed) {
             finalTruncated = true;
             finalWarnings.add("IMPACT_RESPONSE_BYTE_LIMIT");
         }

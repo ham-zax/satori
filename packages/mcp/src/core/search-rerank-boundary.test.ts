@@ -41,6 +41,21 @@ test("must-only matches and lower exact candidates do not own the prefix", () =>
     }), { kind: "rerank", startIndex: 0, reason: "full_set" });
 });
 
+test("caller alt_terms naming the top owner pin the prefix", () => {
+    assert.deepEqual(resolveRerankBoundary({
+        candidates: [candidate(false), candidate(false)],
+        exactMatchPinningEnabled: false,
+        mustTokenCount: 0,
+        altTermsNameTopOwner: true,
+    }), { kind: "rerank", startIndex: 1, reason: "exact_prefix" });
+    assert.deepEqual(resolveRerankBoundary({
+        candidates: [candidate(false), candidate(false)],
+        exactMatchPinningEnabled: false,
+        mustTokenCount: 0,
+        altTermsNameTopOwner: false,
+    }), { kind: "rerank", startIndex: 0, reason: "full_set" });
+});
+
 test("empty input is a no-request full-set decision", () => {
     assert.deepEqual(resolveRerankBoundary({
         candidates: [],

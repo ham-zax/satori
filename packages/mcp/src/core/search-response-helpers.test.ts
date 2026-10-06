@@ -9,6 +9,7 @@ import {
     buildSearchGraphNavigation,
     buildSearchGroupPreview,
     buildSearchGroupRecommendedAction,
+    extractIdentifierFromSymbolLabel,
     buildSearchWarningDetails,
     buildTopRecommendedSearchAction,
     truncateSearchUtf8,
@@ -326,4 +327,10 @@ test("buildSearchWarningDetails renders the must: retrieval-budget notes with bo
     assert.equal(incomplete?.blocksUse, false);
     assert.match(incomplete?.message ?? "", /exhausted its candidate budget/);
     assert.doesNotMatch(incomplete?.message ?? "", /no other matching files exist/);
+});
+
+test("identifier extraction skips the variable kind prefix", () => {
+    assert.equal(extractIdentifierFromSymbolLabel("variable LIVE_WASM_DECISION_TIME_MS"), "LIVE_WASM_DECISION_TIME_MS");
+    assert.equal(extractIdentifierFromSymbolLabel("const LIVE_WASM_DECISION_TIME_MS"), "LIVE_WASM_DECISION_TIME_MS");
+    assert.equal(extractIdentifierFromSymbolLabel("variable"), "variable");
 });

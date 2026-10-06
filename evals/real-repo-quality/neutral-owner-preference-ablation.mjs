@@ -18,7 +18,7 @@ const repo = { name: 'colonist-assistant', commit: '40a7c12' };
 const dir = path.join(reposDir, `${repo.name}@${repo.commit}`);
 const output = process.env.OWNER_PREFERENCE_EVAL_OUTPUT ?? path.join(os.tmpdir(), 'satori-neutral-owner-preference.json');
 const comparedFlag = process.env.OWNER_PREFERENCE_EVAL_FLAG ?? 'neutral_owner_preference';
-if (!['neutral_owner_preference', 'symbol_metadata_bm25', 'definition_discovery'].includes(comparedFlag)) throw new Error(`Unsupported comparison flag: ${comparedFlag}`);
+if (!['neutral_owner_preference', 'symbol_metadata_bm25', 'definition_discovery', 'first_stage_owner_floor'].includes(comparedFlag)) throw new Error(`Unsupported comparison flag: ${comparedFlag}`);
 const repeats = Number(process.env.OWNER_PREFERENCE_EVAL_REPEATS ?? 2);
 if (!Number.isInteger(repeats) || repeats < 2 || repeats > 3) throw new Error('Comparison requires two or three repeats per arm');
 

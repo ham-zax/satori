@@ -2,10 +2,10 @@
   "abiVersion": 1,
   "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "37407b266f64646b6a309f10a8ad3af3a97699b90e6859bc54c18f63c1344edb",
+  "semanticSourceDigest": "c84fac5975a96ba65b9b4503a8c3f8fce4dc967cf7b2309ab060bbed5f9b1814",
   "buildRecipeDigest": "a1d48fca147ea824a72320bf4e4b1a3e3f0554f5ffd22083fd53255fc222bcf3",
   "jsSha256": "88060c0d3d92e71dbd4ebb10723113c452aada9c5e37a8793f7fc9a91373ec64",
-  "wasmSha256": "0d6c5246c936f6220f0cdeb2c9dedef30925d87f8623ab5c0bf914524af6a7ff",
+  "wasmSha256": "8d317654c45f0b06329b2d10f2ab94367456557849c99a8edeb19bab91fdb06a",
   "languages": {
     "go": {
       "semanticRevision": "go-v3",
@@ -20,11 +20,11 @@
       "grammar": "tree-sitter-c-sharp"
     },
     "cpp": {
-      "semanticRevision": "cpp-v1",
+      "semanticRevision": "cpp-v2",
       "grammar": "tree-sitter-cpp"
     },
     "rust": {
-      "semanticRevision": "rust-v1",
+      "semanticRevision": "rust-v2",
       "grammar": "tree-sitter-rust"
     },
     "kotlin": {

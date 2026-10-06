@@ -269,6 +269,7 @@ export class SharedRuntimeHost {
         this.localSyncManager = new SyncManager(this.localContext, {
             watchEnabled: this.watchSyncEnabled,
             mutationRuntime: this.mutationRuntime,
+            preparedReadObservationSource: (codebasePath) => this.providerRuntime.getPreparedReadObservation(codebasePath),
         });
 
     }

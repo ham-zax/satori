@@ -128,11 +128,11 @@ async function build() {
                     grammar: 'tree-sitter-c-sharp',
                 },
                 cpp: {
-                    semanticRevision: 'cpp-v1',
+                    semanticRevision: 'cpp-v2',
                     grammar: 'tree-sitter-cpp',
                 },
                 rust: {
-                    semanticRevision: 'rust-v1',
+                    semanticRevision: 'rust-v2',
                     grammar: 'tree-sitter-rust',
                 },
                 kotlin: {

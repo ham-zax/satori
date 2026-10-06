@@ -8,7 +8,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v8';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v9';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'
@@ -882,6 +882,17 @@ function describeReceiverType(type: ts.Type, depth = 0): string {
     return 'type';
 }
 
+// Inside a class, `this` has the polymorphic this-type: a type parameter
+// constrained to the class instance type. Dispatch on that constraint so a
+// public `this.m()` gets the same override-aware dispatch as `c: C; c.m()`.
+// Unconstrained `this` parameters keep their type parameter.
+function thisReceiverDispatchType(checker: ts.TypeChecker, receiver: ts.Expression, type: ts.Type): ts.Type {
+    if (receiver.kind !== ts.SyntaxKind.ThisKeyword || (type.flags & ts.TypeFlags.TypeParameter) === 0) return type;
+    const constraint = checker.getBaseConstraintOfType(type);
+    if (!constraint || (constraint.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) return type;
+    return constraint;
+}
+
 function memberCandidates(
     checker: ts.TypeChecker,
     call: ts.CallExpression | ts.NewExpression,
@@ -900,7 +911,7 @@ function memberCandidates(
         };
     }
 
-    const receiverType = checker.getTypeAtLocation(receiver);
+    const receiverType = thisReceiverDispatchType(checker, receiver, checker.getTypeAtLocation(receiver));
     // Descriptive evidence only. Do not call TypeChecker.typeToString here:
     // project noErrorTruncation settings can force anonymous structural types
     // to expand into very large strings retained once per call during indexing.

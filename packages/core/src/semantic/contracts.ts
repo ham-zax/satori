@@ -77,7 +77,7 @@ export interface SemanticResolvedOccurrence {
 
 export interface SemanticSkippedFile {
     readonly path: string;
-    readonly reason: 'source_too_large';
+    readonly reason: 'source_too_large' | 'unmodeled_source';
     readonly bytes: number;
 }
 

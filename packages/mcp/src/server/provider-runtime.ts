@@ -28,7 +28,7 @@ import {
     type RootMutationExecution,
     type SharedPublicationRuntime,
 } from "@satori-code/core/integration";
-import { SyncManager } from "../core/sync.js";
+import { SyncManager, type PreparedReadObservationResult } from "../core/sync.js";
 import {
     ContextMcpConfig,
     IndexFingerprint,
@@ -692,6 +692,16 @@ export class ProviderRuntime {
         while (this.detachedMutationCompletions.size > 0) {
             await Promise.allSettled([...this.detachedMutationCompletions]);
         }
+    }
+
+    public getPreparedReadObservation(codebasePath: string): PreparedReadObservationResult | undefined {
+        let firstUnavailable: PreparedReadObservationResult | undefined;
+        for (const toolContext of this.activeContexts) {
+            const result = toolContext.syncManager.getPreparedReadObservation(codebasePath);
+            if (result.available) return result;
+            firstUnavailable ??= result;
+        }
+        return firstUnavailable;
     }
 
     public getActiveLifecycleOperationCount(): number {

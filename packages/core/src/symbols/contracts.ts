@@ -282,7 +282,7 @@ function isSemanticProviderCoverage(value: unknown): value is SemanticProviderCo
         || !value.skippedFiles.every((file) => (
             isRecord(file)
             && isRepositoryRelativePath(file.path)
-            && file.reason === 'source_too_large'
+            && (file.reason === 'source_too_large' || file.reason === 'unmodeled_source')
             && isNonNegativeInteger(file.bytes)
         ))
     )) {

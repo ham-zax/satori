@@ -110,6 +110,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         calleeText: string;
     }>();
     const unavailableSeeds: Array<{ symbolId: string; reason: string }> = [];
+    const warningCounts = new Map<string, number>();
     for (const seed of seeds) {
         const graph = await ports.callers(seed.codebaseRoot, seed);
         if (graph.status !== "ok") {
@@ -117,6 +118,13 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             continue;
         }
         for (const warning of graph.warnings ?? []) {
+            // Per-seed count warnings (CODE:N) are summed per code so the
+            // response carries one entry per code, not one per seed.
+            const counted = /^([A-Z_]+):(\d+)$/.exec(warning);
+            if (counted) {
+                warningCounts.set(counted[1]!, (warningCounts.get(counted[1]!) ?? 0) + Number(counted[2]));
+                continue;
+            }
             warnings.add(warning);
             if (warning === "RELATIONSHIP_TRAVERSAL_LIMIT_REACHED" || warning === "RELATIONSHIP_TRAVERSAL_TRUNCATED") truncated = true;
         }
@@ -264,6 +272,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             }
         }
     }
+    for (const [code, count] of warningCounts) warnings.add(`${code}:${count}`);
     if (uncertainCallReferences.size > 0) warnings.add("IMPACT_NON_AUTHORITATIVE_CALL_REFERENCES");
     if ([...impacted.values()].some((node) => node.evidenceClass === "heuristic")) {
         warnings.add("IMPACT_HEURISTIC_CALL_PATHS");

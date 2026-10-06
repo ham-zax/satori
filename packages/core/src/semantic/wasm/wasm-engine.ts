@@ -1,4 +1,7 @@
 import {
+    DIAGNOSTIC_OFFSETS,
+    DIAGNOSTIC_STRUCT_SIZE,
+    RawSemanticDiagnostic,
     RawSemanticResult,
     ReceiverBindingKind,
     SemanticDecision,
@@ -161,6 +164,41 @@ export class WasmSemanticSession {
         }
 
         return results;
+    }
+
+    diagnostics(): RawSemanticDiagnostic[] {
+        this.assertNotDestroyed();
+        const count = this.native._satori_semantic_diagnostic_count(this.handle);
+        if (count === 0) return [];
+
+        const diagnosticsPtr = this.native._satori_semantic_diagnostics(this.handle);
+        const strTablePtr = this.native._satori_semantic_string_table(this.handle, 0);
+
+        const diagnostics: RawSemanticDiagnostic[] = [];
+
+        for (let i = 0; i < count; i++) {
+            const offset = diagnosticsPtr + i * DIAGNOSTIC_STRUCT_SIZE;
+
+            const messageOff = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.MESSAGE_OFFSET, 'i32');
+            const messageLen = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.MESSAGE_LENGTH, 'i32');
+            const fileOff = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.FILE_OFFSET, 'i32');
+            const fileLen = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.FILE_LENGTH, 'i32');
+            const spanStart = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.SPAN_START_BYTE, 'i32');
+            const spanEnd = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.SPAN_END_BYTE, 'i32');
+            const severity = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.SEVERITY, 'i8');
+            const code = this.native.getValue(offset + DIAGNOSTIC_OFFSETS.CODE, 'i8');
+
+            diagnostics.push({
+                message: messageLen > 0 ? this.native.UTF8ToString(strTablePtr + messageOff) : '',
+                file: fileLen > 0 ? this.native.UTF8ToString(strTablePtr + fileOff) : '',
+                spanStartByte: spanStart,
+                spanEndByte: spanEnd,
+                severity,
+                code,
+            });
+        }
+
+        return diagnostics;
     }
 
     destroy(): void {

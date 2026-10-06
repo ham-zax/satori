@@ -4092,10 +4092,154 @@ static void rust_ensure_known_macro_carrier(RustLSPContext *ctx, const char *mac
     rust_inject_syn_call(ctx, callee_qn);
 }
 
+/* Satori: an exact `#[cfg(test)]` / `#![cfg(test)]` attribute keeps its file
+ * eligible, but call sites inside the gated item emit no results. Gates are
+ * collected from the AST once per file (mirroring the eligibility check in
+ * satori_semantic.c) and consulted at every resolved-call emission point. */
+static bool rust_cfg_test_text_equals(RustLSPContext *ctx, TSNode node, const char *text) {
+    if (!ctx || !ctx->source || !text || ts_node_is_null(node))
+        return false;
+    uint32_t start = ts_node_start_byte(node);
+    uint32_t end = ts_node_end_byte(node);
+    size_t len = strlen(text);
+    return end - start == len && memcmp(ctx->source + start, text, len) == 0;
+}
+
+static bool rust_cfg_test_is_comment_kind(const char *kind) {
+    return kind && (strcmp(kind, "line_comment") == 0 || strcmp(kind, "block_comment") == 0);
+}
+
+static bool rust_cfg_test_token_tree_is_exactly_test(RustLSPContext *ctx, TSNode token_tree) {
+    if (!ctx || ts_node_is_null(token_tree))
+        return false;
+    bool saw_test = false;
+    uint32_t count = ts_node_child_count(token_tree);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_child(token_tree, i);
+        if (ts_node_is_named(child)) {
+            const char *kind = ts_node_type(child);
+            if (rust_cfg_test_is_comment_kind(kind))
+                continue;
+            if (saw_test)
+                return false;
+            if (strcmp(kind, "identifier") != 0)
+                return false;
+            if (!rust_cfg_test_text_equals(ctx, child, "test"))
+                return false;
+            saw_test = true;
+        } else if (!rust_cfg_test_text_equals(ctx, child, "(") &&
+                   !rust_cfg_test_text_equals(ctx, child, ")")) {
+            return false;
+        }
+    }
+    return saw_test;
+}
+
+static bool rust_cfg_test_attribute_is_exact_cfg_test(RustLSPContext *ctx, TSNode attr_item) {
+    if (!ctx || ts_node_is_null(attr_item))
+        return false;
+    uint32_t count = ts_node_named_child_count(attr_item);
+    TSNode attr = {0};
+    bool has_attr = false;
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(attr_item, i);
+        if (strcmp(ts_node_type(child), "attribute") == 0) {
+            attr = child;
+            has_attr = true;
+            break;
+        }
+    }
+    if (!has_attr || ts_node_named_child_count(attr) == 0)
+        return false;
+    if (!rust_cfg_test_text_equals(ctx, ts_node_named_child(attr, 0), "cfg"))
+        return false;
+    uint32_t attr_count = ts_node_named_child_count(attr);
+    for (uint32_t i = 0; i < attr_count; i++) {
+        TSNode child = ts_node_named_child(attr, i);
+        if (strcmp(ts_node_type(child), "token_tree") == 0)
+            return rust_cfg_test_token_tree_is_exactly_test(ctx, child);
+    }
+    return false;
+}
+
+static void rust_cfg_test_gate_push(RustLSPContext *ctx, uint32_t start, uint32_t end) {
+    if (!ctx || end <= start)
+        return;
+    if (ctx->cfg_test_gate_count % 16 == 0) {
+        int new_cap = ctx->cfg_test_gate_count + 16;
+        uint32_t *ns = (uint32_t *)cbm_arena_alloc(ctx->arena, (size_t)new_cap * sizeof(uint32_t));
+        uint32_t *ne = (uint32_t *)cbm_arena_alloc(ctx->arena, (size_t)new_cap * sizeof(uint32_t));
+        if (!ns || !ne)
+            return;
+        if (ctx->cfg_test_gate_starts && ctx->cfg_test_gate_count > 0) {
+            memcpy(ns, ctx->cfg_test_gate_starts,
+                   (size_t)ctx->cfg_test_gate_count * sizeof(uint32_t));
+            memcpy(ne, ctx->cfg_test_gate_ends,
+                   (size_t)ctx->cfg_test_gate_count * sizeof(uint32_t));
+        }
+        ctx->cfg_test_gate_starts = ns;
+        ctx->cfg_test_gate_ends = ne;
+    }
+    ctx->cfg_test_gate_starts[ctx->cfg_test_gate_count] = start;
+    ctx->cfg_test_gate_ends[ctx->cfg_test_gate_count] = end;
+    ctx->cfg_test_gate_count++;
+}
+
+static void rust_collect_cfg_test_gates(RustLSPContext *ctx, TSNode parent) {
+    if (!ctx || ts_node_is_null(parent))
+        return;
+    uint32_t count = ts_node_named_child_count(parent);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(parent, i);
+        const char *kind = ts_node_type(child);
+        if (strcmp(kind, "attribute_item") == 0) {
+            if (rust_cfg_test_attribute_is_exact_cfg_test(ctx, child)) {
+                /* An outer attribute gates the following item (skipping any
+                 * stacked attributes and comments between them). */
+                for (uint32_t j = i + 1; j < count; j++) {
+                    TSNode sib = ts_node_named_child(parent, j);
+                    const char *sk = ts_node_type(sib);
+                    if (strcmp(sk, "attribute_item") == 0 ||
+                        strcmp(sk, "inner_attribute_item") == 0 ||
+                        rust_cfg_test_is_comment_kind(sk))
+                        continue;
+                    rust_cfg_test_gate_push(ctx, ts_node_start_byte(sib),
+                                            ts_node_end_byte(sib));
+                    break;
+                }
+            }
+        } else if (strcmp(kind, "inner_attribute_item") == 0) {
+            if (rust_cfg_test_attribute_is_exact_cfg_test(ctx, child)) {
+                /* An inner attribute gates its enclosing scope; at file level
+                 * that is the whole file. */
+                if (strcmp(ts_node_type(parent), "source_file") == 0)
+                    rust_cfg_test_gate_push(ctx, 0, (uint32_t)ctx->source_len);
+                else
+                    rust_cfg_test_gate_push(ctx, ts_node_start_byte(parent),
+                                            ts_node_end_byte(parent));
+            }
+        }
+        rust_collect_cfg_test_gates(ctx, child);
+    }
+}
+
+static bool rust_site_in_cfg_test_gate(RustLSPContext *ctx, uint32_t site_start) {
+    if (!ctx || ctx->cfg_test_gate_count <= 0)
+        return false;
+    for (int i = 0; i < ctx->cfg_test_gate_count; i++) {
+        if (site_start >= ctx->cfg_test_gate_starts[i] &&
+            site_start < ctx->cfg_test_gate_ends[i])
+            return true;
+    }
+    return false;
+}
+
 static void rust_emit_resolved_call_reason(RustLSPContext *ctx, const char *callee_qn,
                                            const char *strategy, float confidence,
                                            const char *reason) {
     if (!ctx || !ctx->resolved_calls || !callee_qn || !ctx->enclosing_func_qn)
+        return;
+    if (rust_site_in_cfg_test_gate(ctx, ctx->emit_site_start_byte))
         return;
     CBMResolvedCall rc = {
         .caller_qn = ctx->enclosing_func_qn,
@@ -4197,6 +4341,9 @@ static void rust_resolve_callable_argument_references(RustLSPContext *ctx, TSNod
                                    &end)) {
             continue;
         }
+        if (rust_site_in_cfg_test_gate(ctx, start)) {
+            continue;
+        }
         CBMResolvedCall reference = {
             .caller_qn = ctx->enclosing_func_qn,
             .callee_qn = target,
@@ -4214,6 +4361,8 @@ static void rust_resolve_callable_argument_references(RustLSPContext *ctx, TSNod
 static void rust_emit_unresolved_call(RustLSPContext *ctx, const char *expr_text,
                                       const char *reason) {
     if (!ctx || !ctx->resolved_calls || !ctx->enclosing_func_qn)
+        return;
+    if (rust_site_in_cfg_test_gate(ctx, ctx->emit_site_start_byte))
         return;
     CBMResolvedCall rc = {
         .caller_qn = ctx->enclosing_func_qn,
@@ -6310,6 +6459,7 @@ static void rust_resolve_against_registry(CBMArena *arena, const char *source, i
     rust_lsp_init(&ctx, arena, source, source_len, reg, module_qn, out);
     ctx.cargo_manifest = manifest;
     ctx.syn_calls = synthetic_calls;
+    rust_collect_cfg_test_gates(&ctx, root);
     rust_collect_uses(&ctx, root);
     for (int i = 0; i < import_count; i++) {
         if (import_names[i] && import_qns[i]) {

@@ -483,3 +483,54 @@ test("provider lifecycle rolls back background sync when watcher startup fails",
         "stop_watcher",
     ]);
 });
+
+test("getPreparedReadObservation returns undefined without creating a runtime", () => {
+    const runtime = createRuntime(baseConfig());
+    assert.equal(runtime.getPreparedReadObservation("/some/root"), undefined);
+    const internals = runtime as unknown as {
+        activeContexts: ToolContext[];
+        embeddingRuntimePromise: Promise<ToolContext> | null;
+        vectorRuntimePromise: Promise<ToolContext> | null;
+    };
+    assert.equal(internals.activeContexts.length, 0);
+    assert.equal(internals.embeddingRuntimePromise, null);
+    assert.equal(internals.vectorRuntimePromise, null);
+});
+
+test("getPreparedReadObservation prefers an available result over an unavailable one", () => {
+    const runtime = createRuntime(baseConfig());
+    const internals = runtime as unknown as { activeContexts: ToolContext[] };
+    internals.activeContexts.push({
+        syncManager: {
+            getPreparedReadObservation: () => ({
+                available: false,
+                reason: "watcher_starting",
+                freshnessEpoch: 0,
+            }),
+        },
+    } as unknown as ToolContext);
+    const observation = { freshnessEpoch: 0, watcherState: "ready" as const };
+    internals.activeContexts.push({
+        syncManager: {
+            getPreparedReadObservation: () => ({
+                available: true,
+                observation,
+            }),
+        },
+    } as unknown as ToolContext);
+    assert.deepEqual(runtime.getPreparedReadObservation("/some/root"), {
+        available: true,
+        observation,
+    });
+
+    const unavailableOnly = createRuntime(baseConfig());
+    const unavailableInternals = unavailableOnly as unknown as { activeContexts: ToolContext[] };
+    const first = { available: false as const, reason: "watcher_starting" as const, freshnessEpoch: 0 };
+    const second = { available: false as const, reason: "sync_active" as const, freshnessEpoch: 0 };
+    for (const result of [first, second]) {
+        unavailableInternals.activeContexts.push({
+            syncManager: { getPreparedReadObservation: () => result },
+        } as unknown as ToolContext);
+    }
+    assert.deepEqual(unavailableOnly.getPreparedReadObservation("/some/root"), first);
+});

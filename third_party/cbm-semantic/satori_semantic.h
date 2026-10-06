@@ -19,6 +19,9 @@
 #define SATORI_SEMANTIC_ERR_HANDLE_NOT_FOUND -5
 #define SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED -6
 
+/* Diagnostic codes for SatoriSemanticDiagnosticV1.code (uint8, ABI frozen). */
+#define SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE 1
+
 /* Deterministic resource limits */
 #define SATORI_MAX_HANDLES 64
 #define SATORI_MAX_SOURCES 20000
@@ -185,7 +188,8 @@ EMSCRIPTEN_KEEPALIVE const SatoriSemanticRelationshipV1 *satori_semantic_relatio
 EMSCRIPTEN_KEEPALIVE uint32_t satori_semantic_definition_count(SatoriSemanticHandle handle);
 EMSCRIPTEN_KEEPALIVE const SatoriSemanticDefinitionV1 *satori_semantic_definitions(SatoriSemanticHandle handle);
 
-/* 3. Diagnostics stream (ABI frozen; returns 0 for milestone 1) */
+/* 3. Diagnostics stream (ABI frozen; unmodeled-source warnings for Rust/C++,
+ * empty for other languages) */
 EMSCRIPTEN_KEEPALIVE uint32_t satori_semantic_diagnostic_count(SatoriSemanticHandle handle);
 EMSCRIPTEN_KEEPALIVE const SatoriSemanticDiagnosticV1 *satori_semantic_diagnostics(SatoriSemanticHandle handle);
 

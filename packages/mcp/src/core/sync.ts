@@ -36,6 +36,7 @@ interface SyncManagerOptions {
     ) => Promise<void> | void;
     mutationRuntime: RootMutationRuntime;
     onLifecycleActivityChanged?: () => void;
+    preparedReadObservationSource?: (codebasePath: string) => PreparedReadObservationResult | undefined;
     /**
      * Runs the incremental sync for a held lease in a disposable process, so
      * sync memory is returned to the OS instead of staying in the host.
@@ -399,6 +400,7 @@ export class SyncManager {
     private readonly mutationRuntime: RootMutationRuntime;
     private readonly onLifecycleActivityChanged?: () => void;
     private readonly runSyncInWorker?: SyncManagerOptions['runSyncInWorker'];
+    private readonly preparedReadObservationSource?: SyncManagerOptions['preparedReadObservationSource'];
 
     constructor(context: Context, options: SyncManagerOptions) {
         this.context = context;
@@ -408,6 +410,7 @@ export class SyncManager {
         this.mutationRuntime = options.mutationRuntime;
         this.onLifecycleActivityChanged = options.onLifecycleActivityChanged;
         this.runSyncInWorker = options.runSyncInWorker;
+        this.preparedReadObservationSource = options.preparedReadObservationSource;
         this.sourceObservationState = new SourceObservationState({
             assertMutationCurrent: (root) => this.mutationRuntime.assertCurrent(root),
             hasCurrentWatcherCapture: (root, capture) => this.hasCurrentWatcherCapture(root, capture),
@@ -1038,7 +1041,19 @@ export class SyncManager {
             });
         }
 
-        const preparedObservation = this.getPreparedReadObservation(codebasePath);
+        let preparedObservation = this.getPreparedReadObservation(codebasePath);
+        if (
+            !preparedObservation.available
+            && preparedObservation.reason === 'watcher_manager_not_started'
+            && this.preparedReadObservationSource
+        ) {
+            // The local provider-free manager owns no watcher; watcher continuity is
+            // owned by the watcher-running provider manager for the same root.
+            const delegated = this.preparedReadObservationSource(codebasePath);
+            if (delegated !== undefined) {
+                preparedObservation = delegated;
+            }
+        }
         if (!preparedObservation.available) {
             return withReadMetadata({
                 mode: exactMatched || fullMatched ? 'skipped_source_unchanged' : 'read_only',

@@ -236,6 +236,88 @@ function resolveBestOverlappingSearchSymbol(input: {
     return scored[0]?.symbol;
 }
 
+// Doc-comment repair invariant: the chunk may start before S only when every
+// chunk line before S's start is blank, a comment, a language attribute, or a
+// prior symbol's closing-punctuation final line; the documented symbol must be
+// unique; the chunk is not contained in S, so callers must never attach an
+// ownerProof for this attribution.
+function resolveDocumentedSearchSymbol(
+    fileSymbols: SymbolRecord[],
+    ownerChunk: CodeChunk,
+): SymbolRecord | undefined {
+    if (!ownerChunk.content) {
+        return undefined;
+    }
+    const chunkStartByte = ownerChunk.metadata.startByte;
+    const chunkEndByte = ownerChunk.metadata.endByte;
+    const contentLines = ownerChunk.content.split(/\r?\n/);
+    const candidates = fileSymbols.filter((symbol) => {
+        if (symbol.kind === "file") {
+            return false;
+        }
+        const symbolStartByte = symbol.span.startByte;
+        const symbolEndByte = symbol.span.endByte;
+        if (
+            chunkStartByte !== undefined
+            && chunkEndByte !== undefined
+            && symbolStartByte !== undefined
+            && symbolEndByte !== undefined
+        ) {
+            if (!(
+                symbolStartByte > chunkStartByte
+                && symbolStartByte <= chunkEndByte
+                && chunkEndByte <= symbolEndByte
+            )) {
+                return false;
+            }
+        } else if (!(
+            symbol.span.startLine > ownerChunk.metadata.startLine
+            && symbol.span.startLine <= ownerChunk.metadata.endLine
+            && ownerChunk.metadata.endLine <= symbol.span.endLine
+        )) {
+            return false;
+        }
+        const prefixLineCount = symbol.span.startLine - ownerChunk.metadata.startLine;
+        for (let index = 0; index < contentLines.length && index < prefixLineCount; index += 1) {
+            const trimmed = (contentLines[index] ?? "").trim();
+            if (trimmed === "") {
+                continue;
+            }
+            if (
+                trimmed.startsWith("//")
+                || trimmed.startsWith("/*")
+                || trimmed.startsWith("*")
+                || trimmed.startsWith("*/")
+            ) {
+                continue;
+            }
+            if (
+                symbol.language === "python"
+                && trimmed.startsWith("#")
+                && (trimmed.length === 1 || trimmed[1] !== "[")
+            ) {
+                continue;
+            }
+            if (symbol.language === "rust" && trimmed.startsWith("#[")) {
+                continue;
+            }
+            const lineNumber = ownerChunk.metadata.startLine + index;
+            const isPriorClosingLine = fileSymbols.some((other) => (
+                other !== symbol
+                && other.kind !== "file"
+                && other.span.endLine === lineNumber
+                && other.span.endLine < symbol.span.startLine
+                && /^[}\),;\]]+$/.test(trimmed)
+            ));
+            if (!isPriorClosingLine) {
+                return false;
+            }
+        }
+        return true;
+    });
+    return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 export function resolveSearchOwnerFromRegistry(input: {
     result: SearchOwnerResolutionInputResult;
     registry?: SymbolRegistry;
@@ -315,6 +397,17 @@ export function resolveSearchOwnerFromRegistry(input: {
                     };
                 }
             }
+            if (owner?.kind === "file" && fileSymbols && ownerChunk) {
+                const documented = resolveDocumentedSearchSymbol(fileSymbols, ownerChunk);
+                if (documented) {
+                    return {
+                        ownerSymbolKey: documented.symbolKey,
+                        ownerSymbolInstanceId: documented.symbolInstanceId,
+                        symbolKind: documented.kind,
+                        ownerSource: "registry_repair",
+                    };
+                }
+            }
             return {
                 ownerSymbolKey: metadataOwnerKey,
                 ownerSymbolInstanceId: metadataOwnerInstanceId,
@@ -368,6 +461,17 @@ export function resolveSearchOwnerFromRegistry(input: {
             }
 
             const owner = resolveSafeSearchOwnerSymbolForChunk(ownerChunk, fileSymbols);
+            if (!owner || owner.kind === "file") {
+                const documented = resolveDocumentedSearchSymbol(fileSymbols, ownerChunk);
+                if (documented) {
+                    return {
+                        ownerSymbolKey: documented.symbolKey,
+                        ownerSymbolInstanceId: documented.symbolInstanceId,
+                        symbolKind: documented.kind,
+                        ownerSource: "registry_repair",
+                    };
+                }
+            }
             if (!owner) {
                 return {};
             }

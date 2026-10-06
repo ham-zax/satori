@@ -17,7 +17,7 @@ import type {
 import { Utf8SourceMap } from '../../language-analysis/source-map';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../descriptor';
 import { WasmSemanticEngine } from './wasm-engine';
-import { ReceiverBindingKind, SemanticDecision as WasmSemanticDecision, SemanticStrategy as WasmSemanticStrategy } from './wasm-types';
+import { ReceiverBindingKind, SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE, SemanticDecision as WasmSemanticDecision, SemanticStrategy as WasmSemanticStrategy } from './wasm-types';
 
 function loadEngineManifestLanguages(): Set<string> {
     const candidatePaths = [
@@ -113,6 +113,22 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
             }
 
             const rawResults = await session.resolve();
+            const rawDiagnostics = session.diagnostics();
+            if (rawDiagnostics.length > 0) {
+                const sourceBytesByPath = new Map<string, number>();
+                for (const src of input.sourceFiles) {
+                    sourceBytesByPath.set(src.path, Buffer.byteLength(src.source, 'utf8'));
+                }
+                const seenSkipped = new Set(skippedFiles.map((file) => file.path));
+                for (const raw of rawDiagnostics) {
+                    if (raw.code !== SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE) continue;
+                    const bytes = sourceBytesByPath.get(raw.file);
+                    if (bytes === undefined) continue;
+                    if (seenSkipped.has(raw.file)) continue;
+                    seenSkipped.add(raw.file);
+                    skippedFiles.push({ path: raw.file, reason: 'unmodeled_source', bytes });
+                }
+            }
             const occurrencesByFile = new Map<string, SemanticResolvedOccurrence[]>();
 
             for (const raw of rawResults) {

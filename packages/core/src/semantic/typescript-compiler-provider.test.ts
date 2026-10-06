@@ -388,6 +388,40 @@ export function coerce(): boolean {
     }
 });
 
+test('TypeScript compiler provider dispatches public this members through the class type', () => {
+    const source = `
+export class Recorder {
+    record(): void {
+        this.flush();
+        this.render();
+    }
+    flush(): void {}
+    render(): void {}
+}
+
+export class FancyRecorder extends Recorder {
+    override render(): void {}
+}
+`;
+    const evidence = analyzeTypeScriptProject({
+        language: 'typescript',
+        sourceFiles: [{ path: 'src/recorder.ts', source, sourceHash: 'recorder' }],
+        auxiliaryFiles: [],
+    });
+    const calls = evidence.occurrencesByFile.get('src/recorder.ts') ?? [];
+
+    const flush = calls.find((item) => item.calleeText === 'this.flush');
+    assert.equal(flush?.decision, 'resolved');
+    assert.equal(flush?.target?.ownerName, 'Recorder');
+
+    const render = calls.find((item) => item.calleeText === 'this.render');
+    assert.equal(render?.decision, 'ambiguous');
+    assert.deepEqual(
+        render?.candidates?.map((target) => target.ownerName).sort(),
+        ['FancyRecorder', 'Recorder'],
+    );
+});
+
 test('TypeScript target provenance spans match OXC symbol spans and reject same-name decoys', () => {
     const evidence = analyzeTypeScriptProject(project());
     const structural = analyzeWithOxc({

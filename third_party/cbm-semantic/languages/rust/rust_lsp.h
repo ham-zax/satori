@@ -216,6 +216,13 @@ typedef struct {
      * re-invocations have no distinct source site to attribute. Reset at each
      * top-level invocation so distinct source sites keep their attribution. */
     CBMNegMemo macro_memo;
+
+    /* Satori: byte spans gated by an exact `#[cfg(test)]` / `#![cfg(test)]`
+     * attribute. Call sites starting inside a gate emit no results; the file
+     * stays eligible and definitions are unchanged. */
+    uint32_t *cfg_test_gate_starts;
+    uint32_t *cfg_test_gate_ends;
+    int cfg_test_gate_count;
 } RustLSPContext;
 
 /* Initialise an empty context for processing one file. */

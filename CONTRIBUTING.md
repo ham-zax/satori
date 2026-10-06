@@ -36,6 +36,10 @@ pnpm test:scripts
 pnpm test:integration
 ```
 
+To try unreleased changes through a real MCP client (Claude Code, Codex, ...)
+without replacing the installed runtime, see
+[`docs/LOCAL_DEV_MCP.md`](./docs/LOCAL_DEV_MCP.md).
+
 Integration tests should continue validating:
 
 1. indexing works end-to-end

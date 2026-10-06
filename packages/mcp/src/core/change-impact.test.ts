@@ -323,3 +323,62 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
         fs.rmSync(repo, { recursive: true, force: true });
     }
 });
+
+test("detect_changes sums per-seed count warnings into one entry per code", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-warnings-"));
+    try {
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo });
+        execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo });
+        fs.writeFileSync(path.join(repo, "seed.ts"), "export function a() {\n  return 1;\n}\nexport function b() {\n  return 1;\n}\n");
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+        fs.writeFileSync(path.join(repo, "seed.ts"), "export function a() {\n  return 2;\n}\nexport function b() {\n  return 2;\n}\n");
+
+        const seeds = [
+            { ...node("a", "seed.ts"), span: { startLine: 1, endLine: 3 } },
+            { ...node("b", "seed.ts"), span: { startLine: 4, endLine: 6 } },
+        ];
+        const counts: Record<string, number> = { a: 3, b: 4 };
+        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+            outline: async () => ({
+                status: "ok",
+                path: repo,
+                file: "seed.ts",
+                outline: {
+                    symbols: seeds.map((seed) => ({
+                        symbolId: seed.symbolId,
+                        symbolLabel: seed.symbolLabel!,
+                        kind: "function",
+                        language: seed.language,
+                        file: seed.file,
+                        span: seed.span,
+                    })),
+                },
+                hasMore: false,
+            } as FileOutlineResponseEnvelope),
+            callers: async (_root, symbol) => ({
+                status: "ok",
+                path: repo,
+                symbolRef: { file: symbol.file, symbolId: symbol.symbolId },
+                supported: true,
+                direction: "callers",
+                depth: 1,
+                limit: 20,
+                nodes: [symbol],
+                edges: [],
+                notes: [],
+                warnings: [`CALL_GRAPH_OBSERVATIONAL_SOURCE_REFERENCES:${counts[symbol.symbolId]}`, "SHARED_WARNING"],
+            } as unknown as CallGraphResponseEnvelope),
+        });
+
+        assert.equal(result.seeds.length, 2);
+        assert.deepEqual(
+            result.warnings.filter((warning) => warning.startsWith("CALL_GRAPH_OBSERVATIONAL_SOURCE_REFERENCES")),
+            ["CALL_GRAPH_OBSERVATIONAL_SOURCE_REFERENCES:7"],
+        );
+        assert.ok(result.warnings.includes("SHARED_WARNING"));
+    } finally {
+        fs.rmSync(repo, { recursive: true, force: true });
+    }
+});

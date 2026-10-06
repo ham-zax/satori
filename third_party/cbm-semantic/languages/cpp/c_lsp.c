@@ -5405,6 +5405,78 @@ static void c_process_class(CLSPContext *ctx, TSNode class_node) {
 // Process file: top-level walk
 // ============================================================================
 
+// Satori: a canonical include guard is the file's only top-level construct,
+// so its contents are processed exactly as if the guard were absent.
+// resolve_cpp_project admits no other conditional file, hence any
+// preproc_if/preproc_ifdef reaching this file-level walk is that guard node.
+// Only this one level is unwrapped; files without conditionals are unaffected.
+static void c_process_file_pass1_child(CLSPContext *ctx, TSNode child) {
+    if (ts_node_is_null(child))
+        return;
+    const char *ck = ts_node_type(child);
+
+    if (strcmp(ck, "preproc_if") == 0 || strcmp(ck, "preproc_ifdef") == 0) {
+        // Pass-1 statements inside the guard run through the same leaf logic
+        // as guard-absent top-level children, without unwrapping any deeper
+        // level. (Pass 2 unwraps separately via c_process_file_pass2_child.)
+        uint32_t gnc = ts_node_named_child_count(child);
+        for (uint32_t gi = 0; gi < gnc; gi++) {
+            TSNode gchild = ts_node_named_child(child, gi);
+            const char *gck = ts_node_type(gchild);
+            if (strcmp(gck, "using_declaration") == 0 || strcmp(gck, "alias_declaration") == 0 ||
+                strcmp(gck, "type_definition") == 0 ||
+                strcmp(gck, "namespace_alias_definition") == 0) {
+                c_process_statement(ctx, gchild);
+            } else if (strcmp(gck, "declaration") == 0) {
+                c_process_statement(ctx, gchild);
+            } else if (strcmp(gck, "template_declaration") == 0) {
+                uint32_t tnc = ts_node_named_child_count(gchild);
+                for (uint32_t ti = 0; ti < tnc; ti++) {
+                    TSNode inner = ts_node_named_child(gchild, ti);
+                    const char *ik = ts_node_type(inner);
+                    if (strcmp(ik, "alias_declaration") == 0 || strcmp(ik, "type_definition") == 0) {
+                        c_process_statement(ctx, inner);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if (strcmp(ck, "using_declaration") == 0 || strcmp(ck, "alias_declaration") == 0 ||
+        strcmp(ck, "type_definition") == 0 || strcmp(ck, "namespace_alias_definition") == 0) {
+        c_process_statement(ctx, child);
+    } else if (strcmp(ck, "declaration") == 0) {
+        c_process_statement(ctx, child);
+    } else if (strcmp(ck, "template_declaration") == 0) {
+        // template<class T> using Vec = std::vector<T>;
+        // Unwrap template_declaration to process inner alias/typedef
+        uint32_t tnc = ts_node_named_child_count(child);
+        for (uint32_t ti = 0; ti < tnc; ti++) {
+            TSNode inner = ts_node_named_child(child, ti);
+            const char *ik = ts_node_type(inner);
+            if (strcmp(ik, "alias_declaration") == 0 || strcmp(ik, "type_definition") == 0) {
+                c_process_statement(ctx, inner);
+            }
+        }
+    }
+}
+
+static void c_process_file_pass2_child(CLSPContext *ctx, TSNode child) {
+    if (ts_node_is_null(child))
+        return;
+    const char *ck = ts_node_type(child);
+
+    if (strcmp(ck, "preproc_if") == 0 || strcmp(ck, "preproc_ifdef") == 0) {
+        uint32_t gnc = ts_node_named_child_count(child);
+        for (uint32_t gi = 0; gi < gnc; gi++) {
+            c_process_body_child(ctx, ts_node_named_child(child, gi));
+        }
+        return;
+    }
+    c_process_body_child(ctx, child);
+}
+
 void c_lsp_process_file(CLSPContext *ctx, TSNode root) {
     if (ts_node_is_null(root))
         return;
@@ -5414,36 +5486,17 @@ void c_lsp_process_file(CLSPContext *ctx, TSNode root) {
     uint32_t kn = 0;
     TSNode *kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
     TSNode child; // Hoisted: prevents ASan stack-use-after-scope between passes
-    TSNode inner;
 
     // Pass 1: process using declarations and global variables
     for (uint32_t i = 0; i < kn; i++) {
         child = kids[i];
-        const char *ck = ts_node_type(child);
-
-        if (strcmp(ck, "using_declaration") == 0 || strcmp(ck, "alias_declaration") == 0 ||
-            strcmp(ck, "type_definition") == 0 || strcmp(ck, "namespace_alias_definition") == 0) {
-            c_process_statement(ctx, child);
-        } else if (strcmp(ck, "declaration") == 0) {
-            c_process_statement(ctx, child);
-        } else if (strcmp(ck, "template_declaration") == 0) {
-            // template<class T> using Vec = std::vector<T>;
-            // Unwrap template_declaration to process inner alias/typedef
-            uint32_t tnc = ts_node_named_child_count(child);
-            for (uint32_t ti = 0; ti < tnc; ti++) {
-                inner = ts_node_named_child(child, ti);
-                const char *ik = ts_node_type(inner);
-                if (strcmp(ik, "alias_declaration") == 0 || strcmp(ik, "type_definition") == 0) {
-                    c_process_statement(ctx, inner);
-                }
-            }
-        }
+        c_process_file_pass1_child(ctx, child);
     }
 
     // Pass 2: process functions, namespaces, classes, templates
     for (uint32_t i = 0; i < kn; i++) {
         child = kids[i];
-        c_process_body_child(ctx, child);
+        c_process_file_pass2_child(ctx, child);
     }
 
     // Release the per-file negative-lookup memo (malloc-owned; only allocated in

@@ -85,6 +85,10 @@ typedef struct {
     uint32_t result_count;
     uint32_t result_cap;
 
+    SatoriSemanticDiagnosticV1 *diagnostics;
+    uint32_t diagnostic_count;
+    uint32_t diagnostic_cap;
+
     SatoriStringTable str_table;
     char last_error[512];
 } SatoriSession;
@@ -1437,6 +1441,46 @@ static int java_extract_type_definitions(CBMArena *arena, SatoriLspDefArray *def
     return SATORI_SEMANTIC_OK;
 }
 
+/* Appends one SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE diagnostic for a source
+ * file withheld from analysis. At most one per source file. Owned by the
+ * session like results; spans the whole source (0..source_len). */
+static int append_unmodeled_source_diagnostic(SatoriSession *s, const SatoriSourceFile *source,
+                                              const char *message) {
+    if (!s || !source || !message) return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
+    if (s->diagnostic_count >= SATORI_MAX_SOURCES) {
+        set_session_error(s, "Resource limit exceeded: max diagnostics exceeded");
+        return SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
+    }
+    if (s->diagnostic_count >= s->diagnostic_cap) {
+        uint32_t new_cap = s->diagnostic_cap == 0 ? 16 : s->diagnostic_cap * 2;
+        if (new_cap > SATORI_MAX_SOURCES) new_cap = SATORI_MAX_SOURCES;
+        SatoriSemanticDiagnosticV1 *items = (SatoriSemanticDiagnosticV1 *)realloc(
+            s->diagnostics, (size_t)new_cap * sizeof(SatoriSemanticDiagnosticV1));
+        if (!items) {
+            set_session_error(s, "Out of memory allocating diagnostics");
+            return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        }
+        s->diagnostics = items;
+        s->diagnostic_cap = new_cap;
+    }
+    SatoriSemanticDiagnosticV1 *dst = &s->diagnostics[s->diagnostic_count];
+    memset(dst, 0, sizeof(*dst));
+    uint32_t message_len = (uint32_t)strlen(message);
+    if (!str_table_intern_checked(&s->str_table, message, message_len,
+                                  &dst->message_offset, &dst->message_length) ||
+        !str_table_intern_checked(&s->str_table, source->path, source->path_len,
+                                  &dst->file_offset, &dst->file_length)) {
+        set_session_error(s, "String table resource limit exceeded");
+        return SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
+    }
+    dst->span_start_byte = 0;
+    dst->span_end_byte = source->source_len;
+    dst->severity = 2;
+    dst->code = (uint8_t)SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE;
+    s->diagnostic_count++;
+    return SATORI_SEMANTIC_OK;
+}
+
 static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *source,
                                    const char *source_scope_qn,
                                    const char *source_authority_root,
@@ -2524,24 +2568,98 @@ static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
     return SATORI_SEMANTIC_OK;
 }
 
-static bool cpp_source_has_conditional_preprocessor(const char *source) {
-    if (!source) return false;
-    const char *p = source;
-    while (*p) {
-        const char *line = p;
-        while (*p && *p != '\n') p++;
-        const char *q = line;
-        while (q < p && (*q == ' ' || *q == '\t')) q++;
-        if (q < p && *q == '#') {
-            q++;
-            while (q < p && (*q == ' ' || *q == '\t')) q++;
-            if ((size_t)(p - q) >= 2 && strncmp(q, "if", 2) == 0 &&
-                ((q + 2 == p) || q[2] == ' ' || q[2] == '\t' || q[2] == 'd' || q[2] == 'n')) {
-                return true;
+/* Exact source-text comparison for one tree-sitter node (no allocation). */
+static bool satori_node_text_equals(TSNode node, const char *source, const char *text) {
+    if (ts_node_is_null(node) || !source || !text) return false;
+    uint32_t start = ts_node_start_byte(node);
+    uint32_t end = ts_node_end_byte(node);
+    size_t len = strlen(text);
+    return end - start == len && memcmp(source + start, text, len) == 0;
+}
+
+static bool cpp_is_comment_kind(const char *kind) {
+    return kind && strcmp(kind, "comment") == 0;
+}
+
+static bool cpp_is_conditional_directive_kind(const char *kind) {
+    /* The tree-sitter-cpp grammar reuses these type names for the contextual
+     * variants (preproc_if_in_block, preproc_ifdef_in_enumerator_list, ...). */
+    return kind && (
+        strcmp(kind, "preproc_if") == 0 ||
+        strcmp(kind, "preproc_ifdef") == 0 ||
+        strcmp(kind, "preproc_else") == 0 ||
+        strcmp(kind, "preproc_elif") == 0 ||
+        strcmp(kind, "preproc_elifdef") == 0
+    );
+}
+
+/* True when any conditional preprocessing directive occurs in the subtree. */
+static bool cpp_tree_has_conditional_preprocessor(TSNode node) {
+    if (ts_node_is_null(node)) return false;
+    if (cpp_is_conditional_directive_kind(ts_node_type(node))) return true;
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        if (cpp_tree_has_conditional_preprocessor(ts_node_named_child(node, i))) return true;
+    }
+    return false;
+}
+
+/* Canonical include guard: ignoring comments and whitespace, the root's only
+ * top-level construct is `#ifndef NAME` immediately followed by `#define NAME`
+ * (same NAME, no value), closed by the final `#endif`, with no `#else`/`#elif`
+ * branch and no other conditional directive anywhere inside. */
+static bool cpp_is_canonical_include_guard(TSNode root, const char *source) {
+    if (ts_node_is_null(root) || !source) return false;
+    TSNode guard;
+    memset(&guard, 0, sizeof(guard));
+    bool found = false;
+    uint32_t root_count = ts_node_named_child_count(root);
+    for (uint32_t i = 0; i < root_count; i++) {
+        TSNode child = ts_node_named_child(root, i);
+        if (cpp_is_comment_kind(ts_node_type(child))) continue;
+        if (found) return false;
+        if (strcmp(ts_node_type(child), "preproc_ifdef") != 0) return false;
+        guard = child;
+        found = true;
+    }
+    if (!found) return false;
+    /* preproc_ifdef covers both `#ifdef` and `#ifndef`; only the latter guards. */
+    if (ts_node_child_count(guard) == 0) return false;
+    if (!satori_node_text_equals(ts_node_child(guard, 0), source, "#ifndef")) return false;
+    TSNode name_node = ts_node_child_by_field_name(guard, "name", 4);
+    if (ts_node_is_null(name_node)) return false;
+    uint32_t name_start = ts_node_start_byte(name_node);
+    uint32_t name_len = ts_node_end_byte(name_node) - name_start;
+    if (name_len == 0) return false;
+    bool saw_define = false;
+    uint32_t guard_count = ts_node_named_child_count(guard);
+    for (uint32_t i = 0; i < guard_count; i++) {
+        TSNode child = ts_node_named_child(guard, i);
+        if (ts_node_eq(child, name_node)) continue;
+        const char *kind = ts_node_type(child);
+        if (cpp_is_comment_kind(kind)) continue;
+        if (!saw_define) {
+            if (strcmp(kind, "preproc_def") != 0) return false;
+            TSNode def_name = ts_node_child_by_field_name(child, "name", 4);
+            if (ts_node_is_null(def_name)) return false;
+            uint32_t def_start = ts_node_start_byte(def_name);
+            uint32_t def_len = ts_node_end_byte(def_name) - def_start;
+            if (def_len != name_len ||
+                memcmp(source + def_start, source + name_start, name_len) != 0) {
+                return false;
             }
-            if ((size_t)(p - q) >= 4 && strncmp(q, "elif", 4) == 0) return true;
+            if (!ts_node_is_null(ts_node_child_by_field_name(child, "value", 5))) return false;
+            saw_define = true;
+            continue;
         }
-        if (*p == '\n') p++;
+        if (cpp_tree_has_conditional_preprocessor(child)) return false;
+    }
+    if (!saw_define) return false;
+    uint32_t all_count = ts_node_child_count(guard);
+    for (uint32_t i = all_count; i > 0; i--) {
+        TSNode child = ts_node_child(guard, i - 1);
+        if (ts_node_is_named(child) && cpp_is_comment_kind(ts_node_type(child))) continue;
+        return satori_node_text_equals(child, source, "#endif");
     }
     return false;
 }
@@ -2579,8 +2697,16 @@ static int resolve_cpp_project(SatoriSession *s) {
             goto cleanup;
         }
         TSNode root = ts_tree_root_node(trees[i]);
-        meta[i].eligible = !ts_node_has_error(root) && !cpp_source_has_conditional_preprocessor(sf->source);
-        if (!meta[i].eligible) continue;
+        bool has_error = ts_node_has_error(root);
+        bool is_guard = !has_error && cpp_is_canonical_include_guard(root, sf->source);
+        bool has_conditional = !is_guard && cpp_tree_has_conditional_preprocessor(root);
+        meta[i].eligible = !has_error && !has_conditional;
+        if (!meta[i].eligible) {
+            status = append_unmodeled_source_diagnostic(
+                s, sf, has_error ? "parse error" : "unmodeled conditional preprocessing");
+            if (status != SATORI_SEMANTIC_OK) goto cleanup;
+            continue;
+        }
         status = cpp_collect_definitions(&s->arena, &defs, &def_locs, root, sf->source,
                                          "", NULL, sf->path, sf->path_len);
         if (status != SATORI_SEMANTIC_OK) {
@@ -2935,8 +3061,79 @@ static int rust_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
     return SATORI_SEMANTIC_OK;
 }
 
-static bool rust_source_has_unmodeled_cfg(const char *source) {
-    return source && (strstr(source, "#[cfg") || strstr(source, "#[cfg_attr"));
+static bool rust_is_comment_kind(const char *kind) {
+    return kind && (strcmp(kind, "line_comment") == 0 || strcmp(kind, "block_comment") == 0);
+}
+
+/* True when the token_tree holds exactly the single identifier `test`
+ * (i.e. `cfg(test)`), ignoring comments. Any other token — a comma, `=`,
+ * string, or nested tree — is a different predicate. */
+static bool rust_token_tree_is_exactly_test(TSNode token_tree, const char *source) {
+    if (ts_node_is_null(token_tree) || !source) return false;
+    bool saw_test = false;
+    uint32_t count = ts_node_child_count(token_tree);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_child(token_tree, i);
+        if (ts_node_is_named(child)) {
+            const char *kind = ts_node_type(child);
+            if (rust_is_comment_kind(kind)) continue;
+            if (saw_test) return false;
+            if (strcmp(kind, "identifier") != 0) return false;
+            if (!satori_node_text_equals(child, source, "test")) return false;
+            saw_test = true;
+        } else if (!satori_node_text_equals(child, source, "(") &&
+                   !satori_node_text_equals(child, source, ")")) {
+            return false;
+        }
+    }
+    return saw_test;
+}
+
+/* True when this attribute item is a cfg/cfg_attr other than exactly
+ * `cfg(test)`. Only real attribute nodes are inspected, so comments and
+ * string literals never affect eligibility. */
+static bool rust_attribute_is_unmodeled_cfg(TSNode attr_item, const char *source) {
+    if (ts_node_is_null(attr_item) || !source) return false;
+    TSNode attr;
+    memset(&attr, 0, sizeof(attr));
+    bool has_attr = false;
+    uint32_t count = ts_node_named_child_count(attr_item);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_named_child(attr_item, i);
+        if (strcmp(ts_node_type(child), "attribute") == 0) {
+            attr = child;
+            has_attr = true;
+            break;
+        }
+    }
+    if (!has_attr || ts_node_named_child_count(attr) == 0) return false;
+    TSNode path = ts_node_named_child(attr, 0);
+    if (!satori_node_text_equals(path, source, "cfg") &&
+        !satori_node_text_equals(path, source, "cfg_attr")) {
+        return false;
+    }
+    if (satori_node_text_equals(path, source, "cfg_attr")) return true;
+    uint32_t attr_count = ts_node_named_child_count(attr);
+    for (uint32_t i = 0; i < attr_count; i++) {
+        TSNode child = ts_node_named_child(attr, i);
+        if (strcmp(ts_node_type(child), "token_tree") == 0) {
+            return !rust_token_tree_is_exactly_test(child, source);
+        }
+    }
+    return true;
+}
+
+static bool rust_tree_has_unmodeled_cfg(TSNode node, const char *source) {
+    if (ts_node_is_null(node) || !source) return false;
+    const char *kind = ts_node_type(node);
+    if (strcmp(kind, "attribute_item") == 0 || strcmp(kind, "inner_attribute_item") == 0) {
+        if (rust_attribute_is_unmodeled_cfg(node, source)) return true;
+    }
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        if (rust_tree_has_unmodeled_cfg(ts_node_named_child(node, i), source)) return true;
+    }
+    return false;
 }
 
 static int resolve_rust_project(SatoriSession *s) {
@@ -2991,9 +3188,18 @@ static int resolve_rust_project(SatoriSession *s) {
             ? rust_source_module_qn(&s->arena, meta[i].crate, normalized_path)
             : NULL;
         TSNode root = ts_tree_root_node(trees[i]);
-        meta[i].eligible = meta[i].crate && meta[i].module_qn &&
-            !ts_node_has_error(root) && !rust_source_has_unmodeled_cfg(sf->source);
-        if (!meta[i].eligible) continue;
+        bool has_crate = meta[i].crate && meta[i].module_qn;
+        bool has_error = ts_node_has_error(root);
+        bool unmodeled_cfg = has_crate && !has_error &&
+            rust_tree_has_unmodeled_cfg(root, sf->source);
+        meta[i].eligible = has_crate && !has_error && !unmodeled_cfg;
+        if (!meta[i].eligible) {
+            const char *reason = !has_crate ? "no owning crate"
+                : has_error ? "parse error" : "unmodeled cfg attribute";
+            status = append_unmodeled_source_diagnostic(s, sf, reason);
+            if (status != SATORI_SEMANTIC_OK) goto cleanup;
+            continue;
+        }
         status = rust_collect_definitions(&s->arena, &defs, &def_locs, root, sf->source,
                                           meta[i].module_qn, NULL, NULL,
                                           sf->path, sf->path_len);
@@ -3058,11 +3264,16 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
         return SATORI_SEMANTIC_ERR_HANDLE_NOT_FOUND;
     }
 
-    /* Reset previous results and string table */
+    /* Reset previous results, diagnostics, and string table */
     free(s->results);
     s->results = NULL;
     s->result_count = 0;
     s->result_cap = 0;
+
+    free(s->diagnostics);
+    s->diagnostics = NULL;
+    s->diagnostic_count = 0;
+    s->diagnostic_cap = 0;
 
     str_table_reset(&s->str_table);
 
@@ -3446,13 +3657,15 @@ const SatoriSemanticDefinitionV1 *satori_semantic_definitions(SatoriSemanticHand
 }
 
 uint32_t satori_semantic_diagnostic_count(SatoriSemanticHandle handle) {
-    (void)handle;
-    return 0; // Frozen multi-stream ABI contract (returns 0 in milestone 1)
+    SatoriSession *s = find_session(handle);
+    if (!s) return 0;
+    return s->diagnostic_count;
 }
 
 const SatoriSemanticDiagnosticV1 *satori_semantic_diagnostics(SatoriSemanticHandle handle) {
-    (void)handle;
-    return NULL;
+    SatoriSession *s = find_session(handle);
+    if (!s) return NULL;
+    return s->diagnostics;
 }
 
 const char *satori_semantic_string_table(SatoriSemanticHandle handle, uint32_t *out_table_len) {
@@ -3483,6 +3696,7 @@ void satori_semantic_destroy(SatoriSemanticHandle handle) {
     free(s->auxiliaries);
 
     free(s->results);
+    free(s->diagnostics);
     str_table_reset(&s->str_table);
     cbm_arena_destroy(&s->arena);
 

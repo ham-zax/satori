@@ -13,15 +13,15 @@ test('TypeScript Layer Acceptance: Adding a second CBM language requires zero mo
         canonicalLanguage: 'rust',
         extensions: ['.rs'],
         strategy: 'cbm_semantic',
-        semanticRevision: 'rust-v1',
+        semanticRevision: 'rust-v2',
         grammar: 'tree-sitter-rust',
         auxiliaryFiles: [
             { pattern: '**/Cargo.toml', role: 'manifest' },
             { pattern: '**/Cargo.lock', role: 'lockfile' },
         ],
         providerId: 'satori-cbm-semantic-rust',
-        providerVersion: 'cbm-rust-v1',
-        environmentConfigId: 'cbm-rust-config-v1',
+        providerVersion: 'cbm-rust-v2',
+        environmentConfigId: 'cbm-rust-config-v2',
     };
 
     // 2. Custom semantic registry with Go and Rust
@@ -190,12 +190,12 @@ test('TypeScript Layer Acceptance: Caller binding fails closed and abstains when
         canonicalLanguage: 'rust',
         extensions: ['.rs'],
         strategy: 'cbm_semantic',
-        semanticRevision: 'rust-v1',
+        semanticRevision: 'rust-v2',
         grammar: 'tree-sitter-rust',
         auxiliaryFiles: [],
         providerId: 'satori-cbm-semantic-rust',
-        providerVersion: 'cbm-rust-v1',
-        environmentConfigId: 'cbm-rust-config-v1',
+        providerVersion: 'cbm-rust-v2',
+        environmentConfigId: 'cbm-rust-config-v2',
     };
     const semanticRegistry = new DefaultSemanticLanguageRegistry([rustDescriptor]);
 

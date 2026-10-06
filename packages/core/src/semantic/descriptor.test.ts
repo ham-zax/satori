@@ -90,15 +90,15 @@ test('SemanticLanguageRegistry supports multi-language auxiliary routing without
             canonicalLanguage: 'rust',
             extensions: ['.rs'],
             strategy: 'cbm_semantic',
-            semanticRevision: 'rust-v1',
+            semanticRevision: 'rust-v2',
             grammar: 'tree-sitter-rust',
             auxiliaryFiles: [
                 { pattern: '**/Cargo.toml', role: 'manifest' },
                 { pattern: '**/Cargo.lock', role: 'lockfile' },
             ],
             providerId: 'satori-cbm-semantic-rust',
-            providerVersion: 'cbm-rust-v1',
-            environmentConfigId: 'cbm-rust-config-v1',
+            providerVersion: 'cbm-rust-v2',
+            environmentConfigId: 'cbm-rust-config-v2',
         },
     ];
 

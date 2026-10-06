@@ -516,6 +516,115 @@ test("cached postings do not leak across manifest hashes or publications", () =>
     assert.deepEqual(rankNames(other.registry, "manifest-b"), ["checkLegality"]);
 });
 
+function buildDocCommentFixture() {
+    return buildFixture([
+        {
+            path: "src/validate.rs",
+            source: "placeholder",
+            symbols: [
+                { name: "lib", kind: "file", startLine: 1, endLine: 50 },
+                { name: "previous", startLine: 10, endLine: 12 },
+                { name: "validate", startLine: 16, endLine: 30 },
+            ],
+        },
+    ]);
+}
+
+function resolveDocChunkOwner(fixture: ReturnType<typeof buildFixture>, result: {
+    startLine: number;
+    endLine: number;
+    content: string;
+    ownerSymbolKey?: string;
+    ownerSymbolInstanceId?: string;
+    symbolKind?: string;
+}) {
+    return resolveSearchOwnerFromRegistry({
+        result: { relativePath: "src/validate.rs", ...result },
+        registry: fixture.registry,
+        sanitizeIndexedRelativeFilePath: (file) => file,
+        hasTokenBoundaryMatch: (text, term) => text.includes(term),
+        isWriterActionTerm: () => false,
+    });
+}
+
+const docCommentPrefix = ["}", "", "/// Validate conservation ...", "/// ..."];
+const validateBody = [
+    "pub fn validate(&self) -> Result<(), String> {",
+    "    Ok(())",
+    "}",
+];
+
+test("doc-comment chunk starting at the previous closing brace attributes the documented symbol", () => {
+    const fixture = buildDocCommentFixture();
+    const resolution = resolveDocChunkOwner(fixture, {
+        startLine: 12,
+        endLine: 20,
+        content: [...docCommentPrefix, ...validateBody, "    // body", "    // body"].join("\n"),
+    });
+    assert.equal(resolution.ownerSymbolInstanceId, "instance-0-2");
+    assert.equal(resolution.ownerSymbolKey, "key-0-2");
+    assert.equal(resolution.symbolKind, "function");
+    assert.equal(resolution.ownerSource, "registry_repair");
+    assert.equal(resolution.ownerProof, undefined);
+});
+
+test("doc-comment repair through file metadata ownership attributes the documented symbol without proof", () => {
+    const fixture = buildDocCommentFixture();
+    const resolution = resolveDocChunkOwner(fixture, {
+        startLine: 12,
+        endLine: 20,
+        content: [...docCommentPrefix, ...validateBody, "    // body", "    // body"].join("\n"),
+        ownerSymbolKey: "key-0-0",
+        ownerSymbolInstanceId: "instance-0-0",
+        symbolKind: "file",
+    });
+    assert.equal(resolution.ownerSymbolInstanceId, "instance-0-2");
+    assert.equal(resolution.ownerSource, "registry_repair");
+    assert.equal(resolution.ownerProof, undefined);
+});
+
+test("chunk containing code from the previous function keeps the file owner", () => {
+    const fixture = buildDocCommentFixture();
+    const resolution = resolveDocChunkOwner(fixture, {
+        startLine: 10,
+        endLine: 20,
+        content: [
+            "fn previous() {",
+            "    previous_body();",
+            "}",
+            "",
+            "/// Validate conservation ...",
+            "/// ...",
+            ...validateBody,
+            "    // body",
+            "    // body",
+        ].join("\n"),
+    });
+    assert.equal(resolution.ownerSymbolInstanceId, "instance-0-0");
+});
+
+test("chunk extending past the documented symbol keeps the file owner", () => {
+    const fixture = buildDocCommentFixture();
+    const body = Array.from({ length: 20 }, () => "    // body");
+    const resolution = resolveDocChunkOwner(fixture, {
+        startLine: 12,
+        endLine: 35,
+        content: [...docCommentPrefix, ...validateBody, ...body].join("\n"),
+    });
+    assert.equal(resolution.ownerSymbolInstanceId, "instance-0-0");
+});
+
+test("chunk starting at the symbol start keeps the contained owner with proof", () => {
+    const fixture = buildDocCommentFixture();
+    const resolution = resolveDocChunkOwner(fixture, {
+        startLine: 16,
+        endLine: 20,
+        content: [...validateBody, "    // body", "    // body"].join("\n"),
+    });
+    assert.equal(resolution.ownerSymbolInstanceId, "instance-0-2");
+    assert.deepEqual(resolution.ownerProof, { symbolInstanceId: "instance-0-2", basis: "lines" });
+});
+
 test("cancellation propagates instead of returning an empty success", async () => {
     const { registry, readSourceEvidence } = buildFixture([
         { path: "src/a.ts", source: "function checkLegality() { return true; }", symbols: [{ name: "checkLegality" }] },

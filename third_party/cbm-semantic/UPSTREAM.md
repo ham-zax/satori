@@ -73,6 +73,18 @@ Carry these forward on every upstream sync:
   only when the method is declared on exactly the named class; a method found
   through the short-name class fallback or inheritance becomes
   `php_static_indirect`, which Satori does not admit.
+- `languages/cpp/c_lsp.c`: `c_lsp_process_file` unwraps one level of
+  top-level `preproc_if`/`preproc_ifdef` in both passes so a canonical include
+  guard's contents are processed exactly as if the guard were absent
+  (`c_process_file_pass1_child`/`c_process_file_pass2_child`). Only reachable
+  for guard files: `resolve_cpp_project` still withholds every other
+  conditional file.
+- `languages/rust/rust_lsp.{c,h}`: the call walk collects exact
+  `#[cfg(test)]` / `#![cfg(test)]` gate spans once per file
+  (`rust_collect_cfg_test_gates`) and every resolved-call emission point
+  drops sites inside a gate (`rust_site_in_cfg_test_gate`). Files stay
+  eligible with unchanged definitions; only test-gated call sites are
+  suppressed.
 - Stdlib data files include their resolver header by local name.
 
 ## License Notices

@@ -91,12 +91,12 @@
         ".ixx"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "cpp-v1",
+      "semanticRevision": "cpp-v2",
       "grammar": "tree-sitter-cpp",
       "auxiliaryFiles": [],
       "providerId": "satori-cbm-semantic-cpp",
-      "providerVersion": "cbm-11b662f9+satori-cpp-semantic-v1",
-      "environmentConfigId": "cbm-cpp-semantic-v1"
+      "providerVersion": "cbm-11b662f9+satori-cpp-semantic-v2",
+      "environmentConfigId": "cbm-cpp-semantic-v2"
     },
     {
       "language": "rust",
@@ -105,7 +105,7 @@
         ".rs"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "rust-v1",
+      "semanticRevision": "rust-v2",
       "grammar": "tree-sitter-rust",
       "auxiliaryFiles": [
         {
@@ -118,8 +118,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-rust",
-      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v1",
-      "environmentConfigId": "cbm-rust-semantic-v1"
+      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v2",
+      "environmentConfigId": "cbm-rust-semantic-v2"
     },
     {
       "language": "kotlin",

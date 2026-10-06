@@ -84,6 +84,23 @@ export function extractLaneMetrics(stage, targetChunkIds, acceptableOwners) {
     return { targetRank, score, distractorShareTop10 };
 }
 
+// The expected owner's rank at every recorded survival stage, in trace order,
+// so a miss can be read as the first stage where the rank becomes null. Stage
+// lists are capped (maxEntriesPerStage), so a null rank means "not among the
+// recorded candidates", which `recorded` bounds.
+export function extractStageRanks(stages, targetChunkIds, acceptableOwners) {
+    return (stages || []).map((stage) => {
+        const candidates = Array.isArray(stage.candidates) ? stage.candidates : [];
+        const match = candidates.find(c => matchCandidateToAcceptable(c, targetChunkIds, acceptableOwners));
+        return {
+            stage: stage.stage,
+            passId: stage.passId ?? null,
+            rank: match ? match.rank : null,
+            recorded: candidates.length,
+        };
+    });
+}
+
 export function buildQueryHarnessRecord({
     query,
     repoName,
@@ -202,6 +219,7 @@ export function buildQueryHarnessRecord({
             in_top80: inTop80,
             in_rerank_window: inRerankWindow,
         },
+        stage_ranks: extractStageRanks(stages, targetChunkIds, query.acceptable),
         final: {
             final_rank: finalRank,
             matchedTarget: scoreResult?.matched ?? null,

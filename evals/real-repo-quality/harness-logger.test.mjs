@@ -553,3 +553,24 @@ test('the record and fused-pool sidecar agree on rerank membership', () => {
         assert.equal(entry.in_rerank_window, record.fusion.in_rerank_window);
     }
 });
+
+test('stage ranks follow the expected owner through every recorded stage', () => {
+    const response = responseWithExpansion();
+    const target = { candidateId: 't', relativePath: 'src/t.ts' };
+    const other = { candidateId: 'o', relativePath: 'src/o.ts' };
+    response.hints.debugSearch.candidateSurvival.stages = [
+        { stage: 'raw_dense', passId: 'attempt:1/primary', candidates: [{ ...other, rank: 1 }, { ...target, rank: 2 }] },
+        { stage: 'mcp_pass', passId: 'attempt:1/symbol_metadata_bm25', candidates: [{ ...target, rank: 1 }] },
+        { stage: 'reranker_input', candidates: [{ ...other, rank: 1 }, { ...target, rank: 2 }] },
+        { stage: 'reranker_output', candidates: [{ ...other, rank: 1 }] },
+        { stage: 'disclosed' },
+    ];
+    const record = build({ response, targetChunkIds: new Set(['t']) });
+    assert.deepEqual(record.stage_ranks, [
+        { stage: 'raw_dense', passId: 'attempt:1/primary', rank: 2, recorded: 2 },
+        { stage: 'mcp_pass', passId: 'attempt:1/symbol_metadata_bm25', rank: 1, recorded: 1 },
+        { stage: 'reranker_input', passId: null, rank: 2, recorded: 2 },
+        { stage: 'reranker_output', passId: null, rank: null, recorded: 1 },
+        { stage: 'disclosed', passId: null, rank: null, recorded: 0 },
+    ]);
+});

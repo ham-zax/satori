@@ -1,18 +1,11 @@
 import type {
     Reranker,
     RerankExecutionDiagnostics,
-    RerankResult,
+    RerankerFailureKind,
     SemanticSearchExecutionResult,
     SemanticSearchResult,
 } from "@satori-code/core";
 import {
-    RerankerRequestError,
-    type RerankerFailureKind,
-} from "@satori-code/core";
-import {
-    SEARCH_RERANK_DOC_MAX_CHARS,
-    SEARCH_RERANK_DOC_MAX_LINES,
-    SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
     type PathCategory,
     type SearchRankingMode,
     type SearchResultMode,
@@ -20,7 +13,6 @@ import {
 } from "./search-constants.js";
 import type {
     SearchCandidateSurvivalDebug,
-    SearchCandidateSurvivalOccurrence,
     SearchDebugMode,
     SearchFreshnessSummary,
     SearchMustCoverage,
@@ -31,7 +23,7 @@ import type {
 } from "./search-types.js";
 import type { EntrypointOwnerEvidenceResolution } from "./entrypoint-owner-evidence.js";
 import type { SearchAnswerFocus } from "./search-rerank-context.js";
-import { allowsDefinitionDiscovery, fuseDefinitionDiscovery, type DefinitionDiscoveryMetadata } from "./search-definition-discovery.js";
+import { allowsDefinitionDiscovery, type DefinitionDiscoveryMetadata } from "./search-definition-discovery.js";
 import type { SearchOrderAuthority } from "./search-order-policy.js";
 export type { SearchOrderAuthority } from "./search-order-policy.js";
 import type { SearchRerankQueryProjectionIdentity } from "./search-rerank-query-routing.js";
@@ -44,7 +36,7 @@ import {
     SEARCH_CANDIDATE_SURVIVAL_MAX_ENTRIES_PER_STAGE,
     searchCandidateIdentity,
 } from "./search-candidate-survival.js";
-import { WARNING_CODES, type WarningCode } from "./warnings.js";
+import { WARNING_CODES } from "./warnings.js";
 import {
     candidateWithinRequestedSubdirectory,
     type RequestedSearchSubdirectory,
@@ -54,7 +46,6 @@ import {
 } from "./search-response-helpers.js";
 import {
     classifyPathCategory,
-    preferImplementationCandidates,
     shouldIncludeCategoryInScope,
 } from "./search-ranking-policy.js";
 import type { SearchQuerySupport } from "./search-query-support.js";
@@ -81,26 +72,15 @@ import {
 import type { EmbeddingProviderDiagnostic } from "./embedding-provider-diagnostics.js";
 import type { FreshnessDecision } from "./sync.js";
 import {
-    selectRerankCandidates,
-    selectRerankInputWithinUtf8Budget,
-    shouldCallRerankerForProjectedCandidateCount,
     type RerankBudgetReason,
 } from "./search-rerank-policy.js";
 import {
     resolveNextSearchCandidateLimit,
 } from './search-policy.js';
 import type { ResolvedSearchPolicy } from './search-policy.js';
-import {
-    applyNativeRerankToSelectedSlots,
-    validateNativeRerankResults,
-} from "./search-native-rerank.js";
-import { resolveRerankBoundary } from "./search-rerank-boundary.js";
-import type {
-    SearchRerankProjectionFailureReason,
-    SearchRerankProjectionResult,
-    SearchRerankStructuralContextStatus,
-} from "./search-rerank-projection-result.js";
 import { sortNativeRetrievalCandidates } from "./search-retrieval-order.js";
+import type { SearchRerankProjectionResult } from "./search-rerank-projection-result.js";
+import { rerankSearchCandidates } from "./search-rerank-execution.js";
 import { resolveSearchFlags } from "./search-flags.js";
 // Re-exported so the built dist keeps a single stable import path for this
 // predicate (scripts/offline-prf-ladder.mjs imports it from here).
@@ -120,23 +100,6 @@ type SearchPassId = "primary" | "expanded";
 type BackendScoreKind = "dense_similarity" | "lexical_rank" | "rrf_fusion" | "unknown";
 type ChangedFilesState = { available: boolean; files: Set<string> };
 const SEARCH_EXPANSION_MIN_PRIMARY_SCOPED_CANDIDATES = 5;
-const LATEON_OPERATIONAL_REASONS = new Set<SearchRerankerOperationalReason>([
-    "lateon_not_ready",
-    "lateon_execution_timeout",
-    "lateon_cancelled",
-    "lateon_invalid_output",
-    "lateon_worker_failure",
-]);
-
-function resolveLateOnOperationalReason(error: unknown): SearchRerankerOperationalReason | undefined {
-    if (!error || typeof error !== "object" || !("reason" in error)) return undefined;
-    const reason = (error as { reason?: unknown }).reason;
-    return typeof reason === "string"
-        && LATEON_OPERATIONAL_REASONS.has(reason as SearchRerankerOperationalReason)
-        ? reason as SearchRerankerOperationalReason
-        : undefined;
-}
-
 export type SearchExpansionReason =
     | "lexical_route"
     | "exact_registry_fallback"
@@ -539,471 +502,6 @@ export type SearchExecutionInput = {
     reservation_policy?: string;
 };
 
-type RerankPhaseResult = {
-    exactMatchPinningApplied: boolean;
-    rerankerAttempted: boolean;
-    rerankerApplied: boolean;
-    orderAuthority: SearchOrderAuthority;
-    skippedByExactPin: boolean;
-    rerankerFailurePhase?: 'document_projection' | 'api_call' | 'parse_results';
-    rerankerOperationalReason?: SearchRerankerOperationalReason;
-    rerankerCandidatesIn: number;
-    rerankerCandidatesReranked: number;
-    rerankerFamilyCount: number;
-    rerankerSupplementalCandidates: number;
-    rerankerCandidatePoolCount: number;
-    rerankerCandidateBudget: number;
-    rerankerBudgetReason?: RerankBudgetReason;
-    rerankerByteBudgetOmittedCandidates: number;
-    warnings: WarningCode[];
-    projection?: SearchRerankProjectionSummary;
-    rerankerFailureKind?: RerankerFailureKind;
-};
-
-function assignAuthoritativeRanks(candidates: SearchCandidate[]): void {
-    for (let index = 0; index < candidates.length; index += 1) {
-        candidates[index]!.authoritativeRank = index + 1;
-    }
-}
-
-async function rerankSearchCandidates(
-    input: SearchExecutionInput,
-    host: SearchExecutionHost,
-    searchDiagnostics: SearchDiagnostics,
-    scored: SearchCandidate[],
-    initialExactMatchPinningApplied: boolean,
-    candidateSurvival?: SearchCandidateSurvivalDebug,
-): Promise<RerankPhaseResult> {
-    const rerankDecision = host.searchQuerySupport.resolveRerankDecision(input.scope, input.queryPlan);
-    let exactMatchPinningApplied = initialExactMatchPinningApplied;
-    let rerankerApplied = false;
-    let rerankerAttempted = false;
-    let orderAuthority: SearchOrderAuthority = "retrieval_order";
-    let rerankerFailurePhase: 'document_projection' | 'api_call' | 'parse_results' | undefined;
-    let rerankerOperationalReason: SearchRerankerOperationalReason | undefined;
-    const lateOnProvider = (() => {
-        try {
-            return host.reranker?.getIdentity().provider === "lateon";
-        } catch {
-            return false;
-        }
-    })();
-    const rerankerCandidatesIn = scored.length;
-    let rerankerCandidatesReranked = 0;
-    let rerankerFamilyCount = 0;
-    let rerankerSupplementalCandidates = 0;
-    let rerankerCandidatePoolCount = 0;
-    let rerankerCandidateBudget = 0;
-    let rerankerBudgetReason: RerankBudgetReason | undefined;
-    let rerankerByteBudgetOmittedCandidates = 0;
-    const phaseWarnings: WarningCode[] = [];
-    let projectionSummary: SearchRerankProjectionSummary | undefined;
-    const rerankBoundary = resolveRerankBoundary({
-        candidates: scored,
-        exactMatchPinningEnabled: rerankDecision.exactMatchPinningEnabled,
-        mustTokenCount: input.parsedOperators.must.length,
-    });
-    const skippedByExactPin = rerankBoundary.kind === "skip";
-    const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";
-    if (rerankDecision.enabled && scored.length > 0 && host.reranker && !skippedByExactPin && !publicationOnlyStaleRead) {
-        try {
-            const rerankInputCandidates = rerankBoundary.kind === "rerank"
-                ? scored.slice(rerankBoundary.startIndex)
-                : [];
-            const selection = selectRerankCandidates({
-                candidates: rerankInputCandidates,
-                preferredCandidates: rerankInputCandidates.filter((candidate) => (
-                    candidate.retrievalPasses.includes("file_symbols")
-                )),
-                requestedLimit: input.retrievalPolicy.rerankerResultLimit,
-                providerMaximumDocuments: host.reranker.getMaxDocuments?.(),
-            });
-            rerankerFamilyCount = selection.familyCount;
-            rerankerSupplementalCandidates = selection.supplementalCandidateCount;
-            rerankerCandidatePoolCount = selection.candidatePoolCount;
-            const providerBoundedSelection = selection.selected;
-            rerankerCandidateBudget = selection.budget;
-            rerankerBudgetReason = selection.budgetReason;
-            let rerankSlice: SearchCandidate[];
-            let rerankDocuments: string[];
-            let byteBudgetOmittedCandidatesList: SearchCandidate[];
-            let byteSelectionInputBytes = 0;
-            let rerankInputMetadataMap: ReadonlyMap<
-                string,
-                NonNullable<SearchCandidateSurvivalOccurrence["rerankInput"]>
-            > | undefined;
-            if (host.buildRerankDocument) {
-                const buildProjection = host.buildRerankDocument;
-                const projectionRows = await Promise.all(providerBoundedSelection.map(async (candidate) => ({
-                    candidate,
-                    projection: await buildProjection(input.semanticQuery, candidate.result),
-                })));
-                const failureCounts: Partial<Record<SearchRerankProjectionFailureReason, number>> = {};
-                let firstFailure: SearchRerankProjectionSummary["firstFailure"];
-                const structuralContextStatuses = new Set<SearchRerankStructuralContextStatus>();
-                const failedCandidateIds: string[] = [];
-                const projectableRows: Array<{
-                    candidate: SearchCandidate;
-                    projection: Extract<SearchRerankProjectionResult, { ok: true }>;
-                }> = [];
-                for (const row of projectionRows) {
-                    if (
-                        row.projection.ok
-                        && typeof row.projection.document === "string"
-                        && row.projection.document.length > 0
-                    ) {
-                        projectableRows.push({ candidate: row.candidate, projection: row.projection });
-                        if (row.projection.structuralContextStatus !== undefined) {
-                            structuralContextStatuses.add(row.projection.structuralContextStatus);
-                        }
-                        continue;
-                    }
-                    const reason: SearchRerankProjectionFailureReason = row.projection.ok
-                        ? "projection_contract_failed"
-                        : row.projection.reason;
-                    const failedCandidateId = row.projection.ok
-                        ? searchCandidateIdentity(row.candidate.result).candidateId
-                        : row.projection.candidateId;
-                    failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
-                    failedCandidateIds.push(failedCandidateId);
-                    if (!firstFailure) {
-                        firstFailure = { candidateId: failedCandidateId, reason };
-                    }
-                }
-                if (candidateSurvival) {
-                    for (const failedCandidateId of failedCandidateIds) {
-                        appendSearchCandidateRemoval(candidateSurvival, {
-                            candidateId: failedCandidateId,
-                            afterStage: "mcp_ranked",
-                            reason: "reranker_document_projection_failed",
-                        });
-                    }
-                }
-                const structuralContextStatus: SearchRerankStructuralContextStatus | undefined
-                    = structuralContextStatuses.has("incompatible")
-                        ? "incompatible"
-                        : structuralContextStatuses.has("unavailable")
-                            ? "unavailable"
-                            : structuralContextStatuses.has("available")
-                                ? "available"
-                                : undefined;
-                projectionSummary = {
-                    requestedCandidates: providerBoundedSelection.length,
-                    projectedCandidates: projectableRows.length,
-                    skippedCandidates: providerBoundedSelection.length - projectableRows.length,
-                    failureCounts,
-                    ...(firstFailure ? { firstFailure } : {}),
-                    ...(structuralContextStatus ? { structuralContextStatus } : {}),
-                };
-                if (structuralContextStatus === "incompatible") {
-                    phaseWarnings.push(WARNING_CODES.RERANKER_CONTEXT_DEGRADED);
-                }
-                if (!shouldCallRerankerForProjectedCandidateCount(projectableRows.length)) {
-                    // Fewer than two safe documents remain: skip the provider
-                    // and preserve retrieval order without counting a
-                    // provider failure.
-                    phaseWarnings.push(WARNING_CODES.RERANKER_SKIPPED_INPUT);
-                    if (candidateSurvival) {
-                        for (const row of projectableRows) {
-                            appendSearchCandidateRemoval(candidateSurvival, {
-                                candidateId: searchCandidateIdentity(row.candidate.result).candidateId,
-                                afterStage: "mcp_ranked",
-                                reason: "reranker_input_insufficient",
-                            });
-                        }
-                    }
-                    return {
-                        exactMatchPinningApplied,
-                        rerankerAttempted,
-                        rerankerApplied,
-                        orderAuthority,
-                        skippedByExactPin,
-                        rerankerCandidatesIn,
-                        rerankerCandidatesReranked,
-                        rerankerFamilyCount,
-                        rerankerSupplementalCandidates,
-                        rerankerCandidatePoolCount,
-                        rerankerCandidateBudget,
-                        rerankerBudgetReason,
-                        rerankerByteBudgetOmittedCandidates,
-                        warnings: phaseWarnings,
-                        projection: projectionSummary,
-                    };
-                }
-                if (projectableRows.length < providerBoundedSelection.length) {
-                    phaseWarnings.push(WARNING_CODES.RERANKER_INPUT_DEGRADED);
-                }
-                const projectableCandidates = projectableRows.map((row) => row.candidate);
-                const byteSelection = selectRerankInputWithinUtf8Budget({
-                    candidates: projectableCandidates,
-                    documents: projectableRows.map((row) => row.projection.document),
-                    maxInputBytes: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
-                });
-                rerankSlice = [...byteSelection.candidates];
-                rerankDocuments = [...byteSelection.documents];
-                byteBudgetOmittedCandidatesList = projectableCandidates.slice(byteSelection.candidates.length);
-                byteSelectionInputBytes = byteSelection.inputBytes;
-                rerankerByteBudgetOmittedCandidates = byteSelection.omittedCandidateCount;
-                rerankInputMetadataMap = new Map(
-                    rerankSlice.map((candidate, index) => {
-                        const row = projectableRows[index]!;
-                        return [
-                            searchCandidateIdentity(candidate.result).candidateId,
-                            {
-                                documentUtf8Bytes: row.projection.utf8Bytes,
-                                documentSha256: row.projection.sha256,
-                                candidateRole: row.projection.candidateRole,
-                                answerFocus: input.answerFocus,
-                                projectionIdentity: row.projection.projectionIdentity,
-                                queryProjectionIdentity: input.rerankQueryProjectionIdentity,
-                            },
-                        ] as const;
-                    }),
-                );
-            } else {
-                let selectedDocuments: string[];
-                try {
-                    selectedDocuments = await Promise.all(providerBoundedSelection.map(async (candidate) => {
-                        const document = buildNativeProviderRerankDocument(candidate.result);
-                        if (typeof document !== "string" || document.length === 0) {
-                            throw new Error("reranker_document_projection_unavailable");
-                        }
-                        return document;
-                    }));
-                } catch {
-                    rerankerFailurePhase = "document_projection";
-                    throw new Error("reranker_document_projection_failed");
-                }
-                const byteSelection = selectRerankInputWithinUtf8Budget({
-                    candidates: providerBoundedSelection,
-                    documents: selectedDocuments,
-                    maxInputBytes: SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
-                });
-                rerankSlice = [...byteSelection.candidates];
-                rerankDocuments = [...byteSelection.documents];
-                byteBudgetOmittedCandidatesList = providerBoundedSelection.slice(byteSelection.candidates.length);
-                byteSelectionInputBytes = byteSelection.inputBytes;
-                rerankerByteBudgetOmittedCandidates = byteSelection.omittedCandidateCount;
-            }
-            input.signal?.throwIfAborted();
-            const rerankCount = rerankSlice.length;
-            rerankerCandidatesReranked = rerankCount;
-            if (candidateSurvival) {
-                appendSearchCandidateStage(
-                    candidateSurvival,
-                    "reranker_input",
-                    rerankSlice,
-                    undefined,
-                    rerankInputMetadataMap,
-                );
-                for (const candidate of byteBudgetOmittedCandidatesList) {
-                    appendSearchCandidateRemoval(candidateSurvival, {
-                        candidateId: searchCandidateIdentity(candidate.result).candidateId,
-                        afterStage: "mcp_ranked",
-                        reason: "reranker_input_byte_budget",
-                    });
-                }
-            }
-            if (rerankCount === 0) {
-                return {
-                    exactMatchPinningApplied,
-                    rerankerAttempted,
-                    rerankerApplied,
-                    orderAuthority,
-                    skippedByExactPin,
-                    rerankerCandidatesIn,
-                    rerankerCandidatesReranked,
-                    rerankerFamilyCount,
-                    rerankerSupplementalCandidates,
-                    rerankerCandidatePoolCount,
-                    rerankerCandidateBudget,
-                    rerankerBudgetReason,
-                    rerankerByteBudgetOmittedCandidates,
-                    warnings: phaseWarnings,
-                    ...(projectionSummary ? { projection: projectionSummary } : {}),
-                };
-            }
-            rerankerAttempted = true;
-            searchDiagnostics.rerankerCalls += 1;
-            searchDiagnostics.rerankerCandidates += rerankDocuments.length;
-            searchDiagnostics.rerankerInputBytes += byteSelectionInputBytes;
-            let rerankResults: RerankResult[] = [];
-            let rerankerExecutionDiagnosticsObserved = false;
-            try {
-                rerankResults = await host.measureSearchPhase(
-                    'rerank',
-                    () => host.reranker!.rerank(input.rerankQuery, rerankDocuments, {
-                        topK: rerankCount,
-                        truncation: true,
-                        ...(input.signal ? { signal: input.signal } : {}),
-                        returnDocuments: false,
-                        identities: rerankSlice.map((candidate) => (
-                            searchCandidateIdentity(candidate.result).candidateId
-                        )),
-                        // Execution telemetry fires on success and terminal
-                        // failure alike, so retries hidden by a later success
-                        // are still counted. Max-based so repeated reports
-                        // never lose a higher count.
-                        onExecutionDiagnostics: (diagnostics) => {
-                            rerankerExecutionDiagnosticsObserved = true;
-                            searchDiagnostics.rerankerExecutionDiagnostics = diagnostics;
-                            searchDiagnostics.rerankerRetries = Math.max(
-                                searchDiagnostics.rerankerRetries,
-                                diagnostics.retries,
-                            );
-                            searchDiagnostics.rerankerTimeouts = Math.max(
-                                searchDiagnostics.rerankerTimeouts,
-                                diagnostics.timeouts,
-                            );
-                        },
-                    }),
-                );
-            } catch (error) {
-                rerankerFailurePhase = 'api_call';
-                rerankerOperationalReason = resolveLateOnOperationalReason(error);
-                if (error instanceof RerankerRequestError) {
-                    searchDiagnostics.rerankerFailureKind = error.kind;
-                    if (!rerankerExecutionDiagnosticsObserved) {
-                        // Fallback for rerankers that throw RerankerRequestError
-                        // without reporting execution diagnostics: the terminal
-                        // error still carries attempt counts.
-                        searchDiagnostics.rerankerRetries = Math.max(
-                            searchDiagnostics.rerankerRetries,
-                            Math.max(0, error.attempts - 1),
-                        );
-                        if (error.kind === 'timeout') {
-                            searchDiagnostics.rerankerTimeouts = Math.max(
-                                searchDiagnostics.rerankerTimeouts,
-                                1,
-                            );
-                        }
-                    }
-                }
-                throw new Error('reranker_api_call_failed', { cause: error });
-            }
-
-            try {
-                if (!Array.isArray(rerankResults)) {
-                    throw new Error("reranker_result_malformed");
-                }
-
-                const selectedCandidateIds = rerankSlice.map((candidate) => (
-                    searchCandidateIdentity(candidate.result).candidateId
-                ));
-                const validatedItems = validateNativeRerankResults({
-                    candidateIds: selectedCandidateIds,
-                    results: rerankResults,
-                });
-                const executionFlags = resolveSearchFlags(input.flags);
-                let itemsForPolicy = [...validatedItems];
-                let definitionFusionApplied = false;
-                if (allowsDefinitionDiscovery({
-                    enabled: executionFlags.definition_discovery === true,
-                    queryPlan: input.queryPlan,
-                    answerFocus: input.answerFocus,
-                    scope: input.scope,
-                    hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
-                    hasMustConstraint: input.parsedOperators.must.length > 0,
-                }) && host.definitionMetadata) {
-                    const definitionAltTerms = executionFlags.definition_alt_terms
-                        ? (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted : [];
-                    const fusion = fuseDefinitionDiscovery({
-                        items: validatedItems,
-                        query: [input.semanticQuery, ...definitionAltTerms].join(" "),
-                        metadata: index => host.definitionMetadata!(rerankSlice[index]!.result),
-                    });
-                    itemsForPolicy = fusion.items;
-                    definitionFusionApplied = fusion.applied;
-                }
-                if (executionFlags.rerank_blend && !definitionFusionApplied) {
-                    // originalIndex indexes rerankSlice, not the full fused pool,
-                    // so these are ranks WITHIN the rerank window. The blend
-                    // therefore weighs the provider rank against the candidate's
-                    // position in the slice the provider was handed, not its
-                    // position in the pool it was drawn from.
-                    itemsForPolicy.sort((a, b) => {
-                        const aSliceRank = a.originalIndex + 1;
-                        const bSliceRank = b.originalIndex + 1;
-                        const aBlend = 0.5 * a.providerRank + 0.5 * aSliceRank;
-                        const bBlend = 0.5 * b.providerRank + 0.5 * bSliceRank;
-                        if (aBlend !== bBlend) return aBlend - bBlend;
-                        return a.providerRank - b.providerRank;
-                    });
-                }
-                const effectiveRerankItems = preferImplementationCandidates({
-                    candidates: itemsForPolicy,
-                    relativePath: (item) => rerankSlice[item.originalIndex]!.result.relativePath,
-                    answerFocus: input.answerFocus,
-                    queryPlan: input.queryPlan,
-                    hasPathConstraint: input.parsedOperators.path.length > 0
-                        || input.requestedSubdirectory != null,
-                    neutralPrefersImplementation: executionFlags.neutral_owner_preference === true,
-                });
-                const reordered = applyNativeRerankToSelectedSlots({
-                    allCandidates: scored,
-                    selectedCandidateIds,
-                    orderedItems: effectiveRerankItems,
-                    identify: (candidate) => searchCandidateIdentity(candidate.result).candidateId,
-                });
-                for (const item of validatedItems) {
-                    const candidate = rerankSlice[item.originalIndex]!;
-                    candidate.rerankerRank = item.providerRank;
-                    candidate.rerankerScore = item.relevanceScore;
-                    candidate.rerankAdjusted = true;
-                }
-                scored.splice(0, scored.length, ...reordered);
-                orderAuthority = definitionFusionApplied ? "definition_fusion_order" : "reranker_order";
-                rerankerApplied = validatedItems.length > 0;
-                if (candidateSurvival) {
-                    appendSearchCandidateStage(
-                        candidateSurvival,
-                        "reranker_output",
-                        effectiveRerankItems.map((item) => rerankSlice[item.originalIndex]!),
-                    );
-                }
-            } catch {
-                rerankerFailurePhase = 'parse_results';
-                throw new Error('reranker_parse_failed');
-            }
-            if (rerankerApplied && lateOnProvider) {
-                rerankerOperationalReason = "lateon_applied";
-            }
-        } catch {
-            // Cancellation is not a reranker failure: reject instead of
-            // publishing the retrieval-order fallback.
-            input.signal?.throwIfAborted();
-            rerankerFailurePhase ||= 'parse_results';
-            // Every terminal reranker failure -- api_call, document
-            // projection, parse/invalid results -- counts exactly once here.
-            searchDiagnostics.rerankerFailures += 1;
-        }
-    }
-
-    assignAuthoritativeRanks(scored);
-    return {
-        exactMatchPinningApplied,
-        rerankerAttempted,
-        rerankerApplied,
-        orderAuthority,
-        skippedByExactPin,
-        rerankerFailurePhase,
-        rerankerOperationalReason,
-        rerankerCandidatesIn,
-        rerankerCandidatesReranked,
-        rerankerFamilyCount,
-        rerankerSupplementalCandidates,
-        rerankerCandidatePoolCount,
-        rerankerCandidateBudget,
-        rerankerBudgetReason,
-        rerankerByteBudgetOmittedCandidates,
-        rerankerFailureKind: searchDiagnostics.rerankerFailureKind,
-        warnings: rerankerFailurePhase
-            ? [...phaseWarnings, WARNING_CODES.RERANKER_FAILED]
-            : phaseWarnings,
-        ...(projectionSummary ? { projection: projectionSummary } : {}),
-    };
-}
-
 function buildEmptyFilterSummary(): SearchFilterSummary {
     return {
         removedByRequestedSubdirectory: 0,
@@ -1014,31 +512,6 @@ function buildEmptyFilterSummary(): SearchFilterSummary {
         removedByMust: 0,
         removedByExclude: 0,
     };
-}
-
-/**
- * Plain rerank document for providers that do not receive the publication-bound
- * canonical projection (native rerankers). This is an unversioned provider
- * document, not a document projection: no projection policy or identity
- * attaches to it.
- */
-function buildNativeProviderRerankDocument(result: SearchResultLike): string {
-    const relativePath = typeof result?.relativePath === "string"
-        ? result.relativePath
-        : "";
-    const language = typeof result?.language === "string"
-        ? result.language
-        : "unknown";
-    const symbolLabel = typeof result?.symbolLabel === "string"
-        ? result.symbolLabel
-        : "";
-    const content = typeof result?.content === "string" ? result.content : "";
-    const contentLines = content.split(/\r?\n/).slice(0, SEARCH_RERANK_DOC_MAX_LINES);
-    let normalizedContent = contentLines.join("\n");
-    if (normalizedContent.length > SEARCH_RERANK_DOC_MAX_CHARS) {
-        normalizedContent = normalizedContent.slice(0, SEARCH_RERANK_DOC_MAX_CHARS);
-    }
-    return `${relativePath}\n${language}\n${symbolLabel}\n${normalizedContent}`;
 }
 
 export function hasTestOrDocIntent(queryPlan: SearchQueryPlan, queryText: string): boolean {

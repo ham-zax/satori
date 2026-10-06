@@ -6,7 +6,6 @@ import type {
     SemanticSearchResult,
 } from "@satori-code/core";
 import {
-    LexicalRetrievalModeUnsupportedError,
     RerankerRequestError,
     type RerankerFailureKind,
 } from "@satori-code/core";
@@ -64,10 +63,17 @@ import type {
     SearchQueryPlan,
     SearchResultLike,
 } from "./search-lexical-scoring.js";
-import {
-    buildSearchLexicalFallbackTerms,
-    type ParsedSearchOperators,
+import type {
+    ParsedSearchOperators,
 } from "./search-query-planning.js";
+import {
+    runDirtyOverlayPass,
+    runLivePathPass,
+    runMustConstraintLane,
+    runSemanticSearchPasses,
+    runSymbolMetadataPasses,
+    runTrackedLexicalPass,
+} from "./search-retrieval-passes.js";
 import {
     buildSemanticPassFailureDiagnostic,
     type SemanticPassFailureDiagnostic,
@@ -118,32 +124,6 @@ const LATEON_OPERATIONAL_REASONS = new Set<SearchRerankerOperationalReason>([
     "lateon_invalid_output",
     "lateon_worker_failure",
 ]);
-
-function isSearchPassFaultInjectionEnabled(): boolean {
-    return process.env.NODE_ENV === 'test';
-}
-
-function getForcedFailedSearchPassId(): 'primary' | 'expanded' | 'both' | undefined {
-    if (!isSearchPassFaultInjectionEnabled()) {
-        return undefined;
-    }
-
-    const raw = typeof process.env.SATORI_TEST_FAIL_SEARCH_PASS === 'string'
-        ? process.env.SATORI_TEST_FAIL_SEARCH_PASS.trim().toLowerCase()
-        : '';
-    if (raw === 'primary' || raw === 'expanded' || raw === 'both') {
-        return raw;
-    }
-    return undefined;
-}
-
-function shouldForceSearchPassFailure(passId: 'primary' | 'expanded'): boolean {
-    const forced = getForcedFailedSearchPassId();
-    if (!forced) {
-        return false;
-    }
-    return forced === 'both' || forced === passId;
-}
 
 function resolveLateOnOperationalReason(error: unknown): SearchRerankerOperationalReason | undefined {
     if (!error || typeof error !== "object" || !("reason" in error)) return undefined;
@@ -1150,44 +1130,18 @@ export async function runSearchExecution(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         attemptsUsed = attempt + 1;
-        const runPasses = (passDescriptors: Array<{ id: SearchPassId; query: string }>) => {
-            searchDiagnostics.searchPassCount += passDescriptors.length;
-            return host.measureSearchPhase(
-                "semanticSearch",
-                () => Promise.allSettled(passDescriptors.map(async (pass) => {
-                if ((host.shouldForceSearchPassFailure ?? shouldForceSearchPassFailure)(pass.id)) {
-                    throw new Error(`FORCED_TEST_SEARCH_PASS_FAILURE:${pass.id}`);
-                }
-                searchDiagnostics.semanticSearchAttempts += 1;
-                if (input.queryPlan.retrievalMode !== "lexical") {
-                    searchDiagnostics.embeddingCallsByCurrentContract += 1;
-                    searchDiagnostics.denseQueriesByCurrentContract += 1;
-                }
-                if (input.queryPlan.retrievalMode !== "dense") {
-                    searchDiagnostics.sparseQueriesByCurrentContract += 1;
-                }
-                const scorePolicy = input.queryPlan.scorePolicyKind === "topk_only"
-                    ? { kind: "topk_only" as const }
-                    : { kind: "dense_similarity_min" as const, min: 0.3 };
-                const lexicalFallbackTerms = input.queryPlan.retrievalMode === "dense"
-                    ? []
-                    : buildSearchLexicalFallbackTerms(pass.query, { compoundJoin: Boolean(flags.compound_join) });
-                return host.semanticSearch({
-                    codebasePath: input.effectiveRoot,
-                    query: pass.query,
-                    topK: candidateLimit,
-                    retrievalMode: input.queryPlan.retrievalMode,
-                    scorePolicy,
-                    ...(input.retrievalFilter ? { filter: input.retrievalFilter } : {}),
-                    ...(lexicalFallbackTerms.length > 0
-                        ? { lexicalFallbackTerms }
-                        : {}),
-                });
-                })),
-            );
-        };
         const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
-        const primarySettled = await runPasses([primaryDescriptor]);
+        const primarySettled = await runSemanticSearchPasses({
+            host,
+            diagnostics: searchDiagnostics,
+            codebasePath: input.effectiveRoot,
+            retrievalMode: input.queryPlan.retrievalMode,
+            scorePolicyKind: input.queryPlan.scorePolicyKind,
+            compoundJoin: Boolean(flags.compound_join),
+            retrievalFilter: input.retrievalFilter,
+            candidateLimit,
+            passDescriptors: [primaryDescriptor],
+        });
         const primaryResult = primarySettled[0];
         const primaryEmbeddingDiagnostic = primaryResult.status === "rejected"
             ? host.classifyEmbeddingProviderError(primaryResult.reason)
@@ -1246,7 +1200,17 @@ export async function runSearchExecution(
         if (shouldExpand) {
             const expandedDescriptor = { id: "expanded" as const, query: expandedQuery };
             passDescriptors.push(expandedDescriptor);
-            passSettled.push(...await runPasses([expandedDescriptor]));
+            passSettled.push(...await runSemanticSearchPasses({
+                host,
+                diagnostics: searchDiagnostics,
+                codebasePath: input.effectiveRoot,
+                retrievalMode: input.queryPlan.retrievalMode,
+                scorePolicyKind: input.queryPlan.scorePolicyKind,
+                compoundJoin: Boolean(flags.compound_join),
+                retrievalFilter: input.retrievalFilter,
+                candidateLimit,
+                passDescriptors: [expandedDescriptor],
+            }));
         }
 
         const successfulPasses: Array<{
@@ -1453,14 +1417,12 @@ export async function runSearchExecution(
         }
 
         if (dirtyFilesNotFreshened) {
-            const dirtyOverlayResults = await host.measureSearchPhase(
-                "trackedLexical",
-                () => host.searchQuerySupport.buildDirtyFileSearchResults({
-                    effectiveRoot: input.effectiveRoot,
-                    queryPlan: input.queryPlan,
-                    changedFiles: observedChangedFilesState.files,
-                }),
-            );
+            const dirtyOverlayResults = await runDirtyOverlayPass({
+                host,
+                effectiveRoot: input.effectiveRoot,
+                queryPlan: input.queryPlan,
+                changedFiles: observedChangedFilesState.files,
+            });
             if (dirtyOverlayResults.length > 0) {
                 // This pass replaces the stale semantic passes for the dirty path.
                 // Semantic passes combine by max, so one pass weight is equivalent.
@@ -1478,17 +1440,15 @@ export async function runSearchExecution(
         }
 
         const trackedLexical = !publicationOnlyStaleRead
-            ? await host.measureSearchPhase(
-                "trackedLexical",
-                async () => host.searchQuerySupport.buildTrackedLexicalSearchResults({
-                    effectiveRoot: input.effectiveRoot,
-                    parsedOperators: input.parsedOperators,
-                    queryPlan: input.queryPlan,
-                    scope: input.scope,
-                    limit: candidateLimit,
-                    exactRegistryFallback: input.exactRegistryFallbackForTrackedLexical,
-                }),
-            )
+            ? await runTrackedLexicalPass({
+                host,
+                effectiveRoot: input.effectiveRoot,
+                parsedOperators: input.parsedOperators,
+                queryPlan: input.queryPlan,
+                scope: input.scope,
+                limit: candidateLimit,
+                exactRegistryFallback: input.exactRegistryFallbackForTrackedLexical,
+            })
             : { results: [], debug: undefined };
         trackedLexicalDebug = trackedLexical.debug;
         if (trackedLexical.results.length > 0) {
@@ -1505,7 +1465,8 @@ export async function runSearchExecution(
         }
 
         if (canSupplementLivePathEvidence) {
-            const livePathResults = await host.searchQuerySupport.buildLivePathScopedSearchResults({
+            const livePathResults = await runLivePathPass({
+                host,
                 effectiveRoot: input.effectiveRoot,
                 parsedOperators: input.parsedOperators,
                 queryPlan: input.queryPlan,
@@ -1649,41 +1610,15 @@ export async function runSearchExecution(
             mustLaneSkippedByPrimaryLimit = true;
         }
         if (shouldRunMustLane) {
-            const mustLaneBudget = retrievalPolicy.maxCandidateLimit;
-            let laneResults: SearchResultLike[] = [];
-            let laneFailed = false;
-            let conjunctiveUnavailable = false;
-            try {
-                const laneResponse = await host.measureSearchPhase(
-                    "semanticSearch",
-                    () => host.semanticSearch({
-                        codebasePath: input.effectiveRoot,
-                        query: mustTokens.join(" "),
-                        topK: mustLaneBudget,
-                        retrievalMode: "lexical",
-                        // Every must: value is mandatory: the backend must honor
-                        // all-terms matching or reject the request explicitly.
-                        lexicalMatchMode: "all_terms",
-                        scorePolicy: { kind: "topk_only" },
-                        ...(input.retrievalFilter ? { filter: input.retrievalFilter } : {}),
-                    }),
-                );
-                laneResults = Array.isArray(laneResponse)
-                    ? laneResponse
-                    : laneResponse.results;
-            } catch (error) {
-                if (error instanceof LexicalRetrievalModeUnsupportedError) {
-                    // The backend cannot guarantee conjunctive semantics; do not
-                    // silently run provider-defined sparse matching and never
-                    // claim the must: lane examined the candidate pool.
-                    conjunctiveUnavailable = true;
-                } else {
-                    // A lane failure is bounded: keep the primary results and
-                    // report that the budget could not be fully examined.
-                    laneFailed = true;
-                }
-            }
-            if (conjunctiveUnavailable) {
+            const mustLane = await runMustConstraintLane({
+                host,
+                effectiveRoot: input.effectiveRoot,
+                mustTokens,
+                candidateBudget: retrievalPolicy.maxCandidateLimit,
+                retrievalFilter: input.retrievalFilter,
+            });
+            const laneResults = mustLane.laneResults;
+            if (mustLane.outcome.status === "unsupported") {
                 searchWarningsSet.add(WARNING_CODES.MUST_CONJUNCTIVE_RETRIEVAL_UNAVAILABLE);
             } else if (laneResults.length > 0) {
                 if (candidateSurvival) {
@@ -1699,30 +1634,7 @@ export async function runSearchExecution(
                 attemptFilterSummary = buildEmptyFilterSummary();
                 evaluateAllCandidates();
             }
-            mustConstraintRetrievalOutcome = conjunctiveUnavailable
-                ? {
-                    // The backend cannot guarantee conjunctive semantics, so
-                    // the dedicated lane was never attempted and no budget was
-                    // examined. Only the conjunctive-unavailable warning may
-                    // accompany this state.
-                    status: "unsupported",
-                    candidatesExamined: 0,
-                    candidateBudget: mustLaneBudget,
-                    budgetExhausted: false,
-                }
-                : laneFailed
-                    ? {
-                        status: "failed",
-                        candidatesExamined: laneResults.length,
-                        candidateBudget: mustLaneBudget,
-                        budgetExhausted: true,
-                    }
-                    : {
-                        status: "attempted",
-                        candidatesExamined: laneResults.length,
-                        candidateBudget: mustLaneBudget,
-                        budgetExhausted: laneResults.length >= mustLaneBudget,
-                    };
+            mustConstraintRetrievalOutcome = mustLane.outcome;
         }
 
         const definitionMetadataEnabled = host.definitionMetadata && allowsDefinitionDiscovery({
@@ -1733,17 +1645,21 @@ export async function runSearchExecution(
             hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
             hasMustConstraint: input.parsedOperators.must.length > 0,
         });
-        if ((flags.symbol_metadata_bm25 || definitionMetadataEnabled) && host.symbolMetadataSearch
+        const { symbolMetadataSearch } = host;
+        if ((flags.symbol_metadata_bm25 || definitionMetadataEnabled) && symbolMetadataSearch
             && !publicationOnlyStaleRead && input.scope !== "docs"
             && (input.queryPlan.route.kind === "conceptual" || input.queryPlan.route.kind === "mixed" || definitionMetadataEnabled)
             && !input.queryPlan.testSeeking && !input.queryPlan.documentationSeeking
             && !input.queryPlan.referenceSeeking && input.parsedOperators.must.length === 0
             && input.parsedOperators.path.length === 0 && input.requestedSubdirectory == null) {
-            input.signal?.throwIfAborted();
-            const metadataResults = await host.measureSearchPhase("trackedLexical", () => (
-                host.symbolMetadataSearch!()
-            ));
-            input.signal?.throwIfAborted();
+            const symbolMetadata = await runSymbolMetadataPasses({
+                host,
+                signal: input.signal,
+                ...(flags.definition_alt_terms && callerAltTerms.length > 0
+                    ? { altQuery: callerAltTerms.join(" ") }
+                    : {}),
+            });
+            const metadataResults = symbolMetadata.metadataResults;
             if (candidateSurvival) {
                 appendSearchCandidatePass(candidateSurvival, metadataResults,
                     `attempt:${attempt + 1}/symbol_metadata_bm25`, 1);
@@ -1752,11 +1668,8 @@ export async function runSearchExecution(
             passesUsed.add("symbol_metadata_bm25");
             // A separate pass, so caller terms cannot displace owners the
             // primary query admitted from the bounded metadata window.
-            if (flags.definition_alt_terms && callerAltTerms.length > 0) {
-                const altMetadataResults = await host.measureSearchPhase("trackedLexical", () => (
-                    host.symbolMetadataSearch!(callerAltTerms.join(" "))
-                ));
-                input.signal?.throwIfAborted();
+            if (symbolMetadata.altMetadataResults !== undefined) {
+                const altMetadataResults = symbolMetadata.altMetadataResults;
                 if (candidateSurvival) {
                     appendSearchCandidatePass(candidateSurvival, altMetadataResults,
                         `attempt:${attempt + 1}/symbol_metadata_bm25_alt`, 1);

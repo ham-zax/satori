@@ -12,6 +12,7 @@ import {
     type VectorWriteMetricsSnapshot,
     type VectorStoreProviderIdentity,
 } from '../vectordb';
+import { LANCEDB_LEXICAL_ANALYZER_VERSION } from '../vectordb/lancedb-lexical-analyzer';
 import {
     SemanticSearchRequest,
     SemanticSearchResult,
@@ -986,9 +987,10 @@ export class Context {
 
     private buildPublicationFormat(): Publication['format'] {
         const embeddingIdentity = this.assertEmbeddingIdentityCurrent();
-        const backendInfo = this.vectorDatabase.getBackendInfo?.();
-        const lexicalAnalyzerVersion = backendInfo?.provider === 'lancedb'
-            ? backendInfo.lexicalAnalyzerVersion
+        // Derived from the configured provider, never the live adapter, so contexts
+        // without an open vector store validate the same format the writer publishes.
+        const lexicalAnalyzerVersion = this.vectorStoreProvider === 'LanceDB'
+            ? LANCEDB_LEXICAL_ANALYZER_VERSION
             : undefined;
         return Object.freeze({
             indexFormatVersion: JSON.stringify({

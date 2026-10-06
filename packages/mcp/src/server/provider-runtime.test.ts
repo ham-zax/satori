@@ -171,7 +171,6 @@ test("LanceDB runtime selection seals backend identity without requiring Milvus"
         address: databasePath,
         lexicalMatchModes: ["all_terms", "any_terms"],
         defaultLexicalMatchMode: "all_terms",
-        lexicalAnalyzerVersion: "lancedb_fts_simple_lowercase_stem_v1",
     });
     await vectorStore.createCollection("runtime_probe", 2);
     assert.deepEqual(await vectorStore.listCollections(), ["runtime_probe"]);
@@ -233,6 +232,30 @@ test("raw provider contexts carry the deny-all workspace policy", async (t) => {
         (error: unknown) => error instanceof WorkspaceAuthorizationError
             && error.code === "WORKSPACE_POLICY_NOT_BOUND",
     );
+});
+
+test("local-only context derives the LanceDB provider's Publication format", async (t) => {
+    const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "satori-local-format-"));
+    t.after(() => fs.rmSync(databasePath, { recursive: true, force: true }));
+    const config = baseConfig({
+        vectorStoreProvider: "LanceDB",
+        lanceDbPath: databasePath,
+        milvusEndpoint: undefined,
+        milvusApiToken: undefined,
+        embeddingArtifactDigest: "a".repeat(64),
+    });
+    const runtime = createRuntime(config);
+    t.after(() => runtime.shutdown());
+    const toolContext = await runtime.requireToolContext("vector_only");
+    if ("code" in toolContext) {
+        throw new Error("expected a provider context");
+    }
+    // Navigation reads validate Publications on the local-only context; a
+    // format mismatch there schedules a reindex that can never converge.
+    const formatOf = (context: unknown) => (
+        context as { buildPublicationFormat(): unknown }
+    ).buildPublicationFormat();
+    assert.deepEqual(formatOf(createLocalOnlyContext(config)), formatOf(toolContext.context));
 });
 
 test("vector-only context preserves the configured embedding identity", () => {

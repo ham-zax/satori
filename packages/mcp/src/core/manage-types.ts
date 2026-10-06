@@ -95,7 +95,7 @@ export interface ManagePendingSync {
 }
 
 export interface ManageSourceFreshness {
-    state: "verified" | "changed" | "unverified";
+    state: "verified" | "changed" | "index_snapshot" | "unverified";
     reason: string;
 }
 

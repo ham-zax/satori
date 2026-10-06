@@ -478,6 +478,17 @@ export class SearchQuerySupport {
                     logicalPath,
                 ));
             } catch {
+                // Only a deleted path proves the indexed copy is gone. Any other
+                // failure (permissions, I/O, root escape) leaves the indexed
+                // results in place rather than silently suppressing them. The
+                // root-bound opener does not preserve errno, so probe absence.
+                const absent = await fs.promises.lstat(logicalPath).then(
+                    () => false,
+                    (error: unknown) => isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR'),
+                );
+                if (!absent) {
+                    unreadPaths.add(relativePath);
+                }
                 continue;
             } finally {
                 await handle?.close().catch(() => undefined);

@@ -495,51 +495,71 @@ export async function finalizeSearchResults(
                 scored.slice(0, input.limit),
             );
         }
-        const rawResults = buildRawSearchResultsHelper({
+        const rankedRawResults = buildRawSearchResultsHelper({
             scored,
             limit: input.limit,
             debugMode: input.debugMode,
             now: host.now,
         });
-        const noiseMitigationHint = host.searchQuerySupport.buildNoiseMitigationHint(
-            input.effectiveRoot,
-            rawResults.map((result) => result.file),
-            input.scope,
-            input.parsedOperators,
-        );
-        const generatedArtifactsHint = host.buildGeneratedArtifactsVerificationHint(
-            input.effectiveRoot,
-            rawResults.map((result) => ({
-                file: result.file,
-                span: result.span,
-            })),
-        );
         const mustConstraintHint = buildMustConstraintHint();
-        return {
-            kind: "ok",
-            envelope: buildRawSearchEnvelopeHelper({
-                ...(input.navigationAuthority === "valid" && input.searchSymbolRegistry ? {
-                    structuralAnalysis: computeSymbolQualitySummaryFromRegistry(input.searchSymbolRegistry).structuralAnalysis,
-                } : {}),
-                codebaseRoot: input.effectiveRoot,
-                absolutePath: input.absolutePath,
-                query: input.query,
-                scope: input.scope,
-                groupBy: input.groupBy,
-                limit: input.limit,
-                debugMode: input.debugMode,
-                freshnessDecision: input.freshnessDecision,
-                freshnessSummary,
-                warnings: finalizedSearchWarnings,
-                ...buildDebugProjection(),
-                proofDebugHint: input.proofDebugHint,
-                noiseMitigationHint,
-                generatedArtifactsHint,
-                mustConstraintHint,
-                mustCoverageHint: mustCoverage ?? undefined,
-                results: rawResults,
-            }),
-        };
+        const buildRawEnvelope = (rawResults: typeof rankedRawResults, warnings: string[]) => buildRawSearchEnvelopeHelper({
+            ...(input.navigationAuthority === "valid" && input.searchSymbolRegistry ? {
+                structuralAnalysis: computeSymbolQualitySummaryFromRegistry(input.searchSymbolRegistry).structuralAnalysis,
+            } : {}),
+            codebaseRoot: input.effectiveRoot,
+            absolutePath: input.absolutePath,
+            query: input.query,
+            scope: input.scope,
+            groupBy: input.groupBy,
+            limit: input.limit,
+            debugMode: input.debugMode,
+            freshnessDecision: input.freshnessDecision,
+            freshnessSummary,
+            warnings,
+            ...buildDebugProjection(),
+            proofDebugHint: input.proofDebugHint,
+            noiseMitigationHint: host.searchQuerySupport.buildNoiseMitigationHint(
+                input.effectiveRoot,
+                rawResults.map((result) => result.file),
+                input.scope,
+                input.parsedOperators,
+            ),
+            generatedArtifactsHint: host.buildGeneratedArtifactsVerificationHint(
+                input.effectiveRoot,
+                rawResults.map((result) => ({
+                    file: result.file,
+                    span: result.span,
+                })),
+            ),
+            mustConstraintHint,
+            mustCoverageHint: mustCoverage ?? undefined,
+            results: rawResults,
+        });
+        // Raw mode has no continuation, so it shares the grouped response byte
+        // budget by dropping the lowest-ranked chunks and saying so. The top
+        // chunk is always kept.
+        const maxResponseBytes = input.debugMode === "full"
+            ? SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES
+            : SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES;
+        const fits = (envelope: unknown) => Buffer.byteLength(JSON.stringify(envelope), "utf8") <= maxResponseBytes;
+        let envelope = buildRawEnvelope(rankedRawResults, finalizedSearchWarnings);
+        if (rankedRawResults.length > 1 && !fits(envelope)) {
+            const trimmedWarnings = [...finalizedSearchWarnings, WARNING_CODES.SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET];
+            let low = 1;
+            let high = rankedRawResults.length - 1;
+            envelope = buildRawEnvelope(rankedRawResults.slice(0, 1), trimmedWarnings);
+            while (low < high) {
+                const count = Math.ceil((low + high) / 2);
+                const candidate = buildRawEnvelope(rankedRawResults.slice(0, count), trimmedWarnings);
+                if (fits(candidate)) {
+                    low = count;
+                    envelope = candidate;
+                } else {
+                    high = count - 1;
+                }
+            }
+        }
+        return { kind: "ok", envelope };
     }
 
     const needsRegistryRepair = input.groupBy === "symbol"

@@ -656,6 +656,26 @@ test("detect_changes seeds an enclosing class whose own lines change in the same
     assert.deepEqual(result.seeds.map((seed) => seed.symbolId), ["C", "m"]);
 });
 
+test("detect_changes seeds the member whose leading comment or decorator changed, not the enclosing class", async () => {
+    const base = "class C {\n  a = 1;\n\n  m() {\n    return 1;\n  }\n}\n";
+    const edited = "class C {\n  a = 1;\n\n  /**\n   * Doc.\n   */\n  @trace\n  m() {\n    return 1;\n  }\n  // trailing note\n}\n";
+    const result = await seedFixture(base, edited, [
+        { symbolId: "C", kind: "class", startLine: 1, endLine: 12 },
+        { symbolId: "a", kind: "property", startLine: 2, endLine: 2 },
+        { symbolId: "m", kind: "method", startLine: 8, endLine: 10 },
+    ]);
+    // The doc comment and decorator belong to m; the comment before the
+    // closing brace precedes no member and stays with the class.
+    assert.deepEqual(result.seeds.map((seed) => seed.symbolId), ["C", "m"]);
+
+    const onlyDoc = await seedFixture(base, edited.replace("  // trailing note\n", ""), [
+        { symbolId: "C", kind: "class", startLine: 1, endLine: 11 },
+        { symbolId: "a", kind: "property", startLine: 2, endLine: 2 },
+        { symbolId: "m", kind: "method", startLine: 8, endLine: 10 },
+    ]);
+    assert.deepEqual(onlyDoc.seeds.map((seed) => seed.symbolId), ["m"]);
+});
+
 test("detect_changes does not blame a deleted whole symbol on its neighbour and discloses the unmapped hunk", async () => {
     const base = "export function f() {\n  return 1;\n}\nexport function gone() {\n  return 2;\n}\nexport function h() {\n  return 3;\n}\n";
     const edited = "export function f() {\n  return 1;\n}\nexport function h() {\n  return 30;\n}\n";

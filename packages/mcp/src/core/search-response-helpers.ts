@@ -111,6 +111,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             action: "Use the returned Publication-backed results with direct source verification when current-worktree parity matters; manage_index sync is optional maintenance to refresh indexed evidence.",
         };
     }
+    if (code === WARNING_CODES.SOURCE_SERVED_FROM_INDEX_SNAPSHOT) {
+        return {
+            code,
+            severity: "info",
+            blocksUse: false,
+            message: "Results come from the latest completed index. Live change tracking is not running for this workspace yet, so edits made after that index may not be reflected.",
+            action: "Read a file directly when its exact current content matters; manage_index sync refreshes the index.",
+        };
+    }
     if (code === WARNING_CODES.SOURCE_CHANGES_PENDING) {
         return {
             code,
@@ -262,6 +271,15 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
             blocksUse: false,
             message: "The full search results are valid, but the optional compact result index could not fit its UTF-8 response budget.",
             action: "Use the disclosed results and continue_search pages; no result order or group was removed to make room for the index.",
+        };
+    }
+    if (code === WARNING_CODES.SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET) {
+        return {
+            code,
+            severity: "caution",
+            blocksUse: false,
+            message: "Lower-ranked raw chunks were dropped so the response fits its UTF-8 byte budget; the returned chunks keep their rank order.",
+            action: "Use grouped results for pageable continuation, or narrow the query or scope to see the remaining chunks.",
         };
     }
     if (code.startsWith("SEARCH_PARTIAL_INDEX:")) {

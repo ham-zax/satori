@@ -229,6 +229,8 @@ function sourceFreshnessLine(sourceFreshness: SourceFreshnessAssessment): string
             return `Current source parity is verified (${sourceFreshness.reason}).`;
         case "changed":
             return `Current source differs from this completed Publication (${sourceFreshness.reason}); the published generation remains readable while maintenance is pending.`;
+        case "index_snapshot":
+            return `Serving the latest completed Publication; live change tracking is not running yet (${sourceFreshness.reason}).`;
         case "unverified":
             return `Current source parity is unverified (${sourceFreshness.reason}); the completed Publication remains readable and can be refreshed explicitly when current-source parity matters.`;
     }
@@ -544,6 +546,8 @@ export class ManageMaintenanceHandlers {
                 warnings.push(WARNING_CODES.SOURCE_CHANGES_PENDING);
             } else if (sourceFreshness?.state === "unverified") {
                 warnings.push(WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED);
+            } else if (sourceFreshness?.state === "index_snapshot") {
+                warnings.push(WARNING_CODES.SOURCE_SERVED_FROM_INDEX_SNAPSHOT);
             }
             if (proofDebugHint) {
                 statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;

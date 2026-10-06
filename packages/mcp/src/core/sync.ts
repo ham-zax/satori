@@ -84,9 +84,16 @@ export type SourceFreshnessAssessment =
         reason: 'ignore_control_changed' | 'exact_source_comparison' | 'full_source_comparison';
     }
     | {
+        // Live change tracking is simply not running for this root (disabled,
+        // not started yet, or still starting). Reads serve the latest completed
+        // index; nothing has failed, so this is reported apart from 'unverified'.
+        state: 'index_snapshot';
+        reason: LiveTrackingInactiveReason;
+    }
+    | {
         state: 'unverified';
         reason:
-            | PreparedReadObservationUnavailableReason
+            | Exclude<PreparedReadObservationUnavailableReason, LiveTrackingInactiveReason>
             | 'source_checkpoint_probe_failed'
             | 'ignore_control_probe_failed'
             | 'exact_source_comparison_unavailable'
@@ -196,6 +203,21 @@ export interface WatcherObservationSnapshot {
     coverageGapSinceEpoch?: number;
     lastWatcherError?: string;
     pending: boolean;
+}
+
+const LIVE_TRACKING_INACTIVE_REASONS = [
+    'watcher_disabled',
+    'watcher_manager_not_started',
+    'root_not_registered',
+    'watcher_starting',
+] as const;
+
+type LiveTrackingInactiveReason = typeof LIVE_TRACKING_INACTIVE_REASONS[number];
+
+function isLiveTrackingInactiveReason(
+    reason: PreparedReadObservationUnavailableReason,
+): reason is LiveTrackingInactiveReason {
+    return (LIVE_TRACKING_INACTIVE_REASONS as readonly string[]).includes(reason);
 }
 
 export type PreparedReadObservationUnavailableReason =
@@ -1063,12 +1085,12 @@ export class SyncManager {
             }
         }
         if (!preparedObservation.available) {
+            const reason = preparedObservation.reason;
             return withReadMetadata({
                 mode: exactMatched || fullMatched ? 'skipped_source_unchanged' : 'read_only',
-                sourceFreshness: {
-                    state: 'unverified',
-                    reason: preparedObservation.reason,
-                },
+                sourceFreshness: isLiveTrackingInactiveReason(reason)
+                    ? { state: 'index_snapshot', reason }
+                    : { state: 'unverified', reason },
             });
         }
 

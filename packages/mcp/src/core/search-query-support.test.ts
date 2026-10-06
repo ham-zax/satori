@@ -522,21 +522,25 @@ test('dirty overlay ranks matches across chunks before capping and reports files
             `export const big = "${'x'.repeat(300 * 1024)}";\nexport const t = invoiceTotal(taxRate);\n`,
         );
 
+        // Present but unreadable, so its indexed evidence must not be suppressed.
+        fs.writeFileSync(path.join(root, 'src/locked.ts'), 'export const t = invoiceTotal(taxRate);\n');
+        fs.chmodSync(path.join(root, 'src/locked.ts'), 0o000);
+
         const parsedOperators = parseSearchOperators('invoiceTotal taxRate');
         const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
         const support = buildTrackedLexicalSupport([]);
         const overlay = await support.buildDirtyFileSearchResults({
             effectiveRoot: root,
             queryPlan,
-            changedFiles: new Set(['src/billing.ts', 'src/huge.ts', 'src/deleted.ts']),
+            changedFiles: new Set(['src/billing.ts', 'src/huge.ts', 'src/deleted.ts', 'src/locked.ts']),
         });
 
         assert.equal(overlay.results.length, 16);
         assert.match(overlay.results[0]?.content ?? '', /strongest/);
         assert.equal(overlay.results[0]?.symbolKind, 'function');
         assert.ok(overlay.results.every((result) => result.relativePath === 'src/billing.ts'));
-        // A deleted file is read as absent, so only the oversized file stays unread.
-        assert.deepEqual([...overlay.unreadPaths], ['src/huge.ts']);
+        // A deleted file is read as absent; oversized and unreadable files stay unread.
+        assert.deepEqual([...overlay.unreadPaths].sort(), ['src/huge.ts', 'src/locked.ts']);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

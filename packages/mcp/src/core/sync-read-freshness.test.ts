@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { SyncManager } from "./sync.js";
+import { buildFreshnessWarningCodes, WARNING_CODES } from "./warnings.js";
 
 test("read freshness acknowledges only watcher events proven by a matching complete source observation", async () => {
     const root = "/repo";
@@ -223,4 +224,56 @@ test("external sync completion reaches the watcher-owning manager and closes a g
     const afterSecond = manager.getPreparedReadObservation(root);
     assert.equal(afterSecond.available, true);
     assert.equal(afterSecond.available ? afterSecond.observation.checkpointObservation : undefined, "checkpoint-after-sync");
+});
+
+test("read freshness reports an index snapshot, not unverified, until live tracking starts", async () => {
+    const root = "/repo";
+    const observation = "checkpoint-observation";
+    const publication = {
+        publicationId: "publication-3",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: observation,
+            publicationId: "publication-3",
+        }),
+        getCurrentPublicationSourceObservation: () => observation,
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: { assertCurrent: () => {}, getCurrentOperation: () => undefined } as never,
+    });
+    const assess = () => manager.assessReadFreshness(root, 60_000, {
+        preparedPublication: publication as never,
+    });
+
+    // A navigation-first session reads before any provider-backed call starts the watcher.
+    const notStarted = await assess();
+    assert.deepEqual(notStarted.sourceFreshness, {
+        state: "index_snapshot",
+        reason: "watcher_manager_not_started",
+    });
+    assert.deepEqual(buildFreshnessWarningCodes(notStarted), [
+        WARNING_CODES.SOURCE_SERVED_FROM_INDEX_SNAPSHOT,
+    ]);
+
+    // A watcher that should be running but is not stays a real unverified state.
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    const inactive = await assess();
+    assert.deepEqual(inactive.sourceFreshness, {
+        state: "unverified",
+        reason: "root_watcher_not_active",
+    });
+    assert.deepEqual(buildFreshnessWarningCodes(inactive), [
+        WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED,
+    ]);
 });

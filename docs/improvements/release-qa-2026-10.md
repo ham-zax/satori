@@ -22,7 +22,7 @@ Status: in progress. Fixes below are committed; every fix has a regression test 
 - file_outline tool tests mock the handler, so the byte budget and range validation never ran there.
 - No test drives the built server end to end on a repository large enough to hit response budgets.
 
-## Fixed (staged)
+## Fixed in the first pass
 
 | Defect | Cause | Fix | Evidence |
 |---|---|---|---|
@@ -109,6 +109,53 @@ Passed in search QA: untracked and deleted files before and after sync; small di
 
 Not exercised: continuation expiry, `alt_terms`, vocabulary flags, Rust, more than 16 dirty files.
 
+### Independent manual QA on the committed build (d89eb809), colonist-assistant
+
+Verdict given: not ready, one blocker. Confirmed fixed on this build: dirty-file exact search (`decisionSignature` rank 4,
+blocker C), freshness after sync, file_outline `nextPage` and inverted range, concurrent-mutation blocking,
+`continue_search` paging and conflicts, and the new `call_graph` unanalyzed-file warning (`with_budget_ms`: 14 files).
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| Q1 | blocker (reported) | `detect_changes` seeds whole large classes (`AssistantOverlay` 411–6573, `GameSession` 519–1874, `CompactGameBuilder` 1177–2313) although the hunks (≈11, 13, 4) sit inside methods; small classes seed precisely | Repro: defaults on colonist vs `git diff -U0 src/content/overlay.ts`. Not yet reproduced by me. Hypotheses, in order: (1) `readCompleteFileOutline` stops at 40 pages and, with `callGraphHint` making pages byte-bound (Q8), never reaches the methods, so the class is the innermost known symbol; (2) some hunks touch class-level lines (fields, blank lines between members), which seed the class by design (R1) | Fixed. Reproduced on `session.ts` (`GameSession` 519–1874): the hunk 563–567 adds a JSDoc block before a new field, and the comment lines lie outside every member span, so they mapped to the class. Hypothesis 1 refuted (the outline pages were complete). `change-impact.ts` now attributes a changed comment, decorator, attribute or blank line to the declaration that starts right after it; a changed line still inside the class body between members seeds the class |
+| Q2 | minor | Natural-language query for the 2000 ms budget misses `deep-search.ts:59` in the top 5, also with the identifier in `alt_terms` | Same as M4 | Open (ranking) |
+| Q3 | minor | Exact-identifier query `scheduleDecisionAnalysis` ranks test and mock declarations above the real method (`overlay.ts:3361`, not in the top 3) | Three declarations share the name (`overlay.ts:3361`, `tests/road-building-continuation.test.ts:28`, `scripts/ui-preview/scenarios.ts:103`), so the exact registry lookup is ambiguous and falls back to hybrid ranking. At `limit: 50` the method ranks #4; at the default limit it is outside the top 10, so the candidate pool depends on `limit` | Open (ranking, with Q2/M4) |
+| Q4 | minor | A `usableSessionDiceHistory` span (`overlay.ts:3083`) is labelled `class AssistantOverlay` | The `overlay.ts:3083` hit is labelled `method usableSessionDiceHistory`; the `class AssistantOverlay` hit is 411–450, the class's own field lines | Not reproduced; label is correct |
+| Q5 | minor | Reads return `not_ready` (`retryAfterMs: 2000`) for ≈72 s during reindex | Same as M2 | By design |
+| Q6 | minor | `call_graph` returns 0 callers for `with_budget_ms` (Rust) | Now disclosed by `CALL_GRAPH_INBOUND_UNANALYZED_FILES`; cause is the 28fcb259 `unmodeled_source` skip (adjacent findings) | Disclosed; coverage decision pending |
+| Q7 | minor | `find_references` includes a test-local `decisionSignature` (`tests/recommendation-integrity.test.ts:26`) | Line 26 is a same-named module-level function in the test. `find_references` is documented as exact textual occurrences with the owning symbol disclosed | By design |
+| Q8 | minor | `file_outline` reports `indexedAt: null`, `stalenessBucket: unknown` while `sourceState` is fresh and freshness verified | `NavigationFileFreshness` (`search-types.ts`) documents that the symbol registry keeps no per-file index time; `registryBuiltAt` and `sourceState` carry freshness | By design |
+| Q9 | minor | `callGraphHint` per symbol makes the 100-symbol `overlay.ts` page hit `OUTLINE_RESPONSE_BYTE_LIMIT` | One exact outline symbol is ≈924 B, of which `callGraphHint` is ≈300 B. Pages stay under the byte limit and `nextPage` continues (O1) | Not a defect (size cost only); did not cause Q1 |
+| Q10 | minor | First sync after one restart stayed `watcher_observation_gap`; did not reproduce after the next restart | Same as M1/D1 | Not a defect (see D1) |
+
+Not tested by this report: cancelling a long operation, a full file_outline walk of `overlay.ts`, long-running-server
+sync sequences, create on a new codebase, `architecture_overview`, other codebases, cancel racing a mutation, `clear`.
+
+### QA round 2 on the committed build (d89eb809)
+
+Freshness worker: D1 confirmed not a defect (a sync started in the current session verifies; this also explains Q10),
+D2 and D3 fixed. Search worker: S1, S2 (`decisionSignature` #4 clean, #3 dirty), S3 (36–48.7 KB at `limit: 200`), S4
+and C fixed.
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| S5 | minor | `resultMode: "raw"` has no byte budget: 65.9–66.1 KB at `limit: 200` | Raw branch of `search-result-finalization.ts` returns `scored.slice(0, limit)`; the S3 cap covers grouped only | Fixed: raw mode keeps the longest rank-order prefix that fits the grouped byte budget (48 KiB, 2 MiB with `debug: full`) and adds `SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET`; the top chunk is always kept |
+| S6 | minor | An unreadable dirty file (`chmod 000`) loses all its indexed results | `search-query-support.ts` dirty overlay: the `catch { continue; }` and `!stat.isFile()` paths do not record the path as unread, so its indexed results stay suppressed. A deleted file must keep suppressing (ENOENT) | Fixed: a read failure records the path as unread unless `lstat` reports it absent (`ENOENT`/`ENOTDIR`; the root-bound opener drops errno). A non-file path still suppresses |
+| F1 | minor | Cancelling a reindex on a root whose create was cancelled leaves status `reindex/cancelled`; nothing recovers it automatically | Worker repro; a manual `create` recovers | By design (cancel is final) |
+| O4 | minor | `file_outline` exact mode with duplicate labels and `limitSymbols: 1` returns `ambiguous`, `hasMore: true` and no `nextPage` | Exact branch of `registry-file-outline.ts` (~199) computes `hasMoreExact` without a continuation. Repro: diffoutline worker fixture `dup/dup.py` | Not fixed: the response is `ambiguous`, states the match count and says to narrow with `symbolIdExact`; exact mode selects a symbol and has no page cursor |
+| NV1 | major (reported) | In a session whose first calls are navigation tools, reads stay `unverified/watcher_manager_not_started`; after one `manage_index status`, reads verify | The watcher belongs only to the lazily created provider runtime (`provider-runtime.ts:499`). The local manager delegates observation to it (`shared-runtime.ts:272`, `sync.ts:1053-1063`), and it does not exist until a provider-backed call. Offline auto-index starts it at session start. Repro: navigation worker `r2h_order.mjs`, `r2i_race.mjs` | Fixed (reporting): the old answer was truthful but alarming, because "unverified" with a `degraded` warning reads as bad data when nothing has failed. `sync.ts` now reports the reasons that only mean live tracking is not running (`watcher_disabled`, `watcher_manager_not_started`, `root_not_registered`, `watcher_starting`) as `state: index_snapshot`, with the `info` warning `SOURCE_SERVED_FROM_INDEX_SNAPSHOT` ("Results come from the latest completed index…"). Real watcher failures, pending events and checkpoint problems still report `unverified`. Test: `sync-read-freshness.test.ts` (it fails with the old mapping). The colonist repro now shows `index_snapshot`, then `verified` after `manage_index status`. Not done: starting the watcher eagerly. The watcher needs the embedding-capable runtime (`provider-runtime.ts` `startProviderSyncLifecycle`), so it would load embedding providers for navigation-only sessions, and `ProviderRuntime.shutdown` does not own an in-flight runtime creation |
+| NV2 | minor | `call_graph` callees gives no disclosure for gated or unresolved calls from the root | `constructCoverage` comes only from `sourceEvidence` (`relationship-backed-call-graph.ts:678-684`), and the Rust provider emits no occurrence for those receiver sites | Open (semantic provider coverage) |
+| NV3 | minor | A Python class-body `cb = lambda ...` is not extracted as a symbol | `pythonModuleBindingName` requires a module parent (`core/src/language-analysis/tree-sitter-adapter.ts:328`) | Open (extraction coverage; changes indexed output) |
+
+Detect/outline worker: O1, O2, O3, R1, R2 and R3 fixed (R3: 49,151 B, 50 round-robin seeds over 1,500 files; no
+response in the round exceeded 49,151 B). Also passed: outline windows starting inside a member, rename plus edit,
+cross-directory rename, `baseRef: HEAD~1`, staged new and copied files, deleted files, seed round-robin with per-file
+omissions, pure deletion fallback, TS and Rust method seeds, determinism.
+
+Passed in round 2: more than 16 dirty files, dirty bytes over the 2 MiB total budget, dirty rename, `continue_search`
+with dirty files, trimming disclosure, determinism, kill mid-reindex recovery, reads during sync, `mutation_in_progress`,
+response sizes. Not exercised: continuation expiry, `alt_terms`.
+
 ## Adjacent findings (not fixed)
 
 - `scripts/satori-useful-context-fixture-record.mjs` and `scripts/satori-live-latency-benchmark.mjs` expect a synchronous sync that returns `syncStats`. Both were already broken by the asynchronous sync contract.
@@ -118,4 +165,6 @@ Not exercised: continuation expiry, `alt_terms`, vocabulary flags, Rust, more th
 
 1. Fix R1–R3 with a regression test each that fails on the current code. Done.
 2. Fix the round-1 defects (O, S, D, N). Done, including the deferred N1, N3 and N4.
-3. Rebuild, rerun the QA workers on their repros, repeat until a round finds no new major defect. Build done; rerun pending.
+3. Rebuild, rerun the QA workers on their repros, repeat until a round finds no new major defect. Fixes committed (d89eb809); round 2 running.
+4. Reproduce and fix Q1 (blocker), then triage Q3, Q4, Q7, Q8, Q9. Done: Q1, S5, S6 fixed (uncommitted); the rest triaged above.
+5. Open decisions: ranking (Q2, Q3, M4), coverage (NV2, NV3, 28fcb259).

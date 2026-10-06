@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 import { compareContractStrings } from "@satori-code/core";
 import type {
@@ -122,6 +124,28 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 || compareContractStrings(left.symbolId, right.symbolId));
             return containing[0];
         };
+        // Outline spans start at the declaration, so a changed doc comment,
+        // decorator, attribute or blank line before a member would otherwise
+        // seed the whole enclosing class. Such leading trivia belongs to the
+        // declaration it precedes when that declaration starts right after it.
+        const sourceLines = ranges.some(range => range.count > 0)
+            ? (await readFile(path.join(input.path, file), "utf8").catch(() => "")).split(/\r?\n/)
+            : [];
+        const isLeadingTrivia = (line: number) => {
+            const text = sourceLines[line - 1]?.trim();
+            return text !== undefined && (text === "" || /^(\/\/|\/\*|\*|#(?![\w$])|@)/.test(text));
+        };
+        const ownerOfLine = (line: number): OutlineSymbol | undefined => {
+            const owner = innermostContaining(line, line);
+            if (!isLeadingTrivia(line)) return owner;
+            let next = line + 1;
+            while (next <= sourceLines.length && isLeadingTrivia(next)) next += 1;
+            const declared = innermostContaining(next, next);
+            return declared && declared.span.startLine === next && declared !== owner
+                && (!owner || owner.span.endLine >= declared.span.endLine)
+                ? declared
+                : owner;
+        };
         let unmappedHunk = false;
         for (const range of ranges) {
             if (range.count === 0) {
@@ -132,7 +156,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             }
             let mapped = false;
             for (let line = range.start; line < range.start + range.count; line += 1) {
-                const owner = innermostContaining(line, line);
+                const owner = ownerOfLine(line);
                 if (owner) {
                     addPrecise(owner);
                     mapped = true;

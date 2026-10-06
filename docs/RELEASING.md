@@ -207,21 +207,35 @@ prepared-but-unpublished state, a version already high enough for the requested
 intent remains unchanged and absorbs the coordinated changes. Always use the
 planner output rather than copying version numbers from this document.
 
-### `pnpm release minor`
+### `pnpm release [major|minor|patch]`
 
-Runs the coordinated Core minor bump with downstream MCP and CLI updates,
-commits the release manifests, pushes `master` to the canonical repository,
-then invokes the existing publication workflow. `major` and `patch` work the
-same way. This command requires a clean working tree and local `master` that
-contains canonical `master`; it never force-pushes. Commit your implementation
-changes before running it.
+The one-command release. The bump defaults to `minor`; pass `major` or `patch`
+only when you need them. The command requires a clean working tree and a local
+`master` that contains canonical `master`, so commit your implementation
+changes first. It then:
 
-If commit, push, or publication fails, the command stops and preserves the
-prepared files or commit. Resolve that failure before retrying. After a partial
-publication, use `pnpm release` to retry the prepared graph without requesting
-another version bump.
+1. builds the workspace, and stops if the build changes tracked files;
+2. packs Core, MCP, and CLI and compares each one with its published version on
+   npm (the `release:check` registry comparison);
+3. stops without changes when every package matches its published version;
+4. applies the coordinated bump (`release:bump`) to every package whose content
+   changed since publication, with downstream pins following, and commits only
+   the release manifests as `chore(release): bump ...`;
+5. pushes `master` to the canonical repository (never force-pushing), then runs
+   the `release:all` publication workflow.
 
-Plain `pnpm release` remains publish-only, as does `pnpm run release:all`.
+```bash
+pnpm release        # minor bump for whichever packages changed
+pnpm release major
+```
+
+A prepared version that is not published yet is not bumped again. If commit,
+push, or publication fails, the command stops and preserves the prepared commit.
+After you resolve the failure, rerun the same command to retry without another
+version bump.
+
+`pnpm release --allow-unpushed-head` and `pnpm run release:all` only publish
+and never bump.
 
 ### `pnpm run release:all`
 

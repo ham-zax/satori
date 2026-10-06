@@ -172,7 +172,8 @@ export async function checkReleaseGraph(options = {}) {
         : {}),
     });
     printReleaseGraphReport(fullReport, output);
-    if (!fullReport.valid) {
+    // Release preparation reads an invalid report to learn which packages changed.
+    if (!fullReport.valid && options.requireValid !== false) {
       throw new Error('Release graph invalid.');
     }
     kept = options.keepTempDirectory === true;

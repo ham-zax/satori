@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   computeBumpPlan,
+  computeMultiTargetBumpPlan,
   applyReleaseBump,
   runReleaseBump,
   defaultIsVersionPublishedImpl,
@@ -108,6 +109,22 @@ test('published target receives the requested bump', () => {
   const core = plan.entries.find((entry) => entry.key === 'core');
   assert.equal(core.to, '3.7.0');
   assert.equal(core.reason, 'bumped minor');
+});
+
+test('multiple changed targets fold into one plan without double-bumping downstream', () => {
+  const plan = computeMultiTargetBumpPlan({
+    targets: ['mcp', 'core'],
+    bump: 'minor',
+    localVersions: LOCAL_VERSIONS,
+    publishedStableVersions: { core: ['3.6.0'], mcp: ['6.8.0'], cli: ['1.9.0'] },
+    isVersionPublishedImpl: publishedSet(['core', 'mcp', 'cli']),
+  });
+  assert.deepEqual(plan.entries.map(({ key, from, to }) => [key, from, to]), [
+    ['core', '3.6.0', '3.7.0'],
+    ['mcp', '6.8.0', '6.9.0'],
+    ['cli', '1.9.0', '1.9.1'],
+  ]);
+  assert.equal(plan.mcpChanged, true);
 });
 
 test('unpublished target remains unchanged', () => {

@@ -154,6 +154,40 @@ export function computeBumpPlan({
   });
 }
 
+/**
+ * Folds single-target plans in release order so each changed package receives
+ * the requested bump and downstream pins are planned once, from the final versions.
+ */
+export function computeMultiTargetBumpPlan({ targets, bump, localVersions, ...rest }) {
+  if (!Array.isArray(targets) || targets.length === 0) {
+    throw new Error('A release bump needs at least one target');
+  }
+  const unknown = targets.filter((target) => !RELEASE_ORDER.includes(target));
+  if (unknown.length > 0) {
+    throw new Error(`Unknown release target ${JSON.stringify(unknown[0])}; expected one of ${RELEASE_ORDER.join(', ')}`);
+  }
+  let versions = { ...localVersions };
+  const reasons = {};
+  for (const target of RELEASE_ORDER.filter((key) => targets.includes(key))) {
+    const step = computeBumpPlan({ ...rest, target, bump, localVersions: versions });
+    for (const entry of step.changed) reasons[entry.key] = entry.reason;
+    versions = Object.fromEntries(step.entries.map((entry) => [entry.key, entry.to]));
+  }
+  const entries = RELEASE_ORDER.map((key) => Object.freeze({
+    key,
+    name: RELEASE_PACKAGES[key].name,
+    directory: RELEASE_PACKAGES[key].directory,
+    from: localVersions[key],
+    to: versions[key],
+    reason: versions[key] === localVersions[key] ? 'unchanged' : reasons[key],
+  }));
+  return Object.freeze({
+    entries: Object.freeze(entries),
+    changed: Object.freeze(entries.filter((entry) => entry.to !== entry.from)),
+    mcpChanged: entries.some((entry) => entry.key === 'mcp' && entry.to !== entry.from),
+  });
+}
+
 export function printBumpPlan(plan, output) {
   for (const entry of plan.entries) {
     if (entry.to === entry.from) {
@@ -238,15 +272,23 @@ export async function runReleaseBump(options = {}) {
   const cwd = options.cwd || process.cwd();
   const output = options.output || ((line) => console.log(line));
   const argv = options.argv || [];
-  const apply = argv.includes('--apply');
-  const positional = argv.filter((arg) => arg !== '--apply' && arg !== '--');
-  if (positional.length === 1 && ['major', 'minor', 'patch'].includes(positional[0])) {
-    positional.unshift('core');
+  let apply = argv.includes('--apply');
+  let targets;
+  let bump;
+  if (options.targets) {
+    ({ targets, bump } = options);
+    apply = options.apply === true;
+  } else {
+    const positional = argv.filter((arg) => arg !== '--apply' && arg !== '--');
+    if (positional.length === 1 && ['major', 'minor', 'patch'].includes(positional[0])) {
+      positional.unshift('core');
+    }
+    if (positional.length !== 2) {
+      throw new Error('Usage: pnpm release:bump [core|mcp|cli] <major|minor|patch> [--apply]');
+    }
+    targets = [positional[0]];
+    bump = positional[1];
   }
-  if (positional.length !== 2) {
-    throw new Error('Usage: pnpm release:bump [core|mcp|cli] <major|minor|patch> [--apply]');
-  }
-  const [target, bump] = positional;
   const execFileSyncImpl = options.execFileSyncImpl || execFileSync;
   const registryClient = options.registryClient || createReleaseRegistryClient({ cwd, execFileSyncImpl });
   const listPublishedStableVersionsImpl = options.listPublishedStableVersionsImpl
@@ -273,15 +315,23 @@ export async function runReleaseBump(options = {}) {
   );
   const isVersionPublishedImpl = options.isVersionPublishedImpl
     || ((packageName, version) => publishedByPackage.get(packageName)?.has(version) === true);
-  const plan = computeBumpPlan({
-    target,
-    bump,
-    localVersions,
-    isVersionPublishedImpl,
-    publishedStableVersions,
-  });
+  const plan = targets.length === 1
+    ? computeBumpPlan({
+        target: targets[0],
+        bump,
+        localVersions,
+        isVersionPublishedImpl,
+        publishedStableVersions,
+      })
+    : computeMultiTargetBumpPlan({
+        targets,
+        bump,
+        localVersions,
+        isVersionPublishedImpl,
+        publishedStableVersions,
+      });
 
-  output(`Release bump plan for ${target} ${bump}`);
+  output(`Release bump plan for ${targets.join(', ')} ${bump}`);
   output('');
   printBumpPlan(plan, output);
 

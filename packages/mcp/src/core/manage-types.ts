@@ -144,6 +144,4 @@ export interface ManageIndexResponseEnvelope {
     languageCapabilities?: LanguageCapabilityEvidenceSummary;
     /** Bounded per-path structural gaps for languages that claim navigation support. */
     structuralCoverage?: ManageStructuralCoverage;
-    /** Deterministic filesystem changes observed by a completed sync. */
-    syncStats?: { added: number; removed: number; modified: number };
 }

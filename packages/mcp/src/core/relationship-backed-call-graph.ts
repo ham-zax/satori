@@ -906,8 +906,21 @@ export class RelationshipBackedCallGraph {
                     && input.resolvedSymbol.language === "python",
             }
             : undefined;
+        // Files the semantic provider withheld carry no claims at all, so an
+        // empty side of the graph there is unknown rather than proven empty.
+        const skippedSourceFiles = neighbors.manifest.providerCoverage
+            .filter((coverage) => coverage.language === input.resolvedSymbol.language)
+            .flatMap((coverage) => coverage.skippedFiles ?? []);
+        const rootSourceSkip = (input.direction === "callees" || input.direction === "both")
+            ? skippedSourceFiles.find((file) => file.path === input.resolvedSymbol.file)
+            : undefined;
+        const unanalyzedInboundFileCount = (input.direction === "callers" || input.direction === "both")
+            ? skippedSourceFiles.length
+            : 0;
         const warnings = [...new Set([
             ...neighbors.warnings,
+            ...(rootSourceSkip ? [`CALL_GRAPH_SOURCE_FILE_UNANALYZED:${rootSourceSkip.reason}`] : []),
+            ...(unanalyzedInboundFileCount > 0 ? [`CALL_GRAPH_INBOUND_UNANALYZED_FILES:${unanalyzedInboundFileCount}`] : []),
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),

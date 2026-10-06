@@ -563,6 +563,21 @@ test("documented grouped navigation mappings validate and execute through regist
         } as unknown as ToolContext);
         assert.equal(readResponse.isError, undefined);
         assert.equal(readResponse.content[0]?.text, "line two\nline three");
+        assert.equal(readFileInputSchema.safeParse({ ...readInput, start_line: 3, end_line: 2 }).success, false);
+        const pastEndResponse = await readFileTool.execute({ path: absoluteFile, start_line: 9 }, {
+            readFileMaxLines: 100,
+            workspacePolicy: createSessionWorkspacePolicy({
+                roots: [tempRoot],
+                homeDirectory: os.homedir(),
+                stateRoot: path.join(os.homedir(), ".satori"),
+            }),
+            context: publishedContext,
+            mutationRuntime,
+            syncManager: { touchWatchedCodebase: async () => undefined },
+            toolHandlers: {},
+        } as unknown as ToolContext);
+        assert.equal(pastEndResponse.isError, true);
+        assert.match(pastEndResponse.content[0]?.text ?? "", /start_line 9 is past the end/);
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }

@@ -63,7 +63,10 @@ type ToolTextResponse = {
 type ManageMaintenanceHandlersHost = {
     context: Pick<Context, "clearIndex" | "getCurrentPublication" | "listCurrentPublications" | "inspectSourceFreshnessCheckpoint">;
     mutationRuntime: RootMutationRuntime;
-    syncManager: Pick<SyncManager, "assessReadFreshness">;
+    syncManager: Pick<
+        SyncManager,
+        "assessReadFreshness" | "captureExternalSyncFlight"
+    >;
     trackedRootReadiness: Pick<
         TrackedRootReadiness,
         "buildMissingLocalCollectionMessage" | "prepareTrackedRootForRead"
@@ -808,6 +811,7 @@ export class ManageMaintenanceHandlers {
                 "sync",
                 async (execution: RootMutationExecution) => {
                     execution.update("preflight", { progress: 0 });
+                    const syncFlight = this.host.syncManager.captureExternalSyncFlight(absolutePath);
                     const worker = await startSupervisedSyncWorker({
                         codebasePath: absolutePath,
                         execution,
@@ -852,6 +856,11 @@ export class ManageMaintenanceHandlers {
 
                                 await this.host.collectPublicationGarbageAfterSync(absolutePath);
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
+
+                                if (terminalPhase === "completed") {
+                                    await syncFlight.complete();
+                                    if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
+                                }
 
                                 const currentOperation = this.host.mutationRuntime.getCurrentOperation(absolutePath);
                                 if (

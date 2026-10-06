@@ -76,7 +76,9 @@ export type SearchCandidateFusionPolicy = {
     pathDemotionEligible: boolean | undefined;
     isTrueExpansionPass: boolean;
     dirtyFilesNotFreshened: boolean;
-    observedChangedPaths: ReadonlySet<string>;
+    // Dirty paths whose current source the overlay re-read; only these drop
+    // indexed results.
+    rereadDirtyPaths: ReadonlySet<string>;
     suppressedDirtyPaths: Set<string>;
     representedDirtyPaths: Set<string>;
     backendScoreKinds: Set<SearchCandidate["backendScoreKind"]>;
@@ -103,7 +105,7 @@ export function fuseCandidateSets(
         if (
             policy.dirtyFilesNotFreshened
             && pass.id !== "dirty_overlay"
-            && policy.observedChangedPaths.has(normalizedResultPath)
+            && policy.rereadDirtyPaths.has(normalizedResultPath)
         ) {
             policy.suppressedDirtyPaths.add(normalizedResultPath);
             suppressedDirtyResults.push(result);

@@ -410,6 +410,27 @@ test('buildCallRelationshipsForRegistry preserves the six direct Python run_vali
     );
 });
 
+test('buildCallRelationshipsForRegistry attributes calls inside a module-level Python lambda to its binding', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/closure.py': [
+            'def helper(v): pass',
+            '_closure_caller = lambda v: helper(v)',
+            'DEFAULT = helper(1)',
+        ].join('\n'),
+    });
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    assert.deepEqual(
+        records.map((record) => [
+            symbolsById.get(record.sourceInstanceId || '')?.label,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ]),
+        [['function _closure_caller', 'helper']],
+    );
+});
+
 test('buildCallRelationshipsForRegistry resolves exact same-class Python self and cls calls', async () => {
     const content = [
         'class CircuitBreaker:',

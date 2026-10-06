@@ -26,7 +26,10 @@ const result = (relativePath: string, content: string) => ({
     score: 0.9,
 });
 
-function buildSupport(dirtyResults: ReturnType<typeof result>[]): SearchQuerySupport {
+function buildSupport(
+    dirtyResults: ReturnType<typeof result>[],
+    unreadPaths: Set<string> = new Set(),
+): SearchQuerySupport {
     const support = new SearchQuerySupport({
         normalizeSearchPath: (p: string) => p,
         hasPathSegment: () => false,
@@ -47,15 +50,15 @@ function buildSupport(dirtyResults: ReturnType<typeof result>[]): SearchQuerySup
         gitignoreForceReloadEveryN: 1000,
     });
     // The dirty overlay reads the working tree; the test supplies its results directly.
-    support.buildDirtyFileSearchResults = async () => dirtyResults as never;
+    support.buildDirtyFileSearchResults = async () => ({ results: dirtyResults, unreadPaths }) as never;
     return support;
 }
 
-test('dirty overlay contributes one fusion pass weight even when primary and expanded both ran', async () => {
+function buildInput(changedFiles: string[]): SearchExecutionInput {
     const parsed = parseSearchOperators('where is naive utc handling');
     const queryPlan = buildSearchQueryPlan(parsed.semanticQuery, true, parsed);
     const answerFocus = resolveSearchAnswerFocus(queryPlan).focus;
-    const input: SearchExecutionInput = {
+    return {
         effectiveRoot: '/repo',
         scope: 'runtime',
         rankingMode: 'auto_changed_first',
@@ -71,10 +74,14 @@ test('dirty overlay contributes one fusion pass weight even when primary and exp
         exactRegistryEligible: false,
         exactRegistryFallbackForTrackedLexical: false,
         freshnessMode: 'synced',
-        observedChangedFilesState: { available: true, files: new Set(['src/dirty.ts']) },
+        observedChangedFilesState: { available: true, files: new Set(changedFiles) },
         dirtyFilesNotFreshened: true,
         retrievalPolicy: resolveSearchPolicy({ resultLimit: 10, hasMustOperators: false }),
     };
+}
+
+test('dirty overlay contributes one fusion pass weight even when primary and expanded both ran', async () => {
+    const input = buildInput(['src/dirty.ts']);
     const semanticQueries: string[] = [];
     const host: SearchExecutionHost = {
         searchQuerySupport: buildSupport([result('src/dirty.ts', 'export function naiveUtc() {}')]),
@@ -101,4 +108,29 @@ test('dirty overlay contributes one fusion pass weight even when primary and exp
     const expected = 1 / (SEARCH_RRF_K + 1);
     assert.equal(clean.fusionScore, expected);
     assert.equal(dirty.fusionScore, expected, 'dirty overlay rank 1 must score 1/(K+1), not twice that');
+});
+
+test('indexed results are dropped only for dirty files the overlay re-read', async () => {
+    const host: SearchExecutionHost = {
+        // The overlay re-read src/reread.ts and found no match; src/unread.ts was over its bounds.
+        searchQuerySupport: buildSupport([], new Set(['src/unread.ts'])),
+        semanticSearch: async () => [
+            result('src/reread.ts', 'export function naiveUtcStale() {}'),
+            result('src/unread.ts', 'export function naiveUtcUnread() {}'),
+        ],
+        reranker: null,
+        shouldForceSearchPassFailure: () => false,
+        classifyEmbeddingProviderError: () => null,
+        classifyVectorBackendError: () => null,
+        measureSearchPhase: async (_phase, run) => run(),
+    };
+
+    const outcome = await runSearchExecution(
+        buildInput(['src/reread.ts', 'src/unread.ts']),
+        host,
+        {} as SearchDiagnostics,
+    );
+
+    assert.equal(outcome.kind, 'ok');
+    assert.deepEqual(outcome.scored.map((candidate) => candidate.result.relativePath), ['src/unread.ts']);
 });

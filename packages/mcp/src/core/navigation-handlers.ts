@@ -45,6 +45,8 @@ import {
 } from "./session-workspace-policy.js";
 import {
     buildRegistryFileOutlinePayload,
+    FILE_OUTLINE_RESPONSE_MAX_UTF8_BYTES,
+    fitFileOutlineResponseBudget,
     findExactRegistrySymbols,
 } from "./registry-file-outline.js";
 import { prepareRelationshipTraversals } from "./prepared-relationship-traversal.js";
@@ -483,15 +485,15 @@ export class NavigationHandlers {
         const respond = (payload: Record<string, unknown>): ToolTextResponse => ({
             content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
         });
-        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
             prepareReadiness: () => this.host.prepareNavigationRead(requestedPath),
             acquirePublicationLease: (prepared) => prepared.state === "ready"
                 ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                : undefined,
+                : null,
             isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
         });
         const outcome = await session.read(async (prepared, lease) => {
-            if (prepared.state !== "ready") {
+            if (prepared.state !== "ready" || lease === null) {
                 return respond({ status: "not_ready", reason: prepared.state, path: requestedPath });
             }
             if (lease.id !== prepared.publication.id
@@ -614,18 +616,18 @@ export class NavigationHandlers {
         const requestedRoot = absolutePathResult.absolutePath;
         trackCodebasePath(requestedRoot);
 
-        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
             prepareReadiness: () => this.host.prepareNavigationRead(requestedRoot),
             acquirePublicationLease: (prepared) => (
                 prepared.state === "ready"
                     ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                    : undefined
+                    : null
             ),
             isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
         });
 
         const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
-            if (trackedRootState.state !== "ready") {
+            if (trackedRootState.state !== "ready" || lease === null) {
                 return {
                     content: [{
                         type: "text",
@@ -852,18 +854,18 @@ export class NavigationHandlers {
                 : {}),
         };
 
-        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
             prepareReadiness: () => this.host.prepareNavigationRead(requestedRoot),
             acquirePublicationLease: (prepared) => (
                 prepared.state === "ready"
                     ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                    : undefined
+                    : null
             ),
             isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
         });
 
         const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
-            if (trackedRootState.state !== "ready") {
+            if (trackedRootState.state !== "ready" || lease === null) {
                 return {
                     content: [{
                         type: "text",
@@ -1080,6 +1082,24 @@ export class NavigationHandlers {
                 };
             }
 
+            if (
+                requestedStartLine !== undefined
+                && requestedEndLine !== undefined
+                && requestedStartLine > requestedEndLine
+            ) {
+                const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
+                    absoluteRoot,
+                    normalizedFile,
+                    `start_line (${requestedStartLine}) must not exceed end_line (${requestedEndLine}).`,
+                    "not_ready",
+                    "invalid_request",
+                );
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                    isError: true,
+                };
+            }
+
             if (!fs.existsSync(absoluteRoot)) {
                 const payload = this.host.toolResponseBuilders.buildInvalidFileOutlineRequestPayload(
                     absoluteRoot,
@@ -1111,12 +1131,12 @@ export class NavigationHandlers {
 
             trackCodebasePath(absoluteRoot);
 
-            const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+            const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
                 prepareReadiness: () => this.host.prepareNavigationRead(absoluteRoot),
                 acquirePublicationLease: (prepared) => (
                     prepared.state === 'ready'
                         ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                        : undefined
+                        : null
                 ),
                 isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
             });
@@ -1179,6 +1199,9 @@ export class NavigationHandlers {
                 };
             }
 
+            if (lease === null) {
+                throw new Error("Ready navigation readiness must hold a Publication lease.");
+            }
             const leasedRootState: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
                 ...trackedRootState,
                 publication: lease,
@@ -1484,12 +1507,12 @@ export class NavigationHandlers {
 
             trackCodebasePath(absolutePath);
 
-            const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+            const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
                 prepareReadiness: () => this.host.prepareNavigationRead(absolutePath),
                 acquirePublicationLease: (prepared) => (
                     prepared.state === 'ready'
                         ? this.host.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                        : undefined
+                        : null
                 ),
                 isLeaseAdmitted: (_prepared, lease) => this.host.isPublicationAdmitted(lease),
             });
@@ -1586,6 +1609,9 @@ export class NavigationHandlers {
                 };
             }
 
+            if (lease === null) {
+                throw new Error("Ready navigation readiness must hold a Publication lease.");
+            }
             const leasedRootState: Extract<TrackedRootReadinessState, { state: 'ready' }> = {
                 ...trackedRootState,
                 publication: lease,
@@ -2225,6 +2251,16 @@ export class NavigationHandlers {
         if (relationshipGraph.warning) {
             outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
         }
+        const continuationArgs = {
+            path: effectiveRoot,
+            file: normalizedFile,
+            detail,
+            resolveMode,
+            limitSymbols,
+            ...(symbolIdExact !== undefined ? { symbolIdExact } : {}),
+            ...(symbolLabelExact !== undefined ? { symbolLabelExact } : {}),
+            ...(windowEnd !== undefined ? { end_line: windowEnd } : {}),
+        };
         const payload = await buildRegistryFileOutlinePayload({
             codebaseRoot: effectiveRoot,
             file: normalizedFile,
@@ -2235,6 +2271,7 @@ export class NavigationHandlers {
             symbolLabelExact,
             windowStart,
             windowEnd,
+            continuationArgs,
             warnings: outlineWarnings.length > 0 ? outlineWarnings : undefined,
             buildCallGraphHint: (symbol) => this.host.buildRegistrySymbolCallGraphHint(symbol, normalizedFile, relationshipGraph),
             buildOutlineSpanWarningCodes: (repair) => this.host.buildOutlineSpanWarningCodes(repair),
@@ -2401,8 +2438,15 @@ export class NavigationHandlers {
             } },
             trackedRootState.freshnessDecision,
         );
+        const budgetedPayload = fitFileOutlineResponseBudget({
+            payload: this.host.withProofDebugHint(freshnessProjectedPayload, proofDebugHint),
+            maxResponseBytes: FILE_OUTLINE_RESPONSE_MAX_UTF8_BYTES,
+            continuationArgs,
+            requestedStartLine: windowStart,
+            stringify: (payload) => this.host.stringifyToolJson(payload),
+        });
         return {
-            content: [{ type: "text", text: this.host.stringifyToolJson(this.host.withProofDebugHint(freshnessProjectedPayload, proofDebugHint)) }],
+            content: [{ type: "text", text: this.host.stringifyToolJson(budgetedPayload) }],
         };
     }
 }

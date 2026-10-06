@@ -270,6 +270,7 @@ export class SharedRuntimeHost {
             watchEnabled: this.watchSyncEnabled,
             mutationRuntime: this.mutationRuntime,
             preparedReadObservationSource: (codebasePath) => this.providerRuntime.getPreparedReadObservation(codebasePath),
+            externalSyncFlightSource: (codebasePath) => this.providerRuntime.captureExternalSyncFlight(codebasePath),
         });
 
     }

@@ -102,7 +102,6 @@ export class ToolResponseBuilders {
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
             languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
             structuralCoverage?: ManageIndexResponseEnvelope["structuralCoverage"];
-            syncStats?: ManageIndexResponseEnvelope["syncStats"];
             operation?: ManageIndexResponseEnvelope["operation"];
             publication?: ManageIndexResponseEnvelope["publication"];
             sourceFreshness?: ManageIndexResponseEnvelope["sourceFreshness"];
@@ -149,9 +148,6 @@ export class ToolResponseBuilders {
         if (options.structuralCoverage) {
             envelope.structuralCoverage = options.structuralCoverage;
         }
-        if (action === "sync" && options.syncStats) {
-            envelope.syncStats = options.syncStats;
-        }
         if (options.operation) {
             envelope.operation = options.operation;
         }
@@ -194,7 +190,6 @@ export class ToolResponseBuilders {
             symbolQuality?: ManageIndexResponseEnvelope["symbolQuality"];
             languageCapabilities?: ManageIndexResponseEnvelope["languageCapabilities"];
             structuralCoverage?: ManageIndexResponseEnvelope["structuralCoverage"];
-            syncStats?: ManageIndexResponseEnvelope["syncStats"];
             operation?: ManageIndexResponseEnvelope["operation"];
             publication?: ManageIndexResponseEnvelope["publication"];
             sourceFreshness?: ManageIndexResponseEnvelope["sourceFreshness"];

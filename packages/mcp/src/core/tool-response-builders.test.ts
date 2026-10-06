@@ -55,15 +55,6 @@ test("manage response omits operation when no process-lifetime operation exists"
     assert.equal("operation" in envelope, false);
 });
 
-test("manage sync response includes structured change evidence only for sync", () => {
-    const syncStats = { added: 1, removed: 2, modified: 3 };
-    const sync = builders.buildManageResponseEnvelope("sync", "/repo", "ok", "done", { syncStats });
-    assert.deepEqual(sync.syncStats, syncStats);
-
-    const status = builders.buildManageResponseEnvelope("status", "/repo", "ok", "ready", { syncStats });
-    assert.equal(status.syncStats, undefined);
-});
-
 test("manage status response preserves additive language capability evidence", () => {
     const languageCapabilities = {
         basis: "language_declarations_and_navigation_sidecars" as const,

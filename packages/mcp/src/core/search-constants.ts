@@ -42,7 +42,8 @@ export const SEARCH_RERANK_DOC_MAX_LINES = 200;
 export const SEARCH_RERANK_DOC_MAX_CHARS = 4000;
 /** Aggregate UTF-8 bytes of selected reranker document strings; excludes query and transport framing. */
 export const SEARCH_RERANK_INPUT_MAX_UTF8_BYTES = 1024 * 1024;
-export const SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES = 128 * 1024;
+/** Matches the file_outline and detect_changes budgets so one grouped page fits common MCP client limits. */
+export const SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
 export const SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES = 2 * 1024 * 1024;
 export const SEARCH_RESULT_SET_HANDLE_PLACEHOLDER = "0".repeat(48);
 export const SEARCH_RESULT_SET_DIGEST_PLACEHOLDER = "0".repeat(64);

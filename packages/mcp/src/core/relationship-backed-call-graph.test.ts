@@ -214,6 +214,7 @@ test("call graph source fallback propagates partial Publication coverage without
         symbolRegistryManifestHash: "registry-hash",
         relationshipVersion: "fixture",
         builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
         files: [],
     };
     const navigationStore = {
@@ -335,6 +336,7 @@ test("call graph retains exact reference evidence beyond the legacy 100-row disc
         symbolRegistryManifestHash: "registry-hash",
         relationshipVersion: "fixture",
         builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
         files: [],
     };
     const inboundMatches = Array.from({ length: 125 }, (_, index) => ({
@@ -440,6 +442,7 @@ test("call graph path scope excludes sibling graph and semantic evidence before 
         symbolRegistryManifestHash: "registry-hash",
         relationshipVersion: "fixture",
         builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
         files: [],
     };
     const callRecord = (source: SymbolRecord): RelationshipRecord => ({
@@ -687,6 +690,7 @@ test("call graph path scope filters textual fallback references returned by the 
         symbolRegistryManifestHash: "registry-hash",
         relationshipVersion: "fixture",
         builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
         files: [],
     };
     const navigationStore = {
@@ -762,4 +766,82 @@ test("call graph path scope filters textual fallback references returned by the 
         "packages/a/src/local.ts",
     ]);
     assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCount, 1);
+});
+
+test("call graph discloses semantic provider skips for the root file and same-language callers", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "rust",
+        kind: "function",
+        qualifiedName: "depth::search",
+        name: "search",
+        label: "fn search()",
+        span: { startLine: 1, endLine: 3 },
+        parentQualifiedNamePath: [],
+        file: "src/depth.rs",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([[target.file, [target]]]),
+        symbolsByInstanceId: new Map([[target.symbolInstanceId, target]]),
+    } as unknown as SymbolRegistry;
+    const coverage = (language: string, paths: string[]) => ({
+        language,
+        providerId: "cbm",
+        providerVersion: "v1",
+        status: "degraded" as const,
+        sourceFileCount: 10,
+        analyzedSourceFileCount: 10 - paths.length,
+        skippedFiles: paths.map((path) => ({ path, reason: "unmodeled_source" as const, bytes: 100 })),
+    });
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [
+            coverage("rust", ["src/depth.rs", "src/deadline.rs"]),
+            coverage("typescript", ["web/app.ts"]),
+        ],
+        files: [],
+    };
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records: [],
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const build = (direction: "callers" | "callees") => graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction,
+        depth: 1,
+        limit: 20,
+    });
+
+    const callees = await build("callees");
+    assert.ok(callees?.warnings?.includes("CALL_GRAPH_SOURCE_FILE_UNANALYZED:unmodeled_source"));
+    assert.equal(callees?.warnings?.some((warning) => warning.startsWith("CALL_GRAPH_INBOUND_UNANALYZED_FILES")), false);
+
+    const callers = await build("callers");
+    assert.ok(callers?.warnings?.includes("CALL_GRAPH_INBOUND_UNANALYZED_FILES:2"));
+    assert.equal(callers?.warnings?.some((warning) => warning.startsWith("CALL_GRAPH_SOURCE_FILE_UNANALYZED")), false);
 });

@@ -151,9 +151,10 @@ export class CbmSemanticContributionEngine implements CallResolutionEngine {
                 const receiverAwareStrategy = occ.proof.strategy === 'type_dispatch'
                     || occ.proof.strategy === 'embed_dispatch'
                     || occ.proof.strategy === 'interface_dispatch';
-                if (occ.proof.strategy !== 'direct_call' && !(typeReceiverAwareReady && receiverAwareStrategy)) {
-                    continue;
-                }
+                // Calls outside the language's admitted strategies stay visible as
+                // unresolved evidence but never become CALLS edges.
+                const strategyAdmitted = occ.proof.strategy === 'direct_call'
+                    || (typeReceiverAwareReady && receiverAwareStrategy);
 
                 const caller = findEnclosingCaller(fileSymbols, occ.callSpan);
                 if (!caller) continue;
@@ -217,7 +218,14 @@ export class CbmSemanticContributionEngine implements CallResolutionEngine {
                     )
                     : [];
 
-                if (decision === 'resolved' && !occ.targetProvenance) {
+                if (!strategyAdmitted) {
+                    decision = 'unresolved';
+                    proofSteps.push({
+                        kind: 'unresolved_dependency',
+                        subject: occ.targetProvenance?.name ?? 'unknown',
+                        detail: `${occ.proof.strategy} calls are not admitted for ${this.language}`,
+                    });
+                } else if (decision === 'resolved' && !occ.targetProvenance) {
                     decision = 'unresolved';
                     proofSteps.push({
                         kind: 'unresolved_dependency',

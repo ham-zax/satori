@@ -166,7 +166,7 @@ function buildSupport(
     // Working-tree readers are replaced by deterministic stubs that count their calls.
     support.buildDirtyFileSearchResults = async () => {
         counters.dirtyOverlayCalls += 1;
-        return (scenario.dirty ?? []) as never;
+        return { results: scenario.dirty ?? [], unreadPaths: new Set<string>() } as never;
     };
     support.buildTrackedLexicalSearchResults = async () => {
         counters.trackedLexicalCalls += 1;

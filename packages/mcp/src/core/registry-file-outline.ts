@@ -104,6 +104,7 @@ export async function buildRegistryFileOutlinePayload(input: {
     symbolLabelExact?: string;
     windowStart?: number;
     windowEnd?: number;
+    continuationArgs?: Record<string, unknown>;
     warnings?: string[];
     buildCallGraphHint: (symbol: SymbolRecord) => CallGraphHint;
     buildOutlineSpanWarningCodes: (repair: PythonSourceBackedSpanRepair | undefined) => string[];
@@ -247,16 +248,95 @@ export async function buildRegistryFileOutlinePayload(input: {
         return [...warningSet].sort(compareContractStrings);
     };
 
-    const hasMore = mappedSymbols.length > input.limitSymbols;
+    // Enclosing symbols that start before the window repeat on every page of a
+    // walk; counting them would let them fill the page so it never advances.
+    // Symbols are sorted by start line, so they form a prefix.
+    const windowStart = input.windowStart;
+    const enclosingCount = windowStart === undefined
+        ? 0
+        : mappedSymbols.findIndex((symbol) => (symbol.span?.startLine ?? windowStart) >= windowStart);
+    const pageSize = (enclosingCount < 0 ? mappedSymbols.length : enclosingCount) + input.limitSymbols;
+    const hasMore = mappedSymbols.length > pageSize;
     const warnings = collectWarnings(mappedSymbols);
+    const nextPage = hasMore
+        ? outlineNextPageHint(input.continuationArgs, mappedSymbols[pageSize]?.span?.startLine, input.windowStart)
+        : undefined;
     return {
         status: "ok",
         path: input.codebaseRoot,
         file: input.file,
         outline: {
-            symbols: mappedSymbols.slice(0, input.limitSymbols),
+            symbols: mappedSymbols.slice(0, pageSize),
         },
         hasMore,
         ...(warnings.length > 0 ? { warnings } : {}),
+        ...(nextPage ? { hints: { nextPage } } : {}),
     };
+}
+
+/**
+ * Continuation for an outline cut short. Omitted when it would not advance
+ * past the requested start line, so paging cannot repeat the same page.
+ */
+function outlineNextPageHint(
+    continuationArgs: Record<string, unknown> | undefined,
+    nextStartLine: number | undefined,
+    requestedStartLine: number | undefined,
+): { tool: "file_outline"; args: Record<string, unknown> } | undefined {
+    if (!continuationArgs || nextStartLine === undefined) return undefined;
+    if (requestedStartLine !== undefined && nextStartLine <= requestedStartLine) return undefined;
+    return { tool: "file_outline", args: { ...continuationArgs, start_line: nextStartLine } };
+}
+
+/**
+ * MCP hosts cap tool output (Claude Code defaults to 25k tokens). A response
+ * near this many UTF-8 bytes of dense JSON stays under that cap.
+ */
+export const FILE_OUTLINE_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
+
+/**
+ * Keeps the longest leading run of outline symbols whose serialized response
+ * fits the byte budget. Symbols are sorted by start line, so every omitted
+ * symbol starts at or after the first omitted one; the continuation reissues
+ * the request from that line. Enclosing symbols may repeat on the next page.
+ */
+export function fitFileOutlineResponseBudget<T extends FileOutlineResponseEnvelope>(input: {
+    payload: T;
+    maxResponseBytes: number;
+    continuationArgs: Record<string, unknown>;
+    requestedStartLine?: number;
+    stringify: (payload: T) => string;
+}): T {
+    const fits = (candidate: T) => Buffer.byteLength(input.stringify(candidate), "utf8") <= input.maxResponseBytes;
+    const symbols = input.payload.outline?.symbols;
+    if (!symbols || symbols.length === 0 || fits(input.payload)) return input.payload;
+
+    // A limitSymbols continuation would skip the symbols trimmed here.
+    const remainingHints = { ...input.payload.hints };
+    delete remainingHints.nextPage;
+    const otherHints = Object.keys(remainingHints).length > 0 ? remainingHints : undefined;
+    const truncate = (count: number): T => {
+        const nextPage = outlineNextPageHint(
+            input.continuationArgs,
+            symbols[count]?.span?.startLine,
+            input.requestedStartLine,
+        );
+        return {
+            ...input.payload,
+            outline: { symbols: symbols.slice(0, count) },
+            hasMore: true,
+            warnings: [...new Set([...(input.payload.warnings ?? []), "OUTLINE_RESPONSE_BYTE_LIMIT"])]
+                .sort(compareContractStrings),
+            ...(nextPage || otherHints ? { hints: { ...otherHints, ...(nextPage ? { nextPage } : {}) } } : {}),
+        };
+    };
+
+    let low = 0;
+    let high = symbols.length - 1;
+    while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (fits(truncate(mid))) low = mid;
+        else high = mid - 1;
+    }
+    return truncate(low);
 }

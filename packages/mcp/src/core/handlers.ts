@@ -1124,13 +1124,13 @@ export class ToolHandlers {
         symbolId?: string;
         symbolLabel?: string;
     }): Promise<PrepareSymbolContextSnapshotResult> {
-        const session = new PreparedPublicationReadSession<TrackedRootReadinessState>({
+        const session = new PreparedPublicationReadSession<TrackedRootReadinessState, PublicationLease | null>({
             // Keep the caller's root: resolving the absolute file could select a nested Publication.
             prepareReadiness: () => this.prepareNavigationRead(input.codebaseRoot),
             acquirePublicationLease: (prepared) => (
                 prepared.state === 'ready'
                     ? this.acquirePublicationLease(prepared.root.path, prepared.publication.id)
-                    : undefined
+                    : null
             ),
             isLeaseAdmitted: (prepared, lease) => (
                 prepared.state === 'ready'
@@ -1140,9 +1140,9 @@ export class ToolHandlers {
         });
         const executeSymbolContextRead = async (
             preparedRead: TrackedRootReadinessState,
-            lease: PublicationLease,
+            lease: PublicationLease | null,
         ): Promise<PrepareSymbolContextSnapshotResult> => {
-            if (preparedRead.state !== 'ready' || preparedRead.publication.id !== lease.id
+            if (preparedRead.state !== 'ready' || lease === null || preparedRead.publication.id !== lease.id
                 || preparedRead.root.path !== input.codebaseRoot) {
                 return {
                     status: 'unavailable',

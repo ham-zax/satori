@@ -414,7 +414,8 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
             ? pythonModuleBindingName(node)
             : undefined;
         if (pythonModuleBinding) {
-            kind = 'variable';
+            // A lambda binding is a callable owner, as an arrow-function const is in TS.
+            kind = node.childForFieldName('right')?.type === 'lambda' ? 'function' : 'variable';
         }
         const cppDeclaration = language === 'cpp'
             ? cppCallableDeclaration(node, semanticContainer)

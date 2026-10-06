@@ -14,7 +14,7 @@ import {
     type ParsedSearchOperators,
 } from "./search-query-planning.js";
 import type { SearchExecutionHost } from "./search-execution.js";
-import type { SearchQuerySupport } from "./search-query-support.js";
+import type { DirtyFileSearchResults, SearchQuerySupport } from "./search-query-support.js";
 
 // Pass execution reads only host retrieval ports; fusion state (candidate
 // map, survival trace, passesUsed, warning set) stays in search-execution.ts.
@@ -125,7 +125,7 @@ export function runDirtyOverlayPass(input: {
     effectiveRoot: string;
     queryPlan: SearchQueryPlan;
     changedFiles: Set<string>;
-}): Promise<SearchResultLike[]> {
+}): Promise<DirtyFileSearchResults> {
     const host = input.host;
     return host.measureSearchPhase(
         "trackedLexical",

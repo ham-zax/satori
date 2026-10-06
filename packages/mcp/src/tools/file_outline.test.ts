@@ -102,6 +102,19 @@ test('file_outline validates resolveMode=exact requirements', async () => {
     assert.match(response.content[0]?.text || '', /symbolIdExact|resolveMode/);
 });
 
+test('file_outline rejects exact symbol filters outside resolveMode=exact', async () => {
+    for (const filter of [{ symbolIdExact: 'sym-1' }, { symbolLabelExact: 'method add' }]) {
+        const response = await fileOutlineTool.execute({
+            path: '/repo',
+            file: 'src/runtime.ts',
+            ...filter,
+        }, buildContext());
+
+        assert.equal(response.isError, true);
+        assert.match(response.content[0]?.text || '', /require resolveMode="exact"/);
+    }
+});
+
 test('file_outline requires a canonical exact symbol for structural analysis', async () => {
     const response = await fileOutlineTool.execute({
         path: '/repo',

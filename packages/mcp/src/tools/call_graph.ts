@@ -30,7 +30,7 @@ export const callGraphInputSchema = z.object({
     symbolRef: callGraphSymbolRefSchema.describe('Pass a graph-ready grouped search result target directly.'),
     direction: z.enum(['callers', 'callees', 'both']).optional().meta({ default: 'both' }).describe('Traversal direction from the starting symbol. both unions separate caller and callee traversals within the shared edge limit.'),
     depth: z.number().int().min(1).max(3).optional().meta({ default: 1 }).describe('Traversal depth (max 3).'),
-    limit: z.number().int().positive().optional().meta({ default: 20 }).describe('Maximum number of returned edges.'),
+    limit: z.number().int().positive().max(50).optional().meta({ default: 20 }).describe('Maximum number of returned edges (at most 50, which keeps one response within the 48 KiB budget the other navigation tools use).'),
     evidence: z.object({
         kind: z.enum([
             'exact_references',

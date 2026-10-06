@@ -28,7 +28,7 @@ import {
     type RootMutationExecution,
     type SharedPublicationRuntime,
 } from "@satori-code/core/integration";
-import { SyncManager, type PreparedReadObservationResult } from "../core/sync.js";
+import { SyncManager, type ExternalSyncFlight, type PreparedReadObservationResult } from "../core/sync.js";
 import {
     ContextMcpConfig,
     IndexFingerprint,
@@ -702,6 +702,18 @@ export class ProviderRuntime {
             firstUnavailable ??= result;
         }
         return firstUnavailable;
+    }
+
+    public captureExternalSyncFlight(codebasePath: string): ExternalSyncFlight | undefined {
+        if (this.activeContexts.length === 0) return undefined;
+        const flights = this.activeContexts.map((toolContext) => (
+            toolContext.syncManager.captureExternalSyncFlight(codebasePath)
+        ));
+        return {
+            complete: async () => {
+                for (const flight of flights) await flight.complete();
+            },
+        };
     }
 
     public getActiveLifecycleOperationCount(): number {

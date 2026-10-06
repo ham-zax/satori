@@ -91,7 +91,7 @@ test("served_previous_generation uses only publication-bound execution evidence"
         }),
         buildDirtyFileSearchResults: async () => {
             calls.dirtyOverlay += 1;
-            return [];
+            return { results: [], unreadPaths: new Set<string>() };
         },
         buildTrackedLexicalSearchResults: async () => {
             calls.trackedLexical += 1;

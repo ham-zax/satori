@@ -149,3 +149,78 @@ test("read freshness leaves a watcher event pending when it arrives during sourc
     assert.equal(internal.watcherObservations.get(root)?.comparedThroughEventEpoch, 1);
     assert.equal(manager.getWatcherObservation(root).pending, true);
 });
+
+test("external sync completion reaches the watcher-owning manager and closes a gap only through the epoch captured before the worker started", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-2",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-after-sync",
+            publicationId: "publication-2",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-after-sync",
+    };
+    const mutationRuntime = {
+        assertCurrent: () => {},
+        getCurrentOperation: () => undefined,
+        updateCurrentOperation: () => { throw new Error("not used"); },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: mutationRuntime as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, {
+            observedEventEpoch: number;
+            comparedThroughEventEpoch: number;
+            latestEpochByReason: Map<string, number>;
+            coverage: string;
+            coverageGapSinceEpoch?: number;
+        }>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    // A watcher restart (for example around a cancelled reindex) left a gap.
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 2,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 2]]),
+        coverage: "ready",
+        coverageGapSinceEpoch: 1,
+    });
+    assert.equal(manager.getPreparedReadObservation(root).available, false);
+
+    // manage_index sync uses the provider-free manager, which owns no watcher.
+    const localManager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: mutationRuntime as never,
+        externalSyncFlightSource: (codebasePath) => manager.captureExternalSyncFlight(codebasePath),
+    });
+
+    const firstFlight = localManager.captureExternalSyncFlight(root);
+    assert.equal(manager.recordWatcherEvent(root, "source_changed"), 3);
+    await firstFlight.complete();
+
+    const afterFirst = manager.getPreparedReadObservation(root);
+    assert.equal(afterFirst.available, false);
+    assert.equal(afterFirst.available ? undefined : afterFirst.reason, "watcher_event_pending");
+    assert.equal(manager.getWatcherObservation(root).coverageGapSinceEpoch, undefined);
+
+    await localManager.captureExternalSyncFlight(root).complete();
+
+    const afterSecond = manager.getPreparedReadObservation(root);
+    assert.equal(afterSecond.available, true);
+    assert.equal(afterSecond.available ? afterSecond.observation.checkpointObservation : undefined, "checkpoint-after-sync");
+});

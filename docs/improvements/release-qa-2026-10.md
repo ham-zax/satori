@@ -1,0 +1,121 @@
+# Release QA, October 2026 (mcp after 0.9.0)
+
+Status: in progress. Fixes below are committed; every fix has a regression test that fails when the fix is broken. QA round 2 on the new build is running.
+
+## How this QA ran
+
+1. Manual QA by an agent driving the built `satori-dev` server against `/home/hamza/repo/colonist-assistant`
+   (a large TypeScript + Rust repository with 1,000–6,000-line classes).
+2. An independent read-only review of the staged diff (`git diff --cached`), with throwaway tests against temporary git
+   repositories.
+3. Four Muse QA workers (`muse-spark-1.3-contributor`, xhigh), one per area: freshness, detect_changes/file_outline,
+   search, navigation. Each drives the built server through `evals/real-repo-quality/session.mjs` on clones and small
+   TS/Python/Rust fixtures in its own scratch directory. One server at a time (shared lock, 3 GB cap per server).
+
+## Why the earlier tests missed these defects
+
+- Freshness: the unit test drove one `SyncManager`. The server has two: the provider runtime's, which runs the watcher
+  and owns its epochs, and the provider-free `localSyncManager` that `manage_index sync` uses. Completion reached only
+  the second one.
+- detect_changes: `change-impact.ts` tests inject a fake outline where every symbol fits one page; the real outline is
+  cut at 48 KiB, which only happens in files of thousands of lines.
+- file_outline tool tests mock the handler, so the byte budget and range validation never ran there.
+- No test drives the built server end to end on a repository large enough to hit response budgets.
+
+## Fixed (staged)
+
+| Defect | Cause | Fix | Evidence |
+|---|---|---|---|
+| A. Freshness stays `watcher_event_pending` / `watcher_observation_gap` after `manage_index sync` | Completion recorded on the watcher-less `localSyncManager` | `captureExternalSyncFlight` captures the epoch before the worker starts and delegates completion to the watcher-owning managers (`sync.ts`, `provider-runtime.ts`, `shared-runtime.ts`, `manage-maintenance-handlers.ts`) | `sync-read-freshness.test.ts` with two-manager wiring; fails without delegation. Manual QA: verified after sync |
+| B1. `detect_changes` default output overflows the client limit | No response budget | 48 KiB budget trimming `uncertainCallReferences`, `impacted`, then `seeds`, with `omitted` counts and `IMPACT_RESPONSE_BYTE_LIMIT` (`change-impact.ts`) | `change-impact.test.ts`; manual QA returned inline |
+| B2. All 50 seeds come from one file | First-come seed allocation | Round-robin across files, `seedOmittedFiles`, `seed_limit` reason | `change-impact.test.ts`; manual QA 9 of 10 files seeded |
+| B3. Seeds are whole files | Any symbol overlapping any hunk seeded; one import hunk seeded the whole file | Innermost overlapping symbols; whole-file fallback only when a file has no precise seed | `change-impact.test.ts` |
+| B4. Edits inside very large classes seed the whole class | `detect_changes` read only the first 48 KiB outline page | `readCompleteFileOutline` follows `nextPage` (max 40 pages, dedupe by `symbolId`) in `tools/detect_changes.ts` | `tools/detect_changes.test.ts`; manual rerun pending |
+| file_outline overflow | No response budget | 48 KiB budget with `hints.nextPage` (`registry-file-outline.ts`) | `registry-file-outline.test.ts`; manual QA bounded |
+| file_outline `limitSymbols` cut gives no continuation | No hint on a limit cut | `nextPage` at the next symbol; omitted when it would not advance | `registry-file-outline.test.ts`; manual QA `start_line: 156` |
+| file_outline inverted range accepted | No validation | `start_line > end_line` returns `invalid_request` (`navigation-handlers.ts`) | Manual QA; no automated test (tool tests mock the handler) |
+
+## Open defects
+
+### From the staged-diff review (all confirmed, all in code changed by this QA)
+
+| # | Severity | Defect | Evidence | Planned fix |
+|---|---|---|---|---|
+| R1 | major, fixed (unstaged) | A class-header edit is lost when the same hunk also edits a member | `change-impact.ts:117` drops any overlapping symbol that contains another overlapping symbol. `class C extends A {` → `extends B` plus an edit in method `m`, one hunk: seeds `['m']`, no `C`, no warning. Callers and subclasses of `C` are missing | Each changed line now seeds its innermost containing symbol, so `C` (line 1) and `m` (lines 2–4) are both seeded. Test: "seeds a class header and a member edited in one hunk" |
+| R2 | major, fixed (unstaged) | Deleting a whole symbol is blamed on its neighbour, silently | `change-impact.ts:110`: deleting all of `function gone()` between `f` and `h` (`@@ -4,3 +3,0 @@`) seeds `['f']`, no `IMPACT_FILE_LEVEL_SEEDS`. Same disclosure gap for ignored no-symbol hunks (test at `change-impact.test.ts:386` region) | A deletion seeds only a symbol enclosing both neighbouring lines; any hunk that maps to no symbol adds `IMPACT_UNMAPPED_HUNKS` and completeness reason `unmapped_hunks`. Test: deleting `gone` seeds `['h']` with the warning |
+| R3 | major, fixed (unstaged) | The 48 KiB budget cannot be met on large diffs, and trimming discards every seed | `changedFiles` (`change-impact.ts:453`) is the full uncapped diff list. 1,500 changed files: 82,041 bytes, `seeds: []`, `omitted.seeds: 50`; the loop at `:497` empties every list and stays over budget | Trim order is now uncertain → impacted → `changedFiles` (`omitted.changedFiles`) → seeds. Test: 1,500 files fit 48 KiB with all 50 seeds |
+
+### From manual QA on colonist-assistant
+
+| # | Severity | Defect | Status |
+|---|---|---|---|
+| C | near-blocker | Exact-identifier search misses symbols defined in a dirty (edited, unsynced) file, e.g. `decisionSignature` | Fixed with S1 and S2 below |
+| M1 | minor | First `manage_index sync` after a server restart stays `watcher_observation_gap`; the second verifies | Not a defect (D1 below) |
+| M2 | minor | Reads are blocked while a reindex runs | By design (the reindex accept message discloses it); the reason mismatch was D2, fixed |
+| M3 | minor | file_outline repeats the enclosing class on every page | Decided: enclosing symbols repeat on every page but do not count toward `limitSymbols` (O1) |
+| M4 | non-blocker | Natural-language query for the 2000 ms budget constant (`LIVE_WASM_DECISION_TIME_MS`) misses | Ranking, not a defect: the exact query ranks it #1; the natural-language query ranks it 19 of 60 |
+
+### From the navigation QA worker
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| N1 | major (documented limitation) | Rust receiver calls (`deadline.with_budget_ms(...)`) are invisible to `call_graph` in both directions; `find_references` finds them | colonist `depth.rs:2405` → `deadline.rs:53`. Extractor tags them `type_dispatch`; `cbm.ts:151-158` drops non-`direct_call` strategies for languages without receiver-aware capability; Rust has `typeReceiverAwareCapability: NONE` (`capabilities.ts`). Tool description already excludes receiver dispatch | Fixed as disclosure, no edges (user decision; Rust stays non-receiver-aware). `cbm.ts` now keeps a non-admitted strategy as an `unresolved` claim with its candidates and an `unresolved_dependency` proof step instead of dropping it; admission requires `resolved`, so no CALLS edge results, and `call_graph` exact references show the site. Root cause on colonist is wider: since 28fcb259 the CBM provider skips every Rust file with a non-`cfg(test)` `#[cfg(...)]` as `unmodeled_source` (9 of 44 files, `depth.rs` and `deadline.rs` included), so those files have no claims at all. `call_graph` now discloses that (N4). `RELATIONSHIP_BUILDER_VERSION` bumped (`cbm-gated-unresolved-claims-v1`) |
+| N2 | minor | Responses over the ~50 KB agent limit: `find_references` limit 500 = 108 KB; `call_graph` 172 KB (`limit` unbounded, `navigation-handlers.ts:1384` only clamps the minimum); `read_file` on a 60 KB single line = 60 KB | Logs in the worker scratch `qa/navigation/logs/05b_readfile.txt`, `09_colonist.txt` | Fixed: the public `call_graph` schema caps `limit` at 50 (the handler keeps larger internal limits for `detect_changes`). No change for the rest: `find_references` reaches 108 KB only at an explicit `limit: 500` (default 100 ≈ 35 KB), and `read_file` stays within its existing line and byte limits |
+| N3 | minor | Python `x = lambda v: helper(v)` caller missing from `call_graph` edges and exact-reference evidence | `findEnclosingCaller` (`cbm.ts:19-55`) skips non-callable kinds; `isCallableSymbolKind` (`core/src/symbols/contracts.ts:43-49`) | Fixed: the Python adapter gives a module binding whose value is a `lambda` kind `function`, matching TypeScript arrow bindings (`tree-sitter-adapter.ts`). `SYMBOL_EXTRACTOR_VERSION` bumped. Test in `builder.test.ts`; verified on the built server |
+| N4 | minor | `call_graph` callees direction returns an empty result with no warning when calls were dropped | Observational fallback and hints exist only for the inbound path (`relationship-backed-call-graph.ts:883-1000`) | Fixed: `call_graph` reads `providerCoverage[].skippedFiles` from the relationship manifest it already loads and warns `CALL_GRAPH_SOURCE_FILE_UNANALYZED:<reason>` (callees, root file skipped) and `CALL_GRAPH_INBOUND_UNANALYZED_FILES:<n>` (callers, same-language skips). Verified on colonist: `belief_search_backend` callees and `with_budget_ms` callers. Gated receiver calls are disclosed per N1 |
+| N5 | minor | `read_file` serves untracked files despite the description promising `FILE_NOT_PUBLISHED` outside the Publication | Deliberate live-path admission (`read_file.ts:403-421`) | Fixed: description now matches the live-path admission |
+| N6 | minor | `read_file` silently clamps `start_line > end_line` and ranges past EOF | `read_file.ts:905-926` | Fixed: inverted ranges are rejected; clamping past EOF is disclosed |
+| N7 | not a defect | Identical `call_graph` requests differ only in `freshnessDecision.checkedAt` | — | By design |
+
+Observed, not a defect: `detect_changes` on an edited, unsynced file returns `seeds: []` with `unavailableFiles: [{reason: stale_symbol_ref}]` and `coverage: partial`. It refuses to map changed lines onto symbols from an outdated index; the watcher normally syncs first. Whether it should do better before a sync is a product decision.
+
+Passed in navigation QA: TypeScript callers including re-export aliases and closures; Python `self.method`; Rust qualified and imported calls; `trace_path` multi-hop, unconnected pairs and budget honesty; limit/depth honesty; schema validation; dirty-file staleness disclosure; freshness reasons agree across `manage_index status`, `call_graph`, `find_references` and `file_outline` in the same state.
+
+### From the freshness QA worker
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| D1 | major | A completed sync leaves `unverified/watcher_observation_gap`; a second sync verifies (same as M1) | Confirmed in code: `coverWatcherObservation` (`sync.ts:646-666`) closes the gap only when `coverage === 'ready'`; `setWatcherCoverage('ready')` (`:486-505`) never closes the startup gap. The post-restart sync is captured while the watcher is `starting`, so the gap survives it. Repro: worker `p12_lifecycle3.mjs` | Not a defect. The "completed sync" in the repro was an operation persisted by an earlier server process; a sync started in the current session verifies. Keeping the gap open for a scan that may predate watcher readiness is correct |
+| D2 | minor | During reindex, `search_codebase` says `not_ready/indexing` but `file_outline`, `call_graph`, `find_references` say `not_ready/source_state_unverified` | `navigation-handlers.ts` `buildSourceStateUnverified*` (~246-291) vs `handlers.ts` `prepareReadableState` (~1035-1043) | Fixed: `file_outline`, `call_graph`, `find_references`, `trace_path` and `architecture_overview` report `indexing` during a reindex, like search |
+| D3 | minor | `syncStats` is documented on `manage_index` but never emitted | Only the type (`manage-types.ts`) and a gated assignment (`tool-response-builders.ts:152-154`) exist; no handler supplies it | Fixed: field removed (sync is asynchronous; nothing could populate it) |
+| D4 | minor | Every server restart runs a full supervised sync with no source change, briefly flapping status to `unverified/sync_active` | `lastSyncTimes` is in-memory only (`sync.ts:385`), so the first background tick always syncs | By design: the startup sync is what establishes freshness after a restart |
+
+Passed in freshness QA: create/status, sync accept shape and `mutation_in_progress`, edit → pending → sync, rename, delete, branch checkout, `.satoriignore` add/remove, reads during sync vs create/reindex, cancel paths, killed create/reindex recovery, root authorization, determinism, response sizes ≤ 6.5 KB.
+
+### From the detect_changes/file_outline QA worker
+
+Ran on the build from before the R1–R3 fixes.
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| O1 | major | file_outline paging dead-ends: `hasMore: true` with no `nextPage` when the enclosing symbol fills the page | `limitSymbols: 1` on a 2,883-line class: page 1 → `Mega`, `nextPage.start_line: 2`; page 2 → `Mega`, `hasMore: true`, no hint. The stall guard (`registry-file-outline.ts:273-281`) drops the hint because the first omitted symbol is the enclosing repeat; the byte-budget path (`:311-315`) uses the same guard. Code changed by this QA | Fixed (`registry-file-outline.ts`): enclosing repeats do not count toward `limitSymbols` or the continuation, so `nextPage` always advances. Test in `registry-file-outline.test.ts` |
+| O2 | minor | `symbolIdExact`/`symbolLabelExact` are silently ignored in outline mode (all symbols returned, no warning) | `tools/file_outline.ts:17-47`, `navigation-handlers.ts:1025` | Fixed: rejected unless `resolveMode="exact"` (`tools/file_outline.ts`) |
+| O3 | minor | A pure rename seeds the moved symbols as changed and uses two of the 50 file slots | `--no-renames` in `change-impact.ts:62-63`; `git mv util.py helpers.py` seeds `helper` | Fixed: `detect_changes` detects renames; a pure move seeds nothing and uses one file slot, a move with an edit seeds only the edited symbol |
+
+Passed in detect_changes/file_outline QA (against `git diff -U0`): a method edit inside the 2,883-line class seeds only that method (B4 confirmed on the built server); property, Python, TypeScript and Rust edits seed precisely; import-only edit falls back with the warning; untracked/staged/unstaged/deleted files; 60 changed files cap at 50 seeds; `baseRef` forms and validation; determinism; all responses ≤ 48 KiB; file_outline inverted range, past-EOF, window slices and detail modes.
+
+Not exercised: round-robin with `seedOmittedFiles` non-empty; a single symbol over the 48 KiB budget.
+
+### From the search QA worker
+
+| # | Severity | Defect | Evidence | Decision |
+|---|---|---|---|---|
+| S1 | major | A dirty file over 256 KiB loses all its symbols from search: exact-identifier queries return 0 results (Python: unrelated symbols instead) | Confirmed in code: the dirty overlay skips files over `SEARCH_DIRTY_OVERLAY_MAX_BYTES` (`search-query-support.ts:52,485`), and every non-overlay pass suppresses dirty paths (`search-candidate-fusion.ts:103-111`), so nothing represents the file. colonist `overlay.ts` is 252,513 bytes, 9.6 KB under the cap. Recovers after sync | Fixed: the overlay reports the dirty paths it did not read, and only re-read paths suppress indexed results (`search-query-support.ts`, `search-candidate-fusion.ts`, `search-execution.ts`) |
+| S2 | major | A one-line comment edit to a dirty, under-cap file demotes an unchanged exact-identifier definition out of the frozen top 10 (`decisionSignature`: #4 clean → absent, not reachable via `continue_search`) | Worker trace: 15 `dirty_source_suppressed` removals; dirty run uses `["dirty_overlay","primary"]`, and the overlay re-adds at single-pass RRF weight (`search-execution.ts:819-840`). Mechanism not yet traced by me | Fixed: the overlay runs once per request and its results enter fusion with one pass weight, replacing the suppressed stale passes |
+| S3 | minor | Grouped responses can exceed the ~50 KB client limit (51,545 bytes at `limit: 200`) | The grouped cap is 128 KiB (`search-constants.ts:45`) | Fixed: grouped cap is 48 KiB |
+| S4 | minor | Fallback groups lose `symbolKind` and report `navigation.graph: missing_symbol` for an existing current-source symbol | `search-group-results.ts:515-520` | Fixed: overlay results keep the chunk's `symbolKind`. `graph: missing_symbol` stays; it is accurate for a symbol not in the published graph |
+
+Passed in search QA: untracked and deleted files before and after sync; small dirty edits with repaired spans; duplicate names; determinism; filters and validation; `continue_search` paging, replay and error codes; exact constant query; root authorization.
+
+Not exercised: continuation expiry, `alt_terms`, vocabulary flags, Rust, more than 16 dirty files.
+
+## Adjacent findings (not fixed)
+
+- `scripts/satori-useful-context-fixture-record.mjs` and `scripts/satori-live-latency-benchmark.mjs` expect a synchronous sync that returns `syncStats`. Both were already broken by the asynchronous sync contract.
+- Commit 28fcb259 marks every Rust file with any non-`cfg(test)` `#[cfg(...)]` as `unmodeled_source`, removing all call evidence from those files, direct calls included. `call_graph` now discloses it; whether the provider should model those files is a coverage decision.
+
+## Plan
+
+1. Fix R1–R3 with a regression test each that fails on the current code. Done.
+2. Fix the round-1 defects (O, S, D, N). Done, including the deferred N1, N3 and N4.
+3. Rebuild, rerun the QA workers on their repros, repeat until a round finds no new major defect. Build done; rerun pending.

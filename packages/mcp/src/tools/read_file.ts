@@ -55,7 +55,7 @@ export const readFileInputSchema = z.object({
         "Originating indexed root for an exact-symbol request. Preserve this root from the recommendation or symbol-context response when continuing a read.",
     ).optional(),
     start_line: z.number().int().positive().optional().describe("Optional start line (1-based, inclusive)."),
-    end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive)."),
+    end_line: z.number().int().positive().optional().describe("Optional end line (1-based, inclusive). An end_line past the end of the file reads to the last line."),
     mode: z.enum(["plain", "annotated"]).optional().describe("Output mode. Defaults to plain, including exact-symbol requests."),
     presentation: z.enum(["compact", "full"]).optional().describe("Ordinary-read presentation. Omit to wrap explicit ranges longer than 40 lines in a one-line compact envelope; use full for raw multiline source."),
     open_symbol: openSymbolRequestSchema.optional().describe("Read bounded symbol source with continuation-aware excerpts using {contractVersion:2, symbolId}; context defaults to {preset:definition}. Explicit context and continuation are mutually exclusive. Direct spans use one-based inclusive startLine/endLine.")
@@ -65,6 +65,13 @@ export const readFileInputSchema = z.object({
             code: z.ZodIssueCode.custom,
             path: ["codebaseRoot"],
             message: "codebaseRoot applies only to exact-symbol requests.",
+        });
+    }
+    if (input.start_line !== undefined && input.end_line !== undefined && input.start_line > input.end_line) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["end_line"],
+            message: `start_line (${input.start_line}) must not exceed end_line (${input.end_line}).`,
         });
     }
     if (!input.open_symbol) return;
@@ -550,7 +557,7 @@ function resolveIndexingBlockForFile(absolutePath: string, ctx: ToolContext, bou
 export const readFileTool: McpTool = {
     name: "read_file",
     description: () =>
-        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage, so read_file also serves as an exact-path coverage check: FILE_NOT_PUBLISHED means the path is outside the current Publication. With mode=\"annotated\", outlineStatus=\"not_ready\" and outlineReason=\"structural_evidence_unavailable\" mean the file is published and readable but lacks structural extraction evidence.",
+        "Read exact source within a current Satori Publication. Prefer canonical read_file requests returned by search_codebase. open_symbol / symbol_context requests return bounded symbol source with continuation-aware excerpts. Ordinary explicit start_line/end_line ranges return the exact requested source range; presentation=\"full\" returns raw multiline source, subject to read limits. Reads are restricted to published source coverage plus files changed or untracked in git since the Publication that are searchable-language, in scope, and not ignored (their current source is read). FILE_NOT_PUBLISHED means the path is in neither set. With mode=\"annotated\", outlineStatus=\"not_ready\" and outlineReason=\"structural_evidence_unavailable\" mean the file is published and readable but lacks structural extraction evidence.",
     inputSchemaZod: () => readFileInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = readFileInputSchema.safeParse(args || {});
@@ -898,6 +905,17 @@ export const readFileTool: McpTool = {
                     });
                 }
                 const totalLines = lines.length;
+                // Clamping a start past the end would serve the last line as if
+                // it were the requested one.
+                if (input.start_line !== undefined && input.start_line > Math.max(totalLines, 1)) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Error: start_line ${input.start_line} is past the end of '${absolutePath}' (${totalLines} lines).`,
+                        }],
+                        isError: true,
+                    };
+                }
 
                 const maxLines = Math.max(1, ctx.readFileMaxLines);
                 const hasStart = input.start_line !== undefined;

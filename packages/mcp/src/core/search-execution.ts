@@ -604,6 +604,21 @@ export async function runSearchExecution(
     searchDiagnostics.routeKind = input.queryPlan.route.kind;
     searchDiagnostics.retrievalMode = input.queryPlan.retrievalMode;
 
+    // The overlay depends only on the query and the working tree, so every
+    // attempt reuses one read. Indexed results are dropped only for dirty paths
+    // it re-read; the rest keep their indexed evidence.
+    const dirtyOverlay = dirtyFilesNotFreshened
+        ? await runDirtyOverlayPass({
+            host,
+            effectiveRoot: input.effectiveRoot,
+            queryPlan: input.queryPlan,
+            changedFiles: observedChangedFilesState.files,
+        })
+        : { results: [], unreadPaths: new Set<string>() };
+    const rereadDirtyPaths = new Set(
+        [...normalizedObservedChangedFiles].filter((relativePath) => !dirtyOverlay.unreadPaths.has(relativePath)),
+    );
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         attemptsUsed = attempt + 1;
         const primaryDescriptor = { id: "primary" as const, query: input.semanticQuery };
@@ -631,7 +646,7 @@ export async function runSearchExecution(
             .filter((result) => {
                 if (!result || typeof result.relativePath !== "string") return false;
                 const normalizedPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-                if (dirtyFilesNotFreshened && normalizedObservedChangedFiles.has(normalizedPath)) return false;
+                if (dirtyFilesNotFreshened && rereadDirtyPaths.has(normalizedPath)) return false;
                 return shouldIncludeCategoryInScope(input.scope, classifyPathCategory(normalizedPath));
             })
             .map((result) => `${result.relativePath}:${result.startLine}:${result.endLine}:${result.language || "unknown"}`))
@@ -777,7 +792,7 @@ export async function runSearchExecution(
             pathDemotionEligible,
             isTrueExpansionPass: shouldRunCallerExpansion,
             dirtyFilesNotFreshened,
-            observedChangedPaths: normalizedObservedChangedFiles,
+            rereadDirtyPaths,
             suppressedDirtyPaths,
             representedDirtyPaths,
             backendScoreKinds,
@@ -817,12 +832,7 @@ export async function runSearchExecution(
         }
 
         if (dirtyFilesNotFreshened) {
-            const dirtyOverlayResults = await runDirtyOverlayPass({
-                host,
-                effectiveRoot: input.effectiveRoot,
-                queryPlan: input.queryPlan,
-                changedFiles: observedChangedFilesState.files,
-            });
+            const dirtyOverlayResults = dirtyOverlay.results;
             if (dirtyOverlayResults.length > 0) {
                 // This pass replaces the stale semantic passes for the dirty path.
                 // Semantic passes combine by max, so one pass weight is equivalent.
@@ -1197,7 +1207,7 @@ export async function runSearchExecution(
                         continue;
                     }
                     const normalizedPath = result.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
-                    if (dirtyFilesNotFreshened && normalizedObservedChangedFiles.has(normalizedPath)) {
+                    if (dirtyFilesNotFreshened && rereadDirtyPaths.has(normalizedPath)) {
                         recordDiagnosticRemoval(candidate, "dirty_source_suppressed");
                         continue;
                     }

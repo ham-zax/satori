@@ -19,7 +19,7 @@ const fileOutlineInputSchema = z.object({
     file: repoRelativeFilePathSchema('Repo-relative file path inside the codebase root (not absolute; resolved only against that root).'),
     start_line: z.number().int().positive().optional().describe('Optional start line filter (1-based, inclusive).'),
     end_line: z.number().int().positive().optional().describe('Optional end line filter (1-based, inclusive).'),
-    limitSymbols: z.number().int().positive().optional().meta({ default: 500 }).describe('Maximum number of returned symbols after line filtering.'),
+    limitSymbols: z.number().int().positive().optional().meta({ default: 500 }).describe('Maximum number of returned symbols that start inside the line window; enclosing symbols that start before start_line repeat on every page and are not counted.'),
     resolveMode: z.enum(['outline', 'exact']).optional().meta({ default: 'outline' }).describe('Outline mode returns all symbols (windowed/limited). Exact mode resolves deterministic symbol matches in this file.'),
     symbolIdExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol identifier match in the target file. On symbol-owned flows, pass the symbol\'s symbolInstanceId.'),
     symbolLabelExact: z.string().min(1).optional().describe('Used with resolveMode=\"exact\": exact symbol label match in the target file.'),
@@ -33,6 +33,12 @@ const fileOutlineInputSchema = z.object({
                 message: 'resolveMode=\"exact\" requires symbolIdExact or symbolLabelExact.'
             });
         }
+    } else if (input.symbolIdExact || input.symbolLabelExact) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [input.symbolIdExact ? 'symbolIdExact' : 'symbolLabelExact'],
+            message: 'symbolIdExact and symbolLabelExact require resolveMode=\"exact\"; outline mode does not filter by symbol.'
+        });
     }
     if (
         (input.detail === 'analysis' || input.detail === 'relationships')

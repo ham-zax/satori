@@ -26,6 +26,11 @@ import {
     SourceObservationState,
 } from "./source-observation-state.js";
 
+/** Completes one externally executed sync against the watcher state captured before it started. */
+export interface ExternalSyncFlight {
+    complete(): Promise<void>;
+}
+
 interface SyncManagerOptions {
     watchEnabled?: boolean;
     now?: () => number;
@@ -37,6 +42,7 @@ interface SyncManagerOptions {
     mutationRuntime: RootMutationRuntime;
     onLifecycleActivityChanged?: () => void;
     preparedReadObservationSource?: (codebasePath: string) => PreparedReadObservationResult | undefined;
+    externalSyncFlightSource?: (codebasePath: string) => ExternalSyncFlight | undefined;
     /**
      * Runs the incremental sync for a held lease in a disposable process, so
      * sync memory is returned to the OS instead of staying in the host.
@@ -401,6 +407,7 @@ export class SyncManager {
     private readonly onLifecycleActivityChanged?: () => void;
     private readonly runSyncInWorker?: SyncManagerOptions['runSyncInWorker'];
     private readonly preparedReadObservationSource?: SyncManagerOptions['preparedReadObservationSource'];
+    private readonly externalSyncFlightSource?: SyncManagerOptions['externalSyncFlightSource'];
 
     constructor(context: Context, options: SyncManagerOptions) {
         this.context = context;
@@ -411,6 +418,7 @@ export class SyncManager {
         this.onLifecycleActivityChanged = options.onLifecycleActivityChanged;
         this.runSyncInWorker = options.runSyncInWorker;
         this.preparedReadObservationSource = options.preparedReadObservationSource;
+        this.externalSyncFlightSource = options.externalSyncFlightSource;
         this.sourceObservationState = new SourceObservationState({
             assertMutationCurrent: (root) => this.mutationRuntime.assertCurrent(root),
             hasCurrentWatcherCapture: (root, capture) => this.hasCurrentWatcherCapture(root, capture),
@@ -1284,24 +1292,12 @@ export class SyncManager {
 
         this.activeSyncs.set(codebasePath, syncPromise);
         const outcome = await syncPromise;
-        const committedCheckpointStartedAt = Date.now();
-        const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
-        options.onPhaseTiming?.(
-            'checkpoint_proof',
-            Math.max(0, Date.now() - committedCheckpointStartedAt),
+        await this.recordCommittedSync(
+            codebasePath,
+            outcome.mode === 'synced' && !outcome.errorMessage,
+            flightEpoch,
+            options.onPhaseTiming,
         );
-        if (committedCheckpoint?.status === 'valid') {
-            this.sourceObservationState.recordValidCheckpointObservation(
-                codebasePath,
-                committedCheckpoint.observationToken,
-            );
-        } else {
-            if (committedCheckpoint?.status === 'missing' || committedCheckpoint?.status === 'corrupt') {
-                this.sourceObservationState.recordUnavailableCheckpoint(codebasePath, committedCheckpoint.status);
-            } else {
-                this.sourceObservationState.clearCheckpointObservation(codebasePath);
-            }
-        }
         const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
         const decision: FreshnessDecision = {
             mode: outcome.mode,
@@ -1318,7 +1314,39 @@ export class SyncManager {
             operation: outcome.operation,
             errorMessage: outcome.errorMessage,
         };
-        if (outcome.mode === 'synced' && !outcome.errorMessage) {
+        return decision;
+    }
+
+    /**
+     * Records the checkpoint a finished sync committed and, when it synced,
+     * acknowledges watcher events observed up to `flightEpoch` (captured
+     * before the sync read source). Events after that epoch stay pending.
+     */
+    private async recordCommittedSync(
+        codebasePath: string,
+        synced: boolean,
+        flightEpoch: number | undefined,
+        onPhaseTiming?: EnsureFreshnessOptions['onPhaseTiming'],
+    ): Promise<void> {
+        const committedCheckpointStartedAt = Date.now();
+        const committedCheckpoint = await this.inspectSourceFreshnessCheckpoint(codebasePath);
+        onPhaseTiming?.(
+            'checkpoint_proof',
+            Math.max(0, Date.now() - committedCheckpointStartedAt),
+        );
+        if (committedCheckpoint?.status === 'valid') {
+            this.sourceObservationState.recordValidCheckpointObservation(
+                codebasePath,
+                committedCheckpoint.observationToken,
+            );
+        } else {
+            if (committedCheckpoint?.status === 'missing' || committedCheckpoint?.status === 'corrupt') {
+                this.sourceObservationState.recordUnavailableCheckpoint(codebasePath, committedCheckpoint.status);
+            } else {
+                this.sourceObservationState.clearCheckpointObservation(codebasePath);
+            }
+        }
+        if (synced) {
             this.coverWatcherObservation(codebasePath, flightEpoch);
             if (committedCheckpoint?.status === 'valid') {
                 this.supersedeFullIndexSourceHandoffAfterSync(
@@ -1327,7 +1355,28 @@ export class SyncManager {
                 );
             }
         }
-        return decision;
+    }
+
+    /**
+     * Explicit `manage_index sync` runs in a supervised worker with its own
+     * SyncManager, so this process's watcher observation and checkpoint state
+     * never see that sync. The caller captures a flight before starting the
+     * worker and completes it only after the worker reports success.
+     */
+    public captureExternalSyncFlight(codebasePath: string): ExternalSyncFlight {
+        const root = this.canonicalWatcherRoot(codebasePath);
+        const flightEpoch = this.captureWatcherFlightEpoch(root);
+        // A provider-free manager owns no watcher; the watcher-running managers
+        // for the same root must observe the completion to close their gaps.
+        const delegated = this.externalSyncFlightSource?.(root);
+        return {
+            complete: async () => {
+                this.lastSyncTimes.set(root, this.now());
+                await this.recordCommittedSync(root, true, flightEpoch);
+                this.bumpFreshnessEpoch(root);
+                await delegated?.complete();
+            },
+        };
     }
 
     private async runIgnoreReconcile(

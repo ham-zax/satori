@@ -4,6 +4,35 @@ import type { CallGraphResponseEnvelope, FileOutlineResponseEnvelope } from "../
 import { absoluteFilesystemPathSchema, formatZodError, type McpTool } from "./types.js";
 import { resolveVectorBackedToolContext } from "./provider-context.js";
 
+const MAX_OUTLINE_PAGES = 40;
+
+/**
+ * file_outline pages large files under its byte budget; change seeding needs every
+ * member symbol, or hunks inside a big class map only to the enclosing class.
+ */
+export async function readCompleteFileOutline(
+    fetchPage: (startLine: number | undefined) => Promise<FileOutlineResponseEnvelope>,
+): Promise<FileOutlineResponseEnvelope> {
+    let startLine: number | undefined;
+    let merged: FileOutlineResponseEnvelope | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < MAX_OUTLINE_PAGES; page += 1) {
+        const envelope = await fetchPage(startLine);
+        if (envelope.status !== "ok" || !envelope.outline) return merged ?? envelope;
+        // Pages repeat enclosing symbols that overlap their window.
+        const symbols = envelope.outline.symbols.filter(symbol => !seen.has(symbol.symbolId));
+        for (const symbol of symbols) seen.add(symbol.symbolId);
+        merged = merged
+            ? { ...merged, hasMore: envelope.hasMore,
+                outline: { ...merged.outline!, symbols: [...merged.outline!.symbols, ...symbols] } }
+            : envelope;
+        const next = (envelope.hints as { nextPage?: { args?: { start_line?: number } } } | undefined)?.nextPage?.args?.start_line;
+        if (next === undefined) return merged;
+        startLine = next;
+    }
+    return merged!;
+}
+
 const inputSchema = z.object({
     path: absoluteFilesystemPathSchema("Absolute indexed repository root."),
     baseRef: z.string().trim().min(1).max(256).default("HEAD").describe("Git commit/ref compared with the tracked working tree, e.g. HEAD~5. Includes staged and unstaged tracked changes; excludes untracked files."),
@@ -25,10 +54,11 @@ export const detectChangesTool: McpTool = {
             const handlers = resolved.context.toolHandlers;
             const input = { ...parsed.data, path: authorized.canonicalPath };
             const result = await detectChangeImpact(input, {
-                outline: async file => {
-                    const response = await handlers.handleFileOutline({ path: input.path, file, limitSymbols: 500 }, ctx.workspacePolicy);
+                outline: file => readCompleteFileOutline(async startLine => {
+                    const response = await handlers.handleFileOutline({ path: input.path, file, limitSymbols: 500,
+                        ...(startLine === undefined ? {} : { start_line: startLine }) }, ctx.workspacePolicy);
                     return JSON.parse(response.content[0].text) as FileOutlineResponseEnvelope;
-                },
+                }),
                 callers: async (root, symbol) => {
                     const response = await handlers.handleCallGraph({ path: root,
                         symbolRef: { file: symbol.file, symbolId: symbol.symbolId },

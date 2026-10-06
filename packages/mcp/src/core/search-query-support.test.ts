@@ -504,3 +504,40 @@ test('active ignore matcher keeps the built-in denylist authoritative over re-in
     assert.equal(matcher('vendor/x.min.js'), true);
     assert.equal(matcher('src/app.ts'), false);
 });
+
+test('dirty overlay ranks matches across chunks before capping and reports files it could not read', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-dirty-overlay-'));
+    try {
+        fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+        // Twenty weak matches precede the one chunk naming both query terms.
+        const weak = Array.from(
+            { length: 20 },
+            (_, index) => `export function weak${index}() {\n    return invoiceTotal(${index});\n}\n`,
+        );
+        const strong = 'export function strongest() {\n    return invoiceTotal(taxRate);\n}\n';
+        fs.writeFileSync(path.join(root, 'src/billing.ts'), [...weak, strong].join('\n'));
+        // Over the per-file read bound, so the overlay cannot replace its indexed evidence.
+        fs.writeFileSync(
+            path.join(root, 'src/huge.ts'),
+            `export const big = "${'x'.repeat(300 * 1024)}";\nexport const t = invoiceTotal(taxRate);\n`,
+        );
+
+        const parsedOperators = parseSearchOperators('invoiceTotal taxRate');
+        const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
+        const support = buildTrackedLexicalSupport([]);
+        const overlay = await support.buildDirtyFileSearchResults({
+            effectiveRoot: root,
+            queryPlan,
+            changedFiles: new Set(['src/billing.ts', 'src/huge.ts', 'src/deleted.ts']),
+        });
+
+        assert.equal(overlay.results.length, 16);
+        assert.match(overlay.results[0]?.content ?? '', /strongest/);
+        assert.equal(overlay.results[0]?.symbolKind, 'function');
+        assert.ok(overlay.results.every((result) => result.relativePath === 'src/billing.ts'));
+        // A deleted file is read as absent, so only the oversized file stays unread.
+        assert.deepEqual([...overlay.unreadPaths], ['src/huge.ts']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

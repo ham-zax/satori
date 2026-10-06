@@ -11,6 +11,9 @@ import { areaForFile } from "./architecture-overview.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Maximum serialized detect_changes response size (UTF-8 bytes of the MCP JSON payload). */
+export const DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
+
 export type ChangeImpactInput = {
     path: string;
     baseRef: string;
@@ -56,43 +59,125 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     // Resolve the revision separately: revision strings never become options
     // or a pathspec. All subsequent operations use the immutable commit ID.
     const baseCommit = (await git(["rev-parse", "--verify", "--end-of-options", `${input.baseRef}^{commit}`])).trim();
-    const changedFiles = (await git(["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z",
-        "--no-renames", "--relative", baseCommit, "--", "."])).split("\0").filter(Boolean).sort();
+    // Rename detection reports a moved file once, under its current path, and
+    // its per-file diff below runs against the source path, so a pure move
+    // produces no hunks and seeds nothing.
+    const nameStatus = (await git(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z",
+        "--find-renames", "--relative", baseCommit, "--", "."])).split("\0").filter(Boolean);
+    const renamedFrom = new Map<string, string>();
+    const changedFiles: string[] = [];
+    for (let index = 0; index < nameStatus.length;) {
+        const status = nameStatus[index++]!;
+        const file = nameStatus[index++]!;
+        if (status.startsWith("R")) {
+            const renamedTo = nameStatus[index++]!;
+            renamedFrom.set(renamedTo, file);
+            changedFiles.push(renamedTo);
+        } else {
+            changedFiles.push(file);
+        }
+    }
+    changedFiles.sort();
     const seeds: Array<CallGraphNodeResult & { codebaseRoot: string }> = [];
+    const seedOmittedFiles: Array<{ file: string; omittedSeedCount: number }> = [];
     const unavailableFiles: Array<{ file: string; reason: string }> = [];
     const warnings = new Set<string>(["IMPACT_GRAPH_ADVISORY", "IMPACT_CURRENT_SYMBOLS_ONLY", "IMPACT_SNAPSHOT_NOT_ATOMIC"]);
     let truncated = changedFiles.length > 50;
-    for (const [fileIndex, file] of changedFiles.slice(0, 50).entries()) {
+    let seedsDroppedByBudget = false;
+    const candidatesByFile: Array<{ file: string; candidates: Array<CallGraphNodeResult & { codebaseRoot: string }> }> = [];
+    for (const file of changedFiles.slice(0, 50)) {
         const outline = await ports.outline(file);
         if (outline.status !== "ok" || !outline.outline) {
             unavailableFiles.push({ file, reason: outline.reason ?? outline.status });
             continue;
         }
-        const diff = await git(["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--relative",
-            "--unified=0", baseCommit, "--", `:(literal)${file}`]);
+        const source = renamedFrom.get(file);
+        const diff = await git(["diff", "--no-ext-diff", "--no-textconv", source ? "--find-renames" : "--no-renames",
+            "--relative", "--unified=0", baseCommit, "--", ...(source ? [`:(literal)${source}`] : []), `:(literal)${file}`]);
         const ranges = [...diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map(match => ({
             start: Number(match[1]), count: match[2] === undefined ? 1 : Number(match[2]),
         }));
-        // Deletions, import changes, and changes outside a surviving symbol can
-        // affect any declaration in the file. Disclose this file-level fallback.
+        // Hunk-precise seeds: every added or changed line seeds the innermost
+        // current symbol containing it, so an edit to a class's own lines seeds
+        // the class while an edit inside a member seeds only the member. A pure
+        // deletion (+count 0) seeds the innermost symbol enclosing both lines
+        // around the deletion point; a deletion at a symbol boundary (e.g. a
+        // whole removed function) belongs to no current symbol. Hunks that map
+        // to no symbol are disclosed; a file whose hunks seed nothing precise
+        // falls back to every symbol in the file.
         const symbols = outline.outline.symbols.filter(symbol => symbol.kind !== "file");
-        const overlapping = symbols.filter(symbol => ranges.some(range => range.count > 0
-            && symbol.span.startLine <= range.start + range.count - 1 && symbol.span.endLine >= range.start));
-        const needsFileSeeds = ranges.length === 0 || ranges.some(range => range.count === 0
-            || !symbols.some(symbol => symbol.span.startLine <= range.start && symbol.span.endLine >= range.start + range.count - 1));
-        if (needsFileSeeds) warnings.add("IMPACT_FILE_LEVEL_SEEDS");
-        const selected = needsFileSeeds ? symbols : overlapping;
-        if (outline.hasMore) truncated = true;
-        for (const symbol of selected) {
-            if (seeds.length >= 50) { truncated = true; break; }
-            seeds.push({ codebaseRoot: outline.path, symbolId: symbol.symbolId,
-                file: symbol.file, language: symbol.language, symbolLabel: symbol.symbolLabel, span: symbol.span });
+        type OutlineSymbol = (typeof symbols)[number];
+        const precise: OutlineSymbol[] = [];
+        const preciseIds = new Set<string>();
+        const addPrecise = (symbol: OutlineSymbol) => {
+            if (preciseIds.has(symbol.symbolId)) return;
+            preciseIds.add(symbol.symbolId);
+            precise.push(symbol);
+        };
+        const innermostContaining = (first: number, last: number): OutlineSymbol | undefined => {
+            const containing = symbols.filter(symbol => symbol.span.startLine <= first && symbol.span.endLine >= last);
+            containing.sort((left, right) =>
+                ((left.span.endLine - left.span.startLine) - (right.span.endLine - right.span.startLine))
+                || (right.span.startLine - left.span.startLine)
+                || compareContractStrings(left.symbolId, right.symbolId));
+            return containing[0];
+        };
+        let unmappedHunk = false;
+        for (const range of ranges) {
+            if (range.count === 0) {
+                const owner = innermostContaining(range.start, range.start + 1);
+                if (owner) addPrecise(owner);
+                else unmappedHunk = true;
+                continue;
+            }
+            let mapped = false;
+            for (let line = range.start; line < range.start + range.count; line += 1) {
+                const owner = innermostContaining(line, line);
+                if (owner) {
+                    addPrecise(owner);
+                    mapped = true;
+                }
+            }
+            if (!mapped) unmappedHunk = true;
         }
-        if (seeds.length >= 50) {
-            if (fileIndex < changedFiles.length - 1) truncated = true;
-            break;
+        // A diff without hunks (pure move, mode change) changed no lines to seed.
+        const touchesNoSymbol = ranges.length > 0 && precise.length === 0;
+        if (unmappedHunk && !touchesNoSymbol) warnings.add("IMPACT_UNMAPPED_HUNKS");
+        const bySpanThenId = (left: OutlineSymbol, right: OutlineSymbol) =>
+            left.span.startLine - right.span.startLine
+            || left.span.endLine - right.span.endLine
+            || compareContractStrings(left.symbolId, right.symbolId);
+        if (touchesNoSymbol) warnings.add("IMPACT_FILE_LEVEL_SEEDS");
+        const fallback = touchesNoSymbol ? symbols.filter(symbol => !preciseIds.has(symbol.symbolId)) : [];
+        if (outline.hasMore) truncated = true;
+        candidatesByFile.push({ file, candidates: [...[...precise].sort(bySpanThenId), ...fallback.sort(bySpanThenId)]
+            .map(symbol => ({ codebaseRoot: outline.path, symbolId: symbol.symbolId,
+                file: symbol.file, language: symbol.language, symbolLabel: symbol.symbolLabel, span: symbol.span })) });
+    }
+    // Fair allocation: deal the 50-seed budget round-robin across files in
+    // changedFiles order so one large file cannot starve the other files.
+    const allocatedPerFile = candidatesByFile.map(() => 0);
+    for (let round = 0; seeds.length < 50; round++) {
+        let progressed = false;
+        for (const [index, entry] of candidatesByFile.entries()) {
+            if (seeds.length >= 50) break;
+            const candidate = entry.candidates[round];
+            if (!candidate) continue;
+            seeds.push(candidate);
+            allocatedPerFile[index] = (allocatedPerFile[index] ?? 0) + 1;
+            progressed = true;
+        }
+        if (!progressed) break;
+    }
+    for (const [index, entry] of candidatesByFile.entries()) {
+        const omittedSeedCount = entry.candidates.length - (allocatedPerFile[index] ?? 0);
+        if (omittedSeedCount > 0) {
+            seedOmittedFiles.push({ file: entry.file, omittedSeedCount });
+            seedsDroppedByBudget = true;
         }
     }
+    seedOmittedFiles.sort((left, right) => compareContractStrings(left.file, right.file));
+    if (seedsDroppedByBudget) truncated = true;
     const seedKeys = new Set(seeds.map(symbol => `${symbol.codebaseRoot}\0${symbol.symbolId}`));
     const impacted = new Map<string, ImpactNode>();
     const uncertainCallReferences = new Map<string, {
@@ -277,7 +362,6 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     if ([...impacted.values()].some((node) => node.evidenceClass === "heuristic")) {
         warnings.add("IMPACT_HEURISTIC_CALL_PATHS");
     }
-    if (truncated) warnings.add("IMPACT_LIMIT_REACHED");
 
     const impactedValues = [...impacted.values()].sort((a, b) =>
         a.distance - b.distance
@@ -337,42 +421,111 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     }
     for (const reference of uncertainValues) areaRow(reference.file).uncertainReferenceCount += 1;
 
-    const completenessReasons = new Set<string>(["depth_bound"]);
-    if (truncated) completenessReasons.add("limit");
-    if (unavailableFiles.length > 0 || unavailableSeeds.length > 0) {
-        completenessReasons.add("unavailable_navigation");
-    }
-    if (uncertainValues.length > 0) completenessReasons.add("uncertain_references");
+    // Area counts are computed from the untrimmed data so trimming below
+    // never rewrites the disclosed evidence distribution.
+    const areaImpact = [...areaRows.values()].sort((a, b) => (
+        (b.seedCount + b.directCount + b.transitiveCount) - (a.seedCount + a.directCount + a.transitiveCount)
+        || compareContractStrings(a.area, b.area)
+    ));
     const heuristicImpactCount = impactedValues.filter((node) => node.evidenceClass === "heuristic").length;
-    if (heuristicImpactCount > 0) completenessReasons.add("heuristic_relationship_paths");
-    if ([...warnings].some((warning) => warning.includes("SOURCE_REFERENCE_COVERAGE_PARTIAL"))) {
-        completenessReasons.add("source_reference_coverage_partial");
-    }
 
-    return {
-        status: "ok" as const, path: input.path, baseRef: input.baseRef, baseCommit,
-        comparison: "base_to_tracked_worktree" as const,
-        depth: input.depth, limit: input.limit, coverage: "partial" as const, truncated,
-        completeness: {
-            exhaustive: false,
-            reasons: [...completenessReasons].sort(),
-            changedFileLimit: 50,
-            seedLimit: 50,
-            traversalDepth: input.depth,
-            impactedLimit: input.limit,
-            unavailableFileCount: unavailableFiles.length,
-            unavailableSeedCount: unavailableSeeds.length,
-            uncertainReferenceCount: uncertainValues.length,
-            heuristicImpactCount,
-        },
-        changedFiles,
-        seeds: seedValues,
-        impacted: impactedValues,
-        areaImpact: [...areaRows.values()].sort((a, b) => (
-            (b.seedCount + b.directCount + b.transitiveCount) - (a.seedCount + a.directCount + a.transitiveCount)
-            || compareContractStrings(a.area, b.area)
-        )),
-        uncertainCallReferences: uncertainValues,
-        unavailableFiles, unavailableSeeds, warnings: [...warnings].sort(),
+    // Visible prefix lengths for the byte-budgeted lists; the full arrays
+    // stay available for areaImpact and completeness counts above.
+    let visibleUncertainCount = uncertainValues.length;
+    let visibleImpactedCount = impactedValues.length;
+    let visibleSeedCount = seedValues.length;
+    let visibleChangedFileCount = changedFiles.length;
+    const renderPayload = () => {
+        const omitted = {
+            changedFiles: changedFiles.length - visibleChangedFileCount,
+            impacted: impactedValues.length - visibleImpactedCount,
+            uncertainCallReferences: uncertainValues.length - visibleUncertainCount,
+            seeds: seedValues.length - visibleSeedCount,
+        };
+        const finalWarnings = new Set(warnings);
+        let finalTruncated = truncated;
+        if (omitted.impacted > 0 || omitted.uncertainCallReferences > 0 || omitted.seeds > 0 || omitted.changedFiles > 0) {
+            finalTruncated = true;
+            finalWarnings.add("IMPACT_RESPONSE_BYTE_LIMIT");
+        }
+        if (finalTruncated) finalWarnings.add("IMPACT_LIMIT_REACHED");
+        const completenessReasons = new Set<string>(["depth_bound"]);
+        if (finalTruncated) completenessReasons.add("limit");
+        if (seedsDroppedByBudget) completenessReasons.add("seed_limit");
+        if (unavailableFiles.length > 0 || unavailableSeeds.length > 0) {
+            completenessReasons.add("unavailable_navigation");
+        }
+        if (uncertainValues.length > 0) completenessReasons.add("uncertain_references");
+        if (warnings.has("IMPACT_UNMAPPED_HUNKS")) completenessReasons.add("unmapped_hunks");
+        if (heuristicImpactCount > 0) completenessReasons.add("heuristic_relationship_paths");
+        if ([...finalWarnings].some((warning) => warning.includes("SOURCE_REFERENCE_COVERAGE_PARTIAL"))) {
+            completenessReasons.add("source_reference_coverage_partial");
+        }
+        return {
+            status: "ok" as const, path: input.path, baseRef: input.baseRef, baseCommit,
+            comparison: "base_to_tracked_worktree" as const,
+            depth: input.depth, limit: input.limit, coverage: "partial" as const, truncated: finalTruncated,
+            completeness: {
+                exhaustive: false,
+                reasons: [...completenessReasons].sort(),
+                changedFileLimit: 50,
+                seedLimit: 50,
+                traversalDepth: input.depth,
+                impactedLimit: input.limit,
+                unavailableFileCount: unavailableFiles.length,
+                unavailableSeedCount: unavailableSeeds.length,
+                uncertainReferenceCount: uncertainValues.length,
+                heuristicImpactCount,
+            },
+            changedFiles: changedFiles.slice(0, visibleChangedFileCount),
+            seeds: seedValues.slice(0, visibleSeedCount),
+            impacted: impactedValues.slice(0, visibleImpactedCount),
+            areaImpact,
+            uncertainCallReferences: uncertainValues.slice(0, visibleUncertainCount),
+            unavailableFiles, unavailableSeeds, warnings: [...finalWarnings].sort(),
+            seedOmittedFiles, omitted,
+        };
     };
+    const responseFits = (candidate: unknown) =>
+        Buffer.byteLength(JSON.stringify(candidate), "utf8") <= DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES;
+    if (!responseFits(renderPayload())) {
+        // Shrink in order, longest fitting prefix each (binary searched):
+        // uncertainCallReferences, impacted, changedFiles (only the first 50 are
+        // analysed), then seeds last, since seeds are the answer itself. Every
+        // trim is counted in omitted.
+        const longestFittingCount = (total: number, fitsCount: (count: number) => boolean): number => {
+            let low = 0;
+            let high = total;
+            while (low < high) {
+                const mid = Math.ceil((low + high) / 2);
+                if (fitsCount(mid)) low = mid;
+                else high = mid - 1;
+            }
+            return low;
+        };
+        const fits = () => responseFits(renderPayload());
+        const trimStages: Array<{ total: number; set: (count: number) => void }> = [
+            { total: uncertainValues.length, set: (count) => { visibleUncertainCount = count; } },
+            { total: impactedValues.length, set: (count) => { visibleImpactedCount = count; } },
+            { total: changedFiles.length, set: (count) => { visibleChangedFileCount = count; } },
+            { total: seedValues.length, set: (count) => { visibleSeedCount = count; } },
+        ];
+        for (const stage of trimStages) {
+            if (fits()) break;
+            const count = longestFittingCount(stage.total, (candidate) => {
+                stage.set(candidate);
+                return fits();
+            });
+            stage.set(count);
+        }
+        // Omitted-count digit growth can overshoot the binary search by a few
+        // bytes; close any remaining gap one entry at a time, seeds last.
+        const counts = () => [visibleUncertainCount, visibleImpactedCount, visibleChangedFileCount, visibleSeedCount];
+        while (!fits()) {
+            const stageIndex = counts().findIndex((count) => count > 0);
+            if (stageIndex < 0) break;
+            trimStages[stageIndex].set(counts()[stageIndex] - 1);
+        }
+    }
+    return renderPayload();
 }

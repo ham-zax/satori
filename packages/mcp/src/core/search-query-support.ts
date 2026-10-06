@@ -142,31 +142,12 @@ async function readMeasuredSearchSource(
     };
 }
 
-function selectBoundedContractPaths(
-    paths: Iterable<string>,
-    normalize: (relativePath: string) => string | null,
-    limit: number,
-): string[] {
-    const selected: string[] = [];
-    for (const candidate of paths) {
-        const normalized = normalize(candidate);
-        if (!normalized || selected.includes(normalized)) {
-            continue;
-        }
-        let insertionIndex = selected.findIndex((existing) => compareContractStrings(normalized, existing) < 0);
-        if (insertionIndex < 0) {
-            insertionIndex = selected.length;
-        }
-        if (insertionIndex >= limit) {
-            continue;
-        }
-        selected.splice(insertionIndex, 0, normalized);
-        if (selected.length > limit) {
-            selected.pop();
-        }
-    }
-    return selected;
-}
+// Current-source overlay for dirty files, plus the dirty paths it could not
+// read within its bounds.
+export type DirtyFileSearchResults = {
+    results: SearchResultLike[];
+    unreadPaths: Set<string>;
+};
 
 export type SearchQuerySupportHost = {
     normalizeSearchPath(relativePath: string): string;
@@ -435,16 +416,25 @@ export class SearchQuerySupport {
         effectiveRoot: string;
         queryPlan: SearchQueryPlan;
         changedFiles: Set<string>;
-    }): Promise<SearchResultLike[]> {
-        if (input.changedFiles.size === 0 || input.queryPlan.lexicalTerms.length === 0) {
-            return [];
+    }): Promise<DirtyFileSearchResults> {
+        const dirtyPaths = [...new Set(
+            [...input.changedFiles]
+                .map((relativePath) => this.normalizeRelativePathForIgnoreCheck(relativePath))
+                .filter((relativePath): relativePath is string => relativePath !== null),
+        )].sort(compareContractStrings);
+        // Paths whose current source this overlay did not read. Their indexed
+        // results are kept, because nothing current can replace them.
+        const unreadPaths = new Set(dirtyPaths.slice(SEARCH_DIRTY_OVERLAY_MAX_FILES));
+        const unread = (): DirtyFileSearchResults => ({ results: [], unreadPaths: new Set(dirtyPaths) });
+        if (dirtyPaths.length === 0 || input.queryPlan.lexicalTerms.length === 0) {
+            return unread();
         }
 
         let canonicalRoot: string;
         try {
             canonicalRoot = fs.realpathSync(input.effectiveRoot);
         } catch {
-            return [];
+            return unread();
         }
         const activeIgnoreMatcher = this.buildActiveIgnoreMatcher(input.effectiveRoot);
         const analyzer = createLanguageAnalysisService({
@@ -455,17 +445,10 @@ export class SearchQuerySupport {
         const seen = new Set<string>();
         let bytesRead = 0;
 
-        const changedPaths = selectBoundedContractPaths(
-            input.changedFiles,
-            (relativePath) => this.normalizeRelativePathForIgnoreCheck(relativePath),
-            SEARCH_DIRTY_OVERLAY_MAX_FILES,
-        );
-        for (const relativePath of changedPaths) {
-            if (
-                bytesRead >= SEARCH_DIRTY_OVERLAY_TOTAL_BYTES
-                || results.length >= SEARCH_DIRTY_OVERLAY_MAX_RESULTS
-            ) {
-                break;
+        for (const relativePath of dirtyPaths.slice(0, SEARCH_DIRTY_OVERLAY_MAX_FILES)) {
+            if (bytesRead >= SEARCH_DIRTY_OVERLAY_TOTAL_BYTES) {
+                unreadPaths.add(relativePath);
+                continue;
             }
             if (!this.mayBeSearchableLanguagePath(relativePath) || activeIgnoreMatcher?.(relativePath)) {
                 continue;
@@ -482,7 +465,11 @@ export class SearchQuerySupport {
             try {
                 handle = await openRegularFileInsideRoot(logicalPath, canonicalRoot);
                 stat = await handle.stat();
-                if (!stat.isFile() || stat.size > SEARCH_DIRTY_OVERLAY_MAX_BYTES || bytesRead + stat.size > SEARCH_DIRTY_OVERLAY_TOTAL_BYTES) {
+                if (!stat.isFile()) {
+                    continue;
+                }
+                if (stat.size > SEARCH_DIRTY_OVERLAY_MAX_BYTES || bytesRead + stat.size > SEARCH_DIRTY_OVERLAY_TOTAL_BYTES) {
+                    unreadPaths.add(relativePath);
                     continue;
                 }
                 ({ content, observation: sourceObservation } = await readMeasuredSearchSource(
@@ -519,10 +506,8 @@ export class SearchQuerySupport {
                 });
             }
 
+            let fileMatched = false;
             for (const chunk of chunks) {
-                if (results.length >= SEARCH_DIRTY_OVERLAY_MAX_RESULTS) {
-                    break;
-                }
                 const candidate: SearchResultLike = {
                     content: chunk.content,
                     relativePath,
@@ -530,6 +515,7 @@ export class SearchQuerySupport {
                     endLine: chunk.metadata.endLine,
                     language,
                     ...(chunk.metadata.symbolLabel ? { symbolLabel: chunk.metadata.symbolLabel } : {}),
+                    ...(chunk.metadata.symbolKind ? { symbolKind: chunk.metadata.symbolKind } : {}),
                     score: 1,
                     backendScore: 1,
                     backendScoreKind: "lexical_rank",
@@ -543,9 +529,10 @@ export class SearchQuerySupport {
                 }
                 seen.add(key);
                 results.push(candidate);
+                fileMatched = true;
             }
 
-            if (results.some((result) => result.relativePath === relativePath)) {
+            if (fileMatched) {
                 continue;
             }
             const exactWindow = this.findExactTrackedLexicalWindowMatch(relativePath, content, input.queryPlan);
@@ -581,7 +568,22 @@ export class SearchQuerySupport {
             });
         }
 
-        return results;
+        // Rank across every read file before capping, so the strongest current
+        // evidence survives regardless of which file or chunk it came from.
+        // The sort is stable, so equal evidence keeps path and line order.
+        const strength = (result: SearchResultLike): [number, number] => {
+            const evidence = this.detectSearchLexicalEvidence(input.queryPlan, result);
+            return [
+                evidence.exactLexicalMatch ? 1 : 0,
+                evidence.matchedWholeTerms.length + evidence.matchedQuotedPhrases.length,
+            ];
+        };
+        const ranked = results
+            .map((result) => ({ result, strength: strength(result) }))
+            .sort((left, right) => right.strength[0] - left.strength[0] || right.strength[1] - left.strength[1])
+            .slice(0, SEARCH_DIRTY_OVERLAY_MAX_RESULTS)
+            .map(({ result }) => result);
+        return { results: ranked, unreadPaths };
     }
     private shouldRunTrackedLexicalSearch(input: {
         parsedOperators: ParsedSearchOperators;

@@ -184,6 +184,30 @@ test('call_graph rejects unbounded evidence page sizes', async () => {
     assert.match(response.content[0]?.text || '', /evidence/);
 });
 
+test('call_graph rejects edge limits over 50', async () => {
+    const ctx = {
+        workspacePolicy: REPO_WORKSPACE_POLICY,
+        toolHandlers: {
+            handleCallGraph: async () => {
+                throw new Error('handler must not run');
+            }
+        }
+    } as unknown as ToolContext;
+
+    const response = await callGraphTool.execute({
+        path: '/repo',
+        symbolRef: {
+            file: 'src/runtime.ts',
+            symbolId: 'sym_runtime_run'
+        },
+        limit: 51
+    }, ctx);
+
+    assert.equal(response.isError, true);
+    assert.match(response.content[0]?.text || '', /Invalid arguments for 'call_graph'/);
+    assert.match(response.content[0]?.text || '', /limit/);
+});
+
 test('call_graph keeps strict validation for invalid direction values', async () => {
     const ctx = {
         workspacePolicy: REPO_WORKSPACE_POLICY,

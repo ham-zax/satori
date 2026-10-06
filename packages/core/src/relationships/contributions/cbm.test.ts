@@ -320,7 +320,7 @@ test('CbmSemanticContributionEngine abstains when enclosing symbol is non-callab
     assert.equal(result.claimsByFile?.get('main.go')?.length ?? 0, 0);
 });
 
-test('CbmSemanticContributionEngine admits only direct-call evidence for Go Tier-3 qualification', () => {
+test('CbmSemanticContributionEngine admits only direct-call evidence for Go Tier-3 qualification and discloses the rest as unresolved', () => {
     const registry = createMockRegistryWithDecoy();
     const engine = new CbmSemanticContributionEngine('go');
     const nonDirectStrategies = ['type_dispatch', 'embed_dispatch', 'interface_dispatch', 'unknown'] as const;
@@ -357,6 +357,9 @@ test('CbmSemanticContributionEngine admits only direct-call evidence for Go Tier
         });
 
         assert.equal(result.records.length, 0, `${strategy} must not produce authoritative Go CALLS`);
-        assert.equal(result.claimsByFile?.get('main.go')?.length ?? 0, 0, `${strategy} must abstain before claims`);
+        const claims = result.claimsByFile?.get('main.go') ?? [];
+        assert.equal(claims.length, 1, `${strategy} must stay visible as evidence`);
+        assert.equal(claims[0]?.decision, 'unresolved');
+        assert.equal(claims[0]?.targetInstanceId, undefined);
     }
 });

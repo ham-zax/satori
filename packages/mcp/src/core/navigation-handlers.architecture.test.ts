@@ -112,3 +112,24 @@ test("architecture overview fails closed on package ownership from a mismatched 
         message: "The leased Publication package ownership root is incompatible.",
     });
 });
+
+test("architecture overview reports indexing while a reindex holds the root, without leasing", async () => {
+    let leaseRequests = 0;
+    const handler = new NavigationHandlers({
+        prepareNavigationRead: async () => ({
+            state: "indexing",
+            codebasePath: "/repo",
+            searchableGenerationAvailable: true,
+        }) as PreparedNavigationState,
+        acquirePublicationLease: () => {
+            leaseRequests += 1;
+            return fakeLease();
+        },
+        stringifyToolJson: JSON.stringify,
+    } as unknown as NavigationHandlersHost);
+
+    const response = await handler.handleArchitectureOverview({ path: "/repo", scope: "all", limit: 10 });
+
+    assert.equal(leaseRequests, 0);
+    assert.equal(parseResponse(response).reason, "indexing");
+});

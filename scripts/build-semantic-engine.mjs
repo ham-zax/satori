@@ -132,7 +132,7 @@ async function build() {
                     grammar: 'tree-sitter-cpp',
                 },
                 rust: {
-                    semanticRevision: 'rust-v2',
+                    semanticRevision: 'rust-v3',
                     grammar: 'tree-sitter-rust',
                 },
                 kotlin: {

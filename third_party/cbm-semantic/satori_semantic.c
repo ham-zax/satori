@@ -3061,81 +3061,6 @@ static int rust_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
     return SATORI_SEMANTIC_OK;
 }
 
-static bool rust_is_comment_kind(const char *kind) {
-    return kind && (strcmp(kind, "line_comment") == 0 || strcmp(kind, "block_comment") == 0);
-}
-
-/* True when the token_tree holds exactly the single identifier `test`
- * (i.e. `cfg(test)`), ignoring comments. Any other token — a comma, `=`,
- * string, or nested tree — is a different predicate. */
-static bool rust_token_tree_is_exactly_test(TSNode token_tree, const char *source) {
-    if (ts_node_is_null(token_tree) || !source) return false;
-    bool saw_test = false;
-    uint32_t count = ts_node_child_count(token_tree);
-    for (uint32_t i = 0; i < count; i++) {
-        TSNode child = ts_node_child(token_tree, i);
-        if (ts_node_is_named(child)) {
-            const char *kind = ts_node_type(child);
-            if (rust_is_comment_kind(kind)) continue;
-            if (saw_test) return false;
-            if (strcmp(kind, "identifier") != 0) return false;
-            if (!satori_node_text_equals(child, source, "test")) return false;
-            saw_test = true;
-        } else if (!satori_node_text_equals(child, source, "(") &&
-                   !satori_node_text_equals(child, source, ")")) {
-            return false;
-        }
-    }
-    return saw_test;
-}
-
-/* True when this attribute item is a cfg/cfg_attr other than exactly
- * `cfg(test)`. Only real attribute nodes are inspected, so comments and
- * string literals never affect eligibility. */
-static bool rust_attribute_is_unmodeled_cfg(TSNode attr_item, const char *source) {
-    if (ts_node_is_null(attr_item) || !source) return false;
-    TSNode attr;
-    memset(&attr, 0, sizeof(attr));
-    bool has_attr = false;
-    uint32_t count = ts_node_named_child_count(attr_item);
-    for (uint32_t i = 0; i < count; i++) {
-        TSNode child = ts_node_named_child(attr_item, i);
-        if (strcmp(ts_node_type(child), "attribute") == 0) {
-            attr = child;
-            has_attr = true;
-            break;
-        }
-    }
-    if (!has_attr || ts_node_named_child_count(attr) == 0) return false;
-    TSNode path = ts_node_named_child(attr, 0);
-    if (!satori_node_text_equals(path, source, "cfg") &&
-        !satori_node_text_equals(path, source, "cfg_attr")) {
-        return false;
-    }
-    if (satori_node_text_equals(path, source, "cfg_attr")) return true;
-    uint32_t attr_count = ts_node_named_child_count(attr);
-    for (uint32_t i = 0; i < attr_count; i++) {
-        TSNode child = ts_node_named_child(attr, i);
-        if (strcmp(ts_node_type(child), "token_tree") == 0) {
-            return !rust_token_tree_is_exactly_test(child, source);
-        }
-    }
-    return true;
-}
-
-static bool rust_tree_has_unmodeled_cfg(TSNode node, const char *source) {
-    if (ts_node_is_null(node) || !source) return false;
-    const char *kind = ts_node_type(node);
-    if (strcmp(kind, "attribute_item") == 0 || strcmp(kind, "inner_attribute_item") == 0) {
-        if (rust_attribute_is_unmodeled_cfg(node, source)) return true;
-    }
-    uint32_t count = ts_node_named_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        if (rust_tree_has_unmodeled_cfg(ts_node_named_child(node, i), source)) return true;
-    }
-    return false;
-}
-
 static int resolve_rust_project(SatoriSession *s) {
     int status = SATORI_SEMANTIC_OK;
     TSParser *parser = NULL;
@@ -3190,12 +3115,12 @@ static int resolve_rust_project(SatoriSession *s) {
         TSNode root = ts_tree_root_node(trees[i]);
         bool has_crate = meta[i].crate && meta[i].module_qn;
         bool has_error = ts_node_has_error(root);
-        bool unmodeled_cfg = has_crate && !has_error &&
-            rust_tree_has_unmodeled_cfg(root, sf->source);
-        meta[i].eligible = has_crate && !has_error && !unmodeled_cfg;
+        /* Non-test cfg-gated code is real code in some build configuration,
+         * so it is modeled as written; alternate variants share one qualified
+         * name. Exact cfg(test) sites are suppressed in rust_lsp.c. */
+        meta[i].eligible = has_crate && !has_error;
         if (!meta[i].eligible) {
-            const char *reason = !has_crate ? "no owning crate"
-                : has_error ? "parse error" : "unmodeled cfg attribute";
+            const char *reason = !has_crate ? "no owning crate" : "parse error";
             status = append_unmodeled_source_diagnostic(s, sf, reason);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
             continue;

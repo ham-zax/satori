@@ -54,7 +54,16 @@ export type ExactRegistryLookupResult =
         debug: ExactRegistryLookupDebug;
     }
     | {
-        status: Exclude<ExactRegistryLookupStatus, "hit">;
+        status: "ambiguous";
+        reason: "ambiguous";
+        // Every symbol in the first matching tier, in deterministic order.
+        matches: SymbolRecord[];
+        matchReason: ExactRegistryLookupReason;
+        candidateSet: ExactRegistryLookupCandidateSet;
+        debug: ExactRegistryLookupDebug;
+    }
+    | {
+        status: Exclude<ExactRegistryLookupStatus, "hit" | "ambiguous">;
         reason: ExactRegistryLookupReason;
         candidateSet?: ExactRegistryLookupCandidateSet;
         debug: ExactRegistryLookupDebug;
@@ -268,6 +277,8 @@ function resolveIndexedExactTier(input: {
         return {
             status: "ambiguous",
             reason: "ambiguous",
+            matches: filtered,
+            matchReason: input.reason,
             candidateSet: input.candidateSet,
             debug: {
                 attempted: true,
@@ -388,6 +399,8 @@ export function findExactRegistryMatch(input: ExactRegistryLookupInput): ExactRe
             return {
                 status: "ambiguous",
                 reason: "ambiguous",
+                matches,
+                matchReason: tier.reason,
                 candidateSet: scoped.candidateSet,
                 debug: baseDebug("ambiguous", "ambiguous", {
                     ...debugBase,

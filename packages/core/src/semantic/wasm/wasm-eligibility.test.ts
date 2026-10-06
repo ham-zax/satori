@@ -68,9 +68,26 @@ test('calls inside #[cfg(test)] items are suppressed while ordinary calls resolv
     assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
 });
 
-test('Rust file with #[cfg(feature)] is reported as degraded unmodeled_source', async () => {
+test('Rust configuration-gated code is modeled: calls resolve in and around cfg variants', async () => {
     const analyzer = new WasmSemanticProjectAnalyzer();
-    const source = '#[cfg(feature = "x")] pub fn Help() -> i32 { 1 } pub fn Run() -> i32 { Help() }';
+    // Code under a non-test cfg is real code in some build configuration, so
+    // its calls are callers. Alternate variants share one qualified name, so
+    // a call to them is ambiguous rather than bound to one variant.
+    const source = [
+        '#[cfg(not(target_arch = "wasm32"))]',
+        'pub fn Now() -> u64 { 1 }',
+        '#[cfg(target_arch = "wasm32")]',
+        'pub fn Now() -> u64 { 2 }',
+        '#[cfg_attr(not(test), allow(dead_code))]',
+        'pub fn Help() -> u64 { Now() }',
+        '#[cfg(feature = "x")]',
+        'pub fn Gated() -> u64 { Help() }',
+        'pub fn Run() -> u64 {',
+        '    #[cfg(feature = "x")]',
+        '    let _ = Gated();',
+        '    Help()',
+        '}',
+    ].join('\n');
 
     const evidence = await analyzer.analyze({
         language: 'rust',
@@ -78,14 +95,22 @@ test('Rust file with #[cfg(feature)] is reported as degraded unmodeled_source', 
         sourceFiles: [{ path: 'src/lib.rs', source, sourceHash: 'hash-lib' }],
     });
 
-    assert.equal([...evidence.occurrencesByFile.values()].flat().length, 0);
-    assert.deepEqual(evidence.skippedFiles, [
-        { path: 'src/lib.rs', reason: 'unmodeled_source', bytes: Buffer.byteLength(source, 'utf8') },
-    ]);
-    assert.equal(evidence.coverage?.status, 'degraded');
-    assert.equal(evidence.coverage?.sourceFileCount, 1);
-    assert.equal(evidence.coverage?.analyzedSourceFileCount, 0);
-    assert.deepEqual(evidence.coverage?.skippedFiles, evidence.skippedFiles);
+    const occurrences = evidence.occurrencesByFile.get('src/lib.rs') ?? [];
+    const resolvedTargets = occurrences
+        .filter((occurrence) => occurrence.decision === 'resolved' && occurrence.proof.strategy === 'direct_call')
+        .map((occurrence) => `${occurrence.callSpan.startByte}:${occurrence.targetProvenance?.name}`)
+        .sort();
+    const at = (needle: string, name: string) => `${source.indexOf(needle)}:${name}`;
+    assert.deepEqual(resolvedTargets, [
+        at('Help() }', 'Help'),
+        at('Gated();', 'Gated'),
+        at('Help()\n}', 'Help'),
+    ].sort());
+    const variantCall = occurrences.find((occurrence) => occurrence.callSpan.startByte === source.indexOf('Now() }'));
+    assert.equal(variantCall?.decision, 'ambiguous');
+    assert.equal(evidence.skippedFiles, undefined);
+    assert.equal(evidence.coverage?.status, 'complete');
+    assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
 });
 
 test('C++ header with a canonical include guard is analyzed as if the guard were absent', async () => {

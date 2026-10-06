@@ -325,12 +325,19 @@ function rustImplOwner(node: Node): string | undefined {
         || undefined;
 }
 
-function pythonModuleBindingName(node: Node): string | undefined {
-    if (
-        node.type !== 'assignment'
-        || node.parent?.type !== 'expression_statement'
-        || node.parent.parent?.type !== 'module'
-    ) {
+function pythonBindingName(node: Node, semanticContainer: 'module' | 'class' | 'callable'): string | undefined {
+    if (node.type !== 'assignment' || node.parent?.type !== 'expression_statement') {
+        return undefined;
+    }
+    const scope = node.parent.parent;
+    const isModuleBinding = scope?.type === 'module';
+    // Only a lambda class attribute is extracted: it is a callable owner of
+    // the calls in its body. Plain class attributes stay out of the outline.
+    const isClassLambda = semanticContainer === 'class'
+        && scope?.type === 'block'
+        && scope.parent?.type === 'class_definition'
+        && node.childForFieldName('right')?.type === 'lambda';
+    if (!isModuleBinding && !isClassLambda) {
         return undefined;
     }
     const left = node.childForFieldName('left');
@@ -410,12 +417,14 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         ) {
             kind = undefined;
         }
-        const pythonModuleBinding = language === 'python'
-            ? pythonModuleBindingName(node)
+        const pythonBinding = language === 'python'
+            ? pythonBindingName(node, semanticContainer)
             : undefined;
-        if (pythonModuleBinding) {
+        if (pythonBinding) {
             // A lambda binding is a callable owner, as an arrow-function const is in TS.
-            kind = node.childForFieldName('right')?.type === 'lambda' ? 'function' : 'variable';
+            kind = node.childForFieldName('right')?.type === 'lambda'
+                ? (semanticContainer === 'class' ? 'method' : 'function')
+                : 'variable';
         }
         const cppDeclaration = language === 'cpp'
             ? cppCallableDeclaration(node, semanticContainer)
@@ -449,7 +458,7 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
             kind = 'method';
         }
         const name = kind
-            ? pythonModuleBinding
+            ? pythonBinding
                 ?? cppNamespace?.name
                 ?? csharpNamespace?.name
                 ?? scalaPackage?.name

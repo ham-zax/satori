@@ -196,13 +196,15 @@ export async function buildRegistryFileOutlinePayload(input: {
                 ...(exactWarnings.length > 0 ? { warnings: exactWarnings } : {}),
             };
         }
-        const hasMoreExact = exactMapped.length > input.limitSymbols;
+        // Exact mode selects rather than pages: every match is returned so an
+        // ambiguous caller can see each symbolId to narrow with. Matches share
+        // one label in one file, so the set stays small.
         return {
             status: exactMapped.length > 1 ? "ambiguous" : "ok",
             path: input.codebaseRoot,
             file: input.file,
-            outline: { symbols: exactMapped.slice(0, input.limitSymbols) },
-            hasMore: hasMoreExact,
+            outline: { symbols: exactMapped },
+            hasMore: false,
             ...(exactMapped.length > 1
                 ? { message: `Multiple exact symbol matches found (${exactMapped.length}). Narrow with symbolIdExact for deterministic selection.` }
                 : {}),

@@ -325,7 +325,7 @@ test('C++ qualification admits same-TU direct calls and rejects unproved cross-T
     assert.equal([...conditionalEvidence.occurrencesByFile.values()].flat().length, 0);
 });
 
-test('Rust qualification uses Cargo ownership, admits exact direct calls, and fails closed on receiver/cfg contexts', async () => {
+test('Rust qualification uses Cargo ownership, admits exact direct calls, and models receiver/cfg contexts', async () => {
     const cargo = [{
         path: 'Cargo.toml',
         role: 'manifest',
@@ -373,7 +373,11 @@ test('Rust qualification uses Cargo ownership, admits exact direct calls, and fa
         path: 'src/lib.rs',
         source: '#[cfg(feature = "x")] pub fn Help() -> i32 { 1 } pub fn Run() -> i32 { Help() }',
     }], cargo);
-    assert.equal([...cfgEvidence.occurrencesByFile.values()].flat().length, 0);
+    // Code under a non-test cfg is real code in some build, so the call resolves.
+    const cfgCalls = [...cfgEvidence.occurrencesByFile.values()].flat();
+    assert.equal(cfgCalls.length, 1);
+    assert.equal(cfgCalls[0]?.decision, 'resolved');
+    assert.equal(cfgCalls[0]?.proof.strategy, 'direct_call');
 });
 
 test('Rust admits bare calls through use imports as exact direct calls', async () => {

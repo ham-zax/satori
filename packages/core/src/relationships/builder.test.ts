@@ -431,6 +431,30 @@ test('buildCallRelationshipsForRegistry attributes calls inside a module-level P
     );
 });
 
+test('buildCallRelationshipsForRegistry attributes calls inside a class-body Python lambda to its binding', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'src/closure.py': [
+            'def helper(v): pass',
+            'class Holder:',
+            '    cb = lambda self, v: helper(v)',
+            '    LIMIT = 3',
+        ].join('\n'),
+    });
+
+    const records = buildCallRelationshipsForRegistry({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    assert.deepEqual(
+        records.map((record) => [
+            symbolsById.get(record.sourceInstanceId || '')?.label,
+            symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ]),
+        [['method cb', 'Holder.cb', 'helper']],
+    );
+    assert.equal([...symbolsById.values()].some((symbol) => symbol.label.endsWith(' LIMIT')), false);
+});
+
 test('buildCallRelationshipsForRegistry resolves exact same-class Python self and cls calls', async () => {
     const content = [
         'class CircuitBreaker:',

@@ -1,4 +1,4 @@
-import { perfSpan, type SymbolRegistry } from "@satori-code/core";
+import { perfSpan, type SymbolRecord, type SymbolRegistry } from "@satori-code/core";
 import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,
@@ -17,6 +17,7 @@ import {
     type SearchScope,
 } from "./search-constants.js";
 import { resolveFrozenSearchResultLimit } from "./search-policy.js";
+import { classifyPathCategory } from "./search-ranking-policy.js";
 import { buildExactRegistryHitEnvelope } from "./search-exact-registry-hit.js";
 import type { FinalizedSearchResults } from "./search-result-finalization.js";
 import type { SearchQueryPlan } from "./search-lexical-scoring.js";
@@ -48,6 +49,7 @@ import {
     findExactRegistryMatch,
     shouldAttemptExactRegistryLookup,
     type ExactRegistryLookupDebug,
+    type ExactRegistryLookupReason,
 } from "./search/exact-registry.js";
 
 type ChangedFilesState = {
@@ -185,6 +187,46 @@ function isExactRegistryEligible(input: SearchExactFastPathInput, host: SearchEx
         }));
 }
 
+const DEMOTED_DECLARATION_CATEGORIES = new Set([
+    "tests",
+    "fixture",
+    "scriptRuntime",
+    "example",
+    "docs",
+    "generated",
+    "artifact",
+    "landing",
+]);
+
+/**
+ * An identifier that names several declarations is answered with all of them
+ * rather than falling back to hybrid ranking, whose candidate pool depends on
+ * the limit. Runtime declarations come first; tests, scripts and other
+ * non-runtime paths follow, each group in the registry's deterministic order.
+ * Returns undefined (hybrid fallback) when the set does not fit in one page,
+ * when a declaration's file is dirty and would need current-source
+ * validation, or when the matches are not exact name or qualified-name hits.
+ */
+function selectAmbiguousExactDeclarations(input: {
+    matches: readonly SymbolRecord[];
+    matchReason: ExactRegistryLookupReason;
+    routeKind: SearchQueryPlan["route"]["kind"];
+    limit: number;
+    dirtyFiles?: ReadonlySet<string>;
+}): SymbolRecord[] | undefined {
+    if (input.routeKind === "references") return undefined;
+    if (input.matchReason !== "symbol_name" && input.matchReason !== "qualified_name") return undefined;
+    if (input.matches.length < 2 || input.matches.length > input.limit) return undefined;
+    if (input.dirtyFiles && input.matches.some((symbol) => input.dirtyFiles!.has(
+        symbol.file.replace(/\\/g, "/").replace(/^\/+/, ""),
+    ))) {
+        return undefined;
+    }
+    const runtime = input.matches.filter((symbol) => !DEMOTED_DECLARATION_CATEGORIES.has(classifyPathCategory(symbol.file)));
+    const demoted = input.matches.filter((symbol) => DEMOTED_DECLARATION_CATEGORIES.has(classifyPathCategory(symbol.file)));
+    return [...runtime, ...demoted];
+}
+
 export async function runExactRegistryFastPath(
     input: SearchExactFastPathInput,
     host: SearchExactFastPathHost,
@@ -246,8 +288,20 @@ export async function runExactRegistryFastPath(
         filterSymbol,
     }));
     const exactRegistryDebug = exactRegistryMatch.debug;
+    const publicationOnlyStaleRead = input.freshnessDecision.mode === "served_previous_generation";
+    const ambiguousDeclarations = exactRegistryMatch.status === "ambiguous"
+        ? selectAmbiguousExactDeclarations({
+            matches: exactRegistryMatch.matches,
+            matchReason: exactRegistryMatch.matchReason,
+            routeKind: input.queryPlan.route.kind,
+            limit: frozenResultLimit,
+            dirtyFiles: !publicationOnlyStaleRead && input.dirtyFilesNotFreshened
+                ? input.observedChangedFilesState.files
+                : undefined,
+        })
+        : undefined;
 
-    if (exactRegistryMatch.status !== "hit") {
+    if (exactRegistryMatch.status !== "hit" && !ambiguousDeclarations) {
         return {
             kind: "continue",
             exactRegistryDebug,
@@ -257,10 +311,12 @@ export async function runExactRegistryFastPath(
         };
     }
 
-    const publicationOnlyStaleRead = input.freshnessDecision.mode === "served_previous_generation";
-    let exactRegistrySymbol = exactRegistryMatch.symbol;
+    let exactRegistrySymbol = exactRegistryMatch.status === "hit"
+        ? exactRegistryMatch.symbol
+        : ambiguousDeclarations![0];
     const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
-    const exactTargetWasDirty = !publicationOnlyStaleRead
+    const exactTargetWasDirty = !ambiguousDeclarations
+        && !publicationOnlyStaleRead
         && input.dirtyFilesNotFreshened
         && input.observedChangedFilesState.files.has(normalizedExactPath);
     let currentSourceEvidence;
@@ -302,7 +358,7 @@ export async function runExactRegistryFastPath(
                 relationshipUnavailableReason: "missing_relationship_navigation" as const,
             };
 
-    let resultSymbols = [exactRegistrySymbol];
+    let resultSymbols = ambiguousDeclarations ?? [exactRegistrySymbol];
     let relationshipPassUsed = false;
     if (input.queryPlan.route.kind === "references") {
         const direction = input.queryPlan.referenceDirection;

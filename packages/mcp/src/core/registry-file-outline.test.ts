@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { buildSymbolRecordsForFile, createLanguageAnalysisService } from "@satori-code/core";
 import { buildRegistryFileOutlinePayload, fitFileOutlineResponseBudget } from "./registry-file-outline.js";
 import type { FileOutlineResponseEnvelope, FileOutlineSymbolResult } from "./search-types.js";
 
@@ -123,4 +128,43 @@ test("a byte trim replaces a limitSymbols continuation that would skip trimmed s
         stringify,
     });
     assert.deepEqual(fitted.hints, { other: 1 });
+});
+
+test("exact mode returns every duplicate-label match so each symbolId can be used to narrow", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "outline-exact-"));
+    try {
+        const source = "def dup():\n    return 1\n\n\ndef dup():\n    return 2\n";
+        await writeFile(path.join(root, "dup.py"), source);
+        const analysis = await createLanguageAnalysisService().analyze({
+            content: source,
+            language: "python",
+            relativePath: "dup.py",
+        });
+        const records = buildSymbolRecordsForFile({
+            relativePath: "dup.py",
+            language: "python",
+            content: source,
+            fileHash: createHash("sha256").update(source).digest("hex"),
+            extractorVersion: "test",
+            chunks: [...analysis.chunks],
+            extractedSymbols: analysis.symbols,
+        });
+        const payload = await buildRegistryFileOutlinePayload({
+            codebaseRoot: root,
+            file: "dup.py",
+            symbols: records,
+            limitSymbols: 1,
+            resolveMode: "exact",
+            symbolLabelExact: "function dup",
+            buildCallGraphHint: () => ({ supported: false, reason: "test" }) as never,
+            buildOutlineSpanWarningCodes: () => [],
+            readSourceLines: async () => undefined,
+        });
+
+        assert.equal(payload.status, "ambiguous");
+        assert.equal(payload.hasMore, false);
+        assert.equal(payload.outline?.symbols.length, 2);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
 });

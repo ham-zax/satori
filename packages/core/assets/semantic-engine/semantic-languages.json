@@ -105,7 +105,7 @@
         ".rs"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "rust-v2",
+      "semanticRevision": "rust-v3",
       "grammar": "tree-sitter-rust",
       "auxiliaryFiles": [
         {
@@ -118,8 +118,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-rust",
-      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v2",
-      "environmentConfigId": "cbm-rust-semantic-v2"
+      "providerVersion": "cbm-11b662f9+satori-rust-semantic-v3",
+      "environmentConfigId": "cbm-rust-semantic-v3"
     },
     {
       "language": "kotlin",

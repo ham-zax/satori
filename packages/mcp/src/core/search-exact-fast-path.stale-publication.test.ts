@@ -303,3 +303,103 @@ test("runExactRegistryFastPath preserves dirty relationship peers without readin
         }
     }
 });
+
+test("runExactRegistryFastPath answers an ambiguous exact name with every declaration, runtime first", async () => {
+    const declaration = (id: string, file: string, line: number): SymbolRecord => ({
+        symbolKey: `${file}:${line}:${line + 5}:method:scheduleDecisionAnalysis`,
+        symbolInstanceId: id,
+        name: "scheduleDecisionAnalysis",
+        qualifiedName: `Owner.scheduleDecisionAnalysis`,
+        parentQualifiedNamePath: ["Owner"],
+        kind: "method",
+        file,
+        label: "method scheduleDecisionAnalysis",
+        span: { startLine: line, endLine: line + 5 },
+        language: "typescript",
+        fileHash: `hash-${id}`,
+        extractorVersion: "1.0.0",
+    });
+    // Registry order puts the runtime declaration last.
+    const symbols = [
+        declaration("sym-script", "scripts/ui-preview/scenarios.ts", 103),
+        declaration("sym-test", "tests/road-building-continuation.test.ts", 28),
+        declaration("sym-runtime", "src/content/overlay.ts", 3361),
+    ];
+    const registry: SymbolRegistry = {
+        manifest: { builtAt: "2026-08-15T00:00:00Z" } as any,
+        symbols,
+        symbolsByInstanceId: new Map(symbols.map((symbol) => [symbol.symbolInstanceId, symbol])),
+        symbolsByKey: new Map(symbols.map((symbol) => [symbol.symbolKey, [symbol]])),
+        symbolsByFile: new Map(symbols.map((symbol) => [symbol.file, [symbol]])),
+        symbolsByLabel: new Map([["method scheduleDecisionAnalysis", symbols]]),
+        symbolsByQualifiedName: new Map([["Owner.scheduleDecisionAnalysis", symbols]]),
+        symbolsByName: new Map([["scheduleDecisionAnalysis", symbols]]),
+        warnings: [],
+    };
+    const parsedOperators = parseSearchOperators("scheduleDecisionAnalysis");
+    const queryPlan = buildSearchQueryPlan("scheduleDecisionAnalysis", true, parsedOperators);
+    const input: SearchExactFastPathInput = {
+        ...buildInput(),
+        query: "scheduleDecisionAnalysis",
+        semanticQuery: "scheduleDecisionAnalysis",
+        parsedOperators,
+        queryPlan,
+        changedFilesState: { available: true, files: new Set() },
+        observedChangedFilesState: { available: true, files: new Set() },
+        dirtyFilesNotFreshened: false,
+    };
+    const host: SearchExactFastPathHost = {
+        searchQuerySupport: new SearchQuerySupport({
+            normalizeSearchPath: (value) => value,
+            hasPathSegment: () => false,
+            isGeneratedPath: () => false,
+            isTestPath: () => false,
+            isFixturePath: () => false,
+            isDocPath: () => false,
+            getContextActiveIgnorePatterns: () => [],
+            getContextTrackedRelativePaths: () => [],
+            classifyPathCategory: () => "core",
+            shouldIncludeCategoryInScope: () => true,
+            capabilities: {
+                hasReranker: () => false,
+                getDefaultRerankEnabled: () => false,
+            } as unknown as CapabilityResolver,
+            runtimeFingerprint: {} as never,
+            reranker: null,
+            gitignoreForceReloadEveryN: 1000,
+        }),
+        measureSearchPhase: async (_phase, run) => run(),
+        loadRegistryManifest: async () => ({ status: "ok", registry, manifestHash: "man-1" }),
+        loadRegistryValidatedRelationshipNavigation: async () => ({ relationshipReady: true }),
+        buildRelationshipBackedCallGraph: async () => null,
+        buildChangedCodeDebug: async () => undefined,
+        buildGeneratedArtifactsVerificationHint: () => undefined,
+        getSearchNavigationHelpers: () => ({
+            now: () => Date.now(),
+            sanitizeIndexedRelativeFilePath: (f: string) => f,
+            isCallGraphLanguageSupported: () => false,
+            getOutlineStatusForLanguage: () => "valid" as any,
+            buildSearchCandidateHierarchy: () => undefined,
+            buildSearchCandidateRelationships: () => undefined,
+            buildSearchCandidateTestCoverage: () => undefined,
+        } as any),
+        now: () => Date.now(),
+    };
+
+    const outcome = await runExactRegistryFastPath(input, host);
+    assert.equal(outcome.kind, "handled");
+    assert.equal(outcome.exactRegistryDebug?.status, "ambiguous");
+    if (outcome.kind === "handled" && outcome.finalized.kind === "ok") {
+        const files = outcome.finalized.envelope.results.map((group) => (
+            group as import("./search-types.js").SearchGroupedResultV2
+        ).target.file);
+        assert.equal(files[0], "src/content/overlay.ts");
+        assert.deepEqual([...files].sort(), symbols.map((symbol) => symbol.file).sort());
+    } else {
+        assert.fail("expected finalized exact results");
+    }
+
+    // More declarations than one page can hold fall back to hybrid ranking.
+    const overflow = await runExactRegistryFastPath({ ...input, limit: 2 }, host);
+    assert.equal(overflow.kind, "continue");
+});

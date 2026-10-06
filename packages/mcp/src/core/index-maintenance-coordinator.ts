@@ -26,6 +26,11 @@ type AutomaticMaintenanceFailureState = Readonly<{
     retryAfterMs?: number;
 }>;
 
+type AutomaticReindexSuccess = Readonly<{
+    operationId: string;
+    reason: AutomaticReindexReason;
+}>;
+
 type AutomaticReindexLaunch = Readonly<{
     accepted: boolean;
     operationId: string;
@@ -86,6 +91,7 @@ export class IndexMaintenanceCoordinator {
     private workspaceQueue: Promise<void> = Promise.resolve();
     private readonly failures = new Map<string, AutomaticMaintenanceFailureState>();
     private readonly workspaceFailures = new Map<string, AutomaticMaintenanceFailureState>();
+    private readonly automaticSuccesses = new Map<string, AutomaticReindexSuccess>();
     private readonly now: () => number;
     private readonly retryBackoffMs: number;
     private readonly maxRetryBackoffMs: number;
@@ -195,7 +201,7 @@ export class IndexMaintenanceCoordinator {
 
     async requestAutomaticReindex(
         codebasePath: string,
-        _reason: AutomaticReindexReason,
+        reason: AutomaticReindexReason,
     ): Promise<AutomaticReindexScheduleResult> {
         if (!this.options.enabled) {
             return Object.freeze({ outcome: "unavailable" });
@@ -224,6 +230,10 @@ export class IndexMaintenanceCoordinator {
             return Object.freeze({ outcome: "coalesced" });
         }
 
+        if (this.isNonConvergent(codebasePath, epochKey, reason)) {
+            return Object.freeze({ outcome: "suppressed" });
+        }
+
         const pending = this.admission.get(codebasePath);
         if (pending) {
             const result = await pending;
@@ -235,6 +245,7 @@ export class IndexMaintenanceCoordinator {
         const admission = this.startAutomaticReindex(
             codebasePath,
             epochKey,
+            reason,
             previousAttempts,
         );
         this.admission.set(codebasePath, admission);
@@ -250,6 +261,7 @@ export class IndexMaintenanceCoordinator {
     private async startAutomaticReindex(
         codebasePath: string,
         epochKey: string,
+        reason: AutomaticReindexReason,
         previousAttempts: number,
     ): Promise<AutomaticReindexScheduleResult> {
         const launch = await this.options.startReindex(codebasePath);
@@ -292,6 +304,12 @@ export class IndexMaintenanceCoordinator {
                         );
                     } else {
                         this.failures.delete(epochKey);
+                        if (terminal?.id === launch.operationId && terminal.phase === "completed") {
+                            this.automaticSuccesses.set(epochKey, Object.freeze({
+                                operationId: launch.operationId,
+                                reason,
+                            }));
+                        }
                     }
                 },
                 (error) => {
@@ -321,6 +339,32 @@ export class IndexMaintenanceCoordinator {
         }
 
         return Object.freeze({ outcome: "unavailable" });
+    }
+
+    /**
+     * A completed automatic rebuild that is still the root's latest operation
+     * already reflects every input this runtime epoch can change, except
+     * policy inputs (edited without any mutation operation). If the same
+     * reason is requested again, another rebuild would produce the same
+     * result, so the request is suppressed until another operation runs.
+     */
+    private isNonConvergent(
+        codebasePath: string,
+        epochKey: string,
+        reason: AutomaticReindexReason,
+    ): boolean {
+        const success = this.automaticSuccesses.get(epochKey);
+        if (!success) return false;
+        if (this.options.getOperation(codebasePath)?.id !== success.operationId) {
+            this.automaticSuccesses.delete(epochKey);
+            return false;
+        }
+        if (success.reason !== reason || reason === "runtime_policy_incompatible") return false;
+        console.warn(
+            `[INDEX-MAINTENANCE] Automatic reindex '${success.operationId}' for '${codebasePath}' `
+            + `completed but the root still reports '${reason}'; not reindexing again automatically.`,
+        );
+        return true;
     }
 
     private isTerminalFailure(operation: RootMutationOperation): boolean {

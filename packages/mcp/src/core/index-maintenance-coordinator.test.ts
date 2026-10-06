@@ -298,3 +298,44 @@ test('disabled automatic maintenance never creates a workspace index', async () 
     });
     await coordinator.requestWorkspaceIndexing('/a');
 });
+
+test('a successful automatic reindex that does not converge is not repeated', async () => {
+    let launchCount = 0;
+    let currentOperation: RootMutationOperation | undefined;
+    const completed = (id: string): RootMutationOperation => ({
+        id,
+        action: 'reindex',
+        canonicalRoot: '/repo',
+        generation: launchCount,
+        acceptedAt: new Date(0).toISOString(),
+        phase: 'completed',
+        updatedAt: new Date(0).toISOString(),
+    });
+    const coordinator = new IndexMaintenanceCoordinator({
+        ...options,
+        getOperation: () => currentOperation,
+        startReindex: async () => {
+            launchCount += 1;
+            const operationId = `auto-${launchCount}`;
+            currentOperation = completed(operationId);
+            return { accepted: true, operationId, completion: Promise.resolve() };
+        },
+    });
+
+    assert.equal((await coordinator.requestAutomaticReindex('/repo', 'requires_reindex')).outcome, 'started');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Nothing ran since the rebuild, yet the root still requires one: rebuilding again cannot help.
+    assert.equal((await coordinator.requestAutomaticReindex('/repo', 'requires_reindex')).outcome, 'suppressed');
+    assert.equal(launchCount, 1);
+
+    // Policy inputs can change without any mutation operation, so that reason is never treated as non-convergence.
+    for (const expectedLaunches of [2, 3]) {
+        assert.equal((await coordinator.requestAutomaticReindex('/repo', 'runtime_policy_incompatible')).outcome, 'started');
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.equal(launchCount, expectedLaunches);
+    }
+
+    currentOperation = completed('manual-success');
+    assert.equal((await coordinator.requestAutomaticReindex('/repo', 'requires_reindex')).outcome, 'started');
+    assert.equal(launchCount, 4);
+});

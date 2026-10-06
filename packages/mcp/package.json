@@ -1,6 +1,6 @@
 {
   "name": "@satori-code/mcp",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Local-first code intelligence for AI coding agents: natural-language + lexical repository search, exact source/symbol navigation, relationships, freshness, and indexing.",
   "keywords": [
     "mcp",

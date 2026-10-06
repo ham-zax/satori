@@ -21,6 +21,8 @@ the same `--out` retain earlier repositories in all three JSON files; rerunning 
 replaces its records. Each harness record and fused-pool query retains its own run provenance.
 Harness latency records expose aggregate retrieval time as `retrievalMs`. Individual retrieval
 passes and MCP fusion are unmeasured and recorded as `null`; missing timings are also `null`.
+`stage_ranks` lists the expected owner's rank at every candidate-survival stage in trace order;
+a `null` rank means the owner is not among the stage's `recorded` (capped) candidates.
 The client drains the server's stderr; an undrained pipe blocks the index worker on exit.
 
 For publishable quality and latency evidence, use a fresh task-owned state directory after building:

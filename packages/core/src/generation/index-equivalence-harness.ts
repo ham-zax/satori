@@ -1,4 +1,3 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -212,7 +211,7 @@ function firstDifference(expected: string, actual: string): string {
     return `line ${at}: expected ${JSON.stringify(expectedLines[at])}, got ${JSON.stringify(actualLines[at])}`;
 }
 
-async function assertToggleEquivalence(name: string, files: Files): Promise<void> {
+export async function assertToggleEquivalence(name: string, files: Files): Promise<void> {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `satori-equivalence-${name}-`));
     const root = path.join(tempRoot, 'repo');
     writeTree(root, files);
@@ -231,7 +230,7 @@ async function assertToggleEquivalence(name: string, files: Files): Promise<void
     }
 }
 
-const POLYGLOT: Files = {
+export const POLYGLOT: Files = {
     'go.mod': 'module example.com/poly\n\ngo 1.22\n',
     'cmd/app/main.go': 'package main\n\nimport "example.com/poly/pkg/greet"\n\nfunc main() {\n\tgreet.Hello("world")\n}\n',
     'pkg/greet/greet.go': 'package greet\n\nimport "fmt"\n\nfunc Hello(name string) {\n\tfmt.Println(format(name))\n}\n\nfunc format(name string) string {\n\treturn "hello " + name\n}\n',
@@ -253,7 +252,7 @@ const COMPOSITE = {
     types: [],
 };
 
-function tsMonorepo(builtProjects: readonly ('core' | 'lib')[]): Files {
+export function tsMonorepo(builtProjects: readonly ('core' | 'lib')[]): Files {
     const files: Record<string, string> = {
         'packages/core/tsconfig.json': JSON.stringify({ compilerOptions: COMPOSITE, include: ['src'] }),
         'packages/core/src/core.ts': 'export function coreValue(): number {\n    return 1;\n}\n',
@@ -282,24 +281,9 @@ function tsMonorepo(builtProjects: readonly ('core' | 'lib')[]): Files {
     return files;
 }
 
-test('execution toggles publish identical results for Go, Rust, and Python', { timeout: 300_000 }, async () => {
-    await assertToggleEquivalence('polyglot', POLYGLOT);
-});
-
-for (const [state, built] of [
-    ['built', ['core', 'lib']],
-    ['unbuilt', []],
-    ['partly built', ['core']],
-    ['indirect chain unbuilt', ['lib']],
-] as const) {
-    test(`execution toggles publish identical results for a TypeScript monorepo (${state})`, { timeout: 300_000 }, async () => {
-        await assertToggleEquivalence(`ts-${state.replace(/\s+/g, '-')}`, tsMonorepo(built));
-    });
-}
-
 type Edit = (root: string) => void;
 
-const SCRIPTED_EDITS: ReadonlyArray<readonly [string, Edit]> = [
+export const SCRIPTED_EDITS: ReadonlyArray<readonly [string, Edit]> = [
     ['add a file', (root) => writeTree(root, { 'py/extra.py': 'from py.helpers import shout\n\n\ndef extra():\n    return shout("e")\n' })],
     ['delete a file', (root) => fs.rmSync(path.join(root, 'scripts/load.js'))],
     ['rename a file', (root) => fs.renameSync(path.join(root, 'src/util.rs'), path.join(root, 'src/helpers.rs'))],
@@ -319,7 +303,7 @@ const SCRIPTED_EDITS: ReadonlyArray<readonly [string, Edit]> = [
  * TypeScript edits whose effect crosses a project boundary: through a project
  * reference, through a relative import without one, and through globals.
  */
-function tsCrossProject(): Files {
+export function tsCrossProject(): Files {
     return {
         ...tsMonorepo(['core', 'lib']),
         // Imports another project's source without a project reference.
@@ -334,7 +318,7 @@ function tsCrossProject(): Files {
     };
 }
 
-const TS_CROSS_PROJECT_EDITS: ReadonlyArray<readonly [string, Edit]> = [
+export const TS_CROSS_PROJECT_EDITS: ReadonlyArray<readonly [string, Edit]> = [
     ['edit a referenced project source while its output is built', (root) => writeTree(root, {
         'packages/lib/src/lib.ts': '// lib header\nimport { coreValue } from "../../core/src/core";\n\nexport function libValue(): number {\n    return coreValue() + 2;\n}\n',
     })],
@@ -357,7 +341,7 @@ const TS_CROSS_PROJECT_EDITS: ReadonlyArray<readonly [string, Edit]> = [
  * fresh Context each time, as the per-operation sync worker process does, so
  * nothing but persisted state carries over between syncs.
  */
-async function assertSyncMatchesFullIndex(
+export async function assertSyncMatchesFullIndex(
     name: string,
     initial: Files,
     edits: ReadonlyArray<readonly [string, Edit]>,
@@ -417,14 +401,4 @@ async function assertSyncMatchesFullIndex(
     } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-}
-
-for (const cold of [false, true]) {
-    const mode = cold ? 'cold' : 'warm';
-    test(`${mode} sync after scripted edits publishes the same state as a full index of the edited tree`, { timeout: 300_000 }, async () => {
-        await assertSyncMatchesFullIndex(`scripted-${mode}`, { ...POLYGLOT, ...tsMonorepo(['lib']) }, SCRIPTED_EDITS, cold);
-    });
-    test(`${mode} sync after cross-project TypeScript edits publishes the same state as a full index`, { timeout: 300_000 }, async () => {
-        await assertSyncMatchesFullIndex(`typescript-${mode}`, tsCrossProject(), TS_CROSS_PROJECT_EDITS, cold);
-    });
 }

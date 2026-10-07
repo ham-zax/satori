@@ -11,6 +11,16 @@ const MAX_ACTIVE = 3;
 const MAX_RECENT = 3;
 const REFRESH_MS = 80;
 
+// One test file is the unit of parallelism, so the slowest file bounds the wall
+// time of a suite. A file over budget fails the run; split it instead of raising
+// the budget. SATORI_TEST_FILE_BUDGET_MS=0 disables the check.
+const DEFAULT_FILE_BUDGET_MS = 90_000;
+
+function fileBudgetMs() {
+  const configured = Number(process.env.SATORI_TEST_FILE_BUDGET_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_FILE_BUDGET_MS;
+}
+
 function packageLabel() {
   const cwd = process.cwd().replaceAll('\\', '/');
 
@@ -52,6 +62,8 @@ function createState() {
     skipped: 0,
 
     failures: [],
+    fileBudgetMs: fileBudgetMs(),
+    overBudget: [],
   };
 }
 
@@ -201,6 +213,16 @@ function finalSummary(state) {
   ].join('\n');
 }
 
+function overBudgetBlock(state) {
+  return [
+    '',
+    `${red('✖')} ${bold('Test files over the time budget')} ${dim(`(${formatDuration(state.fileBudgetMs)} per file)`)}`,
+    ...state.overBudget.map((entry) => `  ${shortPath(entry.file, 3)}  ${dim(formatDuration(entry.durationMs))}`),
+    `  ${dim('Split the file so its tests run in parallel.')}`,
+    '',
+  ].join('\n');
+}
+
 function plainFileSummary(data) {
   const counts = data.counts ?? {};
 
@@ -343,6 +365,9 @@ export default async function* satoriTestReporter(source) {
           durationMs: data.duration_ms ?? (entry ? Date.now() - entry.startedAt : 0),
         };
 
+        if (state.fileBudgetMs > 0 && recent.durationMs > state.fileBudgetMs) {
+          state.overBudget.push(recent);
+        }
         state.skipped += recent.skipped;
         state.recent.unshift(recent);
         state.recent = state.recent.slice(0, MAX_RECENT);
@@ -361,6 +386,10 @@ export default async function* satoriTestReporter(source) {
           yield frame.clear();
         }
         yield `${finalSummary(state)}\n`;
+        if (state.overBudget.length > 0) {
+          yield `${overBudgetBlock(state)}\n`;
+          process.exitCode = 1;
+        }
       }
     }
   }

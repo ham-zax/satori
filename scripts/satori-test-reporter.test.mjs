@@ -132,3 +132,24 @@ test('interactive mode renders live dashboard with active files, progress, and r
     process.stdout.isTTY = originalIsTty;
   }
 });
+
+test('a test file over the time budget fails the run and is named', async () => {
+  const originalBudget = process.env.SATORI_TEST_FILE_BUDGET_MS;
+  const originalExitCode = process.exitCode;
+  process.env.SATORI_TEST_FILE_BUDGET_MS = '1000';
+  try {
+    const output = await collectReporterOutput([
+      { type: 'test:summary', data: { file: '/repo/packages/core/src/fast.test.ts', counts: { passed: 1 }, duration_ms: 999 } },
+      { type: 'test:summary', data: { file: '/repo/packages/core/src/slow.test.ts', counts: { passed: 1 }, duration_ms: 1001 } },
+      { type: 'test:summary', data: { counts: { passed: 2 } } },
+    ], { CI: '1', NO_COLOR: '1' });
+    assert.match(output, /Test files over the time budget/);
+    assert.match(output, /core\/src\/slow\.test\.ts/);
+    assert.doesNotMatch(output, /over the time budget[\s\S]*fast\.test\.ts/);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = originalExitCode;
+    if (originalBudget === undefined) delete process.env.SATORI_TEST_FILE_BUDGET_MS;
+    else process.env.SATORI_TEST_FILE_BUDGET_MS = originalBudget;
+  }
+});

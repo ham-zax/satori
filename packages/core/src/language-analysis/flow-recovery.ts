@@ -1,7 +1,25 @@
-import ts from 'typescript';
+import { createRequire } from 'node:module';
+
+import type ts from 'typescript';
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import { Utf8SourceMap } from './source-map';
+
+type TypeScriptModule = typeof import('typescript', { with: { 'resolution-mode': 'require' } });
+
+const localRequire = createRequire(__filename);
+
+let typescriptModule: TypeScriptModule | undefined;
+
+/**
+ * The TypeScript compiler is ~9 MB and only Flow-annotated JavaScript needs it.
+ * A static import here put it on the eager path into every Satori process, so
+ * each server cold start paid to load a parser that recovery rarely calls.
+ */
+function loadTypeScript(): TypeScriptModule {
+    typescriptModule ??= localRequire('typescript') as TypeScriptModule;
+    return typescriptModule;
+}
 
 /**
  * Oxc rejects Flow-annotated JavaScript outright and recovers no AST. This
@@ -11,6 +29,7 @@ import { Utf8SourceMap } from './source-map';
  * would be unproven, so callers report the result as recovered, not complete.
  */
 export function recoverFlowSymbols(source: string, relativePath: string): ExtractedSymbol[] {
+    const ts = loadTypeScript();
     const sourceFile = ts.createSourceFile(
         relativePath,
         source,

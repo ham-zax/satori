@@ -619,7 +619,10 @@ export function buildSearchQueryPlan(
     const singleBareLookup = tokens.length === 1
         && /^[a-z][a-z0-9]{2,63}$/.test(tokens[0])
         && !SEARCH_QUERY_STOPWORDS.has(normalizedTokens[0] || "");
-    const exactPinEligible = identifierTokens.some((token) => /[A-Z_]/.test(token));
+    // A lone leading capital ("Go", "React", "C++") is a proper noun in a
+    // question, not a typed symbol. Pinning on it holds whichever candidate
+    // shares any query word above the reranker, so require identifier shape.
+    const exactPinEligible = identifierTokens.some((token) => /_|[a-z0-9][A-Z]/.test(token));
     const quotedLiteralPhrases = extractQuotedLiteralPhrases(semanticQuery);
     const quotedLiteralSeeking = quotedLiteralPhrases.length > 0;
     const lexicalSourceTokens = identifierTokens.length > 0 && naturalLanguageTokens.length > 0

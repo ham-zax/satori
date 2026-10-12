@@ -111,3 +111,19 @@ test('explicit reference questions retain reference routing and direction', () =
         assert.equal(plan.referenceDirection, direction, query);
     }
 });
+
+test('writer-seeking pin needs an identifier-shaped token, not a capitalised word', () => {
+    const cases = [
+        ['in the Go builder where is the vtable written', false],
+        ['where does the C++ generator emit code for a table', false],
+        ['where is the React fiber created', false],
+        ['where is FlatBufferBuilder created', true],
+        ['where is MAX_DEPTH updated', true],
+        ['where does useState persist the hook', true],
+    ] as const;
+    for (const [query, pinned] of cases) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.equal(plan.writerSeeking, true, query);
+        assert.equal(plan.exactMatchPinningEnabled, pinned, query);
+    }
+});

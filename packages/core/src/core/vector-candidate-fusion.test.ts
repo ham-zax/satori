@@ -122,3 +122,47 @@ test('Core RRF fusion rejects empty IDs and conflicting payloads for one ID', ()
         limit: 1,
     }), /conflicting document payloads/);
 });
+
+test('Core RRF fusion credits an all-terms row that a truncated fallback arm cut off', () => {
+    const dense = Array.from({ length: 4 }, (_, index) => candidate(`both-${index + 1}`, 4 - index));
+    const fallback = Array.from({ length: 4 }, (_, index) => candidate(`both-${4 - index}`, 4 - index));
+    const fuse = (lexicalFallbackLimit?: number) => fuseVectorCandidatesWithRrf({
+        dense,
+        lexical: [candidate('strict', 9)],
+        lexicalFallback: fallback,
+        ...(lexicalFallbackLimit !== undefined ? { lexicalFallbackLimit } : {}),
+        k: VECTOR_CANDIDATE_RRF_K_V1,
+        limit: 5,
+    });
+    const strictScore = (results: VectorCandidate[]) => (
+        results.find((result) => result.document.id === 'strict')?.score
+    );
+
+    // The arm filled its limit, so the row is credited the first rank past the cut.
+    const truncated = fuse(4);
+    assert.equal(strictScore(truncated), (1 / 101) + (1 / 105));
+    assert.equal(truncated.find((result) => result.document.id === 'both-1')?.score, (1 / 101) + (1 / 104));
+
+    // An arm that returned fewer rows than its limit excluded the row for real.
+    assert.equal(strictScore(fuse(5)), 1 / 101);
+    assert.equal(strictScore(fuse()), 1 / 101);
+});
+
+test('Core RRF fusion keeps the fallback rank of an owner the fallback arm already ranked', () => {
+    const owner = { relativePath: 'src/owner.ts', metadata: { ownerSymbolInstanceId: 'owner' } };
+    const results = fuseVectorCandidatesWithRrf({
+        dense: [],
+        lexical: [candidate('owner-strict', 9, owner), candidate('listed', 8)],
+        lexicalFallback: [candidate('owner-other', 3, owner), candidate('listed', 2)],
+        lexicalFallbackLimit: 2,
+        k: VECTOR_CANDIDATE_RRF_K_V1,
+        limit: 3,
+    });
+    const score = (id: string) => results.find((result) => result.document.id === id)?.score;
+
+    assert.equal(score('owner-strict'), 1 / 101);
+    assert.equal(score('listed'), (1 / 102) + (1 / 102));
+    assert.throws(() => fuseVectorCandidatesWithRrf({
+        dense: [], lexical: [], lexicalFallbackLimit: 0, k: VECTOR_CANDIDATE_RRF_K_V1, limit: 1,
+    }), /fallback limit/);
+});

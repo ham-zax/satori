@@ -67,6 +67,14 @@ export function fuseVectorCandidatesWithRrf(input: {
      * row that matches all terms also collects the fallback contribution.
      */
     readonly lexicalFallback?: readonly VectorCandidate[];
+    /**
+     * Retrieval limit the fallback arm was requested with. An all-terms row is
+     * in the any-terms match set by construction, so when the fallback arm
+     * filled this limit and cut the row off, the row is credited the first
+     * rank past the cut: the most the untruncated arm could have given it.
+     * Without the limit, truncation is unknown and no credit is given.
+     */
+    readonly lexicalFallbackLimit?: number;
     readonly k: number;
     readonly limit: number;
 }): VectorCandidate[] {
@@ -76,9 +84,17 @@ export function fuseVectorCandidatesWithRrf(input: {
     if (!Number.isSafeInteger(input.limit) || input.limit < 0) {
         throw new Error('RRF result limit must be a non-negative safe integer.');
     }
+    if (input.lexicalFallbackLimit !== undefined
+        && (!Number.isSafeInteger(input.lexicalFallbackLimit) || input.lexicalFallbackLimit <= 0)) {
+        throw new Error('RRF lexical fallback limit must be a positive safe integer.');
+    }
 
     const candidatesById = new Map<string, RankedCandidate>();
-    const addRankedArm = (arm: readonly VectorCandidate[]): void => {
+    const addRankedArm = (arm: readonly VectorCandidate[]): {
+        readonly contributors: readonly VectorCandidate[];
+        readonly ownerIds: ReadonlySet<string>;
+    } => {
+        const contributors: VectorCandidate[] = [];
         const seenDocumentsById = new Map<string, VectorCandidate['document']>();
         const seenOwnerIds = new Set<string>();
         let rank = 0;
@@ -94,6 +110,7 @@ export function fuseVectorCandidatesWithRrf(input: {
                 continue;
             }
             seenOwnerIds.add(ownerId);
+            contributors.push(candidate);
             rank++;
             const score = 1 / (input.k + rank);
             const existing = candidatesById.get(candidate.document.id);
@@ -110,11 +127,27 @@ export function fuseVectorCandidatesWithRrf(input: {
                 });
             }
         }
+        return { contributors, ownerIds: seenOwnerIds };
     };
 
     addRankedArm(input.dense);
-    addRankedArm(input.lexical);
-    if (input.lexicalFallback) addRankedArm(input.lexicalFallback);
+    const lexical = addRankedArm(input.lexical);
+    if (input.lexicalFallback) {
+        const fallback = addRankedArm(input.lexicalFallback);
+        if (input.lexicalFallbackLimit !== undefined
+            && input.lexicalFallback.length >= input.lexicalFallbackLimit) {
+            const cutScore = 1 / (input.k + fallback.ownerIds.size + 1);
+            for (const candidate of lexical.contributors) {
+                // An owner the fallback arm already ranked keeps that rank.
+                if (fallback.ownerIds.has(vectorCandidateOwnerId(candidate))) continue;
+                const existing = candidatesById.get(candidate.document.id)!;
+                candidatesById.set(candidate.document.id, {
+                    ...existing,
+                    score: existing.score + cutScore,
+                });
+            }
+        }
+    }
 
     return Array.from(candidatesById.values())
         .sort((left, right) => (

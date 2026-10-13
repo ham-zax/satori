@@ -595,6 +595,7 @@ export class SemanticSearchService {
                     dense: [],
                     lexical: productSearchResults.slice(0, resolvedRequest.topK),
                     lexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK),
+                    lexicalFallbackLimit: resolvedRequest.topK,
                     k: VECTOR_CANDIDATE_RRF_K_V1,
                     limit: resolvedRequest.topK,
                 })
@@ -735,6 +736,7 @@ export class SemanticSearchService {
                 dense: productDenseCandidates.slice(0, resolvedRequest.topK),
                 lexical: productLexicalCandidates.slice(0, resolvedRequest.topK),
                 lexicalFallback: productLexicalFallback.slice(0, resolvedRequest.topK),
+                lexicalFallbackLimit: resolvedRequest.topK,
                 k: VECTOR_CANDIDATE_RRF_K_V1,
                 limit: resolvedRequest.topK,
             });

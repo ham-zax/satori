@@ -29,6 +29,16 @@ export function allowsDefinitionDiscovery(input: {
         && !input.hasPathConstraint && !input.hasMustConstraint;
 }
 
+/**
+ * Definition fusion corrects a provider order with a symbol-name vote. The
+ * Voyage rerank-3 family already ranks the owner first where that vote
+ * displaces it (docs/improvements/voyage-reranker-and-definition-fusion.md),
+ * so its order stays authoritative. Other providers keep the fused order.
+ */
+export function rerankerOrderNeedsDefinitionFusion(identity: { provider: string; model: string } | undefined): boolean {
+    return !(identity?.provider === "voyage" && (identity.model === "rerank-3" || identity.model === "rerank-3-lite"));
+}
+
 function definitionTerms(metadata: DefinitionDiscoveryMetadata): DefinitionTerms {
     const cached = termsByDefinition.get(metadata);
     const witness = [metadata.name, metadata.qualifiedName, metadata.file, metadata.kind];

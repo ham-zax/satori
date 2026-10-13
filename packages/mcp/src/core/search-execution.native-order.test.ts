@@ -350,6 +350,35 @@ test("default definition discovery admits metadata candidates and fuses their de
     assert.equal(calls, 1);
 });
 
+test("the Voyage rerank-3 family keeps its own order where other providers fuse definition evidence", async () => {
+    const run3 = async (model: string) => {
+        const rows = [candidate("src/noise.ts", 0.95)];
+        const recovered = { ...candidate("src/actions.ts", 0.1), symbolKind: "function", symbolLabel: "function tradeWorkflow" };
+        const host = buildHost(rows, {
+            getIdentity: () => ({ provider: "voyage", model, profile: "test" }),
+            // The provider prefers the candidate the definition vote would displace.
+            rerank: async (_query, documents) => documents
+                .map((document, index) => ({ index, relevanceScore: document.includes("noise") ? 0.9 : 0.1 }))
+                .sort((left, right) => right.relevanceScore - left.relevanceScore),
+        });
+        host.symbolMetadataSearch = async () => [recovered];
+        host.definitionMetadata = result => ({ name: result.relativePath === "src/actions.ts" ? "tradeWorkflow" : "formatCurrency", qualifiedName: "", file: result.relativePath, kind: "function" });
+        const outcome = await run(buildInput("trade workflow rejected bundle loop"), host);
+        assert.equal(outcome.kind, "ok");
+        return outcome;
+    };
+    for (const model of ["rerank-3", "rerank-3-lite"]) {
+        const outcome = await run3(model);
+        assert.equal(outcome.orderAuthority, "reranker_order", model);
+        assert.equal(outcome.scored[0]?.result.relativePath, "src/noise.ts", model);
+        // Admission is unchanged: the metadata candidate still reaches the reranker.
+        assert.ok(outcome.scored.find(entry => entry.result.relativePath === "src/actions.ts")?.retrievalPasses.includes("symbol_metadata_bm25"), model);
+    }
+    const fused = await run3("rerank-2.5");
+    assert.equal(fused.orderAuthority, "definition_fusion_order");
+    assert.equal(fused.scored[0]?.result.relativePath, "src/actions.ts");
+});
+
 test("default definition alt_terms admit and fuse owners the query vocabulary cannot reach", async () => {
     const rows = [candidate("src/noise.ts", 0.95)];
     const recovered = { ...candidate("src/effects.ts", 0.1), symbolKind: "function", symbolLabel: "function commitHookEffectListUnmount" };

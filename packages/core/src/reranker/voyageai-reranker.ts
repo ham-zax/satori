@@ -2,7 +2,8 @@
  * VoyageAI Reranker
  * 
  * Reranks search results using VoyageAI's neural reranker models.
- * Supports rerank-2.5 (best quality) and rerank-2.5-lite (faster).
+ * Supports rerank-3 (best quality) and rerank-3-lite (faster), plus the
+ * earlier rerank-2.5 and rerank-2 families.
  */
 
 import type {
@@ -12,7 +13,7 @@ import type {
     RerankResult,
 } from "./reranker";
 
-export type VoyageRerankerModel = 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
+export type VoyageRerankerModel = 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
 
 export const RERANK_TIMEOUT_MS = 30_000;
 export const RERANK_MAX_ATTEMPTS = 2;
@@ -348,10 +349,20 @@ export class VoyageAIReranker implements Reranker {
      */
     static getSupportedModels(): Record<VoyageRerankerModel, { maxQueryTokens: number; maxDocQueryTokens: number; description: string }> {
         return {
-            'rerank-2.5': {
+            'rerank-3': {
                 maxQueryTokens: 8000,
                 maxDocQueryTokens: 32000,
                 description: 'Best quality reranker'
+            },
+            'rerank-3-lite': {
+                maxQueryTokens: 8000,
+                maxDocQueryTokens: 32000,
+                description: 'Fast and cost-effective reranker'
+            },
+            'rerank-2.5': {
+                maxQueryTokens: 8000,
+                maxDocQueryTokens: 32000,
+                description: 'Earlier best quality reranker'
             },
             'rerank-2.5-lite': {
                 maxQueryTokens: 8000,

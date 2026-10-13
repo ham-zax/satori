@@ -154,7 +154,7 @@ export interface ContextMcpConfig {
     lanceDbPath?: string;
     // Reranker configuration
     rerankerProvider?: RerankerProvider;
-    rankerModel?: 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
+    rankerModel?: 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
     lateOnModelPath?: string;
     lateOnProfileId?: LateOnRuntimeProfileId;
     lateOnActivationPolicy?: LateOnActivationPolicyId;
@@ -566,8 +566,8 @@ export function createMcpConfig(): ContextMcpConfig {
 
     // Parse Voyage reranker model from env var.
     const rankerModelEnv = envManager.get('VOYAGEAI_RERANKER_MODEL');
-    let rankerModel: 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite' | undefined;
-    if (rankerModelEnv && ['rerank-2.5', 'rerank-2.5-lite', 'rerank-2', 'rerank-2-lite'].includes(rankerModelEnv)) {
+    let rankerModel: 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite' | undefined;
+    if (rankerModelEnv && ['rerank-3', 'rerank-3-lite', 'rerank-2.5', 'rerank-2.5-lite', 'rerank-2', 'rerank-2-lite'].includes(rankerModelEnv)) {
         rankerModel = rankerModelEnv as typeof rankerModel;
     } else {
         rankerModel = 'rerank-2.5';

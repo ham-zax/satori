@@ -16,7 +16,7 @@ import type {
     SearchRerankProjectionSummary,
     SearchRerankerOperationalReason,
 } from "./search-types.js";
-import { allowsDefinitionDiscovery, fuseDefinitionDiscovery } from "./search-definition-discovery.js";
+import { allowsDefinitionDiscovery, fuseDefinitionDiscovery, rerankerOrderNeedsDefinitionFusion } from "./search-definition-discovery.js";
 import type { SearchOrderAuthority } from "./search-order-policy.js";
 import {
     appendSearchCandidateRemoval,
@@ -492,6 +492,14 @@ function isStrongFirstStageOwner(candidate: SearchCandidate, queryPlan: SearchQu
     return covered / components.size >= STRONG_OWNER_QUERY_COVERAGE;
 }
 
+function rerankerIdentity(host: SearchExecutionHost): { provider: string; model: string } | undefined {
+    try {
+        return host.reranker?.getIdentity();
+    } catch {
+        return undefined;
+    }
+}
+
 export function applyRerankOrder(args: {
     input: SearchExecutionInput;
     host: SearchExecutionHost;
@@ -525,7 +533,7 @@ export function applyRerankOrder(args: {
             scope: input.scope,
             hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
             hasMustConstraint: input.parsedOperators.must.length > 0,
-        }) && host.definitionMetadata) {
+        }) && host.definitionMetadata && rerankerOrderNeedsDefinitionFusion(rerankerIdentity(host))) {
             const definitionAltTerms = executionFlags.definition_alt_terms
                 ? (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted : [];
             const fusion = fuseDefinitionDiscovery({
@@ -623,13 +631,7 @@ export async function rerankSearchCandidates(
     let orderAuthority: SearchOrderAuthority = "retrieval_order";
     let failurePhase: RerankFailurePhase | undefined;
     let rerankerOperationalReason: SearchRerankerOperationalReason | undefined;
-    const lateOnProvider = (() => {
-        try {
-            return host.reranker?.getIdentity().provider === "lateon";
-        } catch {
-            return false;
-        }
-    })();
+    const lateOnProvider = rerankerIdentity(host)?.provider === "lateon";
     const rerankerCandidatesIn = scored.length;
     let rerankerCandidatesReranked = 0;
     let rerankerFamilyCount = 0;

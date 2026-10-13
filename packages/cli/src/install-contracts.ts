@@ -40,8 +40,6 @@ export const SATORI_RUNTIME_ENV_VARS = [
     "SATORI_LATEON_ACTIVATION_POLICY",
     "GEMINI_API_KEY",
     "GEMINI_BASE_URL",
-    "OLLAMA_HOST",
-    "OLLAMA_MODEL_DIGEST",
     "POTION_HELPER_PATH",
     "POTION_MODEL_PATH",
     "POTION_REQUEST_TIMEOUT_MS",
@@ -64,7 +62,6 @@ export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "SATORI_LATEON_MODEL_PATH",
     "SATORI_LATEON_PROFILE",
     "SATORI_LATEON_ACTIVATION_POLICY",
-    "OLLAMA_HOST",
     "POTION_HELPER_PATH",
     "POTION_MODEL_PATH",
     "POTION_REQUEST_TIMEOUT_MS",
@@ -95,14 +92,12 @@ export type InstallCommandInput =
     | (InstallCommandBase & {
         runtime: "voyage";
         vectorStore?: InstallVectorStore;
-        ollamaModel?: never;
         reranker?: Exclude<InstallReranker, "lateon">;
         rerankerModel?: string;
     })
     | (InstallCommandBase & {
         runtime: "offline";
         vectorStore?: "LanceDB";
-        ollamaModel?: string;
         reranker?: InstallReranker;
         rerankerModel?: string;
     })

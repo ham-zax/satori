@@ -9,10 +9,10 @@ Use three arms when all providers are available:
 
 1. `milvus-voyage`: current connected Milvus plus Voyage;
 2. `lancedb-voyage`: LanceDB plus the same Voyage model and dimensions;
-3. `lancedb-ollama`: the offline LanceDB plus resolved Ollama artifact.
+3. `lancedb-potion`: the offline LanceDB plus the pinned Potion runtime.
 
 The first pair isolates storage behavior. The second and third arms isolate the
-embedding change on LanceDB. The direct Milvus/Voyage to LanceDB/Ollama result
+embedding change on LanceDB. The direct Milvus/Voyage to LanceDB/Potion result
 is a full-stack comparison and cannot attribute a delta to either component.
 
 ## Recording contract
@@ -54,7 +54,7 @@ pnpm eval:vector-stacks -- \
   --tasks evals/vector-stacks/tasks.json \
   --arm milvus-voyage=/tmp/milvus-voyage.observations.json \
   --arm lancedb-voyage=/tmp/lancedb-voyage.observations.json \
-  --arm lancedb-ollama=/tmp/lancedb-ollama.observations.json \
+  --arm lancedb-potion=/tmp/lancedb-potion.observations.json \
   --out /tmp/vector-stack-comparison.json
 ```
 

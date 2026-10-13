@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { executeInstallCommand as executeInstallCommandProduction, type InstallCommandInput } from "./install.js";
 import {
     formatCandidatePreflightFailure,
@@ -31,7 +32,6 @@ import {
 } from "./test-fixtures/lateon-fixture.js";
 import { loadAcquisitionAuthority } from "./lateon-model-store.js";
 
-const DIGEST = "b".repeat(64);
 const POTION_ASSETS_ROOT = fileURLToPath(new URL("../../mcp/assets/potion/linux-x64/", import.meta.url));
 const loadWorkspaceCore = async (): Promise<PotionRuntimeCoreModule> => (
     import("@satori-code/core") as Promise<PotionRuntimeCoreModule>
@@ -686,40 +686,6 @@ test("managed connected launcher pins the Milvus backend that passed preflight",
     }
 });
 
-test("offline install preflight records resolved local model identity", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-preflight-"));
-    try {
-        const result = await runInstallPreflight({
-            runtime: "offline",
-            homeDir,
-            env: { OLLAMA_HOST: "http://localhost:11434" },
-            ollamaModel: "nomic-embed-text",
-        }, {
-            probeLanceDb: async () => undefined,
-            resolveOllamaIdentity: async ({ model, host }) => {
-                assert.equal(model, "nomic-embed-text");
-                assert.equal(host, "http://localhost:11434");
-                return Object.freeze({
-                    configuredModel: model,
-                    resolvedModel: "nomic-embed-text:latest",
-                    artifactDigest: DIGEST,
-                    artifactSize: 42,
-                    dimension: 768,
-                });
-            },
-        });
-
-        assert.equal(result.runtimeEnvironment.SATORI_RUNTIME_PROFILE, "offline");
-        assert.equal(result.runtimeEnvironment.EMBEDDING_PROVIDER, "Ollama");
-        assert.equal(result.runtimeEnvironment.EMBEDDING_MODEL, "nomic-embed-text:latest");
-        assert.equal(result.runtimeEnvironment.OLLAMA_MODEL_DIGEST, DIGEST);
-        assert.equal(result.runtimeEnvironment.EMBEDDING_OUTPUT_DIMENSION, "768");
-        assert.equal(result.ollamaIdentity?.dimension, 768);
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-});
-
 test("offline install defaults to the integrity- and capability-verified bundled Potion runtime", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-potion-preflight-"));
     try {
@@ -854,7 +820,6 @@ test("new offline install persists Potion embeddings and LateOn D128 in the mana
         assert.equal(launcherEnvironment.EMBEDDING_OUTPUT_DIMENSION, "256");
         assert.equal(launcherEnvironment.POTION_HELPER_PATH, path.join(POTION_ASSETS_ROOT, "satori-potion"));
         assert.equal(launcherEnvironment.POTION_MODEL_PATH, path.join(POTION_ASSETS_ROOT, "model"));
-        assert.equal(launcherEnvironment.OLLAMA_MODEL, undefined);
         assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "lateon");
         assert.equal(
             launcherEnvironment.SATORI_LATEON_PROFILE,
@@ -1170,13 +1135,12 @@ test(`connected reinstall preserves a managed custom LanceDB path when the shell
 
 for (const currentValues of [
     {},
-    { LANCEDB_PATH: "", OLLAMA_HOST: "   " },
+    { LANCEDB_PATH: "" },
 ] as const) {
-test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"LANCEDB_PATH" in currentValues ? "blank" : "absent"} shell values`, async () => {
+test(`offline reinstall preserves the managed LanceDB path with ${"LANCEDB_PATH" in currentValues ? "blank" : "absent"} shell values`, async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-path-reinstall-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     const databasePath = path.join(homeDir, "custom", "offline-lancedb");
-    const ollamaHost = "http://localhost:11435";
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
     fs.writeFileSync(launcherPath, buildLauncherScript({
         command: process.execPath,
@@ -1185,11 +1149,10 @@ test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"L
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: databasePath,
-            EMBEDDING_PROVIDER: "Ollama",
-            EMBEDDING_MODEL: "nomic-embed-text:latest",
-            OLLAMA_MODEL_DIGEST: DIGEST,
-            EMBEDDING_OUTPUT_DIMENSION: "768",
-            OLLAMA_HOST: ollamaHost,
+            EMBEDDING_PROVIDER: "Potion",
+            EMBEDDING_OUTPUT_DIMENSION: "256",
+            POTION_HELPER_PATH: path.join(POTION_ASSETS_ROOT, "satori-potion"),
+            POTION_MODEL_PATH: path.join(POTION_ASSETS_ROOT, "model"),
         },
     }), "utf8");
     const probedPaths: string[] = [];
@@ -1200,42 +1163,32 @@ test(`offline reinstall preserves managed LanceDB and Ollama endpoints with ${"L
             client: "codex",
             dryRun: false,
             runtime: "offline",
-            ollamaModel: "nomic-embed-text",
         }, {
             homeDir,
             env: currentValues,
             packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             preflightDependencies: {
                 probeLanceDb: async (candidate) => { probedPaths.push(candidate); },
-                resolveOllamaIdentity: async ({ host }) => {
-                    assert.equal(host, ollamaHost);
-                    return Object.freeze({
-                        configuredModel: "nomic-embed-text",
-                        resolvedModel: "nomic-embed-text:latest",
-                        artifactDigest: DIGEST,
-                        artifactSize: 42,
-                        dimension: 768,
-                    });
-                },
+                verifyPotionRuntime: async () => undefined,
             },
         });
 
         assert.deepEqual(probedPaths, [databasePath]);
         assert.equal(result.runtimeEnvironment?.LANCEDB_PATH, databasePath);
-        assert.equal(result.runtimeEnvironment?.OLLAMA_HOST, ollamaHost);
         const launcherEnvironment = parseManagedLauncherEnvironment(fs.readFileSync(launcherPath, "utf8"));
         assert.equal(launcherEnvironment.LANCEDB_PATH, databasePath);
-        assert.equal(launcherEnvironment.OLLAMA_HOST, ollamaHost);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
 });
 }
 
-test("offline reinstall without a model preserves an existing managed Ollama selection", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-ollama-preserve-"));
+test("offline reinstall rejects an existing managed non-Potion provider", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-offline-provider-conflict-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
     fs.writeFileSync(launcherPath, buildLauncherScript({
@@ -1245,42 +1198,19 @@ test("offline reinstall without a model preserves an existing managed Ollama sel
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
             LANCEDB_PATH: path.join(homeDir, "lancedb"),
-            EMBEDDING_PROVIDER: "Ollama",
-            EMBEDDING_MODEL: "nomic-embed-text:latest",
-            OLLAMA_MODEL_DIGEST: DIGEST,
-            EMBEDDING_OUTPUT_DIMENSION: "768",
-            OLLAMA_HOST: "http://localhost:11434",
+            EMBEDDING_PROVIDER: "VoyageAI",
         },
     }), "utf8");
-    let selectedModel: string | undefined;
-    const fixture = fixtureLateOnRuntime(homeDir);
     try {
-        const result = await executeInstallCommand({
+        await assert.rejects(executeInstallCommand({
             kind: "install",
             client: "codex",
-            dryRun: false,
+            dryRun: true,
             runtime: "offline",
         }, {
             homeDir,
-            packageSpecifier: "@satori-code/mcp@0.0.0-test",
-            runtimeCommand: fixture.runtimeCommand,
-            fetchImpl: fixture.fetchImpl,
-            preflightRunner: async (input) => {
-                selectedModel = input.ollamaModel;
-                return {
-                    runtimeEnvironment: Object.freeze({
-                        SATORI_RUNTIME_PROFILE: "offline",
-                        VECTOR_STORE_PROVIDER: "LanceDB",
-                        EMBEDDING_PROVIDER: "Ollama",
-                        EMBEDDING_MODEL: input.ollamaModel || "",
-                        OLLAMA_MODEL_DIGEST: DIGEST,
-                    }),
-                };
-            },
-        });
-
-        assert.equal(selectedModel, "nomic-embed-text:latest");
-        assert.equal(result.runtimeEnvironment?.EMBEDDING_PROVIDER, "Ollama");
+            env: {},
+        }), /Existing offline installation uses EMBEDDING_PROVIDER=VoyageAI; expected Potion/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1483,8 +1413,8 @@ test("Linux x64 with implicit Potion defaults to LateOn D128", async () => {
     }
 });
 
-test("Linux x64 with implicit Ollama defaults to LateOn D128", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-ollama-d32-"));
+test("Linux x64 managed Potion keeps its LateOn D128 selection", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-potion-managed-d32-"));
     const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
     fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
     fs.writeFileSync(launcherPath, buildLauncherScript({
@@ -1493,11 +1423,11 @@ test("Linux x64 with implicit Ollama defaults to LateOn D128", async () => {
         managedEnv: {
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
-            EMBEDDING_PROVIDER: "Ollama",
-            EMBEDDING_MODEL: "nomic-embed-text:latest",
-            OLLAMA_MODEL_DIGEST: DIGEST,
-            EMBEDDING_OUTPUT_DIMENSION: "768",
-            OLLAMA_HOST: "http://localhost:11434",
+            EMBEDDING_PROVIDER: "Potion",
+            EMBEDDING_MODEL: POTION_MODEL_ID,
+            EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+            POTION_HELPER_PATH: path.join(POTION_ASSETS_ROOT, "satori-potion"),
+            POTION_MODEL_PATH: path.join(POTION_ASSETS_ROOT, "model"),
         },
     }), "utf8");
     try {
@@ -1517,44 +1447,7 @@ test("Linux x64 with implicit Ollama defaults to LateOn D128", async () => {
             result.runtimeEnvironment?.SATORI_LATEON_PROFILE,
             "lateon_offline_quality_projection_v6_d128_v1",
         );
-        assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, "nomic-embed-text:latest");
-    } finally {
-        fs.rmSync(homeDir, { recursive: true, force: true });
-    }
-});
-
-test("non-Linux-x64 with implicit Ollama defaults to no reranker", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-matrix-ollama-none-"));
-    const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
-    fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
-    fs.writeFileSync(launcherPath, buildLauncherScript({
-        command: process.execPath,
-        args: ["/tmp/old-runtime.js"],
-        managedEnv: {
-            SATORI_RUNTIME_PROFILE: "offline",
-            VECTOR_STORE_PROVIDER: "LanceDB",
-            EMBEDDING_PROVIDER: "Ollama",
-            EMBEDDING_MODEL: "nomic-embed-text:latest",
-            OLLAMA_MODEL_DIGEST: DIGEST,
-            EMBEDDING_OUTPUT_DIMENSION: "768",
-            OLLAMA_HOST: "http://localhost:11434",
-        },
-    }), "utf8");
-    try {
-        const result = await executeInstallCommand({
-            kind: "install",
-            client: "codex",
-            dryRun: true,
-            runtime: "offline",
-        }, {
-            homeDir,
-            env: {},
-            platform: "darwin",
-            architecture: "arm64",
-        });
-        assert.equal(result.runtimeEnvironment?.SATORI_RERANKER_PROVIDER, "none");
-        assert.equal(result.runtimeEnvironment?.SATORI_LATEON_PROFILE, undefined);
-        assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, "nomic-embed-text:latest");
+        assert.equal(result.runtimeEnvironment?.EMBEDDING_MODEL, POTION_MODEL_ID);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }
@@ -1827,7 +1720,6 @@ test("programmatic offline installs reject a contradictory Milvus backend", asyn
         dryRun: true,
         runtime: "offline",
         vectorStore: "Milvus",
-        ollamaModel: "nomic-embed-text",
     } as unknown as InstallCommandInput;
     await assert.rejects(
         executeInstallCommand(command, { homeDir: "/tmp/satori-offline-invalid", env: {} }),
@@ -1911,30 +1803,34 @@ test("successful offline install persists its non-secret identity in the shared 
             client: "codex",
             dryRun: false,
             runtime: "offline",
-            ollamaModel: "nomic-embed-text",
         }, {
             homeDir,
             packageSpecifier: "@satori-code/mcp@0.0.0-test",
             runtimeCommand: fixture.runtimeCommand,
             fetchImpl: fixture.fetchImpl,
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             preflightRunner: async () => ({
                 runtimeEnvironment: Object.freeze({
                     SATORI_RUNTIME_PROFILE: "offline",
                     VECTOR_STORE_PROVIDER: "LanceDB",
-                    EMBEDDING_PROVIDER: "Ollama",
-                    EMBEDDING_MODEL: "nomic-embed-text:latest",
-                    OLLAMA_MODEL_DIGEST: DIGEST,
+                    EMBEDDING_PROVIDER: "Potion",
+                    EMBEDDING_MODEL: POTION_MODEL_ID,
+                    EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+                    POTION_HELPER_PATH: path.join(POTION_ASSETS_ROOT, "satori-potion"),
+                    POTION_MODEL_PATH: path.join(POTION_ASSETS_ROOT, "model"),
                 }),
             }),
         });
 
         const launcher = fs.readFileSync(path.join(homeDir, ".satori", "bin", "satori-mcp.js"), "utf8");
         assert.match(launcher, /"SATORI_RUNTIME_PROFILE":"offline"/);
-        assert.match(launcher, new RegExp(`"OLLAMA_MODEL_DIGEST":"${DIGEST}"`));
+        assert.match(launcher, /"EMBEDDING_PROVIDER":"Potion"/);
+        assert.match(launcher, new RegExp(`"EMBEDDING_MODEL":"${POTION_MODEL_ID}"`));
         assert.match(launcher, /const effectiveEnv = \{ \.\.\.process\.env, \.\.\.managedEnv \}/);
         assert.match(launcher, /env: effectiveEnv/);
         assert.equal(result.runtime, "offline");
-        assert.equal(result.runtimeEnvironment?.OLLAMA_MODEL_DIGEST, DIGEST);
+        assert.equal(result.runtimeEnvironment?.EMBEDDING_OUTPUT_DIMENSION, String(POTION_DIMENSION));
         assert.doesNotMatch(launcher, /VOYAGEAI_API_KEY/);
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -2209,7 +2105,8 @@ test("planned launcher environments carry Voyage provider and model in both runt
         runtime: "offline",
         homeDir: "/tmp/satori-task6-offline",
         env: { VOYAGEAI_API_KEY: "test-voyage-key", VOYAGEAI_RERANKER_MODEL: "" },
-        ollamaModel: "nomic-embed-text",
+        potionAssetsRoot: POTION_ASSETS_ROOT,
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
         reranker: "voyage",
         platform: "linux",
         architecture: "x64",
@@ -2221,7 +2118,8 @@ test("planned launcher environments carry Voyage provider and model in both runt
         runtime: "offline",
         homeDir: "/tmp/satori-task6-offline",
         env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
-        ollamaModel: "nomic-embed-text",
+        potionAssetsRoot: POTION_ASSETS_ROOT,
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
         reranker: "lateon",
         lateOnModelPath: "/tmp/satori-lateon-model",
         lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",
@@ -2236,7 +2134,8 @@ test("planned launcher environments carry Voyage provider and model in both runt
         runtime: "offline",
         homeDir: "/tmp/satori-task6-offline",
         env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
-        ollamaModel: "nomic-embed-text",
+        potionAssetsRoot: POTION_ASSETS_ROOT,
+        potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
         reranker: "none",
         platform: "linux",
         architecture: "x64",
@@ -2272,7 +2171,8 @@ test("rebuilt launcher stores the Voyage model without the API key and removes i
             runtime: "offline",
             homeDir,
             env: { VOYAGEAI_API_KEY: voyageApiKey, VOYAGEAI_RERANKER_MODEL: "" },
-            ollamaModel: "nomic-embed-text",
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             reranker: "voyage",
         });
         fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
@@ -2293,7 +2193,8 @@ test("rebuilt launcher stores the Voyage model without the API key and removes i
             runtime: "offline",
             homeDir,
             env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
-            ollamaModel: "nomic-embed-text",
+            potionAssetsRoot: POTION_ASSETS_ROOT,
+            potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
             reranker: "lateon",
             lateOnModelPath: path.join(homeDir, "lateon-model"),
             lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",

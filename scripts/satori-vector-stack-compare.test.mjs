@@ -36,12 +36,12 @@ const TASK_SUITE = {
 };
 
 function fingerprint(vectorStoreProvider, embeddingProvider) {
-    const ollama = embeddingProvider === "Ollama";
+    const potion = embeddingProvider === "Potion";
     return {
         embeddingProvider,
-        embeddingModel: ollama ? "nomic-embed-text:latest" : "voyage-code-3",
-        embeddingDimension: ollama ? 768 : 1024,
-        embeddingArtifactDigest: ollama ? "a".repeat(64) : null,
+        embeddingModel: potion ? "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b" : "voyage-code-3",
+        embeddingDimension: potion ? 256 : 1024,
+        embeddingArtifactDigest: null,
         embeddingNormalizationPolicy: "provider_output_v1",
         vectorStoreProvider,
         schemaVersion: "hybrid_v3",
@@ -199,9 +199,9 @@ test("compares storage-only, embedding-only, and full-stack arms without conflat
         { id: "milvus-voyage", sourceFile: "/tmp/milvus.json", observations: observationSet("Milvus", "VoyageAI") },
         { id: "lancedb-voyage", sourceFile: "/tmp/lancedb-voyage.json", observations: observationSet("LanceDB", "VoyageAI") },
         {
-            id: "lancedb-ollama",
-            sourceFile: "/tmp/lancedb-ollama.json",
-            observations: observationSet("LanceDB", "Ollama", { alternateHybrid: true }),
+            id: "lancedb-potion",
+            sourceFile: "/tmp/lancedb-potion.json",
+            observations: observationSet("LanceDB", "Potion", { alternateHybrid: true }),
         },
     ]);
 
@@ -262,7 +262,7 @@ test("rejects an arm whose runtime fingerprint changes between task runs", () =>
         {
             id: "right",
             observations: observationSet("LanceDB", "VoyageAI", {
-                secondFingerprint: fingerprint("LanceDB", "Ollama"),
+                secondFingerprint: fingerprint("LanceDB", "Potion"),
             }),
         },
     ]), /not bound to the arm-level generation proof/);
@@ -435,9 +435,9 @@ test("parses repeated named arms", () => {
     const parsed = parseArgs([
         "--tasks", "tasks.json",
         "--arm", "milvus-voyage=milvus.json",
-        "--arm", "lancedb-ollama=offline.json",
+        "--arm", "lancedb-potion=offline.json",
         "--json",
     ]);
-    assert.deepEqual(parsed.arms.map((arm) => arm.id), ["milvus-voyage", "lancedb-ollama"]);
+    assert.deepEqual(parsed.arms.map((arm) => arm.id), ["milvus-voyage", "lancedb-potion"]);
     assert.equal(parsed.json, true);
 });

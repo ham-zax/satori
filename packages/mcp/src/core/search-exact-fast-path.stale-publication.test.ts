@@ -124,7 +124,6 @@ test("runExactRegistryFastPath uses publication-only symbols without reading cur
         shouldIncludeCategoryInScope: () => true,
         capabilities: {
             hasReranker: () => false,
-            getDefaultRerankEnabled: () => false,
         } as unknown as CapabilityResolver,
         runtimeFingerprint: {} as never,
         reranker: null,
@@ -242,7 +241,6 @@ test("runExactRegistryFastPath preserves dirty relationship peers without readin
         shouldIncludeCategoryInScope: () => true,
         capabilities: {
             hasReranker: () => false,
-            getDefaultRerankEnabled: () => false,
         } as unknown as CapabilityResolver,
         runtimeFingerprint: {} as never,
         reranker: null,
@@ -362,7 +360,6 @@ test("runExactRegistryFastPath answers an ambiguous exact name with every declar
             shouldIncludeCategoryInScope: () => true,
             capabilities: {
                 hasReranker: () => false,
-                getDefaultRerankEnabled: () => false,
             } as unknown as CapabilityResolver,
             runtimeFingerprint: {} as never,
             reranker: null,

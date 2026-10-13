@@ -30,7 +30,6 @@ function usage() {
     '  --client <name>       all, claude, codex, or opencode (default: opencode).',
     '  --runtime <name>      offline or voyage (default: preserve managed selection).',
     '  --reranker <name>     lateon or none for an offline runtime.',
-    '  --ollama-model <id>   Use Ollama instead of Potion for offline embeddings.',
     '  --vector-store <name> lancedb or milvus (milvus requires voyage runtime).',
     '  --no-build            Reuse existing Core, MCP, and CLI build output.',
     '  --home <path>         Override HOME for testing or isolated installs.',
@@ -55,7 +54,6 @@ export function parseArgs(argv) {
     client: 'opencode',
     runtime: undefined,
     reranker: undefined,
-    ollamaModel: undefined,
     vectorStore: undefined,
     help: false,
   };
@@ -97,11 +95,6 @@ export function parseArgs(argv) {
         throw new Error('--reranker must be one of: lateon, none.');
       }
       options.reranker = value;
-      i += 1;
-      continue;
-    }
-    if (arg === '--ollama-model') {
-      options.ollamaModel = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -163,9 +156,6 @@ function createLocalInstallCommand(options, managedEnv) {
     if (options.reranker !== undefined) {
       throw new Error('--reranker is supported only with --runtime offline.');
     }
-    if (options.ollamaModel !== undefined) {
-      throw new Error('--ollama-model is supported only with --runtime offline.');
-    }
     return {
       kind: 'install',
       client: options.client,
@@ -183,7 +173,6 @@ function createLocalInstallCommand(options, managedEnv) {
     runtime,
     ...(options.vectorStore ? { vectorStore: options.vectorStore } : {}),
     ...(options.reranker ? { reranker: options.reranker } : {}),
-    ...(options.ollamaModel ? { ollamaModel: options.ollamaModel } : {}),
     dryRun: false,
   };
 }
@@ -250,7 +239,6 @@ export async function installLocalMcpRuntime(options = {}) {
     client: options.client || 'opencode',
     runtime: options.runtime,
     reranker: options.reranker,
-    ollamaModel: options.ollamaModel,
     vectorStore: options.vectorStore,
   }, managedEnv);
   const activationOwner = options.activationOwner || await loadActivationOwner(repoRoot);

@@ -341,7 +341,7 @@ function parseCurrentFingerprint(value, label) {
     if (canonicalJson(keys) !== canonicalJson(expectedKeys)) {
         throw new Error(`${label} must contain exactly the current fingerprint fields.`);
     }
-    if (!["OpenAI", "VoyageAI", "Gemini", "Ollama"].includes(fingerprint.embeddingProvider)) {
+    if (!["OpenAI", "VoyageAI", "Gemini", "Potion"].includes(fingerprint.embeddingProvider)) {
         throw new Error(`${label} has an unsupported embedding provider.`);
     }
     requireString(fingerprint.embeddingModel, `${label} embedding model`);

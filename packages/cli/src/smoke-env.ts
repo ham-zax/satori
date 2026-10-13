@@ -21,7 +21,7 @@ const PNPM_ONLY_NPM_ENV_KEYS = new Set([
 ]);
 
 function isSatoriRuntimeEnvKey(key: string): boolean {
-    return /^(?:SATORI_|EMBEDDING_|OPENAI_|VOYAGEAI_|GEMINI_|OLLAMA_|POTION_|MILVUS_)/.test(key)
+    return /^(?:SATORI_|EMBEDDING_|OPENAI_|VOYAGEAI_|GEMINI_|POTION_|MILVUS_)/.test(key)
         || key === "VECTOR_STORE_PROVIDER"
         || key === "LANCEDB_PATH";
 }

@@ -59,7 +59,7 @@ export function resolveOfflineReranker(
     const rejectUnsupportedLateOn = (): never => {
         throw new CliError(
             "E_USAGE",
-            `LateOn D128 is supported only on Linux x64/WSL2; received ${platform ?? process.platform} ${architecture ?? process.arch}. Use --reranker none or an offline Ollama installation.`,
+            `LateOn D128 is supported only on Linux x64/WSL2; received ${platform ?? process.platform} ${architecture ?? process.arch}. Use --reranker none or a supported platform.`,
             2,
         );
     };
@@ -270,61 +270,43 @@ export async function resolveVerifiedPotionModel(
     }
 }
 
-export function resolveOfflineOllamaModel(
-    command: Extract<InstallCommandInput, { kind: "install"; runtime: "offline" }>,
+export function assertOfflinePotionSelection(
     managedEnvironment: Readonly<Record<string, string>>,
     env: NodeJS.ProcessEnv,
-): string | undefined {
-    if (command.ollamaModel) {
-        return command.ollamaModel;
-    }
+): void {
     const managedOffline = managedEnvironment.SATORI_RUNTIME_PROFILE === "offline";
     const managedProvider = managedOffline ? managedEnvironment.EMBEDDING_PROVIDER : undefined;
-    if (managedProvider && managedProvider !== "Ollama" && managedProvider !== "Potion") {
+    if (managedProvider && managedProvider !== "Potion") {
         throw new CliError(
             "E_USAGE",
-            `Existing offline installation uses EMBEDDING_PROVIDER=${managedProvider}; expected Potion or Ollama. Reconcile the managed configuration before reinstalling.`,
+            `Existing offline installation uses EMBEDDING_PROVIDER=${managedProvider}; expected Potion. Reconcile the managed configuration before reinstalling.`,
             2,
         );
     }
-    const preservedOllamaModel = managedProvider === "Ollama"
-        ? managedEnvironment.EMBEDDING_MODEL
-        : undefined;
-    if (managedProvider === "Ollama" && !preservedOllamaModel) {
-        throw new CliError(
-            "E_USAGE",
-            "Existing managed Ollama installation has no EMBEDDING_MODEL. Re-run with an explicit --ollama-model.",
-            2,
-        );
-    }
-    const expectedProvider = preservedOllamaModel ? "Ollama" : "Potion";
     const configuredProvider = env.EMBEDDING_PROVIDER?.trim();
-    if (configuredProvider && configuredProvider !== expectedProvider) {
+    if (configuredProvider && configuredProvider !== "Potion") {
         throw new CliError(
             "E_USAGE",
-            `EMBEDDING_PROVIDER=${configuredProvider} conflicts with the ${expectedProvider} offline installation selection. Remove the conflicting environment value or select Ollama explicitly with --ollama-model.`,
+            `EMBEDDING_PROVIDER=${configuredProvider} conflicts with the Potion offline installation selection. Remove the conflicting environment value.`,
             2,
         );
     }
-    if (!preservedOllamaModel) {
-        const configuredModel = env.EMBEDDING_MODEL?.trim();
-        if (configuredModel && configuredModel !== POTION_MODEL_ID) {
-            throw new CliError(
-                "E_USAGE",
-                `EMBEDDING_MODEL=${configuredModel} conflicts with the pinned Potion model ${POTION_MODEL_ID}. Remove the conflicting environment value.`,
-                2,
-            );
-        }
-        const configuredDimension = env.EMBEDDING_OUTPUT_DIMENSION?.trim();
-        if (configuredDimension && configuredDimension !== String(POTION_DIMENSION)) {
-            throw new CliError(
-                "E_USAGE",
-                `EMBEDDING_OUTPUT_DIMENSION=${configuredDimension} conflicts with Potion dimension ${POTION_DIMENSION}. Remove the conflicting environment value.`,
-                2,
-            );
-        }
+    const configuredModel = env.EMBEDDING_MODEL?.trim();
+    if (configuredModel && configuredModel !== POTION_MODEL_ID) {
+        throw new CliError(
+            "E_USAGE",
+            `EMBEDDING_MODEL=${configuredModel} conflicts with the pinned Potion model ${POTION_MODEL_ID}. Remove the conflicting environment value.`,
+            2,
+        );
     }
-    return preservedOllamaModel;
+    const configuredDimension = env.EMBEDDING_OUTPUT_DIMENSION?.trim();
+    if (configuredDimension && configuredDimension !== String(POTION_DIMENSION)) {
+        throw new CliError(
+            "E_USAGE",
+            `EMBEDDING_OUTPUT_DIMENSION=${configuredDimension} conflicts with Potion dimension ${POTION_DIMENSION}. Remove the conflicting environment value.`,
+            2,
+        );
+    }
 }
 
 export function readConfiguredClientVectorStore(

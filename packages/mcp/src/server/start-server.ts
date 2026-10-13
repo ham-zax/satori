@@ -77,14 +77,7 @@ export async function startMcpServerFromEnv(options: StartMcpServerOptions = {})
     }
 
     const parsedConfig = createMcpConfig();
-    const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(
-        parsedConfig,
-        {},
-        {
-            useRecordedOllamaIdentity: runMode === "postflight"
-                && parsedConfig.executionProfile === "offline",
-        },
-    );
+    const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(parsedConfig);
     logConfigurationSummary(config);
 
     const server = new ContextMcpServer(

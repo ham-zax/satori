@@ -36,15 +36,13 @@ For the default offline Potion + LanceDB runtime on Linux x64/WSL2, LateOn D32
 reranks the bounded query-time candidate set. The installer downloads its pinned Apache-2.0 model closure once
 into `~/.satori/models/`, verifies every artifact, and reuses it across MCP
 upgrades. `--reranker none` is the explicit opt-out: it keeps the selected
-embedding provider plus baseline ordering (exact + BM25 + single vector) - with
-Ollama embeddings that is the Ollama model plus baseline ordering, not "Potion +
-BM25". The runtime also falls back to that baseline automatically on any LateOn
+embedding provider plus baseline ordering (exact + BM25 + single vector). The
+offline baseline uses Potion embeddings with BM25. The runtime also falls back to that baseline automatically on any LateOn
 failure; automatic failure fallback and explicit opt-out are different
 concepts. Compatible
 clients attach through one private local host instead of each starting a full
 MCP runtime. Each client still has its own MCP session and continuations. The
-shared host idles out after disconnect and is not used for Voyage, Milvus, or
-explicit Ollama runtimes.
+shared host idles out after disconnect and is not used for connected runtimes.
 
 Connected Voyage runtime:
 
@@ -81,11 +79,12 @@ allowance, not measured steady consumption.
 install [--client auto|all|codex|claude|opencode|agy]
         [--runtime offline|voyage] # defaults to offline Potion + LateOn D32
         [--vector-store lancedb|milvus]
-        [--ollama-model <model>]
-        [--reranker lateon|none]
+        [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify]
         [--profile default|minimal|all-text]
         [--dry-run]
 
+reranker use lateon|voyage|none [--model <model>] [--no-verify]
+reranker status
 doctor [--verbose] [--json]
 version # aliases: -v, --version
 upgrade
@@ -154,7 +153,7 @@ profile = "minimal"
 
 Do not place provider keys, model names, or backend credentials in `satori.toml`.
 
-Supported runtime paths include Potion (model downloaded once from Hugging Face into `~/.satori/models`) + LanceDB, Voyage + LanceDB, explicit loopback Ollama + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
+Supported runtime paths include Potion (model downloaded once from Hugging Face into `~/.satori/models`) + LanceDB, Voyage + LanceDB, and connected Voyage + Milvus/Zilliz. Native Windows and macOS are not supported in this release; Windows users should install inside WSL2.
 
 ## Development
 

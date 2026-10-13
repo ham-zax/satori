@@ -804,7 +804,6 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <li><code>--client opencode|codex|claude|all</code> (default: <code>opencode</code>).</li>
             <li><code>--runtime offline|voyage</code>; omission preserves the managed selection, or starts offline when no launcher exists.</li>
             <li><code>--reranker lateon|none</code>, available only with the offline runtime.</li>
-            <li><code>--ollama-model &lt;id&gt;</code> to select Ollama instead of Potion for offline embeddings.</li>
             <li><code>--vector-store lancedb|milvus</code>; offline requires LanceDB and Milvus requires Voyage.</li>
             <li><code>--no-build</code>, <code>--home &lt;path&gt;</code>, and <code>--node &lt;path&gt;</code> for existing-build or isolated testing.</li>
           </ul>
@@ -1002,14 +1001,6 @@ profile = "minimal"</code></pre>
               <code>--reranker none</code> to disable neural reranking. Once installed,
               the qualified offline runtime requires no model API key and is designed
               for zero Satori runtime network requests.
-            </p>
-          </div>
-          <div class="panel">
-            <h3>Offline Ollama</h3>
-            <pre><code>npx -y @satori-code/cli@latest install --runtime offline --ollama-model nomic-embed-text --reranker none</code></pre>
-            <p>
-              Uses the selected loopback Ollama model with LanceDB. On qualified
-              Linux x64/WSL2, <code>--reranker lateon</code> is also supported.
             </p>
           </div>
           <div class="panel">

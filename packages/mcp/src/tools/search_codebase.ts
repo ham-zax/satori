@@ -64,9 +64,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getProfile(ctx: ToolContext): string {
-    const locality = ctx.capabilities.getEmbeddingLocality();
-    const profile = ctx.capabilities.getPerformanceProfile();
-    return `${locality}_${profile}`;
+    return ctx.capabilities.getEmbeddingLocality();
 }
 
 function getErrorMessage(response: ToolResponse): string {

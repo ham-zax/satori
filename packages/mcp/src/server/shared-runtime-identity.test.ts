@@ -46,7 +46,7 @@ test("shared runtime identity is exact, non-secret, and bounded to eligible Linu
 
     assert.equal(isSharedOfflineRuntimeEligible(env, "linux", "x64"), true);
     assert.equal(isSharedOfflineRuntimeEligible(env, "win32", "x64"), false);
-    assert.equal(isSharedOfflineRuntimeEligible({ ...env, EMBEDDING_PROVIDER: "Ollama" }), false);
+    assert.equal(isSharedOfflineRuntimeEligible({ ...env, EMBEDDING_PROVIDER: "VoyageAI" }), false);
 
     const identity = buildSharedRuntimeIdentity(runtimeEntry, env);
     assert.notEqual(

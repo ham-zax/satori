@@ -16,72 +16,6 @@ import {
     type ContextMcpConfig,
 } from '../config.js';
 
-const DIGEST = 'a'.repeat(64);
-
-test('offline static config preserves the installer-resolved Ollama dimension', () => {
-    const keys = [
-        'SATORI_RUNTIME_PROFILE',
-        'VECTOR_STORE_PROVIDER',
-        'LANCEDB_PATH',
-        'EMBEDDING_PROVIDER',
-        'EMBEDDING_MODEL',
-        'OLLAMA_MODEL_DIGEST',
-        'OLLAMA_HOST',
-        'EMBEDDING_OUTPUT_DIMENSION',
-    ] as const;
-    const backup = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-    try {
-        for (const key of keys) delete process.env[key];
-        process.env.SATORI_RUNTIME_PROFILE = 'offline';
-        process.env.VECTOR_STORE_PROVIDER = 'LanceDB';
-        process.env.LANCEDB_PATH = '/opt/satori/lancedb';
-        process.env.EMBEDDING_PROVIDER = 'Ollama';
-        process.env.EMBEDDING_MODEL = 'nomic-embed-text';
-        process.env.OLLAMA_MODEL_DIGEST = 'a'.repeat(64);
-        process.env.OLLAMA_HOST = 'http://127.0.0.1:11434';
-        process.env.EMBEDDING_OUTPUT_DIMENSION = '768';
-
-        const parsed = createMcpConfig();
-        assert.equal(parsed.encoderProvider, 'Ollama');
-        assert.equal(parsed.encoderOutputDimension, 768);
-    } finally {
-        for (const key of keys) {
-            if (backup[key] === undefined) delete process.env[key];
-            else process.env[key] = backup[key];
-        }
-    }
-});
-
-test('offline bootstrap preserves recorded Ollama dimension', async () => {
-    const recorded = config({
-        executionProfile: 'offline',
-        networkPolicy: { kind: 'local-only' },
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text',
-        ollamaModelDigest: DIGEST,
-        ollamaEndpoint: 'http://127.0.0.1:11434',
-        encoderOutputDimension: 768,
-    });
-
-    const resolved = await resolveMcpRuntimeBootstrap(recorded, {
-        resolveOllamaIdentity: async () => Object.freeze({
-            configuredModel: 'nomic-embed-text',
-            resolvedModel: 'nomic-embed-text:latest',
-            artifactDigest: DIGEST,
-            artifactSize: 42,
-            dimension: 768,
-        }),
-    });
-
-    assert.equal(resolved.runtimeFingerprint.embeddingDimension, 768);
-    assert.equal(resolved.runtimeFingerprint.embeddingModel, 'nomic-embed-text:latest');
-    assert.equal(resolved.runtimeFingerprint.embeddingArtifactDigest, DIGEST);
-    assert.equal(
-        resolved.runtimeFingerprint.embeddingNormalizationPolicy,
-        EMBEDDING_NORMALIZATION_POLICY_VERSION,
-    );
-});
-
 test('retired reranker application mode fails clearly before MCP configuration is built', () => {
     const keys = [
         'SATORI_RUNTIME_PROFILE',
@@ -115,7 +49,7 @@ test('retired reranker application mode fails clearly before MCP configuration i
     }
 });
 
-test('removed OLLAMA_MODEL alias and implicit MILVUS_ADDRESS provider selection fail with the single fix', () => {
+test('implicit MILVUS_ADDRESS provider selection fails with the single fix', () => {
     const keys = [
         'SATORI_RUNTIME_PROFILE',
         'VECTOR_STORE_PROVIDER',
@@ -123,7 +57,6 @@ test('removed OLLAMA_MODEL alias and implicit MILVUS_ADDRESS provider selection 
         'LANCEDB_PATH',
         'EMBEDDING_PROVIDER',
         'EMBEDDING_MODEL',
-        'OLLAMA_MODEL',
     ] as const;
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     try {
@@ -131,14 +64,9 @@ test('removed OLLAMA_MODEL alias and implicit MILVUS_ADDRESS provider selection 
         Object.assign(process.env, {
             VECTOR_STORE_PROVIDER: 'LanceDB',
             LANCEDB_PATH: '/tmp/satori-removed-env',
-            EMBEDDING_PROVIDER: 'Ollama',
-            OLLAMA_MODEL: 'nomic-embed-text',
+            EMBEDDING_MODEL: 'voyage-code-3',
         });
-        assert.throws(createMcpConfig, /OLLAMA_MODEL has been removed; set EMBEDDING_MODEL/);
-
-        delete process.env.OLLAMA_MODEL;
-        process.env.EMBEDDING_MODEL = 'nomic-embed-text:latest';
-        assert.equal(createMcpConfig().encoderModel, 'nomic-embed-text:latest');
+        assert.equal(createMcpConfig().encoderModel, 'voyage-code-3');
 
         delete process.env.VECTOR_STORE_PROVIDER;
         process.env.MILVUS_ADDRESS = 'localhost:19530';
@@ -172,15 +100,8 @@ function config(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
 }
 
 test('connected cloud bootstrap resolves without local model I/O', async () => {
-    let identityCalls = 0;
-    const resolved = await resolveMcpRuntimeBootstrap(config(), {
-        async resolveOllamaIdentity() {
-            identityCalls += 1;
-            throw new Error('must not run');
-        },
-    });
+    const resolved = await resolveMcpRuntimeBootstrap(config());
 
-    assert.equal(identityCalls, 0);
     assert.equal(resolved.runtimeFingerprint.embeddingArtifactDigest, null);
     assert.equal(
         resolved.runtimeFingerprint.embeddingNormalizationPolicy,
@@ -452,7 +373,6 @@ const OFFLINE_VOYAGE_CONFIG_ENV_KEYS = [
     'SATORI_LATEON_ACTIVATION_POLICY',
     'VOYAGEAI_API_KEY',
     'SATORI_RERANK_APPLICATION_MODE',
-    'OLLAMA_MODEL',
 ] as const;
 
 type OfflineVoyageConfigEnvKey = (typeof OFFLINE_VOYAGE_CONFIG_ENV_KEYS)[number];
@@ -545,131 +465,4 @@ test('Potion bootstrap rejects invalid model identity or dimension', async () =>
         })),
         /EMBEDDING_OUTPUT_DIMENSION=256/,
     );
-});
-
-test('offline bootstrap resolves model digest and dimension before fingerprinting', async () => {
-    const resolved = await resolveMcpRuntimeBootstrap(config({
-        executionProfile: 'offline',
-        networkPolicy: { kind: 'local-only' },
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text',
-        ollamaModelDigest: DIGEST,
-        ollamaEndpoint: 'http://127.0.0.1:11434',
-    }), {
-        async resolveOllamaIdentity(input) {
-            assert.deepEqual(input, {
-                model: 'nomic-embed-text',
-                host: 'http://127.0.0.1:11434',
-            });
-            return {
-                configuredModel: 'nomic-embed-text',
-                resolvedModel: 'nomic-embed-text:latest',
-                artifactDigest: DIGEST,
-                artifactSize: 100,
-                dimension: 768,
-            };
-        },
-    });
-
-    assert.equal(resolved.config.encoderModel, 'nomic-embed-text:latest');
-    assert.equal(resolved.config.encoderOutputDimension, 768);
-    assert.equal(resolved.runtimeFingerprint.embeddingModel, 'nomic-embed-text:latest');
-    assert.equal(resolved.runtimeFingerprint.embeddingArtifactDigest, DIGEST);
-    assert.equal(resolved.runtimeFingerprint.embeddingDimension, 768);
-});
-
-test('offline postflight bootstrap uses the preflight-recorded identity without provider calls', async () => {
-    let identityCalls = 0;
-    const resolved = await resolveMcpRuntimeBootstrap(config({
-        executionProfile: 'offline',
-        networkPolicy: { kind: 'local-only' },
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text:latest',
-        encoderOutputDimension: 768,
-        ollamaModelDigest: DIGEST,
-        ollamaEndpoint: 'http://127.0.0.1:11434',
-    }), {
-        async resolveOllamaIdentity() {
-            identityCalls += 1;
-            throw new Error('postflight must not call Ollama');
-        },
-    }, { useRecordedOllamaIdentity: true });
-
-    assert.equal(identityCalls, 0);
-    assert.equal(resolved.runtimeFingerprint.embeddingModel, 'nomic-embed-text:latest');
-    assert.equal(resolved.runtimeFingerprint.embeddingDimension, 768);
-    assert.equal(resolved.runtimeFingerprint.embeddingArtifactDigest, DIGEST);
-});
-
-test('offline bootstrap rejects remote endpoints before model resolution', async () => {
-    let identityCalls = 0;
-    await assert.rejects(
-        resolveMcpRuntimeBootstrap(config({
-            executionProfile: 'offline',
-            networkPolicy: { kind: 'local-only' },
-            encoderProvider: 'Ollama',
-            encoderModel: 'nomic-embed-text',
-            ollamaModelDigest: DIGEST,
-            ollamaEndpoint: 'https://ollama.example.com',
-        }), {
-            async resolveOllamaIdentity() {
-                identityCalls += 1;
-                throw new Error('must not run');
-            },
-        }),
-        /loopback HTTP\(S\) endpoint/,
-    );
-    assert.equal(identityCalls, 0);
-});
-
-test('offline bootstrap rejects missing or changed installer-recorded digests', async () => {
-    const offline = config({
-        executionProfile: 'offline',
-        networkPolicy: { kind: 'local-only' },
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text',
-        ollamaEndpoint: 'http://localhost:11434',
-    });
-
-    await assert.rejects(
-        resolveMcpRuntimeBootstrap(offline),
-        /requires installer-recorded OLLAMA_MODEL_DIGEST/,
-    );
-
-    await assert.rejects(
-        resolveMcpRuntimeBootstrap({ ...offline, ollamaModelDigest: 'b'.repeat(64) }, {
-            async resolveOllamaIdentity() {
-                return {
-                    configuredModel: 'nomic-embed-text',
-                    resolvedModel: 'nomic-embed-text:latest',
-                    artifactDigest: DIGEST,
-                    artifactSize: 100,
-                    dimension: 768,
-                };
-            },
-        }),
-        /does not match the installed artifact/,
-    );
-});
-
-test('offline bootstrap accepts a canonical sha256-prefixed recorded digest', async () => {
-    const digest = 'a'.repeat(64);
-    const result = await resolveMcpRuntimeBootstrap(config({
-        executionProfile: 'offline',
-        networkPolicy: { kind: 'local-only' },
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text',
-        ollamaModelDigest: `sha256:${digest}`,
-        ollamaEndpoint: 'http://127.0.0.1:11434',
-    }), {
-        resolveOllamaIdentity: async () => Object.freeze({
-            configuredModel: 'nomic-embed-text',
-            resolvedModel: 'nomic-embed-text:latest',
-            artifactDigest: digest,
-            artifactSize: 42,
-            dimension: 768,
-        }),
-    });
-
-    assert.equal(result.runtimeFingerprint.embeddingArtifactDigest, digest);
 });

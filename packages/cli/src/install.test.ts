@@ -287,15 +287,6 @@ function installRuntimePackageWithPreflightCore(
         fs.writeFileSync(path.join(corePackageRoot, "index.mjs"), [
             "export async function restoreVerifiedOwnerExecutableBit() {}",
             "export const PotionEmbedding = { async create() { return { async close() {} }; } };",
-            "export async function resolveOllamaModelIdentity({ model }) {",
-            "  return {",
-            "    configuredModel: model,",
-            "    resolvedModel: `${model}:latest`,",
-            `    artifactDigest: ${JSON.stringify(`sha256:${"a".repeat(64)}`)},`,
-            "    artifactSize: 42,",
-            "    dimension: 768,",
-            "  };",
-            "}",
             "",
         ].join("\n"), "utf8");
         return result;
@@ -449,14 +440,12 @@ function writeCorePackage(packageRoot: string, version: string): void {
 
 async function runOfflineUpgradeWithProductionPreflight(
     homeDir: string,
-    embeddingProvider: "Potion" | "Ollama",
 ): Promise<Readonly<Record<string, string>>> {
     await installUpgradeSourceRuntime(homeDir, {
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
-        EMBEDDING_PROVIDER: embeddingProvider,
+        EMBEDDING_PROVIDER: "Potion",
         SATORI_RERANKER_PROVIDER: "none",
-        ...(embeddingProvider === "Ollama" ? { EMBEDDING_MODEL: "nomic-embed-text" } : {}),
     });
 
     const result = await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
@@ -484,16 +473,8 @@ async function runOfflineUpgradeWithProductionPreflight(
 
 test("managed Potion upgrade uses the staged Core preflight verifier", async () => {
     await withTempHome(async (homeDir) => {
-        const environment = await runOfflineUpgradeWithProductionPreflight(homeDir, "Potion");
+        const environment = await runOfflineUpgradeWithProductionPreflight(homeDir);
         assert.equal(environment.EMBEDDING_PROVIDER, "Potion");
-    });
-});
-
-test("managed Ollama upgrade uses the staged Core identity resolver", async () => {
-    await withTempHome(async (homeDir) => {
-        const environment = await runOfflineUpgradeWithProductionPreflight(homeDir, "Ollama");
-        assert.equal(environment.EMBEDDING_PROVIDER, "Ollama");
-        assert.equal(environment.EMBEDDING_MODEL, "nomic-embed-text:latest");
     });
 });
 
@@ -1207,26 +1188,7 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
             expected: {
                 runtime: "offline",
                 vectorStore: "LanceDB",
-                ollamaModel: undefined,
                 lancedbPath: "/managed/potion-lance",
-            },
-        },
-        {
-            name: "offline Ollama",
-            managedEnvironment: {
-                SATORI_RUNTIME_PROFILE: "offline",
-                VECTOR_STORE_PROVIDER: "LanceDB",
-                LANCEDB_PATH: "/managed/ollama-lance",
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text",
-                OLLAMA_HOST: "http://127.0.0.1:11434",
-            },
-            inheritedEnvironment: {},
-            expected: {
-                runtime: "offline",
-                vectorStore: "LanceDB",
-                ollamaModel: "nomic-embed-text",
-                lancedbPath: "/managed/ollama-lance",
             },
         },
         {
@@ -1242,7 +1204,6 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
             expected: {
                 runtime: "voyage",
                 vectorStore: "Milvus",
-                ollamaModel: undefined,
                 lancedbPath: undefined,
             },
         },
@@ -1257,7 +1218,6 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
             expected: {
                 runtime: "voyage",
                 vectorStore: "LanceDB",
-                ollamaModel: undefined,
                 lancedbPath: "/managed/legacy-lance",
             },
         },
@@ -1270,7 +1230,6 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
             let observedSelection: {
                 runtime: string;
                 vectorStore?: string;
-                ollamaModel?: string;
                 lancedbPath?: string;
             } | undefined;
 
@@ -1292,7 +1251,6 @@ test("managed runtime upgrade preserves each supported runtime selection and rej
                     observedSelection = {
                         runtime: input.runtime,
                         vectorStore: input.vectorStore,
-                        ollamaModel: input.ollamaModel,
                         lancedbPath: input.env.LANCEDB_PATH,
                     };
                     return {
@@ -2000,8 +1958,8 @@ test("eligible shared launcher failure does not execute a direct runtime fallbac
     }
 });
 
-test("managed offline Ollama launcher preserves the direct runtime lifecycle", (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-ollama-direct-"));
+test("managed connected Voyage launcher preserves the direct runtime lifecycle", (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-cli-connected-direct-"));
     try {
         const sourceIdentityModule = path.resolve(
             PACKAGE_ROOT,
@@ -2053,11 +2011,12 @@ test("managed offline Ollama launcher preserves the direct runtime lifecycle", (
             command: process.execPath,
             args: [runtimeEntry],
             managedEnv: {
-                SATORI_RUNTIME_PROFILE: "offline",
+                SATORI_RUNTIME_PROFILE: "connected",
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: path.join(root, "lancedb"),
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text",
+                EMBEDDING_PROVIDER: "VoyageAI",
+                EMBEDDING_MODEL: "voyage-code-3",
+                EMBEDDING_OUTPUT_DIMENSION: "1024",
             },
         }));
 

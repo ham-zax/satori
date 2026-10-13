@@ -1303,7 +1303,7 @@ export class SearchQuerySupport {
         exactMatchPinningEnabled: boolean;
     } {
         const capabilityPresent = this.capabilities.hasReranker();
-        const enabledByPolicy = capabilityPresent && this.capabilities.getDefaultRerankEnabled();
+        const enabledByPolicy = capabilityPresent;
         const rerankerPresent = this.reranker !== null;
         const skippedByScopeDocs = scope === 'docs';
         const skippedByIdentifierIntent = !plan.rerankAllowed;

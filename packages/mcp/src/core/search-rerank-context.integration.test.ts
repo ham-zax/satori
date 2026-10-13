@@ -60,7 +60,6 @@ function buildSupport(reranker: Reranker | null): SearchQuerySupport {
         shouldIncludeCategoryInScope: () => true,
         capabilities: {
             hasReranker: () => reranker !== null,
-            getDefaultRerankEnabled: () => reranker !== null,
         } as unknown as CapabilityResolver,
         runtimeFingerprint: {} as never,
         reranker,

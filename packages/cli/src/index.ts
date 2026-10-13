@@ -324,7 +324,7 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64; --ollama-model selects Ollama)",
+            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64)",
             "version (-v, --version)",
             "upgrade",
             "terminate",
@@ -379,7 +379,6 @@ function formatHelpText(): string {
         `  ${satoriCliCommand("reranker use voyage --no-verify")}  Skip the Voyage reranker test call`,
         `  ${satoriCliCommand("reranker disable")}  Disable LateOn (add --purge to delete its model)`,
         `  ${satoriCliCommand("reranker enable")}  Enable LateOn`,
-        `  ${satoriCliCommand("install --runtime offline --ollama-model <model>")}  Select Ollama embeddings`,
         "  Restart configured clients after changing the runtime.",
         "",
         "Options:",
@@ -781,7 +780,6 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                     ? satoriCliCommand([
                         "install --runtime offline --reranker lateon",
                         `--client ${parsed.command.client}`,
-                        ...(parsed.command.ollamaModel ? [`--ollama-model ${parsed.command.ollamaModel}`] : []),
                         ...(parsed.command.profile ? [`--profile ${parsed.command.profile}`] : []),
                     ].join(" "))
                     : undefined,

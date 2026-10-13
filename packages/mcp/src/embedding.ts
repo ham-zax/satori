@@ -1,7 +1,6 @@
 import {
     Embedding,
     GeminiEmbedding,
-    OllamaEmbedding,
     OpenAIEmbedding,
     PotionEmbedding,
     VoyageAIEmbedding,
@@ -61,19 +60,6 @@ export async function createEmbeddingInstance(config: ContextMcpConfig): Promise
             return geminiEmbedding;
         }
 
-        case 'Ollama': {
-            const ollamaEndpoint = config.ollamaEndpoint || 'http://127.0.0.1:11434';
-            console.error(`[EMBEDDING] 🔧 Configuring Ollama with model: ${config.encoderModel}, host: ${ollamaEndpoint}`);
-            const ollamaEmbedding = new OllamaEmbedding({
-                model: config.encoderModel,
-                host: config.ollamaEndpoint,
-                dimension: config.encoderOutputDimension,
-                artifactDigest: config.embeddingArtifactDigest,
-            });
-            console.error(`[EMBEDDING] ✅ Ollama embedding instance created successfully`);
-            return ollamaEmbedding;
-        }
-
         case 'Potion': {
             if (!config.potionHelperPath || !config.potionModelPath) {
                 throw new Error('POTION_HELPER_PATH and POTION_MODEL_PATH are required for Potion');
@@ -107,9 +93,6 @@ export function logEmbeddingProviderInfo(config: ContextMcpConfig, embedding: Em
             break;
         case 'Gemini':
             console.error(`[EMBEDDING] Gemini configuration - API Key: ${config.geminiKey ? '✅ Provided' : '❌ Missing'}, Base URL: ${config.geminiEndpoint || 'Default'}`);
-            break;
-        case 'Ollama':
-            console.error(`[EMBEDDING] Ollama configuration - Host: ${config.ollamaEndpoint || 'http://127.0.0.1:11434'}, Model: ${config.encoderModel}`);
             break;
         case 'Potion':
             console.error(`[EMBEDDING] Potion configuration - pinned local worker, model: ${config.encoderModel}`);

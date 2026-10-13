@@ -4,8 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ResolvedOllamaModelIdentity } from "@satori-code/core";
-import { assertLocalOnlyEndpoint, resolveSatoriStateRoot } from "./local-runtime-contract.js";
+import { resolveSatoriStateRoot } from "./local-runtime-contract.js";
 import {
     readManagedRuntimeRelease,
     resolveCliPackageJsonPath,
@@ -69,7 +68,7 @@ export interface DoctorRuntimeConfiguration {
     status: "configured" | "needs_repair" | "not_configured";
     source: "managed_launcher" | "client_configuration" | "unknown" | null;
     profile: "connected" | "offline" | null;
-    embeddingProvider: "OpenAI" | "VoyageAI" | "Gemini" | "Ollama" | "Potion" | null;
+    embeddingProvider: "OpenAI" | "VoyageAI" | "Gemini" | "Potion" | null;
     embeddingModel: string | null;
     embeddingDimension: string | null;
     rerankerProvider: InstallReranker | null;
@@ -128,10 +127,6 @@ export interface DoctorOptions {
     inspectManagedClients?: (homeDir: string) => ReturnType<typeof inspectManagedClientConfigurations>;
     /** Override local diagnostics event log path. */
     diagnosticsPath?: string;
-    resolveOllamaIdentity?: (input: {
-        model: string;
-        host?: string;
-    }) => Promise<Readonly<ResolvedOllamaModelIdentity>>;
     /** Read-only exact-runtime LanceDB module load override. */
     loadManagedLanceDb?: (runtimeTarget: string) => Promise<void>;
 }
@@ -154,7 +149,6 @@ const DISPLAYED_EMBEDDING_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfigura
     "OpenAI",
     "VoyageAI",
     "Gemini",
-    "Ollama",
     "Potion",
 ]);
 const DISPLAYED_RERANKER_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfiguration["rerankerProvider"]>>(
@@ -760,56 +754,12 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
             continue;
         }
         const checkSuffix = evaluatedRuntimeContexts.length === 1 || !context.client ? "" : `_${context.client}`;
-        const provider = context.environment.EMBEDDING_PROVIDER?.trim() || "VoyageAI";
-        let ollamaIdentityFailed = false;
-        if (provider === "Ollama") {
-            const host = context.environment.OLLAMA_HOST?.trim() || "http://127.0.0.1:11434";
-            const model = context.environment.EMBEDDING_MODEL?.trim() || "nomic-embed-text";
-            try {
-                if ((context.environment.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
-                    assertLocalOnlyEndpoint(host, "OLLAMA_HOST");
-                }
-                const resolveOllamaIdentity = options.resolveOllamaIdentity
-                    ?? (activeManagedRuntime?.status === "active"
-                        ? async (input: { model: string; host?: string }) => {
-                            const requireFromRuntime = createRequire(activeManagedRuntime.target);
-                            const coreEntry = requireFromRuntime.resolve("@satori-code/core");
-                            const core = await import(pathToFileURL(coreEntry).href) as {
-                                resolveOllamaModelIdentity: NonNullable<DoctorOptions["resolveOllamaIdentity"]>;
-                            };
-                            return core.resolveOllamaModelIdentity(input);
-                        }
-                        : undefined);
-                if (!resolveOllamaIdentity) {
-                    throw new Error("Ollama identity probe requires an active managed Satori runtime.");
-                }
-                const identity: Readonly<ResolvedOllamaModelIdentity> = await resolveOllamaIdentity({ model, host });
-                const recordedDigest = context.environment.OLLAMA_MODEL_DIGEST?.trim().replace(/^sha256:/i, "").toLowerCase();
-                if (recordedDigest && recordedDigest !== identity.artifactDigest) {
-                    throw new Error("installed model digest does not match OLLAMA_MODEL_DIGEST");
-                }
-                addCheck(
-                    checks,
-                    `ollama_model_identity${checkSuffix}`,
-                    "ok",
-                    `${clientLabel(context.client)} Ollama model ${identity.resolvedModel} resolved with dimension ${identity.dimension} and the recorded artifact digest.`,
-                );
-            } catch (error) {
-                ollamaIdentityFailed = true;
-                const message = error instanceof Error ? error.message : String(error);
-                addCheck(checks, `ollama_model_identity${checkSuffix}`, "error", `${clientLabel(context.client)} Ollama model identity probe failed: ${message}`);
-                nextSteps.push(context.client
-                    ? `${clientLabel(context.client)}: Start Ollama and reinstall the offline profile with the intended local model.`
-                    : "Start Ollama and reinstall the offline profile with the intended local model.");
-            }
-        }
-
         if ((context.environment.SATORI_RUNTIME_PROFILE?.trim() || "connected") === "offline") {
             addCheck(
                 checks,
                 `offline_execution_invariant${checkSuffix}`,
-                ollamaIdentityFailed ? "error" : "ok",
-                `${clientLabel(context.client)} offline profile selects LanceDB and ${provider}; remote inference and reranking construction is prohibited.`,
+                "ok",
+                `${clientLabel(context.client)} offline profile selects LanceDB and Potion; remote inference and reranking construction is prohibited.`,
             );
         }
     }
@@ -914,7 +864,7 @@ function appendManagedClientChecks(
         for (const failure of failures) {
             const provider = failure.runtimeEnvironment?.EMBEDDING_PROVIDER?.trim();
             const runtime = failure.runtimeEnvironment?.SATORI_RUNTIME_PROFILE?.trim()
-                || (provider === "Potion" || provider === "Ollama"
+                || (provider === "Potion"
                     ? "offline"
                     : provider
                         ? "connected"

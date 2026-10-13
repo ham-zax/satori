@@ -25,7 +25,7 @@ export interface RuntimeConfigSelection {
     vectorStore: string;
 }
 
-const SUPPORTED_EMBEDDING_PROVIDERS = new Set(["OpenAI", "VoyageAI", "Gemini", "Ollama", "Potion"]);
+const SUPPORTED_EMBEDDING_PROVIDERS = new Set(["OpenAI", "VoyageAI", "Gemini", "Potion"]);
 const SUPPORTED_VECTOR_STORES = new Set(["Milvus", "LanceDB"]);
 const SUPPORTED_OUTPUT_DIMENSIONS = new Set([256, 512, 1024, 2048]);
 const RERANKER_PROVIDER_NAMES = Object.keys(RERANKER_PROVIDERS);
@@ -51,8 +51,6 @@ function defaultModelForProvider(provider: string): string {
             return "voyage-code-3";
         case "Gemini":
             return "gemini-embedding-001";
-        case "Ollama":
-            return "nomic-embed-text";
         case "Potion":
             return POTION_MODEL_ID;
         default:
@@ -86,7 +84,6 @@ function requiredEmbeddingEnv(provider: string): string | null {
             return "VOYAGEAI_API_KEY";
         case "Gemini":
             return "GEMINI_API_KEY";
-        case "Ollama":
         case "Potion":
             return null;
         default:
@@ -118,8 +115,8 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         return [{
             name: "embedding_provider",
             status: "error",
-            message: `Unsupported embedding provider: ${provider}. Use OpenAI, VoyageAI, Gemini, Ollama, or Potion.`,
-            nextStep: "Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, Ollama, or Potion.",
+            message: `Unsupported embedding provider: ${provider}. Use OpenAI, VoyageAI, Gemini, or Potion.`,
+            nextStep: "Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Potion.",
         }];
     }
 
@@ -133,14 +130,6 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         }];
     }
 
-    if (env.OLLAMA_MODEL !== undefined) {
-        return [{
-            name: "embedding_model",
-            status: "error",
-            message: "OLLAMA_MODEL has been removed.",
-            nextStep: "Set EMBEDDING_MODEL and unset OLLAMA_MODEL.",
-        }];
-    }
     if (!env.VECTOR_STORE_PROVIDER?.trim() && env.MILVUS_ADDRESS?.trim()) {
         return [{
             name: "vector_store_provider",
@@ -269,12 +258,12 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         });
     }
 
-    if (executionProfile === "offline" && provider !== "Ollama" && provider !== "Potion") {
+    if (executionProfile === "offline" && provider !== "Potion") {
         checks.push({
             name: "offline_embedding_policy",
             status: "error",
-            message: "Offline runtime requires EMBEDDING_PROVIDER=Potion or Ollama.",
-            nextStep: "Set EMBEDDING_PROVIDER to Potion or Ollama, or select SATORI_RUNTIME_PROFILE=connected.",
+            message: "Offline runtime requires EMBEDDING_PROVIDER=Potion.",
+            nextStep: "Set EMBEDDING_PROVIDER=Potion or select SATORI_RUNTIME_PROFILE=connected.",
         });
     }
     if (executionProfile !== "offline" && provider === "Potion") {
@@ -299,27 +288,21 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         const dimension = Number(dimensionValue);
         const valid = provider === "VoyageAI"
             ? SUPPORTED_OUTPUT_DIMENSIONS.has(dimension)
-            : provider === "Ollama"
-                ? Number.isSafeInteger(dimension) && dimension > 0
-                : provider === "Potion"
-                    ? dimension === POTION_DIMENSION
+            : provider === "Potion"
+                ? dimension === POTION_DIMENSION
                 : false;
         if (!valid) {
             const expected = provider === "VoyageAI"
                 ? "256, 512, 1024, or 2048"
-                : provider === "Ollama"
-                    ? "a positive safe integer resolved from the installed model"
-                    : provider === "Potion"
-                        ? String(POTION_DIMENSION)
+                : provider === "Potion"
+                    ? String(POTION_DIMENSION)
                     : `no explicit dimension because ${provider} ignores this setting`;
             checks.push({
                 name: "embedding_dimension",
                 status: "error",
                 message: `Invalid embedding output dimension for ${provider}: ${dimensionValue}. Use ${expected}.`,
-                nextStep: provider === "Ollama"
-                    ? "Re-run offline install so the selected Ollama model dimension is recorded."
-                    : provider === "Potion"
-                        ? "Re-run offline install so the pinned Potion dimension is recorded."
+                nextStep: provider === "Potion"
+                    ? "Re-run offline install so the pinned Potion dimension is recorded."
                     : "Remove EMBEDDING_OUTPUT_DIMENSION or use a dimension supported by the selected provider.",
             });
         } else {
@@ -393,23 +376,6 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
                 message: lanceDbPath
                     ? `LanceDB path: ${lanceDbPath}.`
                     : "LanceDB path uses the installer-owned default.",
-            });
-        }
-    }
-
-    if (executionProfile === "offline" && provider !== "Potion") {
-        if (!env.OLLAMA_MODEL_DIGEST?.trim()) {
-            checks.push({
-                name: "offline_model_digest",
-                status: "error",
-                message: "Offline runtime requires installer-recorded OLLAMA_MODEL_DIGEST.",
-                nextStep: `Re-run ${satoriCliCommand("install --runtime offline")} with the selected local model.`,
-            });
-        } else {
-            checks.push({
-                name: "offline_model_digest",
-                status: "ok",
-                message: "Installer-recorded Ollama model digest is present.",
             });
         }
     }

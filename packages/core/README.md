@@ -9,7 +9,7 @@ Most coding-agent installations should use `@satori-code/cli` and `@satori-code/
 - repository discovery, ignore policy, source observation, and incremental synchronization;
 - Oxc, Tree-sitter-WASM, and the CBM semantic engine (WebAssembly) for language analysis;
 - structural chunks, symbols, navigation, and conservative relationship evidence;
-- Potion, VoyageAI, OpenAI, Gemini, and Ollama embeddings;
+- Potion, VoyageAI, OpenAI, and Gemini embeddings;
 - dense and BM25 hybrid retrieval;
 - LanceDB and Milvus/Zilliz storage adapters; and
 - atomic publication identity, compatibility, checkpoint, and receipt state.
@@ -18,7 +18,7 @@ Files remain the source of truth. Navigation and graph data are derived source e
 
 ## Retrieval and Storage
 
-Core supports Potion, VoyageAI, OpenAI, Gemini, and Ollama embeddings; LanceDB and Milvus/Zilliz storage; and dense + BM25 hybrid retrieval. The managed offline distribution uses Potion Code 16M v2 with 256-dimensional vectors, while the connected reference path uses Voyage Code 3.
+Core supports Potion, VoyageAI, OpenAI, and Gemini embeddings; LanceDB and Milvus/Zilliz storage; and dense + BM25 hybrid retrieval. The managed offline distribution uses Potion Code 16M v2 with 256-dimensional vectors, while the connected reference path uses Voyage Code 3.
 
 The persistence model separates source-derived lexical/navigation state from model-specific vectors. That boundary preserves a complete exact + BM25 + single-vector baseline when an optional reranker is disabled, unavailable, or over deadline. The managed MCP/CLI distribution can apply local LateOn reranking at query time on the qualified offline path without making that reranker part of Core's persisted search authority.
 

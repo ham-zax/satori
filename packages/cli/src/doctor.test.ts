@@ -34,13 +34,6 @@ function baseDoctorOptions(overrides: DoctorOptions = {}): DoctorOptions {
         diagnosticsPath: noDiagnosticsPath,
         mutationLeasesPath: null,
         managedLauncherPath: null,
-        resolveOllamaIdentity: async ({ model }) => Object.freeze({
-            configuredModel: model,
-            resolvedModel: `${model}:latest`,
-            artifactDigest: "a".repeat(64),
-            artifactSize: 1,
-            dimension: 768,
-        }),
         inspectManagedClients: () => [{
             client: "codex",
             configPath: "/tmp/config.toml",
@@ -406,42 +399,22 @@ test("runDoctor treats whitespace-only provider env as incomplete", async () => 
     );
 });
 
-test("runDoctor treats Ollama as keyless but still requires MILVUS_ADDRESS", async () => {
-    const result = await runDoctor(baseDoctorOptions({
-        nodeVersion: "v22.13.0",
-        env: {
-            EMBEDDING_PROVIDER: "Ollama",
-            VECTOR_STORE_PROVIDER: "Milvus",
-            MILVUS_ADDRESS: "localhost:19530",
-        },
-    }));
-
-    assert.equal(result.status, "ok");
-    assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "Codex: Embedding provider: Ollama.");
-    assert.equal(result.checks.find((check) => check.name === "embedding_model")?.message, "Codex: Embedding model: nomic-embed-text.");
-    assert.equal(result.checks.find((check) => check.name === "embedding_dimension")?.message, "Codex: Embedding output dimension: provider default.");
-    assert.equal(result.checks.find((check) => check.name === "embedding_provider_env")?.status, "ok");
-    assert.equal(result.checks.find((check) => check.name === "milvus_address")?.status, "ok");
-    assert.equal(result.checks.find((check) => check.name === "milvus_token")?.status, "ok");
-});
-
-test("runDoctor proves the selected offline backend, model identity, and network invariant", async () => {
+test("runDoctor proves the selected offline backend and execution invariant", async () => {
     const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v22.13.0",
         env: {
             HOME: "/tmp/satori-offline-doctor",
             SATORI_RUNTIME_PROFILE: "offline",
             VECTOR_STORE_PROVIDER: "LanceDB",
-            EMBEDDING_PROVIDER: "Ollama",
-            EMBEDDING_MODEL: "nomic-embed-text:latest",
-            OLLAMA_MODEL_DIGEST: "a".repeat(64),
-            OLLAMA_HOST: "http://127.0.0.1:11434",
+            EMBEDDING_PROVIDER: "Potion",
+            EMBEDDING_OUTPUT_DIMENSION: "256",
+            POTION_HELPER_PATH: "/tmp/satori-offline-doctor/potion/satori-potion",
+            POTION_MODEL_PATH: "/tmp/satori-offline-doctor/potion/model",
             VOYAGEAI_API_KEY: "retained-but-disabled",
         },
     }));
 
     assert.equal(result.status, "ok");
-    assert.equal(result.checks.find((check) => check.name === "ollama_model_identity")?.status, "ok");
     assert.equal(result.checks.find((check) => check.name === "offline_execution_invariant")?.status, "ok");
 });
 
@@ -488,10 +461,10 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
                 SATORI_RUNTIME_PROFILE: "offline",
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: path.join(tempDir, "lancedb"),
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text:latest",
-                OLLAMA_MODEL_DIGEST: "a".repeat(64),
-                OLLAMA_HOST: "http://127.0.0.1:11434",
+                EMBEDDING_PROVIDER: "Potion",
+                EMBEDDING_OUTPUT_DIMENSION: "256",
+                POTION_HELPER_PATH: path.join(tempDir, "potion", "satori-potion"),
+                POTION_MODEL_PATH: path.join(tempDir, "potion", "model"),
             },
         }));
 
@@ -511,7 +484,7 @@ test("runDoctor uses installer-owned launcher settings over stale ambient provid
         assert.equal(result.status, "ok");
         assert.equal(result.checks.find((check) => check.name === "runtime_profile")?.message, "OpenCode: Runtime profile: offline.");
         assert.equal(result.checks.find((check) => check.name === "vector_store_provider")?.message, "OpenCode: Vector store provider: LanceDB.");
-        assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "OpenCode: Embedding provider: Ollama.");
+        assert.equal(result.checks.find((check) => check.name === "embedding_provider")?.message, "OpenCode: Embedding provider: Potion.");
         assert.equal(result.checks.find((check) => check.name === "offline_execution_invariant")?.status, "ok");
         assert.equal(result.checks.find((check) => check.name === "npm_package_access"), undefined);
     } finally {
@@ -676,14 +649,14 @@ test("runDoctor rejects unsupported embedding providers", async () => {
     assert.equal(result.status, "error");
     const providerCheck = result.checks.find((check) => check.name === "embedding_provider");
     assert.equal(providerCheck?.status, "error");
-    assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, Ollama, or Potion/);
+    assert.match(providerCheck?.message || "", /OpenAI, VoyageAI, Gemini, or Potion/);
     // Model/dimension/key checks are skipped so doctor does not emit contradictory "ok" or VoyageAI key guidance.
     assert.equal(result.checks.find((check) => check.name === "embedding_model"), undefined);
     assert.equal(result.checks.find((check) => check.name === "embedding_dimension"), undefined);
     assert.equal(result.checks.find((check) => check.name === "embedding_provider_env"), undefined);
     assert.equal(result.nextSteps.some((step) => step.includes("VOYAGEAI_API_KEY")), false);
     assert.equal(
-        result.nextSteps.some((step) => step.includes("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, Ollama, or Potion.")),
+        result.nextSteps.some((step) => step.includes("Set EMBEDDING_PROVIDER to OpenAI, VoyageAI, Gemini, or Potion.")),
         true,
     );
 });

@@ -58,7 +58,7 @@ async function execute(lookup?: () => Promise<RepositoryVocabularyResult>, enabl
             isTestPath: () => false, isFixturePath: () => false, isDocPath: () => false,
             getContextActiveIgnorePatterns: () => [], getContextTrackedRelativePaths: () => [],
             classifyPathCategory: () => 'srcRuntime', shouldIncludeCategoryInScope: () => true,
-            capabilities: { hasReranker: () => true, getDefaultRerankEnabled: () => true } as unknown as CapabilityResolver,
+            capabilities: { hasReranker: () => true } as unknown as CapabilityResolver,
             runtimeFingerprint: {} as never, reranker, gitignoreForceReloadEveryN: 25,
         }),
         semanticSearch: async request => { retrievalQueries.push(request.query); return candidates; },

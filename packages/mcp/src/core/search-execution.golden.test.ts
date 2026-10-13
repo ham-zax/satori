@@ -157,7 +157,6 @@ function buildSupport(
         shouldIncludeCategoryInScope: () => true,
         capabilities: {
             hasReranker: () => reranker !== null,
-            getDefaultRerankEnabled: () => reranker !== null,
         } as unknown as CapabilityResolver,
         runtimeFingerprint: {} as never,
         reranker,

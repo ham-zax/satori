@@ -6,6 +6,7 @@ import path from "node:path";
 import { executeInstallCommand } from "./install.js";
 import { runInstallPostflight, type InstallPostflightSession } from "./install-postflight.js";
 import { CliError } from "./errors.js";
+import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 
 const TOOL_NAMES = [
     "manage_index",
@@ -70,7 +71,8 @@ test("install postflight verifies launcher, clients, tools, owner, config, and t
             installResult,
             homeDir,
             env: {
-                EMBEDDING_PROVIDER: "Ollama",
+                EMBEDDING_PROVIDER: "VoyageAI",
+                VOYAGEAI_API_KEY: "test-key",
                 MILVUS_ADDRESS: "localhost:19530",
                 SATORI_SESSION_ROOTS_JSON: JSON.stringify([homeDir]),
             },
@@ -117,11 +119,11 @@ test("install postflight validates the installed profile over stale ambient prov
                 SATORI_RUNTIME_PROFILE: "offline",
                 VECTOR_STORE_PROVIDER: "LanceDB",
                 LANCEDB_PATH: path.join(homeDir, ".satori", "vector", "lancedb"),
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text:latest",
-                OLLAMA_MODEL_DIGEST: "a".repeat(64),
-                EMBEDDING_OUTPUT_DIMENSION: "768",
-                OLLAMA_HOST: "http://127.0.0.1:11434",
+                EMBEDDING_PROVIDER: "Potion",
+                EMBEDDING_MODEL: POTION_MODEL_ID,
+                EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+                POTION_HELPER_PATH: path.join(homeDir, ".satori", "potion", "satori-potion"),
+                POTION_MODEL_PATH: path.join(homeDir, ".satori", "potion", "model"),
             }),
         };
         const result = await runInstallPostflight({
@@ -154,7 +156,7 @@ test("install postflight reports exact tool-list drift and still closes the sess
         const result = await runInstallPostflight({
             installResult,
             homeDir,
-            env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
+            env: { EMBEDDING_PROVIDER: "VoyageAI", VOYAGEAI_API_KEY: "test-key", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
             writeStderr: () => {},
@@ -183,7 +185,7 @@ test("install postflight preserves tool timeout code and proves owner cleanup", 
         const result = await runInstallPostflight({
             installResult: await installFixture(homeDir),
             homeDir,
-            env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
+            env: { EMBEDDING_PROVIDER: "VoyageAI", VOYAGEAI_API_KEY: "test-key", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
             writeStderr: () => {},
@@ -215,7 +217,7 @@ test("install postflight preserves startup timeout code and verifies launcher ex
         const result = await runInstallPostflight({
             installResult: await installFixture(homeDir),
             homeDir,
-            env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
+            env: { EMBEDDING_PROVIDER: "VoyageAI", VOYAGEAI_API_KEY: "test-key", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
             writeStderr: () => {},
@@ -265,7 +267,7 @@ test("install postflight identifies owner when launcher is direct node process (
         const result = await runInstallPostflight({
             installResult,
             homeDir,
-            env: { EMBEDDING_PROVIDER: "Ollama", MILVUS_ADDRESS: "localhost:19530" },
+            env: { EMBEDDING_PROVIDER: "VoyageAI", VOYAGEAI_API_KEY: "test-key", MILVUS_ADDRESS: "localhost:19530" },
             startupTimeoutMs: 1_000,
             callTimeoutMs: 1_000,
             writeStderr: () => {},

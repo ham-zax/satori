@@ -26,7 +26,7 @@ async function finalizeRaw(chunkBytes: number, count: number) {
         getContextTrackedRelativePaths: () => [],
         classifyPathCategory: () => "core",
         shouldIncludeCategoryInScope: () => true,
-        capabilities: { hasReranker: () => false, getDefaultRerankEnabled: () => false } as unknown as CapabilityResolver,
+        capabilities: { hasReranker: () => false } as unknown as CapabilityResolver,
         runtimeFingerprint: {} as never,
         reranker: null,
         gitignoreForceReloadEveryN: 1000,

@@ -41,7 +41,6 @@ export type ParsedCommand =
         profile?: InstallProfile;
         runtime: "voyage";
         vectorStore?: InstallVectorStore;
-        ollamaModel?: never;
         reranker?: Exclude<InstallReranker, "lateon">;
         rerankerModel?: string;
         noVerify?: boolean;
@@ -53,7 +52,6 @@ export type ParsedCommand =
         profile?: InstallProfile;
         runtime: "offline";
         vectorStore?: "LanceDB";
-        ollamaModel?: string;
         reranker?: InstallReranker;
         rerankerModel?: string;
         noVerify?: boolean;
@@ -102,7 +100,6 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
         { flag: "--client", value: INSTALL_CLIENT_VALUES, description: "Clients to configure (default: auto-detect Codex, Claude Code, OpenCode; agy is opt-in)" },
         { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
         { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
-        { flag: "--ollama-model", value: "model", description: "Use Ollama embeddings (offline runtime only)" },
         { flag: "--reranker", value: Object.keys(RERANKER_PROVIDERS).join("|"), description: "Select the reranker provider (LateOn is offline only)" },
         { flag: "--reranker-model", value: "model", description: "Select a Voyage reranker model (requires --reranker voyage)" },
         { flag: "--no-verify", description: "Skip the Voyage reranker test call (requires --reranker voyage)" },
@@ -338,7 +335,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let profile: InstallProfile | undefined;
     let runtime: InstallRuntime = "offline";
     let vectorStore: InstallVectorStore | undefined;
-    let ollamaModel: string | undefined;
     let reranker: InstallReranker | undefined;
     let rerankerModel: string | undefined;
     let noVerify = false;
@@ -389,15 +385,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             i += 1;
             continue;
         }
-        if (kind === "install" && token === "--ollama-model") {
-            const next = args[i + 1]?.trim();
-            if (!next) {
-                throw new CliError("E_USAGE", "--ollama-model requires a non-empty model name.", 2);
-            }
-            ollamaModel = next;
-            i += 1;
-            continue;
-        }
         if (kind === "install" && token === "--reranker") {
             const next = args[i + 1];
             if (next === undefined || next.trim() === "") {
@@ -424,9 +411,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     }
 
     if (kind === "install") {
-        if (runtime !== "offline" && ollamaModel) {
-            throw new CliError("E_USAGE", "--ollama-model is only valid with --runtime offline.", 2);
-        }
         if (runtime !== "offline" && reranker === "lateon") {
             throw new CliError("E_USAGE", "--reranker lateon is only valid with --runtime offline.", 2);
         }
@@ -455,7 +439,6 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             profile,
             runtime,
             vectorStore: vectorStore === "LanceDB" ? "LanceDB" : undefined,
-            ...(ollamaModel ? { ollamaModel } : {}),
             ...(reranker ? { reranker } : {}),
             ...(rerankerModel ? { rerankerModel } : {}),
             ...(noVerify ? { noVerify: true } : {}),

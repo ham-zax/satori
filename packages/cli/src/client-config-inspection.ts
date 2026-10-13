@@ -274,14 +274,14 @@ export function runtimeEnvironmentWithManagedFallbacks(
     const fallbacks: NodeJS.ProcessEnv = {};
     // These non-secret location values are installer-owned runtime identity.
     // Provider credentials and tokens must never be recovered from a launcher.
-    for (const key of ["LANCEDB_PATH", "OLLAMA_HOST"] as const) {
+    for (const key of ["LANCEDB_PATH"] as const) {
         if (typeof managed[key] === "string" && managed[key].length > 0) {
             fallbacks[key] = managed[key];
         }
     }
     for (const [key, value] of Object.entries(env)) {
         if (value !== undefined) {
-            if ((key === "LANCEDB_PATH" || key === "OLLAMA_HOST") && value.trim().length === 0) {
+            if (key === "LANCEDB_PATH" && value.trim().length === 0) {
                 continue;
             }
             fallbacks[key] = value;

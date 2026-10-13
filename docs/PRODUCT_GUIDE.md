@@ -385,7 +385,7 @@ Potion embeddings
 
 No model API key is required for that default runtime after installation.
 
-Satori also supports connected configurations: Voyage embeddings with LanceDB or Milvus/Zilliz Cloud storage, and local Ollama embeddings. Milvus/Zilliz is selected explicitly (`--vector-store milvus`, which sets `VECTOR_STORE_PROVIDER=Milvus`). Those paths are configuration choices rather than the default product story.
+Satori also supports connected configurations: Voyage embeddings with LanceDB or Milvus/Zilliz Cloud storage. Milvus/Zilliz is selected explicitly (`--vector-store milvus`, which sets `VECTOR_STORE_PROVIDER=Milvus`). Those paths are configuration choices rather than the default product story.
 
 ## The 11 MCP tools
 

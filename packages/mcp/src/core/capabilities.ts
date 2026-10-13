@@ -9,19 +9,16 @@ import {
 } from "./search-constants.js";
 
 export type EmbeddingLocality = 'local' | 'cloud';
-export type PerformanceProfile = 'fast' | 'standard' | 'slow';
 
 export interface CapabilityMatrix {
     hasVectorStore: boolean;
     hasReranker: boolean;
     embeddingLocality: EmbeddingLocality;
-    performanceProfile: PerformanceProfile;
     defaultSearchLimit: number;
     maxSearchLimit: number;
     maxSearchResultTotal: number;
     maxFrozenSearchResults: number;
     maxSearchPageSize: number;
-    defaultRerankEnabled: boolean;
 }
 
 export class CapabilityResolver {
@@ -34,46 +31,32 @@ export class CapabilityResolver {
     }
 
     private buildMatrix(): CapabilityMatrix {
-        const embeddingLocality: EmbeddingLocality = (
-            this.config.encoderProvider === 'Ollama'
-            || this.config.encoderProvider === 'Potion'
-        ) ? 'local' : 'cloud';
-
-        let performanceProfile: PerformanceProfile;
-        if (embeddingLocality === 'local') {
-            performanceProfile = 'slow';
-        } else if (this.config.encoderProvider === 'VoyageAI' || this.config.encoderProvider === 'OpenAI') {
-            performanceProfile = 'fast';
-        } else {
-            performanceProfile = 'standard';
-        }
+        const embeddingLocality: EmbeddingLocality = this.config.encoderProvider === 'Potion'
+            ? 'local'
+            : 'cloud';
 
         const hasVectorStore = this.config.vectorStoreProvider === 'LanceDB'
             ? Boolean(this.config.lanceDbPath)
             : Boolean(this.config.milvusEndpoint);
         const rerankerProvider = resolveRerankerProvider(this.config);
-        // Under local-only, config resolves Voyage only after explicit selection.
+        // Config owns the reranker choice; a resolved reranker with its requirement
+        // met is always used. Under local-only, Voyage resolves only after explicit selection.
         const hasReranker = rerankerProvider === 'lateon'
             ? Boolean(this.config.lateOnModelPath)
             : rerankerProvider === 'voyage'
                 && Boolean(this.config.voyageKey);
 
-        const defaultSearchLimit = performanceProfile === 'slow' ? 10 : 20;
-
-        const defaultRerankEnabled = hasReranker
-            && (rerankerProvider === 'lateon' || performanceProfile !== 'slow');
+        const defaultSearchLimit = embeddingLocality === 'local' ? 10 : 20;
 
         return {
             hasVectorStore,
             hasReranker,
             embeddingLocality,
-            performanceProfile,
             defaultSearchLimit,
             maxSearchLimit: SEARCH_MAX_LOGICAL_RESULTS,
             maxSearchResultTotal: SEARCH_MAX_LOGICAL_RESULTS,
             maxFrozenSearchResults: SEARCH_MAX_FROZEN_RESULTS,
             maxSearchPageSize: SEARCH_MAX_PAGE_SIZE,
-            defaultRerankEnabled
         };
     }
 
@@ -91,10 +74,6 @@ export class CapabilityResolver {
 
     public getEmbeddingLocality(): EmbeddingLocality {
         return this.matrix.embeddingLocality;
-    }
-
-    public getPerformanceProfile(): PerformanceProfile {
-        return this.matrix.performanceProfile;
     }
 
     public getDefaultSearchLimit(): number {
@@ -115,9 +94,5 @@ export class CapabilityResolver {
 
     public getMaxSearchPageSize(): number {
         return this.matrix.maxSearchPageSize;
-    }
-
-    public getDefaultRerankEnabled(): boolean {
-        return this.matrix.defaultRerankEnabled;
     }
 }

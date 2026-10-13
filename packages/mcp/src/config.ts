@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import {
-    assertNetworkPolicyAllowsEndpoint,
     DEFAULT_VOYAGE_RERANKER_MODEL,
     EMBEDDING_NORMALIZATION_POLICY_VERSION,
     envManager,
@@ -18,10 +17,8 @@ import {
     POTION_MODEL_ID,
     POTION_SEMANTIC_VERSION,
     resolveExecutionPolicy,
-    resolveOllamaModelIdentity,
     type ExecutionProfile,
     type NetworkPolicy,
-    type ResolvedOllamaModelIdentity,
 } from "@satori-code/core";
 import { resolveSatoriStateRoot } from "@satori-code/core/integration";
 import {
@@ -31,7 +28,7 @@ import {
     type LateOnRuntimeProfileId,
 } from "./server/lateon-reranker-protocol.js";
 
-export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Ollama' | 'Potion';
+export type EmbeddingProvider = 'OpenAI' | 'VoyageAI' | 'Gemini' | 'Potion';
 export type VectorStoreProvider = 'Milvus' | 'LanceDB';
 export type RerankerProvider = 'none' | 'voyage' | 'lateon';
 export type ResolvedVectorStoreConfig =
@@ -141,9 +138,6 @@ export interface ContextMcpConfig {
     voyageKey?: string;
     geminiKey?: string;
     geminiEndpoint?: string;
-    // Ollama configuration
-    ollamaModelDigest?: string;
-    ollamaEndpoint?: string;
     // Installer-managed Potion configuration.
     potionHelperPath?: string;
     potionModelPath?: string;
@@ -187,9 +181,9 @@ export function assertExecutionPolicyAllowsRuntime(input: {
     }
     if (input.executionProfile !== 'offline') return;
 
-    if (input.encoderProvider !== 'Ollama' && input.encoderProvider !== 'Potion') {
+    if (input.encoderProvider !== 'Potion') {
         throw new Error(
-            'SATORI_RUNTIME_PROFILE=offline requires EMBEDDING_PROVIDER=Ollama or Potion.',
+            'SATORI_RUNTIME_PROFILE=offline requires EMBEDDING_PROVIDER=Potion.',
         );
     }
     if (input.vectorStoreProvider !== 'LanceDB') {
@@ -208,8 +202,6 @@ export function getDefaultModelForProvider(provider: string): string {
             return 'voyage-code-3';
         case 'Gemini':
             return 'gemini-embedding-001';
-        case 'Ollama':
-            return 'nomic-embed-text';
         case 'Potion':
             return POTION_MODEL_ID;
         default:
@@ -222,7 +214,6 @@ export function getEmbeddingModelForProvider(provider: string): string {
     switch (provider) {
         case 'Potion':
             return POTION_MODEL_ID;
-        case 'Ollama':
         case 'OpenAI':
         case 'VoyageAI':
         case 'Gemini':
@@ -248,8 +239,6 @@ export function resolveConfiguredEmbeddingDimension(config: ContextMcpConfig): n
             return config.encoderModel === 'text-embedding-3-large' ? 3072 : 1536;
         case 'Gemini':
             return 3072;
-        case 'Ollama':
-            return config.encoderOutputDimension || 768;
         case 'Potion':
             return POTION_DIMENSION;
         case 'VoyageAI':
@@ -280,23 +269,8 @@ export interface ResolvedMcpRuntimeBootstrap {
     runtimeFingerprint: IndexFingerprint;
 }
 
-function parseRecordedOllamaDigest(value: string): string {
-    const match = /^(?:sha256:)?([a-f0-9]{64})$/i.exec(value.trim());
-    if (!match?.[1]) {
-        throw new Error('OLLAMA_MODEL_DIGEST must be a SHA-256 digest.');
-    }
-    return match[1].toLowerCase();
-}
-
 export async function resolveMcpRuntimeBootstrap(
     config: ContextMcpConfig,
-    dependencies: {
-        resolveOllamaIdentity?: (input: {
-            model: string;
-            host?: string;
-        }) => Promise<Readonly<ResolvedOllamaModelIdentity>>;
-    } = {},
-    options: { useRecordedOllamaIdentity?: boolean } = {},
 ): Promise<ResolvedMcpRuntimeBootstrap> {
     assertExecutionPolicyAllowsRuntime({
         executionProfile: config.executionProfile,
@@ -327,78 +301,12 @@ export async function resolveMcpRuntimeBootstrap(
             ),
         });
     }
-    if (config.encoderProvider !== 'Ollama') {
-        const resolvedConfig = Object.freeze({ ...config });
-        return Object.freeze({
-            config: resolvedConfig,
-            runtimeFingerprint: buildRuntimeIndexFingerprint(
-                resolvedConfig,
-                resolveConfiguredEmbeddingDimension(resolvedConfig),
-            ),
-        });
-    }
-
-    const host = config.ollamaEndpoint || 'http://127.0.0.1:11434';
-    assertNetworkPolicyAllowsEndpoint(config.networkPolicy, host, 'OLLAMA_HOST');
-    if (config.executionProfile === 'offline' && !config.ollamaModelDigest) {
-        throw new Error(
-            'SATORI_RUNTIME_PROFILE=offline requires installer-recorded OLLAMA_MODEL_DIGEST.',
-        );
-    }
-
-    if (options.useRecordedOllamaIdentity) {
-        const artifactDigest = config.ollamaModelDigest
-            ? parseRecordedOllamaDigest(config.ollamaModelDigest)
-            : null;
-        const dimension = config.encoderOutputDimension;
-        if (
-            !artifactDigest
-            || typeof dimension !== 'number'
-            || !Number.isSafeInteger(dimension)
-            || dimension <= 0
-        ) {
-            throw new Error(
-                'Recorded Ollama bootstrap requires OLLAMA_MODEL_DIGEST and EMBEDDING_OUTPUT_DIMENSION.',
-            );
-        }
-        const resolvedConfig = Object.freeze({
-            ...config,
-            embeddingArtifactDigest: artifactDigest,
-            encoderOutputDimension: dimension,
-            ollamaEndpoint: host,
-        });
-        return Object.freeze({
-            config: resolvedConfig,
-            runtimeFingerprint: buildRuntimeIndexFingerprint(resolvedConfig, dimension),
-        });
-    }
-
-    const resolveIdentity = dependencies.resolveOllamaIdentity ?? resolveOllamaModelIdentity;
-    const identity = await resolveIdentity({
-        model: config.encoderModel,
-        host,
-    });
-    const recordedDigest = config.ollamaModelDigest
-        ? parseRecordedOllamaDigest(config.ollamaModelDigest)
-        : undefined;
-    if (recordedDigest && recordedDigest !== identity.artifactDigest) {
-        throw new Error(
-            `Configured Ollama model digest does not match the installed artifact for '${identity.resolvedModel}'.`,
-        );
-    }
-
-    const resolvedConfig = Object.freeze({
-        ...config,
-        encoderModel: identity.resolvedModel,
-        encoderOutputDimension: identity.dimension,
-        embeddingArtifactDigest: identity.artifactDigest,
-        ollamaEndpoint: host,
-    });
+    const resolvedConfig = Object.freeze({ ...config });
     return Object.freeze({
         config: resolvedConfig,
         runtimeFingerprint: buildRuntimeIndexFingerprint(
             resolvedConfig,
-            identity.dimension,
+            resolveConfiguredEmbeddingDimension(resolvedConfig),
         ),
     });
 }
@@ -407,9 +315,6 @@ export async function resolveMcpRuntimeBootstrap(
 export function assertRemovedRuntimeEnvUnset(read: (name: string) => string | undefined): void {
     if (read('SATORI_RERANK_APPLICATION_MODE') !== undefined) {
         throw new Error('SATORI_RERANK_APPLICATION_MODE has been removed; unset it.');
-    }
-    if (read('OLLAMA_MODEL') !== undefined) {
-        throw new Error('OLLAMA_MODEL has been removed; set EMBEDDING_MODEL instead and unset OLLAMA_MODEL.');
     }
 }
 
@@ -443,17 +348,14 @@ export function createMcpConfig(): ContextMcpConfig {
         const parsed = Number(outputDimensionStr);
         if (
             (defaultProvider === 'VoyageAI' && [256, 512, 1024, 2048].includes(parsed))
-            || (defaultProvider === 'Ollama' && Number.isSafeInteger(parsed) && parsed > 0)
             || (defaultProvider === 'Potion' && parsed === POTION_DIMENSION)
         ) {
             encoderOutputDimension = parsed;
         } else {
             const expected = defaultProvider === 'VoyageAI'
                 ? '256, 512, 1024, or 2048'
-                : defaultProvider === 'Ollama'
-                    ? 'a positive safe integer resolved from the installed model'
-                    : defaultProvider === 'Potion'
-                        ? String(POTION_DIMENSION)
+                : defaultProvider === 'Potion'
+                    ? String(POTION_DIMENSION)
                     : `unset because ${defaultProvider} ignores this setting`;
             console.warn(`[WARN] Invalid EMBEDDING_OUTPUT_DIMENSION value for ${defaultProvider}: ${outputDimensionStr}. Expected ${expected}.`);
         }
@@ -613,9 +515,6 @@ export function createMcpConfig(): ContextMcpConfig {
         voyageKey: envManager.get('VOYAGEAI_API_KEY'),
         geminiKey: envManager.get('GEMINI_API_KEY'),
         geminiEndpoint: envManager.get('GEMINI_BASE_URL'),
-        // Ollama configuration
-        ollamaModelDigest: envManager.get('OLLAMA_MODEL_DIGEST'),
-        ollamaEndpoint: envManager.get('OLLAMA_HOST'),
         // The installer pins these paths to its integrity- and capability-verified runtime bundle.
         potionHelperPath: envManager.get('POTION_HELPER_PATH'),
         potionModelPath: envManager.get('POTION_MODEL_PATH'),
@@ -678,10 +577,6 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
                 console.log(`[MCP]   Gemini Base URL: ${config.geminiEndpoint}`);
             }
             break;
-        case 'Ollama':
-            console.log(`[MCP]   Ollama Host: ${config.ollamaEndpoint || 'http://127.0.0.1:11434'}`);
-            console.log(`[MCP]   Ollama Model: ${config.encoderModel}`);
-            break;
         case 'Potion':
             console.log(`[MCP]   Potion Helper: ${config.potionHelperPath ? '✅ Configured' : '❌ Missing'}`);
             console.log(`[MCP]   Potion Model Artifacts: ${config.potionModelPath ? '✅ Configured' : '❌ Missing'}`);
@@ -707,8 +602,8 @@ Environment Variables:
   MCP_SERVER_VERSION      Server version
 
   Embedding Provider Configuration:
-  EMBEDDING_PROVIDER      Embedding provider: OpenAI, VoyageAI, Gemini, Ollama (default: VoyageAI)
-  EMBEDDING_MODEL         Embedding model name (works for all providers, including Ollama)
+  EMBEDDING_PROVIDER      Embedding provider: OpenAI, VoyageAI, Gemini, Potion (default: VoyageAI)
+  EMBEDDING_MODEL         Embedding model name (works for connected providers)
 
   Provider-specific API Keys:
   OPENAI_API_KEY          OpenAI API key (required for OpenAI provider)
@@ -716,9 +611,6 @@ Environment Variables:
   VOYAGEAI_API_KEY        VoyageAI API key (required for VoyageAI provider)
   GEMINI_API_KEY          Google AI API key (required for Gemini provider)
   GEMINI_BASE_URL         Gemini API base URL (optional, for custom endpoints)
-
-  Ollama Configuration:
-  OLLAMA_HOST             Ollama server host (default: http://127.0.0.1:11434)
 
   Vector Database Configuration:
   VECTOR_STORE_PROVIDER   Vector store: LanceDB or Milvus (default: LanceDB; MILVUS_ADDRESS requires VECTOR_STORE_PROVIDER=Milvus)
@@ -750,7 +642,5 @@ Examples:
   # Start MCP server with Gemini and specific model
   EMBEDDING_PROVIDER=Gemini GEMINI_API_KEY=xxx EMBEDDING_MODEL=gemini-embedding-001 VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=https://your-zilliz-endpoint MILVUS_TOKEN=your-token satori
 
-  # Start MCP server with Ollama and specific model
-  EMBEDDING_PROVIDER=Ollama EMBEDDING_MODEL=nomic-embed-text VECTOR_STORE_PROVIDER=Milvus MILVUS_ADDRESS=localhost:19530 satori
         `);
 }

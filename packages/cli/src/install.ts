@@ -46,10 +46,10 @@ import {
 } from "./client-config-inspection.js";
 import {
     assertDefaultLateOnProfile,
+    assertOfflinePotionSelection,
     configuredLateOnModelPath,
     resolveConnectedReranker,
     resolveConnectedVectorStoreForInstallOrThrow,
-    resolveOfflineOllamaModel,
     resolveOfflineReranker,
     resolveRerankerModel,
     resolveVerifiedLateOnModel,
@@ -94,7 +94,7 @@ import {
 function managedRuntimePreflightDependencies(
     homeDir: string,
     runtimeCommand: NonNullable<InstallCommandOptions["runtimeCommand"]>,
-): Pick<InstallPreflightDependencies, "probeLanceDb" | "verifyPotionRuntime" | "resolveOllamaIdentity"> {
+): Pick<InstallPreflightDependencies, "probeLanceDb" | "verifyPotionRuntime"> {
     if (runtimeCommand.args.length !== 1 || !path.isAbsolute(runtimeCommand.args[0] ?? "")) {
         return {};
     }
@@ -138,9 +138,9 @@ export async function executeInstallCommand(
                 ? resolveConnectedVectorStoreForInstallOrThrow(command, homeDir, env, managedRuntimeEnvironment)
                 : "LanceDB";
             const effectiveEnv = runtimeEnvironmentWithManagedFallbacks(managedRuntimeEnvironment, env);
-            const preservedOllamaModel = command.runtime === "offline"
-                ? resolveOfflineOllamaModel(command, managedRuntimeEnvironment, env)
-                : undefined;
+            if (command.runtime === "offline") {
+                assertOfflinePotionSelection(managedRuntimeEnvironment, env);
+            }
             const reranker = command.runtime === "offline"
                 ? resolveOfflineReranker(
                     command,
@@ -165,7 +165,7 @@ export async function executeInstallCommand(
             if (requestedLateOnModelPath && !path.isAbsolute(requestedLateOnModelPath)) {
                 throw new CliError("E_USAGE", "LateOn model path must be absolute.", 2);
             }
-            if (command.runtime === "offline" && !preservedOllamaModel) {
+            if (command.runtime === "offline") {
                 assertSupportedPotionPlatform({
                     platform: options.platform,
                     architecture: options.architecture,
@@ -198,7 +198,6 @@ export async function executeInstallCommand(
                     homeDir,
                     env: effectiveEnv,
                     vectorStore,
-                    ollamaModel: preservedOllamaModel,
                     reranker,
                     rerankerModel,
                     lateOnModelPath,
@@ -233,7 +232,7 @@ export async function executeInstallCommand(
                     installedRuntimeCommand = managedRuntimeCandidate.command;
                     potionAssetsRoot = resolvePotionAssetsRoot(managedRuntimeCandidate.packageRoot);
                 }
-                const potionModelPath = command.runtime === "offline" && !preservedOllamaModel
+                const potionModelPath = command.runtime === "offline"
                     ? options.potionModelPath ?? await resolveVerifiedPotionModel(
                         homeDir,
                         potionAssetsRoot,
@@ -284,7 +283,6 @@ export async function executeInstallCommand(
                             homeDir,
                             env: effectiveEnv,
                             vectorStore,
-                            ollamaModel: preservedOllamaModel,
                             reranker,
                             rerankerModel,
                             noVerify: command.noVerify,
@@ -340,7 +338,6 @@ export async function executeInstallCommand(
             const currentManagedRuntimeEnvironment = readManagedRuntimeEnvironment(homeDir);
             for (const key of [
                 "LANCEDB_PATH",
-                "OLLAMA_HOST",
                 "EMBEDDING_PROVIDER",
                 "EMBEDDING_MODEL",
                 "SATORI_RERANKER_PROVIDER",

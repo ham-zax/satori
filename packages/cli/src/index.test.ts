@@ -646,7 +646,6 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
         const exitCode = await runCli([
             "install",
             "--runtime", "offline",
-            "--ollama-model", "nomic-embed-text",
             "--reranker", "lateon",
             "--client", "codex",
             "--profile", "minimal",
@@ -667,7 +666,7 @@ test("runCli LateOn retry preserves explicit offline install selections", async 
         assert.match(io.read().stderr, /LateOn D128 model preflight failed: acquisition unavailable/);
         assert.match(
             io.read().stderr,
-            /Retry: npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon --client codex --ollama-model nomic-embed-text --profile minimal$/m,
+            /Retry: npx -y @satori-code\/cli@latest install --runtime offline --reranker lateon --client codex --profile minimal$/m,
         );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
@@ -913,11 +912,11 @@ test("runCli install preserves the structured receipt when JSON is requested", a
     }
 });
 
-test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem work", async () => {
+test("runCli install dry-run performs no package, LanceDB, Potion model, or filesystem work", async () => {
     for (const commandArgv of [
         ["install", "--client", "all", "--dry-run"],
         ["install", "--client", "all", "--runtime", "voyage", "--dry-run"],
-        ["install", "--runtime", "offline", "--ollama-model", "nomic-embed-text", "--dry-run"],
+        ["install", "--runtime", "offline", "--dry-run"],
     ]) {
         const argv = ["--format", "json", ...commandArgv];
         const homeDir = fs.mkdtempSync(path.join(PACKAGE_ROOT, ".tmp-install-dry-run-home-"));
@@ -943,7 +942,7 @@ test("runCli install dry-run performs no package, LanceDB, Ollama, or filesystem
 
             assert.equal(exitCode, 0);
             const result = JSON.parse(io.read().stdout);
-            if (!commandArgv.includes("--runtime") && !commandArgv.includes("--ollama-model")) {
+            if (!commandArgv.includes("--runtime")) {
                 assert.equal(result.runtime, "offline");
             }
             assert.equal(installabilityCalls, 0);
@@ -1728,10 +1727,11 @@ if (RUN_LIVE_SERVER_SMOKE) {
             serverCommand: process.execPath,
             serverArgs: ["--import", "tsx", SOURCE_SERVER_ENTRY],
             serverEnv: {
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text",
-                OLLAMA_HOST: "http://127.0.0.1:11434",
-                MILVUS_ADDRESS: "localhost:19530",
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                EMBEDDING_PROVIDER: "Potion",
+                POTION_HELPER_PATH: "/tmp/satori-potion/satori-potion",
+                POTION_MODEL_PATH: "/tmp/satori-potion/model",
                 MCP_ENABLE_WATCHER: "false",
                 // Force default guard behavior in test regardless of parent env.
                 SATORI_CLI_STDOUT_GUARD: "",
@@ -1761,10 +1761,11 @@ if (RUN_LIVE_SERVER_SMOKE) {
             writeStdout: io.writeStdout,
             writeStderr: io.writeStderr,
             serverEnv: {
-                EMBEDDING_PROVIDER: "Ollama",
-                EMBEDDING_MODEL: "nomic-embed-text",
-                OLLAMA_HOST: "http://127.0.0.1:11434",
-                MILVUS_ADDRESS: "localhost:19530",
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                EMBEDDING_PROVIDER: "Potion",
+                POTION_HELPER_PATH: "/tmp/satori-potion/satori-potion",
+                POTION_MODEL_PATH: "/tmp/satori-potion/model",
                 MCP_ENABLE_WATCHER: "false",
                 SATORI_CLI_STDOUT_GUARD: "",
             },

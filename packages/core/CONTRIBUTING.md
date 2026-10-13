@@ -16,7 +16,7 @@ pnpm --filter @satori-code/core test
 - `src/core/` — `Context` (composition root and compatibility façade), indexing pipeline, ignore rules, semantic search
 - `src/generation/` — Publication store and full-index generation workflow
 - `src/sync/` — incremental synchronization
-- `src/embedding/` — embedding providers (Potion, Voyage, OpenAI, Gemini, Ollama)
+- `src/embedding/` — embedding providers (Potion, Voyage, OpenAI, Gemini)
 - `src/vectordb/` — vector stores (LanceDB, Milvus/Zilliz gRPC and REST)
 - `src/reranker/` — query-time reranking
 - `src/symbols/`, `src/navigation/`, `src/relationships/` — symbol registry, navigation sidecars, and relationship evidence

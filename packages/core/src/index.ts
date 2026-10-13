@@ -46,15 +46,6 @@ export {
     GeminiEmbedding,
 } from './embedding/gemini-embedding';
 export {
-    OllamaEmbedding,
-} from './embedding/ollama-embedding';
-export {
-    resolveOllamaModelIdentity,
-} from './embedding/ollama-model-identity';
-export type {
-    ResolvedOllamaModelIdentity,
-} from './embedding/ollama-model-identity';
-export {
     OpenAIEmbedding,
 } from './embedding/openai-embedding';
 export {

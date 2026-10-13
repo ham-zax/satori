@@ -200,7 +200,7 @@ behind that launcher. Multiple compatible Codex, Claude Code, OpenCode, or
 subagent sessions attach as independent MCP sessions to one private local host,
 shared provider/LanceDB state, and one Potion worker. The host uses a user-only
 Unix-domain socket, idles out after clients disconnect, and is not used for
-connected Voyage/Milvus or explicit Ollama runtimes.
+connected runtimes.
 
 To stop every verified Satori MCP runtime under the active state root:
 
@@ -350,7 +350,6 @@ Satori found a same-name definition in the defining file for 80–100% of lookup
 |---|---|---|---|
 | Offline | Potion Code 16M v2 + BM25 | LanceDB | Linux x64; no model API key |
 | Connected | Voyage Code 3 + BM25 | LanceDB | `VOYAGEAI_API_KEY` |
-| Ollama | selected Ollama model + BM25 | LanceDB | local loopback Ollama |
 | Connected Milvus | Voyage Code 3 + BM25 | Milvus or Zilliz Cloud | `VOYAGEAI_API_KEY`, `MILVUS_ADDRESS` (plus `MILVUS_TOKEN` for Zilliz) |
 
 Connected install:
@@ -369,11 +368,7 @@ managed launcher temporarily points at a local repository build; doctor keeps
 the outside-managed-store warning while reporting the profile the launcher
 actually applies.
 
-For Milvus or Zilliz Cloud, add `--vector-store milvus` to a Voyage install; the launcher then sets `VECTOR_STORE_PROVIDER=Milvus`, which the runtime requires (`MILVUS_ADDRESS` alone does not select Milvus). For Ollama embeddings, select an explicit model:
-
-```bash
-satori install --client all --runtime offline --ollama-model nomic-embed-text
-```
+For Milvus or Zilliz Cloud, add `--vector-store milvus` to a Voyage install; the launcher then sets `VECTOR_STORE_PROVIDER=Milvus`, which the runtime requires (`MILVUS_ADDRESS` alone does not select Milvus).
 
 Changing the embedding provider, model, dimensions, vector backend, or persisted projection changes index compatibility and requires a reindex. Satori never silently converts or deletes the previous backend's publication.
 
@@ -396,7 +391,6 @@ LateOn reranker. Restart OpenCode after changing the launcher.
 | `--client` | `opencode` (default), `codex`, `claude`, or `all` |
 | `--runtime` | `offline` or `voyage`; when omitted, preserve the managed selection, or use offline for a new launcher |
 | `--reranker` | `lateon` or `none`; offline only |
-| `--ollama-model` | Selects an Ollama model instead of Potion; offline only |
 | `--vector-store` | `lancedb` or `milvus`; offline requires LanceDB and Milvus requires Voyage |
 | `--no-build` | Reuse the existing local build output |
 | `--home`, `--node` | Override the managed home or Node executable for isolated testing |
@@ -409,9 +403,6 @@ pnpm dev:install-local-mcp -- --client opencode --runtime offline --reranker lat
 
 # Offline Potion + LanceDB without neural reranking
 pnpm dev:install-local-mcp -- --client opencode --runtime offline --reranker none
-
-# Offline Ollama + LanceDB
-pnpm dev:install-local-mcp -- --client opencode --runtime offline --ollama-model nomic-embed-text --reranker none
 
 # Connected Voyage + LanceDB or Milvus
 pnpm dev:install-local-mcp -- --client opencode --runtime voyage --vector-store lancedb
@@ -527,6 +518,35 @@ satori install --reranker lateon|voyage|none [--reranker-model <name>] [--no-ver
 `offline` is accepted as another spelling of `lateon`. `enable` and `disable`
 keep working as `use lateon` and `use none`.
 
+### Which one to pick
+
+| Choice | Pick it when | Cost |
+|---|---|---|
+| `lateon` | Code must stay on the machine, or you have no API key. | Free. Runs on the local CPU, so it is the slowest per search. Linux x64/WSL2, offline runtime only. |
+| `voyage` | You want the best ranking and the fastest reranked search, and sending code excerpts to Voyage is acceptable. | Billed by Voyage per search. Needs the network and `VOYAGEAI_API_KEY`. |
+| `none` | You want the fastest search and can accept retrieval order. | Free. No reranking. |
+
+Measured on 28 plain-English questions over React (9), Polars (9), and
+FlatBuffers (10), with Potion embeddings and the same index for every row:
+
+| Reranker | Right answer first | In top 5 | In top 10 | MRR | Search time: median / mean / p90 |
+|---|---:|---:|---:|---:|---|
+| LateOn (local, default) | 13/28 | 19/28 | 21/28 | 0.556 | 2.40 s / 3.10 s / 4.19 s |
+| Voyage `rerank-3-lite` (Voyage default) | 18/28 | 24/28 | 24/28 | 0.738 | 1.04 s / 1.65 s / 3.09 s |
+| Voyage `rerank-3` | 17/28 | 24/28 | 24/28 | 0.711 | 1.12 s / 2.15 s / 3.23 s |
+| Voyage `rerank-2.5` | 19/28 | 24/28 | 24/28 | 0.759 | 1.25 s / 2.20 s / 5.21 s |
+
+Each Voyage row made 28 rerank calls with no failure and no timeout, and sent
+about 1.2 MB of query and code text in total.
+
+Limits of these numbers:
+
+- 28 questions on 3 repositories, one run per row. A difference of one
+  question between two Voyage models is not a reason to prefer one.
+- Times are the whole search on one WSL2 laptop, not the reranker alone, and
+  are not a median of repeated runs. Voyage times also depend on the network.
+- `none` was not part of this run.
+
 LateOn runs offline only. Voyage runs on both the offline and connected
 runtimes. The default Voyage model is `rerank-3-lite`. Any model name is passed
 to the provider unchanged. A name the provider rejects is reported with the
@@ -607,9 +627,8 @@ satori install --runtime offline --reranker none
 ```
 
 `--reranker none` is the explicit opt-out: it keeps the selected embedding
-provider plus baseline ordering (exact + BM25 + single vector). With Ollama
-embeddings that is the Ollama model plus baseline ordering, not "Potion +
-BM25". The runtime also falls back to that baseline automatically on any LateOn
+provider plus baseline ordering (exact + BM25 + single vector). The offline
+baseline uses Potion embeddings with BM25. The runtime also falls back to that baseline automatically on any LateOn
 failure; automatic failure fallback and explicit opt-out are different
 concepts.
 
@@ -733,7 +752,6 @@ Removed, and what you will see:
 | Legacy install cleanup (retired skill, instruction, and guidance-hook companions; old Codex hooks, env templates, AGENTS.md blocks, pre-marker skill copies; silent deletion of retired runtime env vars) | Nothing is stripped or deleted. A real directory at a skill-link path is refused: `Refusing to replace <path>: it is not managed by Satori. Remove it manually and rerun install.` |
 | LateOn historical profile and activation-policy IDs, and `satori upgrade` migration of them | CLI: `Existing managed LateOn installation uses unsupported profile <profile>. Reinstall with \`satori install --runtime offline --reranker lateon\`, or \`satori install --runtime offline --reranker none\` to disable LateOn.` MCP: `Invalid SATORI_LATEON_PROFILE '<id>'. Expected <current id>; reinstall is required.` and the same for `SATORI_LATEON_ACTIVATION_POLICY`. Existing LateOn installs must be reinstalled (the rerank request contract and runtime profile pin were regenerated). |
 | `SATORI_RERANK_APPLICATION_MODE` | `SATORI_RERANK_APPLICATION_MODE has been removed; unset it.` |
-| `OLLAMA_MODEL` | `OLLAMA_MODEL has been removed; set EMBEDDING_MODEL instead and unset OLLAMA_MODEL.` |
 | `MILVUS_ADDRESS` alone selecting Milvus | MCP: `MILVUS_ADDRESS no longer selects Milvus; set VECTOR_STORE_PROVIDER=Milvus explicitly.` CLI install: `MILVUS_ADDRESS no longer selects Milvus; pass --vector-store milvus or set VECTOR_STORE_PROVIDER=Milvus.` Voyage and Zilliz/Milvus remain fully supported. |
 | Grouped `search_codebase` result `score` field | Removed. Response order and `resultIndex.rank` are the ranking. |
 | `read_file` `open_symbol` without `contractVersion` | `contractVersion` is required whenever an exact-symbol marker is present. |

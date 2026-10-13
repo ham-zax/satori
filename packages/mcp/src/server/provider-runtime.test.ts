@@ -68,7 +68,7 @@ test("embedding/vector operations require provider key and MILVUS_ADDRESS", () =
         { config: baseConfig({ encoderProvider: "VoyageAI", voyageKey: undefined }), expected: ["VOYAGEAI_API_KEY", "MILVUS_ADDRESS"] },
         { config: baseConfig({ encoderProvider: "OpenAI", encoderModel: "text-embedding-3-small", openaiKey: undefined }), expected: ["OPENAI_API_KEY", "MILVUS_ADDRESS"] },
         { config: baseConfig({ encoderProvider: "Gemini", encoderModel: "gemini-embedding-001", geminiKey: undefined }), expected: ["GEMINI_API_KEY", "MILVUS_ADDRESS"] },
-        { config: baseConfig({ encoderProvider: "Ollama", encoderModel: "nomic-embed-text" }), expected: ["MILVUS_ADDRESS"] },
+        { config: baseConfig({ encoderProvider: "Potion", encoderModel: "pinned-potion", potionHelperPath: "/tmp/satori-potion", potionModelPath: "/tmp/satori-model" }), expected: ["MILVUS_ADDRESS"] },
         { config: baseConfig({ encoderProvider: "Potion", encoderModel: "pinned-potion" }), expected: ["POTION_HELPER_PATH", "POTION_MODEL_PATH", "MILVUS_ADDRESS"] },
     ];
 

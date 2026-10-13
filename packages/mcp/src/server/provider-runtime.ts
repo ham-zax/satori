@@ -378,8 +378,6 @@ export class ProviderRuntime {
                 case "Gemini":
                     if (!this.config.geminiKey) missing.push("GEMINI_API_KEY");
                     break;
-                case "Ollama":
-                    break;
                 case "Potion":
                     if (!this.config.potionHelperPath) missing.push("POTION_HELPER_PATH");
                     if (!this.config.potionModelPath) missing.push("POTION_MODEL_PATH");

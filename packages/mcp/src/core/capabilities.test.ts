@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { CapabilityResolver } from './capabilities.js';
 import { ContextMcpConfig } from '../config.js';
+import { SearchQuerySupport, type SearchQuerySupportHost } from './search-query-support.js';
+import type { SearchQueryPlan } from './search-lexical-scoring.js';
 
 function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
     return {
@@ -24,30 +26,27 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     };
 }
 
-test('capability resolver enables default rerank on fast profile with reranker capability', () => {
+test('capability resolver reports a cloud reranker and the cloud default limit', () => {
     const resolver = new CapabilityResolver(baseConfig());
 
     assert.equal(resolver.hasReranker(), true);
-    assert.equal(resolver.getPerformanceProfile(), 'fast');
-    assert.equal(resolver.getDefaultRerankEnabled(), true);
     assert.equal(resolver.getDefaultSearchLimit(), 20);
 });
 
-test('capability resolver disables default rerank when reranker capability is missing', () => {
+test('capability resolver reports no reranker without a Voyage key', () => {
     const resolver = new CapabilityResolver(baseConfig({ voyageKey: undefined }));
 
     assert.equal(resolver.hasReranker(), false);
-    assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
-test('capability resolver disables default rerank on slow profile', () => {
+test('local embeddings keep the smaller default limit and still use the resolved reranker', () => {
     const resolver = new CapabilityResolver(baseConfig({
-        encoderProvider: 'Ollama',
+        encoderProvider: 'Potion',
         voyageKey: 'voyage-key'
     }));
 
-    assert.equal(resolver.getPerformanceProfile(), 'slow');
-    assert.equal(resolver.getDefaultRerankEnabled(), false);
+    assert.equal(resolver.getEmbeddingLocality(), 'local');
+    assert.equal(resolver.hasReranker(), true);
     assert.equal(resolver.getDefaultSearchLimit(), 10);
 });
 
@@ -57,13 +56,12 @@ test('offline policy disables cloud reranking even when credentials remain confi
         networkPolicy: { kind: 'local-only' },
         vectorStoreProvider: 'LanceDB',
         lanceDbPath: '/tmp/satori-lancedb',
-        encoderProvider: 'Ollama',
-        encoderModel: 'nomic-embed-text',
+        encoderProvider: 'Potion',
+        encoderModel: 'pinned-potion',
         voyageKey: 'retained-cloud-key',
     }));
 
     assert.equal(resolver.hasReranker(), false);
-    assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
 test('capability resolver recognizes explicit Voyage reranking under local-only policy', () => {
@@ -81,7 +79,28 @@ test('capability resolver recognizes explicit Voyage reranking under local-only 
     assert.equal(resolver.hasReranker(), true);
 });
 
-test('Potion is a slow local embedding capability without cloud reranking', () => {
+test('a search reranks when Voyage is explicitly selected with Potion embeddings', () => {
+    const capabilities = new CapabilityResolver(baseConfig({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: '/tmp/satori-lancedb',
+        encoderProvider: 'Potion',
+        encoderModel: 'pinned-potion',
+        rerankerProvider: 'voyage',
+        voyageKey: 'explicit-voyage-key',
+    }));
+    const support = new SearchQuerySupport({ capabilities, reranker: {} } as unknown as SearchQuerySupportHost);
+
+    const decision = support.resolveRerankDecision(
+        'runtime',
+        { rerankAllowed: true, exactMatchPinningEnabled: false } as unknown as SearchQueryPlan,
+    );
+
+    assert.equal(decision.enabled, true);
+});
+
+test('Potion is a local embedding capability without cloud reranking', () => {
     const resolver = new CapabilityResolver(baseConfig({
         executionProfile: 'offline',
         networkPolicy: { kind: 'local-only' },
@@ -93,7 +112,6 @@ test('Potion is a slow local embedding capability without cloud reranking', () =
     }));
 
     assert.equal(resolver.getEmbeddingLocality(), 'local');
-    assert.equal(resolver.getPerformanceProfile(), 'slow');
     assert.equal(resolver.hasReranker(), false);
     assert.equal(resolver.getMaxSearchResultTotal(), Number.MAX_SAFE_INTEGER);
     assert.equal(resolver.getMaxFrozenSearchResults(), 200);
@@ -114,9 +132,7 @@ test('qualified LateOn enables local reranking without cloud credentials', () =>
         lateOnModelPath: '/opt/satori/models/lateon-code-edge',
     }));
 
-    assert.equal(resolver.getPerformanceProfile(), 'slow');
     assert.equal(resolver.hasReranker(), true);
-    assert.equal(resolver.getDefaultRerankEnabled(), true);
 });
 
 test('capability resolver does not treat token-only Milvus config as vector-ready', () => {

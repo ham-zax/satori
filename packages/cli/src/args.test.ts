@@ -66,11 +66,6 @@ test("parseCliArgs never treats a command flag's value as a global option", () =
     if (fileMode.command.kind !== "tool-call") assert.fail("Expected tool-call parsing");
     assert.deepEqual(fileMode.command.rawArgsMode, { kind: "file", path: "--debug" });
 
-    // An install --ollama-model value equal to a global flag name is the model, not the global.
-    const install = parseCliArgs(["install", "--ollama-model", "--debug", "--dry-run"]);
-    assert.equal(install.globals.debug, false);
-    if (install.command.kind !== "install") assert.fail("Expected install parsing");
-    assert.equal(install.command.ollamaModel, "--debug");
 });
 
 test("parseCliArgs passes a wrapper tool's own --format and --debug tokens through untouched", () => {
@@ -110,7 +105,6 @@ test("parseCliArgs defaults install to offline Potion", () => {
     assert.equal(parsed.command.client, "codex");
     assert.equal(parsed.command.dryRun, true);
     assert.equal(parsed.command.runtime, "offline");
-    assert.equal(parsed.command.ollamaModel, undefined);
 });
 
 test("parseCliArgs parses upgrade and no longer treats update as an alias", () => {
@@ -133,26 +127,11 @@ test("parseCliArgs supports terminate without accepting command-specific argumen
     );
 });
 
-test("parseCliArgs accepts the strict offline runtime variant", () => {
-    const parsed = parseCliArgs([
-        "install",
-        "--runtime",
-        "offline",
-        "--ollama-model",
-        "nomic-embed-text",
-    ]);
-    assert.equal(parsed.command.kind, "install");
-    if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
-    assert.equal(parsed.command.runtime, "offline");
-    assert.equal(parsed.command.ollamaModel, "nomic-embed-text");
-});
-
 test("parseCliArgs defaults offline installation to bundled Potion", () => {
     const parsed = parseCliArgs(["install", "--runtime", "offline"]);
     assert.equal(parsed.command.kind, "install");
     if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
     assert.equal(parsed.command.runtime, "offline");
-    assert.equal(parsed.command.ollamaModel, undefined);
     assert.equal(parsed.command.reranker, undefined);
 });
 
@@ -256,27 +235,6 @@ test("parseCliArgs accepts an explicit connected Milvus backend", () => {
     assert.equal(parsed.command.kind, "install");
     if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
     assert.equal(parsed.command.vectorStore, "Milvus");
-});
-
-test("parseCliArgs accepts Ollama under the default offline runtime and rejects contradictions", () => {
-    const ollama = parseCliArgs(["install", "--ollama-model", "nomic-embed-text"]);
-    assert.equal(ollama.command.kind, "install");
-    if (ollama.command.kind !== "install") assert.fail("Expected install command parsing");
-    assert.equal(ollama.command.runtime, "offline");
-    assert.equal(ollama.command.ollamaModel, "nomic-embed-text");
-
-    assert.throws(
-        () => parseCliArgs([
-            "install",
-            "--runtime",
-            "offline",
-            "--ollama-model",
-            "nomic-embed-text",
-            "--vector-store",
-            "milvus",
-        ]),
-        /offline requires --vector-store lancedb/,
-    );
 });
 
 test("parseCliArgs supports install profile selection", () => {

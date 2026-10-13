@@ -10,7 +10,7 @@ test("release smoke isolates machine configuration and removes pnpm-only npm var
         HOME: "/home/source",
         PATH: "/usr/bin",
         SATORI_RUNTIME_PROFILE: "connected",
-        EMBEDDING_PROVIDER: "Ollama",
+        EMBEDDING_PROVIDER: "VoyageAI",
         MILVUS_ADDRESS: "ambient.example:19530",
         npm_config_shell_emulator: "true",
         npm_config_cache: "/home/source/.npm",

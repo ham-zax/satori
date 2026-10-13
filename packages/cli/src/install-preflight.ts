@@ -2,11 +2,9 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import type {
-    ResolvedOllamaModelIdentity,
     VectorDatabase,
 } from "@satori-code/core";
 import {
-    assertLocalOnlyEndpoint,
     EMBEDDING_PROJECTION_VERSION,
     LEXICAL_PROJECTION_VERSION,
     POTION_DIMENSION,
@@ -26,7 +24,6 @@ import type {
 } from "./args.js";
 import type { InstallReranker } from "./reranker-providers.js";
 
-const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
 const POTION_MANIFEST_SHA256 = "bad8260921b46eb781d104b16c9f7faa0fc4405ef55652d636df1370307a0eb9";
@@ -36,7 +33,6 @@ export interface InstallPreflightInput {
     homeDir: string;
     env: NodeJS.ProcessEnv;
     vectorStore?: InstallVectorStore;
-    ollamaModel?: string;
     reranker?: InstallReranker;
     rerankerModel?: string;
     noVerify?: boolean;
@@ -54,16 +50,11 @@ export interface InstallPreflightInput {
 
 export interface InstallPreflightResult {
     runtimeEnvironment: Readonly<Record<string, string>>;
-    ollamaIdentity?: Readonly<ResolvedOllamaModelIdentity>;
 }
 
 export interface InstallPreflightDependencies {
     fetchImpl?: typeof fetch;
     probeLanceDb?: (databasePath: string) => Promise<void>;
-    resolveOllamaIdentity?: (input: {
-        model: string;
-        host?: string;
-    }) => Promise<Readonly<ResolvedOllamaModelIdentity>>;
     verifyPotionRuntime?: (assetsRoot: string, modelPath: string) => Promise<void>;
     probeCandidateRuntime?: (input: ManagedRuntimeCandidateProbeInput) => Promise<void>;
 }
@@ -258,8 +249,7 @@ export function assertSupportedPotionPlatform(input: Pick<InstallPreflightInput,
     const architecture = input.architecture ?? process.arch;
     if (platform !== "linux" || architecture !== "x64") {
         throw new Error(
-            `Potion offline installation supports Linux x64; received ${platform} ${architecture}. `
-            + "Use an explicit --ollama-model for the existing portable offline path.",
+            `Potion offline installation supports Linux x64; received ${platform} ${architecture}.`,
         );
     }
 }
@@ -634,39 +624,25 @@ function planProviderRuntimeEnvironment(
     } else if (input.reranker === "none") {
         rerankerEnvironment = { SATORI_RERANKER_PROVIDER: "none" };
     }
-    const model = input.ollamaModel?.trim();
-    if (!model) {
-        assertSupportedPotionPlatform(input);
-        if (!input.potionAssetsRoot || !input.potionModelPath) {
-            throw new Error("Potion offline installation requires the runtime asset root and a verified model path.");
-        }
-        if (!path.isAbsolute(input.potionAssetsRoot) || !path.isAbsolute(input.potionModelPath)) {
-            throw new Error("Potion asset root and model path must be absolute.");
-        }
-        const helperPath = path.join(input.potionAssetsRoot, "satori-potion");
-        const modelPath = input.potionModelPath;
-        return Object.freeze({
-            SATORI_RUNTIME_PROFILE: "offline",
-            VECTOR_STORE_PROVIDER: "LanceDB",
-            LANCEDB_PATH: resolveLanceDbPath(input.homeDir, input.env),
-            EMBEDDING_PROVIDER: "Potion",
-            EMBEDDING_MODEL: POTION_MODEL_ID,
-            EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
-            POTION_HELPER_PATH: helperPath,
-            POTION_MODEL_PATH: modelPath,
-            POTION_REQUEST_TIMEOUT_MS: DEFAULT_POTION_REQUEST_TIMEOUT_MS,
-            ...rerankerEnvironment,
-        });
+    assertSupportedPotionPlatform(input);
+    if (!input.potionAssetsRoot || !input.potionModelPath) {
+        throw new Error("Potion offline installation requires the runtime asset root and a verified model path.");
     }
-    const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
-    assertLocalOnlyEndpoint(host, "OLLAMA_HOST");
+    if (!path.isAbsolute(input.potionAssetsRoot) || !path.isAbsolute(input.potionModelPath)) {
+        throw new Error("Potion asset root and model path must be absolute.");
+    }
+    const helperPath = path.join(input.potionAssetsRoot, "satori-potion");
+    const modelPath = input.potionModelPath;
     return Object.freeze({
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
         LANCEDB_PATH: resolveLanceDbPath(input.homeDir, input.env),
-        EMBEDDING_PROVIDER: "Ollama",
-        EMBEDDING_MODEL: model,
-        OLLAMA_HOST: host,
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: POTION_MODEL_ID,
+        EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+        POTION_HELPER_PATH: helperPath,
+        POTION_MODEL_PATH: modelPath,
+        POTION_REQUEST_TIMEOUT_MS: DEFAULT_POTION_REQUEST_TIMEOUT_MS,
         ...rerankerEnvironment,
     });
 }
@@ -763,36 +739,14 @@ export async function runInstallPreflight(
 
     const databasePath = resolveLanceDbPath(input.homeDir, input.env);
     await (dependencies.probeLanceDb ?? probeLanceDbRuntime)(databasePath);
-    const model = input.ollamaModel?.trim();
-    if (!model) {
-        assertSupportedPotionPlatform(input);
-        if (!input.potionAssetsRoot || !input.potionModelPath) {
-            throw new Error("Potion offline install preflight requires the runtime asset root and model path.");
-        }
-        if (!dependencies.verifyPotionRuntime) {
-            throw new Error("Potion preflight requires the staged Satori runtime verifier.");
-        }
-        await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath);
-        await verifyVoyageReranker(input, dependencies);
-        return { runtimeEnvironment: proposedEnvironment };
+    assertSupportedPotionPlatform(input);
+    if (!input.potionAssetsRoot || !input.potionModelPath) {
+        throw new Error("Potion offline install preflight requires the runtime asset root and model path.");
     }
-    const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
-    assertLocalOnlyEndpoint(host, "OLLAMA_HOST");
-    if (!dependencies.resolveOllamaIdentity) {
-        throw new Error("Ollama preflight requires the staged Satori runtime resolver.");
+    if (!dependencies.verifyPotionRuntime) {
+        throw new Error("Potion preflight requires the staged Satori runtime verifier.");
     }
-    const identity = await dependencies.resolveOllamaIdentity({
-        model,
-        host,
-    });
+    await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath);
     await verifyVoyageReranker(input, dependencies);
-    return {
-        runtimeEnvironment: Object.freeze({
-            ...proposedEnvironment,
-            EMBEDDING_MODEL: identity.resolvedModel,
-            OLLAMA_MODEL_DIGEST: identity.artifactDigest,
-            EMBEDDING_OUTPUT_DIMENSION: String(identity.dimension),
-        }),
-        ollamaIdentity: identity,
-    };
+    return { runtimeEnvironment: proposedEnvironment };
 }

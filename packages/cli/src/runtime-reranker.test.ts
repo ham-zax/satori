@@ -8,6 +8,7 @@ import { buildLauncherScript, parseManagedLauncherDescriptor } from "./managed-l
 import { executeInstallCommand as executeInstallCommandProduction } from "./install.js";
 import { executeManagedRerankerCommand, formatRerankerText } from "./runtime-reranker.js";
 import type { InstallCommandOptions } from "./install-contracts.js";
+import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 
 const VERSION = "1.0.0";
 const API_KEY = "test-voyage-secret";
@@ -63,10 +64,11 @@ function baseManagedEnvironment(homeDir: string): Record<string, string> {
         SATORI_RUNTIME_PROFILE: "offline",
         VECTOR_STORE_PROVIDER: "LanceDB",
         LANCEDB_PATH: path.join(homeDir, "lancedb"),
-        EMBEDDING_PROVIDER: "Ollama",
-        EMBEDDING_MODEL: "nomic-embed-text:latest",
-        EMBEDDING_OUTPUT_DIMENSION: "768",
-        OLLAMA_HOST: "http://localhost:11434",
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: POTION_MODEL_ID,
+        EMBEDDING_OUTPUT_DIMENSION: String(POTION_DIMENSION),
+        POTION_HELPER_PATH: path.join(homeDir, ".satori", "potion", "satori-potion"),
+        POTION_MODEL_PATH: path.join(homeDir, ".satori", "potion", "model"),
         SATORI_RERANKER_PROVIDER: "none",
     };
 }
@@ -97,8 +99,9 @@ function optionsFor(
         homeDir,
         env: {
             VOYAGEAI_API_KEY: apiKey,
-            OLLAMA_HOST: "http://localhost:11434",
         },
+        potionAssetsRoot: path.join(homeDir, ".satori", "potion"),
+        potionModelPath: path.join(homeDir, ".satori", "potion", "model"),
         packageSpecifier: `@satori-code/mcp@${VERSION}`,
         execFileSyncImpl: installRuntimePackageStub as never,
         platform: "linux",
@@ -107,13 +110,7 @@ function optionsFor(
             fetchImpl,
             probeLanceDb: async () => undefined,
             probeCandidateRuntime: async () => undefined,
-            resolveOllamaIdentity: async ({ model }) => Object.freeze({
-                configuredModel: model,
-                resolvedModel: "nomic-embed-text:latest",
-                artifactDigest: "a".repeat(64),
-                artifactSize: 1024,
-                dimension: 768,
-            }),
+            verifyPotionRuntime: async () => {},
         },
         terminateRunner: async () => ({
             action: "terminate",
@@ -262,7 +259,6 @@ test("install rejects a Voyage model before writing the launcher or client confi
                 client: "codex",
                 dryRun: false,
                 runtime: "offline",
-                ollamaModel: "nomic-embed-text",
                 reranker: "voyage",
             }, options),
             (error: unknown) => {
@@ -295,7 +291,6 @@ test("install --no-verify skips the Voyage check without persisting the API key"
             client: "codex",
             dryRun: false,
             runtime: "offline",
-            ollamaModel: "nomic-embed-text",
             reranker: "voyage",
             noVerify: true,
         }, options);

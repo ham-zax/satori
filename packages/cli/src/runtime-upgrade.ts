@@ -22,9 +22,9 @@ import {
 import { resolvePotionAssetsRoot } from "./managed-runtime-paths.js";
 import {
     assertDefaultLateOnProfile,
+    assertOfflinePotionSelection,
     configuredLateOnModelPath,
     resolveConnectedVectorStoreForInstallOrThrow,
-    resolveOfflineOllamaModel,
     resolveOfflineReranker,
     resolveConnectedReranker,
     resolveRerankerModel,
@@ -78,7 +78,6 @@ export function upgradeRuntimeSelection(
 ): {
     runtime: InstallRuntime;
     vectorStore: InstallVectorStore;
-    ollamaModel?: string;
     reranker?: InstallReranker;
     rerankerModel?: string;
     lateOnModelPath?: string;
@@ -95,7 +94,7 @@ export function upgradeRuntimeSelection(
             ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
             ...(rerankerModelOverride ? { rerankerModel: rerankerModelOverride } : {}),
         };
-        const ollamaModel = resolveOfflineOllamaModel(command, managedEnvironment, env);
+        assertOfflinePotionSelection(managedEnvironment, env);
         const reranker = resolveOfflineReranker(command, managedEnvironment, env, platform, architecture);
         const rerankerModel = resolveRerankerModel(
             reranker,
@@ -110,7 +109,6 @@ export function upgradeRuntimeSelection(
         return {
             runtime: "offline",
             vectorStore: "LanceDB",
-            ...(ollamaModel ? { ollamaModel } : {}),
             reranker,
             ...(rerankerModel ? { rerankerModel } : {}),
             ...(lateOnModelPath ? { lateOnModelPath } : {}),
@@ -272,7 +270,7 @@ export async function activateManagedRuntimeSelection(input: {
     noVerify?: boolean;
 }): Promise<void> {
     const { homeDir, options, installed, selection } = input;
-    if (selection.runtime === "offline" && !selection.ollamaModel) {
+    if (selection.runtime === "offline") {
         assertSupportedPotionPlatform({
             platform: options.platform,
             architecture: options.architecture,
@@ -295,7 +293,7 @@ export async function activateManagedRuntimeSelection(input: {
             options.onUpgradeProgress?.("verifying");
             const potionAssetsRoot = options.potionAssetsRoot
                 ?? resolvePotionAssetsRoot(installedCandidate.packageRoot);
-            const potionModelPath = selection.runtime === "offline" && !selection.ollamaModel
+            const potionModelPath = selection.runtime === "offline"
                 ? options.potionModelPath ?? await resolveVerifiedPotionModel(
                     homeDir,
                     potionAssetsRoot,
@@ -334,7 +332,6 @@ export async function activateManagedRuntimeSelection(input: {
                 homeDir,
                 env: selection.effectiveEnv,
                 vectorStore: selection.vectorStore,
-                ollamaModel: selection.ollamaModel,
                 reranker: selection.reranker,
                 rerankerModel: selection.rerankerModel,
                 noVerify: input.noVerify,

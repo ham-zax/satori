@@ -36,24 +36,24 @@ test('resolved execution policy is immutable', () => {
     assert.equal(Object.isFrozen(policy.networkPolicy), true);
 });
 
-test('local-only policy accepts loopback Ollama endpoints and rejects remote hosts', () => {
+test('local-only policy accepts loopback endpoints and rejects remote hosts', () => {
     const { networkPolicy } = resolveExecutionPolicy('offline');
 
     assert.doesNotThrow(() => assertNetworkPolicyAllowsEndpoint(
         networkPolicy,
-        'http://127.0.0.1:11434',
-        'OLLAMA_HOST',
+        'http://127.0.0.1:8080',
+        'OPENAI_BASE_URL',
     ));
     assert.doesNotThrow(() => assertNetworkPolicyAllowsEndpoint(
         networkPolicy,
-        'http://[::1]:11434',
-        'OLLAMA_HOST',
+        'http://[::1]:8080',
+        'OPENAI_BASE_URL',
     ));
     assert.throws(
         () => assertNetworkPolicyAllowsEndpoint(
             networkPolicy,
-            'https://ollama.example.com',
-            'OLLAMA_HOST',
+            'https://api.example.com',
+            'OPENAI_BASE_URL',
         ),
         /loopback HTTP\(S\) endpoint/,
     );

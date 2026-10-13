@@ -48,7 +48,6 @@ test('parseArgs supports local install options', () => {
     '--client', 'opencode',
     '--runtime', 'offline',
     '--reranker', 'none',
-    '--ollama-model', 'qwen2.5-coder',
     '--vector-store', 'lancedb',
     '--home', '/tmp/satori-home',
     '--node', '/usr/bin/node',
@@ -58,7 +57,6 @@ test('parseArgs supports local install options', () => {
   assert.equal(parsed.client, 'opencode');
   assert.equal(parsed.runtime, 'offline');
   assert.equal(parsed.reranker, 'none');
-  assert.equal(parsed.ollamaModel, 'qwen2.5-coder');
   assert.equal(parsed.vectorStore, 'LanceDB');
   assert.equal(parsed.homeDir, '/tmp/satori-home');
   assert.equal(parsed.nodePath, '/usr/bin/node');
@@ -212,7 +210,6 @@ test('installLocalMcpRuntime injects exact-runtime preflight dependencies for th
   const expectedDependencies = {
     probeLanceDb: async () => {},
     verifyPotionRuntime: async () => {},
-    resolveOllamaIdentity: async () => ({ resolvedModel: 'local', artifactDigest: 'sha256:test', dimension: 32 }),
   };
   activationOwner.exactRuntimePreflightDependencies = (runtimeCommand) => {
     activationOwner.calls.push({ kind: 'exact-preflight-dependencies', runtimeCommand });

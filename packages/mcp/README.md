@@ -17,7 +17,7 @@ npx -y @satori-code/cli@latest doctor
 opt-in, and `--client all` configures every supported client. A persistent `satori` command is optional:
 `npm install -g @satori-code/cli@latest`.
 
-The qualified default offline path supports Linux x64, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Explicit local Ollama and connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
+The qualified default offline path supports Linux x64, including Windows through WSL2, and uses local Potion embeddings, BM25, LateOn reranking, and LanceDB without a model API key after installation. Connected Voyage configurations are also available. See the [main README](https://github.com/ham-zax/satori#install) for runtime choices.
 
 When installed through the CLI, compatible offline Potion + LanceDB clients
 share one private local host, provider/LanceDB state, and one Potion worker. Each
@@ -167,8 +167,7 @@ its results are advisory and do not establish complete impact coverage.
   provenance — UTF-8 bytes, SHA-256, candidate role, and projection identities —
   never source text.
 - Managed offline Potion + LanceDB clients on Linux x64/WSL2 share one private
-  local host. Connected providers, Milvus, and explicit Ollama runtimes keep
-  the direct per-client lifecycle.
+  local host. Connected providers and Milvus keep the direct per-client lifecycle.
 - LateOn projection-v4 D32 is the semantic reranking contract whenever LateOn
   is selected. Managed offline installs bind
   `lateon_offline_quality_projection_v6_d128_v1` automatically. The v6 profile
@@ -181,9 +180,8 @@ its results are advisory and do not establish complete impact coverage.
   `SATORI_RERANKER_PROVIDER=lateon` and an absolute `SATORI_LATEON_MODEL_PATH`
   are configured. Any other LateOn profile ID is rejected and cannot execute;
   reinstall the managed runtime to bind v5.
-  `SATORI_RERANKER_PROVIDER=none` is the explicit opt-out: with Ollama embeddings
-  it means the selected embedding provider plus baseline ordering, not
-  "Potion + BM25". Automatic failure fallback and explicit opt-out are different
+  `SATORI_RERANKER_PROVIDER=none` is the explicit opt-out: it keeps the selected
+  embedding provider plus baseline ordering. Automatic failure fallback and explicit opt-out are different
   concepts.
 - Direct runtimes select Voyage with `SATORI_RERANKER_PROVIDER=voyage`. This
   needs `VOYAGEAI_API_KEY`; the key alone does not enable it. Startup fails with

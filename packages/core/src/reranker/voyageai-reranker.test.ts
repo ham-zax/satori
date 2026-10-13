@@ -123,6 +123,51 @@ test('VoyageAIReranker exposes its stable provider and model identity', () => {
     });
 });
 
+test('VoyageAIReranker sends a model name outside its documented table unchanged', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    await withMockedFetch(async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return { ok: true, status: 200, json: async () => ({ data: [{ index: 0, relevance_score: 0.5 }] }), text: async () => '' };
+    }, async () => {
+        const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key', model: 'rerank-9-test' });
+        await reranker.rerank('find auth', ['alpha document']);
+    });
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].model, 'rerank-9-test');
+});
+
+test('VoyageAIReranker defaults to rerank-3-lite when no model is named', () => {
+    const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key' });
+    assert.equal(reranker.getModel(), 'rerank-3-lite');
+});
+
+test('VoyageAIReranker reports a provider 400 as one permanent failure carrying the provider message', async () => {
+    const providerBody = JSON.stringify({
+        detail: "Model rerank-9-test is not supported. Supported models are ['rerank-3', 'rerank-3-lite'].",
+    });
+    const calls: string[] = [];
+    await withMutedConsoleError(async () => {
+        await withMockedFetch(async () => {
+            calls.push('call');
+            return { ok: false, status: 400, json: async () => ({}), text: async () => providerBody };
+        }, async () => {
+            const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key', model: 'rerank-9-test', retryDelayMs: 0 });
+            await assert.rejects(
+                () => reranker.rerank('find auth', ['alpha document']),
+                (error: unknown) => {
+                    assert.ok(error instanceof RerankerRequestError, `expected RerankerRequestError, got ${String(error)}`);
+                    assert.equal(error.kind, 'permanent_http');
+                    assert.equal(error.status, 400);
+                    assert.equal(error.attempts, 1);
+                    assert.ok(error.message.includes(providerBody), error.message);
+                    return true;
+                },
+            );
+        });
+    });
+    assert.equal(calls.length, 1);
+});
+
 test('VoyageAIReranker retries a transient HTTP failure once and succeeds', async () => {
     const calls: string[] = [];
     await withMockedFetch(async () => {

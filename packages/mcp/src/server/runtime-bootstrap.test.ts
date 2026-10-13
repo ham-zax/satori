@@ -7,9 +7,11 @@ import {
     POTION_DIMENSION,
     POTION_SEMANTIC_VERSION,
     POTION_MODEL_ID,
+    envManager,
 } from '@satori-code/core';
 import {
     createMcpConfig,
+    resolveRerankerProvider,
     resolveMcpRuntimeBootstrap,
     type ContextMcpConfig,
 } from '../config.js';
@@ -391,6 +393,135 @@ test('LateOn config fails closed for a missing or relative shared model path', (
             else process.env[key] = value;
         }
     }
+});
+
+test('VOYAGEAI_RERANKER_MODEL is passed through as typed; unset or blank uses the core default', () => {
+    const keys = [
+        'SATORI_RUNTIME_PROFILE',
+        'VECTOR_STORE_PROVIDER',
+        'LANCEDB_PATH',
+        'EMBEDDING_PROVIDER',
+        'POTION_HELPER_PATH',
+        'POTION_MODEL_PATH',
+        'VOYAGEAI_RERANKER_MODEL',
+    ] as const;
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+        for (const key of keys) delete process.env[key];
+        Object.assign(process.env, {
+            SATORI_RUNTIME_PROFILE: 'offline',
+            VECTOR_STORE_PROVIDER: 'LanceDB',
+            LANCEDB_PATH: '/tmp/satori-lancedb',
+            EMBEDDING_PROVIDER: 'Potion',
+            POTION_HELPER_PATH: '/opt/satori/potion-helper',
+            POTION_MODEL_PATH: '/opt/satori/potion-model',
+        });
+
+        process.env.VOYAGEAI_RERANKER_MODEL = 'rerank-9-test';
+        assert.equal(createMcpConfig().rankerModel, 'rerank-9-test');
+
+        process.env.VOYAGEAI_RERANKER_MODEL = '  rerank-9-test  ';
+        assert.equal(createMcpConfig().rankerModel, 'rerank-9-test');
+
+        delete process.env.VOYAGEAI_RERANKER_MODEL;
+        assert.equal(createMcpConfig().rankerModel, 'rerank-3-lite');
+
+        process.env.VOYAGEAI_RERANKER_MODEL = '   ';
+        assert.equal(createMcpConfig().rankerModel, 'rerank-3-lite');
+    } finally {
+        for (const key of keys) {
+            const value = previous[key];
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    }
+});
+
+const OFFLINE_VOYAGE_CONFIG_ENV_KEYS = [
+    'SATORI_RUNTIME_PROFILE',
+    'VECTOR_STORE_PROVIDER',
+    'LANCEDB_PATH',
+    'EMBEDDING_PROVIDER',
+    'EMBEDDING_MODEL',
+    'EMBEDDING_OUTPUT_DIMENSION',
+    'POTION_HELPER_PATH',
+    'POTION_MODEL_PATH',
+    'SATORI_RERANKER_PROVIDER',
+    'SATORI_LATEON_MODEL_PATH',
+    'SATORI_LATEON_PROFILE',
+    'SATORI_LATEON_ACTIVATION_POLICY',
+    'VOYAGEAI_API_KEY',
+    'SATORI_RERANK_APPLICATION_MODE',
+    'OLLAMA_MODEL',
+] as const;
+
+type OfflineVoyageConfigEnvKey = (typeof OFFLINE_VOYAGE_CONFIG_ENV_KEYS)[number];
+
+function withOfflinePotionConfig(
+    overrides: Partial<Record<OfflineVoyageConfigEnvKey, string>>,
+    run: () => void,
+): void {
+    const previous = Object.fromEntries(
+        OFFLINE_VOYAGE_CONFIG_ENV_KEYS.map((key) => [key, process.env[key]]),
+    );
+    const originalGet = envManager.get;
+    try {
+        envManager.get = (name) => process.env[name];
+        for (const key of OFFLINE_VOYAGE_CONFIG_ENV_KEYS) delete process.env[key];
+        Object.assign(process.env, {
+            SATORI_RUNTIME_PROFILE: 'offline',
+            VECTOR_STORE_PROVIDER: 'LanceDB',
+            LANCEDB_PATH: '/tmp/satori-lancedb',
+            EMBEDDING_PROVIDER: 'Potion',
+            POTION_HELPER_PATH: '/opt/satori/potion-helper',
+            POTION_MODEL_PATH: '/opt/satori/potion-model',
+        }, overrides);
+        run();
+    } finally {
+        envManager.get = originalGet;
+        for (const key of OFFLINE_VOYAGE_CONFIG_ENV_KEYS) {
+            const value = previous[key];
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    }
+}
+
+test('offline config accepts explicitly selected Voyage reranking when the key is present', () => {
+    withOfflinePotionConfig({
+        SATORI_RERANKER_PROVIDER: 'voyage',
+        VOYAGEAI_API_KEY: 'test-voyage-key',
+    }, () => {
+        const parsed = createMcpConfig();
+
+        assert.equal(parsed.rerankerProvider, 'voyage');
+        assert.equal(resolveRerankerProvider(parsed), 'voyage');
+    });
+});
+
+test('offline config does not infer Voyage reranking from an API key', () => {
+    withOfflinePotionConfig({ VOYAGEAI_API_KEY: 'test-voyage-key' }, () => {
+        const parsed = createMcpConfig();
+
+        assert.ok(parsed.rerankerProvider === 'none' || parsed.rerankerProvider === 'lateon');
+        assert.notEqual(resolveRerankerProvider(parsed), 'voyage');
+    });
+});
+
+test('offline config requires a Voyage API key when Voyage is explicitly selected', () => {
+    withOfflinePotionConfig({ SATORI_RERANKER_PROVIDER: 'voyage' }, () => {
+        assert.throws(
+            createMcpConfig,
+            (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.equal(
+                    error.message,
+                    'SATORI_RERANKER_PROVIDER=voyage requires VOYAGEAI_API_KEY.',
+                );
+                return true;
+            },
+        );
+    });
 });
 
 test('Potion bootstrap rejects invalid model identity or dimension', async () => {

@@ -45,3 +45,10 @@ test("every help topic renders", () => {
         assert.match(formatCommandHelpText(topic), /^\S.*\n\nUsage:\n {2}satori /, topic);
     }
 });
+
+test("reranker help documents provider selection, models, and verification control", () => {
+    const text = formatCommandHelpText("reranker");
+    assert.match(text, /satori reranker use <provider> \[--model <name>\] \[--no-verify\]/);
+    assert.match(text, /satori reranker use voyage --model rerank-3/);
+    assert.match(text, /--no-verify\s+Skip the Voyage reranker test call/);
+});

@@ -30,6 +30,7 @@ import { runSearchFrontDoor, type SearchFrontDoorHost } from "./search-frontdoor
 import { SearchQuerySupport } from "./search-query-support.js";
 import { buildSearchQueryPlan, parseSearchOperators } from "./search-query-planning.js";
 import { resolveSearchAnswerFocus } from "./search-answer-focus.js";
+import { buildSearchWarningDetails } from "./search-response-helpers.js";
 import {
     buildSearchRerankQuery,
     SEARCH_RERANK_QUERY_PROJECTION_IDENTITY,
@@ -303,6 +304,80 @@ test("Scenario D: universal projection failure skips the provider and keeps retr
     );
 });
 
+test("permanent Voyage HTTP failures explain the rejected rerank request", async () => {
+    const providerMessage = "Model rerank-9 is not supported";
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "voyage", model: "rerank-9", profile: "test" }),
+        rerank: async () => {
+            throw new RerankerRequestError("permanent_http", 400, 1, providerMessage);
+        },
+    };
+    const results = [
+        candidate("a", "src/a.ts", 0.9),
+        candidate("b", "src/b.ts", 0.8),
+        candidate("c", "src/c.ts", 0.7),
+    ];
+    const diagnostics = buildDiagnostics();
+    const outcome = await runSearchExecution(
+        buildInput("how does Shariah compliance checking block trades"),
+        buildHost(results, reranker),
+        diagnostics,
+    );
+
+    assert.equal(outcome.kind, "ok");
+    if (outcome.kind !== "ok") return;
+    const warning = "RERANKER_FAILED - Voyage rejected the rerank request for model 'rerank-9' (HTTP 400): Model rerank-9 is not supported. Results use retrieval ranking only.";
+    assert.ok(outcome.searchWarnings.includes(warning));
+    assert.equal(diagnostics.rerankerFailureStatus, 400);
+    assert.equal(diagnostics.rerankerFailureMessage, providerMessage);
+    assert.deepEqual(
+        buildSearchWarningDetails(outcome.searchWarnings).find((detail) => detail.code === "RERANKER_FAILED"),
+        {
+            code: "RERANKER_FAILED",
+            severity: "degraded",
+            blocksUse: false,
+            message: "Voyage rejected the rerank request for model 'rerank-9' (HTTP 400): Model rerank-9 is not supported. Results use retrieval ranking only.",
+            action: "Check the model name and API key, then run satori reranker use voyage --model <name>.",
+        },
+    );
+    assert.deepEqual(
+        outcome.scored.map((entry) => entry.result.candidateId),
+        ["a", "b", "c"],
+    );
+});
+
+test("permanent HTTP failures from non-Voyage rerankers keep the generic warning", async () => {
+    const reranker: Reranker = {
+        getIdentity: () => ({ provider: "lateon", model: "test", profile: "test" }),
+        rerank: async () => {
+            throw new RerankerRequestError("permanent_http", 400, 1, "Model test is not supported");
+        },
+    };
+    const outcome = await runSearchExecution(
+        buildInput("how does Shariah compliance checking block trades"),
+        buildHost([
+            candidate("a", "src/a.ts", 0.9),
+            candidate("b", "src/b.ts", 0.8),
+            candidate("c", "src/c.ts", 0.7),
+        ], reranker),
+        buildDiagnostics(),
+    );
+
+    assert.equal(outcome.kind, "ok");
+    if (outcome.kind !== "ok") return;
+    assert.ok(outcome.searchWarnings.includes("RERANKER_FAILED"));
+    assert.deepEqual(
+        buildSearchWarningDetails(outcome.searchWarnings).find((detail) => detail.code === "RERANKER_FAILED"),
+        {
+            code: "RERANKER_FAILED",
+            severity: "degraded",
+            blocksUse: false,
+            message: "The reranker failed, so results use retrieval ranking only.",
+            action: "Retry once; if it recurs, use debugMode=ranking to inspect the reranker failure reason.",
+        },
+    );
+});
+
 test("Scenario E: provider timeout freezes retrieval order and reports qualified lateness", async () => {
     const effectiveScoreDeadlineMs = 2000;
     const observedWallMs = 2450;
@@ -338,6 +413,16 @@ test("Scenario E: provider timeout freezes retrieval order and reports qualified
     assert.equal(outcome.rerankerFailurePhase, "api_call");
     assert.equal(outcome.rerankerFailureKind, "timeout");
     assert.ok(outcome.searchWarnings.includes("RERANKER_FAILED"));
+    assert.deepEqual(
+        buildSearchWarningDetails(outcome.searchWarnings).find((detail) => detail.code === "RERANKER_FAILED"),
+        {
+            code: "RERANKER_FAILED",
+            severity: "degraded",
+            blocksUse: false,
+            message: "The reranker failed, so results use retrieval ranking only.",
+            action: "Retry once; if it recurs, use debugMode=ranking to inspect the reranker failure reason.",
+        },
+    );
     assert.deepEqual(outcome.rerankerExecutionDiagnostics, {
         attempts: 1,
         retries: 0,

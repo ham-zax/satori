@@ -113,7 +113,31 @@ test("Doctor renders effective configuration for every supported client as a tab
     assert.match(text, /Codex\s+\| Configured\s+\| offline\s+\| Potion \/ potion-code\s+\| 256\s+\| LateOn · Code-edge D128\s+\| LanceDB\s+\| Managed launcher/);
     assert.match(text, /Claude Code\s+\| Not configured\s+\| —/);
     assert.match(text, /OpenCode\s+\| Needs repair\s+\| connected\s+\| VoyageAI \/ voyage-code-3\s+\| 1024\s+\| none\s+\| Milvus\s+\| Client config/);
+    assert.doesNotMatch(text, /Online: search queries and code excerpts are sent to Voyage\./);
     assert.doesNotMatch(text, /Selected runtime:|Configured runtimes:/);
+});
+
+test("Doctor table reports the Voyage reranker model and online disclosure", () => {
+    const result: DoctorResult = {
+        ...resultWithActiveRuntime(),
+        runtimeConfigurations: [{
+            client: "codex",
+            status: "configured",
+            source: "managed_launcher",
+            profile: "connected",
+            embeddingProvider: "VoyageAI",
+            embeddingModel: "voyage-code-3",
+            embeddingDimension: "1024",
+            rerankerProvider: "voyage",
+            rerankerModel: "rerank-3-lite",
+            rerankerProfile: null,
+            vectorStore: "Milvus",
+        }],
+    };
+
+    const text = formatDoctorText(result, { verbose: false });
+    assert.match(text, /Codex\s+\| Configured\s+\| connected\s+\| VoyageAI \/ voyage-code-3\s+\| 1024\s+\| Voyage \/ rerank-3-lite\s+\| Milvus\s+\| Managed launcher/);
+    assert.match(text, /Online: search queries and code excerpts are sent to Voyage\./);
 });
 
 test("Doctor table shortens model identity and verbose output keeps the full identity", () => {

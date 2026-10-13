@@ -169,6 +169,88 @@ test("parseCliArgs supports the offline LateOn reranker opt-out", () => {
     );
 });
 
+test("parseCliArgs accepts reranker providers and a trimmed model for either install runtime", () => {
+    for (const runtime of ["offline", "voyage"] as const) {
+        const parsed = parseCliArgs([
+            "install",
+            "--runtime",
+            runtime,
+            "--reranker",
+            "voyage",
+            "--reranker-model",
+            "  rerank-custom-model  ",
+        ]);
+        assert.equal(parsed.command.kind, "install");
+        if (parsed.command.kind !== "install") assert.fail("Expected install command parsing");
+        assert.equal(parsed.command.runtime, runtime);
+        assert.equal(parsed.command.reranker, "voyage");
+        assert.equal(parsed.command.rerankerModel, "rerank-custom-model");
+    }
+
+    const connectedNone = parseCliArgs(["install", "--runtime", "voyage", "--reranker", "none"]);
+    assert.equal(connectedNone.command.kind, "install");
+    if (connectedNone.command.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(connectedNone.command.reranker, "none");
+});
+
+test("parseCliArgs normalizes reranker aliases and parses provider use", () => {
+    const useLateOn = { kind: "reranker", operation: "enable", purge: false };
+    assert.deepEqual(parseCliArgs(["reranker", "use", "lateon"]).command, useLateOn);
+    assert.deepEqual(parseCliArgs(["reranker", "use", "offline"]).command, useLateOn);
+    assert.deepEqual(parseCliArgs(["reranker", "enable"]).command, useLateOn);
+
+    const useNone = { kind: "reranker", operation: "disable", purge: false };
+    assert.deepEqual(parseCliArgs(["reranker", "use", "none"]).command, useNone);
+    assert.deepEqual(parseCliArgs(["reranker", "disable"]).command, useNone);
+    assert.deepEqual(parseCliArgs(["reranker", "disable", "--purge"]).command, {
+        kind: "reranker",
+        operation: "disable",
+        purge: true,
+    });
+
+    assert.deepEqual(parseCliArgs(["reranker", "use", "voyage", "--model", "  rerank-user-model  "]).command, {
+        kind: "reranker",
+        operation: "use",
+        provider: "voyage",
+        model: "rerank-user-model",
+        purge: false,
+    });
+    assert.deepEqual(parseCliArgs(["reranker", "status"]).command, {
+        kind: "reranker",
+        operation: "status",
+        purge: false,
+    });
+});
+
+test("parseCliArgs rejects unsupported reranker providers and invalid model options", () => {
+    assert.throws(() => parseCliArgs(["reranker", "use", "unknown"]), /lateon, voyage, none/);
+    assert.throws(() => parseCliArgs(["reranker", "use", "lateon", "--model", "rerank-user-model"]), /only valid.*voyage/);
+    assert.throws(() => parseCliArgs(["reranker", "use", "voyage", "--model", "  "]), /non-empty/);
+    assert.throws(() => parseCliArgs(["install", "--reranker", "lateon", "--reranker-model", "rerank-user-model"]), /only valid.*voyage/);
+    assert.throws(() => parseCliArgs(["install", "--reranker", "voyage", "--reranker-model", "  "]), /non-empty/);
+    assert.throws(() => parseCliArgs(["install", "--runtime", "voyage", "--reranker", "lateon"]), /only valid with --runtime offline/);
+});
+
+test("parseCliArgs scopes --no-verify to Voyage reranker use and install", () => {
+    assert.deepEqual(parseCliArgs(["reranker", "use", "voyage", "--no-verify"]).command, {
+        kind: "reranker",
+        operation: "use",
+        provider: "voyage",
+        noVerify: true,
+        purge: false,
+    });
+    const install = parseCliArgs(["install", "--runtime", "offline", "--reranker", "voyage", "--no-verify"]).command;
+    assert.equal(install.kind, "install");
+    if (install.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(install.noVerify, true);
+
+    assert.throws(() => parseCliArgs(["reranker", "use", "lateon", "--no-verify"]), /only valid with reranker use voyage/);
+    assert.throws(() => parseCliArgs(["reranker", "disable", "--no-verify"]), /only valid with reranker use voyage/);
+    assert.throws(() => parseCliArgs(["install", "--reranker", "none", "--no-verify"]), /only valid with --reranker voyage/);
+    assert.throws(() => parseCliArgs(["install", "--no-verify"]), /only valid with --reranker voyage/);
+    assert.throws(() => parseCliArgs(["doctor", "--no-verify"]), /Unknown argument for doctor/);
+});
+
 test("parseCliArgs accepts an explicit connected Milvus backend", () => {
     const parsed = parseCliArgs(["install", "--runtime", "voyage", "--vector-store", "milvus"]);
     assert.equal(parsed.command.kind, "install");

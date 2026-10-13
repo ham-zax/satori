@@ -272,3 +272,32 @@ test("static runtime config enforces the explicit offline policy and recorded mo
     assert.equal(invalid.find((check) => check.name === "offline_vector_policy")?.status, "error");
     assert.equal(invalid.find((check) => check.name === "offline_model_digest")?.status, "error");
 });
+
+test("static runtime config accepts offline Voyage reranking and reports a missing key", () => {
+    const base = {
+        SATORI_RUNTIME_PROFILE: "offline",
+        VECTOR_STORE_PROVIDER: "LanceDB",
+        EMBEDDING_PROVIDER: "Potion",
+        EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+        EMBEDDING_OUTPUT_DIMENSION: "256",
+        POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
+        POTION_MODEL_PATH: "/opt/satori/potion/model",
+        SATORI_RERANKER_PROVIDER: "voyage",
+    };
+    const configured = evaluateStaticRuntimeConfig({
+        ...base,
+        VOYAGEAI_API_KEY: "test-voyage-key",
+    });
+    const reranker = configured.find((check) => check.name === "reranker_provider");
+    assert.equal(reranker?.status, "ok");
+    assert.match(reranker?.message || "", /Voyage reranking is online/);
+    assert.equal(configured.some((check) => check.status === "error"), false);
+
+    const missingKey = evaluateStaticRuntimeConfig({
+        ...base,
+        VOYAGEAI_API_KEY: "",
+    });
+    const missingKeyCheck = missingKey.find((check) => check.name === "reranker_api_key");
+    assert.equal(missingKeyCheck?.status, "error");
+    assert.match(missingKeyCheck?.message || "", /VOYAGEAI_API_KEY/);
+});

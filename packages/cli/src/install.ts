@@ -47,9 +47,11 @@ import {
 import {
     assertDefaultLateOnProfile,
     configuredLateOnModelPath,
+    resolveConnectedReranker,
     resolveConnectedVectorStoreForInstallOrThrow,
     resolveOfflineOllamaModel,
     resolveOfflineReranker,
+    resolveRerankerModel,
     resolveVerifiedLateOnModel,
     resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
@@ -147,10 +149,16 @@ export async function executeInstallCommand(
                     options.platform,
                     options.architecture,
                 )
-                : undefined;
+                : resolveConnectedReranker(command, managedRuntimeEnvironment, env);
+            const rerankerModel = resolveRerankerModel(
+                reranker,
+                command.rerankerModel,
+                managedRuntimeEnvironment,
+                env,
+            );
             const explicitRerankerSelection = command.runtime === "offline" && command.reranker !== undefined;
             if (reranker) assertDefaultLateOnProfile(reranker, env, explicitRerankerSelection);
-            const requestedLateOnModelPath = command.runtime === "offline" && reranker
+            const requestedLateOnModelPath = command.runtime === "offline" && reranker === "lateon"
                 ? options.lateOnModelPath
                     ?? configuredLateOnModelPath(reranker, managedRuntimeEnvironment, env)
                 : undefined;
@@ -192,6 +200,7 @@ export async function executeInstallCommand(
                     vectorStore,
                     ollamaModel: preservedOllamaModel,
                     reranker,
+                    rerankerModel,
                     lateOnModelPath,
                     ...(reranker === "lateon"
                         ? {
@@ -266,6 +275,7 @@ export async function executeInstallCommand(
                 const preflightDependencies: InstallPreflightDependencies = {
                     ...managedRuntimePreflightDependencies(homeDir, installedRuntimeCommand),
                     ...options.preflightDependencies,
+                    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
                 };
                 try {
                     preflight = await (options.preflightRunner ?? runInstallPreflight)(
@@ -276,6 +286,8 @@ export async function executeInstallCommand(
                             vectorStore,
                             ollamaModel: preservedOllamaModel,
                             reranker,
+                            rerankerModel,
+                            noVerify: command.noVerify,
                             ...(lateOnModel
                                 ? {
                                     lateOnModelPath: lateOnModel.modelDirectory,
@@ -332,6 +344,7 @@ export async function executeInstallCommand(
                 "EMBEDDING_PROVIDER",
                 "EMBEDDING_MODEL",
                 "SATORI_RERANKER_PROVIDER",
+                "VOYAGEAI_RERANKER_MODEL",
                 "SATORI_LATEON_MODEL_PATH",
                 "SATORI_LATEON_PROFILE",
                 "SATORI_LATEON_ACTIVATION_POLICY",

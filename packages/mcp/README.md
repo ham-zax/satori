@@ -185,6 +185,13 @@ its results are advisory and do not establish complete impact coverage.
   it means the selected embedding provider plus baseline ordering, not
   "Potion + BM25". Automatic failure fallback and explicit opt-out are different
   concepts.
+- Direct runtimes select Voyage with `SATORI_RERANKER_PROVIDER=voyage`. This
+  needs `VOYAGEAI_API_KEY`; the key alone does not enable it. Startup fails with
+  `SATORI_RERANKER_PROVIDER=voyage requires VOYAGEAI_API_KEY.` when the key is
+  missing. `VOYAGEAI_RERANKER_MODEL` sets the model (default `rerank-3-lite`),
+  and the name is passed to Voyage unchanged. Each search sends the query and
+  candidate code excerpts to Voyage, which bills for them. A rejected rerank
+  returns results in retrieval order with `RERANKER_FAILED`.
 
 ## Development
 

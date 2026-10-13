@@ -630,6 +630,38 @@ test("runDoctor flags a managed launcher whose LateOn activation policy contradi
     }
 });
 
+test("runDoctor includes the model for a Voyage reranker", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-voyage-reranker-"));
+    try {
+        const result = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir, VOYAGEAI_API_KEY: "" },
+            inspectManagedClients: () => [{
+                client: "codex",
+                configPath: path.join(tempDir, "codex.toml"),
+                status: "ok",
+                message: "codex config uses a direct runtime",
+                usesManagedLauncher: false,
+                runtimeEnvironment: Object.freeze({
+                    SATORI_RUNTIME_PROFILE: "connected",
+                    VECTOR_STORE_PROVIDER: "Milvus",
+                    MILVUS_ADDRESS: "localhost:19530",
+                    EMBEDDING_PROVIDER: "VoyageAI",
+                    EMBEDDING_MODEL: "voyage-code-3",
+                    EMBEDDING_OUTPUT_DIMENSION: "1024",
+                    SATORI_RERANKER_PROVIDER: "voyage",
+                }),
+            }],
+        }));
+
+        const configuration = result.runtimeConfigurations?.find((entry) => entry.client === "codex");
+        assert.equal(configuration?.rerankerProvider, "voyage");
+        assert.equal(configuration?.rerankerModel, "rerank-3-lite");
+        assert.equal(Object.prototype.hasOwnProperty.call(configuration ?? {}, "rerankerModel"), true);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test("runDoctor rejects unsupported embedding providers", async () => {
     const result = await runDoctor(baseDoctorOptions({
         nodeVersion: "v22.13.0",

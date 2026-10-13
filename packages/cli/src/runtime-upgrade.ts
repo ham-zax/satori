@@ -4,10 +4,10 @@ import path from "node:path";
 import { CliError } from "./errors.js";
 import { satoriCliCommand } from "./cli-command.js";
 import type {
-    InstallOfflineReranker,
     InstallRuntime,
     InstallVectorStore,
 } from "./args.js";
+import type { InstallReranker } from "./reranker-providers.js";
 import type {
     InstallCommandInput,
     InstallCommandOptions,
@@ -26,6 +26,8 @@ import {
     resolveConnectedVectorStoreForInstallOrThrow,
     resolveOfflineOllamaModel,
     resolveOfflineReranker,
+    resolveConnectedReranker,
+    resolveRerankerModel,
     resolveVerifiedLateOnModel,
     resolveVerifiedPotionModel,
 } from "./runtime-selection.js";
@@ -71,12 +73,14 @@ export function upgradeRuntimeSelection(
     env: NodeJS.ProcessEnv,
     platform: NodeJS.Platform | undefined,
     architecture: string | undefined,
-    rerankerOverride?: InstallOfflineReranker,
+    rerankerOverride?: InstallReranker,
+    rerankerModelOverride?: string,
 ): {
     runtime: InstallRuntime;
     vectorStore: InstallVectorStore;
     ollamaModel?: string;
-    reranker?: InstallOfflineReranker;
+    reranker?: InstallReranker;
+    rerankerModel?: string;
     lateOnModelPath?: string;
     effectiveEnv: NodeJS.ProcessEnv;
 } {
@@ -89,21 +93,31 @@ export function upgradeRuntimeSelection(
             dryRun: false,
             runtime: "offline",
             ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
+            ...(rerankerModelOverride ? { rerankerModel: rerankerModelOverride } : {}),
         };
         const ollamaModel = resolveOfflineOllamaModel(command, managedEnvironment, env);
         const reranker = resolveOfflineReranker(command, managedEnvironment, env, platform, architecture);
+        const rerankerModel = resolveRerankerModel(
+            reranker,
+            command.rerankerModel,
+            managedEnvironment,
+            env,
+        );
         assertDefaultLateOnProfile(reranker, env, rerankerOverride !== undefined);
-        const lateOnModelPath = configuredLateOnModelPath(reranker, managedEnvironment, env);
+        const lateOnModelPath = reranker === "lateon"
+            ? configuredLateOnModelPath(reranker, managedEnvironment, env)
+            : undefined;
         return {
             runtime: "offline",
             vectorStore: "LanceDB",
             ...(ollamaModel ? { ollamaModel } : {}),
             reranker,
+            ...(rerankerModel ? { rerankerModel } : {}),
             ...(lateOnModelPath ? { lateOnModelPath } : {}),
             effectiveEnv,
         };
     }
-    if (rerankerOverride) {
+    if (rerankerOverride === "lateon") {
         throw new CliError(
             "E_USAGE",
             `Reranker selection applies only to the offline runtime. Rerun \`${satoriCliCommand("install --runtime offline")}\` first.`,
@@ -122,7 +136,11 @@ export function upgradeRuntimeSelection(
         client: "all",
         dryRun: false,
         runtime: "voyage",
+        ...(rerankerOverride ? { reranker: rerankerOverride } : {}),
+        ...(rerankerModelOverride ? { rerankerModel: rerankerModelOverride } : {}),
     };
+    const reranker = resolveConnectedReranker(command, managedEnvironment, env);
+    const rerankerModel = resolveRerankerModel(reranker, command.rerankerModel, managedEnvironment, env);
     return {
         runtime: "voyage",
         vectorStore: resolveConnectedVectorStoreForInstallOrThrow(
@@ -131,6 +149,8 @@ export function upgradeRuntimeSelection(
             env,
             managedEnvironment,
         ),
+        reranker,
+        ...(rerankerModel ? { rerankerModel } : {}),
         effectiveEnv,
     };
 }
@@ -249,6 +269,7 @@ export async function activateManagedRuntimeSelection(input: {
     coreVersion: string;
     selection: ManagedRuntimeSelection;
     failureLabel: string;
+    noVerify?: boolean;
 }): Promise<void> {
     const { homeDir, options, installed, selection } = input;
     if (selection.runtime === "offline" && !selection.ollamaModel) {
@@ -306,6 +327,7 @@ export async function activateManagedRuntimeSelection(input: {
             const preflightDependencies: InstallPreflightDependencies = {
                 ...exactRuntimePreflightDependencies(installedCandidate.command),
                 ...options.preflightDependencies,
+                ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
             };
             const preflight = await (options.preflightRunner ?? runInstallPreflight)({
                 runtime: selection.runtime,
@@ -314,6 +336,8 @@ export async function activateManagedRuntimeSelection(input: {
                 vectorStore: selection.vectorStore,
                 ollamaModel: selection.ollamaModel,
                 reranker: selection.reranker,
+                rerankerModel: selection.rerankerModel,
+                noVerify: input.noVerify,
                 ...(lateOnModel
                     ? {
                         lateOnModelPath: lateOnModel.modelDirectory,
@@ -442,6 +466,7 @@ export async function executeManagedRuntimeUpgrade(
         coreVersion: target.coreVersion,
         selection,
         failureLabel: "Satori runtime upgrade",
+        noVerify: true,
     });
     return { ...result, status: "upgraded", restartRequired: true };
 }

@@ -496,6 +496,7 @@ EMBEDDING_MODEL
 EMBEDDING_OUTPUT_DIMENSION
 VOYAGEAI_API_KEY
 SATORI_RERANKER_PROVIDER
+VOYAGEAI_RERANKER_MODEL
 SATORI_LATEON_MODEL_PATH
 SATORI_LATEON_PROFILE
 SATORI_LATEON_ACTIVATION_POLICY
@@ -510,6 +511,75 @@ Run `doctor` after changing runtime configuration. Restart every Satori MCP clie
 Satori stores each index generation as one immutable Publication. A complete Publication owns the vector collection, navigation, selection policy and format identity, source checkpoint, and persisted semantic-provider coverage for that generation. Readers pin one Publication for the lifetime of a request; activation makes a replacement Publication current, while failed candidate work leaves the active Publication unchanged. Full-index candidates also have durable receipts before vector collection creation. If a process dies mid-build, the next same-root create/reindex can prove and reclaim an unreferenced orphan candidate instead of leaking an unmapped collection.
 
 Incremental synchronization scans for source changes, embeds changed chunks only, updates navigation and relationship evidence, and activates the complete replacement Publication. Ordinary source divergence converges through `sync`. Search admission is bounded before pathological source files can exhaust the worker: individual searchable sources are capped at 8 MiB and aggregate searchable source bytes at 512 MiB per full Publication; the aggregate limit produces a truthful partial `limit_reached` Publication. TypeScript compiler-backed semantics have separate 4 MiB per-source and 64 MiB per-project budgets, so semantic over-budget cases leave search available while call-graph coverage becomes unavailable. Managed offline runtimes automatically rebuild a tracked Publication when the current format/runtime identity or runtime policy requires a full reindex; corrupt or unsupported authority still fails closed for explicit operator recovery. Satori does not expose a force-unlock or salvage retired authority formats into the current Publication model.
+
+## Choosing a reranker
+
+Change the reranker from the CLI:
+
+```bash
+satori reranker use lateon
+satori reranker use voyage [--model <name>]
+satori reranker use none
+satori reranker status
+satori install --reranker lateon|voyage|none [--reranker-model <name>] [--no-verify]
+```
+
+`offline` is accepted as another spelling of `lateon`. `enable` and `disable`
+keep working as `use lateon` and `use none`.
+
+LateOn runs offline only. Voyage runs on both the offline and connected
+runtimes. The default Voyage model is `rerank-3-lite`. Any model name is passed
+to the provider unchanged. A name the provider rejects is reported with the
+provider's message.
+
+Voyage is selected only explicitly. A `VOYAGEAI_API_KEY` alone does not enable
+it. The key is read from the environment and is never written to the launcher.
+Direct runtimes set the provider and model in the MCP client's environment:
+
+```text
+SATORI_RERANKER_PROVIDER=voyage
+VOYAGEAI_API_KEY=<your key>
+VOYAGEAI_RERANKER_MODEL=rerank-3-lite
+```
+
+If `SATORI_RERANKER_PROVIDER=voyage` is set without `VOYAGEAI_API_KEY`, startup
+fails with:
+
+```text
+SATORI_RERANKER_PROVIDER=voyage requires VOYAGEAI_API_KEY.
+```
+
+`satori reranker use voyage` and `satori install --reranker voyage` first make
+one small test rerank call. If the call is rejected or fails, the switch stops,
+the provider's message is printed, and the launcher is unchanged. Pass
+`--no-verify` to skip the call. `satori upgrade` does not make this call.
+
+`satori reranker status` and `satori doctor` show the provider and model. For
+Voyage they print:
+
+```text
+Online: search queries and code excerpts are sent to Voyage.
+```
+
+With Voyage, each search sends the query and candidate code excerpts to Voyage,
+which bills for them. Embeddings and the vector store are not affected.
+
+If Voyage rejects a rerank during search, results are returned in retrieval
+order. The response reports `RERANKER_FAILED`, with the model, the HTTP status,
+and the provider's message.
+
+Definition fusion is skipped only for Voyage `rerank-3` and `rerank-3-lite`.
+Any other model name, including future names, keeps the standard rule.
+
+### Adding a provider
+
+No new provider is added yet. These are the steps for a future provider:
+
+1. Add one entry in `packages/cli/src/reranker-providers.ts`.
+2. Add one value to the MCP provider list in `packages/mcp/src/config.ts`.
+3. Add one case to `createReranker` in
+   `packages/mcp/src/server/provider-runtime.ts`.
+4. Implement a `Reranker` in `packages/core`.
 
 ## Offline Local Reranking
 

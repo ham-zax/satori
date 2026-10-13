@@ -907,6 +907,67 @@ test("managed runtime upgrade replaces MCP and Core without rewriting client con
     });
 });
 
+test("managed runtime upgrade skips Voyage reranker verification", async () => {
+    await withTempHome(async (homeDir) => {
+        const sourceSpecifier = "@satori-code/mcp@6.1.0";
+        const managedEnvironment = {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            LANCEDB_PATH: path.join(homeDir, "lancedb"),
+            EMBEDDING_PROVIDER: "VoyageAI",
+            EMBEDDING_MODEL: "voyage-code-3",
+            EMBEDDING_OUTPUT_DIMENSION: "1024",
+            SATORI_RERANKER_PROVIDER: "voyage",
+            VOYAGEAI_RERANKER_MODEL: "rerank-3-lite",
+        };
+        await executeInstallCommand({
+            kind: "install",
+            client: "codex",
+            runtime: "voyage",
+            dryRun: false,
+        }, {
+            homeDir,
+            env: { VOYAGEAI_API_KEY: "" },
+            packageSpecifier: sourceSpecifier,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/source-runtime.mjs",
+                sourceSpecifier,
+                "6.1.0",
+                "3.0.0",
+            ) as never,
+            preflightRunner: async () => ({ runtimeEnvironment: managedEnvironment }),
+        });
+
+        let fetchCalls = 0;
+        const result = await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+            homeDir,
+            env: { VOYAGEAI_API_KEY: "upgrade-test-api-key", VECTOR_STORE_PROVIDER: "LanceDB" },
+            platform: "linux",
+            architecture: "x64",
+            fetchImpl: (async () => {
+                fetchCalls += 1;
+                throw new Error("fetch must not be called during upgrade");
+            }) as typeof fetch,
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/target-runtime.mjs",
+                UPGRADE_TARGET.mcpPackageSpecifier,
+                UPGRADE_TARGET.mcpVersion,
+                UPGRADE_TARGET.coreVersion,
+            ) as never,
+            preflightDependencies: {
+                probeLanceDb: async () => {},
+                probeCandidateRuntime: async () => {},
+            },
+        });
+
+        assert.equal(result.status, "upgraded");
+        assert.equal(fetchCalls, 0);
+        const launcherEnvironment = parseManagedLauncherDescriptor(readFile(launcherPath(homeDir))).managedEnv;
+        assert.equal(launcherEnvironment.SATORI_RERANKER_PROVIDER, "voyage");
+        assert.equal(launcherEnvironment.VOYAGEAI_RERANKER_MODEL, "rerank-3-lite");
+    });
+});
+
 test("failed managed runtime upgrade preserves the previous launcher and removes its candidate", async () => {
     await withTempHome(async (homeDir) => {
         const oldSpecifier = "@satori-code/mcp@6.1.0";
@@ -3654,4 +3715,48 @@ test("uninstall --dry-run says it would remove or modify the paths it lists", as
         const nothing = await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: true }, { homeDir });
         assert.match(formatInstallText(nothing), /No files would change\./);
     });
+});
+
+test("managed runtime upgrades preserve Voyage reranker provider and model in both profiles", async () => {
+    for (const profile of ["offline", "connected"] as const) {
+        await withTempHome(async (homeDir) => {
+            await installUpgradeSourceRuntime(homeDir, {
+                SATORI_RUNTIME_PROFILE: profile,
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                ...(profile === "offline" ? {
+                    LANCEDB_PATH: path.join(homeDir, "lancedb"),
+                    EMBEDDING_PROVIDER: "Potion",
+                } : { EMBEDDING_PROVIDER: "VoyageAI" }),
+                SATORI_RERANKER_PROVIDER: "voyage",
+                VOYAGEAI_RERANKER_MODEL: "rerank-3-lite",
+            });
+
+            await executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+                homeDir,
+                env: { VOYAGEAI_API_KEY: "test-only-voyage-key" },
+                platform: "linux",
+                architecture: "x64",
+                potionModelPath: path.join(POTION_ASSETS_ROOT, "model"),
+                execFileSyncImpl: installRuntimePackageStub(
+                    "dist/target-runtime.mjs",
+                    UPGRADE_TARGET.mcpPackageSpecifier,
+                    UPGRADE_TARGET.mcpVersion,
+                    UPGRADE_TARGET.coreVersion,
+                ) as never,
+                preflightRunner: async (input) => ({
+                    runtimeEnvironment: planInstallRuntimeEnvironment(input),
+                }),
+                preflightDependencies: {
+                    probeCandidateRuntime: async () => {},
+                },
+            });
+
+            const launcher = readFile(launcherPath(homeDir));
+            const managedEnvironment = parseManagedLauncherDescriptor(launcher).managedEnv;
+            assert.equal(managedEnvironment.SATORI_RERANKER_PROVIDER, "voyage", profile);
+            assert.equal(managedEnvironment.VOYAGEAI_RERANKER_MODEL, "rerank-3-lite", profile);
+            assert.equal(managedEnvironment.VOYAGEAI_API_KEY, undefined, profile);
+            assert.doesNotMatch(launcher, /VOYAGEAI_API_KEY|test-only-voyage-key/);
+        });
+    }
 });

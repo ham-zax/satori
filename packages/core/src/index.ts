@@ -195,6 +195,7 @@ export type {
     Reranker,
 } from './reranker/reranker';
 export {
+    DEFAULT_VOYAGE_RERANKER_MODEL,
     RerankerRequestError,
     VoyageAIReranker,
 } from './reranker/voyageai-reranker';

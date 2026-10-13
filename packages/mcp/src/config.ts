@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import {
     assertNetworkPolicyAllowsEndpoint,
+    DEFAULT_VOYAGE_RERANKER_MODEL,
     EMBEDDING_NORMALIZATION_POLICY_VERSION,
     envManager,
     EMBEDDING_PROJECTION_VERSION,
@@ -154,7 +155,7 @@ export interface ContextMcpConfig {
     lanceDbPath?: string;
     // Reranker configuration
     rerankerProvider?: RerankerProvider;
-    rankerModel?: 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
+    rankerModel?: string;
     lateOnModelPath?: string;
     lateOnProfileId?: LateOnRuntimeProfileId;
     lateOnActivationPolicy?: LateOnActivationPolicyId;
@@ -521,12 +522,9 @@ export function createMcpConfig(): ContextMcpConfig {
             'SATORI_RERANKER_PROVIDER=lateon requires SATORI_LATEON_MODEL_PATH.',
         );
     }
-    if (
-        rerankerProvider === 'voyage'
-        && executionPolicy.networkPolicy.kind !== 'remote-allowed'
-    ) {
+    if (rerankerProvider === 'voyage' && !envManager.get('VOYAGEAI_API_KEY')) {
         throw new Error(
-            'SATORI_RERANKER_PROVIDER=voyage is unavailable under the local-only network policy.',
+            'SATORI_RERANKER_PROVIDER=voyage requires VOYAGEAI_API_KEY.',
         );
     }
 
@@ -564,14 +562,10 @@ export function createMcpConfig(): ContextMcpConfig {
             : lateOnActivationPolicyRaw
     ) as LateOnActivationPolicyId | undefined;
 
-    // Parse Voyage reranker model from env var.
-    const rankerModelEnv = envManager.get('VOYAGEAI_RERANKER_MODEL');
-    let rankerModel: 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite' | undefined;
-    if (rankerModelEnv && ['rerank-3', 'rerank-3-lite', 'rerank-2.5', 'rerank-2.5-lite', 'rerank-2', 'rerank-2-lite'].includes(rankerModelEnv)) {
-        rankerModel = rankerModelEnv as typeof rankerModel;
-    } else {
-        rankerModel = 'rerank-2.5';
-    }
+    // Parse Voyage reranker model from env var. The name is passed through
+    // as typed (trimmed); unset or blank uses the core default.
+    const rankerModelEnv = envManager.get('VOYAGEAI_RERANKER_MODEL')?.trim();
+    const rankerModel = rankerModelEnv || DEFAULT_VOYAGE_RERANKER_MODEL;
 
     let readFileMaxLines = defaultReadFileMaxLines;
     const readFileMaxLinesRaw = envManager.get('READ_FILE_MAX_LINES');

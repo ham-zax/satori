@@ -14,16 +14,17 @@ import {
 } from "./local-runtime-contract.js";
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
+import { RERANKER_PROVIDERS } from "./reranker-providers.js";
 import { assertSafeModelArtifactPath, resolveModelDirectory, type ModelSpec } from "./model-store.js";
 import {
     createCandidateStderrCollector,
     normalizeCandidateStderr,
 } from "./candidate-stderr.js";
 import type {
-    InstallOfflineReranker,
     InstallRuntime,
     InstallVectorStore,
 } from "./args.js";
+import type { InstallReranker } from "./reranker-providers.js";
 
 const DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434";
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
@@ -36,7 +37,9 @@ export interface InstallPreflightInput {
     env: NodeJS.ProcessEnv;
     vectorStore?: InstallVectorStore;
     ollamaModel?: string;
-    reranker?: InstallOfflineReranker;
+    reranker?: InstallReranker;
+    rerankerModel?: string;
+    noVerify?: boolean;
     lateOnModelPath?: string;
     lateOnProfileId?: string;
     lateOnActivationPolicy?: string;
@@ -55,6 +58,7 @@ export interface InstallPreflightResult {
 }
 
 export interface InstallPreflightDependencies {
+    fetchImpl?: typeof fetch;
     probeLanceDb?: (databasePath: string) => Promise<void>;
     resolveOllamaIdentity?: (input: {
         model: string;
@@ -584,7 +588,11 @@ function planProviderRuntimeEnvironment(
     input: InstallPreflightInput,
 ): Readonly<Record<string, string>> {
     if (input.runtime === "voyage") {
+        if (input.reranker === "lateon") {
+            throw new Error("LateOn reranking is only supported by the offline runtime.");
+        }
         const vectorStore = selectedConnectedVectorStore(input);
+        const rerankerEnvironment = plannedRerankerEnvironment(input);
         return Object.freeze({
             SATORI_RUNTIME_PROFILE: "connected",
             VECTOR_STORE_PROVIDER: vectorStore,
@@ -594,13 +602,14 @@ function planProviderRuntimeEnvironment(
             EMBEDDING_PROVIDER: "VoyageAI",
             EMBEDDING_MODEL: "voyage-code-3",
             EMBEDDING_OUTPUT_DIMENSION: "1024",
+            ...rerankerEnvironment,
         });
     }
 
     if (input.lateOnModelPath && !path.isAbsolute(input.lateOnModelPath)) {
         throw new Error("LateOn model path must be absolute.");
     }
-    let lateOnEnvironment: Readonly<Record<string, string>> = {};
+    let rerankerEnvironment: Readonly<Record<string, string>> = {};
     if (input.reranker === "lateon") {
         const modelDirectory = input.lateOnModelPath;
         const profileId = input.lateOnProfileId;
@@ -614,14 +623,16 @@ function planProviderRuntimeEnvironment(
         if (!activationPolicy) {
             throw new Error("Managed LateOn D128 reranking requires an activation policy identity.");
         }
-        lateOnEnvironment = {
+        rerankerEnvironment = {
             SATORI_RERANKER_PROVIDER: "lateon",
             SATORI_LATEON_MODEL_PATH: modelDirectory,
             SATORI_LATEON_PROFILE: profileId,
             SATORI_LATEON_ACTIVATION_POLICY: activationPolicy,
         };
+    } else if (input.reranker === "voyage") {
+        rerankerEnvironment = plannedRerankerEnvironment(input);
     } else if (input.reranker === "none") {
-        lateOnEnvironment = { SATORI_RERANKER_PROVIDER: "none" };
+        rerankerEnvironment = { SATORI_RERANKER_PROVIDER: "none" };
     }
     const model = input.ollamaModel?.trim();
     if (!model) {
@@ -644,7 +655,7 @@ function planProviderRuntimeEnvironment(
             POTION_HELPER_PATH: helperPath,
             POTION_MODEL_PATH: modelPath,
             POTION_REQUEST_TIMEOUT_MS: DEFAULT_POTION_REQUEST_TIMEOUT_MS,
-            ...lateOnEnvironment,
+            ...rerankerEnvironment,
         });
     }
     const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
@@ -656,8 +667,81 @@ function planProviderRuntimeEnvironment(
         EMBEDDING_PROVIDER: "Ollama",
         EMBEDDING_MODEL: model,
         OLLAMA_HOST: host,
-        ...lateOnEnvironment,
+        ...rerankerEnvironment,
     });
+}
+
+function plannedRerankerEnvironment(
+    input: InstallPreflightInput,
+): Readonly<Record<string, string>> {
+    if (input.reranker === "none") {
+        return { SATORI_RERANKER_PROVIDER: "none" };
+    }
+    if (input.reranker !== "voyage") return {};
+    return {
+        SATORI_RERANKER_PROVIDER: "voyage",
+        VOYAGEAI_RERANKER_MODEL: input.rerankerModel?.trim()
+            || RERANKER_PROVIDERS.voyage.defaultModel,
+    };
+}
+
+function redactApiKey(message: string, apiKey: string): string {
+    return apiKey ? message.split(apiKey).join("[redacted]") : message;
+}
+
+async function verifyVoyageReranker(
+    input: InstallPreflightInput,
+    dependencies: InstallPreflightDependencies,
+): Promise<void> {
+    if (input.noVerify || input.reranker !== "voyage") return;
+
+    const apiKey = input.env.VOYAGEAI_API_KEY?.trim();
+    if (!apiKey) {
+        throw new CliError("E_USAGE", "Voyage reranking requires VOYAGEAI_API_KEY in the environment.", 2);
+    }
+    const model = input.rerankerModel?.trim() || RERANKER_PROVIDERS.voyage.defaultModel;
+    let response: Response;
+    try {
+        response = await (dependencies.fetchImpl ?? fetch)("https://api.voyageai.com/v1/rerank", {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                query: "Satori reranker verification query.",
+                documents: ["Satori reranker verification document."],
+                model,
+                top_k: 1,
+            }),
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new CliError(
+            "E_INSTALL_PREFLIGHT",
+            `Voyage reranker verification failed: ${redactApiKey(message, apiKey)}`,
+            1,
+        );
+    }
+
+    if (!response.ok) {
+        let providerMessage: string;
+        try {
+            providerMessage = await response.text();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new CliError(
+                "E_INSTALL_PREFLIGHT",
+                `Voyage reranker verification failed: ${redactApiKey(message, apiKey)}`,
+                1,
+            );
+        }
+        throw new CliError(
+            "E_INSTALL_PREFLIGHT",
+            `VoyageAI Rerank API error (${response.status}): ${redactApiKey(providerMessage, apiKey)}`,
+            1,
+        );
+    }
 }
 
 export async function runInstallPreflight(
@@ -671,6 +755,7 @@ export async function runInstallPreflight(
             const databasePath = resolveLanceDbPath(input.homeDir, input.env);
             await (dependencies.probeLanceDb ?? probeLanceDbRuntime)(databasePath);
         }
+        await verifyVoyageReranker(input, dependencies);
         return {
             runtimeEnvironment: proposedEnvironment,
         };
@@ -688,6 +773,7 @@ export async function runInstallPreflight(
             throw new Error("Potion preflight requires the staged Satori runtime verifier.");
         }
         await dependencies.verifyPotionRuntime(input.potionAssetsRoot, input.potionModelPath);
+        await verifyVoyageReranker(input, dependencies);
         return { runtimeEnvironment: proposedEnvironment };
     }
     const host = input.env.OLLAMA_HOST?.trim() || DEFAULT_OLLAMA_HOST;
@@ -699,6 +785,7 @@ export async function runInstallPreflight(
         model,
         host,
     });
+    await verifyVoyageReranker(input, dependencies);
     return {
         runtimeEnvironment: Object.freeze({
             ...proposedEnvironment,

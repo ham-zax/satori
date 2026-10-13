@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { CliError } from "./errors.js";
 import { satoriCliCommand } from "./cli-command.js";
-import type { InstallOfflineReranker, RerankerOperation } from "./args.js";
+import type { RerankerOperation } from "./args.js";
+import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 import type { InstallCommandOptions, ManagedRerankerResult } from "./install-contracts.js";
 import { resolveDefaultLateOnModelDirectory } from "./lateon-model-store.js";
 import { managedRuntimeClosureMatches } from "./managed-runtime-closure.js";
@@ -21,9 +22,19 @@ function managedLateOnModelsRoot(homeDir: string): string {
     return path.dirname(resolveDefaultLateOnModelDirectory(homeDir));
 }
 
-function launcherReranker(installed: InstalledManagedRuntime): InstallOfflineReranker | null {
+function launcherReranker(installed: InstalledManagedRuntime): InstallReranker | null {
+    const configured = installed.managedEnv.SATORI_RERANKER_PROVIDER;
+    if (configured && Object.prototype.hasOwnProperty.call(RERANKER_PROVIDERS, configured)) {
+        return configured as InstallReranker;
+    }
     if (installed.managedEnv.SATORI_RUNTIME_PROFILE !== "offline") return null;
     return installed.managedEnv.SATORI_RERANKER_PROVIDER === "lateon" ? "lateon" : "none";
+}
+
+function launcherModel(installed: InstalledManagedRuntime): string | null {
+    if (launcherReranker(installed) !== "voyage") return null;
+    return installed.managedEnv.VOYAGEAI_RERANKER_MODEL?.trim()
+        || RERANKER_PROVIDERS.voyage.defaultModel;
 }
 
 function describe(
@@ -35,21 +46,24 @@ function describe(
         ? installed.managedEnv.SATORI_LATEON_MODEL_PATH ?? null
         : null;
     const managedModelsRoot = managedLateOnModelsRoot(homeDir);
+    const runtime = installed.managedEnv.SATORI_RUNTIME_PROFILE === "offline" ? "offline" : "voyage";
     return {
         action: "reranker",
-        runtime: installed.managedEnv.SATORI_RUNTIME_PROFILE === "offline" ? "offline" : "voyage",
+        runtime,
         reranker,
+        model: reranker === "voyage" ? launcherModel(installed) : null,
+        network: reranker ? RERANKER_PROVIDERS[reranker].network : runtime === "voyage" ? "remote" : "local",
         modelPath,
         managedModelsPresent: fs.existsSync(managedModelsRoot),
     };
 }
 
 /**
- * Switches the managed offline runtime's reranker by re-activating the installed MCP/Core version
+ * Switches the managed runtime's reranker by re-activating the installed MCP/Core version
  * with only the reranker selection changed; clients keep pointing at the same launcher.
  */
 export async function executeManagedRerankerCommand(
-    command: { operation: RerankerOperation; purge: boolean },
+    command: { operation: RerankerOperation; provider?: InstallReranker; model?: string; noVerify?: boolean; purge: boolean },
     options: InstallCommandOptions = {},
 ): Promise<ManagedRerankerResult> {
     const homeDir = options.homeDir ?? os.homedir();
@@ -68,7 +82,16 @@ export async function executeManagedRerankerCommand(
         };
     }
 
-    const desired: InstallOfflineReranker = command.operation === "enable" ? "lateon" : "none";
+    const desired: InstallReranker = command.operation === "enable"
+        ? "lateon"
+        : command.operation === "disable"
+            ? "none"
+            : command.provider ?? (() => {
+                throw new CliError("E_USAGE", "reranker use requires a provider.", 2);
+            })();
+    const desiredModel = desired === "voyage"
+        ? command.model?.trim() || RERANKER_PROVIDERS.voyage.defaultModel
+        : undefined;
     const selection = upgradeRuntimeSelection(
         homeDir,
         installed.managedEnv,
@@ -76,8 +99,12 @@ export async function executeManagedRerankerCommand(
         options.platform,
         options.architecture,
         desired,
+        desiredModel,
     );
+    const currentModel = launcherModel(installed);
+    const selectedModel = desired === "voyage" ? selection.rerankerModel ?? RERANKER_PROVIDERS.voyage.defaultModel : null;
     const unchanged = launcherReranker(installed) === desired
+        && currentModel === selectedModel
         && managedRuntimeClosureMatches(installed.runtimeRoot, managedRuntimeClosureFor(selection, options));
     if (!unchanged) {
         await activateManagedRuntimeSelection({
@@ -89,6 +116,7 @@ export async function executeManagedRerankerCommand(
             coreVersion: installed.coreVersion,
             selection,
             failureLabel: `Satori reranker ${command.operation}`,
+            noVerify: command.noVerify,
         });
     }
     const active = unchanged
@@ -126,14 +154,26 @@ export async function executeManagedRerankerCommand(
 export function formatRerankerText(result: ManagedRerankerResult): string {
     const state = result.reranker === null
         ? "managed by the connected runtime's environment"
-        : result.reranker === "lateon" ? "LateOn (enabled)" : "none (disabled)";
+        : result.reranker === "lateon"
+            ? "LateOn (enabled)"
+            : result.reranker === "voyage"
+                ? "Voyage"
+                : "none (disabled)";
     const heading = result.status === "changed"
-        ? `Satori reranker ${result.operation === "enable" ? "enabled" : "disabled"}`
+        ? result.operation === "use"
+            ? "Satori reranker selected"
+            : `Satori reranker ${result.operation === "enable" ? "enabled" : "disabled"}`
         : result.status === "unchanged"
-            ? `Satori reranker already ${result.operation === "enable" ? "enabled" : "disabled"}`
+            ? result.operation === "use"
+                ? "Satori reranker unchanged"
+                : `Satori reranker already ${result.operation === "enable" ? "enabled" : "disabled"}`
             : "Satori reranker";
     const lines = [heading, "", `Reranker: ${state}`];
-    if (result.modelPath) lines.push(`Model: ${result.modelPath}`);
+    if (result.model) lines.push(`Model: ${result.model}`);
+    else if (result.modelPath) lines.push(`Model: ${result.modelPath}`);
+    if (result.reranker === "voyage" && result.network === "remote") {
+        lines.push("Online: search queries and code excerpts are sent to Voyage.");
+    }
     if (result.purgedModelPath) {
         lines.push(`Deleted LateOn models: ${result.purgedModelPath}`);
     } else if (result.reranker === "none" && result.managedModelsPresent) {

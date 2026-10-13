@@ -1,12 +1,12 @@
 import type { execFileSync } from "node:child_process";
 import type {
     InstallClient,
-    InstallOfflineReranker,
     InstallProfile,
     InstallRuntime,
     InstallVectorStore,
     RerankerOperation,
 } from "./args.js";
+import type { InstallReranker } from "./reranker-providers.js";
 import type {
     InstallPreflightDependencies,
     InstallPreflightInput,
@@ -60,6 +60,7 @@ export const LAUNCHER_OWNED_RUNTIME_ENV_VARS = [
     "EMBEDDING_MODEL",
     "EMBEDDING_OUTPUT_DIMENSION",
     "SATORI_RERANKER_PROVIDER",
+    "VOYAGEAI_RERANKER_MODEL",
     "SATORI_LATEON_MODEL_PATH",
     "SATORI_LATEON_PROFILE",
     "SATORI_LATEON_ACTIVATION_POLICY",
@@ -86,6 +87,8 @@ type InstallCommandBase = {
     client: InstallClient;
     dryRun: boolean;
     profile?: InstallProfile;
+    /** Skip the small Voyage reranker request during preflight. */
+    noVerify?: boolean;
 };
 
 export type InstallCommandInput =
@@ -93,12 +96,15 @@ export type InstallCommandInput =
         runtime: "voyage";
         vectorStore?: InstallVectorStore;
         ollamaModel?: never;
+        reranker?: Exclude<InstallReranker, "lateon">;
+        rerankerModel?: string;
     })
     | (InstallCommandBase & {
         runtime: "offline";
         vectorStore?: "LanceDB";
         ollamaModel?: string;
-        reranker?: InstallOfflineReranker;
+        reranker?: InstallReranker;
+        rerankerModel?: string;
     })
     | {
         kind: "uninstall";
@@ -205,8 +211,10 @@ export interface ManagedRerankerResult {
     /** `current` for status; `unchanged` when the launcher already used the requested reranker. */
     status: "current" | "changed" | "unchanged";
     runtime: InstallRuntime;
-    /** Null for the connected runtime, whose reranker is not installer-managed. */
-    reranker: InstallOfflineReranker | null;
+    /** Null only when the launcher leaves provider selection to the runtime environment. */
+    reranker: InstallReranker | null;
+    model: string | null;
+    network: "local" | "remote";
     modelPath: string | null;
     managedModelsPresent: boolean;
     purgedModelPath: string | null;

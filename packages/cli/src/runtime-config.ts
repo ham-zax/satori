@@ -1,6 +1,7 @@
 import path from "node:path";
 import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { satoriCliCommand } from "./cli-command.js";
+import { RERANKER_PROVIDERS } from "./reranker-providers.js";
 import {
     DEFAULT_LATEON_PROFILE_ID,
     DEFAULT_LATEON_ACTIVATION_POLICY,
@@ -27,7 +28,8 @@ export interface RuntimeConfigSelection {
 const SUPPORTED_EMBEDDING_PROVIDERS = new Set(["OpenAI", "VoyageAI", "Gemini", "Ollama", "Potion"]);
 const SUPPORTED_VECTOR_STORES = new Set(["Milvus", "LanceDB"]);
 const SUPPORTED_OUTPUT_DIMENSIONS = new Set([256, 512, 1024, 2048]);
-const SUPPORTED_RERANKER_PROVIDERS = new Set(["none", "voyage", "lateon"]);
+const RERANKER_PROVIDER_NAMES = Object.keys(RERANKER_PROVIDERS);
+const SUPPORTED_RERANKER_PROVIDERS = new Set(RERANKER_PROVIDER_NAMES);
 
 function selectedExecutionProfile(env: NodeJS.ProcessEnv): string {
     return env.SATORI_RUNTIME_PROFILE?.trim() || "connected";
@@ -184,8 +186,8 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         checks.push({
             name: "reranker_provider",
             status: "error",
-            message: `Unsupported reranker provider: ${rerankerProvider}. Use none, voyage, or lateon.`,
-            nextStep: "Set SATORI_RERANKER_PROVIDER to none, voyage, or lateon.",
+            message: `Unsupported reranker provider: ${rerankerProvider}. Use ${RERANKER_PROVIDER_NAMES.join(", ")}.`,
+            nextStep: `Set SATORI_RERANKER_PROVIDER to ${RERANKER_PROVIDER_NAMES.join(", ")}.`,
         });
     } else if (rerankerProvider === "lateon") {
         const modelPath = env.SATORI_LATEON_MODEL_PATH?.trim();
@@ -233,10 +235,17 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
     } else if (rerankerProvider === "voyage" && executionProfile === "offline") {
         checks.push({
             name: "reranker_provider",
-            status: "error",
-            message: "Voyage reranking is unavailable under the offline local-only policy.",
-            nextStep: "Use SATORI_RERANKER_PROVIDER=none or configure the local LateOn reranker.",
+            status: "ok",
+            message: "Voyage reranking is online.",
         });
+        if (!env.VOYAGEAI_API_KEY?.trim()) {
+            checks.push({
+                name: "reranker_api_key",
+                status: "error",
+                message: "Voyage reranking requires VOYAGEAI_API_KEY.",
+                nextStep: "Set VOYAGEAI_API_KEY from the Voyage AI dashboard API keys page.",
+            });
+        }
     } else {
         checks.push({
             name: "reranker_provider",

@@ -16,6 +16,7 @@ import {
 } from "./install-preflight.js";
 import { CliError } from "./errors.js";
 import { buildLauncherScript, parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
+import { resolveOfflineReranker } from "./runtime-selection.js";
 import {
     CANDIDATE_STDERR_LIMIT_BYTES,
     createCandidateStderrCollector,
@@ -2137,6 +2138,178 @@ test("missing acquisition manifest leaves the managed installation byte-identica
             /must contain the frozen LateOn D128 profile and acquisition manifest/,
         );
         assertManagedLateOnSnapshotUnchanged(snapshot);
+    } finally {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+});
+
+test("offline reranker selection prefers flag, environment, launcher, then platform default", () => {
+    const command = {
+        kind: "install",
+        client: "all",
+        dryRun: false,
+        runtime: "offline",
+    } as const;
+    const voyageLauncher = {
+        SATORI_RUNTIME_PROFILE: "offline",
+        SATORI_RERANKER_PROVIDER: "voyage",
+        VOYAGEAI_RERANKER_MODEL: "rerank-3-lite",
+    };
+
+    assert.equal(resolveOfflineReranker(
+        { ...command, reranker: "none" },
+        voyageLauncher,
+        { SATORI_RERANKER_PROVIDER: "voyage", VOYAGEAI_API_KEY: "test-voyage-key" },
+        "linux",
+        "x64",
+    ), "none");
+    assert.equal(resolveOfflineReranker(
+        command,
+        { ...voyageLauncher, SATORI_RERANKER_PROVIDER: "none" },
+        { SATORI_RERANKER_PROVIDER: "voyage", VOYAGEAI_API_KEY: "test-voyage-key" },
+        "linux",
+        "x64",
+    ), "voyage");
+    assert.equal(resolveOfflineReranker(
+        command,
+        voyageLauncher,
+        { VOYAGEAI_API_KEY: "test-voyage-key" },
+        "linux",
+        "x64",
+    ), "voyage");
+    assert.equal(resolveOfflineReranker(
+        command,
+        {},
+        { VOYAGEAI_API_KEY: "test-voyage-key" },
+        "linux",
+        "x64",
+    ), "lateon");
+    assert.equal(resolveOfflineReranker(
+        command,
+        {},
+        { VOYAGEAI_API_KEY: "test-voyage-key" },
+        "darwin",
+        "arm64",
+    ), "none");
+
+    for (const [selection, managedEnvironment, env] of [
+        [{ ...command, reranker: "voyage" }, {}, { VOYAGEAI_API_KEY: "" }],
+        [command, {}, { SATORI_RERANKER_PROVIDER: "voyage", VOYAGEAI_API_KEY: "" }],
+        [command, voyageLauncher, { VOYAGEAI_API_KEY: "" }],
+    ] as const) {
+        assert.throws(
+            () => resolveOfflineReranker(selection, managedEnvironment, env, "linux", "x64"),
+            /VOYAGEAI_API_KEY/,
+        );
+    }
+});
+
+test("planned launcher environments carry Voyage provider and model in both runtimes", () => {
+    const voyageOffline = planInstallRuntimeEnvironment({
+        runtime: "offline",
+        homeDir: "/tmp/satori-task6-offline",
+        env: { VOYAGEAI_API_KEY: "test-voyage-key", VOYAGEAI_RERANKER_MODEL: "" },
+        ollamaModel: "nomic-embed-text",
+        reranker: "voyage",
+        platform: "linux",
+        architecture: "x64",
+    });
+    assert.equal(voyageOffline.SATORI_RERANKER_PROVIDER, "voyage");
+    assert.equal(voyageOffline.VOYAGEAI_RERANKER_MODEL, "rerank-3-lite");
+
+    const lateOnOffline = planInstallRuntimeEnvironment({
+        runtime: "offline",
+        homeDir: "/tmp/satori-task6-offline",
+        env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
+        ollamaModel: "nomic-embed-text",
+        reranker: "lateon",
+        lateOnModelPath: "/tmp/satori-lateon-model",
+        lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",
+        lateOnActivationPolicy: "lateon_context_v6_d128_owner_default_v1",
+        platform: "linux",
+        architecture: "x64",
+    });
+    assert.equal(lateOnOffline.SATORI_RERANKER_PROVIDER, "lateon");
+    assert.equal(lateOnOffline.VOYAGEAI_RERANKER_MODEL, undefined);
+
+    const noneOffline = planInstallRuntimeEnvironment({
+        runtime: "offline",
+        homeDir: "/tmp/satori-task6-offline",
+        env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
+        ollamaModel: "nomic-embed-text",
+        reranker: "none",
+        platform: "linux",
+        architecture: "x64",
+    });
+    assert.equal(noneOffline.SATORI_RERANKER_PROVIDER, "none");
+    assert.equal(noneOffline.VOYAGEAI_RERANKER_MODEL, undefined);
+
+    const voyageConnected = planInstallRuntimeEnvironment({
+        runtime: "voyage",
+        homeDir: "/tmp/satori-task6-connected",
+        env: { VOYAGEAI_API_KEY: "test-voyage-key", VOYAGEAI_RERANKER_MODEL: "" },
+        reranker: "voyage",
+    });
+    assert.equal(voyageConnected.SATORI_RERANKER_PROVIDER, "voyage");
+    assert.equal(voyageConnected.VOYAGEAI_RERANKER_MODEL, "rerank-3-lite");
+
+    const noneConnected = planInstallRuntimeEnvironment({
+        runtime: "voyage",
+        homeDir: "/tmp/satori-task6-connected",
+        env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
+        reranker: "none",
+    });
+    assert.equal(noneConnected.SATORI_RERANKER_PROVIDER, "none");
+    assert.equal(noneConnected.VOYAGEAI_RERANKER_MODEL, undefined);
+});
+
+test("rebuilt launcher stores the Voyage model without the API key and removes it for LateOn", () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-reranker-launcher-"));
+    const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    const voyageApiKey = "test-only-voyage-key";
+    try {
+        const voyageEnvironment = planInstallRuntimeEnvironment({
+            runtime: "offline",
+            homeDir,
+            env: { VOYAGEAI_API_KEY: voyageApiKey, VOYAGEAI_RERANKER_MODEL: "" },
+            ollamaModel: "nomic-embed-text",
+            reranker: "voyage",
+        });
+        fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
+        fs.writeFileSync(launcherPath, buildLauncherScript({
+            command: process.execPath,
+            args: ["/tmp/satori-runtime.js"],
+            managedEnv: voyageEnvironment,
+        }), "utf8");
+        const voyageLauncher = fs.readFileSync(launcherPath, "utf8");
+        assert.match(voyageLauncher, /VOYAGEAI_RERANKER_MODEL/);
+        assert.doesNotMatch(voyageLauncher, /VOYAGEAI_API_KEY|test-only-voyage-key/);
+        assert.equal(
+            parseManagedLauncherEnvironment(voyageLauncher).VOYAGEAI_RERANKER_MODEL,
+            "rerank-3-lite",
+        );
+
+        const lateOnEnvironment = planInstallRuntimeEnvironment({
+            runtime: "offline",
+            homeDir,
+            env: { VOYAGEAI_API_KEY: "", VOYAGEAI_RERANKER_MODEL: "stale-model" },
+            ollamaModel: "nomic-embed-text",
+            reranker: "lateon",
+            lateOnModelPath: path.join(homeDir, "lateon-model"),
+            lateOnProfileId: "lateon_offline_quality_projection_v6_d128_v1",
+            lateOnActivationPolicy: "lateon_context_v6_d128_owner_default_v1",
+            platform: "linux",
+            architecture: "x64",
+        });
+        fs.writeFileSync(launcherPath, buildLauncherScript({
+            command: process.execPath,
+            args: ["/tmp/satori-runtime.js"],
+            managedEnv: lateOnEnvironment,
+        }), "utf8");
+        assert.equal(
+            parseManagedLauncherEnvironment(fs.readFileSync(launcherPath, "utf8")).VOYAGEAI_RERANKER_MODEL,
+            undefined,
+        );
     } finally {
         fs.rmSync(homeDir, { recursive: true, force: true });
     }

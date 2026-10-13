@@ -25,6 +25,7 @@ import {
 import { readLocalDiagnosticsSummary, type LocalDiagnosticsSummary } from "./local-diagnostics.js";
 import { sanitizeTerminalText } from "./terminal-sanitize.js";
 import { SATORI_CLI_NPX_COMMAND } from "./cli-command.js";
+import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 import {
     discoverRuntimeOwnerRegistryPaths,
     resolveRuntimeOwnerRegistryPath,
@@ -71,7 +72,8 @@ export interface DoctorRuntimeConfiguration {
     embeddingProvider: "OpenAI" | "VoyageAI" | "Gemini" | "Ollama" | "Potion" | null;
     embeddingModel: string | null;
     embeddingDimension: string | null;
-    rerankerProvider: "none" | "voyage" | "lateon" | null;
+    rerankerProvider: InstallReranker | null;
+    rerankerModel?: string | null;
     rerankerProfile: string | null;
     vectorStore: "Milvus" | "LanceDB" | null;
 }
@@ -155,11 +157,9 @@ const DISPLAYED_EMBEDDING_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfigura
     "Ollama",
     "Potion",
 ]);
-const DISPLAYED_RERANKER_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfiguration["rerankerProvider"]>>([
-    "none",
-    "voyage",
-    "lateon",
-]);
+const DISPLAYED_RERANKER_PROVIDERS = new Set<NonNullable<DoctorRuntimeConfiguration["rerankerProvider"]>>(
+    Object.keys(RERANKER_PROVIDERS) as InstallReranker[],
+);
 const DISPLAYED_VECTOR_STORES = new Set<NonNullable<DoctorRuntimeConfiguration["vectorStore"]>>(["Milvus", "LanceDB"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -348,6 +348,14 @@ function buildRuntimeConfigurationRows(
             embeddingModel: sanitizedModelIdentity(selection.embeddingModel),
             embeddingDimension: sanitizedDimension(selection.embeddingDimension),
             rerankerProvider: allowlistedValue(selection.rerankerProvider, DISPLAYED_RERANKER_PROVIDERS),
+            ...(selection.rerankerProvider === "voyage"
+                ? {
+                    rerankerModel: sanitizedModelIdentity(
+                        context.environment.VOYAGEAI_RERANKER_MODEL?.trim()
+                        || RERANKER_PROVIDERS.voyage.defaultModel,
+                    ),
+                }
+                : {}),
             rerankerProfile: selection.rerankerProvider === "lateon"
                 && (context.environment.SATORI_LATEON_PROFILE?.trim() ?? DEFAULT_LATEON_PROFILE_ID) === DEFAULT_LATEON_PROFILE_ID
                 ? DEFAULT_LATEON_PROFILE_ID

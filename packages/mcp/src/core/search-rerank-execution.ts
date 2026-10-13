@@ -71,7 +71,7 @@ export type RerankPhaseResult = {
     rerankerCandidateBudget: number;
     rerankerBudgetReason?: RerankBudgetReason;
     rerankerByteBudgetOmittedCandidates: number;
-    warnings: WarningCode[];
+    warnings: string[];
     projection?: SearchRerankProjectionSummary;
     rerankerFailureKind?: RerankerFailureKind;
 };
@@ -435,6 +435,10 @@ export async function invokeReranker(args: {
         const operationalReason = resolveLateOnOperationalReason(error);
         if (error instanceof RerankerRequestError) {
             searchDiagnostics.rerankerFailureKind = error.kind;
+            if (error.kind === 'permanent_http') {
+                searchDiagnostics.rerankerFailureStatus = error.status;
+                searchDiagnostics.rerankerFailureMessage = sanitizeProviderErrorMessage(error.message);
+            }
             if (!rerankerExecutionDiagnosticsObserved) {
                 // Fallback for rerankers that throw RerankerRequestError
                 // without reporting execution diagnostics: the terminal
@@ -498,6 +502,14 @@ function rerankerIdentity(host: SearchExecutionHost): { provider: string; model:
     } catch {
         return undefined;
     }
+}
+
+function sanitizeProviderErrorMessage(message: string): string {
+    return message
+        .replace(/[\p{Cc}\u2028\u2029]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 300);
 }
 
 export function applyRerankOrder(args: {
@@ -631,7 +643,8 @@ export async function rerankSearchCandidates(
     let orderAuthority: SearchOrderAuthority = "retrieval_order";
     let failurePhase: RerankFailurePhase | undefined;
     let rerankerOperationalReason: SearchRerankerOperationalReason | undefined;
-    const lateOnProvider = rerankerIdentity(host)?.provider === "lateon";
+    const rerankerProviderIdentity = rerankerIdentity(host);
+    const lateOnProvider = rerankerProviderIdentity?.provider === "lateon";
     const rerankerCandidatesIn = scored.length;
     let rerankerCandidatesReranked = 0;
     let rerankerFamilyCount = 0;
@@ -788,6 +801,13 @@ export async function rerankSearchCandidates(
     }
 
     assignAuthoritativeRanks(scored);
+    const permanentHttpFailureWarning = searchDiagnostics.rerankerFailureKind === 'permanent_http'
+        && rerankerProviderIdentity?.provider === 'voyage'
+        && searchDiagnostics.rerankerFailureStatus !== undefined
+        && searchDiagnostics.rerankerFailureStatus !== null
+        && searchDiagnostics.rerankerFailureMessage !== undefined
+        ? `${WARNING_CODES.RERANKER_FAILED} - Voyage rejected the rerank request for model '${rerankerProviderIdentity.model}' (HTTP ${searchDiagnostics.rerankerFailureStatus}): ${searchDiagnostics.rerankerFailureMessage}. Results use retrieval ranking only.`
+        : WARNING_CODES.RERANKER_FAILED;
     return {
         exactMatchPinningApplied,
         rerankerAttempted,
@@ -806,7 +826,7 @@ export async function rerankSearchCandidates(
         rerankerByteBudgetOmittedCandidates,
         rerankerFailureKind: searchDiagnostics.rerankerFailureKind,
         warnings: failurePhase
-            ? [...phaseWarnings, WARNING_CODES.RERANKER_FAILED]
+            ? [...phaseWarnings, permanentHttpFailureWarning]
             : phaseWarnings,
         ...(projectionSummary ? { projection: projectionSummary } : {}),
     };

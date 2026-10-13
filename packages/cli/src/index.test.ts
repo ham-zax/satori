@@ -203,6 +203,8 @@ test("runCli defaults to human help and preserves structured help on request", a
     assert.match(io.read().stdout, /npm install -g @satori-code\/cli@latest/);
     assert.match(io.read().stdout, /-v, --version\s+Show installed CLI, MCP, and Core versions/);
     assert.match(io.read().stdout, /terminate\s+Stop all running Satori MCP servers/);
+    assert.match(io.read().stdout, /reranker use/);
+    assert.match(io.read().stdout, /--no-verify/);
     assert.doesNotMatch(io.read().stdout, /legacy/i);
     assert.equal(io.read().stderr, "");
 
@@ -217,6 +219,7 @@ test("runCli defaults to human help and preserves structured help on request", a
     assert.equal(help.usage, "satori <command>");
     assert.ok(help.commands.includes("version (-v, --version)"));
     assert.ok(help.commands.includes("terminate"));
+    assert.ok(help.commands.some((command: string) => command.includes("reranker use") && command.includes("--no-verify")));
     assert.ok(help.globalFlags.includes("-v, --version"));
     assert.equal("legacyAlias" in help, false);
 });

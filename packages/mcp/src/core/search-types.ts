@@ -427,6 +427,10 @@ export interface SearchProviderWorkDebugHint {
     rerankerFailures: number;
     rerankerRetries: number;
     rerankerTimeouts: number;
+    /** HTTP status from the last terminal permanent reranker response. */
+    rerankerFailureStatus?: number | null;
+    /** Sanitized provider text from the last terminal permanent reranker response. */
+    rerankerFailureMessage?: string;
     candidatesWithSemanticEvidence: number;
     candidatesWithLexicalEvidence: number;
     candidatesWithCurrentSourceEvidence: number;

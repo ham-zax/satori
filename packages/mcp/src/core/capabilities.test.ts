@@ -66,6 +66,21 @@ test('offline policy disables cloud reranking even when credentials remain confi
     assert.equal(resolver.getDefaultRerankEnabled(), false);
 });
 
+test('capability resolver recognizes explicit Voyage reranking under local-only policy', () => {
+    const resolver = new CapabilityResolver(baseConfig({
+        executionProfile: 'offline',
+        networkPolicy: { kind: 'local-only' },
+        vectorStoreProvider: 'LanceDB',
+        lanceDbPath: '/tmp/satori-lancedb',
+        encoderProvider: 'Potion',
+        encoderModel: 'pinned-potion',
+        rerankerProvider: 'voyage',
+        voyageKey: 'explicit-voyage-key',
+    }));
+
+    assert.equal(resolver.hasReranker(), true);
+});
+
 test('Potion is a slow local embedding capability without cloud reranking', () => {
     const resolver = new CapabilityResolver(baseConfig({
         executionProfile: 'offline',

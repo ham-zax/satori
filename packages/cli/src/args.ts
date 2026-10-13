@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { CliError } from "./errors.js";
+import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 
 export interface GlobalOptions {
     startupTimeoutMs: number;
@@ -32,7 +33,7 @@ export type ParsedCommand =
     | { kind: "doctor"; json: boolean; verbose: boolean }
     | { kind: "upgrade" }
     | { kind: "terminate" }
-    | { kind: "reranker"; operation: RerankerOperation; purge: boolean }
+    | { kind: "reranker"; operation: RerankerOperation; provider?: InstallReranker; model?: string; noVerify?: boolean; purge: boolean }
     | {
         kind: "install";
         client: InstallClient;
@@ -41,6 +42,9 @@ export type ParsedCommand =
         runtime: "voyage";
         vectorStore?: InstallVectorStore;
         ollamaModel?: never;
+        reranker?: Exclude<InstallReranker, "lateon">;
+        rerankerModel?: string;
+        noVerify?: boolean;
     }
     | {
         kind: "install";
@@ -50,7 +54,9 @@ export type ParsedCommand =
         runtime: "offline";
         vectorStore?: "LanceDB";
         ollamaModel?: string;
-        reranker?: InstallOfflineReranker;
+        reranker?: InstallReranker;
+        rerankerModel?: string;
+        noVerify?: boolean;
     }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean; purge: boolean }
     | { kind: "tools-list" }
@@ -71,8 +77,7 @@ export type InstallClient = "auto" | "all" | "claude" | "codex" | "opencode" | "
 export type InstallProfile = "default" | "minimal" | "all-text";
 export type InstallRuntime = "voyage" | "offline";
 export type InstallVectorStore = "LanceDB" | "Milvus";
-export type InstallOfflineReranker = "lateon" | "none";
-export type RerankerOperation = "enable" | "disable" | "status";
+export type RerankerOperation = "enable" | "disable" | "status" | "use";
 
 export interface CommandOptionSpec {
     flag: string;
@@ -98,7 +103,9 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
         { flag: "--runtime", value: "offline|voyage", description: "Offline Potion + LanceDB (default) or VoyageAI embeddings" },
         { flag: "--vector-store", value: "lancedb|milvus", description: "Vector store; milvus requires --runtime voyage" },
         { flag: "--ollama-model", value: "model", description: "Use Ollama embeddings (offline runtime only)" },
-        { flag: "--reranker", value: "lateon|none", description: "Enable or disable LateOn reranking (offline runtime only)" },
+        { flag: "--reranker", value: Object.keys(RERANKER_PROVIDERS).join("|"), description: "Select the reranker provider (LateOn is offline only)" },
+        { flag: "--reranker-model", value: "model", description: "Select a Voyage reranker model (requires --reranker voyage)" },
+        { flag: "--no-verify", description: "Skip the Voyage reranker test call (requires --reranker voyage)" },
         { flag: "--profile", value: "default|minimal|all-text", description: "Repository index profile" },
         { flag: "--dry-run", description: "Show what would change without changing anything" },
     ],
@@ -114,6 +121,8 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
     upgrade: [],
     terminate: [],
     reranker: [
+        { flag: "--model", value: "name", description: "Voyage reranker model (only with use voyage)" },
+        { flag: "--no-verify", description: "Skip the Voyage reranker test call" },
         { flag: "--purge", description: "With disable: also delete the downloaded LateOn model files" },
     ],
     version: [],
@@ -307,6 +316,21 @@ function parseRawArgsMode(args: string[]): { rawArgsMode: RawArgsMode; remaining
     return { rawArgsMode, remaining };
 }
 
+const RERANKER_PROVIDER_NAMES = Object.keys(RERANKER_PROVIDERS);
+
+function isRerankerProvider(value: string): value is InstallReranker {
+    return Object.prototype.hasOwnProperty.call(RERANKER_PROVIDERS, value);
+}
+
+function parseRerankerProvider(value: string, option: string, allowOfflineAlias = false): InstallReranker {
+    const normalized = value.trim().toLowerCase();
+    const provider = allowOfflineAlias && normalized === "offline" ? "lateon" : normalized;
+    if (!isRerankerProvider(provider)) {
+        throw new CliError("E_USAGE", `${option} must be one of: ${RERANKER_PROVIDER_NAMES.join(", ")}.`, 2);
+    }
+    return provider;
+}
+
 function parseInstallCommand(kind: "install" | "uninstall", args: string[]): ParsedCommand {
     let client: InstallClient = kind === "install" ? "auto" : "all";
     let dryRun = false;
@@ -315,7 +339,9 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let runtime: InstallRuntime = "offline";
     let vectorStore: InstallVectorStore | undefined;
     let ollamaModel: string | undefined;
-    let reranker: InstallOfflineReranker | undefined;
+    let reranker: InstallReranker | undefined;
+    let rerankerModel: string | undefined;
+    let noVerify = false;
 
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
@@ -373,12 +399,25 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             continue;
         }
         if (kind === "install" && token === "--reranker") {
-            const next = args[i + 1]?.trim().toLowerCase();
-            if (next !== "lateon" && next !== "none") {
-                throw new CliError("E_USAGE", "--reranker must be one of: lateon, none.", 2);
+            const next = args[i + 1];
+            if (next === undefined || next.trim() === "") {
+                throw new CliError("E_USAGE", `--reranker must be one of: ${RERANKER_PROVIDER_NAMES.join(", ")}.`, 2);
             }
-            reranker = next;
+            reranker = parseRerankerProvider(next, "--reranker");
             i += 1;
+            continue;
+        }
+        if (kind === "install" && token === "--reranker-model") {
+            const next = args[i + 1]?.trim();
+            if (!next) {
+                throw new CliError("E_USAGE", "--reranker-model requires a non-empty model name.", 2);
+            }
+            rerankerModel = next;
+            i += 1;
+            continue;
+        }
+        if (kind === "install" && token === "--no-verify") {
+            noVerify = true;
             continue;
         }
         throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
@@ -388,8 +427,14 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         if (runtime !== "offline" && ollamaModel) {
             throw new CliError("E_USAGE", "--ollama-model is only valid with --runtime offline.", 2);
         }
-        if (runtime !== "offline" && reranker) {
-            throw new CliError("E_USAGE", "--reranker is only valid with --runtime offline.", 2);
+        if (runtime !== "offline" && reranker === "lateon") {
+            throw new CliError("E_USAGE", "--reranker lateon is only valid with --runtime offline.", 2);
+        }
+        if (rerankerModel !== undefined && reranker !== "voyage") {
+            throw new CliError("E_USAGE", "--reranker-model is only valid with --reranker voyage.", 2);
+        }
+        if (noVerify && reranker !== "voyage") {
+            throw new CliError("E_USAGE", "--no-verify is only valid with --reranker voyage.", 2);
         }
         if (runtime === "offline" && vectorStore === "Milvus") {
             throw new CliError("E_USAGE", "--runtime offline requires --vector-store lancedb.", 2);
@@ -412,9 +457,21 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             vectorStore: vectorStore === "LanceDB" ? "LanceDB" : undefined,
             ...(ollamaModel ? { ollamaModel } : {}),
             ...(reranker ? { reranker } : {}),
+            ...(rerankerModel ? { rerankerModel } : {}),
+            ...(noVerify ? { noVerify: true } : {}),
         };
     }
-    return { kind, client, dryRun, profile, runtime, vectorStore };
+    return {
+        kind,
+        client,
+        dryRun,
+        profile,
+        runtime,
+        vectorStore,
+        ...(reranker && reranker !== "lateon" ? { reranker } : {}),
+        ...(rerankerModel ? { rerankerModel } : {}),
+        ...(noVerify ? { noVerify: true } : {}),
+    };
 }
 
 export function parseCliArgs(argv: string[]): ParsedCliInput {
@@ -473,21 +530,66 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
     }
 
     if (rest[0] === "reranker") {
-        const operation = rest[1];
-        if (operation !== "enable" && operation !== "disable" && operation !== "status") {
-            throw new CliError("E_USAGE", "reranker requires one of: enable, disable, status.", 2);
+        const requestedOperation = rest[1];
+        if (requestedOperation === "status") {
+            if (rest.length > 2) {
+                throw new CliError("E_USAGE", `Unknown argument for reranker status: ${rest[2]}`, 2);
+            }
+            return { globals, command: { kind: "reranker", operation: "status", purge: false } };
         }
+
+        let provider: InstallReranker;
+        let optionArgs: string[];
+        if (requestedOperation === "enable" || requestedOperation === "disable") {
+            provider = requestedOperation === "enable" ? "lateon" : "none";
+            optionArgs = rest.slice(2);
+        } else if (requestedOperation === "use") {
+            provider = parseRerankerProvider(rest[2] ?? "", "reranker use", true);
+            optionArgs = rest.slice(3);
+        } else {
+            throw new CliError("E_USAGE", "reranker requires use <provider>, enable, disable, or status.", 2);
+        }
+
+        let model: string | undefined;
+        let noVerify = false;
         let purge = false;
-        for (const token of rest.slice(2)) {
-            if (operation === "disable" && token === "--purge") {
+        for (let i = 0; i < optionArgs.length; i += 1) {
+            const token = optionArgs[i];
+            if (token === "--model") {
+                const value = optionArgs[i + 1]?.trim();
+                if (!("modelEnv" in RERANKER_PROVIDERS[provider])) {
+                    throw new CliError("E_USAGE", "--model is only valid with the voyage reranker provider.", 2);
+                }
+                if (!value) {
+                    throw new CliError("E_USAGE", "--model requires a non-empty model name.", 2);
+                }
+                model = value;
+                i += 1;
+                continue;
+            }
+            if (token === "--no-verify") {
+                if (requestedOperation !== "use" || !("modelEnv" in RERANKER_PROVIDERS[provider])) {
+                    throw new CliError("E_USAGE", "--no-verify is only valid with reranker use voyage.", 2);
+                }
+                noVerify = true;
+                continue;
+            }
+            if (provider === "none" && token === "--purge") {
                 purge = true;
                 continue;
             }
-            throw new CliError("E_USAGE", `Unknown argument for reranker ${operation}: ${token}`, 2);
+            throw new CliError("E_USAGE", `Unknown argument for reranker ${requestedOperation}: ${token}`, 2);
+        }
+
+        if (provider === "lateon") {
+            return { globals, command: { kind: "reranker", operation: "enable", purge: false } };
+        }
+        if (provider === "none") {
+            return { globals, command: { kind: "reranker", operation: "disable", purge } };
         }
         return {
             globals,
-            command: { kind: "reranker", operation, purge }
+            command: { kind: "reranker", operation: "use", provider, ...(model ? { model } : {}), ...(noVerify ? { noVerify: true } : {}), purge: false },
         };
     }
 

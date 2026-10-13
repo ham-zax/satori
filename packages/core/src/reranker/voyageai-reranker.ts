@@ -2,8 +2,8 @@
  * VoyageAI Reranker
  * 
  * Reranks search results using VoyageAI's neural reranker models.
- * Supports rerank-3 (best quality) and rerank-3-lite (faster), plus the
- * earlier rerank-2.5 and rerank-2 families.
+ * The model name is sent to Voyage as typed; Voyage decides whether it is
+ * accepted. getSupportedModels lists the documented models and their limits.
  */
 
 import type {
@@ -13,7 +13,11 @@ import type {
     RerankResult,
 } from "./reranker";
 
-export type VoyageRerankerModel = 'rerank-3' | 'rerank-3-lite' | 'rerank-2.5' | 'rerank-2.5-lite' | 'rerank-2' | 'rerank-2-lite';
+// Any model name is accepted here; Voyage's rejection message is the authority.
+export type VoyageRerankerModel = string;
+
+// Used when no model is named. The CLI keeps its own copy (it does not depend on core); keep them equal.
+export const DEFAULT_VOYAGE_RERANKER_MODEL = 'rerank-3-lite';
 
 export const RERANK_TIMEOUT_MS = 30_000;
 export const RERANK_MAX_ATTEMPTS = 2;
@@ -119,7 +123,7 @@ export class VoyageAIReranker implements Reranker {
 
     constructor(config: VoyageAIRerankerConfig) {
         this.apiKey = config.apiKey;
-        this.model = config.model || 'rerank-2.5-lite';
+        this.model = config.model || DEFAULT_VOYAGE_RERANKER_MODEL;
         this.timeoutMs = Number.isFinite(config.timeoutMs) && (config.timeoutMs as number) > 0
             ? config.timeoutMs as number
             : RERANK_TIMEOUT_MS;
@@ -345,9 +349,10 @@ export class VoyageAIReranker implements Reranker {
     }
 
     /**
-     * Get supported models with their specifications
+     * Known limits and descriptions for the documented Voyage models. This is
+     * not a list of accepted names: any model name is sent to Voyage.
      */
-    static getSupportedModels(): Record<VoyageRerankerModel, { maxQueryTokens: number; maxDocQueryTokens: number; description: string }> {
+    static getSupportedModels(): Record<string, { maxQueryTokens: number; maxDocQueryTokens: number; description: string }> {
         return {
             'rerank-3': {
                 maxQueryTokens: 8000,

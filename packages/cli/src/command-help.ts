@@ -47,10 +47,17 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
         examples: ["satori terminate"],
     },
     reranker: {
-        usage: ["satori reranker enable", "satori reranker disable [--purge]", "satori reranker status"],
-        summary: "Turn LateOn reranking on or off for the installed offline runtime.",
+        usage: [
+            "satori reranker use <provider> [--model <name>] [--no-verify]",
+            "satori reranker enable",
+            "satori reranker disable [--purge]",
+            "satori reranker status",
+        ],
+        summary: "Select and inspect the reranker for the installed runtime.",
         examples: [
             "satori reranker status",
+            "satori reranker use voyage --model rerank-3",
+            "satori reranker use voyage --no-verify",
             "satori reranker disable",
             "satori reranker disable --purge",
             "satori reranker enable",

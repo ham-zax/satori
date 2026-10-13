@@ -324,11 +324,11 @@ function buildHelpPayload() {
     return {
         usage: "satori <command>",
         commands: [
-            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|none] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64; --ollama-model selects Ollama; --reranker none disables reranking)",
+            "install [--client auto|all|codex|claude|opencode|agy] [--runtime offline|voyage] [--vector-store lancedb|milvus] [--ollama-model <model>] [--reranker lateon|voyage|none] [--reranker-model <model>] [--no-verify] [--profile default|minimal|all-text] [--dry-run] (default: auto-detect Codex, Claude Code, and OpenCode; agy is opt-in; offline Potion embeddings with LateOn D128 reranking on Linux x64; --ollama-model selects Ollama)",
             "version (-v, --version)",
             "upgrade",
             "terminate",
-            "reranker enable|disable|status [--purge] (switch LateOn reranking for the installed offline runtime; disable --purge also deletes the LateOn model files)",
+            "reranker use <provider> [--model <name>] [--no-verify]|enable|disable|status [--purge] (select and inspect the reranker for the installed runtime)",
             "uninstall [--client auto|all|codex|claude|opencode|agy] [--dry-run] [--purge] (default: all supported clients; --purge also stops servers and deletes the runtime, models, and indexes)",
             "doctor [--verbose] [--json]",
             "tools list",
@@ -368,13 +368,15 @@ function formatHelpText(): string {
         "  version       Show installed CLI, MCP, and Core versions",
         "  upgrade       Update the CLI and its compatible MCP/Core runtime",
         "  terminate     Stop all running Satori MCP servers",
-        "  reranker      Enable, disable, or show LateOn reranking (offline runtime)",
+        "  reranker      Select or show reranking for the installed runtime",
         "  doctor        Check installation, runtime, and client configuration",
         "  uninstall     Remove Satori-managed client configuration; add --purge to delete all Satori data",
         "  tools list    List the available MCP tools",
         "  tool call     Call an MCP tool from the terminal",
         "",
         "Common runtime changes:",
+        `  ${satoriCliCommand("reranker use voyage")}  Select Voyage reranking (add --model <name> to choose a model)`,
+        `  ${satoriCliCommand("reranker use voyage --no-verify")}  Skip the Voyage reranker test call`,
         `  ${satoriCliCommand("reranker disable")}  Disable LateOn (add --purge to delete its model)`,
         `  ${satoriCliCommand("reranker enable")}  Enable LateOn`,
         `  ${satoriCliCommand("install --runtime offline --ollama-model <model>")}  Select Ollama embeddings`,
@@ -726,7 +728,9 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
                         writers.writeStderr(`${messages[phase]}\n`);
                     },
                 modelProgress: wantsJson ? undefined : createModelProgressReporter(writers),
-                installRetryCommand: satoriCliCommand(`reranker ${parsed.command.operation}`),
+                installRetryCommand: satoriCliCommand(parsed.command.operation === "use"
+                    ? `reranker use ${parsed.command.provider ?? "voyage"}`
+                    : `reranker ${parsed.command.operation}`),
             });
             if (wantsJson) {
                 emitJson(writers, result);

@@ -69,7 +69,9 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
             ? configuration.rerankerProfile === DEFAULT_LATEON_PROFILE_ID
                 ? "LateOn · Code-edge D128"
                 : "LateOn · profile unknown"
-            : configuration.rerankerProvider ?? "—",
+            : configuration.rerankerProvider === "voyage"
+                ? `Voyage / ${modelLabel(configuration.rerankerModel ?? null) ?? "—"}`
+                : configuration.rerankerProvider ?? "—",
         configuration.vectorStore ?? "—",
         configuration.source === "managed_launcher"
             ? "Managed launcher"
@@ -87,13 +89,17 @@ function runtimeConfigurationTable(result: DoctorResult, verbose: boolean): stri
         .map((value, index) => value.padEnd(widths[index]))
         .join(" | ")
         .trimEnd();
-    return [
+    const lines = [
         "",
         "Applied runtime configuration:",
         renderRow(headers),
         widths.map((width) => "-".repeat(width)).join("-+-"),
         ...rows.map(renderRow),
     ];
+    if (result.runtimeConfigurations.some((configuration) => configuration.rerankerProvider === "voyage")) {
+        lines.push("", "Online: search queries and code excerpts are sent to Voyage.");
+    }
+    return lines;
 }
 
 function selectedRuntimeLines(result: DoctorResult, verbose: boolean): string[] {

@@ -1,5 +1,6 @@
 import {
     Context,
+    DEFAULT_VOYAGE_RERANKER_MODEL,
     Embedding,
     type ContextConfig,
     EmbeddingVector,
@@ -566,7 +567,7 @@ export class ProviderRuntime {
                     ? {
                         kind: 'voyage' as const,
                         apiKey: this.config.voyageKey as string,
-                        model: this.config.rankerModel || 'rerank-2.5',
+                        model: this.config.rankerModel || DEFAULT_VOYAGE_RERANKER_MODEL,
                     }
                     : null;
         const embedding = requireEmbedding

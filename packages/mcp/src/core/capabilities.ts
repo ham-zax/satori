@@ -52,10 +52,10 @@ export class CapabilityResolver {
             ? Boolean(this.config.lanceDbPath)
             : Boolean(this.config.milvusEndpoint);
         const rerankerProvider = resolveRerankerProvider(this.config);
+        // Under local-only, config resolves Voyage only after explicit selection.
         const hasReranker = rerankerProvider === 'lateon'
             ? Boolean(this.config.lateOnModelPath)
             : rerankerProvider === 'voyage'
-                && this.config.networkPolicy.kind === 'remote-allowed'
                 && Boolean(this.config.voyageKey);
 
         const defaultSearchLimit = performanceProfile === 'slow' ? 10 : 20;

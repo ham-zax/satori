@@ -175,12 +175,17 @@ function buildSearchWarningDetail(warning: string): SearchWarningDetail {
         };
     }
     if (code === WARNING_CODES.RERANKER_FAILED) {
+        const message = fallbackMessage !== undefined
+            ? fallbackMessage
+            : "The reranker failed, so results use retrieval ranking only.";
         return {
             code,
             severity: "degraded",
             blocksUse: false,
-            message: "The reranker failed, so results use retrieval ranking only.",
-            action: "Retry once; if it recurs, use debugMode=ranking to inspect the reranker failure reason.",
+            message,
+            action: fallbackMessage !== undefined
+                ? "Check the model name and API key, then run satori reranker use voyage --model <name>."
+                : "Retry once; if it recurs, use debugMode=ranking to inspect the reranker failure reason.",
         };
     }
     if (code === WARNING_CODES.RERANKER_INPUT_DEGRADED) {

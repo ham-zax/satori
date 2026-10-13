@@ -3,9 +3,9 @@ import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
 import { CliError } from "./errors.js";
 import { satoriCliCommand } from "./cli-command.js";
 import type {
-    InstallOfflineReranker,
     InstallVectorStore,
 } from "./args.js";
+import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 import { resolveClientTargets } from "./client-targets.js";
 import { readPotionModelSpec, selectedConnectedVectorStore } from "./install-preflight.js";
 import {
@@ -53,7 +53,7 @@ export function resolveOfflineReranker(
     env: NodeJS.ProcessEnv,
     platform: NodeJS.Platform | undefined,
     architecture: string | undefined,
-): InstallOfflineReranker {
+): InstallReranker {
     const isQualifiedPlatform = (platform ?? process.platform) === "linux"
         && (architecture ?? process.arch) === "x64";
     const rejectUnsupportedLateOn = (): never => {
@@ -64,6 +64,10 @@ export function resolveOfflineReranker(
         );
     };
     if (command.reranker === "none") return "none";
+    if (command.reranker === "voyage") {
+        requireVoyageApiKey(env);
+        return "voyage";
+    }
     if (command.reranker === "lateon") {
         if (!isQualifiedPlatform) rejectUnsupportedLateOn();
         return "lateon";
@@ -72,10 +76,10 @@ export function resolveOfflineReranker(
     const managedOffline = managedEnvironment.SATORI_RUNTIME_PROFILE === "offline";
     const configured = env.SATORI_RERANKER_PROVIDER?.trim();
     if (configured) {
-        if (configured !== "lateon" && configured !== "none") {
+        if (configured !== "lateon" && configured !== "voyage" && configured !== "none") {
             throw new CliError(
                 "E_USAGE",
-                `Offline installation supports SATORI_RERANKER_PROVIDER=lateon or none; received ${configured}.`,
+                `Offline installation supports SATORI_RERANKER_PROVIDER=lateon, voyage or none; received ${configured}.`,
                 2,
             );
         }
@@ -86,12 +90,17 @@ export function resolveOfflineReranker(
             throw staleLateOnProfileError(staleProfile);
         }
         if (configured === "lateon" && !isQualifiedPlatform) rejectUnsupportedLateOn();
+        if (configured === "voyage") requireVoyageApiKey(env);
         return configured;
     }
 
     if (managedOffline) {
         const managed = managedEnvironment.SATORI_RERANKER_PROVIDER;
         if (managed === "none") return "none";
+        if (managed === "voyage") {
+            requireVoyageApiKey(env);
+            return "voyage";
+        }
         if (managed === "lateon") {
             const profile = managedEnvironment.SATORI_LATEON_PROFILE?.trim();
             if (profile !== DEFAULT_LATEON_PROFILE_ID) {
@@ -117,8 +126,53 @@ export function resolveOfflineReranker(
     return isQualifiedPlatform ? "lateon" : "none";
 }
 
+function requireVoyageApiKey(env: NodeJS.ProcessEnv): void {
+    if (!env.VOYAGEAI_API_KEY?.trim()) {
+        throw new CliError("E_USAGE", "Voyage reranking requires VOYAGEAI_API_KEY in the environment.", 2);
+    }
+}
+
+export function resolveConnectedReranker(
+    command: Extract<InstallCommandInput, { kind: "install"; runtime: "voyage" }>,
+    managedEnvironment: Readonly<Record<string, string>>,
+    env: NodeJS.ProcessEnv,
+): Exclude<InstallReranker, "lateon"> | undefined {
+    const configured = env.SATORI_RERANKER_PROVIDER?.trim() || undefined;
+    const managedProfile = managedEnvironment.SATORI_RUNTIME_PROFILE;
+    const managed = (managedProfile === undefined || managedProfile === "connected")
+        ? managedEnvironment.SATORI_RERANKER_PROVIDER?.trim() || undefined
+        : undefined;
+    const selected = command.reranker ?? configured ?? managed;
+    if (selected === undefined) return undefined;
+    if (selected === "lateon") {
+        throw new CliError("E_USAGE", "LateOn reranking is only supported by the offline runtime.", 2);
+    }
+    if (selected !== "voyage" && selected !== "none") {
+        throw new CliError(
+            "E_USAGE",
+            `Unsupported SATORI_RERANKER_PROVIDER=${selected}. Use voyage or none for the connected runtime.`,
+            2,
+        );
+    }
+    if (selected === "voyage") requireVoyageApiKey(env);
+    return selected;
+}
+
+export function resolveRerankerModel(
+    reranker: InstallReranker | undefined,
+    commandModel: string | undefined,
+    managedEnvironment: Readonly<Record<string, string>>,
+    env: NodeJS.ProcessEnv,
+): string | undefined {
+    if (reranker !== "voyage") return undefined;
+    return commandModel?.trim()
+        || env.VOYAGEAI_RERANKER_MODEL?.trim()
+        || managedEnvironment.VOYAGEAI_RERANKER_MODEL?.trim()
+        || RERANKER_PROVIDERS.voyage.defaultModel;
+}
+
 export function configuredLateOnModelPath(
-    reranker: InstallOfflineReranker,
+    reranker: Exclude<InstallReranker, "voyage">,
     managedEnvironment: Readonly<Record<string, string>>,
     env: NodeJS.ProcessEnv,
 ): string | undefined {
@@ -133,11 +187,11 @@ export function configuredLateOnModelPath(
 }
 
 export function assertDefaultLateOnProfile(
-    reranker: InstallOfflineReranker,
+    reranker: InstallReranker,
     env: NodeJS.ProcessEnv,
     explicitSelection = false,
 ): void {
-    if (reranker === "none" || explicitSelection) return;
+    if (reranker !== "lateon" || explicitSelection) return;
     const configured = env.SATORI_LATEON_PROFILE?.trim();
     if (configured && configured !== DEFAULT_LATEON_PROFILE_ID) {
         throw new CliError(

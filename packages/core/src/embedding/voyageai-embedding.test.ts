@@ -393,3 +393,35 @@ test('Voyage embedding deterministically splits an explicit provider batch-limit
     assert.deepEqual(result.map((item) => item.vector), [[1], [2], [3], [4]]);
     assert.equal(embedding.getOperationMetricsSnapshot().providerRequestCount, 3);
 });
+
+test('Voyage embedding splits on the provider TOO_MANY_TOKENS_IN_BATCH response', async () => {
+    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    const submitted: string[][] = [];
+    stubEmbedClient(embedding, async (request) => {
+        const input = Array.isArray(request.input) ? request.input : [request.input];
+        submitted.push(input);
+        if (input.length > 2) {
+            // Body recorded from the live API on 2026-10-13.
+            throw new VoyageAIError({
+                statusCode: 400,
+                body: {
+                    detail: "Request to model 'voyage-code-3' failed. The max allowed tokens per submitted batch is 120000. Your batch has 128010 tokens after truncation. Please lower the number of tokens in the batch.",
+                    error_code: 'TOO_MANY_TOKENS_IN_BATCH',
+                },
+            });
+        }
+        return {
+            data: input.map((text) => ({ embedding: [Number(text)] })),
+            usage: { totalTokens: input.length },
+        };
+    });
+
+    const result = await embedding.embedDocuments(['1', '2', '3', '4']);
+
+    assert.deepEqual(submitted, [
+        ['1', '2', '3', '4'],
+        ['1', '2'],
+        ['3', '4'],
+    ]);
+    assert.deepEqual(result.map((item) => item.vector), [[1], [2], [3], [4]]);
+});

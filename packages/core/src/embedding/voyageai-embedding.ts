@@ -77,6 +77,10 @@ function isRetryableVoyageError(error: unknown): boolean {
 function isExplicitVoyageBatchLimitError(error: unknown): boolean {
     if (error instanceof VoyageAIError) {
         if (![400, 413, 422].includes(error.statusCode ?? 0)) return false;
+        // The API reports an over-limit batch as a structured code; its prose
+        // ("The max allowed tokens per submitted batch is ...") has no stable wording.
+        const body = error.body as { error_code?: unknown } | null | undefined;
+        if (body?.error_code === 'TOO_MANY_TOKENS_IN_BATCH') return true;
     }
     const message = error instanceof Error ? error.message : String(error);
     return /too many|maximum.*(?:input|text|token)|token.*limit|input.*limit|request.*large/i.test(message);

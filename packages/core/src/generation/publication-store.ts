@@ -358,7 +358,21 @@ export class PublicationStore {
             return existing;
         }
 
-        this.writeDurableFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+        fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+        // Stage outside candidates: a crash before linking must not leave an
+        // entry that candidate enumeration could mistake for a receipt.
+        const temporaryPath = path.join(
+            this.publicationRoot(canonicalRoot),
+            `${lease.operationId}.${process.pid}.${crypto.randomUUID()}.tmp`,
+        );
+        try {
+            this.writeDurableFile(temporaryPath, `${JSON.stringify(receipt, null, 2)}\n`);
+            // Linking publishes the complete durable inode without replacing an
+            // existing receipt, preserving the exclusive-create contract.
+            fs.linkSync(temporaryPath, receiptPath);
+        } finally {
+            fs.rmSync(temporaryPath, { force: true });
+        }
         this.fsyncDirectory(path.dirname(receiptPath));
         this.fsyncDirectory(this.publicationRoot(canonicalRoot));
         this.fsyncDirectory(this.publicationsRoot);

@@ -74,7 +74,7 @@ import {
 } from '../symbols';
 import {
     assertDescriptorBoundIndexingSupported,
-    resolveInsideRoot,
+    openRegularFileInsideRoot,
 } from '../sync/root-bound-fs';
 import { AtomicIncrementalPublicationUnsupportedError } from './errors';
 
@@ -1784,11 +1784,13 @@ export class IndexGenerationWorkflow {
         for (const [relativePath, expectedHash] of observedFileHashes) {
             const match = registry.matchAuxiliaries(relativePath).find((entry) => entry.language === language);
             if (!match) continue;
-            const realPath = await resolveInsideRoot(path.resolve(codebasePath, relativePath), codebasePath);
-            if (!realPath) {
-                throw new Error(`Failed to resolve semantic auxiliary file inside root: ${relativePath}`);
+            const handle = await openRegularFileInsideRoot(path.resolve(codebasePath, relativePath), codebasePath);
+            let content: string;
+            try {
+                content = await handle.readFile('utf8');
+            } finally {
+                await handle.close();
             }
-            const content = fs.readFileSync(realPath, 'utf8');
             const sourceHash = crypto.createHash('sha256').update(content).digest('hex');
             if (sourceHash !== expectedHash) {
                 throw new Error(`Semantic auxiliary source hash mismatch for ${relativePath}: expected ${expectedHash}, got ${sourceHash}`);
@@ -1924,13 +1926,14 @@ export class IndexGenerationWorkflow {
                     const langFiles = mergedManifestFiles.filter((f) => f.language === lang);
                     for (const f of langFiles) {
                         const fullPath = path.resolve(codebasePath, f.path);
-                        const realPath = await resolveInsideRoot(fullPath, codebasePath);
-                        if (!realPath) {
-                            throw new Error(`Failed to resolve semantic source file inside root: ${f.path}`);
-                        }
                         let source: string;
                         try {
-                            source = fs.readFileSync(realPath, 'utf8');
+                            const handle = await openRegularFileInsideRoot(fullPath, codebasePath);
+                            try {
+                                source = await handle.readFile('utf8');
+                            } finally {
+                                await handle.close();
+                            }
                         } catch {
                             throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
                         }

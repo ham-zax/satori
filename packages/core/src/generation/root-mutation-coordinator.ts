@@ -730,6 +730,12 @@ export class MutationLeaseCoordinator {
                 }));
                 break;
             } catch (error) {
+                if (descriptor !== null) {
+                    try { fs.closeSync(descriptor); } catch { /* Best-effort close. */ }
+                    descriptor = null;
+                    try { fs.unlinkSync(lockPath); } catch { /* Best-effort unlock. */ }
+                    throw error;
+                }
                 if (!isRecord(error) || error.code !== 'EEXIST') throw error;
                 if (this.shouldBreakLock(lockPath)) {
                     try {
@@ -761,9 +767,21 @@ export class MutationLeaseCoordinator {
     }
 
     private shouldBreakLock(lockPath: string): boolean {
+        let parsed: unknown;
         try {
-            const parsed: unknown = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-            if (!isRecord(parsed) || typeof parsed.pid !== 'number') return false;
+            parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        } catch {
+            // An interrupted owner write may leave an incomplete record.
+        }
+        if (!isRecord(parsed) || typeof parsed.pid !== 'number') {
+            try {
+                // Allow an in-flight writer the normal lock wait interval to finish.
+                return Date.now() - fs.statSync(lockPath).mtimeMs > this.lockWaitMs;
+            } catch {
+                return false;
+            }
+        }
+        try {
             const current = this.processInspector.inspect(parsed.pid);
             if (!current) return true;
             return typeof parsed.processStartTime === 'string'

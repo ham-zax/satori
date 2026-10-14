@@ -22,6 +22,57 @@ function fixture(t: TestContext): { root: string; stateDir: string; statePath: s
     };
 }
 
+test('failed lock owner write closes the descriptor and removes the incomplete lock', (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const lockPath = statePath.replace(/\.json$/, '.lock');
+    const coordinator = new MutationLeaseCoordinator({ stateDir });
+    const originalOpen = fs.openSync;
+    const originalWrite = fs.writeFileSync;
+    const failure = Object.assign(new Error('injected lock ENOSPC'), { code: 'ENOSPC' });
+    let lockDescriptor: number | undefined;
+    t.mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+        const descriptor = originalOpen(...args);
+        if (args[0] === lockPath) lockDescriptor = descriptor;
+        return descriptor;
+    });
+    t.mock.method(fs, 'writeFileSync', (...args: Parameters<typeof fs.writeFileSync>) => {
+        if (args[0] === lockDescriptor) throw failure;
+        return originalWrite(...args);
+    });
+    try {
+        assert.throws(() => coordinator.acquire(root, 'create'), (error) => error === failure);
+        assert.ok(lockDescriptor !== undefined);
+        assert.throws(() => fs.fstatSync(lockDescriptor!), { code: 'EBADF' });
+        assert.equal(fs.existsSync(lockPath), false);
+        t.mock.restoreAll();
+        const acquired = coordinator.acquire(root, 'create');
+        assert.ok(acquired.acquired);
+        coordinator.release(acquired.lease);
+    } finally {
+        // The failing baseline must not leak the injected descriptor either.
+        if (lockDescriptor !== undefined) {
+            try { fs.closeSync(lockDescriptor); } catch { /* Already closed. */ }
+        }
+    }
+});
+
+test('malformed locks are reclaimable only after the lock wait interval', (t) => {
+    const { stateDir, statePath } = fixture(t);
+    const lockPath = statePath.replace(/\.json$/, '.lock');
+    fs.mkdirSync(stateDir);
+    const now = Date.now();
+    t.mock.method(Date, 'now', () => now);
+    const coordinator = new MutationLeaseCoordinator({ stateDir, lockWaitMs: 2_000 });
+    const internals = coordinator as unknown as { shouldBreakLock(lockPath: string): boolean };
+    for (const content of ['', '{"pid":', '{}', '{"pid":"invalid"}']) {
+        fs.writeFileSync(lockPath, content);
+        fs.utimesSync(lockPath, new Date(now), new Date(now));
+        assert.equal(internals.shouldBreakLock(lockPath), false, 'fresh malformed lock stays protected');
+        fs.utimesSync(lockPath, new Date(now - 2_001), new Date(now - 2_001));
+        assert.equal(internals.shouldBreakLock(lockPath), true, 'stale malformed lock is reclaimable');
+    }
+});
+
 for (const action of ['create', 'reindex'] as const) {
     test(`released failed ${action} remains available through a restarted runtime`, async (t) => {
         const { root, stateDir } = fixture(t);

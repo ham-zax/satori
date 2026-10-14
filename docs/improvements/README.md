@@ -7,6 +7,7 @@ records the problem, evidence, decision, and remaining limitations.
 |---|---|---|
 | [Indexing native memory](indexing-native-memory-plan.md) | Implemented | Design B: baseline WASM parser processes with bounded lifetimes, bounded malloc arenas and semantic-worker release under plans <=4 GiB. 2G passes (138.5 s), 7G median 4.507 GiB / 49.7 s. |
 | [Indexing memory budget](index-memory-budget-plan.md) | Implemented | One frozen plan per full index/sync and a last-run budget hint. 7G median 4.460 GiB / 44.92 s; the 3G/2G failures are fixed by design B (indexing native memory). |
+| [Manifest file search](manifest-file-search.md) | Deferred | `go.mod` and root `package.json` are excluded from the search corpus on purpose, and admission alone still ranks them 13 and 48. Needs an admission policy and a file/config ranking signal. |
 | [Self-contained distribution](self-contained-distribution.md) | Deferred | Ship one self-contained executable per platform so a curl/PowerShell script, Homebrew, and npm become thin downloaders. |
 | [Change-proportional edit sync](change-proportional-sync.md) | Deferred | Make a one-file edit sync cost scale with the change, not the repository: warm worker, watcher change sets, delta publication. |
 | [Retrieval quality investigation](retrieval-quality-investigation.md) | Completed | Import-chunk noise, CBM retrieval ideas vs the LateOn reranker, and live search latency, measured on judged React queries. |

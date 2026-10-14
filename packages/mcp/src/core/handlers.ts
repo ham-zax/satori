@@ -2061,8 +2061,8 @@ export class ToolHandlers {
         return this.navigationHandlers.handleArchitectureOverview(args);
     }
 
-    public async handleFindReferences(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy) {
-        return this.navigationHandlers.handleFindReferences(args, workspacePolicy);
+    public async handleFindReferences(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal) {
+        return this.navigationHandlers.handleFindReferences(args, workspacePolicy, signal);
     }
 
     public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy) {

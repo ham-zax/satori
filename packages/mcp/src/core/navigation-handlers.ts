@@ -746,17 +746,56 @@ export class NavigationHandlers {
                 };
             }
 
+            const requestedSubdirectory = resolveRequestedSearchSubdirectory({
+                indexedRoot: leasedRootState.root.path,
+                requestedPath: requestedRoot,
+            });
+            let architectureManifest = manifest.registry.manifest;
+            let architectureSymbols = manifest.registry.symbols;
+            let architectureRelationships = compatibility.relationships.records;
+            let architectureClaims = resolutionClaims.claims;
+            if (requestedSubdirectory) {
+                // Authorization covers the requested directory, not its ancestor Publication.
+                // Restrict inputs before aggregation so counts and ownership metadata cannot leak siblings.
+                const withinRequest = (file: string) => candidateWithinRequestedSubdirectory(file, requestedSubdirectory);
+                const symbolsById = new Map(architectureSymbols.map((symbol) => [symbol.symbolInstanceId, symbol]));
+                architectureManifest = {
+                    ...architectureManifest,
+                    files: architectureManifest.files.filter((file) => withinRequest(file.path)),
+                };
+                architectureSymbols = architectureSymbols.filter((symbol) => withinRequest(symbol.file));
+                architectureRelationships = architectureRelationships.filter((relationship) => {
+                    const source = relationship.sourceInstanceId ? symbolsById.get(relationship.sourceInstanceId) : undefined;
+                    const target = relationship.targetInstanceId ? symbolsById.get(relationship.targetInstanceId) : undefined;
+                    const sourceFile = source?.file ?? relationship.file;
+                    const targetFile = target?.file ?? relationship.targetPath;
+                    return Boolean(sourceFile && targetFile && withinRequest(sourceFile) && withinRequest(targetFile));
+                });
+                architectureClaims = architectureClaims.filter((claim) => withinRequest(claim.sourceFile));
+                const files = packageOwnership.files.filter((file) => withinRequest(file.path));
+                // Owning package identities describe authorized files even when their manifest is above the request.
+                const packageRoots = new Set(files.map((file) => file.packageRoot));
+                packageOwnership = {
+                    ...packageOwnership,
+                    workspace: packageOwnership.workspace && withinRequest(packageOwnership.workspace.manifestPath)
+                        ? packageOwnership.workspace : null,
+                    cargoWorkspaces: (packageOwnership.cargoWorkspaces ?? []).filter((workspace) => withinRequest(workspace.manifestPath)),
+                    packages: packageOwnership.packages.filter((pkg) => packageRoots.has(pkg.root)),
+                    files,
+                };
+            }
+            const effectiveSubtree = subtree ?? requestedSubdirectory?.relativePrefix;
             let overview;
             try {
                 overview = buildArchitectureOverview({
-                    manifest: manifest.registry.manifest,
+                    manifest: architectureManifest,
                     packageOwnership,
-                    symbols: manifest.registry.symbols,
-                    relationships: compatibility.relationships.records,
-                    resolutionClaims: resolutionClaims.claims,
+                    symbols: architectureSymbols,
+                    relationships: architectureRelationships,
+                    resolutionClaims: architectureClaims,
                     scope,
                     limit,
-                    ...(subtree ? { subtree } : {}),
+                    ...(effectiveSubtree ? { subtree: effectiveSubtree } : {}),
                     ...(excludePaths ? { excludePaths } : {}),
                 });
             } catch (error) {
@@ -782,7 +821,7 @@ export class NavigationHandlers {
                     type: "text",
                     text: this.host.stringifyToolJson({
                         status: "ok",
-                        path: leasedRootState.root.path,
+                        path: requestedRoot,
                         publicationId: lease.id,
                         ...overview,
                         ...(freshnessDecision?.sourceFreshness
@@ -812,7 +851,9 @@ export class NavigationHandlers {
     public async handleFindReferences(
         args: ToolArgs,
         workspacePolicy: SessionWorkspacePolicy,
+        signal?: AbortSignal,
     ): Promise<ToolTextResponse> {
+        signal?.throwIfAborted();
         const absolutePathResult = typeof args.path === "string"
             ? requireAbsoluteFilesystemPath(args.path, "path")
             : { ok: false as const, path: "", message: "path is required." };
@@ -865,6 +906,7 @@ export class NavigationHandlers {
         });
 
         const outcome = await session.read(async (trackedRootState, lease): Promise<ToolTextResponse> => {
+            signal?.throwIfAborted();
             if (trackedRootState.state !== "ready" || lease === null) {
                 return {
                     content: [{
@@ -928,6 +970,7 @@ export class NavigationHandlers {
                 manifest.registry.manifest.files.map((file) => file.path),
             );
             const readPublishedSource = async (relativeFilePath: string): Promise<ExactReferenceSourceRead> => {
+                signal?.throwIfAborted();
                 try {
                     const sourceRead = await readAuthorizedPublishedSource({
                         workspacePolicy,
@@ -936,6 +979,7 @@ export class NavigationHandlers {
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
                     });
+                    signal?.throwIfAborted();
                     return {
                         status: "ok",
                         text: sourceRead.bytes.toString("utf8"),
@@ -971,8 +1015,10 @@ export class NavigationHandlers {
                 scope,
                 limit,
                 readPublishedSource,
+                signal,
             });
             await this.host.touchWatchedCodebase(leasedRootState.root.path);
+            signal?.throwIfAborted();
             const freshnessDecision = leasedRootState.freshnessDecision;
             const warnings = freshnessDecision
                 ? buildFreshnessWarningCodes(freshnessDecision)

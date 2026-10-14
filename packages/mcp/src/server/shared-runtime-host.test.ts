@@ -277,6 +277,26 @@ test("bounded socket transport closes a session above its pending-request limit"
     assert.match(transportError, /exceeds 2 pending requests/);
 });
 
+test("bounded socket transport frees cancelled slots and accepts the id again", async (t) => {
+    const stream = new PassThrough();
+    const transport = new BoundedSocketTransport(stream as unknown as net.Socket, () => {});
+    t.after(() => transport.close());
+    const messages: unknown[] = [];
+    const errors: Error[] = [];
+    transport.onmessage = (message) => messages.push(message);
+    transport.onerror = (error) => errors.push(error);
+    await transport.start();
+
+    for (let id = 1; id <= 20; id += 1) {
+        stream.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "ping" })}\n`);
+        stream.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } })}\n`);
+    }
+    stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" })}\n`);
+    assert.equal(stream.destroyed, false, "cancelled requests must not exhaust pending slots");
+    assert.deepEqual(errors, []);
+    assert.equal(messages.length, 41);
+});
+
 test("private socket host keeps MCP sessions independent and shares one runtime owner", async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-shared-host-"));
     fs.mkdirSync(path.join(root, "xdg"), { mode: 0o700 });

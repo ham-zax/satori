@@ -131,8 +131,10 @@ export async function findExactPublishedSourceReferences(input: {
     target: SymbolRecord;
     scope?: PublishedPathScope;
     limit?: number;
+    signal?: AbortSignal;
     readPublishedSource(file: string): Promise<ExactReferenceSourceRead>;
 }): Promise<ExactReferenceSearchResult> {
+    input.signal?.throwIfAborted();
     const limit = Math.max(1, Math.floor(input.limit ?? 100));
     const publishedEntries = input.registry.manifest.files
         .map((entry) => ({
@@ -146,6 +148,7 @@ export async function findExactPublishedSourceReferences(input: {
     ));
     const eligibleFiles = eligibleEntries.map((entry) => entry.path);
     const references: ExactSourceReference[] = [];
+    let matchedOccurrenceCount = 0;
     const reasons: ExactReferenceCoverageReason[] = [];
     let inspectedFileCount = 0;
     let declarationSeen = false;
@@ -191,6 +194,7 @@ export async function findExactPublishedSourceReferences(input: {
     let nextReadIndex = 0;
     const fillReadWindow = () => {
         while (nextReadIndex < eligibleEntries.length && pendingReads.length < EXACT_REFERENCE_READ_CONCURRENCY) {
+            if (input.signal?.aborted) break;
             const read = input.readPublishedSource(eligibleEntries[nextReadIndex++]!.path);
             // Observed when awaited in order; this only prevents an unhandled
             // rejection for reads left in flight when an earlier one throws.
@@ -199,104 +203,115 @@ export async function findExactPublishedSourceReferences(input: {
         }
     };
 
-    for (const entry of eligibleEntries) {
-        const file = entry.path;
-        fillReadWindow();
-        const source = await pendingReads.shift()!;
-        if (source.status === "skipped") {
-            reasons.push({
-                code: source.code,
-                file,
-                ...(source.detail ? { detail: source.detail } : {}),
-            });
-            continue;
-        }
-        const expectedSourceHash = entry.hash?.trim().toLowerCase();
-        if (expectedSourceHash) {
-            if (!/^[a-f0-9]{64}$/.test(expectedSourceHash)) {
+    try {
+        for (const entry of eligibleEntries) {
+            const file = entry.path;
+            input.signal?.throwIfAborted();
+            fillReadWindow();
+            const source = await pendingReads.shift()!;
+            input.signal?.throwIfAborted();
+            if (source.status === "skipped") {
                 reasons.push({
-                    code: "source_unverified",
+                    code: source.code,
                     file,
-                    detail: "Publication source identity is not a valid SHA-256 content hash.",
+                    ...(source.detail ? { detail: source.detail } : {}),
                 });
                 continue;
             }
-            const observedSha256 = source.sourceSha256?.trim().toLowerCase();
-            if (!observedSha256) {
-                reasons.push({
-                    code: "source_unverified",
-                    file,
-                    detail: "Current source bytes could not be bound to the Publication content hash.",
-                });
-                continue;
-            }
-            if (observedSha256 !== expectedSourceHash) {
-                reasons.push({
-                    code: "source_changed",
-                    file,
-                    detail: "Current source bytes differ from the Publication content hash.",
-                });
-                continue;
-            }
-        }
-        inspectedFileCount += 1;
-        const lines = source.text.split(/\r?\n/);
-        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-            const lineText = lines[lineIndex] ?? "";
-            matcher.lastIndex = 0;
-            let match: RegExpExecArray | null;
-            while ((match = matcher.exec(lineText)) !== null) {
-                const leading = match[1] ?? "";
-                const startIndex = match.index + leading.length;
-                const line = lineIndex + 1;
-                const occurrenceKind = classifyOccurrence({
-                    file,
-                    line,
-                    lineText,
-                    startIndex,
-                    target: input.target,
-                    declarationSeen,
-                });
-                if (occurrenceKind === "declaration") {
-                    declarationSeen = true;
+            const expectedSourceHash = entry.hash?.trim().toLowerCase();
+            if (expectedSourceHash) {
+                if (!/^[a-f0-9]{64}$/.test(expectedSourceHash)) {
+                    reasons.push({
+                        code: "source_unverified",
+                        file,
+                        detail: "Publication source identity is not a valid SHA-256 content hash.",
+                    });
+                    continue;
                 }
-                const owner = findOwningSymbol(input.registry, file, line);
-                references.push({
-                    file,
-                    span: {
-                        startLine: line,
-                        endLine: line,
-                        startColumn: startIndex + 1,
-                        endColumn: startIndex + identifier.length + 1,
-                    },
-                    ...(owner ? {
-                        owningSymbol: {
-                            symbolId: owner.symbolInstanceId,
-                            symbolLabel: owner.label,
-                            file: owner.file,
-                            span: {
-                                startLine: owner.span.startLine,
-                                endLine: owner.span.endLine,
-                            },
+                const observedSha256 = source.sourceSha256?.trim().toLowerCase();
+                if (!observedSha256) {
+                    reasons.push({
+                        code: "source_unverified",
+                        file,
+                        detail: "Current source bytes could not be bound to the Publication content hash.",
+                    });
+                    continue;
+                }
+                if (observedSha256 !== expectedSourceHash) {
+                    reasons.push({
+                        code: "source_changed",
+                        file,
+                        detail: "Current source bytes differ from the Publication content hash.",
+                    });
+                    continue;
+                }
+            }
+            inspectedFileCount += 1;
+            const lines = source.text.split(/\r?\n/);
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+                const lineText = lines[lineIndex] ?? "";
+                matcher.lastIndex = 0;
+                let match: RegExpExecArray | null;
+                while ((match = matcher.exec(lineText)) !== null) {
+                    matchedOccurrenceCount += 1;
+                    // Files, lines, and matches are consumed in source order, so
+                    // only this prefix can appear in the limited response.
+                    if (references.length >= limit) continue;
+                    const leading = match[1] ?? "";
+                    const startIndex = match.index + leading.length;
+                    const line = lineIndex + 1;
+                    const occurrenceKind = classifyOccurrence({
+                        file,
+                        line,
+                        lineText,
+                        startIndex,
+                        target: input.target,
+                        declarationSeen,
+                    });
+                    if (occurrenceKind === "declaration") {
+                        declarationSeen = true;
+                    }
+                    const owner = findOwningSymbol(input.registry, file, line);
+                    references.push({
+                        file,
+                        span: {
+                            startLine: line,
+                            endLine: line,
+                            startColumn: startIndex + 1,
+                            endColumn: startIndex + identifier.length + 1,
                         },
-                    } : {}),
-                    occurrenceKind,
-                    matchedText: identifier,
-                    ...(occurrenceKind === "member" ? { member: identifier } : {}),
-                    evidenceClass: EXACT_REFERENCE_EVIDENCE_CLASS,
-                });
-                if (match[0].length === 0) {
-                    matcher.lastIndex += 1;
+                        ...(owner ? {
+                            owningSymbol: {
+                                symbolId: owner.symbolInstanceId,
+                                symbolLabel: owner.label,
+                                file: owner.file,
+                                span: {
+                                    startLine: owner.span.startLine,
+                                    endLine: owner.span.endLine,
+                                },
+                            },
+                        } : {}),
+                        occurrenceKind,
+                        matchedText: identifier,
+                        ...(occurrenceKind === "member" ? { member: identifier } : {}),
+                        evidenceClass: EXACT_REFERENCE_EVIDENCE_CLASS,
+                    });
+                    if (match[0].length === 0) {
+                        matcher.lastIndex += 1;
+                    }
                 }
             }
         }
+    } finally {
+        // The caller owns a Publication lease until every started read settles.
+        await Promise.allSettled(pendingReads);
     }
 
     const sorted = references.sort(compareReferences);
-    if (sorted.length > limit) {
+    if (matchedOccurrenceCount > limit) {
         reasons.push({
             code: "result_limit",
-            detail: "Matched " + sorted.length + " occurrences; returned first " + limit + " in deterministic source order.",
+            detail: "Matched " + matchedOccurrenceCount + " occurrences; returned first " + limit + " in deterministic source order.",
         });
     }
     const returned = sorted.slice(0, limit);
@@ -319,7 +334,7 @@ export async function findExactPublishedSourceReferences(input: {
             eligibleFileCount: eligibleFiles.length,
             inspectedFileCount,
             skippedFileCount: eligibleFiles.length - inspectedFileCount,
-            matchedOccurrenceCount: sorted.length,
+            matchedOccurrenceCount,
             returnedOccurrenceCount: returned.length,
             reasons,
         },

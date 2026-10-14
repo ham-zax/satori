@@ -102,6 +102,6 @@ export const findReferencesTool: McpTool = {
         return ctx.toolHandlers.handleFindReferences({
             ...parsed.data,
             path: authorized.canonicalPath,
-        }, ctx.workspacePolicy);
+        }, ctx.workspacePolicy, ctx.requestSignal);
     },
 };

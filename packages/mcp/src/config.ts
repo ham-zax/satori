@@ -565,7 +565,14 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
         case 'OpenAI':
             console.log(`[MCP]   OpenAI API Key: ${config.openaiKey ? '✅ Configured' : '❌ Missing'}`);
             if (config.openaiEndpoint) {
-                console.log(`[MCP]   OpenAI Base URL: ${config.openaiEndpoint}`);
+                let endpoint = '[Invalid URL]';
+                try {
+                    const url = new URL(config.openaiEndpoint);
+                    endpoint = url.origin + url.pathname;
+                } catch {
+                    // Malformed endpoints may also contain credentials.
+                }
+                console.log(`[MCP]   OpenAI Base URL: ${endpoint}`);
             }
             break;
         case 'VoyageAI':

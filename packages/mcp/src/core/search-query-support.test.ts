@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
 import { withSourceMeasurementOperation } from '@satori-code/core';
 import type { CapabilityResolver } from './capabilities.js';
 import { SearchQuerySupport } from './search-query-support.js';
@@ -76,6 +77,67 @@ test('SearchQuerySupport owns the root gitignore matcher cache', () => {
         assert.match(hint.nextStep, /already covered by root \.gitignore/i);
     } finally {
         fs.rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+});
+
+test('root gitignore matcher never reads an outside symlink, including after a cached regular file', (t) => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-gitignore-symlink-'));
+    try {
+        const repositoryRoot = path.join(temp, 'repo');
+        fs.mkdirSync(repositoryRoot);
+        const gitignorePath = path.join(repositoryRoot, '.gitignore');
+        const outsidePath = path.join(temp, 'outside-ignore');
+        const contents = '**/*.test.*\n';
+        fs.writeFileSync(outsidePath, contents);
+        const host: SearchQuerySupportHost = {
+            normalizeSearchPath: (value) => value,
+            hasPathSegment: () => false,
+            isGeneratedPath: () => false,
+            isTestPath: () => true,
+            isFixturePath: () => false,
+            isDocPath: () => false,
+            getContextActiveIgnorePatterns: () => [],
+            getContextTrackedRelativePaths: () => [],
+            classifyPathCategory: () => 'srcRuntime',
+            shouldIncludeCategoryInScope: () => true,
+            capabilities: {} as CapabilityResolver,
+            runtimeFingerprint: {} as never,
+            reranker: null,
+            gitignoreForceReloadEveryN: 25,
+        };
+        const support = new SearchQuerySupport(host);
+        const hint = () => support.buildNoiseMitigationHint(repositoryRoot, ['tests/auth.test.ts'], 'mixed', { path: [] });
+        const readFileSync = fs.readFileSync;
+        let outsideReads = 0;
+        t.mock.method(fs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+            if (String(args[0]) === gitignorePath && fs.lstatSync(gitignorePath).isSymbolicLink()) {
+                outsideReads += 1;
+                throw new Error('outside gitignore read denied by regression fixture');
+            }
+            return Reflect.apply(readFileSync, fs, args);
+        });
+        syncBuiltinESMExports();
+
+        fs.symlinkSync(outsidePath, gitignorePath);
+        hint();
+        assert.equal(outsideReads, 0, 'fresh matcher must not attempt an outside read');
+
+        const cachedSupport = new SearchQuerySupport(host);
+        const cachedHint = () => cachedSupport.buildNoiseMitigationHint(repositoryRoot, ['tests/auth.test.ts'], 'mixed', { path: [] });
+        fs.unlinkSync(gitignorePath);
+        fs.writeFileSync(gitignorePath, contents);
+        assert.match(cachedHint()!.nextStep, /already covered by root \.gitignore/i);
+        const stat = fs.statSync(gitignorePath);
+        fs.utimesSync(outsidePath, stat.atime, stat.mtime);
+        fs.unlinkSync(gitignorePath);
+        fs.symlinkSync(outsidePath, gitignorePath);
+        // Exercise the cached ready branch before its periodic reload.
+        assert.doesNotMatch(cachedHint()!.nextStep, /already covered by root \.gitignore/i);
+        assert.equal(outsideReads, 0, 'cached matcher replacement must not attempt an outside read');
+    } finally {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+        fs.rmSync(temp, { recursive: true, force: true });
     }
 });
 

@@ -1,11 +1,75 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
+import fs from "node:fs";
+import type { PublicationLease, SymbolRecord, SymbolRegistry } from "@satori-code/core";
+import { ToolHandlers } from "../core/handlers.js";
+import { NavigationHandlers } from "../core/navigation-handlers.js";
+import { createSessionWorkspacePolicy } from "../core/session-workspace-policy.js";
 import {
     findReferencesInputSchema,
     findReferencesTool,
 } from "./find_references.js";
 import type { ToolContext } from "./types.js";
+
+test("find_references cancellation stops source scanning and releases the publication lease", async (t) => {
+    const root = fs.mkdtempSync(path.resolve("satori-find-references-test-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const files = Array.from({ length: 32 }, (_, i) => `${String(i).padStart(2, "0")}.ts`);
+    for (const file of files) fs.writeFileSync(path.join(root, file), "request();\n");
+    const target = {
+        symbolInstanceId: "target", name: "request", file: files[0]!, language: "typescript",
+        kind: "function", label: "request", qualifiedName: "request", parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 1 },
+        symbolKey: "target", fileHash: "fixture", extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: files.map((file) => ({ path: file })) },
+        symbolsByFile: new Map([[target.file, [target]]]),
+    } as unknown as SymbolRegistry;
+    let released = false;
+    let published = false;
+    let sourceReads = 0;
+    const controller = new AbortController();
+    const abortReason = new Error("deterministic scan cancellation");
+    const lease = {
+        id: "publication-1", publication: { id: "publication-1", canonicalRoot: root },
+        release: () => { released = true; },
+    } as PublicationLease;
+    const policy = createSessionWorkspacePolicy({ roots: [root], homeDirectory: path.dirname(root), stateRoot: path.join(root, "state") });
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: root }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        loadPreparedNavigationManifest: async () => ({ status: "ok", registry }),
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => { published = true; },
+        stringifyToolJson: JSON.stringify,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const toolHandlers = {
+        navigationHandlers,
+        handleFindReferences: ToolHandlers.prototype.handleFindReferences,
+    } as unknown as ToolHandlers;
+    const ctx = {
+        toolHandlers,
+        requestSignal: controller.signal,
+        workspacePolicy: {
+            ...policy,
+            authorizePath(file: string) {
+                sourceReads += 1;
+                controller.abort(abortReason);
+                return policy.authorizePath(file);
+            },
+        },
+    } as unknown as ToolContext;
+    await assert.rejects(findReferencesTool.execute({
+        path: root, symbolRef: { file: target.file, symbolId: "target" },
+    }, ctx), (error: unknown) => error === abortReason);
+    assert.equal(released, true);
+    assert.equal(published, false);
+    assert.equal(sourceReads, 1);
+});
 
 test("find_references schema requires canonical symbol target and safe repo-relative scope", () => {
     assert.equal(findReferencesInputSchema.safeParse({

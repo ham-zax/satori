@@ -4,6 +4,46 @@ import test from "node:test";
 import type { SymbolRecord, SymbolRegistry } from "@satori-code/core";
 import { findExactPublishedSourceReferences } from "./exact-reference-search.js";
 
+test("exact reference cancellation drains started reads before rejecting", async () => {
+    const nav = registry();
+    const target = nav.symbolsByInstanceId.get("target")!;
+    const controller = new AbortController();
+    const reason = new Error("deterministic read cancellation");
+    const pending: Array<() => void> = [];
+    let active = 0;
+    let started = 0;
+    let readsStarted!: () => void;
+    const startedGate = new Promise<void>((resolve) => { readsStarted = resolve; });
+    const input = {
+        registry: nav,
+        target,
+        signal: controller.signal,
+        readPublishedSource: async (file: string) => {
+            active += 1;
+            started += 1;
+            if (started === 3) readsStarted();
+            await new Promise<void>((resolve) => { pending.push(resolve); });
+            active -= 1;
+            return { status: "ok" as const, text: sources.get(file)! };
+        },
+    };
+    const result = findExactPublishedSourceReferences(input);
+    let settled = false;
+    const assertion = assert.rejects(result, (error: unknown) => {
+        assert.equal(active, 0, "all started reads must finish before the lease can release");
+        return error === reason;
+    }).finally(() => { settled = true; });
+    await startedGate;
+    controller.abort(reason);
+    pending[0]!();
+    // Flush continuations while two reads remain blocked by explicit gates.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(active, 2);
+    for (const resolve of pending.slice(1)) resolve();
+    await assertion;
+});
+
 function symbol(input: Partial<SymbolRecord> & Pick<SymbolRecord, "symbolInstanceId" | "name" | "file">): SymbolRecord {
     const { symbolInstanceId, name, file, ...overrides } = input;
     return {
@@ -68,6 +108,54 @@ const sources = new Map([
     ["src/caller.ts", "export function run(client: any) {\n  return client.request();\n}\n"],
     ["src/ignored/caller.ts", "export function ignoredRun(client: any) {\n  return client.request();\n}\n"],
 ]);
+
+test("exact reference search materializes only the bounded prefix but counts every match", async (t) => {
+    const nav = registry();
+    const target = nav.symbolsByInstanceId.get("target")!;
+    const getSymbols = nav.symbolsByFile.get.bind(nav.symbolsByFile);
+    let materialized = 0;
+    t.mock.method(nav.symbolsByFile, "get", (file: string) => {
+        materialized += 1;
+        if (materialized > 2) throw new Error("materialized occurrence beyond result limit");
+        return getSymbols(file);
+    });
+    const result = await findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        limit: 2,
+        readPublishedSource: async (file) => ({
+            status: "ok",
+            text: file === "src/caller.ts" ? "client.request();\n".repeat(5000) : sources.get(file)!,
+        }),
+    });
+    assert.equal(materialized, 2);
+    assert.equal(result.coverage.matchedOccurrenceCount, 5002);
+    assert.equal(result.coverage.inspectedFileCount, 3);
+    assert.equal(result.coverage.returnedOccurrenceCount, 2);
+    assert.deepEqual(result.references.map((reference) => [reference.file, reference.span.startLine]), [
+        ["src/caller.ts", 1], ["src/caller.ts", 2],
+    ]);
+    assert.deepEqual(result.coverage.reasons, [{
+        code: "result_limit",
+        detail: "Matched 5002 occurrences; returned first 2 in deterministic source order.",
+    }]);
+});
+
+test("bounded exact references equal the unlimited source-order prefix", async () => {
+    const nav = registry();
+    const input = {
+        registry: nav,
+        target: nav.symbolsByInstanceId.get("target")!,
+        readPublishedSource: async (file: string) => ({ status: "ok" as const, text: sources.get(file)! }),
+    };
+    const unlimited = await findExactPublishedSourceReferences({ ...input, limit: 100 });
+    for (const limit of [1, 2, 3, 4]) {
+        const result = await findExactPublishedSourceReferences({ ...input, limit });
+        assert.deepEqual(result.references, unlimited.references.slice(0, limit));
+        assert.equal(result.coverage.matchedOccurrenceCount, unlimited.coverage.matchedOccurrenceCount);
+        if (limit >= unlimited.references.length) assert.deepEqual(result, unlimited);
+    }
+});
 
 function sha256(value: string): string {
     return crypto.createHash("sha256").update(value).digest("hex");

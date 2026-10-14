@@ -3,7 +3,7 @@ import type {
     JSONRPCMessage,
     MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
-import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CancelledNotificationSchema, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Socket } from "node:net";
 import {
     SHARED_RUNTIME_MAX_PENDING_REQUESTS,
@@ -139,6 +139,14 @@ export class BoundedSocketTransport implements Transport {
         if (!serialized) return;
         try {
             const message = JSONRPCMessageSchema.parse(JSON.parse(serialized));
+            if (!("id" in message) && "method" in message && message.method === "notifications/cancelled") {
+                const cancelled = CancelledNotificationSchema.safeParse(message);
+                if (cancelled.success) {
+                    const id = cancelled.data.params.requestId;
+                    // The protocol suppresses responses for cancelled requests.
+                    this.pendingRequests.delete(`${typeof id}:${String(id)}`);
+                }
+            }
             const pendingRequest = requestKey(message);
             if (pendingRequest !== null) {
                 if (

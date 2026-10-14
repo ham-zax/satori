@@ -1036,7 +1036,7 @@ export class SearchQuerySupport {
 
         if (!forceReload && existing.state === 'ready') {
             try {
-                const stat = fs.statSync(gitignorePath);
+                const stat = fs.lstatSync(gitignorePath);
                 const mtimeMs = Math.trunc(stat.mtimeMs);
                 const size = stat.size;
                 if (stat.isFile() && existing.mtimeMs === mtimeMs && existing.size === size && existing.matcher) {
@@ -1056,7 +1056,8 @@ export class SearchQuerySupport {
         }
 
         try {
-            const stat = fs.statSync(gitignorePath);
+            // Root ignore policy must be a regular file, never a symlink to external content.
+            const stat = fs.lstatSync(gitignorePath);
             if (!stat.isFile()) {
                 const absent = {
                     state: "absent" as GitignoreMatcherCacheState,

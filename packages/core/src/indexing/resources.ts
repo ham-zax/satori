@@ -27,6 +27,12 @@ export interface IndexingResourcePlan {
     readonly typescriptProjectConcurrency: number;
     readonly analysisWorkers: number;
     readonly analysisWindowFiles: number;
+    readonly analysisWorkerMode: 'thread' | 'process';
+    readonly analysisProcessMaxFiles: number;
+    readonly analysisProcessMaxSourceBytes: number;
+    readonly analysisLargeFileBytes: number;
+    readonly mutationMallocArenaMax: number;
+    readonly releaseSemanticBeforeResolution: boolean;
     readonly queuedEmbeddingTextBytes: number;
     readonly embeddingBatchMaxItems: number;
     readonly vectorWriteMaxRows: number;
@@ -60,6 +66,22 @@ export function isIndexingMemoryStatus(value: unknown): value is IndexingMemoryS
     if (!value || typeof value !== 'object') return false;
     const status = value as IndexingMemoryStatus;
     return Number.isSafeInteger(status.budgetMb) && status.budgetMb >= 0 && typeof status.hint === 'string';
+}
+
+/** Restore the immutable plan across the trusted mutation-worker IPC boundary. */
+export function restoreIndexingResourcePlan(value: unknown): IndexingResourcePlan {
+    if (!value || typeof value !== 'object') throw new Error('Invalid indexing resource plan.');
+    const plan = value as IndexingResourcePlan;
+    const nonnegative = ['budgetBytes', 'burstReserveBytes', 'analysisWorkers', 'mutationMallocArenaMax'] as const;
+    const positive = ['typescriptProjectConcurrency', 'analysisWindowFiles', 'analysisProcessMaxFiles',
+        'analysisProcessMaxSourceBytes', 'analysisLargeFileBytes', 'queuedEmbeddingTextBytes',
+        'embeddingBatchMaxItems', 'vectorWriteMaxRows'] as const;
+    if (nonnegative.some(key => !Number.isSafeInteger(plan[key]) || plan[key] < 0)
+        || positive.some(key => !Number.isSafeInteger(plan[key]) || plan[key] <= 0)
+        || !['process', 'thread'].includes(plan.analysisWorkerMode)
+        || typeof plan.releaseSemanticBeforeResolution !== 'boolean'
+        || !isIndexingMemoryStatus(plan.memoryBudget)) throw new Error('Invalid indexing resource plan.');
+    return Object.freeze({ ...plan, memoryBudget: Object.freeze({ ...plan.memoryBudget }) });
 }
 
 /** One observation/policy owner; stages consume its immutable per-operation plan. */
@@ -162,6 +184,13 @@ export class IndexingResourcePlanner {
         const derivedAnalysis = Math.min(cpuAnalysis, Math.max(1, Math.floor(jobBytes / ANALYSIS_JOB_BYTES)));
         const analysisWorkers = overrides.analysisWorkers ?? derivedAnalysis;
         const analysisWindowFiles = Math.max(1, analysisWorkers) * (budgetBytes > 4 * GIB ? 2 : 1);
+        // Turn 4 attribution: optimizing a generated C++ lexer used 2.30 GiB
+        // of V8 native compiler allocations. Baseline WASM reduced it to 5 MiB.
+        // Small plans isolate that policy and release parser/allocator capacity
+        // at process exit; large plans retain the established threaded fast path.
+        const smallBudget = budgetBytes <= 4 * GIB;
+        const analysisWorkerMode = smallBudget && analysisWorkers > 0 ? 'process' : 'thread';
+        const analysisProcessMaxSourceBytes = Math.max(256 * 1024, Math.min(8 * MIB, Math.floor(jobBytes / 16)));
         const lowered = typescriptProjectConcurrency < cpuTypescript || (overrides.analysisWorkers === undefined && analysisWorkers < cpuAnalysis);
         const reason = typescriptProjectConcurrency < cpuTypescript
             ? typescriptProjectConcurrency === 1
@@ -170,10 +199,17 @@ export class IndexingResourcePlanner {
             : 'Fewer analysis workers run in parallel, so indexing may take longer.';
         const memoryBudget = Object.freeze({
             budgetMb: Math.floor(budgetBytes / MIB),
-            hint: `Memory budget ${(budgetBytes / GIB).toFixed(1)} GiB${lowered ? `: ${reason}` : '.'}`,
+            hint: `Memory budget ${(budgetBytes / GIB).toFixed(1)} GiB${lowered ? `: ${reason}` : '.'}${analysisWorkerMode === 'process' ? ' Parser processes are recycled to release native memory.' : ''}`,
         });
         return Object.freeze({
             budgetBytes, burstReserveBytes, typescriptProjectConcurrency, analysisWorkers, analysisWindowFiles,
+            analysisWorkerMode, analysisProcessMaxFiles: 128, analysisProcessMaxSourceBytes,
+            analysisLargeFileBytes: Math.floor(analysisProcessMaxSourceBytes / 2),
+            // Parser isolation exposed ~850 MiB of free glibc arenas retained
+            // by native payload writes. Bound arenas at mutation-process spawn;
+            // release the completed semantic worker before admitting a Program.
+            mutationMallocArenaMax: smallBudget && this.observation.platform() === 'linux' ? 2 : 0,
+            releaseSemanticBeforeResolution: smallBudget,
             queuedEmbeddingTextBytes,
             embeddingBatchMaxItems: Math.max(8, Math.min(1000, Math.floor(queuedEmbeddingTextBytes / (16 * 1024)))),
             vectorWriteMaxRows: Math.max(8, Math.min(256, Math.floor(queuedEmbeddingTextBytes / (32 * 1024)))),

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IndexingResourcePlanner } from './resources';
+import { IndexingResourcePlanner, restoreIndexingResourcePlan } from './resources';
 import { readIndexingResourceOverrides } from '../config/indexing-resources';
 
 const GIB = 1024 ** 3;
@@ -50,6 +50,10 @@ for (const scenario of [
         if (row.warning) assert.match(warnings[0], row.missing ? /Cgroup.*conservative/ : /positive integer.*derived memory budget/);
         assert.ok(Object.isFrozen(plan));
         assert.ok(Object.isFrozen(plan.memoryBudget));
+        assert.equal(plan.analysisWorkerMode, plan.budgetBytes <= 4 * GIB && plan.analysisWorkers > 0 ? 'process' : 'thread');
+        assert.equal(plan.analysisProcessMaxFiles, 128);
+        assert.ok(plan.analysisProcessMaxSourceBytes >= 256 * 1024 && plan.analysisProcessMaxSourceBytes <= 8 * MIB);
+        assert.equal(plan.analysisLargeFileBytes, Math.floor(plan.analysisProcessMaxSourceBytes / 2));
         assert.equal(plan.burstReserveBytes, Math.ceil(plan.budgetBytes * 0.2));
         assert.ok(plan.budgetBytes <= row.host * GIB);
         if (row.override === '2048') assert.equal(plan.budgetBytes, 2 * GIB);
@@ -183,3 +187,20 @@ for (const scenario of [
         if (scenario.warnings) assert.match(warnings[0], /Cgroup.*conservative 2 GiB/);
     });
 }
+
+test('mutation IPC restores the same frozen resource plan and rejects malformed limits', async () => {
+    const planner = new IndexingResourcePlanner({
+        platform: () => 'linux', readFile: file => file === '/proc/self/cgroup' ? '0::/' : 'max',
+        totalMemory: () => 64 * GIB, freeMemory: () => 2 * GIB, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] }));
+    const plan = planner.createPlan();
+    assert.equal(plan.mutationMallocArenaMax, 2);
+    assert.equal(plan.releaseSemanticBeforeResolution, true);
+    const restored = restoreIndexingResourcePlan(JSON.parse(JSON.stringify(plan)));
+    assert.deepEqual(restored, plan);
+    assert.ok(Object.isFrozen(restored));
+    assert.ok(Object.isFrozen(restored.memoryBudget));
+    for (const invalid of [undefined, { ...plan, analysisProcessMaxFiles: 0 }, { ...plan, analysisWorkerMode: 'invalid' }, { ...plan, mutationMallocArenaMax: -1 }]) {
+        assert.throws(() => restoreIndexingResourcePlan(invalid), /Invalid indexing resource plan/);
+    }
+});

@@ -399,3 +399,91 @@ test('operation plan bounds analysis read-ahead, queued text, embedding batches 
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('a failed file drains already-started analysis reads before the pipeline rejects', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const analyzer = createLanguageAnalysisService();
+    const pipeline = new IndexingPipeline({
+        getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+        semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+        assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+        isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'fixture',
+    });
+    let readFinished = false;
+    pipeline.analyzeIndexedFile = async file => {
+        if (file === 'a.ts') throw new Error('injected file failure');
+        await gate;
+        readFinished = true;
+        return null;
+    };
+    const operation = pipeline.processFileList({ filePaths: ['a.ts', 'b.ts'], codebasePath: '/repo', collectionName: 'fixture' });
+    const rejection = assert.rejects(operation, /injected file failure/);
+    let settled = false;
+    operation.then(() => { settled = true; }, () => { settled = true; });
+    try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'returned while a prefetched analysis read was in flight');
+        release();
+        await rejection;
+        assert.equal(readFinished, true);
+    } finally { release(); await operation.catch(() => undefined); await analyzer.dispose?.(); }
+});
+
+for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as const) {
+    test(`${stop} drains later read failures without replacing the first outcome`, async () => {
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const firstError = new Error(stop);
+        if (stop === 'cancellation') firstError.name = 'AbortError';
+        const analyzer = createLanguageAnalysisService();
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+            semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+            assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+            isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+            normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'fixture',
+        });
+        let readFinished = false;
+        pipeline.analyzeIndexedFile = async file => {
+            if (file === 'b.ts') {
+                await gate;
+                readFinished = true;
+                throw new Error('later read failure');
+            }
+            if (stop === 'analysis failure') throw firstError;
+            return {
+                relativePath: file as RepositoryRelativePath, source: '', sourceHash: 'fixture',
+                sourceStat: { size: stop === 'source byte limit' ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION + 1 : 1, mtimeMs: 0, ctimeMs: 0 },
+                language: 'typescript', structuralStatus: 'complete', chunks: [], extractedSymbols: [],
+                moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [],
+            };
+        };
+        const operation = pipeline.processFileList({
+            filePaths: ['a.ts', 'b.ts'], codebasePath: '/repo', collectionName: 'fixture',
+            onFileProcessed: () => { if (stop === 'cancellation') throw firstError; },
+        });
+        const outcome = stop === 'source byte limit' ? operation : assert.rejects(operation, error => error === firstError);
+        let settled = false;
+        operation.then(() => { settled = true; }, () => { settled = true; });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.equal(settled, false, 'returned while a later analysis read was in flight');
+            release();
+            await outcome;
+            assert.equal(readFinished, true);
+            if (stop === 'source byte limit') {
+                const result = await operation;
+                assert.equal(result.status, 'limit_reached');
+                assert.equal(result.processedFiles, 0);
+                assert.deepEqual(result.sourceFiles, []);
+                await result.payloadSettled;
+            }
+        } finally { release(); await operation.catch(() => undefined); await analyzer.dispose?.(); }
+    });
+}

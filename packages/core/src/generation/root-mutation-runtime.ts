@@ -304,6 +304,11 @@ export class RootMutationRuntime {
         requireCoordinator(this).assertCurrent(lease);
     }
 
+    getCurrentSignal(root: string): AbortSignal {
+        const lease = requireCurrentLeaseForRoot(this, root);
+        return requireOperationControl(this, lease.operationId).execution.signal;
+    }
+
     isCurrent(root: string): boolean {
         const lease = currentLeaseForRoot(this, root);
         return lease ? requireCoordinator(this).isCurrent(lease) : false;

@@ -35,3 +35,41 @@ test('zero workers analyze in-process and dispose is safe', async () => {
     await pool.dispose();
     assert.equal((await pool.analyze(inputs[0])).structuralStatus, 'complete');
 });
+
+test('failed parser workers remain owned until disposal has awaited their exit', async () => {
+    const { Worker } = await import('node:worker_threads');
+    const originalPost = Worker.prototype.postMessage;
+    const originalTerminate = Worker.prototype.terminate;
+    const workers: InstanceType<typeof Worker>[] = [];
+    let failed!: () => void;
+    const failure = new Promise<void>(resolve => { failed = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    Worker.prototype.postMessage = function () {
+        workers.push(this);
+        this.emit('error', new Error('injected parser death'));
+        failed();
+    };
+    Worker.prototype.terminate = async function () { await gate; return originalTerminate.call(this); };
+    const pool = createParallelLanguageAnalysisService({}, 1);
+    try {
+        const operation = pool.analyze(inputs[0]);
+        const rejected = assert.rejects(operation, /injected parser death/);
+        await failure;
+        let disposed = false;
+        const disposal = pool.dispose().then(() => { disposed = true; });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        assert.equal(disposed, false, 'disposal returned while failed parser termination was in flight');
+        release();
+        await disposal;
+        await rejected;
+        assert.equal(workers.length, 1);
+        assert.equal(workers[0].threadId, -1);
+    } finally {
+        release();
+        Worker.prototype.postMessage = originalPost;
+        Worker.prototype.terminate = originalTerminate;
+        await pool.dispose();
+        await Promise.all(workers.map(worker => originalTerminate.call(worker)));
+    }
+});

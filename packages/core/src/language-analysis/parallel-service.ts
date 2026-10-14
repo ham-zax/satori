@@ -53,15 +53,23 @@ export function createParallelLanguageAnalysisService(
 ): ParallelLanguageAnalysisPort {
     const local = createLanguageAnalysisService(options);
     const workers: PoolWorker[] = [];
+    const retiring = new Set<Promise<number>>();
     let nextId = 1;
     let idleTimer: NodeJS.Timeout | undefined;
     let disposed = false;
 
     const pendingCount = () => workers.reduce((sum, entry) => sum + entry.pending.size, 0);
 
+    const retire = (entry: PoolWorker) => {
+        const exited = entry.worker.terminate();
+        retiring.add(exited);
+        void exited.finally(() => retiring.delete(exited));
+        return exited;
+    };
+
     const releaseAll = () => {
         for (const entry of workers.splice(0)) {
-            void entry.worker.terminate();
+            retire(entry);
         }
     };
 
@@ -77,9 +85,11 @@ export function createParallelLanguageAnalysisService(
     const failWorker = (entry: PoolWorker, error: Error) => {
         const index = workers.indexOf(entry);
         if (index >= 0) workers.splice(index, 1);
-        for (const pending of entry.pending.values()) pending.reject(error);
+        const pending = [...entry.pending.values()];
         entry.pending.clear();
-        void entry.worker.terminate();
+        // A failed handle remains owned until exit; callers cannot drain a pool
+        // that has silently discarded its still-terminating worker.
+        void retire(entry).then(() => { for (const request of pending) request.reject(error); });
     };
 
     const spawnWorker = (): PoolWorker => {
@@ -147,7 +157,7 @@ export function createParallelLanguageAnalysisService(
                 for (const pending of entry.pending.values()) pending.reject(new Error('Language analysis service was disposed.'));
                 entry.pending.clear();
             }
-            await Promise.all(all.map((entry) => entry.worker.terminate()));
+            await Promise.all([...all.map(retire), ...retiring]);
         },
     };
 }

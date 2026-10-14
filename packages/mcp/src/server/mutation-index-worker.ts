@@ -1,4 +1,4 @@
-import type { ObservedResolvedIndexPolicy } from "@satori-code/core";
+import { restoreIndexingResourcePlan, type IndexingResourcePlan, type ObservedResolvedIndexPolicy } from "@satori-code/core";
 import { RootMutationRuntime, type MutationOperationPhase } from "@satori-code/core/integration";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { createMcpConfig, resolveMcpRuntimeBootstrap } from "../config.js";
@@ -13,6 +13,7 @@ type FullIndexWorkerInput = Readonly<{
     forceReindex: boolean;
     indexPolicy: ObservedResolvedIndexPolicy;
     deferPartialPublication: boolean;
+    resourcePlan: IndexingResourcePlan;
 }>;
 
 type FullIndexWorkerResult = Readonly<{
@@ -91,6 +92,7 @@ function parseInput(raw: string | undefined): FullIndexWorkerInput {
         forceReindex: parsed.forceReindex,
         indexPolicy,
         deferPartialPublication: parsed.deferPartialPublication,
+        resourcePlan: restoreIndexingResourcePlan(parsed.resourcePlan),
     };
 }
 
@@ -137,6 +139,7 @@ async function main(): Promise<void> {
                 watchSyncEnabled: false,
                 startSyncLifecycle: false,
                 mutationRuntime,
+                indexingResourcePlanner: { createPlan: () => input.resourcePlan },
             });
 
             try {

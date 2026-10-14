@@ -549,6 +549,9 @@ export class IndexGenerationWorkflow {
             }
         }
 
+        if (resourcePlan?.releaseSemanticBeforeResolution) {
+            await this.ports.semanticAnalyzer?.releaseIdleWorker?.();
+        }
         const resolutionEvidenceByLanguage = new Map<string, ResolutionProjectEvidence>();
         if (this.ports.resolutionAnalyzer) {
             for (const language of new Set(manifestFiles.map((file) => file.language))) {

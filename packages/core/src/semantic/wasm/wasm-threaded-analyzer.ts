@@ -90,6 +90,15 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
         return this.worker !== null;
     }
 
+    async releaseIdleWorker(): Promise<void> {
+        if (this.pendingRequests.size > 0) return;
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+        const worker = this.worker;
+        this.worker = null;
+        if (worker) await worker.terminate();
+    }
+
     supportsLanguage(language: string): boolean {
         return this.fallbackAnalyzer.supportsLanguage(language);
     }

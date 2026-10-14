@@ -1,4 +1,5 @@
 import { IndexingResourcePlanner, type IndexingResourcePlan, type IndexingProgress } from '../indexing/resources';
+import { createProcessLanguageAnalysisService } from '../language-analysis/process-service';
 import {
     Embedding,
     OpenAIEmbedding,
@@ -607,9 +608,11 @@ export class Context {
         this.indexingPipeline = new IndexingPipeline({
             getVectorDatabase: () => this.vectorDatabase,
             languageAnalyzer: this.languageAnalyzer,
-            createIndexingAnalyzer: config.languageAnalyzer ? undefined : (plan) => createParallelLanguageAnalysisService({
-                chunkSize: 2500, chunkOverlap: 300,
-            }, plan.analysisWorkers),
+            createIndexingAnalyzer: config.languageAnalyzer ? undefined : (plan, root) => (
+                plan.analysisWorkerMode === 'process' && plan.analysisWorkers > 0
+                    ? createProcessLanguageAnalysisService({ chunkSize: 2500, chunkOverlap: 300 }, plan, this.rootMutationRuntime.getCurrentSignal(root))
+                    : createParallelLanguageAnalysisService({ chunkSize: 2500, chunkOverlap: 300 }, plan.analysisWorkers)
+            ),
             semanticAnalyzer,
             getEmbedding: () => this.embedding,
             assertEmbeddingIdentityCurrent: () => this.assertEmbeddingIdentityCurrent(),

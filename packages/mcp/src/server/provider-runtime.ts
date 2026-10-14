@@ -284,6 +284,7 @@ export class ProviderRuntime {
     private readonly startSyncLifecycle: boolean;
     private readonly runtimeOwnerGate: RuntimeOwnerMutationGate | null;
     private readonly mutationRuntime: RootMutationRuntime;
+    private readonly indexingResourcePlanner?: ContextConfig['indexingResourcePlanner'];
     private readonly publicationRuntime?: SharedPublicationRuntime;
     private readonly now: () => number;
     private readonly searchContinuationCoordinator: SearchContinuationCoordinator;
@@ -312,6 +313,7 @@ export class ProviderRuntime {
         startSyncLifecycle?: boolean;
         runtimeOwnerGate?: RuntimeOwnerMutationGate | null;
         mutationRuntime?: RootMutationRuntime;
+        indexingResourcePlanner?: ContextConfig['indexingResourcePlanner'];
         publicationRuntime?: SharedPublicationRuntime;
         searchContinuationCoordinator?: SearchContinuationCoordinator;
         onLifecycleActivityChanged?: () => void;
@@ -326,6 +328,7 @@ export class ProviderRuntime {
         this.startSyncLifecycle = args.startSyncLifecycle === true;
         this.runtimeOwnerGate = args.runtimeOwnerGate || null;
         this.mutationRuntime = args.mutationRuntime || new RootMutationRuntime();
+        this.indexingResourcePlanner = args.indexingResourcePlanner;
         this.publicationRuntime = args.publicationRuntime;
         this.searchContinuationCoordinator = args.searchContinuationCoordinator
             ?? new SearchContinuationCoordinator();
@@ -446,6 +449,7 @@ export class ProviderRuntime {
                 vectorDatabase,
                 vectorStoreProvider: this.config.vectorStoreProvider,
                 rootMutationRuntime: this.mutationRuntime,
+                indexingResourcePlanner: this.indexingResourcePlanner,
                 navigationStore: this.navigationStore,
                 ...(this.publicationRuntime ? { publicationRuntime: this.publicationRuntime } : {}),
             } satisfies ContextConfig);

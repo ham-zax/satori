@@ -143,7 +143,7 @@ interface PendingIndexedChunk extends ProjectedChunkEntry {
 type IndexingPipelineConfig = Readonly<{
     getVectorDatabase: () => VectorDatabase;
     languageAnalyzer: LanguageAnalysisPort;
-    createIndexingAnalyzer?: (plan: IndexingResourcePlan) => LanguageAnalysisPort;
+    createIndexingAnalyzer?: (plan: IndexingResourcePlan, root: string) => LanguageAnalysisPort;
     semanticAnalyzer?: SemanticProjectAnalyzer;
     semanticLanguageRegistry?: SemanticLanguageRegistry;
     getEmbedding: () => Embedding;
@@ -483,7 +483,7 @@ export class IndexingPipeline {
         resourcePlan?: IndexingResourcePlan;
     }): Promise<ProcessedFileList> {
         const analyzer = input.resourcePlan && this.createIndexingAnalyzer
-            ? this.createIndexingAnalyzer(input.resourcePlan) : this.languageAnalyzer;
+            ? this.createIndexingAnalyzer(input.resourcePlan, input.codebasePath) : this.languageAnalyzer;
         try {
             return await this.processFileListWithAnalyzer(input, analyzer);
         } finally {
@@ -754,10 +754,16 @@ export class IndexingPipeline {
                     `[Context] ❌ Failed to index file ${filePath}: ${describeError(error)}`,
                 );
                 await stopPayload(error);
+                // The window owns every started read, including unread files.
+                // Drain without replacing the consumed file's failure/cancellation.
+                await Promise.allSettled(pendingAnalyses.values());
                 throw error;
             }
 
         }
+        // A source/chunk limit can leave the rest of the window unconsumed.
+        // Completed loops have no pending reads and keep their success path.
+        if (pendingAnalyses.size > 0) await Promise.allSettled(pendingAnalyses.values());
         // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
         // for the pool here); free them before navigation starts its own workers.
         if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
+    IndexingResourcePlanner,
     RemoteCollectionDeletePendingError,
     type CustomIndexPolicyUpdate,
 } from "@satori-code/core";
@@ -276,6 +277,9 @@ export class ManageIndexingHandlers {
         action: "create" | "reindex",
     ): FullIndexCandidateRunner {
         return async (input) => {
+            // The single plan must exist before fork to set native allocator
+            // policy at process startup; the child consumes this same value.
+            const resourcePlan = new IndexingResourcePlanner().createPlan();
             let completedResult: Readonly<Record<string, unknown>> | undefined;
             const worker = spawnSupervisedMutationWorker({
                 operationId: execution.id,
@@ -286,7 +290,11 @@ export class ManageIndexingHandlers {
                     forceReindex: input.forceReindex,
                     indexPolicy: input.indexPolicy,
                     deferPartialPublication: input.deferPartialPublication,
+                    resourcePlan,
                 })],
+                env: resourcePlan.mutationMallocArenaMax > 0
+                    ? { ...process.env, MALLOC_ARENA_MAX: String(resourcePlan.mutationMallocArenaMax) }
+                    : process.env,
                 signal: execution.signal,
                 noProgressTimeoutMs: FULL_INDEX_NO_PROGRESS_TIMEOUT_MS,
                 onHeartbeat: () => {

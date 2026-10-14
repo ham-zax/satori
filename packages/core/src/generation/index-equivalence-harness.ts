@@ -12,6 +12,7 @@ import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-s
 import { readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
 import type { IndexingResourcePlan } from '../indexing/resources';
+import { RootMutationRuntime } from './root-mutation-runtime';
 
 /**
  * Equivalence harness for changes that promise unchanged results. Each fixture
@@ -176,10 +177,11 @@ async function withContext<T>(
     run: (context: Context, database: LanceDbVectorDatabase, embedding: RecordingEmbedding) => Promise<T>,
     databasePath = fs.mkdtempSync(path.join(tempRoot, 'vectors-')),
     resourcePlan?: IndexingResourcePlan,
+    rootMutationRuntime?: RootMutationRuntime,
 ): Promise<T> {
     const embedding = new RecordingEmbedding();
     const database = new LanceDbVectorDatabase({ databasePath });
-    const context = new Context({ embedding, vectorDatabase: database,
+    const context = new Context({ embedding, vectorDatabase: database, rootMutationRuntime,
         indexingResourcePlanner: resourcePlan ? { createPlan: () => resourcePlan } : undefined });
     try {
         return await run(context, database, embedding);
@@ -187,6 +189,23 @@ async function withContext<T>(
         await context.dispose();
         await database.close();
     }
+}
+
+export async function assertParserFailureNoPublication(
+    plan: IndexingResourcePlan,
+    run: (context: Context, runtime: RootMutationRuntime, root: string, tempRoot: string) => Promise<void>,
+): Promise<void> {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-parser-publication-failure-'));
+    const root = path.join(tempRoot, 'repo');
+    writeTree(root, { 'a.ts': 'export const a = 1;\n', 'b.ts': 'export const b = 2;\n' });
+    const runtime = new RootMutationRuntime({ stateDir: path.join(tempRoot, 'mutations') });
+    try {
+        await withContext(tempRoot, async context => {
+            await run(context, runtime, root, tempRoot);
+            assert.equal(context.getCurrentPublication(root) ?? null, null, 'parser failure/cancellation must not publish');
+            assert.equal(runtime.getActiveMutation(root), undefined, 'failed indexing must release its lease');
+        }, undefined, plan, runtime);
+    } finally { fs.rmSync(tempRoot, { recursive: true, force: true }); }
 }
 
 /** Exercise the real stage boundaries and compare the existing complete publication oracle. */

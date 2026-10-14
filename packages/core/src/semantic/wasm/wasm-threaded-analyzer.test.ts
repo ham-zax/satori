@@ -223,3 +223,16 @@ test('ThreadedWasmSemanticProjectAnalyzer rejects a request past its deadline an
         await analyzer.dispose();
     }
 });
+
+test('explicit idle semantic release awaits exit and preserves subsequent evidence', async () => {
+    const analyzer = new ThreadedWasmSemanticProjectAnalyzer();
+    try {
+        const expected = await analyzer.analyze(SMALL_GO_PROJECT);
+        const worker = (analyzer as unknown as { worker: import('node:worker_threads').Worker }).worker;
+        await analyzer.releaseIdleWorker();
+        assert.equal(worker.threadId, -1, 'returned before the semantic isolate exited');
+        assert.equal(analyzer.hasLiveWorker(), false);
+        const actual = await analyzer.analyze(SMALL_GO_PROJECT);
+        assert.deepEqual(actual, expected);
+    } finally { await analyzer.dispose(); }
+});

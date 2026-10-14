@@ -72,7 +72,8 @@
     "assets/cbm-extractor/*.wasm",
     "assets/cbm-extractor/manifest.json",
     "assets/semantic-engine/**",
-    "README.md"
+    "README.md",
+    "!dist/**/*.test.*"
   ],
   "repository": {
     "type": "git",

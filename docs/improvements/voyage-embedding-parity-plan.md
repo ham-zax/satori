@@ -2,11 +2,62 @@
 
 Written 2026-10-13 against `master` at `9297b1db`. Status: plan only, awaiting
 review and approval. Nothing in this document is implemented. The measurements
-that motivate it are under [Baseline](#baseline).
+that motivate it are under [Baseline](#baseline). What changed around the plan
+after it was written is under [Update](#update-2026-10-14).
 
 A written plan is warranted because the change crosses three packages, removes
 a dependency, replaces the runtime profile that gates indexing behaviour, and
 makes a paid provider run automatically.
+
+## Update (2026-10-14)
+
+Checked against `master` at `224183ca`. No phase has started and no decision
+below has been confirmed. Four things changed around the plan:
+
+- **The batch-overflow patch is committed** (`861820e2`, together with this
+  document). The rest of the Voyage code is as reviewed under
+  [Findings](#findings).
+- **Reranker scope.** `rerank-3-lite` is the Voyage default
+  (`DEFAULT_VOYAGE_RERANKER_MODEL`,
+  `packages/core/src/reranker/voyageai-reranker.ts:20`) and `rerank-3` is
+  supported. `rerank-2.5` was ruled out of scope as obsolete
+  ([root cause](definition-fusion-root-cause.md), "Scope"). Its rows under
+  [Baseline](#baseline) stay as measured and no longer drive a decision. This
+  changes the example order in Phase 5.
+- **Definition fusion depends on the reranker.** It is skipped for Voyage
+  `rerank-3` and `rerank-3-lite` and applied for every other reranker,
+  LateOn included (`rerankerOrderNeedsDefinitionFusion`,
+  `packages/mcp/src/core/search-definition-discovery.ts:38`). The rule reads
+  the configured reranker (`rerankerIdentity(host)`,
+  `packages/mcp/src/core/search-rerank-execution.ts:548`). Under Phase 5 the
+  reranker that orders the results can differ from the configured one, so
+  Phase 5 gains a requirement.
+- **Owner recall work overlaps Phases 1 to 3.** The
+  [owner recall checkpoint](owner-recall-design-checkpoint.md) is measuring
+  changes to the retrieval arms and core fusion in
+  `packages/core/src/core/semantic-search-service.ts` (lines 701 to 741),
+  directly after the `embedQuery` call that Phase 1 changes (line 698). A
+  retrieval change moves the ranks of every arm, so if one ships first the
+  table under "Search quality and time" stops being the equivalence
+  reference; see [Acceptance](#acceptance).
+
+Not measured: everything in the owner recall checkpoint was captured on the
+Potion index (47 of 72 owners inside the rerank window, 18 in no retrieval
+arm's top 80, and on those 18 questions test files hold a median 27 of the
+dense arm's first 80 rows). None of it has been repeated with Voyage
+embeddings, so it is unknown whether the better unreranked Voyage row (13
+against 7 at rank 1) comes from retrieving those owners.
+
+Later the same day the owner recall work measured two things through the real
+local pipeline, both on the Potion index. Caller alt terms bring 64 of 72
+owners into the window (51 without, lenient) and raise MRR from 0.3559 to
+0.4985. A cap on test rows per arm brings two more owners in and does not
+move MRR, so no retrieval-arm change is proposed and the table under "Search
+quality and time" remains the equivalence reference. The one product change
+made is a sentence in the `search_codebase` tool description, which does not
+alter ranking for a given request. What remains open there is ordering inside
+the window with LateOn; the [handoff](owner-ranking-handoff.md) has the
+state. Voyage embeddings with caller alt terms is not measured.
 
 ## Goal
 
@@ -138,7 +189,7 @@ This confirms findings 4 and 5. The `length / 4` estimate put that batch at
 100k tokens; it was 128k (3.1 characters per token). The overflow regex did
 not match the provider's wording, so the existing split-and-retry never ran.
 
-Patch (uncommitted at the time of writing): `isExplicitVoyageBatchLimitError`
+Patch (committed in `861820e2`): `isExplicitVoyageBatchLimitError`
 also accepts `error_code: "TOO_MANY_TOKENS_IN_BATCH"`; one regression test
 uses the recorded body. All numbers below include this patch. The estimate is
 unchanged, so over-limit batches still cost one rejected request each.
@@ -182,7 +233,9 @@ row is Task 9 of the [reranker selection plan](reranker-selection-plan.md).
 - The price is latency: a search makes one remote request for the query
   embedding and a second for reranking. The Voyage rerank arms used 294,508
   rerank tokens for 28 searches (about 10.5k per search).
-- Voyage embeddings with LateOn was not measured.
+- Voyage embeddings with LateOn was not measured. Neither was Voyage
+  embeddings with `rerank-3`.
+- `rerank-2.5` is out of scope since 2026-10-14; its two rows are history.
 
 ## Decisions
 
@@ -289,7 +342,9 @@ unreranked with a `RERANKER_FAILED` warning.
 - The selected Voyage reranker is first. On a model-scoped failure (HTTP 429,
   quota exhausted, model unavailable) the next Voyage reranker is tried, in a
   fixed order starting from the selection, for example `rerank-3-lite`,
-  `rerank-3`, `rerank-2.5`.
+  then `rerank-3`. The example used to end with `rerank-2.5`, which is out
+  of scope since 2026-10-14; whether it stays in the chain is part of the
+  open order question below.
 - When no Voyage reranker remains, or the failure is account-wide (401, 403,
   network, timeout), the search reranks with LateOn.
 - Unreranked results are returned only when LateOn is not installed, or the
@@ -298,6 +353,13 @@ unreranked with a `RERANKER_FAILED` warning.
 - A failed model is skipped for a cooldown (honouring `Retry-After`), so each
   search does not pay for the same failure again. One owner holds this state.
 - The whole chain shares one rerank deadline.
+- Added 2026-10-14: definition fusion follows the reranker that produced the
+  order, not the configured one. Today the rule reads the configured
+  reranker (`search-rerank-execution.ts:548`), so a search that fails over
+  from `rerank-3-lite` to LateOn would skip the fusion that LateOn's order is
+  measured with (13 at rank 1 with it on the 28 questions), and any model
+  outside `rerank-3` and `rerank-3-lite` gets fusion applied. The failover
+  owner reports which reranker ran; the fusion rule reads that.
 
 Decided 2026-10-13: failover is driven by provider errors only. Satori does
 not count tokens or track an allowance.
@@ -326,7 +388,13 @@ the three baseline repositories, one at a time.
 
 - **No quality regression.** After Phases 1 and 2, the 28-question results for
   every Voyage arm in the baseline are unchanged (same ranks). After Phase 3,
-  the Potion arms are unchanged.
+  the Potion arms are unchanged. The reference is the baseline table only
+  while retrieval is as it was at `9297b1db`. If a retrieval or fusion change
+  has shipped since (see [Update](#update-2026-10-14)), re-run the baseline
+  arms at the commit the phase starts from and compare against that.
+- **Failover and fusion** (added 2026-10-14 with the Phase 5 requirement). A
+  search that fails over to LateOn gets the same order as a search with
+  LateOn selected, on the same candidates.
 - **Indexing.** The three baseline repositories index with Voyage without a
   manual retry. Index wall time and provider request count are no worse than
   baseline; rejected-and-split requests drop to zero or are explained.

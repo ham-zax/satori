@@ -219,7 +219,8 @@ Findings:
 
 ## Changes in the working tree
 
-Uncommitted at the time of writing.
+Uncommitted at the time of writing. Committed since: the core fusion credit in
+`a9be87e3`, the `rerank-3` acceptance and fusion skip in `22a56c06`.
 
 - **Core fusion credit** (`packages/core/src/core/vector-candidate-fusion.ts`,
   `semantic-search-service.ts`): when the any-terms lexical arm filled its limit

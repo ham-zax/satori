@@ -72,8 +72,8 @@ figures are 8 and 37. **The open problem is step 5 with LateOn.**
    owners in the window 51 to 64, first places 21 to 27, MRR 0.3559 to
    0.4985. Another question's terms give 0.1823, worse than none. The feature
    already ships ([Agent alt terms](agent-alt-terms-definition-discovery.md));
-   the tool description now tells callers to use it (uncommitted, see
-   [State of the tree](#state-of-the-tree)).
+   the tool description and the MCP server instructions now tell callers to
+   use it (`39be5634`, see [State of the tree](#state-of-the-tree)).
 7. **What is left is ordering inside the window.** With terms, 64 owners are
    in the window and 27 are first. LateOn's own order puts the owner first
    for 16 of the 51 in the window without terms; definition fusion and
@@ -321,13 +321,12 @@ node evals/real-repo-quality/run.mjs --state-root <dir> --out <dir> \
 
 ## State of the tree
 
-- Uncommitted product change: one sentence added to the `search_codebase`
-  tool description telling callers to pass `alt_terms` for plain-English
-  questions (`packages/mcp/src/tools/search_codebase.ts`). Typecheck, the
-  tool-reference and manifest checks and `src/tools/registry.test.ts` pass.
-- The MCP server instructions (`SATORI_MCP_INSTRUCTIONS`,
-  `packages/mcp/src/server/shared-runtime.ts`) do not mention `alt_terms`.
-  Not changed; reported here.
+- Committed in `39be5634`: one sentence in the `search_codebase` tool
+  description (`packages/mcp/src/tools/search_codebase.ts`) and one in the MCP
+  server instructions (`SATORI_MCP_INSTRUCTIONS`,
+  `packages/mcp/src/server/shared-runtime.ts`) telling callers to pass
+  `alt_terms` for plain-English questions. `src/tools/search_codebase.test.ts`,
+  `src/server/shared-runtime.test.ts` and `pnpm run check` pass.
 - Local captures and scripts on the original machine are listed under
   "Resuming this work" in the checkpoint. One scratch directory named there
   holds an API key file. Never read, print or copy it.

@@ -56,7 +56,7 @@ start with the [handoff](owner-ranking-handoff.md).
   the 46 conceptual questions; the original 28 gain reach but not MRR.
 - **Alt terms already ship.** The parameter, both flags and the user
   documentation exist; only the tool's own description did not mention them,
-  and it now does (uncommitted). What is left with the local reranker is
+  and it now does (`39be5634`, with the MCP server instructions). What is left with the local reranker is
   ordering: with terms, 64 owners are in the window and 27 are first.
 - **Earlier verdicts on ordering are data, not rulings** (Hamza, 2026-10-14).
   "Keep the wrapper, the JSON document and LateOn" was measured on a handful

@@ -433,6 +433,6 @@ the three baseline repositories, one at a time.
 - New embedding providers; changes to OpenAI and Gemini beyond D5.
 - Changing the reranker document projection (finding 13). It is measured
   separately first.
-- Concurrent embedding batches (finding 9), unless the baseline shows index
-  time is the main cost; then it is a follow-up with its own measurement.
+- Concurrent embedding batches (finding 9) outside Phase 6. Phase 6 measures
+  them as one lever, with its own measurement.
 - Removing Potion.

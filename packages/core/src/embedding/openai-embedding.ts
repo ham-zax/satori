@@ -102,12 +102,20 @@ export class OpenAIEmbedding extends Embedding {
                 encoding_format: 'float',
             });
 
-            this.dimension = response.data[0].embedding.length;
-
-            return response.data.map((item) => ({
-                vector: item.embedding,
-                dimension: this.dimension
-            }));
+            if (!response.data || response.data.length !== processedTexts.length) {
+                throw new Error(`OpenAI API returned ${response.data?.length ?? 'no'} embeddings for ${processedTexts.length} inputs`);
+            }
+            const embeddings: EmbeddingVector[] = new Array(processedTexts.length);
+            for (const item of response.data) {
+                const index = item.index;
+                if (!Number.isInteger(index) || index < 0
+                    || index >= processedTexts.length || embeddings[index] !== undefined) {
+                    throw new Error('OpenAI API returned an invalid or duplicate embedding index');
+                }
+                embeddings[index] = { vector: item.embedding, dimension: item.embedding.length };
+            }
+            if (embeddings.length > 0) this.dimension = embeddings[0].dimension;
+            return embeddings;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             throw new Error(`Failed to generate OpenAI batch embeddings: ${errorMessage}`, { cause: error });

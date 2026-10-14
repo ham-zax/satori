@@ -11,11 +11,28 @@ type MockFetch = (
     status: number;
     json: () => Promise<unknown>;
     text: () => Promise<string>;
+    body?: ReadableStream<Uint8Array> | null;
 }>;
 
 async function withMockedFetch<T>(mockFetch: MockFetch, fn: () => Promise<T>): Promise<T> {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mockFetch as typeof fetch;
+    globalThis.fetch = (async (input, init) => {
+        const response = await mockFetch(input, init);
+        if (response.body !== undefined) return response;
+        // Exercise body consumption while preserving each fixture's payload and injected failures.
+        const body = new ReadableStream<Uint8Array>({
+            async start(controller) {
+                try {
+                    const text = response.ok ? JSON.stringify(await response.json()) : await response.text();
+                    controller.enqueue(new TextEncoder().encode(text));
+                    controller.close();
+                } catch (error) {
+                    controller.error(error);
+                }
+            },
+        });
+        return new Response(body, { status: response.status });
+    }) as typeof fetch;
     // A real in-flight fetch holds a socket that keeps the event loop alive; a mocked hung fetch holds nothing,
     // and Node 22.13's unref'd AbortSignal.timeout alone lets the test runner see a drained loop.
     const keepAlive = setInterval(() => undefined, 60_000);
@@ -578,4 +595,59 @@ test('VoyageAIReranker classifies a stalled HTTP error body as a timeout and ret
     });
     assert.equal(calls.length, 2);
     assert.deepEqual(reported, { attempts: 2, retries: 1, timeouts: 1 });
+});
+
+
+for (const status of [200, 503]) {
+    test(`VoyageAIReranker bounds and cancels oversized response bodies at HTTP ${status}`, async () => {
+        const limit = 8 * 1024 * 1024;
+        let calls = 0;
+        let pulls = 0;
+        let cancelled = false;
+        await withMutedConsoleError(async () => {
+            await withMockedFetch(async () => {
+                calls += 1;
+                const first = new Uint8Array(limit).fill(32);
+                first.set(new TextEncoder().encode('{"data":[{"index":0,"relevance_score":0.5}]}'));
+                const body = new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        pulls += 1;
+                        if (pulls === 1) controller.enqueue(first);
+                        else if (pulls === 2) controller.enqueue(new Uint8Array([32]));
+                        else controller.close();
+                    },
+                    cancel() { cancelled = true; },
+                }, { highWaterMark: 0 });
+                return new Response(body, { status });
+            }, async () => {
+                const reranker = new VoyageAIReranker({ apiKey: 'test-key', retryDelayMs: 0 });
+                await assert.rejects(reranker.rerank('query', ['document']), (error: unknown) => {
+                    assert.ok(error instanceof RerankerRequestError);
+                    assert.equal(error.kind, 'invalid_response');
+                    assert.match(error.message, /exceeded.*bytes/);
+                    assert.equal(error.attempts, 1);
+                    assert.equal(cancelled, true, 'body cancellation must complete before rejection');
+                    return true;
+                });
+            });
+        });
+        assert.equal(calls, 1);
+        assert.equal(pulls, 2, 'the oversized tail must not be consumed');
+    });
+}
+
+test('VoyageAIReranker accepts a response exactly at the byte limit', async () => {
+    const json = '{"data":[{"index":0,"relevance_score":0.5}]}';
+    await withMockedFetch(async () => new Response(json.padEnd(8 * 1024 * 1024, ' ')), async () => {
+        const reranker = new VoyageAIReranker({ apiKey: 'test-key' });
+        assert.deepEqual(await reranker.rerank('query', ['document']), [{ index: 0, relevanceScore: 0.5 }]);
+    });
+});
+
+
+test('VoyageAIReranker preserves fetch UTF-8 BOM decoding with bounded body reads', async () => {
+    await withMockedFetch(async () => new Response('\uFEFF{"data":[{"index":0,"relevance_score":0.5}]}'), async () => {
+        const reranker = new VoyageAIReranker({ apiKey: 'test-key' });
+        assert.deepEqual(await reranker.rerank('query', ['document']), [{ index: 0, relevanceScore: 0.5 }]);
+    });
 });

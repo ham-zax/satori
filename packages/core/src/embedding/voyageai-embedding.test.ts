@@ -20,7 +20,7 @@ type EmbedOptions = {
 };
 
 type EmbedResponse = {
-    data: Array<{ embedding?: unknown }>;
+    data: Array<{ index?: number; embedding?: unknown }>;
     usage?: { totalTokens?: number };
 };
 
@@ -69,7 +69,7 @@ test('Voyage embedding disables truncation and records actual provider usage', a
         calls.push({ request, options });
         const input = Array.isArray(request.input) ? request.input : [request.input];
         return {
-            data: input.map((_, index) => ({ embedding: [index, index + 1] })),
+            data: input.map((_, index) => ({ index, embedding: [index, index + 1] })),
             usage: { totalTokens: 17 },
         };
     });
@@ -116,7 +116,7 @@ test('Voyage embedding decodes canonical Base64 as little-endian FP32', async ()
         Buffer.alloc((1024 - 4) * 4),
     ]);
     stubEmbedClient(embedding, async () => ({
-        data: [{ embedding: bytes.toString('base64') }],
+        data: [{ index: 0, embedding: bytes.toString('base64') }],
     }));
 
     const result = await embedding.embedQuery('fixed input');
@@ -143,7 +143,7 @@ test('Voyage embedding rejects invalid Base64 and unsupported response values', 
             outputDtype: 'float',
         });
         stubEmbedClient(embedding, async () => ({
-            data: [{ embedding: fixture.embedding }],
+            data: [{ index: 0, embedding: fixture.embedding }],
         }));
 
         await assert.rejects(
@@ -168,7 +168,7 @@ test('Voyage embedding rejects non-finite decoded FP32 values', async () => {
     const bytes = Buffer.alloc(1024 * 4);
     bytes.writeFloatLE(Number.NaN, 0);
     stubEmbedClient(embedding, async () => ({
-        data: [{ embedding: bytes.toString('base64') }],
+        data: [{ index: 0, embedding: bytes.toString('base64') }],
     }));
 
     await assert.rejects(
@@ -185,7 +185,7 @@ test('Voyage embedding accepts numeric-array responses as a compatibility fallba
     const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
     const numeric = [1, -2, 0, 0.5];
     stubEmbedClient(embedding, async () => ({
-        data: [{ embedding: numeric }],
+        data: [{ index: 0, embedding: numeric }],
     }));
 
     const result = await embedding.embedQuery('fixed input');
@@ -207,7 +207,7 @@ test('Voyage embedding exposes retries instead of hiding them inside the SDK', a
         if (attempts === 1) {
             throw new VoyageAIError({ statusCode: 429, message: 'rate limited' });
         }
-        return { data: [{ embedding: [1, 2] }], usage: { totalTokens: 3 } };
+        return { data: [{ index: 0, embedding: [1, 2] }], usage: { totalTokens: 3 } };
     });
 
     const result = await embedding.embedDocuments(['owner']);
@@ -343,7 +343,7 @@ test('Voyage embedding keeps document and query roles isolated across overlappin
         }
 
         return {
-            data: input.map((value) => ({ embedding: [value.length] })),
+            data: input.map((value, index) => ({ index, embedding: [value.length] })),
             usage: { totalTokens: input.length },
         };
     });
@@ -378,7 +378,7 @@ test('Voyage embedding deterministically splits an explicit provider batch-limit
             throw new VoyageAIError({ statusCode: 400, message: 'maximum total token limit exceeded' });
         }
         return {
-            data: input.map((text) => ({ embedding: [Number(text)] })),
+            data: input.map((text, index) => ({ index, embedding: [Number(text)] })),
             usage: { totalTokens: input.length },
         };
     });
@@ -411,7 +411,7 @@ test('Voyage embedding splits on the provider TOO_MANY_TOKENS_IN_BATCH response'
             });
         }
         return {
-            data: input.map((text) => ({ embedding: [Number(text)] })),
+            data: input.map((text, index) => ({ index, embedding: [Number(text)] })),
             usage: { totalTokens: input.length },
         };
     });
@@ -424,4 +424,30 @@ test('Voyage embedding splits on the provider TOO_MANY_TOKENS_IN_BATCH response'
         ['3', '4'],
     ]);
     assert.deepEqual(result.map((item) => item.vector), [[1], [2], [3], [4]]);
+});
+
+
+test('Voyage embedding response indexes preserve input order and reject invalid mappings', async () => {
+    const embedding = new VoyageAIEmbedding({ apiKey: 'test-key', model: 'voyage-code-3' });
+    stubEmbedClient(embedding, async () => ({
+        data: [{ index: 1, embedding: [20] }, { index: 0, embedding: [10] }],
+    }));
+    assert.deepEqual((await embedding.embedDocuments(['first', 'second'])).map(row => row.vector), [[10], [20]]);
+
+    for (const data of [
+        [{ embedding: [10] }, { index: 1, embedding: [20] }],
+        [{ index: 0, embedding: [10] }, { index: 0, embedding: [20] }],
+        [{ index: -1, embedding: [10] }, { index: 1, embedding: [20] }],
+        [{ index: 0, embedding: [10] }, { index: 2, embedding: [20] }],
+        [{ index: 0, embedding: [10] }, { index: 0.5, embedding: [20] }],
+        [{ index: 0, embedding: [10] }],
+    ]) {
+        stubEmbedClient(embedding, async () => ({ data }));
+        await assert.rejects(embedding.embedDocuments(['first', 'second']), (error: unknown) => {
+            assert.ok(error instanceof EmbeddingProviderError);
+            assert.equal(error.code, 'EMBEDDING_PROVIDER_ERROR');
+            assert.equal(error.retryable, false);
+            return true;
+        });
+    }
 });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
 
 import ts from 'typescript';
 
@@ -119,20 +120,71 @@ export class TypeScriptConfigReadError extends Error {
     }
 }
 
+const MAX_TYPESCRIPT_CONFIG_BYTES = 1024 * 1024;
+const MAX_TYPESCRIPT_CONFIG_READS = 64;
+
 export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptConfiguredProject {
     const absoluteConfigPath = normalizedPath(configPath);
-    const configRead = ts.readConfigFile(absoluteConfigPath, ts.sys.readFile);
+    let reads = 0;
+    let readFailure: string | undefined;
+    // Bound all config/metadata reads through TypeScript's own resolver. The total
+    // read budget also bounds extends depth without copying compiler resolution rules.
+    const readFile = (fileName: string): string | undefined => {
+        if (readFailure) return undefined;
+        if (++reads > MAX_TYPESCRIPT_CONFIG_READS) {
+            readFailure = `TypeScript config read budget exceeded ${MAX_TYPESCRIPT_CONFIG_READS} files.`;
+            return undefined;
+        }
+        let fd: number | undefined;
+        try {
+            fd = fs.openSync(fileName, 'r');
+            if (fs.fstatSync(fd).size > MAX_TYPESCRIPT_CONFIG_BYTES) {
+                readFailure = `TypeScript config '${fileName}' exceeds the ${MAX_TYPESCRIPT_CONFIG_BYTES} byte budget.`;
+                return undefined;
+            }
+            // A sentinel byte makes the limit hold even if the file grows after stat.
+            const buffer = Buffer.alloc(MAX_TYPESCRIPT_CONFIG_BYTES + 1);
+            let bytes = 0;
+            while (bytes < buffer.length) {
+                const count = fs.readSync(fd, buffer, bytes, buffer.length - bytes, null);
+                if (count === 0) break;
+                bytes += count;
+            }
+            if (bytes > MAX_TYPESCRIPT_CONFIG_BYTES) {
+                readFailure = `TypeScript config '${fileName}' exceeds the ${MAX_TYPESCRIPT_CONFIG_BYTES} byte budget.`;
+                return undefined;
+            }
+            const content = buffer.subarray(0, bytes);
+            // Match the compiler's UTF-8 and UTF-16 BOM support.
+            const encoding = content[0] === 0xff && content[1] === 0xfe ? 'utf-16le'
+                : content[0] === 0xfe && content[1] === 0xff ? 'utf-16be' : 'utf-8';
+            return new TextDecoder(encoding).decode(content);
+        } catch {
+            return undefined;
+        } finally {
+            if (fd !== undefined) fs.closeSync(fd);
+        }
+    };
+    const configRead = ts.readConfigFile(absoluteConfigPath, readFile);
+    if (readFailure) throw new TypeScriptConfigReadError(readFailure);
     if (configRead.error) {
         throw new TypeScriptConfigReadError(`Unable to read TypeScript config '${absoluteConfigPath}': ${diagnosticText(configRead.error)}`);
     }
 
     const parsed = ts.parseJsonConfigFileContent(
         configRead.config,
-        ts.sys,
+        { ...ts.sys, readFile },
         path.dirname(absoluteConfigPath),
         undefined,
         absoluteConfigPath,
+        undefined,
+        undefined,
+        new Map(),
     );
+    if (readFailure) throw new TypeScriptConfigReadError(readFailure);
+    // TypeScript owns cycle detection; callers already skip configs with this error type.
+    const cycle = parsed.errors.find(error => error.code === 18000);
+    if (cycle) throw new TypeScriptConfigReadError(diagnosticText(cycle));
 
     const fileNames = parsed.fileNames.map(normalizedPath).sort();
     const options = {

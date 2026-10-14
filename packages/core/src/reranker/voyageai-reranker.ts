@@ -54,6 +54,35 @@ export class RerankerRequestError extends Error {
 }
 
 const RETRYABLE_NETWORK_CODES = new Set(["ETIMEDOUT", "ECONNRESET", "EAI_AGAIN"]);
+const MAX_RERANK_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+async function readRerankResponseBody(response: Response): Promise<string> {
+    if (!response.body) return '';
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+        for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            bytes += chunk.value.byteLength;
+            if (bytes > MAX_RERANK_RESPONSE_BYTES) {
+                throw Object.assign(new Error(`VoyageAI Rerank response body exceeded ${MAX_RERANK_RESPONSE_BYTES} bytes`), {
+                    rerankerValidationFailure: true,
+                    rerankerHttpStatus: response.status,
+                });
+            }
+            chunks.push(chunk.value);
+        }
+        return new TextDecoder().decode(Buffer.concat(chunks, bytes));
+    } catch (error) {
+        await reader.cancel(error).catch(() => undefined);
+        throw error;
+    } finally {
+        reader.releaseLock();
+    }
+}
+
 
 interface RerankerFailureClassification {
     kind: RerankerFailureKind;
@@ -217,10 +246,10 @@ export class VoyageAIReranker implements Reranker {
                     const status = response.status;
                     let errorText = '';
                     try {
-                        errorText = await response.text();
+                        errorText = await readRerankResponseBody(response);
                     } catch (error) {
-                        if (isAbortLikeError(error)) {
-                            // A stalled error body is an attempt timeout, not
+                        if (isAbortLikeError(error) || (error as { rerankerValidationFailure?: boolean }).rerankerValidationFailure) {
+                            // An oversized body is terminal; a stalled error body is an attempt timeout, not
                             // an HTTP classification: let it flow into the
                             // timeout-aware classification boundary.
                             throw error;
@@ -234,7 +263,7 @@ export class VoyageAIReranker implements Reranker {
                     );
                 }
 
-                const result = await response.json() as { data?: unknown };
+                const result = JSON.parse(await readRerankResponseBody(response)) as { data?: unknown };
                 if (!result.data || !Array.isArray(result.data)) {
                     throw Object.assign(
                         new Error('VoyageAI Rerank API returned invalid response'),

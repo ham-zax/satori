@@ -8,6 +8,7 @@ import ts from 'typescript';
 
 import {
     TypeScriptLanguageServiceSession,
+    TypeScriptConfigReadError,
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
 import { unbuiltReferenceImport } from '../relationships/typescript-semantic-analyzer';
@@ -331,4 +332,121 @@ test('disposing a session survives TypeScript releasing a duplicated declaration
         .filter((filePath, index, all) => all.indexOf(filePath) !== index);
     assert.ok(outputs.length > 0, 'expected the duplicated declaration output this test guards');
     assert.doesNotThrow(() => session.dispose());
+});
+
+
+for (const inherited of [false, true]) {
+    test(`configured TypeScript project rejects oversized ${inherited ? 'inherited' : 'root'} config through the fallback error`, () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-budget-'));
+        try {
+            const config = path.join(root, 'tsconfig.json');
+            const target = inherited ? path.join(root, 'base.json') : config;
+            if (inherited) writeJson(config, { extends: './base.json', files: ['value.ts'] });
+            write(path.join(root, 'value.ts'), 'export const value = 1;');
+            write(target, '{"files":["value.ts"]}'.padEnd(1024 * 1024 + 1, ' '));
+            assert.throws(() => loadTypeScriptConfiguredProject(config), (error: unknown) => {
+                assert.ok(error instanceof TypeScriptConfigReadError);
+                assert.match(error.message, /byte.*budget/);
+                return true;
+            });
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+}
+
+test('configured TypeScript project bounds extends reads and accepts the read-budget boundary', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-depth-'));
+    try {
+        write(path.join(root, 'value.ts'), 'export const value = 1;');
+        for (let index = 0; index < 65; index += 1) {
+            writeJson(path.join(root, `config-${index}.json`), {
+                ...(index < 64 ? { extends: `./config-${index + 1}.json` } : {}),
+                files: ['value.ts'],
+            });
+        }
+        assert.throws(() => loadTypeScriptConfiguredProject(path.join(root, 'config-0.json')), (error: unknown) => {
+            assert.ok(error instanceof TypeScriptConfigReadError);
+            assert.match(error.message, /read.*budget/);
+            return true;
+        });
+        assert.equal(loadTypeScriptConfiguredProject(path.join(root, 'config-1.json')).errors.length, 0);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('configured TypeScript project rejects extends cycles through the fallback error', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-cycle-'));
+    try {
+        writeJson(path.join(root, 'tsconfig.json'), { extends: './base.json', files: ['value.ts'] });
+        writeJson(path.join(root, 'base.json'), { extends: './tsconfig.json' });
+        write(path.join(root, 'value.ts'), 'export const value = 1;');
+        assert.throws(() => loadTypeScriptConfiguredProject(path.join(root, 'tsconfig.json')), (error: unknown) => {
+            assert.ok(error instanceof TypeScriptConfigReadError);
+            assert.match(error.message, /[Cc]ircular/);
+            return true;
+        });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('configured TypeScript project accepts the byte boundary and shared extends ancestors', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-diamond-'));
+    try {
+        writeJson(path.join(root, 'tsconfig.json'), { extends: ['./left.json', './right.json'], files: ['value.ts'] });
+        writeJson(path.join(root, 'left.json'), { extends: './base.json' });
+        writeJson(path.join(root, 'right.json'), { extends: './base.json' });
+        write(path.join(root, 'base.json'), '{"compilerOptions":{"strict":true}}'.padEnd(1024 * 1024, ' '));
+        write(path.join(root, 'value.ts'), 'export const value = 1;');
+        const project = loadTypeScriptConfiguredProject(path.join(root, 'tsconfig.json'));
+        assert.equal(project.errors.length, 0);
+        assert.equal(project.options.strict, true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+
+test('configured TypeScript project bounds bytes even when a config grows after stat', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-growth-'));
+    try {
+        const config = path.join(root, 'tsconfig.json');
+        write(config, '{"files":[]}'.padEnd(1024 * 1024 + 1, ' '));
+        const stat = fs.fstatSync;
+        t.mock.method(fs, 'fstatSync', (fd: number) => Object.assign(stat(fd), { size: 0 }));
+        const read = fs.readSync;
+        let bytesRead = 0;
+        t.mock.method(fs, 'readSync', (...args: unknown[]) => {
+            const bytes = Reflect.apply(read, fs, args) as number;
+            bytesRead += bytes;
+            return bytes;
+        });
+        assert.throws(() => loadTypeScriptConfiguredProject(config), TypeScriptConfigReadError);
+        assert.equal(bytesRead, 1024 * 1024 + 1, 'the bounded reader stops at the overflow sentinel');
+    } finally {
+        t.mock.restoreAll();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('configured TypeScript project preserves TypeScript BOM encodings', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-config-encoding-'));
+    try {
+        const config = path.join(root, 'tsconfig.json');
+        write(path.join(root, 'value.ts'), 'export const value = 1;');
+        const json = '{"files":["value.ts"],"compilerOptions":{"strict":true}}';
+        const littleEndian = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(json, 'utf16le')]);
+        for (const content of [
+            Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(json)]),
+            littleEndian,
+            Buffer.from(littleEndian).swap16(),
+        ]) {
+            fs.writeFileSync(config, content);
+            assert.equal(loadTypeScriptConfiguredProject(config).options.strict, true);
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

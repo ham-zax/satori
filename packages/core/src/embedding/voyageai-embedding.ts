@@ -269,13 +269,20 @@ export class VoyageAIEmbedding extends Embedding {
                 );
             }
 
-            return response.data.map((item) => {
+            const embeddings: EmbeddingVector[] = new Array(processedTexts.length);
+            for (const item of response.data) {
+                const index = item.index;
+                if (!Number.isInteger(index) || index === undefined || index < 0
+                    || index >= processedTexts.length || embeddings[index] !== undefined) {
+                    throw new Error('VoyageAI API returned an invalid or duplicate embedding index');
+                }
                 const runtimeEmbedding: unknown = item.embedding;
-                return {
+                embeddings[index] = {
                     vector: decodeVoyageEmbedding(runtimeEmbedding, this.dimension),
                     dimension: this.dimension,
                 };
-            });
+            }
+            return embeddings;
         } catch (error) {
             if (!isExplicitVoyageBatchLimitError(error) || processedTexts.length <= 1) {
                 throw error;

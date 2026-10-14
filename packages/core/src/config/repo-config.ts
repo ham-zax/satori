@@ -93,12 +93,24 @@ export function parseSatoriRepoConfig(content: string, configPath: string): Sato
 
 export function loadSatoriRepoConfig(codebasePath: string): SatoriRepoConfig {
     const configPath = path.join(codebasePath, SATORI_REPO_CONFIG_FILENAME);
-    if (!fs.existsSync(configPath)) {
-        return { profile: 'default' };
+    const stat = fs.lstatSync(configPath, { throwIfNoEntry: false });
+    if (!stat) return { profile: 'default' };
+    if (stat.isSymbolicLink()) {
+        throw new SatoriRepoConfigAuthorityError(`${SATORI_REPO_CONFIG_FILENAME} must not be a symbolic link.`);
     }
-    const stat = fs.statSync(configPath);
-    if (!stat.isFile()) {
-        return { profile: 'default' };
+    if (!stat.isFile()) return { profile: 'default' };
+
+    const canonicalRoot = fs.realpathSync(codebasePath);
+    const resolvedConfigPath = fs.realpathSync(configPath);
+    const relative = path.relative(canonicalRoot, resolvedConfigPath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new SatoriRepoConfigAuthorityError(`${SATORI_REPO_CONFIG_FILENAME} resolves outside the codebase root.`);
     }
-    return parseSatoriRepoConfig(fs.readFileSync(configPath, 'utf8'), configPath);
+    // Open the canonical path without following a final symlink swapped in after lstat.
+    const fd = fs.openSync(path.join(canonicalRoot, SATORI_REPO_CONFIG_FILENAME), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+        return parseSatoriRepoConfig(fs.readFileSync(fd, 'utf8'), configPath);
+    } finally {
+        fs.closeSync(fd);
+    }
 }

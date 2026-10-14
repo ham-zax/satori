@@ -732,7 +732,6 @@ export class MutationLeaseCoordinator {
             } catch (error) {
                 if (descriptor !== null) {
                     try { fs.closeSync(descriptor); } catch { /* Best-effort close. */ }
-                    descriptor = null;
                     try { fs.unlinkSync(lockPath); } catch { /* Best-effort unlock. */ }
                     throw error;
                 }

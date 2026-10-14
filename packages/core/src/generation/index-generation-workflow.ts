@@ -7,7 +7,6 @@
  * acquires authority state by reachability through Context.
  */
 import * as crypto from 'crypto';
-import * as fs from 'fs';
 import * as path from 'path';
 import type {
     IndexCodebaseResult,

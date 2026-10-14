@@ -543,6 +543,29 @@ export function createMcpConfig(): ContextMcpConfig {
     return config;
 }
 
+// Endpoints may carry credentials in userinfo, query or fragment; log only the location.
+function redactEndpoint(endpoint: string, allowBareHost = false): string {
+    try {
+        const url = new URL(endpoint);
+        if (url.host !== '') {
+            return `${url.protocol}//${url.host}${url.pathname}`;
+        }
+    } catch {
+        // Fall through: Milvus also accepts a bare host:port.
+    }
+    if (!allowBareHost) {
+        // Malformed endpoints may also contain credentials.
+        return '[Invalid URL]';
+    }
+    try {
+        const url = new URL(`http://${endpoint}`);
+        return url.host + (url.pathname === '/' ? '' : url.pathname);
+    } catch {
+        // Malformed endpoints may also contain credentials.
+        return '[Invalid URL]';
+    }
+}
+
 export function logConfigurationSummary(config: ContextMcpConfig): void {
     // Log configuration summary before starting server
     console.log(`[MCP] 🚀 Starting Satori MCP Server`);
@@ -556,7 +579,7 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
     if (config.vectorStoreProvider === 'LanceDB') {
         console.log(`[MCP]   LanceDB Path: ${config.lanceDbPath}`);
     } else {
-        console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint || '[Not configured]'}`);
+        console.log(`[MCP]   Milvus Address: ${config.milvusEndpoint ? redactEndpoint(config.milvusEndpoint, true) : '[Not configured]'}`);
     }
     console.log(`[MCP]   Filesystem Watcher: ${config.watchSyncEnabled ? 'enabled (observation only)' : 'disabled'}`);
 
@@ -565,14 +588,7 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
         case 'OpenAI':
             console.log(`[MCP]   OpenAI API Key: ${config.openaiKey ? '✅ Configured' : '❌ Missing'}`);
             if (config.openaiEndpoint) {
-                let endpoint = '[Invalid URL]';
-                try {
-                    const url = new URL(config.openaiEndpoint);
-                    endpoint = url.origin + url.pathname;
-                } catch {
-                    // Malformed endpoints may also contain credentials.
-                }
-                console.log(`[MCP]   OpenAI Base URL: ${endpoint}`);
+                console.log(`[MCP]   OpenAI Base URL: ${redactEndpoint(config.openaiEndpoint)}`);
             }
             break;
         case 'VoyageAI':
@@ -581,7 +597,7 @@ export function logConfigurationSummary(config: ContextMcpConfig): void {
         case 'Gemini':
             console.log(`[MCP]   Gemini API Key: ${config.geminiKey ? '✅ Configured' : '❌ Missing'}`);
             if (config.geminiEndpoint) {
-                console.log(`[MCP]   Gemini Base URL: ${config.geminiEndpoint}`);
+                console.log(`[MCP]   Gemini Base URL: ${redactEndpoint(config.geminiEndpoint)}`);
             }
             break;
         case 'Potion':

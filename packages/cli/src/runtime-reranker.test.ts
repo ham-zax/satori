@@ -436,7 +436,7 @@ test("plain reranker in a terminal lists switch commands while JSON keeps the st
         };
         assert.equal(await runCli(["reranker"], options), 0, stderr);
         assert.match(stdout, /Reranker: none \(disabled\)/);
-        assert.match(stdout, /reranker use voyage  Voyage/);
+        assert.match(stdout, /reranker use voyage {2}Voyage/);
         assert.match(stdout, /reranker use lateon/);
         assert.match(stdout, /reranker disable/);
         stdout = "";

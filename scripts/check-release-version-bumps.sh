@@ -39,8 +39,10 @@ declare -A PACKAGE_DIRS=(
 declare -A PACKAGE_RELEVANT_FILES=()
 for key in core mcp cli; do
   directory="${PACKAGE_DIRS[${key}]}"
+  # Test files never ship: every package's "files" list has "!dist/**/*.test.*".
   relevant="$(printf '%s\n' "${CHANGED_FILES}" \
     | grep -E "^${directory}/(src/|scripts/|assets/|README\.md$|LICENSE$|package\.json$|tsconfig(\..*)?\.json$)" \
+    | grep -Ev '\.test\.[cm]?[jt]s$' \
     || true)"
   if [[ -n "${relevant}" ]]; then
     PACKAGE_RELEVANT_FILES[${key}]="${relevant}"

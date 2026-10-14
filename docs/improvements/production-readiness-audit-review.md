@@ -2,7 +2,7 @@
 
 An external agent audited `400c15d7` and returned NO-GO with three release blockers. Each claim was checked
 on 2026-10-15 against `5186f4f4` (code reads, focused test runs, `npm pack --dry-run`, the npm registry).
-Result: no P0 or P1 issue. The three blockers are either out of date or not reproduced.
+Result: no P0 issue. CI later reproduced the P1 blocker F-003, which is now fixed. The other two blockers are out of date or not reproduced.
 
 ## Priority scale
 
@@ -15,6 +15,7 @@ Result: no P0 or P1 issue. The three blockers are either out of date or not repr
 
 | ID | Priority | Status | Finding | Evidence |
 |---|---|---|---|---|
+| F-003 | P1 | Fixed in this commit | `index-equivalence-typescript-project-jobs.test.ts` exceeds the 90 s file budget under 8-way concurrency. CI failed on it at `49f2f461` (1m 32s), `d46f2174` (1m 33s) and `5a098eae` (1m 31s). | Split into one file per built state; the three files run in 22 s together. |
 | F-009 | P2 | Fixed in `6782b807` | `logConfigurationSummary()` logs `MILVUS_ADDRESS` and `GEMINI_BASE_URL` without redaction; `OPENAI_BASE_URL` is redacted. Credentials in those URLs reach the startup log. | `packages/mcp/src/config.ts:559`, `:584`; redaction at `:567-575` |
 | F-006 | P2 | Fixed in `ad77f536` | The npm tarballs ship compiled tests: 212 test files in core, 278 in mcp, 50 in cli. The `files` globs `dist/**/*.js` and `dist/**/*.d.ts` include them. | `npm pack --dry-run` in `packages/core` and `packages/cli` |
 | F-004 | P3 | Confirmed | Dev scripts still require synchronous `syncStats` from `manage_index sync`, which is now a supervised background operation. | `scripts/satori-live-latency-benchmark.mjs:303-306`, `scripts/satori-useful-context-record.mjs:927-930` |
@@ -28,7 +29,6 @@ Result: no P0 or P1 issue. The three blockers are either out of date or not repr
 |---|---|---|---|
 | F-001 | P1: local packed tarballs differ from published 0.7.1 / 0.9.1 / 0.6.4 without a version bump | Out of date | `6cc01f0e` bumped core 0.8.0, mcp 0.9.2, cli 0.6.5; npm has mcp 0.9.1. The cited `docs/release/published-package-snapshots.json` does not exist; `scripts/check-release-graph.mjs` reads the registry. |
 | F-002 | P1: `lateon-reranker.test.ts` fails deterministically | Not reproduced | 27 pass, 2 skipped, 4 s at HEAD; the file and `lateon-reranker.ts` are unchanged since `400c15d7`. The described `execArgv` filter is also wrong: it removes only `--input-type`. A failure under the auditor's container load is possible. |
-| F-003 | P1: `index-equivalence-typescript-project-jobs.test.ts` exceeds the 90 s file budget under 8-way concurrency | Not reproduced | The 8-way core batch (100 files, includes that file) passed 713 tests in 51 s with no budget failure. The file is in the 8-way batch, so heavy load can still slow it. |
 | F-005b | `start:with-env` uses the missing `dotenv` binary | False | `packages/mcp/package.json:32` sets variables inline and runs `tsx src/index.ts`. |
 
 ## Decision

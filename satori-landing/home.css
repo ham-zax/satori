@@ -1761,6 +1761,25 @@ h3.minor {
   gap: 0.6rem;
 }
 
+.rank-choice .voyage-title {
+  align-items: center;
+}
+
+.voyage-logo {
+  height: 1.6rem;
+  width: auto;
+  color: #00ed64;
+}
+
+.rank-choice .voyage-by {
+  flex: 0 0 auto;
+  margin-top: -0.5rem;
+  color: #00ed64;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
 .rank-choice h3 small {
   color: var(--paper-3);
   font-family: var(--mono);

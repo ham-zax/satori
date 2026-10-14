@@ -203,8 +203,8 @@ export interface ManagedRuntimeUpgradeResult {
 export interface ManagedRerankerResult {
     action: "reranker";
     operation: RerankerOperation;
-    /** `current` for status; `unchanged` when the launcher already used the requested reranker. */
-    status: "current" | "changed" | "unchanged";
+    /** `current` for status; `unchanged` for a repeat; `cancelled` for an empty key prompt. */
+    status: "current" | "changed" | "unchanged" | "cancelled";
     runtime: InstallRuntime;
     /** Null only when the launcher leaves provider selection to the runtime environment. */
     reranker: InstallReranker | null;

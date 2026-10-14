@@ -46,6 +46,7 @@ import type { DoctorPackageVersion, DoctorResult, RuntimeVersionState } from "./
 import { emitDoctorText } from "./doctor-format.js";
 import { emitInstallText } from "./install-format.js";
 import { executeManagedRerankerCommand, formatRerankerText } from "./runtime-reranker.js";
+import { promptHiddenApiKey } from "./voyage-api-key.js";
 import { SATORI_CLI_NPX_COMMAND, satoriCliCommand } from "./cli-command.js";
 import { buildLocalDiagnosticEvent, recordLocalDiagnosticEvent } from "./local-diagnostics.js";
 import {
@@ -72,6 +73,8 @@ interface RunCliOptions {
     writeStdout?: (text: string) => void;
     writeStderr?: (text: string) => void;
     stdin?: NodeJS.ReadStream;
+    stdoutIsTTY?: boolean;
+    promptVoyageApiKey?: () => Promise<string>;
     env?: NodeJS.ProcessEnv;
     serverCommand?: string;
     serverArgs?: string[];
@@ -375,7 +378,8 @@ function formatHelpText(): string {
         "  tool call     Call an MCP tool from the terminal",
         "",
         "Common runtime changes:",
-        `  ${satoriCliCommand("reranker use voyage")}  Select Voyage reranking (add --model <name> to choose a model)`,
+        `  ${satoriCliCommand("reranker use voyage")}  Select Voyage (paid API; prompts for a missing key and saves to ~/.satori/.env)`,
+        "  --model <name> selects a Voyage model; Enter at the hidden key prompt cancels.",
         `  ${satoriCliCommand("reranker use voyage --no-verify")}  Skip the Voyage reranker test call`,
         `  ${satoriCliCommand("reranker disable")}  Disable LateOn (add --purge to delete its model)`,
         `  ${satoriCliCommand("reranker enable")}  Enable LateOn`,
@@ -708,9 +712,13 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
         if (parsed.command.kind === "reranker") {
             const wantsJson = parsed.globals.formatExplicit && parsed.globals.format === "json";
+            const stdoutIsTTY = options.stdoutIsTTY ?? Boolean(process.stdout.isTTY);
             const result = await executeManagedRerankerCommand(parsed.command, {
                 homeDir,
                 env: effectiveEnv,
+                isInteractive: Boolean((options.stdin ?? process.stdin).isTTY && stdoutIsTTY),
+                promptApiKey: options.promptVoyageApiKey ?? (() => promptHiddenApiKey(options.stdin ?? process.stdin)),
+                writeMessage: writers.writeStderr,
                 preflightDependencies: options.installPreflightDependencies,
                 preflightRunner: options.installPreflightRunner,
                 lateOnAuthorityLoader: options.installLateOnAuthorityLoader,
@@ -734,7 +742,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
             if (wantsJson) {
                 emitJson(writers, result);
             } else {
-                writers.writeStdout(formatRerankerText(result));
+                writers.writeStdout(formatRerankerText(result, stdoutIsTTY));
             }
             return 0;
         }

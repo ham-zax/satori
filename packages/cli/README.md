@@ -84,7 +84,9 @@ install [--client auto|all|codex|claude|opencode|agy]
         [--dry-run]
 
 reranker use lateon|voyage|none [--model <model>] [--no-verify]
-reranker status
+reranker [status]
+reranker enable
+reranker disable [--purge]
 doctor [--verbose] [--json]
 version # aliases: -v, --version
 upgrade
@@ -95,6 +97,35 @@ tool call <toolName> --args-json '<json>'
 tool call <toolName> --args-file <path>
 <toolName> [schema-driven flags]
 ```
+
+`satori reranker` shows the current provider and model, plus switch commands
+in a terminal. To switch from local LateOn to Voyage:
+
+```sh
+satori reranker use voyage --model rerank-3
+```
+
+Voyage is a paid API. In Satori's 28-question evaluation, `rerank-3` with
+definition fusion off put the owning code at rank 1 for 20 questions versus 13 for LateOn
+([measured results](../../docs/improvements/voyage-reranker-and-definition-fusion.md)).
+Without `--model`, Voyage defaults to `rerank-3-lite`.
+
+If `VOYAGEAI_API_KEY` is missing from both the process environment and
+`~/.satori/.env`, the switch prompts for it with hidden input when stdin and
+stdout are terminals. Press Enter with no key to cancel without changing the
+reranker. The CLI saves the key atomically to `~/.satori/.env` with mode `0600`,
+creates the directory with mode `0700` if needed, and keeps other settings.
+It prints the saved path, never the key. Existing keys skip the prompt; the
+process environment takes precedence over the file. Without a terminal, set
+`VOYAGEAI_API_KEY` in either location before switching.
+
+The switch verifies the selected Voyage model using that key in the same run;
+`--no-verify` skips the API check but still requires a key. A failed verification
+keeps the current reranker; a newly saved key remains in the env file. The
+managed MCP runtime reads the same file on startup. Restart your coding agent
+after a successful switch. `--format json` keeps stdout as structured output;
+prompt and progress messages go to stderr, and cancellation reports
+`status: "cancelled"`.
 
 Agents receive Satori guidance in two native ways, with nothing injected per
 tool call:

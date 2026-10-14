@@ -51,4 +51,11 @@ test("reranker help documents provider selection, models, and verification contr
     assert.match(text, /satori reranker use <provider> \[--model <name>\] \[--no-verify\]/);
     assert.match(text, /satori reranker use voyage --model rerank-3/);
     assert.match(text, /--no-verify\s+Skip the Voyage reranker test call/);
+    assert.match(text, /paid API/);
+    assert.match(text, /VOYAGEAI_API_KEY/);
+    assert.match(text, /hidden input/);
+    assert.match(text, /~\/\.satori\/\.env/);
+    assert.match(text, /Enter cancels without switching/);
+    assert.match(text, /Existing keys.*skip the prompt/);
+    assert.match(text, /Without a terminal/);
 });

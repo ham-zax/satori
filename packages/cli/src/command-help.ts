@@ -9,6 +9,7 @@ interface CommandHelp {
     usage: string[];
     summary: string;
     examples: string[];
+    notes?: string[];
 }
 
 const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
@@ -48,12 +49,19 @@ const COMMAND_HELP: Readonly<Record<HelpTopic, CommandHelp>> = {
     },
     reranker: {
         usage: [
+            "satori reranker",
             "satori reranker use <provider> [--model <name>] [--no-verify]",
             "satori reranker enable",
             "satori reranker disable [--purge]",
             "satori reranker status",
         ],
         summary: "Select and inspect the reranker for the installed runtime.",
+        notes: [
+            "Voyage is a paid API. A missing VOYAGEAI_API_KEY is prompted in a terminal with hidden input",
+            "and saved privately to ~/.satori/.env; Enter cancels without switching.",
+            "Existing keys in the environment or ~/.satori/.env skip the prompt.",
+            "Without a terminal, set VOYAGEAI_API_KEY in either location before switching.",
+        ],
         examples: [
             "satori reranker status",
             "satori reranker use voyage --model rerank-3",
@@ -106,6 +114,7 @@ export function formatCommandHelpText(topic: HelpTopic): string {
         "",
         "Usage:",
         ...help.usage.map((line) => `  ${line}`),
+        ...(help.notes ? ["", ...help.notes] : []),
         "",
         "Options:",
         ...render(commandOptions),

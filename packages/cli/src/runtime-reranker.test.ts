@@ -3,12 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { CliError } from "./errors.js";
 import { buildLauncherScript, parseManagedLauncherDescriptor } from "./managed-launcher-script.mjs";
 import { executeInstallCommand as executeInstallCommandProduction } from "./install.js";
 import { executeManagedRerankerCommand, formatRerankerText } from "./runtime-reranker.js";
 import type { InstallCommandOptions } from "./install-contracts.js";
 import { POTION_DIMENSION, POTION_MODEL_ID } from "./local-runtime-contract.js";
+import { runCli } from "./index.js";
+import { promptHiddenApiKey, resolveVoyageApiKey } from "./voyage-api-key.js";
 
 const VERSION = "1.0.0";
 const API_KEY = "test-voyage-secret";
@@ -243,6 +247,257 @@ test("reranker use --no-verify skips the Voyage call", async () => {
         assert.equal(result.status, "changed");
         assert.equal(calls, 0);
         assert.equal(readManagedEnvironment(launcherPath(homeDir)).VOYAGEAI_RERANKER_MODEL, "rerank-3");
+    });
+});
+
+test("interactive Voyage switch saves a private key file, preserves other lines, and verifies with the key", async () => {
+    await withTempHome(async (homeDir) => {
+        writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        const envPath = path.join(homeDir, ".satori", ".env");
+        const otherLines = "# Local settings\r\nOTHER_SETTING=keep=this\r\n\r\nVOYAGEAI_API_KEY=\r\n";
+        fs.writeFileSync(envPath, otherLines, { mode: 0o644 });
+        fs.chmodSync(envPath, 0o644);
+        const originalInode = fs.statSync(envPath).ino;
+        const calls: Array<{ input: string; init?: RequestInit }> = [];
+        let prompts = 0;
+        let output = "";
+        const options = {
+            ...optionsFor(homeDir, responseFetch(200, "{}", calls)),
+            env: {},
+            isInteractive: true,
+            promptApiKey: async () => { prompts += 1; return API_KEY; },
+            writeMessage: (message: string) => { output += message; },
+        };
+        const result = await executeManagedRerankerCommand({ operation: "use", provider: "voyage", purge: false }, options);
+
+        assert.equal(prompts, 1);
+        assert.equal(result.status, "changed");
+        assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+        assert.notEqual(fs.statSync(envPath).ino, originalInode, "atomic replacement must create a new inode");
+        assert.equal(fs.readFileSync(envPath, "utf8"), otherLines.replace("VOYAGEAI_API_KEY=\r", `VOYAGEAI_API_KEY=${API_KEY}`));
+        assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${API_KEY}`);
+        assert.match(output, /paid API.*20 of 28 questions.*LateOn did so for 13/);
+        assert.ok(output.includes(envPath));
+        assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(API_KEY), false);
+        assert.equal(fs.readFileSync(launcherPath(homeDir), "utf8").includes(API_KEY), false);
+        assert.equal(fs.readdirSync(path.dirname(envPath)).some((name) => name.endsWith(".tmp")), false);
+    });
+});
+
+test("empty Voyage key input cancels without changing the launcher or env file", async () => {
+    await withTempHome(async (homeDir) => {
+        const launcher = writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        const launcherBytes = fs.readFileSync(launcher);
+        const envPath = path.join(homeDir, ".satori", ".env");
+        for (const existingContent of [null, "OTHER_SETTING=keep\nVOYAGEAI_API_KEY=\n"]) {
+            if (existingContent !== null) {
+                fs.writeFileSync(envPath, existingContent, { mode: 0o644 });
+                fs.chmodSync(envPath, 0o644);
+            }
+            const options = {
+                ...optionsFor(homeDir, (async () => { throw new Error("must not verify on cancellation"); }) as typeof fetch),
+                env: {},
+                isInteractive: true,
+                promptApiKey: async () => "   ",
+                writeMessage: () => {},
+            };
+            const result = await executeManagedRerankerCommand({ operation: "use", provider: "voyage", purge: false }, options);
+            assert.equal(result.status, "cancelled");
+            assert.equal(result.restartRequired, false);
+            assert.match(formatRerankerText(result), /switch cancelled/);
+            assert.deepEqual(fs.readFileSync(launcher), launcherBytes);
+            if (existingContent === null) assert.equal(fs.existsSync(envPath), false);
+            else {
+                assert.equal(fs.readFileSync(envPath, "utf8"), existingContent);
+                assert.equal(fs.statSync(envPath).mode & 0o777, 0o644);
+            }
+        }
+    });
+});
+
+test("non-TTY Voyage switch without a key names the variable and env file without prompting", async () => {
+    await withTempHome(async (homeDir) => {
+        const launcher = writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        const launcherBytes = fs.readFileSync(launcher);
+        const options = {
+            ...optionsFor(homeDir, (async () => { throw new Error("must not verify without a key"); }) as typeof fetch),
+            env: {},
+            isInteractive: false,
+            promptApiKey: async () => { throw new Error("must not prompt without a TTY"); },
+            writeMessage: () => {},
+        };
+        await assert.rejects(
+            executeManagedRerankerCommand({ operation: "use", provider: "voyage", noVerify: true, purge: false }, options),
+            (error: unknown) => {
+                assert.ok(error instanceof CliError);
+                assert.match(error.message, /VOYAGEAI_API_KEY/);
+                assert.ok(error.message.includes(path.join(homeDir, ".satori", ".env")));
+                assert.match(error.message, /terminal/i);
+                return true;
+            },
+        );
+        assert.deepEqual(fs.readFileSync(launcher), launcherBytes);
+        assert.equal(fs.existsSync(path.join(homeDir, ".satori", ".env")), false);
+    });
+});
+
+test("existing environment or env-file Voyage keys skip prompting with process env taking precedence", async () => {
+    await withTempHome(async (homeDir) => {
+        const envPath = path.join(homeDir, ".satori", ".env");
+        for (const useProcessEnv of [true, false]) {
+            writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+            const fileKey = "test-voyage-file-secret";
+            const content = `# Existing key\n VOYAGEAI_API_KEY=${fileKey}\nOTHER=keep\n`;
+            fs.writeFileSync(envPath, content);
+            const calls: Array<{ input: string; init?: RequestInit }> = [];
+            let output = "";
+            const options = {
+                ...optionsFor(homeDir, responseFetch(200, "{}", calls)),
+                env: useProcessEnv ? { VOYAGEAI_API_KEY: API_KEY } : {},
+                isInteractive: useProcessEnv,
+                promptApiKey: async () => { throw new Error("existing key must skip prompt"); },
+                writeMessage: (message: string) => { output += message; },
+            };
+            const result = await executeManagedRerankerCommand({ operation: "use", provider: "voyage", purge: false }, options);
+            assert.equal(result.status, "changed");
+            assert.equal((calls[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${useProcessEnv ? API_KEY : fileKey}`);
+            assert.equal(fs.readFileSync(envPath, "utf8"), content);
+            assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(API_KEY), false);
+            assert.equal((output + formatRerankerText(result) + JSON.stringify(result)).includes(fileKey), false);
+        }
+    });
+});
+
+test("first Voyage key save creates a private directory and env file", async () => {
+    await withTempHome(async (homeDir) => {
+        let output = "";
+        const key = await resolveVoyageApiKey(homeDir, {}, {
+            isInteractive: true,
+            promptApiKey: async () => API_KEY,
+            writeMessage: (message) => { output += message; },
+        });
+        assert.equal(key, API_KEY);
+        assert.equal(fs.statSync(path.join(homeDir, ".satori")).mode & 0o777, 0o700);
+        assert.equal(fs.statSync(path.join(homeDir, ".satori", ".env")).mode & 0o777, 0o600);
+        assert.equal(output.includes(API_KEY), false);
+    });
+});
+
+test("hidden readline input restores raw mode after Enter, Ctrl+C, and EOF", async () => {
+    for (const [inputBytes, expected] of [[`${API_KEY}\r`, API_KEY], ["\x03", ""], ["\x04", ""]]) {
+        const input = new PassThrough() as PassThrough & { setRawMode: (enabled: boolean) => void; isRaw: boolean };
+        const rawModes: boolean[] = [];
+        input.isRaw = false;
+        input.setRawMode = (enabled) => { input.isRaw = enabled; rawModes.push(enabled); };
+        const result = promptHiddenApiKey(input);
+        input.write(inputBytes);
+        assert.equal(await result, expected);
+        assert.deepEqual(rawModes, [true, false]);
+        input.destroy();
+    }
+});
+
+test("Voyage verification rejection after prompting keeps the launcher and redacts the saved key", async () => {
+    await withTempHome(async (homeDir) => {
+        const launcher = writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        const originalBytes = fs.readFileSync(launcher);
+        let output = "";
+        const options = {
+            ...optionsFor(homeDir, responseFetch(401, `Rejected ${API_KEY}`, [])),
+            env: {},
+            isInteractive: true,
+            promptApiKey: async () => API_KEY,
+            writeMessage: (message: string) => { output += message; },
+        };
+        await assert.rejects(
+            executeManagedRerankerCommand({ operation: "use", provider: "voyage", purge: false }, options),
+            (error: unknown) => {
+                assert.ok(error instanceof CliError);
+                assert.match(error.message, /Rejected \[redacted\]/);
+                assert.equal((error.message + output).includes(API_KEY), false);
+                return true;
+            },
+        );
+        assert.deepEqual(fs.readFileSync(launcher), originalBytes);
+        assert.equal(fs.statSync(path.join(homeDir, ".satori", ".env")).mode & 0o777, 0o600);
+    });
+});
+
+test("plain reranker in a terminal lists switch commands while JSON keeps the status shape", async () => {
+    await withTempHome(async (homeDir) => {
+        writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        let stdout = "";
+        let stderr = "";
+        const options = {
+            env: { HOME: homeDir },
+            stdoutIsTTY: true,
+            writeStdout: (text: string) => { stdout += text; },
+            writeStderr: (text: string) => { stderr += text; },
+        };
+        assert.equal(await runCli(["reranker"], options), 0, stderr);
+        assert.match(stdout, /Reranker: none \(disabled\)/);
+        assert.match(stdout, /reranker use voyage  Voyage/);
+        assert.match(stdout, /reranker use lateon/);
+        assert.match(stdout, /reranker disable/);
+        stdout = "";
+        assert.equal(await runCli(["reranker", "--format", "json"], options), 0, stderr);
+        assert.deepEqual(JSON.parse(stdout), await executeManagedRerankerCommand({ operation: "status", purge: false }, { homeDir, env: {} }));
+        assert.equal(stderr, "");
+    });
+});
+
+test("CLI prompt cancellation leaves JSON parseable and does not expose the key", async () => {
+    await withTempHome(async (homeDir) => {
+        const launcher = writeLauncher(homeDir, baseManagedEnvironment(homeDir));
+        const originalBytes = fs.readFileSync(launcher);
+        let stdout = "";
+        let stderr = "";
+        let prompts = 0;
+        const input = new PassThrough() as unknown as NodeJS.ReadStream;
+        input.isTTY = true;
+        const exit = await runCli(["reranker", "use", "voyage", "--format", "json"], {
+            env: { HOME: homeDir },
+            stdin: input,
+            stdoutIsTTY: true,
+            promptVoyageApiKey: async () => { prompts += 1; return ""; },
+            writeStdout: (text) => { stdout += text; },
+            writeStderr: (text) => { stderr += text; },
+        });
+        assert.equal(exit, 0);
+        assert.equal(prompts, 1);
+        assert.equal(JSON.parse(stdout).status, "cancelled");
+        assert.match(stderr, /paid API/);
+        assert.match(stderr, /hidden; Enter to cancel/);
+        assert.deepEqual(fs.readFileSync(launcher), originalBytes);
+        assert.equal(fs.existsSync(path.join(homeDir, ".satori", ".env")), false);
+        input.destroy();
+    });
+});
+
+test("managed launcher child resolves its Voyage key from the saved env file through MCP configuration", async () => {
+    await withTempHome(async (homeDir) => {
+        writeLauncher(homeDir, { ...baseManagedEnvironment(homeDir), SATORI_RERANKER_PROVIDER: "voyage" });
+        await resolveVoyageApiKey(homeDir, {}, { isInteractive: true, promptApiKey: async () => API_KEY, writeMessage: () => {} });
+        const descriptor = parseManagedLauncherDescriptor(fs.readFileSync(launcherPath(homeDir), "utf8"));
+        const runtimeEntry = descriptor.args[0];
+        const serverDir = path.join(path.dirname(runtimeEntry), "server");
+        fs.mkdirSync(serverDir, { recursive: true });
+        // Exercise the direct launcher branch with the real MCP/Core config reader, without starting services.
+        fs.writeFileSync(path.join(serverDir, "shared-runtime-identity.js"), "exports.isSharedOfflineRuntimeEligible = () => false;\n");
+        const configUrl = new URL("../../mcp/dist/config.js", import.meta.url).href;
+        fs.writeFileSync(runtimeEntry, `import(${JSON.stringify(configUrl)}).then(({ createMcpConfig }) => {
+            const config = createMcpConfig();
+            console.log(JSON.stringify({ provider: config.rerankerProvider, keyFromFile: config.voyageKey === ${JSON.stringify(API_KEY)} }));
+        });\n`);
+        const child = spawnSync(process.execPath, [launcherPath(homeDir)], {
+            env: { HOME: homeDir, PATH: process.env.PATH },
+            input: "",
+            encoding: "utf8",
+            timeout: 10_000,
+        });
+        assert.equal(child.status, 0, child.stderr);
+        assert.deepEqual(JSON.parse(child.stdout), { provider: "voyage", keyFromFile: true });
+        assert.equal((child.stdout + child.stderr).includes(API_KEY), false);
     });
 });
 

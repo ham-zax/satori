@@ -514,7 +514,7 @@ export function parseCliArgs(argv: string[]): ParsedCliInput {
 
     if (rest[0] === "reranker") {
         const requestedOperation = rest[1];
-        if (requestedOperation === "status") {
+        if (requestedOperation === undefined || requestedOperation === "status") {
             if (rest.length > 2) {
                 throw new CliError("E_USAGE", `Unknown argument for reranker status: ${rest[2]}`, 2);
             }

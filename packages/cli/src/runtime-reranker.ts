@@ -9,6 +9,7 @@ import type { InstallCommandOptions, ManagedRerankerResult } from "./install-con
 import { resolveDefaultLateOnModelDirectory } from "./lateon-model-store.js";
 import { managedRuntimeClosureMatches } from "./managed-runtime-closure.js";
 import { acquireManagedRuntimeMutationLock } from "./managed-runtime-store.js";
+import { resolveVoyageApiKey, type VoyageKeyInteraction } from "./voyage-api-key.js";
 import {
     activateManagedRuntimeSelection,
     managedRuntimeClosureFor,
@@ -64,10 +65,10 @@ function describe(
  */
 export async function executeManagedRerankerCommand(
     command: { operation: RerankerOperation; provider?: InstallReranker; model?: string; noVerify?: boolean; purge: boolean },
-    options: InstallCommandOptions = {},
+    options: InstallCommandOptions & VoyageKeyInteraction = {},
 ): Promise<ManagedRerankerResult> {
     const homeDir = options.homeDir ?? os.homedir();
-    const env = options.env ?? process.env;
+    let env = options.env ?? process.env;
     const installed = readInstalledManagedRuntime(
         homeDir,
         `Satori has no managed runtime. Run \`${satoriCliCommand("install --client all")}\` first.`,
@@ -92,6 +93,21 @@ export async function executeManagedRerankerCommand(
     const desiredModel = desired === "voyage"
         ? command.model?.trim() || RERANKER_PROVIDERS.voyage.defaultModel
         : undefined;
+    if (desired === "voyage") {
+        const writeMessage = options.writeMessage ?? ((message: string) => { process.stderr.write(message); });
+        writeMessage("Voyage is a paid API. In Satori's tests it ranked the owning code first for 20 of 28 questions; LateOn did so for 13.\n");
+        const apiKey = await resolveVoyageApiKey(homeDir, env, options);
+        if (apiKey === null) {
+            return {
+                ...describe(homeDir, installed),
+                operation: command.operation,
+                status: "cancelled",
+                purgedModelPath: null,
+                restartRequired: false,
+            };
+        }
+        env = { ...env, [RERANKER_PROVIDERS.voyage.keyEnv]: apiKey };
+    }
     const selection = upgradeRuntimeSelection(
         homeDir,
         installed.managedEnv,
@@ -151,7 +167,7 @@ export async function executeManagedRerankerCommand(
     };
 }
 
-export function formatRerankerText(result: ManagedRerankerResult): string {
+export function formatRerankerText(result: ManagedRerankerResult, showSwitchCommands = false): string {
     const state = result.reranker === null
         ? "managed by the connected runtime's environment"
         : result.reranker === "lateon"
@@ -167,7 +183,9 @@ export function formatRerankerText(result: ManagedRerankerResult): string {
             ? result.operation === "use"
                 ? "Satori reranker unchanged"
                 : `Satori reranker already ${result.operation === "enable" ? "enabled" : "disabled"}`
-            : "Satori reranker";
+            : result.status === "cancelled"
+                ? "Satori reranker switch cancelled"
+                : "Satori reranker";
     const lines = [heading, "", `Reranker: ${state}`];
     if (result.model) lines.push(`Model: ${result.model}`);
     else if (result.modelPath) lines.push(`Model: ${result.modelPath}`);
@@ -181,6 +199,15 @@ export function formatRerankerText(result: ManagedRerankerResult): string {
     }
     if (result.restartRequired) {
         lines.push("", "Running Satori servers were stopped; restart your coding agent to use the new runtime.");
+    }
+    if (result.operation === "status" && showSwitchCommands) {
+        lines.push(
+            "",
+            "Switch reranker:",
+            `  ${satoriCliCommand("reranker use voyage")}  Voyage (paid API; prompts for a missing key)`,
+            `  ${satoriCliCommand("reranker use lateon")}  LateOn (local)`,
+            `  ${satoriCliCommand("reranker disable")}  Disable reranking`,
+        );
     }
     return `${lines.join("\n")}\n`;
 }

@@ -173,6 +173,12 @@ test("parseCliArgs accepts reranker providers and a trimmed model for either ins
 });
 
 test("parseCliArgs normalizes reranker aliases and parses provider use", () => {
+    assert.deepEqual(parseCliArgs(["reranker"]).command, {
+        kind: "reranker", operation: "status", purge: false,
+    });
+    assert.deepEqual(parseCliArgs(["reranker", "--format", "json"]).command, {
+        kind: "reranker", operation: "status", purge: false,
+    });
     const useLateOn = { kind: "reranker", operation: "enable", purge: false };
     assert.deepEqual(parseCliArgs(["reranker", "use", "lateon"]).command, useLateOn);
     assert.deepEqual(parseCliArgs(["reranker", "use", "offline"]).command, useLateOn);

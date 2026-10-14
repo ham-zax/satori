@@ -86,7 +86,7 @@
       "name": "Does my code leave my machine?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage and Milvus/Zilliz runtimes are opt-in and billed by those providers."
+        "text": "Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage reranking, Voyage embeddings, and Milvus/Zilliz are opt-in and billed by those providers."
       }
     },
     {
@@ -130,7 +130,7 @@
     href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="brand.css?v=2026-09-29d" />
-  <link rel="stylesheet" href="home.css?v=2026-09-30a" />
+  <link rel="stylesheet" href="home.css?v=2026-10-15a" />
   <script>document.documentElement.classList.add("js");</script>
 </head>
 
@@ -150,6 +150,7 @@
       </a>
       <div class="nav-links">
         <a href="#how-it-works">Product</a>
+        <a href="#ranking">Ranking</a>
         <a href="#use-cases">Use cases</a>
         <a href="docs/index.html">Docs</a>
         <a href="architecture.html">Architecture</a>
@@ -168,7 +169,7 @@
             <span class="line"><span class="word">Follow</span> <span class="word">the</span> <span class="word">evidence<span class="seal-dot" aria-hidden="true"></span></span></span>
           </h1>
           <p class="hero-lede" data-reveal style="--i:6">
-            Ask where behavior lives in plain English. Satori finds the owning code and hands your agent exact source. Free, open source, and local.
+            Your AI coding agent must find the right code before it can change it. Satori finds it: ask in plain English, and the agent gets the function that owns the behavior, who calls it, and what to read next. Free, open source, and it runs on your machine.
           </p>
           <div class="hero-actions" data-reveal style="--i:7">
             <a class="btn primary" href="#quickstart">Try it on a repo <span class="btn-arrow" aria-hidden="true">&rarr;</span></a>
@@ -234,6 +235,60 @@
         </ul>
         <span class="works-note">Free and open source. No account. Beta: Linux x64 and WSL2 only for now.</span>
       </div>
+
+      <section class="section plain-section" id="plain">
+        <h2>What Satori does, in plain words.</h2>
+        <p class="section-intro">
+          AI coding agents write code fast. Their weak step is finding where to make the change. In a large project they search for a word, open whole files, and often stop reading before they reach the part that matters. Satori is the search and map service that the agent calls before it edits.
+        </p>
+        <div class="plain-compare">
+          <article class="plain-card" data-reveal style="--i:0">
+            <h3 class="minor">Without Satori</h3>
+            <ul>
+              <li>The agent searches for a keyword and gets dozens of matches.</li>
+              <li>It opens whole files, and they fill its working memory.</li>
+              <li>It reads the top of a function and edits before it sees the rest.</li>
+              <li>It misses the other code that depends on the old behavior.</li>
+            </ul>
+          </article>
+          <article class="plain-card is-with" data-reveal style="--i:1">
+            <h3 class="minor">With Satori</h3>
+            <ul>
+              <li>The agent asks one question in plain English.</li>
+              <li>It gets the function that owns the behavior, ranked near the top.</li>
+              <li>It reads that function from start to end, with an outline of its file.</li>
+              <li>It sees who calls the function before it changes it.</li>
+            </ul>
+          </article>
+        </div>
+        <p class="plain-analogy" data-reveal>
+          Think of a smart new colleague on day one who does not yet know where anything is. Satori is the colleague who has read the whole project and says: &ldquo;That lives here. These places use it. Read this first.&rdquo;
+        </p>
+
+        <h3 class="minor plain-subtitle">How it fits into your agent</h3>
+        <ol class="plain-steps">
+          <li data-reveal style="--i:0"><b>Install once</b><span>One command adds Satori to Claude Code, Codex, OpenCode, or any MCP client. MCP is the standard plug that lets AI agents use outside tools.</span></li>
+          <li data-reveal style="--i:1"><b>Index the project</b><span>Satori reads the code on your machine and builds a search index and a map of which code calls which. It updates when files change.</span></li>
+          <li data-reveal style="--i:2"><b>The agent asks</b><span>When the agent needs to find code, it calls Satori tools such as <code>search_codebase</code>, <code>file_outline</code>, <code>call_graph</code>, and <code>read_file</code>. You use your agent as before.</span></li>
+          <li data-reveal style="--i:3"><b>The agent edits with the full picture</b><span>It changes the right place with the context it needs. Satori only reads. It never changes your files.</span></li>
+        </ol>
+
+        <h3 class="minor plain-subtitle">Who it helps</h3>
+        <div class="plain-audience">
+          <article class="plain-card" data-reveal style="--i:0">
+            <h3>Developers</h3>
+            <p>Less time watching the agent search. Fewer edits in the wrong file. Exact source and call paths you can check yourself. Free, local, and one command to try.</p>
+          </article>
+          <article class="plain-card" data-reveal style="--i:1">
+            <h3>Team leads and stakeholders</h3>
+            <p>Agents find the right place sooner and spend their context on the change, not on the search. On the default setup, code stays on the machine. There is no account, no subscription, and no usage bill.</p>
+          </article>
+          <article class="plain-card" data-reveal style="--i:2">
+            <h3>Small and fast models</h3>
+            <p>Cheap, fast models read less. They often skim a function and edit without the part they skipped. Satori gives them the whole owning function and its callers, so a small model sees what a large one would have searched for.</p>
+          </article>
+        </div>
+      </section>
 
       <section class="section strata-section" id="how-it-works">
         <div class="strata-head">
@@ -353,7 +408,7 @@
           </article>
           <article class="tile" data-reveal style="--i:2">
             <h3>Reranking that finds owners</h3>
-            <p>LateOn reranks a bounded candidate set locally to put the owning code first. In our 36-task test it doubled first-hit accuracy, from 0.19 to 0.39. On 46 plain-English questions, the agent&rsquo;s own <code>alt_terms</code> lifted owners in the top 10 from 16 to 34. <a class="tile-link" href="https://github.com/ham-zax/satori/tree/master/docs/evidence/lateon-quality-20260804">See the evidence</a>.</p>
+            <p>LateOn reranks a bounded candidate set locally to put the owning code first. In our 36-task test it doubled first-hit accuracy, from 0.19 to 0.39. On 46 plain-English questions, the agent&rsquo;s own <code>alt_terms</code> lifted owners in the top 10 from 16 to 34. Switch to Voyage with one command when you want the strongest ranking. <a class="tile-link" href="#ranking">See how ranking works</a>.</p>
           </article>
           <article class="tile tile-langs" data-reveal style="--i:0">
             <h3>Parser-derived repository structure</h3>
@@ -375,6 +430,81 @@
         </div>
       </section>
 
+      <section class="section ranking-section" id="ranking">
+        <h2>Built to put the owning code first.</h2>
+        <p class="section-intro">
+          When the right file comes back at rank seven, your agent reads six wrong files first. Satori ranks for the code that owns the behavior, then hands the agent the exact span to read.
+        </p>
+        <ol class="rank-pipeline" aria-label="How a question becomes ranked owners">
+          <li data-reveal style="--i:0">
+            <b>Retrieve three ways</b>
+            <span>Potion embeddings, BM25, and exact symbol matches run together, so a paraphrase and an exact identifier both reach the candidates.</span>
+          </li>
+          <li data-reveal style="--i:1">
+            <b>Search the agent&rsquo;s guesses</b>
+            <span>The agent sends up to four likely identifiers as <code>alt_terms</code>. Satori searches each one as a separate pass, including a definition lookup, and fuses the results with the original question.</span>
+          </li>
+          <li data-reveal style="--i:2">
+            <b>Vote for definitions</b>
+            <span>Definition fusion lifts the code that defines a named symbol above code that only mentions it.</span>
+          </li>
+          <li data-reveal style="--i:3">
+            <b>Rerank with context</b>
+            <span>Up to 64 candidates go to the reranker with their role, callers, callees, and tests. LateOn runs on your CPU in parallel sessions sized to the machine. Voyage runs in the cloud.</span>
+          </li>
+          <li data-reveal style="--i:4">
+            <b>Return exact evidence</b>
+            <span>The agent gets the owning span, a file outline, and qualified call paths to follow next, instead of whole files.</span>
+          </li>
+        </ol>
+
+        <div class="rank-results">
+          <article data-reveal style="--i:0">
+            <p class="rank-figure">0.19 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 0.39</p>
+            <p>Owner found first, with LateOn reranking. 36 tasks on 6 repositories.</p>
+          </article>
+          <article data-reveal style="--i:1">
+            <p class="rank-figure">16 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 34</p>
+            <p>Owners in the top 10 when the agent adds its own <code>alt_terms</code>. 46 plain-English questions. Median request 2.7 s to 2.9 s.</p>
+          </article>
+          <article data-reveal style="--i:2">
+            <p class="rank-figure">4 <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 13</p>
+            <p>Named-symbol questions answered at rank 1 with definition fusion and LateOn, against no reranker. 19 questions on 4 repositories.</p>
+          </article>
+          <article data-reveal style="--i:3">
+            <p class="rank-figure">1.86 s <span aria-hidden="true">&rarr;</span><span class="visually-hidden">to</span> 1.22 s</p>
+            <p>LateOn rerank of 64 candidates with the adaptive session pool on an 8-core Ryzen 7 3800X. Scores are bit-identical.</p>
+          </article>
+        </div>
+
+        <h3 class="minor rank-choose-title">Choose a reranker</h3>
+        <div class="rank-choices">
+          <article class="rank-choice" data-reveal style="--i:0">
+            <h3>LateOn <small>default, offline</small></h3>
+            <p>Runs on your CPU. Code stays on the machine and needs no API key. 13 of 28 owners first, median search 2.40 s. Linux x64 and WSL2.</p>
+            <pre><code>satori reranker use lateon</code></pre>
+          </article>
+          <article class="rank-choice is-featured" data-reveal style="--i:1">
+            <h3>Voyage <small>best ranking, billed</small></h3>
+            <p>18 of 28 owners first with <code>rerank-3-lite</code>, median search 1.04 s. The command asks for your <code>VOYAGEAI_API_KEY</code> with hidden input, saves it to <code>~/.satori/.env</code>, and makes one test call before it switches. Queries and code excerpts go to Voyage, which bills each search.</p>
+            <pre><code>satori reranker use voyage
+satori reranker status</code></pre>
+          </article>
+          <article class="rank-choice" data-reveal style="--i:2">
+            <h3>None <small>fastest</small></h3>
+            <p>Retrieval order only. About 200 ms per search on React, with 36,233 chunks.</p>
+            <pre><code>satori reranker use none</code></pre>
+          </article>
+        </div>
+        <p class="rank-note">
+          Measured on 28 plain-English questions over React, Polars, and FlatBuffers with the same index for every reranker. Restart your agent after a switch. If Voyage fails during a search, Satori returns retrieval order and reports <code>RERANKER_FAILED</code>. Use <code>npx -y @satori-code/cli@latest</code> in place of <code>satori</code> if the CLI is not installed globally.
+        </p>
+        <div class="link-row">
+          <a class="text-link" href="docs/index.html#reranker">Read the reranker docs <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="https://github.com/ham-zax/satori/blob/master/docs/REFERENCE.md#choosing-a-reranker" target="_blank" rel="noopener noreferrer">See the full benchmark <span aria-hidden="true">&rarr;</span></a>
+        </div>
+      </section>
+
       <section class="section usecase-section" id="use-cases">
         <h2>Use Satori when the repository is larger than the prompt.</h2>
         <div class="usecases" data-tabs>
@@ -382,7 +512,7 @@
             <button role="tab" id="uc-tab-onboard" aria-controls="uc-onboard" aria-selected="true">Onboard</button>
             <button role="tab" id="uc-tab-debug" aria-controls="uc-debug" aria-selected="false" tabindex="-1">Debug</button>
             <button role="tab" id="uc-tab-change" aria-controls="uc-change" aria-selected="false" tabindex="-1">Change</button>
-            <button role="tab" id="uc-tab-local" aria-controls="uc-local" aria-selected="false" tabindex="-1">Local models</button>
+            <button role="tab" id="uc-tab-local" aria-controls="uc-local" aria-selected="false" tabindex="-1">Small models</button>
             <button role="tab" id="uc-tab-multi" aria-controls="uc-multi" aria-selected="false" tabindex="-1">Multi-agent</button>
           </div>
           <div class="usecase-panels">
@@ -400,8 +530,9 @@
               <p>Find the owner, nearby structure, bounded source, and supported call paths before changing a subsystem.</p>
             </article>
             <article class="usecase" role="tabpanel" id="uc-local" aria-labelledby="uc-tab-local">
-              <h3>Spend context on implementation.</h3>
-              <p>A strict search &rarr; owner &rarr; exact source funnel helps smaller models avoid context-heavy repository discovery.</p>
+              <h3>Give a fast model the context it would skip.</h3>
+              <p>Flash and local models are cheap and quick, but they read less. A small model may edit a function after it reads only the first part, and it cannot afford to read the repository to find the right one. Satori does the discovery work: hybrid search, the model&rsquo;s own <code>alt_terms</code>, and owner-aware reranking put the owner near the top, then the model reads one exact span and follows qualified call paths. With LateOn, the whole stack runs offline, so a fully local setup stays local.</p>
+              <code class="usecase-q">&ldquo;Where is the cleanup of useEffect?&rdquo; &rarr; commitHookEffectListUnmount</code>
             </article>
             <article class="usecase" role="tabpanel" id="uc-multi" aria-labelledby="uc-tab-multi">
               <h3>Share repository intelligence, not the prompt.</h3>
@@ -421,7 +552,7 @@
           </div>
           <div class="faq-item" data-reveal style="--i:1">
             <dt>Does my code leave my machine?</dt>
-            <dd>Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage and Milvus/Zilliz runtimes are opt-in and billed by those providers.</dd>
+            <dd>Not on the default offline runtime. Embedding, storage, search, and telemetry make no network requests after installation. Optional Voyage reranking, Voyage embeddings, and Milvus/Zilliz are opt-in and billed by those providers.</dd>
           </div>
           <div class="faq-item" data-reveal style="--i:2">
             <dt>Will it change my repository?</dt>
@@ -463,6 +594,11 @@ npx -y @satori-code/cli@latest doctor</code></pre>
               <button class="copy-btn" data-copy-target="quick-first-prompt" aria-label="Copy first prompt">Copy</button>
             </div>
             <pre id="quick-first-prompt" class="terminal-prompt"><code>Index /absolute/path/to/repo with Satori, then find where auth refresh is handled.</code></pre>
+            <div class="terminal-top terminal-next">
+              <span class="terminal-title">Optional: stronger ranking with a Voyage API key</span>
+              <button class="copy-btn" data-copy-target="quick-voyage-code" aria-label="Copy Voyage reranker command">Copy</button>
+            </div>
+            <pre id="quick-voyage-code"><code>npx -y @satori-code/cli@latest reranker use voyage</code></pre>
           </div>
           <ol class="steps">
             <li><h3>Index</h3><p>Create the repository Publication and wait until status is ready.</p></li>

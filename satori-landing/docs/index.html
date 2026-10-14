@@ -998,7 +998,8 @@ profile = "minimal"</code></pre>
             <p>
               Uses local Potion embeddings with BM25 and LanceDB. Qualified Linux
               x64/WSL2 installs default to LateOn reranking; add
-              <code>--reranker none</code> to disable neural reranking. Once installed,
+              <code>--reranker none</code> to disable neural reranking, or see
+              <a href="#reranker">Choose a Reranker</a> for Voyage. Once installed,
               the qualified offline runtime requires no model API key and is designed
               for zero Satori runtime network requests.
             </p>
@@ -1032,6 +1033,89 @@ npx -y @satori-code/cli@latest install --runtime voyage --vector-store milvus</c
             and bounded source reads keep broad files out of the model's context.
           </p>
         </div>
+      </section>
+
+      <section class="section" id="reranker">
+        <h2>Choose a Reranker</h2>
+        <p class="lede">
+          The reranker orders up to 64 retrieved candidates, with each
+          candidate's role, callers, callees, and tests, so the owning code comes
+          first. Change it at any time from the CLI. Embeddings, the vector
+          store, and the index are not affected. Restart every Satori MCP client
+          after a switch.
+        </p>
+        <div class="grid">
+          <div class="panel">
+            <h3>LateOn (default)</h3>
+            <pre><code>satori reranker use lateon</code></pre>
+            <p>
+              Local CPU reranking. Free, no API key, and no network requests.
+              Offline runtime on Linux x64/WSL2 only. <code>offline</code> is
+              another spelling of <code>lateon</code>.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>Voyage</h3>
+            <pre><code>satori reranker use voyage [--model &lt;name&gt;]
+satori reranker status</code></pre>
+            <p>
+              The default model is <code>rerank-3-lite</code>. If
+              <code>VOYAGEAI_API_KEY</code> is missing, the command asks for it
+              with hidden input in a terminal and saves it to
+              <code>~/.satori/.env</code> with mode 0600. Press Enter to cancel.
+              Without a terminal, set the key in the environment or in that file
+              first. The command makes one test rerank call. If the call fails,
+              the current reranker stays. Pass <code>--no-verify</code> to skip
+              the call. Works with the offline and connected runtimes.
+            </p>
+          </div>
+          <div class="panel">
+            <h3>None</h3>
+            <pre><code>satori reranker use none</code></pre>
+            <p>Retrieval order only. The fastest search, about 200 ms on React.</p>
+          </div>
+        </div>
+        <p>
+          The installer takes the same choice:
+          <code>satori install --reranker lateon|voyage|none [--reranker-model &lt;name&gt;] [--no-verify]</code>.
+          Without a global install, use <code>npx -y @satori-code/cli@latest</code>
+          in place of <code>satori</code>.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Reranker</th><th>Right answer first</th><th>In top 5</th><th>In top 10</th><th>MRR</th><th>Median search</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>LateOn (local, default)</td><td>13/28</td><td>19/28</td><td>21/28</td><td>0.556</td><td>2.40 s</td></tr>
+              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>18/28</td><td>24/28</td><td>24/28</td><td>0.738</td><td>1.04 s</td></tr>
+              <tr><td>Voyage <code>rerank-3</code></td><td>17/28</td><td>24/28</td><td>24/28</td><td>0.711</td><td>1.12 s</td></tr>
+              <tr><td>Voyage <code>rerank-2.5</code></td><td>19/28</td><td>24/28</td><td>24/28</td><td>0.759</td><td>1.25 s</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          28 plain-English questions over React, Polars, and FlatBuffers, with
+          Potion embeddings and the same index for every row. One run per row on
+          one WSL2 laptop. Times are the whole search and include the network for
+          Voyage.
+        </p>
+        <div class="callout">
+          <p>
+            <strong>Privacy and cost:</strong> Voyage is selected only explicitly.
+            A <code>VOYAGEAI_API_KEY</code> alone does not enable it. With Voyage,
+            each search sends the query and candidate code excerpts to Voyage,
+            which bills for them. <code>satori doctor</code> and
+            <code>satori reranker status</code> print
+            <code>Online: search queries and code excerpts are sent to Voyage.</code>
+            If Voyage fails during a search, results come back in retrieval order
+            with <code>RERANKER_FAILED</code>.
+          </p>
+        </div>
+        <p>A hand-configured MCP client sets the reranker in its environment:</p>
+        <pre><code>SATORI_RERANKER_PROVIDER=voyage
+VOYAGEAI_API_KEY=&lt;your key&gt;
+VOYAGEAI_RERANKER_MODEL=rerank-3-lite</code></pre>
       </section>
 
       <section class="section" id="first-index">

@@ -54,6 +54,8 @@ start with the [handoff](owner-ranking-handoff.md).
   are in the window against 51 and MRR over the 72 goes from 0.3559 to
   0.4985. With another question's terms it falls to 0.1823. The gain is on
   the 46 conceptual questions; the original 28 gain reach but not MRR.
+  A second caller (Codex `gpt-6-luna`, 2026-10-15) reaches 0.4858, but
+  lowers the original 28 from 0.5646 to 0.5205.
 - **Alt terms already ship.** The parameter, both flags and the user
   documentation exist; only the tool's own description did not mention them,
   and it now does (`39be5634`, with the MCP server instructions). What is left with the local reranker is
@@ -664,6 +666,26 @@ guesses raise owner recall, unrelated ones rank worse than none." Typecheck,
 server instructions (`SATORI_MCP_INSTRUCTIONS`,
 `packages/mcp/src/server/shared-runtime.ts`) still do not mention alt terms;
 that was not approved and is not changed.
+
+**Second caller, 2026-10-15.** Codex `gpt-6-luna` at effort max wrote terms
+for all 72 questions (241 terms, none empty). It saw only the current tool
+description and the questions, not the code or the Muse terms. The run was
+paired: no terms and Luna terms on the same build (`f621e641`) and index.
+Lenient MRR, strict in brackets; the Muse row is the P2 run above, not paired.
+
+| Run | Rank 1 / 5 / 10 | MRR 72 | MRR 28 | MRR 46 |
+|---|---|---|---|---|
+| No terms (paired) | 21 / 33 / 37 | 0.3594 (0.3455) | 0.5646 (0.5467) | 0.2297 (0.2188) |
+| Luna terms | 24 / 48 / 58 | 0.4858 (0.4787) | 0.5205 (0.5086) | 0.4870 (0.4831) |
+| Muse own terms (P2) | 27 / 48 / 56 | 0.4985 (0.4932) | 0.5671 (0.5593) | 0.4786 (0.4750) |
+
+- **A second model reproduces the gain:** MRR over the 72 rises by 0.126, and
+  the conceptual 46 more than double, as with Muse.
+- **The original 28 lose MRR with Luna** (0.5646 to 0.5205), where Muse held
+  level. Luna terms make the final rank worse than no terms on 16 of the 72
+  questions (14 strict).
+- The no-terms baseline moved 0.0035 from P2 on the newer build. One run per
+  condition; window counts were not captured.
 
 ### Ordering experiments with the local reranker
 

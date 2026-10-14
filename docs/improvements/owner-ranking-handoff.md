@@ -130,7 +130,7 @@ signature.
 | Score name and signature as a short separate document with the model's own vectors, in place of the BM25 name vote | Same capture; gains 3 first places with caller terms, flat without; not confirmed end to end |
 | Calibrate for document length or genericness | Same capture; no gain; score and length are uncorrelated |
 | Put a space at camelCase boundaries before LateOn lowercases its input | No gain: +0.0145 MRR without caller terms, +0.0062 with them, both inside the noise; with terms the raw reranker order gets worse (26 owners first to 20) and fusion restores it |
-| Soften definition fusion for LateOn: rank candidates with no name match as tied last instead of scoring them zero | Not run; fusion's downward moves cost 0.042 MRR without caller terms and 0.074 with; see the results log |
+| Soften definition fusion for LateOn: give candidates with no name match a tie rank instead of zero | No gain end to end (0.3553 against 0.3559 without caller terms, 0.4960 against 0.4985 with); the same 4 and 6 owners still lose first place; see the results log |
 | Match word stems in the name vote, so `optimization` meets `optimize` | Not run; needs a suffix list and also helps generic distractors; measure apart from the row above |
 | Let a test or caller vote for the code it exercises | Ruled out with the links the documents carry today; see the results log |
 | Derive alt terms inside Satori from the first-pass results, so the gain does not depend on the caller | Not tried here; read `evals/real-repo-quality/vocabulary-ablation.mjs` and the alt-terms document first |
@@ -218,8 +218,40 @@ Newest last. Each entry names its command or script.
   to 9, `28/f9` to 4, `46/r2_rewritten` to 10, `46/p6_rewritten` to 2,
   `46/f5_rewritten` to 3). Downward moves cost 0.042 MRR without terms and
   0.074 with them, which is the ceiling for a rule that keeps the upward
-  moves. Not run: unmatched candidates tied last instead of zero. Script
+  moves. Script
   `fusion-moves.mjs`.
+- **2026-10-14, a tie rank for unmatched candidates in definition fusion,
+  end to end.** Unmatched candidates get the rank after the last matched one
+  (`tied`) instead of a zero second vote. Full pipeline, both sources, scored
+  after grouping. Without caller terms: 21/32/37 at ranks 1/5/10, MRR 0.3553
+  (strict 0.3414), against 21/32/36, 0.3559 (0.3420). With caller terms:
+  27/48/55, 0.4960 (0.4905), against 27/48/56, 0.4985 (0.4932). The same 4
+  and 6 owners lose first place and the same 9 are taken to it, so the cost of
+  0.044 and 0.074 MRR stays. Reason: the candidate that passes the owner is
+  itself matched, and a tie rank moves only unmatched candidates. An offline
+  replay of the captured fusion inputs (59 questions where fusion ran) also
+  tried the two other tie conventions, the middle of the unmatched ranks and
+  the last rank: both equal the shipped rule within 0.0006 MRR, with and
+  without terms. Closed; the shipped rule stays. Runs `fusion-tied` and
+  `fusion-tied-alt`.
+- **2026-10-14, the earlier rank-fusion rules with caller terms.** The rules
+  of `definition-fusion-root-cause.md` were measured without caller terms. An
+  offline replay of today's LateOn fusion inputs ranked `rrf cov2 k5 w0.75`
+  first: 22 owners first against 19, MRR 0.3524 against 0.3250 without terms,
+  and 0.4483 against 0.4375 with them (59 questions where fusion ran, order
+  before grouping). End to end, both sources, scored after grouping, LateOn:
+  24/33/38, 0.3877 (strict 0.3478) without terms against 21/32/36, 0.3559
+  (0.3420); 26/48/58, 0.5040 (0.4924) with them against 27/48/56, 0.4985
+  (0.4932). Lenient MRR gains 0.032 and 0.006; strict rank, the primary
+  measure, gains 0.006 and loses 0.001. Not a product change on this
+  evidence. Runs `fusion-cov2-75` and `fusion-cov2-75-alt`.
+- **2026-10-14, `rerank-3-lite` end to end with and without caller terms.**
+  LateOn swapped for `rerank-3-lite` at the reranker call, fusion off (the
+  product's behaviour for this model), both sources, scored after grouping.
+  Without terms: 34/42/44, 0.5160 (0.4813). With terms: 31/56/60, 0.5959
+  (0.5770). Median Voyage call 0.70 s. On the recorded inputs no fusion rule
+  beats off by more than 0.007 MRR (`rrf any k5 w0.5`: 0.4288 against
+  0.4244). Runs `v3l` and `v3l-alt`.
 - **2026-10-14, the rest of that review.** Its reference-graph vote uses the
   links the tests-vote entry above already measured (one owner of 35). Its
   claim that wrong caller terms do no harm at retrieval is contradicted:

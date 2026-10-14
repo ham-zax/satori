@@ -806,8 +806,16 @@ Lenient ranks, 72 questions.
   terms against 21/32/36, 0.3559 (0.3420); 28/46/57, 0.5047 (0.4984) with
   them against 27/48/56, 0.4985 (0.4932). With terms the raw reranker order
   falls from 26 owners first to 20. Closed; see the handoff's results log.
-- Definition fusion with unmatched candidates tied last: not run. Needs the
-  full pipeline on both sources, scored after grouping.
+- Definition fusion with a tie rank for unmatched candidates: run end to end
+  on both sources, no gain. 21/32/37, 0.3553 (0.3414) without caller terms
+  and 27/48/55, 0.4960 (0.4905) with them. The owners that lose first place
+  lose it to matched candidates, which a tie rank does not move. Closed; see
+  the handoff's results log.
+- `rrf cov2 k5 w0.75` for LateOn, end to end: 0.3877 (0.3478) without caller
+  terms and 0.5040 (0.4924) with them. Strict rank gains 0.006 and loses
+  0.001, so the shipped rule stays.
+- `rerank-3-lite`, end to end, fusion off: 0.5160 (0.4813) without caller
+  terms and 0.5959 (0.5770) with them, against LateOn's 0.3559 and 0.4985.
 - Latency of the depth-400 arm read (medians of three runs), needed only if a
   cap is proposed. The sweep's own timings are not comparable: the hooks add
   depth-400 diagnostic reads.

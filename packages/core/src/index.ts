@@ -272,3 +272,6 @@ export {
 export type {
     VectorDatabase,
 } from './vectordb/types';
+
+export { IndexingResourcePlanner } from './indexing/resources';
+export type { IndexingResourcePlan, IndexingProgress, IndexingMemoryStatus } from './indexing/resources';

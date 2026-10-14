@@ -1,3 +1,4 @@
+import { isIndexingMemoryStatus, type IndexingMemoryStatus } from '../indexing/resources';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -22,6 +23,7 @@ export interface RootMutationOperation {
     heartbeatAt?: string;
     progressAt?: string;
     progress?: number;
+    memoryBudget?: IndexingMemoryStatus;
     error?: string;
     cancelRequestedAt?: string;
     cancelReason?: string;
@@ -319,7 +321,7 @@ export class MutationLeaseCoordinator {
     public updateOperation(
         lease: RootMutationLease,
         phase: MutationOperationPhase,
-        update: { progress?: number; error?: string } = {},
+        update: { progress?: number; error?: string; memoryBudget?: IndexingMemoryStatus } = {},
     ): RootMutationOperation {
         return this.withRootLock(lease.canonicalRoot, () => {
             const state = this.readState(lease.canonicalRoot);
@@ -331,6 +333,7 @@ export class MutationLeaseCoordinator {
             if (progress !== undefined && (!Number.isFinite(progress) || progress < 0 || progress > 100)) {
                 throw new Error(`Invalid mutation operation progress '${progress}'.`);
             }
+            if (update.memoryBudget !== undefined && !isIndexingMemoryStatus(update.memoryBudget)) throw new Error('Invalid indexing memory status.');
             const now = new Date(this.now()).toISOString();
             const phaseAdvanced = phase !== current.phase
                 && phase !== 'cancelling'
@@ -347,6 +350,7 @@ export class MutationLeaseCoordinator {
                 progressAt: madeProgress ? now : (current.progressAt ?? current.updatedAt),
                 ...(progress !== undefined ? { progress } : {}),
                 ...(update.error !== undefined ? { error: update.error } : {}),
+                ...(update.memoryBudget !== undefined ? { memoryBudget: update.memoryBudget } : {}),
             };
             this.operationsByRoot.set(lease.canonicalRoot, next);
             return { ...next };
@@ -650,6 +654,7 @@ export class MutationLeaseCoordinator {
             && typeof value.updatedAt === 'string'
             && ['heartbeatAt', 'progressAt', 'error', 'cancelRequestedAt', 'cancelReason']
                 .every((field) => value[field] === undefined || typeof value[field] === 'string')
+            && (value.memoryBudget === undefined || isIndexingMemoryStatus(value.memoryBudget))
             && (value.progress === undefined || (
                 typeof value.progress === 'number'
                 && Number.isFinite(value.progress)

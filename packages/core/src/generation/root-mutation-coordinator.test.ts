@@ -8,6 +8,19 @@ import test, { type TestContext } from 'node:test';
 import { MutationExecutorStillActiveError, MutationLeaseCoordinator } from './root-mutation-coordinator';
 import { RootMutationRuntime } from './root-mutation-runtime';
 
+test('the last operation retains its indexing budget hint after runtime restart', async (t) => {
+    const { root, stateDir } = fixture(t);
+    const memoryBudget = { budgetMb: 2048, hint: 'Memory budget 2.0 GiB: TypeScript projects run one at a time.' };
+    const runtime = new RootMutationRuntime({ stateDir });
+    await runtime.run(root, 'create', () => {
+        runtime.recordIndexingMemoryBudget(root, memoryBudget);
+        assert.deepEqual(runtime.getCurrentOperation(root)?.memoryBudget, memoryBudget);
+        runtime.updateCurrentOperation(root, 'completed', { progress: 100 });
+    });
+    const restarted = new RootMutationRuntime({ stateDir });
+    assert.deepEqual(restarted.getOperation(root)?.memoryBudget, memoryBudget);
+});
+
 function fixture(t: TestContext): { root: string; stateDir: string; statePath: string } {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-mutation-receipt-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

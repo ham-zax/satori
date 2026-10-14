@@ -1,6 +1,6 @@
 import { fork, spawn } from "node:child_process";
 import fs from "node:fs";
-import type { MutationOperationPhase, RootMutationExecutor } from "@satori-code/core/integration";
+import { isIndexingMemoryStatus, type IndexingMemoryStatus, type MutationOperationPhase, type RootMutationExecutor } from "@satori-code/core/integration";
 
 const MUTATION_OPERATION_ID_ENV = "SATORI_MUTATION_OPERATION_ID";
 const MUTATION_PARENT_PID_ENV = "SATORI_MUTATION_PARENT_PID";
@@ -82,6 +82,7 @@ type WorkerMessage =
         sequence: number;
         phase?: MutationOperationPhase;
         progress?: number;
+        memoryBudget?: IndexingMemoryStatus;
     }
     | {
         type: "mutation_worker_completed";
@@ -99,6 +100,7 @@ export type MutationWorkerProgress = Readonly<{
     sequence: number;
     phase?: MutationOperationPhase;
     progress?: number;
+    memoryBudget?: IndexingMemoryStatus;
 }>;
 
 export type SupervisedMutationWorkerOptions = Readonly<{
@@ -214,6 +216,7 @@ function isWorkerMessage(value: unknown): value is WorkerMessage {
                     typeof record.phase === "string"
                     && MUTATION_OPERATION_PHASES.has(record.phase as MutationOperationPhase)
                 ))
+                && (record.memoryBudget === undefined || isIndexingMemoryStatus(record.memoryBudget))
                 && (record.progress === undefined || (
                     typeof record.progress === "number"
                     && Number.isFinite(record.progress)
@@ -440,6 +443,7 @@ export function spawnSupervisedMutationWorker(
                             sequence: message.sequence,
                             ...(message.phase !== undefined ? { phase: message.phase } : {}),
                             ...(message.progress !== undefined ? { progress: message.progress } : {}),
+                            ...(message.memoryBudget !== undefined ? { memoryBudget: message.memoryBudget } : {}),
                         });
                     } catch {
                         requestCancellation("progress_callback_failed");
@@ -566,7 +570,7 @@ export type MutationWorkerRuntime = Readonly<{
     signal: AbortSignal;
     started: Promise<void>;
     heartbeat(): void;
-    progress(input?: { phase?: MutationOperationPhase; progress?: number }): void;
+    progress(input?: { phase?: MutationOperationPhase; progress?: number; memoryBudget?: IndexingMemoryStatus }): void;
     complete(result?: Readonly<Record<string, unknown>>): void;
     cancel(reason?: string): void;
     fail(error: unknown): void;
@@ -676,7 +680,7 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
         heartbeat: () => {
             if (!terminal) workerSend({ type: "mutation_worker_heartbeat", operationId });
         },
-        progress: (input: { phase?: MutationOperationPhase; progress?: number } = {}) => {
+        progress: (input: { phase?: MutationOperationPhase; progress?: number; memoryBudget?: IndexingMemoryStatus } = {}) => {
             if (terminal) return;
             progressSequence += 1;
             workerSend({
@@ -685,6 +689,7 @@ export function createMutationWorkerRuntime(): MutationWorkerRuntime {
                 sequence: progressSequence,
                 ...(input.phase !== undefined ? { phase: input.phase } : {}),
                 ...(input.progress !== undefined ? { progress: input.progress } : {}),
+                ...(input.memoryBudget !== undefined ? { memoryBudget: input.memoryBudget } : {}),
             });
         },
         complete: (result?: Readonly<Record<string, unknown>>) => {

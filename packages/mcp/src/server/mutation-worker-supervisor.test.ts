@@ -139,3 +139,29 @@ process.stdout.write('SUPERVISOR_DONE\\n');
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('memory budget progress survives the mutation worker IPC boundary', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-worker-budget-'));
+    const workerPath = path.join(root, 'worker.cjs');
+    const memoryBudget = { budgetMb: 2048, hint: 'Memory budget 2.0 GiB: TypeScript projects run one at a time.' };
+    fs.writeFileSync(workerPath, `
+process.send({ type: 'mutation_worker_ready', operationId: process.env.SATORI_MUTATION_OPERATION_ID });
+process.on('message', (message) => {
+    if (message.type !== 'mutation_worker_start') return;
+    process.send({ type: 'mutation_worker_progress', operationId: process.env.SATORI_MUTATION_OPERATION_ID,
+        sequence: 1, phase: 'writing', progress: 50, memoryBudget: ${JSON.stringify(memoryBudget)} });
+    process.send({ type: 'mutation_worker_completed', operationId: process.env.SATORI_MUTATION_OPERATION_ID }, () => process.exit(0));
+});
+`);
+    let received: unknown;
+    try {
+        const worker = spawnSupervisedMutationWorker({ operationId: 'budget-fixture', workerPath,
+            onProgress: (progress) => { received = progress.memoryBudget; } });
+        await worker.ready;
+        worker.start();
+        await worker.completion;
+        assert.deepEqual(received, memoryBudget);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

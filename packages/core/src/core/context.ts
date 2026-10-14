@@ -1,3 +1,4 @@
+import { IndexingResourcePlanner, type IndexingResourcePlan, type IndexingProgress } from '../indexing/resources';
 import {
     Embedding,
     OpenAIEmbedding,
@@ -255,6 +256,7 @@ function summarizeVectorWriteMetrics(
 
 
 export interface ContextConfig {
+    indexingResourcePlanner?: Pick<IndexingResourcePlanner, 'createPlan'>;
     embedding?: Embedding;
     vectorDatabase?: VectorDatabase;
     vectorStoreProvider?: VectorStoreProviderIdentity;
@@ -472,6 +474,8 @@ export class Context {
         this.resolutionAnalyzer = resolutionAnalyzer;
 
         this.indexGenerationWorkflow = new IndexGenerationWorkflow({
+            indexingResourcePlanner: config.indexingResourcePlanner ?? new IndexingResourcePlanner(),
+            recordIndexingMemoryBudget: this.rootMutationRuntime.recordIndexingMemoryBudget.bind(this.rootMutationRuntime),
             isRepositoryVocabularyIndexingEnabled: () => this.indexingPipeline.isRepositoryVocabularyIndexingEnabled(),
             activatePublication: (publication, lease) => this.publicationStore.activate(publication, lease),
             getCurrentPublicationSourceCheckpoint: (canonicalRoot) => (
@@ -545,7 +549,7 @@ export class Context {
             prepareCollection: (codebasePath, forceReindex, assertMutationCurrent, collectionNameOverride) => (
                 this.prepareCollection(codebasePath, forceReindex, assertMutationCurrent, collectionNameOverride)
             ),
-            processFileList: (filePaths, codebasePath, onFileProcessed, collectionName, assertMutationCurrent, indexPolicy) => (
+            processFileList: (filePaths, codebasePath, onFileProcessed, collectionName, assertMutationCurrent, indexPolicy, resourcePlan) => (
                 this.processFileList(
                     filePaths,
                     codebasePath,
@@ -553,6 +557,7 @@ export class Context {
                     collectionName,
                     assertMutationCurrent,
                     indexPolicy,
+                    resourcePlan,
                 )
             ),
             refreshRuntimePolicyAuthority: (canonicalRoot) => this.refreshRuntimePolicyAuthority(canonicalRoot),
@@ -602,6 +607,9 @@ export class Context {
         this.indexingPipeline = new IndexingPipeline({
             getVectorDatabase: () => this.vectorDatabase,
             languageAnalyzer: this.languageAnalyzer,
+            createIndexingAnalyzer: config.languageAnalyzer ? undefined : (plan) => createParallelLanguageAnalysisService({
+                chunkSize: 2500, chunkOverlap: 300,
+            }, plan.analysisWorkers),
             semanticAnalyzer,
             getEmbedding: () => this.embedding,
             assertEmbeddingIdentityCurrent: () => this.assertEmbeddingIdentityCurrent(),
@@ -1328,7 +1336,7 @@ export class Context {
 
     async clearIndex(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        progressCallback?: (progress: IndexingProgress) => void,
     ): Promise<void> {
         return this.rootMutationRuntime.run(codebasePath, 'clear', async () => {
             const lease = getCurrentRootMutationLease(this.rootMutationRuntime, codebasePath);
@@ -1627,9 +1635,11 @@ export class Context {
         collectionName: string,
         assertMutationCurrent?: () => void,
         indexPolicy?: ResolvedIndexPolicy,
+        resourcePlan?: IndexingResourcePlan,
     ): Promise<ProcessedFileList> {
         return this.indexingPipeline.processFileList({
             filePaths,
+            resourcePlan,
             codebasePath,
             collectionName,
             ...(onFileProcessed ? { onFileProcessed } : {}),
@@ -1700,7 +1710,7 @@ export class Context {
 
     public async indexCodebase(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        progressCallback?: (progress: IndexingProgress) => void,
         forceReindex: boolean = false,
         options: MutationGuardOptions = {},
     ): Promise<IndexCodebaseResult> {
@@ -1724,7 +1734,7 @@ export class Context {
 
     public async reindexByChange(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        progressCallback?: (progress: IndexingProgress) => void,
         options: ReindexByChangeOptions = {}
     ): Promise<ReindexByChangeResult> {
         return this.rootMutationRuntime.run(codebasePath, 'sync', async () => {

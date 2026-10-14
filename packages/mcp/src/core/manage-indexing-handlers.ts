@@ -308,6 +308,7 @@ export class ManageIndexingHandlers {
                         current: percentage,
                         total: 100,
                         percentage,
+                        memoryBudget: progress.memoryBudget,
                     });
                 },
                 onNoProgress: () => {

@@ -159,6 +159,7 @@ async function main(): Promise<void> {
                         workerRuntime.progress({
                             phase: progressPhase(nextProgress),
                             progress: nextProgress,
+                            memoryBudget: progress.memoryBudget,
                         });
                     },
                     input.forceReindex,

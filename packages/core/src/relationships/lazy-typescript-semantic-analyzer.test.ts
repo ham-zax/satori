@@ -11,6 +11,53 @@ import type { ResolutionProjectInput } from './resolution';
 import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols/contracts';
 import { buildSymbolRegistry } from '../symbols/registry';
 import { TypeScriptSemanticProjectAnalyzer } from './typescript-semantic-analyzer';
+import { IndexingResourcePlanner } from '../indexing/resources';
+
+test('a parallel full-index failure drains other project jobs and keeps failure precedence', { timeout: 30_000 }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-parallel-failure-'));
+    for (const project of ['one', 'two']) {
+        fs.mkdirSync(path.join(root, project));
+        fs.writeFileSync(path.join(root, project, 'tsconfig.json'), JSON.stringify({ include: ['*.ts'] }));
+        fs.writeFileSync(path.join(root, project, 'a.ts'), 'export const a = 1;');
+    }
+    const resourcePlan = new IndexingResourcePlanner({
+        platform: () => 'darwin', readFile: () => { throw new Error('no proc'); },
+        totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+    const analyzer = new LazyTypeScriptSemanticProjectAnalyzer();
+    const original = Worker.prototype.postMessage;
+    const jobs: Worker[] = [];
+    let started!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { started = resolve; });
+    let secondId = 0;
+    Worker.prototype.postMessage = function (message, ...args) {
+        if (message.method === 'analyze') {
+            jobs.push(this);
+            if (jobs.length === 1) this.emit('message', { id: message.id, ok: false, error: 'first project failed' });
+            else { secondId = message.id; started(); }
+            return;
+        }
+        return original.call(this, message, ...args);
+    };
+    try {
+        let settled = false;
+        const operation = analyzer.analyze({ ...inputFor(root, ['one/a.ts', 'two/a.ts']), resourcePlan });
+        operation.then(() => { settled = true; }, () => { settled = true; });
+        const rejection = assert.rejects(operation, /first project failed/);
+        await bothStarted;
+        assert.ok(jobs.every((worker) => worker.threadId !== -1), 'plan concurrency was ignored');
+        assert.equal(settled, false, 'returned while the second project was in flight');
+        jobs[1].emit('message', { id: secondId, ok: false, error: 'second project failed' });
+        await rejection;
+        assert.ok(jobs.every((worker) => worker.threadId === -1), 'returned before project workers exited');
+    } finally {
+        Worker.prototype.postMessage = original;
+        await analyzer.dispose();
+        // Also drain explicitly recorded handles if a cleanup mutation fails.
+        await Promise.all(jobs.map((worker) => worker.terminate()));
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
 
 function inputFor(root: string, files: readonly string[]): ResolutionProjectInput {
     return {

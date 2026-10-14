@@ -30,3 +30,6 @@ export type {
     ProvenSourceFreshnessCheckpointEvidence,
     SourceFreshnessPathComparison,
 } from './sync/synchronizer';
+
+export type { IndexingMemoryStatus } from './indexing/resources';
+export { isIndexingMemoryStatus } from './indexing/resources';

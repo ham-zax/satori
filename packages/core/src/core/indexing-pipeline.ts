@@ -42,14 +42,13 @@ import type {
     VectorDatabase,
 } from '../vectordb';
 import { envManager } from '../utils/env-manager';
+import type { IndexingResourcePlan } from '../indexing/resources';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { withSourceVocabulary } from '../vocabulary/extract';
 import { resolveRepositoryVocabularyIndexingEnabled } from '../vocabulary/config';
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
-/** Embedding text queued ahead of the embedder before the file loop waits for it. */
-const MAX_QUEUED_EMBEDDING_TEXT_BYTES = 64 * 1024 * 1024;
 const INDEX_CHUNK_LIMIT = 450_000;
 export const MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION = 512 * 1024 * 1024;
 
@@ -144,6 +143,7 @@ interface PendingIndexedChunk extends ProjectedChunkEntry {
 type IndexingPipelineConfig = Readonly<{
     getVectorDatabase: () => VectorDatabase;
     languageAnalyzer: LanguageAnalysisPort;
+    createIndexingAnalyzer?: (plan: IndexingResourcePlan) => LanguageAnalysisPort;
     semanticAnalyzer?: SemanticProjectAnalyzer;
     semanticLanguageRegistry?: SemanticLanguageRegistry;
     getEmbedding: () => Embedding;
@@ -217,6 +217,7 @@ function chunksWithResolvedOwners(
 export class IndexingPipeline {
     private readonly getVectorDatabase: () => VectorDatabase;
     private readonly languageAnalyzer: LanguageAnalysisPort;
+    private readonly createIndexingAnalyzer?: IndexingPipelineConfig['createIndexingAnalyzer'];
     private readonly semanticAnalyzer?: SemanticProjectAnalyzer;
     private readonly semanticLanguageRegistry: SemanticLanguageRegistry;
     private readonly getEmbedding: () => Embedding;
@@ -236,6 +237,7 @@ export class IndexingPipeline {
     constructor(config: IndexingPipelineConfig) {
         this.getVectorDatabase = config.getVectorDatabase;
         this.languageAnalyzer = config.languageAnalyzer;
+        this.createIndexingAnalyzer = config.createIndexingAnalyzer;
         this.semanticAnalyzer = config.semanticAnalyzer;
         this.semanticLanguageRegistry = config.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
         this.getEmbedding = config.getEmbedding;
@@ -386,6 +388,7 @@ export class IndexingPipeline {
         filePath: string,
         codebasePath: string,
         indexPolicy?: IndexingPolicy,
+        languageAnalyzer = this.languageAnalyzer,
     ): Promise<AnalyzedIndexedFile | null> {
         const sourceObservation = await this.readIndexableFileObservationInsideRoot(
             filePath,
@@ -403,7 +406,7 @@ export class IndexingPipeline {
         }
         const source = sourceObservation.content;
         const language = detectLanguageId(filePath, source);
-        const analysis = await this.languageAnalyzer.analyze({
+        const analysis = await languageAnalyzer.analyze({
             content: source,
             language,
             relativePath,
@@ -477,14 +480,30 @@ export class IndexingPipeline {
         ) => void;
         assertMutationCurrent?: () => void;
         indexPolicy?: IndexingPolicy;
+        resourcePlan?: IndexingResourcePlan;
     }): Promise<ProcessedFileList> {
+        const analyzer = input.resourcePlan && this.createIndexingAnalyzer
+            ? this.createIndexingAnalyzer(input.resourcePlan) : this.languageAnalyzer;
+        try {
+            return await this.processFileListWithAnalyzer(input, analyzer);
+        } finally {
+            // Each operation owns its pool. Await exit before returning or throwing,
+            // including failed/limited file loops; shared custom ports keep their owner.
+            if (analyzer !== this.languageAnalyzer) await analyzer.dispose?.();
+        }
+    }
+
+    private async processFileListWithAnalyzer(
+        input: Parameters<IndexingPipeline['processFileList']>[0],
+        languageAnalyzer: LanguageAnalysisPort,
+    ): Promise<ProcessedFileList> {
         const isHybrid = this.isHybridEnabled();
         const embedding = this.getEmbedding();
         const batchPolicy = embedding.getBatchPolicy?.() ?? null;
         const embeddingBatchSize = resolveEmbeddingBatchSize(
             envManager.get('EMBEDDING_BATCH_SIZE'),
             batchPolicy?.preferredMaxItems ?? DEFAULT_EMBEDDING_BATCH_SIZE,
-            batchPolicy?.hardMaxItems ?? MAX_EMBEDDING_BATCH_SIZE,
+            Math.min(batchPolicy?.hardMaxItems ?? MAX_EMBEDDING_BATCH_SIZE, input.resourcePlan?.embeddingBatchMaxItems ?? MAX_EMBEDDING_BATCH_SIZE),
         );
         const targetEstimatedTokens = batchPolicy?.targetEstimatedTokens;
         const hardTokenLimit = batchPolicy?.hardTokenLimit;
@@ -504,6 +523,7 @@ export class IndexingPipeline {
                 );
             }
         }
+        const vectorWriteMaxRows = Math.min(writeAggregationPolicy?.preferredMaxRows ?? 256, input.resourcePlan?.vectorWriteMaxRows ?? 256);
         let pendingVectorWrites: IndexedVectorDocument[] = [];
         let chunkBuffer: PendingIndexedChunk[] = [];
         let chunkBufferEstimatedTokens = 0;
@@ -542,8 +562,8 @@ export class IndexingPipeline {
                 );
                 pendingVectorWrites.push(...documents);
                 if (writeAggregationPolicy) {
-                    while (pendingVectorWrites.length >= writeAggregationPolicy.preferredMaxRows) {
-                        const batch = pendingVectorWrites.splice(0, writeAggregationPolicy.preferredMaxRows);
+                    while (pendingVectorWrites.length >= vectorWriteMaxRows) {
+                        const batch = pendingVectorWrites.splice(0, vectorWriteMaxRows);
                         await this.flushVectorWriteBuffer(
                             input.collectionName,
                             batch,
@@ -577,7 +597,7 @@ export class IndexingPipeline {
             if (payloadError) throw payloadError;
             if (chunkBuffer.length === 0) return;
             const chunks = chunkBuffer;
-            const chunkBytes = chunks.reduce((sum, entry) => sum + entry.projections.embeddingText.length, 0);
+            const chunkBytes = chunks.reduce((sum, entry) => sum + Buffer.byteLength(entry.projections.embeddingText, 'utf8'), 0);
             chunkBuffer = [];
             chunkBufferEstimatedTokens = 0;
             queuedPayloadBytes += chunkBytes;
@@ -590,7 +610,7 @@ export class IndexingPipeline {
                     queuedPayloadBytes -= chunkBytes;
                 }
             });
-            if (queuedPayloadBytes > MAX_QUEUED_EMBEDDING_TEXT_BYTES) await payloadChain;
+            if (queuedPayloadBytes > (input.resourcePlan?.queuedEmbeddingTextBytes ?? 64 * 1024 * 1024)) await payloadChain;
             if (payloadError) throw payloadError;
         };
 
@@ -604,7 +624,7 @@ export class IndexingPipeline {
         // Files are read and analyzed ahead of consumption, up to twice the
         // analyzer's concurrency, and consumed in path order: output is the same
         // as analyzing one file at a time.
-        const analysisWindow = Math.max(1, this.languageAnalyzer.concurrency ?? 1) * 2;
+        const analysisWindow = Math.min(Math.max(1, languageAnalyzer.concurrency ?? 1) * 2, input.resourcePlan?.analysisWindowFiles ?? Infinity);
         const pendingAnalyses = new Map<number, Promise<AnalyzedIndexedFile | null>>();
         let nextAnalysisIndex = 0;
         const scheduleAnalyses = (consumingIndex: number) => {
@@ -616,6 +636,7 @@ export class IndexingPipeline {
                     input.filePaths[nextAnalysisIndex],
                     input.codebasePath,
                     input.indexPolicy,
+                    languageAnalyzer,
                 );
                 // Observed when consumed; an early stop leaves later ones unread.
                 analysis.catch(() => undefined);
@@ -739,7 +760,7 @@ export class IndexingPipeline {
         }
         // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
         // for the pool here); free them before navigation starts its own workers.
-        this.languageAnalyzer.releaseIdleWorkers?.();
+        if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();
 
         if (chunkBuffer.length > 0) {
             const searchType = isHybrid ? 'hybrid' : 'regular';

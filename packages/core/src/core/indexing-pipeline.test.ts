@@ -11,6 +11,8 @@ import type { SemanticProjectAnalyzer, SemanticProjectInput, SemanticProjectEvid
 import type { VectorDatabase } from '../vectordb/types';
 import type { Embedding } from '../embedding';
 import { buildSymbolRecordsForFile } from '../symbols/registry';
+import { IndexingResourcePlanner } from '../indexing/resources';
+import { createParallelLanguageAnalysisService } from '../language-analysis';
 
 function createMockVectorDb(): VectorDatabase {
     return {
@@ -50,9 +52,24 @@ import type { RepositoryRelativePath } from '../paths/repository-path';
 
 test('IndexingPipeline has no full-source semantic retention channel when semantic analyzer supports no languages', async () => {
     const languageAnalyzer = createLanguageAnalysisService();
+    const resourcePlan = new IndexingResourcePlanner({
+        platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory observation'); },
+        totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+    let received = false;
+    let disposed = false;
     const pipeline = new IndexingPipeline({
         getVectorDatabase: () => createMockVectorDb(),
         languageAnalyzer,
+        createIndexingAnalyzer: (plan) => {
+            assert.equal(plan, resourcePlan);
+            received = true;
+            const pool = createParallelLanguageAnalysisService({}, plan.analysisWorkers);
+            assert.equal(pool.concurrency, plan.analysisWorkers);
+            const dispose = pool.dispose.bind(pool);
+            pool.dispose = async () => { await dispose(); disposed = true; };
+            return pool;
+        },
         semanticAnalyzer: noopSemanticProjectAnalyzer,
         getEmbedding: () => createMockEmbedding(),
         assertEmbeddingIdentityCurrent: () => ({
@@ -76,10 +93,13 @@ test('IndexingPipeline has no full-source semantic retention channel when semant
         filePaths: [],
         codebasePath: '/repo',
         collectionName: 'test_col',
+        resourcePlan,
     });
 
     assert.equal(result.processedFiles, 0);
     assert.equal('semanticSources' in result, false);
+    assert.equal(received, true);
+    assert.equal(disposed, true, 'operation pool must exit before the pipeline settles');
 });
 
 
@@ -313,4 +333,69 @@ test('IndexingPipeline vocabulary is default-off and preserves legacy symbol byt
     assert.ok(optedIn.buildAnalyzedFileSymbolFacts(analyzed).symbolRecords.some(symbol => symbol.vocabulary));
     assert.equal(forcedOff.isRepositoryVocabularyIndexingEnabled(), false);
     assert.equal(JSON.stringify(forcedOff.buildAnalyzedFileSymbolFacts(analyzed).symbolRecords), JSON.stringify(legacy));
+});
+
+test('operation plan bounds analysis read-ahead, queued text, embedding batches and vector writes', { timeout: 10_000 }, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pipeline-budget-'));
+    const local = createLanguageAnalysisService();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void;
+    const embeddingStarted = new Promise<void>(resolve => { started = resolve; });
+    let analyses = 0;
+    const batchSizes: number[] = [];
+    const writeSizes: number[] = [];
+    const embedding = createMockEmbedding();
+    const embed = embedding.embedDocuments.bind(embedding);
+    embedding.embedDocuments = async texts => {
+        batchSizes.push(texts.length);
+        started();
+        await gate;
+        return embed(texts);
+    };
+    const database = createMockVectorDb();
+    database.getWriteAggregationPolicy = () => ({ preferredMaxRows: 256 });
+    database.writeDocuments = async (_collection, documents) => { writeSizes.push(documents.length); };
+    const base = new IndexingResourcePlanner({
+        platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+        totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+    const resourcePlan = Object.freeze({ ...base, analysisWindowFiles: 1, queuedEmbeddingTextBytes: 1,
+        embeddingBatchMaxItems: 2, vectorWriteMaxRows: 2 });
+    const pipeline = new IndexingPipeline({
+        getVectorDatabase: () => database,
+        languageAnalyzer: { ...local, concurrency: 16, analyze: input => { analyses++; return local.analyze(input); } },
+        semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: () => embedding,
+        assertEmbeddingIdentityCurrent: () => embedding.getIdentity(),
+        isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (base, p) => path.relative(base, p) as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'extractor-v1',
+    });
+    const filePaths = Array.from({ length: 12 }, (_, index) => {
+        const file = path.join(root, `${index}.ts`);
+        fs.writeFileSync(file, `export const value${index} = ${index};\n`);
+        return file;
+    });
+    const operation = pipeline.processFileList({ filePaths, codebasePath: root, collectionName: 'fixture', resourcePlan });
+    operation.catch(() => undefined);
+    try {
+        await embeddingStarted;
+        assert.equal(analyses, 1, 'queued text must block the file loop and plan must bound read-ahead');
+        release();
+        const result = await operation;
+        await result.payloadSettled;
+        assert.equal(result.processedFiles, 12);
+        assert.ok(batchSizes.length > 0);
+        assert.ok(batchSizes.every(size => size === 2));
+        assert.equal(batchSizes.reduce((sum, size) => sum + size, 0), result.totalChunks);
+        assert.ok(writeSizes.length > 0);
+        assert.ok(writeSizes.every(size => size === 2));
+        assert.equal(writeSizes.reduce((sum, size) => sum + size, 0), result.totalChunks);
+    } finally {
+        release();
+        await operation.catch(() => undefined);
+        await local.dispose?.();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

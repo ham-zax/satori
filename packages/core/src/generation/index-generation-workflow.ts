@@ -1,3 +1,4 @@
+import { IndexingResourcePlanner, type IndexingResourcePlan, type IndexingMemoryStatus, type IndexingProgress } from '../indexing/resources';
 /**
  * Phase 4.5 — Core index generation workflow.
  *
@@ -178,6 +179,8 @@ const NAVIGATION_DELTA_STATE_IDLE_MS = 2 * 60_000;
 
 // ---- Narrow dependency ports ----
 export interface IndexGenerationWorkflowPorts {
+    indexingResourcePlanner?: Pick<IndexingResourcePlanner, 'createPlan'>;
+    recordIndexingMemoryBudget?: (root: string, status: IndexingMemoryStatus) => void;
     isRepositoryVocabularyIndexingEnabled?: () => boolean;
     activatePublication(publication: Publication, lease: RootMutationLease): PublicationRef;
     reserveIndexCandidate(
@@ -276,6 +279,7 @@ export interface IndexGenerationWorkflowPorts {
             collectionName: string,
             assertMutationCurrent?: () => void,
             indexPolicy?: ResolvedIndexPolicy,
+            resourcePlan?: IndexingResourcePlan,
         ): Promise<ProcessedFileList>;
     refreshRuntimePolicyAuthority(canonicalRoot: string): void;
     resolveCollectionName(codebasePath: string): string;
@@ -395,6 +399,7 @@ export class IndexGenerationWorkflow {
         indexPolicy?: ResolvedIndexPolicy,
         capturedSources?: readonly IndexedSourceFileObservation[],
         onRelationshipProgress?: (progress: RelationshipResolutionProgress) => void,
+        resourcePlan?: IndexingResourcePlan,
     ): Promise<StagedPublicationNavigation | undefined> {
         if (indexPolicy) {
             this.ports.assertResolvedIndexPolicyRoot(codebasePath, indexPolicy);
@@ -554,6 +559,7 @@ export class IndexGenerationWorkflow {
                         rootPath: canonicalRoot,
                         language,
                         registry,
+                        resourcePlan,
                     }), { language, files: sourceFileCount });
                     resolutionEvidenceByLanguage.set(language, evidence);
                     const coverage = evidence.coverage ?? {
@@ -703,9 +709,16 @@ export class IndexGenerationWorkflow {
 
     async indexCodebase(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        progressCallback?: (progress: IndexingProgress) => void,
         options: MutationGuardOptions = {},
+        suppliedResourcePlan?: IndexingResourcePlan,
     ): Promise<IndexCodebaseResult> {
+        const resourcePlan = suppliedResourcePlan ?? (this.ports.indexingResourcePlanner ?? new IndexingResourcePlanner()).createPlan();
+        const originalProgress = progressCallback;
+        progressCallback = (progress) => originalProgress?.({ ...progress, memoryBudget: resourcePlan.memoryBudget });
+        const { memoryBudget: resourceStatus, ...resourceValues } = resourcePlan;
+        perfTrace('index.resource_plan', 0, resourceValues);
+        console.log(`[IndexResources] ${resourceStatus.hint}`);
         const operationStartedAt = Date.now();
         const embeddingMetricsBefore = this.ports.embedding.getOperationMetricsSnapshot?.() ?? null;
         const vectorWriteMetricsBefore = this.ports.vectorDatabase.getWriteMetricsSnapshot?.() ?? null;
@@ -727,6 +740,7 @@ export class IndexGenerationWorkflow {
         if (mutationLease.canonicalRoot !== canonicalRoot) {
             throw new Error(`Full candidate mutation lease does not own '${canonicalRoot}'.`);
         }
+        this.ports.recordIndexingMemoryBudget?.(canonicalRoot, resourcePlan.memoryBudget);
         const publicationId = mutationLease.operationId;
         const isHybrid = this.ports.getIsHybrid();
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
@@ -808,6 +822,7 @@ export class IndexGenerationWorkflow {
                 writeCollectionName,
                 options.assertMutationCurrent,
                 indexPolicy,
+                resourcePlan,
             );
             // Analysis is complete here; embedding and vector writes may still be
             // draining. Navigation below needs only the analysis, so it runs
@@ -877,6 +892,7 @@ export class IndexGenerationWorkflow {
                     indexPolicy,
                     result.sourceFiles,
                     (progress) => progressCallback?.(relationshipIndexingProgress(progress)),
+                    resourcePlan,
                 );
                 navigationMs = Date.now() - navigationStartedAt;
                 await payloadDrain;
@@ -1182,7 +1198,8 @@ export class IndexGenerationWorkflow {
         resolutionSourceControls: ReadonlySet<string>;
         packageOwnershipSourceControls: ReadonlySet<string>;
         options: ReindexByChangeOptions;
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void;
+        progressCallback?: (progress: IndexingProgress) => void;
+        resourcePlan: IndexingResourcePlan;
     }): Promise<ReindexByChangeResult> {
         const measurePublicationPhase = async <T>(
             phase:
@@ -1354,6 +1371,8 @@ export class IndexGenerationWorkflow {
                             },
                             candidateCollectionName,
                             input.options.assertMutationCurrent,
+                            input.sealedPolicy,
+                            input.resourcePlan,
                         ).then(async (processed) => {
                             await processed.payloadSettled;
                             return processed;
@@ -1401,6 +1420,7 @@ export class IndexGenerationWorkflow {
                     reusableNavigationState,
                     input.options.onPhaseTiming,
                     (progress) => input.progressCallback?.(relationshipIndexingProgress(progress)),
+                    input.resourcePlan,
                 ),
             ).then((result) => {
                 if (!result.candidate) {
@@ -1580,10 +1600,17 @@ export class IndexGenerationWorkflow {
 
     private async performReindexByChange(
         codebasePath: string,
-        progressCallback: ((progress: { phase: string; current: number; total: number; percentage: number }) => void) | undefined,
+        progressCallback: ((progress: IndexingProgress) => void) | undefined,
         options: ReindexByChangeOptions,
     ): Promise<ReindexByChangeResult> {
+        const resourcePlan = (this.ports.indexingResourcePlanner ?? new IndexingResourcePlanner()).createPlan();
+        const originalProgress = progressCallback;
+        progressCallback = (progress) => originalProgress?.({ ...progress, memoryBudget: resourcePlan.memoryBudget });
+        const { memoryBudget: resourceStatus, ...resourceValues } = resourcePlan;
+        perfTrace('index.resource_plan', 0, resourceValues);
+        console.log(`[IndexResources] ${resourceStatus.hint}`);
         const canonicalRoot = this.ports.canonicalizeCodebasePath(codebasePath);
+        this.ports.recordIndexingMemoryBudget?.(canonicalRoot, resourcePlan.memoryBudget);
         this.ports.refreshRuntimePolicyAuthority(canonicalRoot);
         const currentPublicationSource = this.ports.getCurrentPublicationSourceCheckpoint(canonicalRoot);
 
@@ -1597,7 +1624,7 @@ export class IndexGenerationWorkflow {
                 progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 });
                 return { added: 0, removed: 0, modified: 0, changedFiles: [] };
             }
-            const indexResult = await this.indexCodebase(codebasePath, progressCallback, options);
+            const indexResult = await this.indexCodebase(codebasePath, progressCallback, options, resourcePlan);
             return {
                 added: changedFiles.length,
                 removed: 0,
@@ -1737,6 +1764,7 @@ export class IndexGenerationWorkflow {
             packageOwnershipSourceControls: packageOwnershipControlSet,
             options,
             progressCallback,
+            resourcePlan,
         });
     }
 
@@ -1815,6 +1843,7 @@ export class IndexGenerationWorkflow {
         existingRelationshipState?: CachedNavigationDeltaState,
         onPhaseTiming?: ReindexByChangeOptions['onPhaseTiming'],
         onRelationshipProgress?: (progress: RelationshipResolutionProgress) => void,
+        resourcePlan?: IndexingResourcePlan,
     ): Promise<NavigationDeltaBuildResult> {
         const measurePhase = async <T>(
             phase:
@@ -2006,6 +2035,7 @@ export class IndexGenerationWorkflow {
                             registry,
                             previousRegistry: existingRegistry,
                             changedFiles: replacedPaths,
+                            resourcePlan,
                         }), { language, files: languageFiles.length });
                         resolutionEvidenceByLanguage.set(language, evidence);
                         const coverage = evidence.coverage ?? {
@@ -2113,7 +2143,7 @@ export class IndexGenerationWorkflow {
 
     async reindexByChange(
         codebasePath: string,
-        progressCallback?: (progress: { phase: string; current: number; total: number; percentage: number }) => void,
+        progressCallback?: (progress: IndexingProgress) => void,
         options: ReindexByChangeOptions = {}
     ): Promise<ReindexByChangeResult> {
         assertDescriptorBoundIndexingSupported();

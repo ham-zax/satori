@@ -11,6 +11,7 @@ import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typ
 import { TypeScriptSemanticProjectAnalyzer } from '../relationships/typescript-semantic-analyzer';
 import { readRelationshipSidecar, readSymbolRegistrySidecar } from '../symbols';
 import { LanceDbVectorDatabase } from '../vectordb/lancedb-vectordb';
+import type { IndexingResourcePlan } from '../indexing/resources';
 
 /**
  * Equivalence harness for changes that promise unchanged results. Each fixture
@@ -174,15 +175,62 @@ async function withContext<T>(
     tempRoot: string,
     run: (context: Context, database: LanceDbVectorDatabase, embedding: RecordingEmbedding) => Promise<T>,
     databasePath = fs.mkdtempSync(path.join(tempRoot, 'vectors-')),
+    resourcePlan?: IndexingResourcePlan,
 ): Promise<T> {
     const embedding = new RecordingEmbedding();
     const database = new LanceDbVectorDatabase({ databasePath });
-    const context = new Context({ embedding, vectorDatabase: database });
+    const context = new Context({ embedding, vectorDatabase: database,
+        indexingResourcePlanner: resourcePlan ? { createPlan: () => resourcePlan } : undefined });
     try {
         return await run(context, database, embedding);
     } finally {
         await context.dispose();
         await database.close();
+    }
+}
+
+/** Exercise the real stage boundaries and compare the existing complete publication oracle. */
+export async function assertResourcePlanEquivalence(files: Files, plans: readonly IndexingResourcePlan[]): Promise<void> {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-resource-equivalence-'));
+    const root = path.join(tempRoot, 'repo');
+    writeTree(root, files);
+    const originalPipeline = IndexingPipeline.prototype.processFileList;
+    const originalResolution = LazyTypeScriptSemanticProjectAnalyzer.prototype.analyze;
+    let expected: IndexingResourcePlan;
+    let pipelineCalls = 0;
+    let resolutionCalls = 0;
+    IndexingPipeline.prototype.processFileList = function (input) {
+        assert.equal(input.resourcePlan, expected, 'pipeline must receive the frozen operation plan');
+        pipelineCalls++;
+        return originalPipeline.call(this, input);
+    };
+    LazyTypeScriptSemanticProjectAnalyzer.prototype.analyze = function (input) {
+        assert.equal(input.resourcePlan, expected, 'resolution must receive the same operation plan');
+        resolutionCalls++;
+        return originalResolution.call(this, input);
+    };
+    try {
+        let baseline: unknown;
+        for (const plan of plans) {
+            expected = plan;
+            const result = await withContext(tempRoot, async (context, database, embedding) => {
+                await context.indexCodebase(root);
+                const full = await snapshotPublication(context, database, root);
+                fs.appendFileSync(path.join(root, 'loose.ts'), '\nexport const edited = 42;\n');
+                await context.reindexByChange(root);
+                const synced = await snapshotPublication(context, database, root);
+                writeTree(root, files);
+                return { full, synced, embeddedTexts: [...embedding.embeddedTexts].sort() };
+            }, undefined, plan);
+            if (baseline === undefined) baseline = result;
+            else assert.deepEqual(result, baseline, 'resource limits must not change published evidence or embedded text');
+        }
+        assert.equal(pipelineCalls, plans.length * 2);
+        assert.equal(resolutionCalls, plans.length * 2);
+    } finally {
+        IndexingPipeline.prototype.processFileList = originalPipeline;
+        LazyTypeScriptSemanticProjectAnalyzer.prototype.analyze = originalResolution;
+        fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 }
 

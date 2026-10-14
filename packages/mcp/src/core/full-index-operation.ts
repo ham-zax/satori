@@ -1,3 +1,4 @@
+import type { IndexingMemoryStatus, IndexingProgress } from '@satori-code/core';
 import {
     COLLECTION_LIMIT_MESSAGE,
     Context,
@@ -29,12 +30,7 @@ export type FullIndexCandidateRunner = (input: Readonly<{
     forceReindex: boolean;
     indexPolicy: ObservedResolvedIndexPolicy;
     deferPartialPublication: boolean;
-    onProgress: (progress: {
-        phase: string;
-        current: number;
-        total: number;
-        percentage: number;
-    }) => void;
+    onProgress: (progress: IndexingProgress) => void;
 }>) => Promise<FullIndexCandidateResult>;
 
 export interface FullIndexOperationHost {
@@ -127,7 +123,7 @@ export class FullIndexOperation {
 
         const publishBackgroundPhase = (
             phase: MutationOperationPhase,
-            update: { progress?: number; error?: string } = {},
+            update: { progress?: number; error?: string; memoryBudget?: IndexingMemoryStatus } = {},
         ): void => {
             this.host.mutationRuntime.updateCurrentOperation(absolutePath, phase, update);
         };
@@ -202,7 +198,7 @@ export class FullIndexOperation {
                 onProgress: (progress) => {
                     this.host.mutationRuntime.assertCurrent(absolutePath);
                     const publicProgress = Math.min(progress.percentage, 99);
-                    publishBackgroundPhase("writing", { progress: publicProgress });
+                    publishBackgroundPhase("writing", { progress: publicProgress, memoryBudget: progress.memoryBudget });
                 },
             });
             targetCollectionName = stats.collectionName;

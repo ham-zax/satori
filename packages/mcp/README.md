@@ -89,6 +89,18 @@ relevant state changes or a successful manual create/reindex supersedes them.
 The option defaults to off and has no effect on connected runtimes. File-change
 observation remains controlled by `MCP_ENABLE_WATCHER`.
 
+Full indexing and sync choose one memory resource plan from cgroup v2 headroom
+(including ancestors), Linux `MemAvailable`, or portable OS free memory. Set
+`SATORI_INDEX_MEMORY_BUDGET_MB` to a positive integer MiB to lower the planning
+budget; a value above available memory cannot raise it. Invalid values produce
+a diagnostic and use the derived budget. The plan leaves a host reserve and a
+20% GC/native burst reserve, scales compiler project and parser concurrency and
+payload queues, and reaches up to 3 compiler projects and 8 parser workers on
+large machines. `SATORI_ANALYSIS_WORKERS` retains precedence, including zero for
+in-process parsing. Progress and `manage_index status` expose the last run's
+`operation.memoryBudget` (`budgetMb`, `hint`), explaining reduced concurrency.
+This is planning guidance; a single large project or native stage can still OOM.
+
 Semantic relationship analysis is resource-bounded independently from search.
 WASM-backed languages skip sources over 1 MiB rather than duplicating them into
 linear memory. TypeScript compiler-backed analysis defaults to 4 MiB per source

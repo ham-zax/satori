@@ -1,3 +1,4 @@
+import type { IndexingMemoryStatus } from '../indexing/resources';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
     MutationLeaseCoordinator,
@@ -48,7 +49,7 @@ export type RootMutationExecution = Readonly<{
     heartbeat(): RootMutationOperation;
     update(
         phase: MutationOperationPhase,
-        update?: { progress?: number; error?: string },
+        update?: { progress?: number; error?: string; memoryBudget?: IndexingMemoryStatus },
     ): RootMutationOperation;
     bindExecutor(executor: RootMutationExecutor): RootMutationActivity;
 }>;
@@ -331,10 +332,16 @@ export class RootMutationRuntime {
         return activityFromLease(requireCoordinator(this).bindExecutor(lease, executor));
     }
 
+    recordIndexingMemoryBudget(root: string, memoryBudget: IndexingMemoryStatus): void {
+        const operation = this.getCurrentOperation(root);
+        if (!operation) throw new Error('Indexing memory status requires an active operation.');
+        this.updateCurrentOperation(root, operation.phase, { memoryBudget });
+    }
+
     updateCurrentOperation(
         root: string,
         phase: MutationOperationPhase,
-        update: { progress?: number; error?: string } = {},
+        update: { progress?: number; error?: string; memoryBudget?: IndexingMemoryStatus } = {},
     ): RootMutationOperation {
         const lease = requireCurrentLeaseForRoot(this, root);
         return requireCoordinator(this).updateOperation(lease, phase, update);
@@ -374,7 +381,7 @@ function createOperationControl(runtime: RootMutationRuntime, lease: RootMutatio
         heartbeat: () => requireCoordinator(runtime).heartbeatOperation(lease),
         update: (
             phase: MutationOperationPhase,
-            update: { progress?: number; error?: string } = {},
+            update: { progress?: number; error?: string; memoryBudget?: IndexingMemoryStatus } = {},
         ) => requireCoordinator(runtime).updateOperation(lease, phase, update),
         bindExecutor: (executor: RootMutationExecutor) => (
             activityFromLease(requireCoordinator(runtime).bindExecutor(lease, executor))

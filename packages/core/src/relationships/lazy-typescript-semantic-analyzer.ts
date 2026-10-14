@@ -14,9 +14,6 @@ import { mergeTypeScriptShardEvidence, type TypeScriptShardEvidence } from './ty
 
 /** TypeScript projects are analyzed on this many worker threads at most. */
 const MAX_TYPESCRIPT_RESOLUTION_SHARDS = 3;
-// Full indexing owns one complete compiler project until its isolate exits.
-// A later memory-admission owner can change this single internal limit.
-const FULL_INDEX_PROJECT_CONCURRENCY = 1;
 
 type ProjectJobEvidence = TypeScriptShardEvidence & { readonly state?: string };
 
@@ -181,7 +178,8 @@ class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
                     ? await this.analyzeFullIndex(input)
                     : await this.analyzeWarm(input);
             } catch (error) {
-                await Promise.all(this.shards.map((shard) => shard.releaseWorker()));
+                await Promise.all([...this.shards, ...this.activeJobs].map((shard) => shard.releaseWorker()));
+                this.activeJobs.clear();
                 throw error;
             }
         });
@@ -195,23 +193,31 @@ class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
         const jobs = await this.shards[0].getProjectJobs(input, this.shards.length);
         // An empty input still gets the established empty-provider evidence.
         const keys: readonly (string | undefined)[] = jobs.length ? jobs.map((job) => job.key) : [undefined];
-        const settled: PromiseSettledResult<ProjectJobEvidence>[] = [];
-        for (let offset = 0; offset < keys.length; offset += FULL_INDEX_PROJECT_CONCURRENCY) {
-            if (this.disposed) throw new Error('TypeScript resolution analyzer was disposed.');
-            const batch = keys.slice(offset, offset + FULL_INDEX_PROJECT_CONCURRENCY);
-            settled.push(...await Promise.allSettled(batch.map(async (key) => {
-                const worker = new WorkerTypeScriptResolutionAnalyzer(1, undefined, undefined, key);
+        const settled: PromiseSettledResult<ProjectJobEvidence>[] = new Array(keys.length);
+        const concurrency = input.resourcePlan?.typescriptProjectConcurrency ?? 1;
+        let nextIndex = 0;
+        const runLane = async () => {
+            while (nextIndex < keys.length && !this.disposed) {
+                const index = nextIndex++;
+                const worker = new WorkerTypeScriptResolutionAnalyzer(1, undefined, undefined, keys[index]);
                 this.activeJobs.add(worker);
                 try {
-                    return await worker.analyzeShard(input);
+                    const value = await worker.analyzeShard(input);
+                    settled[index] = { status: 'fulfilled', value };
+                } catch (reason) {
+                    settled[index] = { status: 'rejected', reason };
                 } finally {
-                    // Structured-cloned evidence has no compiler objects. Exit,
-                    // rather than session eviction/GC, releases the entire isolate.
+                    // A slot is reused only after its isolate exits. Continuous
+                    // lanes avoid a slow project holding up all later projects.
                     await worker.dispose();
                     this.activeJobs.delete(worker);
                 }
-            })));
-        }
+            }
+        };
+        const lanes = await Promise.allSettled(Array.from({ length: Math.min(keys.length, concurrency) }, runLane));
+        const laneFailure = lanes.find((lane): lane is PromiseRejectedResult => lane.status === 'rejected');
+        if (laneFailure) throw laneFailure.reason;
+        if (this.disposed) throw new Error('TypeScript resolution analyzer was disposed.');
         // Jobs are ordered by their legacy shard, then plan order: thrown
         // failures keep the old shard precedence; resource failures use phase rank.
         const terminalByShard = new Map<number, { rank: readonly number[]; result: PromiseSettledResult<ProjectJobEvidence> }>();

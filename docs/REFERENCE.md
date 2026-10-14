@@ -523,7 +523,7 @@ keep working as `use lateon` and `use none`.
 | Choice | Pick it when | Cost |
 |---|---|---|
 | `lateon` | Code must stay on the machine, or you have no API key. | Free. Runs on the local CPU, so it is the slowest per search. Linux x64/WSL2, offline runtime only. |
-| `voyage` | You want the best ranking and the fastest reranked search, and sending code excerpts to Voyage is acceptable. | Billed by Voyage per search. Needs the network and `VOYAGEAI_API_KEY`. |
+| `voyage` | You want the best ranking and the fastest reranked search, and sending code excerpts to Voyage is acceptable. | 200 million free tokens per model on each Voyage account, about 8,000 searches. Needs the network and `VOYAGEAI_API_KEY`. |
 | `none` | You want the fastest search and can accept retrieval order. | Free. No reranking. |
 
 Measured on 28 plain-English questions over React (9), Polars (9), and
@@ -581,8 +581,8 @@ Voyage they print:
 Online: search queries and code excerpts are sent to Voyage.
 ```
 
-With Voyage, each search sends the query and candidate code excerpts to Voyage,
-which bills for them. Embeddings and the vector store are not affected.
+With Voyage, each search sends the query and candidate code excerpts to Voyage
+AI, a MongoDB company. Each account gets 200 million free tokens per model. Embeddings and the vector store are not affected.
 
 If Voyage rejects a rerank during search, results are returned in retrieval
 order. The response reports `RERANKER_FAILED`, with the model, the HTTP status,

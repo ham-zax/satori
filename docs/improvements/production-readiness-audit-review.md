@@ -15,8 +15,8 @@ Result: no P0 or P1 issue. The three blockers are either out of date or not repr
 
 | ID | Priority | Status | Finding | Evidence |
 |---|---|---|---|---|
-| F-009 | P2 | Confirmed | `logConfigurationSummary()` logs `MILVUS_ADDRESS` and `GEMINI_BASE_URL` without redaction; `OPENAI_BASE_URL` is redacted. Credentials in those URLs reach the startup log. | `packages/mcp/src/config.ts:559`, `:584`; redaction at `:567-575` |
-| F-006 | P2 | Confirmed | The npm tarballs ship compiled tests: 212 test files in core, 50 in cli. The `files` globs `dist/**/*.js` and `dist/**/*.d.ts` include them. | `npm pack --dry-run` in `packages/core` and `packages/cli` |
+| F-009 | P2 | Fixed in `6782b807` | `logConfigurationSummary()` logs `MILVUS_ADDRESS` and `GEMINI_BASE_URL` without redaction; `OPENAI_BASE_URL` is redacted. Credentials in those URLs reach the startup log. | `packages/mcp/src/config.ts:559`, `:584`; redaction at `:567-575` |
+| F-006 | P2 | Fixed in `ad77f536` | The npm tarballs ship compiled tests: 212 test files in core, 278 in mcp, 50 in cli. The `files` globs `dist/**/*.js` and `dist/**/*.d.ts` include them. | `npm pack --dry-run` in `packages/core` and `packages/cli` |
 | F-004 | P3 | Confirmed | Dev scripts still require synchronous `syncStats` from `manage_index sync`, which is now a supervised background operation. | `scripts/satori-live-latency-benchmark.mjs:303-306`, `scripts/satori-useful-context-record.mjs:927-930` |
 | F-005a | P3 | Confirmed | `.env.example` lists removed Ollama settings and `SPLITTER_TYPE=ast`, and line 5 says `cp env.example`. | `.env.example:5`, `:61-64`, `:82`; `EmbeddingProvider` in `packages/mcp/src/config.ts:31` |
 | F-007 | P3 | Partly confirmed | `.vscode/launch.json` and `settings.json` refer to the removed `packages/vscode-extension`; root `package.json` keeps browserify polyfills. The `.omc` part is out of date (untracked in `6cc01f0e`). | `.vscode/launch.json:13-16`, `.vscode/settings.json:18`, `package.json:64-74` |
@@ -33,5 +33,5 @@ Result: no P0 or P1 issue. The three blockers are either out of date or not repr
 
 ## Decision
 
-The NO-GO depended on F-001 to F-003; none holds at `5186f4f4`. F-009 and F-006 should be fixed before the
-next npm publish. The P3 items do not affect users.
+The NO-GO depended on F-001 to F-003; none holds at `5186f4f4`. F-009 and F-006 are fixed
+(`6782b807`, `ad77f536`). The P3 items do not affect users.

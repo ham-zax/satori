@@ -73,6 +73,11 @@ function listManagedLauncherProcessesDefault(
         if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
         const pid = Number(entry.name);
         if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) continue;
+        try {
+            if (fs.statSync(`/proc/${pid}`).uid !== process.getuid?.()) continue;
+        } catch {
+            continue;
+        }
         const argv = readLinuxCommandLine(pid);
         if (argv.length === 0) continue;
         const title = argv[0];
@@ -86,10 +91,11 @@ function listManagedLauncherProcessesDefault(
             }
             continue;
         }
-        if (argv.some((argument) => (
-            path.isAbsolute(argument)
-            && path.resolve(argument) === resolvedLauncherPath
-        ))) {
+        // Client configs invoke node with the launcher as its script, never as data.
+        if (argv[0] === resolvedLauncherPath || (
+            (argv[0] === process.execPath || ["node", "nodejs"].includes(path.basename(argv[0])))
+            && argv[1] === resolvedLauncherPath
+        )) {
             pids.push(pid);
         }
     }

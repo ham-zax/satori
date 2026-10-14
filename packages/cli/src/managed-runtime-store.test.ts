@@ -3,11 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { buildLauncherScript } from "./managed-launcher-script.mjs";
 import {
     acquireManagedRuntimeMutationLock,
+    acquireManagedRuntimeLeaseLock,
     pruneManagedRuntimeStore,
 } from "./managed-runtime-store.js";
 
@@ -397,5 +399,153 @@ test("managed runtime mutation lock recovers a stale process owner", async () =>
         assert.equal(fs.existsSync(lockPath), true);
         release();
         assert.equal(fs.existsSync(lockPath), false);
+    });
+});
+
+
+test("runtime store lock release preserves another writer's replacement lock", async () => {
+    await withTempHome((homeDir) => {
+        for (const [acquire, filename] of [
+            [acquireManagedRuntimeMutationLock, ".mutation.lock"],
+            [acquireManagedRuntimeLeaseLock, ".leases.lock"],
+        ] as const) {
+            const release = acquire({ homeDir });
+            const lockPath = path.join(homeDir, ".satori", "mcp-runtime", filename);
+            fs.renameSync(lockPath, `${lockPath}.previous`);
+            const replacement = JSON.stringify({ pid: process.pid, owner: "replacement" });
+            fs.writeFileSync(lockPath, replacement);
+            release();
+            assert.equal(fs.existsSync(lockPath), true, "release must retain the replacement lock");
+            assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+        }
+    });
+});
+
+test("runtime store stale recovery preserves a lock replaced during owner inspection", async (t) => {
+    t.mock.method(Atomics, "wait", () => "timed-out");
+    await withTempHome((homeDir) => {
+        for (const [acquire, filename] of [
+            [acquireManagedRuntimeMutationLock, ".mutation.lock"],
+            [acquireManagedRuntimeLeaseLock, ".leases.lock"],
+        ] as const) {
+            const storageRoot = path.join(homeDir, ".satori", "mcp-runtime");
+            fs.mkdirSync(storageRoot, { recursive: true });
+            const lockPath = path.join(storageRoot, filename);
+            fs.writeFileSync(lockPath, JSON.stringify({ pid: 710001 }));
+            const replacement = JSON.stringify({ pid: process.pid, owner: "replacement" });
+            let clock = 0;
+            assert.throws(() => {
+                const release = acquire({
+                    homeDir,
+                    now: () => clock++ * 1000,
+                    inspectProcess: (pid) => {
+                        if (pid === 710001) {
+                            fs.renameSync(lockPath, `${lockPath}.previous`);
+                            fs.writeFileSync(lockPath, replacement);
+                            return null;
+                        }
+                        return { pid };
+                    },
+                });
+                release();
+            }, /Timed out waiting/);
+            assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+        }
+    });
+});
+
+function generatedLeaseFunctions(homeDir: string, overrides: Record<string, unknown> = {}): vm.Context {
+    const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+    const script = buildLauncherScript({ command: process.execPath, args: ["runtime.js"], managedLauncherPath: launcherPath });
+    fs.mkdirSync(path.dirname(launcherPath), { recursive: true });
+    fs.writeFileSync(launcherPath, script);
+    const cohortLine = script.split("\n").find((line) => line.startsWith("const managedCohortToken = "))!;
+    const context = vm.createContext({
+        fs, path, process, managedRuntimeRoot: null, managedLauncherPath: launcherPath,
+        managedCohortToken: JSON.parse(cohortLine.slice("const managedCohortToken = ".length, -1)),
+        ...overrides,
+    });
+    vm.runInContext(script.slice(script.indexOf("function currentProcessIdentity()")), context);
+    return context;
+}
+
+test("generated launcher lock release preserves another writer's replacement lock", async (t) => {
+    await withTempHome((homeDir) => {
+        const context = generatedLeaseFunctions(homeDir);
+        const lockPath = path.join(homeDir, ".satori", "mcp-runtime", ".leases.lock");
+        const replacement = JSON.stringify({ pid: process.pid, owner: "replacement" });
+        const read = fs.readFileSync;
+        t.mock.method(fs, "readFileSync", (target: fs.PathOrFileDescriptor, options: unknown) => {
+            if (target === context.managedLauncherPath && fs.existsSync(lockPath)) {
+                fs.renameSync(lockPath, `${lockPath}.previous`);
+                fs.writeFileSync(lockPath, replacement);
+            }
+            return read(target, options as never);
+        });
+        assert.equal(vm.runInContext("acquireManagedRuntimeLease()", context), null);
+        assert.equal(fs.existsSync(lockPath), true, "generated release must retain the replacement lock");
+        assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+    });
+});
+
+test("generated launcher stale recovery preserves a lock replaced during owner inspection", async () => {
+    await withTempHome((homeDir) => {
+        const storageRoot = path.join(homeDir, ".satori", "mcp-runtime");
+        fs.mkdirSync(storageRoot, { recursive: true });
+        const lockPath = path.join(storageRoot, ".leases.lock");
+        fs.writeFileSync(lockPath, JSON.stringify({ pid: 710001 }));
+        const replacement = JSON.stringify({ pid: process.pid, owner: "replacement" });
+        let clock = 0;
+        const context = generatedLeaseFunctions(homeDir, {
+            Date: { now: () => clock++ * 1000 },
+            Atomics: { wait: () => "timed-out" },
+            process: {
+                pid: process.pid, platform: process.platform,
+                kill: (pid: number) => {
+                    if (pid === 710001) {
+                        fs.renameSync(lockPath, `${lockPath}.previous`);
+                        fs.writeFileSync(lockPath, replacement);
+                        throw new Error("injected stale owner");
+                    }
+                    process.kill(pid, 0);
+                },
+            },
+            storageRoot,
+        });
+        assert.throws(() => vm.runInContext("acquireLeaseLock(storageRoot)", context), /Timed out waiting/);
+        assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+    });
+});
+
+
+test("store and generated lock publication failures preserve replacement locks", async (t) => {
+    await withTempHome((homeDir) => {
+        const storageRoot = path.join(homeDir, ".satori", "mcp-runtime");
+        fs.mkdirSync(storageRoot, { recursive: true });
+        const context = generatedLeaseFunctions(homeDir, { storageRoot });
+        const cases = [
+            [".mutation.lock", () => acquireManagedRuntimeMutationLock({ homeDir })],
+            [".leases.lock", () => acquireManagedRuntimeLeaseLock({ homeDir })],
+            [".leases.lock", () => vm.runInContext("acquireLeaseLock(storageRoot)", context)],
+        ] as const;
+        for (const [filename, acquire] of cases) {
+            const lockPath = path.join(storageRoot, filename);
+            const replacement = JSON.stringify({ pid: process.pid, owner: "replacement" });
+            const write = fs.writeFileSync;
+            t.mock.method(fs, "writeFileSync", (target: fs.PathOrFileDescriptor) => {
+                assert.equal(typeof target, "number");
+                fs.renameSync(lockPath, `${lockPath}.previous`);
+                write(lockPath, replacement);
+                throw new Error("injected lock publication failure");
+            });
+            try {
+                assert.throws(acquire, /injected lock publication failure/);
+                assert.equal(fs.existsSync(lockPath), true, "failed publication must retain the replacement lock");
+                assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+            } finally {
+                t.mock.restoreAll();
+                fs.rmSync(lockPath, { force: true });
+            }
+        }
     });
 });

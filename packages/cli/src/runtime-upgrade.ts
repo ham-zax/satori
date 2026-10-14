@@ -256,7 +256,8 @@ export function managedRuntimeClosureFor(
 /**
  * Installs (or reuses) the runtime closure for `selection`, verifies its models, preflights and
  * probes it, then retires running servers and rewrites the launcher. A newly installed candidate
- * is removed when any step fails, so the previous launcher stays authoritative.
+ * is removed on failure only before activation. Once published, the launcher must
+ * retain its candidate even if retirement fails.
  */
 export async function activateManagedRuntimeSelection(input: {
     homeDir: string;
@@ -280,6 +281,7 @@ export async function activateManagedRuntimeSelection(input: {
     const releaseRuntimeMutationLock = acquireManagedRuntimeMutationLock({ homeDir });
     try {
         let candidate: ManagedRuntimeCandidate | undefined;
+        let activated = false;
         try {
             options.onUpgradeProgress?.("installing");
             const installedCandidate = installManagedRuntimeCandidate(
@@ -370,6 +372,7 @@ export async function activateManagedRuntimeSelection(input: {
                 );
                 launcherMutation.assertUnchanged?.();
                 launcherMutation.apply();
+                activated = true;
             });
             pruneManagedRuntimeAfterActivation(
                 homeDir,
@@ -377,7 +380,7 @@ export async function activateManagedRuntimeSelection(input: {
                 { ...selection.effectiveEnv, ...preflight.runtimeEnvironment },
             );
         } catch (error) {
-            if (candidate?.newlyInstalled) {
+            if (candidate?.newlyInstalled && !activated) {
                 fs.rmSync(candidate.runtimeRoot, { recursive: true, force: true });
             }
             if (error instanceof CliError) {

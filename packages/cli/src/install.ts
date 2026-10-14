@@ -410,7 +410,42 @@ async function purgeSatoriData(
     const targets = [...new Set([
         path.join(homeDir, ".satori"),
         resolveSatoriStateRoot({ configured: env.SATORI_STATE_ROOT, homeDir }),
-    ])].filter((target) => fs.existsSync(target));
+    ])].filter((target) => fs.lstatSync(target, { throwIfNoEntry: false }) !== undefined);
+    const realHome = fs.realpathSync(homeDir);
+    const canonicalRoot = path.join(realHome, ".satori");
+    // Custom roots have no ownership marker. These top-level entries are written
+    // by PublicationStore, MutationLeaseCoordinator, the runtime-owner registry,
+    // Context's TypeScript resolution cache, and the shared runtime host.
+    const stateEntries = new Set([
+        "publications", "runtime", "runtime-owner", "typescript-resolution", "runtime-host",
+    ]);
+    for (const target of targets) {
+        let owned = false;
+        try {
+            const realTarget = fs.realpathSync(target);
+            const stat = fs.lstatSync(target);
+            const relativeHome = path.relative(realTarget, realHome);
+            if (
+                stat.isDirectory()
+                && !stat.isSymbolicLink()
+                && realTarget !== path.parse(realTarget).root
+                && (relativeHome === ".." || relativeHome.startsWith(`..${path.sep}`) || path.isAbsolute(relativeHome))
+            ) {
+                if (realTarget === canonicalRoot) {
+                    // The installer owns its canonical directory, even without a launcher.
+                    owned = true;
+                } else {
+                    const entries = fs.readdirSync(target);
+                    owned = entries.length > 0 && entries.every((entry) => stateEntries.has(entry));
+                }
+            }
+        } catch {
+            // Missing or malformed ownership evidence must never authorize deletion.
+        }
+        if (!owned) {
+            throw new CliError("E_USAGE", `Refusing to purge '${target}': Satori ownership of this directory cannot be verified.`, 2);
+        }
+    }
     if (dryRun || targets.length === 0) return targets;
     const termination = await (terminateRunner ?? terminateSatoriServers)({ homeDir, env });
     if (termination.status === "partial") {

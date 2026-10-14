@@ -434,8 +434,19 @@ function sleepSync(milliseconds: number): void {
     Atomics.wait(new Int32Array(waitBuffer), 0, 0, milliseconds);
 }
 
+function removeLockIfUnchanged(lockPath: string, expected: fs.Stats): void {
+    try {
+        const current = fs.lstatSync(lockPath);
+        if (current.dev === expected.dev && current.ino === expected.ino) {
+            fs.rmSync(lockPath, { force: true });
+        }
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+}
+
 function shouldRecoverLock(
-    lockPath: string,
+    lockStat: fs.Stats,
     value: unknown,
     inspectProcess: (pid: number) => ProcessIdentity | null,
     now: () => number,
@@ -449,11 +460,7 @@ function shouldRecoverLock(
                 : {}),
         }, inspectProcess(Number(value.pid)));
     }
-    try {
-        return now() - fs.statSync(lockPath).mtimeMs >= METADATALESS_LOCK_STALE_MS;
-    } catch {
-        return true;
-    }
+    return now() - lockStat.mtimeMs >= METADATALESS_LOCK_STALE_MS;
 }
 
 function acquireStoreLock(
@@ -469,8 +476,8 @@ function acquireStoreLock(
     while (now() <= deadline) {
         try {
             const openedFd = fs.openSync(lockPath, "wx");
-            const current = inspectProcess(process.pid) ?? { pid: process.pid };
             try {
+                const current = inspectProcess(process.pid) ?? { pid: process.pid };
                 fs.writeFileSync(openedFd, JSON.stringify({
                     formatVersion: 1,
                     pid: current.pid,
@@ -480,8 +487,11 @@ function acquireStoreLock(
                         : {}),
                 }));
             } catch (error) {
-                fs.closeSync(openedFd);
-                fs.rmSync(lockPath, { force: true });
+                try {
+                    removeLockIfUnchanged(lockPath, fs.fstatSync(openedFd));
+                } finally {
+                    fs.closeSync(openedFd);
+                }
                 throw error;
             }
             lockFd = openedFd;
@@ -490,15 +500,29 @@ function acquireStoreLock(
             if (!isRecord(error) || error.code !== "EEXIST") {
                 throw error;
             }
-            let existing: unknown;
+            let existingFd: number;
             try {
-                existing = readJson(lockPath);
-            } catch {
-                existing = null;
+                existingFd = fs.openSync(lockPath, "r");
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+                throw error;
             }
-            if (shouldRecoverLock(lockPath, existing, inspectProcess, now)) {
-                fs.rmSync(lockPath, { force: true });
-                continue;
+            try {
+                // Hold the observed inode open through recovery so its identity cannot
+                // be reused while another writer replaces the pathname.
+                const existingStat = fs.fstatSync(existingFd);
+                let existing: unknown;
+                try {
+                    existing = JSON.parse(fs.readFileSync(existingFd, "utf8"));
+                } catch {
+                    existing = null;
+                }
+                if (shouldRecoverLock(existingStat, existing, inspectProcess, now)) {
+                    removeLockIfUnchanged(lockPath, existingStat);
+                    continue;
+                }
+            } finally {
+                fs.closeSync(existingFd);
             }
             sleepSync(LOCK_RETRY_MS);
         }
@@ -507,8 +531,11 @@ function acquireStoreLock(
         throw new Error(`Timed out waiting for managed runtime lock ${lockFileName}.`);
     }
     return () => {
-        fs.closeSync(lockFd);
-        fs.rmSync(lockPath, { force: true });
+        try {
+            removeLockIfUnchanged(lockPath, fs.fstatSync(lockFd));
+        } finally {
+            fs.closeSync(lockFd);
+        }
     };
 }
 

@@ -10,6 +10,12 @@ import { fileURLToPath } from "node:url";
 import { connectCliMcpSession } from "./client.js";
 import { CliError } from "./errors.js";
 import {
+    prepareClaudeInstall, prepareClaudeUninstall,
+    prepareCodexInstall, prepareCodexUninstall,
+    prepareOpenCodeInstall, prepareOpenCodeUninstall,
+} from "./client-config-mutations.js";
+
+import {
     executeInstallCommand as executeInstallCommandProduction,
     executeManagedRuntimeUpgrade,
     createInstallPlan,
@@ -3718,4 +3724,199 @@ test("managed runtime upgrades preserve Voyage reranker provider and model in bo
             assert.doesNotMatch(launcher, /VOYAGEAI_API_KEY|test-only-voyage-key/);
         });
     }
+});
+
+
+test("uninstall purge refuses dangerous or unowned state roots before deleting anything", async (t) => {
+    await withTempHome(async (homeDir) => {
+        const satoriRoot = path.join(homeDir, ".satori");
+        fs.mkdirSync(satoriRoot);
+        const unowned = path.join(homeDir, "unrelated-data");
+        fs.mkdirSync(unowned);
+        fs.writeFileSync(path.join(unowned, "keep"), "user data");
+        const empty = path.join(homeDir, "empty-state");
+        fs.mkdirSync(empty);
+        const mixed = path.join(homeDir, "mixed-state");
+        fs.mkdirSync(path.join(mixed, "publications"), { recursive: true });
+        fs.writeFileSync(path.join(mixed, "keep"), "user data");
+        const customLink = path.join(homeDir, "linked-state");
+        fs.symlinkSync(mixed, customLink);
+        const danglingLink = path.join(homeDir, "dangling-state");
+        fs.symlinkSync(path.join(homeDir, "missing-state"), danglingLink);
+        const file = path.join(homeDir, "state-file");
+        fs.writeFileSync(file, "user data");
+        const dangerous = [homeDir, path.dirname(homeDir), path.parse(homeDir).root];
+        const refused = [...dangerous, unowned, empty, mixed, customLink, danglingLink, file];
+        const removed: string[] = [];
+        const remove = fs.rmSync;
+        const readDirectory = fs.readdirSync;
+        // Dangerous locations must be refused even if their entries look owned.
+        t.mock.method(fs, "readdirSync", (target: fs.PathLike, options?: never) => {
+            if (dangerous.includes(String(target))) return ["publications"];
+            return readDirectory(target, options);
+        });
+        t.mock.method(fs, "rmSync", (target: fs.PathLike, options: fs.RmOptions) => {
+            removed.push(String(target));
+            // Never let the broken implementation delete a dangerous test target.
+            if (refused.includes(String(target))) return;
+            remove(target, options);
+        });
+        try {
+            for (const configured of refused) {
+                for (const dryRun of [true, false]) {
+                    await assert.rejects(executeInstallCommand({
+                        kind: "uninstall", client: "all", dryRun, purge: true,
+                    }, {
+                        homeDir,
+                        env: { SATORI_STATE_ROOT: configured },
+                        terminateRunner: async () => { assert.fail("refusal must precede server termination"); },
+                    }), /Refusing to purge/);
+                }
+            }
+            assert.deepEqual(removed, []);
+            assert.equal(readFile(path.join(unowned, "keep")), "user data");
+            assert.equal(readFile(path.join(mixed, "keep")), "user data");
+            const preview = await executeInstallCommand({
+                kind: "uninstall", client: "all", dryRun: true, purge: true,
+            }, {
+                homeDir, env: { SATORI_STATE_ROOT: satoriRoot },
+                terminateRunner: async () => { assert.fail("dry run must not stop servers"); },
+            });
+            assert.deepEqual(preview.purgedPaths, [satoriRoot]);
+            assert.deepEqual(removed, []);
+            assert.equal(fs.existsSync(satoriRoot), true);
+            const result = await executeInstallCommand({
+                kind: "uninstall", client: "all", dryRun: false, purge: true,
+            }, {
+                homeDir, env: {}, terminateRunner: async () => ({ status: "not_running" } as never),
+            });
+            assert.deepEqual(result.purgedPaths, [satoriRoot]);
+            assert.deepEqual(removed, [satoriRoot]);
+            assert.equal(fs.existsSync(satoriRoot), false);
+        } finally {
+            t.mock.restoreAll();
+        }
+    });
+});
+
+test("uninstall purge accepts a custom root containing only known Satori entries", async () => {
+    await withTempHome(async (homeDir) => {
+        const customRoot = path.join(homeDir, "custom-state");
+        for (const entry of ["publications", "runtime", "runtime-owner", "typescript-resolution", "runtime-host"]) {
+            fs.mkdirSync(path.join(customRoot, entry), { recursive: true });
+            fs.writeFileSync(path.join(customRoot, entry, "state"), "Satori data");
+        }
+        let terminated = 0;
+        const options = {
+            homeDir, env: { SATORI_STATE_ROOT: customRoot },
+            terminateRunner: async () => { terminated += 1; return { status: "not_running" } as never; },
+        };
+        const preview = await executeInstallCommand({
+            kind: "uninstall", client: "all", dryRun: true, purge: true,
+        }, options);
+        assert.deepEqual(preview.purgedPaths, [customRoot]);
+        assert.equal(terminated, 0);
+        assert.equal(fs.existsSync(customRoot), true);
+        const result = await executeInstallCommand({
+            kind: "uninstall", client: "all", dryRun: false, purge: true,
+        }, options);
+        assert.deepEqual(result.purgedPaths, [customRoot]);
+        assert.equal(terminated, 1);
+        assert.equal(fs.existsSync(customRoot), false);
+    });
+});
+
+test("uninstall purge refuses a symlinked Satori root", async () => {
+    await withTempHome(async (homeDir) => {
+        const userData = path.join(homeDir, "user-data");
+        fs.mkdirSync(path.join(userData, "bin"), { recursive: true });
+        fs.writeFileSync(path.join(userData, "bin", "satori-mcp.js"), buildLauncherScript({ command: process.execPath, args: ["runtime.js"] }));
+        fs.symlinkSync(userData, path.join(homeDir, ".satori"));
+        for (const dryRun of [true, false]) {
+            await assert.rejects(executeInstallCommand({
+                kind: "uninstall", client: "all", dryRun, purge: true,
+            }, {
+                homeDir, env: {}, terminateRunner: async () => { assert.fail("refusal must precede server termination"); },
+            }), /Refusing to purge/);
+        }
+        assert.equal(fs.existsSync(path.join(homeDir, ".satori")), true);
+        assert.equal(fs.existsSync(path.join(userData, "bin", "satori-mcp.js")), true);
+    });
+});
+
+
+test("client config mutations preserve original bytes on write or rename failure and preserve mode", async (t) => {
+    await withTempHome(async (homeDir) => {
+        const runtime = { command: process.execPath, args: [launcherPath(homeDir)] };
+        const cases = [
+            ["json", prepareClaudeInstall, prepareClaudeUninstall, "{}\n"],
+            ["toml", prepareCodexInstall, prepareCodexUninstall, 'model = "example"\n'],
+            ["jsonc", prepareOpenCodeInstall, prepareOpenCodeUninstall, "{ // keep comment\n}\n"],
+        ] as const;
+        for (const [extension, install, uninstall, initial] of cases) {
+            const filePath = path.join(homeDir, `config.${extension}`);
+            fs.writeFileSync(filePath, initial, { mode: 0o640 });
+            fs.chmodSync(filePath, 0o640);
+            for (const prepare of [install, uninstall]) {
+                const original = fs.readFileSync(filePath, "utf8");
+                const mutation = prepare(filePath, runtime);
+                for (const operation of ["writeFileSync", "renameSync"] as const) {
+                    const write = fs.writeFileSync;
+                    if (operation === "writeFileSync") {
+                        t.mock.method(fs, operation, (target: fs.PathOrFileDescriptor) => {
+                            write(target, "partial write");
+                            throw new Error("injected config write failure");
+                        });
+                    } else {
+                        t.mock.method(fs, operation, () => { throw new Error("injected config rename failure"); });
+                    }
+                    try {
+                        assert.throws(() => mutation.apply(), /injected config/);
+                        assert.equal(fs.readFileSync(filePath, "utf8"), original);
+                        assert.deepEqual(fs.readdirSync(homeDir).filter((name) => name.endsWith(".tmp")), []);
+                    } finally {
+                        t.mock.restoreAll();
+                    }
+                }
+                mutation.apply();
+                assert.equal(fs.statSync(filePath).mode & 0o777, 0o640);
+                assert.notEqual(fs.readFileSync(filePath, "utf8"), original);
+            }
+        }
+    });
+});
+
+
+test("managed runtime upgrade retains the active candidate when post-activation retirement fails", async () => {
+    await withTempHome(async (homeDir) => {
+        await installUpgradeSourceRuntime(homeDir, {
+            SATORI_RUNTIME_PROFILE: "connected",
+            VECTOR_STORE_PROVIDER: "LanceDB",
+            EMBEDDING_PROVIDER: "VoyageAI",
+        });
+        const originalLauncher = readFile(launcherPath(homeDir));
+        let sweeps = 0;
+        await assert.rejects(executeManagedRuntimeUpgrade(UPGRADE_TARGET, {
+            homeDir,
+            env: { VECTOR_STORE_PROVIDER: "LanceDB" },
+            execFileSyncImpl: installRuntimePackageStub(
+                "dist/target-runtime.mjs", UPGRADE_TARGET.mcpPackageSpecifier,
+                UPGRADE_TARGET.mcpVersion, UPGRADE_TARGET.coreVersion,
+            ) as never,
+            preflightRunner: async () => ({ runtimeEnvironment: Object.freeze({
+                SATORI_RUNTIME_PROFILE: "connected", VECTOR_STORE_PROVIDER: "LanceDB",
+            }) }),
+            preflightDependencies: { probeCandidateRuntime: async () => {} },
+            terminateRunner: async () => {
+                if (++sweeps === 3) throw new Error("injected post-activation retirement failure");
+                return { status: "not_running" } as never;
+            },
+        }), /injected post-activation retirement failure/);
+        assert.equal(sweeps, 3);
+        const activeLauncher = readFile(launcherPath(homeDir));
+        assert.notEqual(activeLauncher, originalLauncher);
+        const activeEntry = parseManagedLauncherDescriptor(activeLauncher).args[0];
+        assert.equal(fs.existsSync(activeEntry), true, "the active launcher must keep its runtime entry");
+        assert.equal(fs.existsSync(path.join(homeDir, ".satori", "mcp-runtime", "@satori-code-mcp@6.1.0")), true);
+    });
 });

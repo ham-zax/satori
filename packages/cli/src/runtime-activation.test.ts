@@ -236,3 +236,38 @@ test("activation recovers old malformed lease debris but rejects a fresh ambiguo
         assert.equal(activated, false);
     });
 });
+
+
+test("activation ignores unrelated and foreign-user processes mentioning the launcher", { skip: process.platform !== "linux" }, async (t) => {
+    await withTempHome(async (homeDir) => {
+        const launcherPath = path.join(homeDir, ".satori", "bin", "satori-mcp.js");
+        const commands = new Map([
+            [710001, ["/usr/bin/cat", launcherPath]],
+            [710002, [process.execPath, "editor.js", launcherPath]],
+            [710003, [process.execPath, launcherPath]],
+            [710004, [launcherPath]],
+            [710005, [process.execPath, launcherPath]],
+        ]);
+        const signaled: number[] = [];
+        const readFile = fs.readFileSync;
+        const readDir = fs.readdirSync;
+        const stat = fs.statSync;
+        t.mock.method(fs, "readdirSync", (target: fs.PathLike, options: unknown) => target === "/proc"
+            ? [...commands.keys()].filter((pid) => !signaled.includes(pid)).map((pid) => ({ name: String(pid), isDirectory: () => true }))
+            : readDir(target, options as never));
+        t.mock.method(fs, "readFileSync", (target: fs.PathOrFileDescriptor, options: unknown) => {
+            const match = String(target).match(/^\/proc\/(\d+)\/cmdline$/);
+            return match ? Buffer.from(commands.get(Number(match[1]))!.join("\0")) : readFile(target, options as never);
+        });
+        t.mock.method(fs, "statSync", (target: fs.PathLike, options: unknown) => {
+            const match = String(target).match(/^\/proc\/(\d+)$/);
+            return match ? { uid: process.getuid!() + (Number(match[1]) === 710005 ? 1 : 0) } : stat(target, options as never);
+        });
+        await activateAfterRetiringManagedRuntime({
+            homeDir,
+            terminateRunner: async () => notRunning(homeDir),
+            signalProcess: (pid) => { signaled.push(pid); },
+        }, () => writeActiveLauncher(homeDir));
+        assert.deepEqual(signaled, [710003, 710004]);
+    });
+});

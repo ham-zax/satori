@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
 import type { InstallProfile } from "./args.js";
@@ -201,12 +202,26 @@ export function buildPreservedManagedEnv(existing: unknown): Record<string, stri
 
 export function writeTextFileAtomic(filePath: string, content: string, mode?: number): void {
     ensureParentDir(filePath);
-    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempPath, content, "utf8");
-    if (mode !== undefined) {
-        fs.chmodSync(tempPath, mode);
+    if (mode === undefined) {
+        try {
+            mode = fs.statSync(filePath).mode & 0o7777;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
     }
-    fs.renameSync(tempPath, filePath);
+    const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+    const fd = fs.openSync(tempPath, "wx", mode);
+    try {
+        try {
+            fs.writeFileSync(fd, content, "utf8");
+            if (mode !== undefined) fs.fchmodSync(fd, mode);
+        } finally {
+            fs.closeSync(fd);
+        }
+        fs.renameSync(tempPath, filePath);
+    } finally {
+        fs.rmSync(tempPath, { force: true });
+    }
 }
 
 export function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
@@ -260,7 +275,7 @@ export function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRun
                 return;
             }
             ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next, "utf8");
+            writeTextFileAtomic(filePath, next);
         },
     };
 }
@@ -297,7 +312,7 @@ export function prepareCodexUninstall(filePath: string): FileMutation {
             if (next === current) {
                 return;
             }
-            fs.writeFileSync(filePath, next, "utf8");
+            writeTextFileAtomic(filePath, next);
         },
     };
 }
@@ -440,7 +455,7 @@ function prepareMcpServersJsonInstall(
                 return;
             }
             ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next, "utf8");
+            writeTextFileAtomic(filePath, next);
         },
     };
 }
@@ -475,7 +490,7 @@ export function prepareClaudeUninstall(filePath: string, runtimeCommand: Managed
     return {
         changed: true,
         apply: () => {
-            fs.writeFileSync(filePath, next, "utf8");
+            writeTextFileAtomic(filePath, next);
         },
     };
 }
@@ -533,7 +548,7 @@ export function mutateJsonc(filePath: string, current: string, pathSegments: Arr
                 return;
             }
             ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+            writeTextFileAtomic(filePath, next.endsWith("\n") ? next : `${next}\n`);
         },
     };
 }

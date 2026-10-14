@@ -827,6 +827,8 @@ export interface TypeScriptSemanticAnalyzerOptions {
      * and their evidence is merged (see typescript-resolution-shards).
      */
     readonly shard?: Readonly<{ index: number; count: number }>;
+    /** A full-index job owns one intact project, including its import closure. */
+    readonly projectKey?: string;
 }
 
 /**
@@ -855,6 +857,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     private readonly rootStates = new Map<string, RootResolutionState>();
     private useCounter = 0;
     private activeAnalyses = 0;
+    private projectFailureRank: TypeScriptResourceFailureRank = [0, 0];
     private idleReleaseTimer?: ReturnType<typeof setTimeout>;
 
     constructor(
@@ -903,10 +906,53 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         return (await this.analyzeShard(input)).evidence;
     }
 
+    /** Discovery does not construct a compiler Program. Preserve legacy failure order. */
+    getProjectJobs(input: ResolutionProjectInput, shardCount: number): readonly { key: string; shardIndex: number }[] {
+        const files = input.registry.manifest.files
+            .filter((file) => file.language === 'typescript' && isTypeScriptSourcePath(file.path))
+            .map((file) => normalizeRelative(file.path)).sort();
+        const plans = this.discoverPlans(input.rootPath, files);
+        const owners = assignProjectShards(plans, shardCount);
+        return plans.map((plan) => ({ key: plan.key, shardIndex: owners.get(plan.key)! }))
+            .sort((left, right) => left.shardIndex - right.shardIndex);
+    }
+
+    exportRootState(rootPath: string): string | undefined {
+        const root = normalizeAbsolute(rootPath);
+        const state = this.rootStates.get(root);
+        return state ? serializeRootState(root, state) : undefined;
+    }
+
+    getProjectFailureRank(): TypeScriptResourceFailureRank {
+        return this.projectFailureRank;
+    }
+
+    /** Seed the existing delta owner with compact snapshots, never compiler objects. */
+    importProjectStates(rootPath: string, states: readonly string[]): void {
+        const root = normalizeAbsolute(rootPath);
+        let merged: RootResolutionState | undefined;
+        const snapshots = new Map<string, ProjectSnapshot>();
+        for (const text of states) {
+            const state = parseRootState(text, root);
+            if (!state || (merged && state.registryDigest !== merged.registryDigest)) {
+                throw new Error('Inconsistent TypeScript project job state.');
+            }
+            merged = state;
+            for (const [key, snapshot] of state.snapshots) {
+                if (!snapshots.has(key) || snapshot.referenceAuthorityReady !== undefined) snapshots.set(key, snapshot);
+            }
+        }
+        if (!merged) return;
+        const state = { ...merged, snapshots };
+        this.rootStates.set(root, state);
+        this.persistRootState(root, state);
+    }
+
     /** `analyze`, plus where a resource-limit failure was met, for merging shards. */
     async analyzeShard(input: ResolutionProjectInput): Promise<TypeScriptShardEvidence> {
         clearTimeout(this.idleReleaseTimer);
         this.activeAnalyses += 1;
+        this.projectFailureRank = [0, 0];
         try {
             return await this.analyzeProjects(input);
         } finally {
@@ -957,7 +1003,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         const plans = this.discoverPlans(rootPath, typeScriptFiles);
         const shard = this.options.shard;
         const shardOwner = shard ? assignProjectShards(plans, shard.count) : undefined;
-        const owns = (plan: ProjectPlan) => !shard || shardOwner!.get(plan.key) === shard.index;
+        const owns = (plan: ProjectPlan) => this.options.projectKey !== undefined
+            ? plan.key === this.options.projectKey
+            : !shard || shardOwner!.get(plan.key) === shard.index;
         const planIndex = new Map(plans.map((plan, index) => [plan.key, index]));
         const currentFileToProject = new Map<string, string>();
         for (const plan of plans) {
@@ -1063,6 +1111,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 });
                 continue;
             }
+            this.projectFailureRank = [1, planIndex.get(plan.key)!];
             // A snapshot without readiness was kept for another shard's project.
             const kept = previousState?.snapshots.get(plan.key);
             const previous = kept?.referenceAuthorityReady === undefined ? undefined : kept;
@@ -1213,6 +1262,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         for (const plan of plans) {
             if (!owns(plan)) continue;
             const affected = affectedByProject.get(plan.key) ?? new Set<string>();
+            this.projectFailureRank = [2, planIndex.get(plan.key)!];
             for (const file of affected) {
                 if (manifestByPath.has(file)) affectedSourceFiles.add(file);
             }
@@ -1283,7 +1333,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
         this.persistRootState(rootPath, state);
 
         // Unsharded, every TypeScript file belongs to one of the plans.
-        const sourceFileCount = shard ? ownedSourceFileCount : typeScriptFiles.length;
+        const sourceFileCount = shard || this.options.projectKey !== undefined ? ownedSourceFileCount : typeScriptFiles.length;
         return { evidence: {
             language: 'typescript',
             providerId: TYPESCRIPT_COMPILER_PROVIDER_ID,

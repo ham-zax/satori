@@ -14,6 +14,11 @@ import { mergeTypeScriptShardEvidence, type TypeScriptShardEvidence } from './ty
 
 /** TypeScript projects are analyzed on this many worker threads at most. */
 const MAX_TYPESCRIPT_RESOLUTION_SHARDS = 3;
+// Full indexing owns one complete compiler project until its isolate exits.
+// A later memory-admission owner can change this single internal limit.
+const FULL_INDEX_PROJECT_CONCURRENCY = 1;
+
+type ProjectJobEvidence = TypeScriptShardEvidence & { readonly state?: string };
 
 type SourceControlInput = {
     readonly rootPath: string;
@@ -23,6 +28,8 @@ type SourceControlInput = {
 
 type WorkerRequestBody =
     | { method: 'analyze'; input: ResolutionProjectInput }
+    | { method: 'getProjectJobs'; input: ResolutionProjectInput; shardCount: number }
+    | { method: 'importProjectStates'; rootPath: string; states: readonly string[] }
     | { method: 'getProviderMetadata'; language: string }
     | { method: 'getSourceControlFiles'; input: SourceControlInput };
 
@@ -44,10 +51,19 @@ class WorkerTypeScriptResolutionAnalyzer {
         private readonly maxSessions: number,
         private readonly stateDirectory: string | undefined,
         private readonly shard: Readonly<{ index: number; count: number }> | undefined,
+        private readonly projectKey?: string,
     ) {}
 
-    analyzeShard(input: ResolutionProjectInput): Promise<TypeScriptShardEvidence> {
-        return this.request({ method: 'analyze', input }) as Promise<TypeScriptShardEvidence>;
+    analyzeShard(input: ResolutionProjectInput): Promise<ProjectJobEvidence> {
+        return this.request({ method: 'analyze', input }) as Promise<ProjectJobEvidence>;
+    }
+
+    getProjectJobs(input: ResolutionProjectInput, shardCount: number) {
+        return this.request({ method: 'getProjectJobs', input, shardCount }) as Promise<readonly { key: string; shardIndex: number }[]>;
+    }
+
+    async importProjectStates(rootPath: string, states: readonly string[]): Promise<void> {
+        await this.request({ method: 'importProjectStates', rootPath, states });
     }
 
     getProviderMetadata(language: string) {
@@ -64,15 +80,20 @@ class WorkerTypeScriptResolutionAnalyzer {
 
     async dispose(): Promise<void> {
         this.disposed = true;
+        await this.releaseWorker();
+    }
+
+    async releaseWorker(): Promise<void> {
         const worker = this.worker;
         this.failPending(new Error('TypeScript resolution analyzer was disposed.'));
         await worker?.terminate();
+        if (this.worker === worker) this.worker = undefined;
     }
 
     private startWorker(): Worker {
         const worker = new Worker(resolveWorkerScriptPath(__filename, 'typescript-resolution-worker-runner'), {
             execArgv: filterWorkerExecArgv(),
-            workerData: { maxSessions: this.maxSessions, stateDirectory: this.stateDirectory, shard: this.shard },
+            workerData: { maxSessions: this.maxSessions, stateDirectory: this.stateDirectory, shard: this.shard, projectKey: this.projectKey },
         });
         worker.unref();
         worker.on('message', (response: TypeScriptResolutionWorkerResponse) => {
@@ -80,20 +101,22 @@ class WorkerTypeScriptResolutionAnalyzer {
             if (!pending) return;
             this.pending.delete(response.id);
             if (response.ok) pending.resolve(response.value);
-            else pending.reject(new Error(response.error));
+            else pending.reject(Object.assign(new Error(response.error), { projectFailureRank: response.projectFailureRank }));
         });
         const fail = (error: Error) => {
             if (this.worker !== worker) return;
             this.failPending(error);
         };
         worker.on('error', fail);
-        worker.on('exit', (code) => fail(new Error(`TypeScript resolution worker exited with code ${code}.`)));
+        worker.on('exit', (code) => {
+            fail(new Error(`TypeScript resolution worker exited with code ${code}.`));
+            if (this.worker === worker) this.worker = undefined;
+        });
         return worker;
     }
 
-    /** Rejects every pending request and drops the current worker. */
+    /** Retain the handle until exit so failure cleanup can still await termination. */
     private failPending(error: Error): void {
-        this.worker = undefined;
         const pending = [...this.pending.values()];
         this.pending.clear();
         for (const entry of pending) entry.reject(error);
@@ -132,6 +155,10 @@ class WorkerTypeScriptResolutionAnalyzer {
  */
 class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     readonly shards: readonly WorkerTypeScriptResolutionAnalyzer[];
+    private readonly activeJobs = new Set<WorkerTypeScriptResolutionAnalyzer>();
+    private disposed = false;
+    private analysisTail: Promise<void> = Promise.resolve();
+    private providerMetadata?: Awaited<ReturnType<WorkerTypeScriptResolutionAnalyzer['getProviderMetadata']>>;
 
     constructor(maxSessions: number, stateDirectory: string | undefined, count: number) {
         this.shards = Array.from({ length: count }, (_, index) => new WorkerTypeScriptResolutionAnalyzer(
@@ -145,7 +172,77 @@ class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
         return language.trim().toLowerCase() === 'typescript';
     }
 
-    async analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+    analyze(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        // A full index must not overlap a previous warm analysis's Programs.
+        const operation = this.analysisTail.then(async () => {
+            if (this.disposed) throw new Error('TypeScript resolution analyzer was disposed.');
+            try {
+                return input.changedFiles === undefined
+                    ? await this.analyzeFullIndex(input)
+                    : await this.analyzeWarm(input);
+            } catch (error) {
+                await Promise.all(this.shards.map((shard) => shard.releaseWorker()));
+                throw error;
+            }
+        });
+        this.analysisTail = operation.then(() => {}, () => {});
+        return operation;
+    }
+
+    private async analyzeFullIndex(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
+        await Promise.all(this.shards.map((shard) => shard.releaseWorker()));
+        await this.getProviderMetadata(input.language);
+        const jobs = await this.shards[0].getProjectJobs(input, this.shards.length);
+        // An empty input still gets the established empty-provider evidence.
+        const keys: readonly (string | undefined)[] = jobs.length ? jobs.map((job) => job.key) : [undefined];
+        const settled: PromiseSettledResult<ProjectJobEvidence>[] = [];
+        for (let offset = 0; offset < keys.length; offset += FULL_INDEX_PROJECT_CONCURRENCY) {
+            if (this.disposed) throw new Error('TypeScript resolution analyzer was disposed.');
+            const batch = keys.slice(offset, offset + FULL_INDEX_PROJECT_CONCURRENCY);
+            settled.push(...await Promise.allSettled(batch.map(async (key) => {
+                const worker = new WorkerTypeScriptResolutionAnalyzer(1, undefined, undefined, key);
+                this.activeJobs.add(worker);
+                try {
+                    return await worker.analyzeShard(input);
+                } finally {
+                    // Structured-cloned evidence has no compiler objects. Exit,
+                    // rather than session eviction/GC, releases the entire isolate.
+                    await worker.dispose();
+                    this.activeJobs.delete(worker);
+                }
+            })));
+        }
+        // Jobs are ordered by their legacy shard, then plan order: thrown
+        // failures keep the old shard precedence; resource failures use phase rank.
+        const terminalByShard = new Map<number, { rank: readonly number[]; result: PromiseSettledResult<ProjectJobEvidence> }>();
+        for (const [index, result] of settled.entries()) {
+            const rank = result.status === 'rejected'
+                ? result.reason.projectFailureRank ?? [0, 0]
+                : result.value.resourceFailure;
+            if (!rank) continue;
+            const shardIndex = jobs[index]?.shardIndex ?? 0;
+            const previous = terminalByShard.get(shardIndex);
+            // A shard originally stopped at its earliest pass failure. An eager
+            // singleton's claims failure cannot outrank a later dependency failure.
+            if (!previous || rank[0] < previous.rank[0] || (rank[0] === previous.rank[0] && rank[1] < previous.rank[1])) {
+                terminalByShard.set(shardIndex, { rank, result });
+            }
+        }
+        for (const [, terminal] of [...terminalByShard].sort(([left], [right]) => left - right)) {
+            if (terminal.result.status === 'rejected') throw terminal.result.reason;
+        }
+        const results = settled.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+        const evidence = mergeTypeScriptShardEvidence(results);
+        if (!results.some((result) => result.resourceFailure)) {
+            const states = results.flatMap((result) => result.state ? [result.state] : []);
+            // Seed the same in-memory/disk snapshots warm sync already consumes.
+            // These workers have no Programs until a delta actually needs one.
+            await Promise.all(this.shards.map((shard) => shard.importProjectStates(input.rootPath, states)));
+        }
+        return evidence;
+    }
+
+    private async analyzeWarm(input: ResolutionProjectInput): Promise<ResolutionProjectEvidence> {
         // Wait for every shard, even after one fails, so no worker is still
         // analyzing when this returns.
         const settled = await Promise.allSettled(this.shards.map((shard) => shard.analyzeShard(input)));
@@ -156,8 +253,14 @@ class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
         )));
     }
 
-    getProviderMetadata(language: string) {
-        return this.shards[0].getProviderMetadata(language);
+    async getProviderMetadata(language: string) {
+        // Disposal must still make metadata unavailable so cancellation cannot
+        // be mistaken for an optional-provider failure and activate a publication.
+        if (this.disposed) throw new Error('TypeScript resolution analyzer was disposed.');
+        // Provider identity is fixed for this analyzer's runtime. Retain it across
+        // isolate exits so reporting degraded coverage starts no replacement worker.
+        this.providerMetadata ??= await this.shards[0].getProviderMetadata(language);
+        return this.providerMetadata;
     }
 
     getSourceControlFiles(input: SourceControlInput): Promise<readonly string[]> {
@@ -165,7 +268,9 @@ class ShardedTypeScriptResolutionAnalyzer implements ResolutionProjectAnalyzer {
     }
 
     async dispose(): Promise<void> {
-        await Promise.all(this.shards.map((shard) => shard.dispose()));
+        this.disposed = true;
+        await Promise.all([...this.shards, ...this.activeJobs].map((shard) => shard.dispose()));
+        await this.analysisTail;
     }
 }
 

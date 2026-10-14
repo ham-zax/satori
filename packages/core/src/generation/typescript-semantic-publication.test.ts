@@ -5,6 +5,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import ts from 'typescript';
+import { Worker } from 'node:worker_threads';
+import { LazyTypeScriptSemanticProjectAnalyzer } from '../relationships/lazy-typescript-semantic-analyzer';
 
 import { Context } from '../core/context';
 import { Embedding, EMBEDDING_NORMALIZATION_POLICY_VERSION } from '../embedding';
@@ -149,6 +151,88 @@ class CapturingTypeScriptSemanticProjectAnalyzer extends TypeScriptSemanticProje
         return evidence;
     }
 }
+
+for (const failure of ['project throw', 'worker death'] as const) {
+    test(`an isolated TypeScript ${failure} publishes degraded coverage after worker cleanup`, { timeout: 60_000 }, async () => {
+        const analyzer = new LazyTypeScriptSemanticProjectAnalyzer();
+        const original = Worker.prototype.postMessage;
+        const jobs: Worker[] = [];
+        Worker.prototype.postMessage = function (message, ...args) {
+            if (message.method === 'analyze' && message.input?.language === 'typescript') {
+                jobs.push(this);
+                if (failure === 'worker death') void this.terminate();
+                else {
+                    // Inject the response a throwing project job sends, at the
+                    // real worker request boundary; cleanup must still await exit.
+                    this.emit('message', { id: message.id, ok: false, error: 'injected project job throw' });
+                }
+                return;
+            }
+            return original.call(this, message, ...args);
+        };
+        const fixture = await createFixture({
+            'tsconfig.json': tsconfig(),
+            'src/run.ts': 'export function target() { return 1; }\nexport function run() { return target(); }\n',
+            'helper.py': 'def helper():\n    return 1\n\ndef run():\n    return helper()\n',
+        }, analyzer);
+        try {
+            const result = await fixture.context.indexCodebase(fixture.root);
+            assert.equal(result.status, 'completed');
+            assert.equal(result.publication.status, 'activated');
+            const state = await readNavigation(fixture.context, fixture.root);
+            const coverage = state.relationships.manifest.providerCoverage.find((entry) => entry.providerId === 'satori-typescript-compiler');
+            assert.ok(coverage);
+            assert.equal(coverage.status, 'unavailable');
+            assert.equal(coverage.failureReason, 'provider_failure');
+            assert.match(coverage.failureMessage ?? '', failure === 'worker death' ? /TypeScript resolution worker exited/ : /injected project job throw/);
+            assert.equal(coverage.sourceFileCount, 1);
+            assert.equal(coverage.analyzedSourceFileCount, 0);
+            assert.ok(state.registry.symbols.some((symbol) => symbol.name === 'target'));
+            const calls = callTargets(state.relationships.records, state.registry.symbolsByInstanceId);
+            assert.ok(calls.some(({ source, target }) => source.file === 'helper.py' && target.file === 'helper.py'), 'other-language call evidence must remain published');
+            assert.ok(!calls.some(({ source }) => source.file === 'src/run.ts'));
+            assert.ok(jobs.length > 0);
+            assert.ok(jobs.every((worker) => worker.threadId === -1));
+            const inner = await (analyzer as unknown as {
+                analyzerPromise: Promise<{ shards: { worker?: Worker }[]; activeJobs: Set<unknown> }>;
+            }).analyzerPromise;
+            assert.equal(inner.activeJobs.size, 0);
+            assert.ok(inner.shards.every((shard) => shard.worker === undefined), 'coverage recovery must not restart a worker');
+        } finally {
+            Worker.prototype.postMessage = original;
+            await fixture.close();
+        }
+    });
+}
+
+test('cancelling an isolated TypeScript project job drains indexing without publication', { timeout: 60_000 }, async () => {
+    const analyzer = new LazyTypeScriptSemanticProjectAnalyzer();
+    const original = Worker.prototype.postMessage;
+    let started!: (worker: Worker) => void;
+    const jobStarted = new Promise<Worker>((resolve) => { started = resolve; });
+    Worker.prototype.postMessage = function (message, ...args) {
+        if (message.method === 'analyze' && message.input?.language === 'typescript') {
+            started(this);
+            return;
+        }
+        return original.call(this, message, ...args);
+    };
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/run.ts': 'export function run() { return 1; }\n',
+    }, analyzer);
+    try {
+        const rejection = assert.rejects(fixture.context.indexCodebase(fixture.root), /disposed/);
+        const worker = await jobStarted;
+        await analyzer.dispose();
+        await rejection;
+        assert.equal(worker.threadId, -1);
+        assert.equal(fixture.context.getCurrentPublication(fixture.root) ?? null, null);
+    } finally {
+        Worker.prototype.postMessage = original;
+        await fixture.close();
+    }
+});
 
 test('late TypeScript resolution failure preserves a searchable Publication with unavailable call-graph coverage', async () => {
     const failingAnalyzer: ResolutionProjectAnalyzer = {

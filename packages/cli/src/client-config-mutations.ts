@@ -148,8 +148,7 @@ export function prepareProjectProfileInstall(repoDir: string, profile: InstallPr
             if (next === current) {
                 return;
             }
-            ensureParentDir(filePath);
-            fs.writeFileSync(filePath, next, "utf8");
+            writeTextFileAtomic(filePath, next);
         },
     };
 }

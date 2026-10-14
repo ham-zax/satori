@@ -3,11 +3,8 @@ import * as path from 'path';
 import * as os from 'os';
 
 export class EnvManager {
-    private envFilePath: string;
-
-    constructor() {
-        const homeDir = os.homedir();
-        this.envFilePath = path.join(homeDir, '.satori', '.env');
+    private get envFilePath(): string {
+        return path.join(os.homedir(), '.satori', '.env');
     }
 
     /**

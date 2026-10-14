@@ -2069,8 +2069,8 @@ export class ToolHandlers {
         return this.navigationHandlers.handleFileOutline(args, workspacePolicy);
     }
 
-    public async handleCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy) {
-        return this.navigationHandlers.handleCallGraph(args, workspacePolicy);
+    public async handleCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal) {
+        return this.navigationHandlers.handleCallGraph(args, workspacePolicy, signal);
     }
 
     public async handleTracePath(args: ToolArgs) {

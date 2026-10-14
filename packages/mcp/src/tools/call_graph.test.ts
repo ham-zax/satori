@@ -1,3 +1,6 @@
+import type { PublicationLease, SymbolRecord, SymbolRegistry } from '@satori-code/core';
+import { ToolHandlers } from '../core/handlers.js';
+import { NavigationHandlers } from '../core/navigation-handlers.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -413,4 +416,77 @@ test('call_graph substitutes the authorized canonical path before handler dispat
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test("call_graph cancellation stops source scanning and releases the publication lease", async (t) => {
+    const root = fs.mkdtempSync(path.resolve("satori-call-graph-test-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const files = Array.from({ length: 32 }, (_, i) => `${String(i).padStart(2, "0")}.ts`);
+    for (const file of files) fs.writeFileSync(path.join(root, file), "request();\n");
+    const target = {
+        symbolInstanceId: "target", name: "request", file: files[0]!, language: "typescript",
+        kind: "function", label: "request", qualifiedName: "request", parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 1 },
+        symbolKey: "target", fileHash: "fixture", extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: files.map((file) => ({ path: file })) },
+        symbolsByFile: new Map([[target.file, [target]]]),
+    } as unknown as SymbolRegistry;
+    let released = false;
+    let published = false;
+    let sourceReads = 0;
+    let scanning = false;
+    const controller = new AbortController();
+    const abortReason = new Error("deterministic scan cancellation");
+    const lease = {
+        id: "publication-1", publication: { id: "publication-1", canonicalRoot: root },
+        release: () => { released = true; },
+    } as PublicationLease;
+    const policy = createSessionWorkspacePolicy({ roots: [root], homeDirectory: path.dirname(root), stateRoot: path.join(root, "state") });
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: root }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        isPartialIndexNavigationUnavailable: () => false,
+        isCallGraphLanguageSupported: () => true,
+        loadPreparedNavigationSymbolsByFile: async () => ({ status: "ok", registry, symbols: [target] }),
+        loadPreparedNavigationCompatibility: async () => ({ relationships: { status: "ok" } }),
+        getRegistryFileFreshness: () => ({ status: "fresh" }),
+        getPublicationNavigationAddress: () => ({ publicationId: lease.id, navigationRoot: root }),
+        buildRelationshipBackedCallGraph: async (input: { findExactSourceReferences: (symbol: SymbolRecord) => Promise<unknown> }) => {
+            scanning = true;
+            await input.findExactSourceReferences(target);
+            throw new Error("cancelled scan must not finish");
+        },
+        toolResponseBuilders: { buildInvalidCallGraphRequestPayload: (_context: unknown, message: string) => { throw new Error(message); } },
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => { published = true; },
+        stringifyToolJson: JSON.stringify,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const toolHandlers = {
+        navigationHandlers,
+        handleCallGraph: ToolHandlers.prototype.handleCallGraph,
+    } as unknown as ToolHandlers;
+    const ctx = {
+        toolHandlers,
+        requestSignal: controller.signal,
+        workspacePolicy: {
+            ...policy,
+            authorizePath(file: string) {
+                if (scanning) {
+                    sourceReads += 1;
+                    controller.abort(abortReason);
+                }
+                return policy.authorizePath(file);
+            },
+        },
+    } as unknown as ToolContext;
+    await assert.rejects(callGraphTool.execute({
+        path: root, symbolRef: { file: target.file, symbolId: "target" },
+    }, ctx), (error: unknown) => error === abortReason);
+    assert.equal(released, true);
+    assert.equal(published, false);
+    assert.equal(sourceReads, 1);
 });

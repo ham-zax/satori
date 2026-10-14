@@ -158,6 +158,6 @@ export const callGraphTool: McpTool = {
             return executionContext.response;
         }
 
-        return executionContext.context.toolHandlers.handleCallGraph(input, executionContext.context.workspacePolicy);
+        return executionContext.context.toolHandlers.handleCallGraph(input, executionContext.context.workspacePolicy, ctx.requestSignal);
     }
 };

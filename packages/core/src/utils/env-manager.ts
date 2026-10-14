@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { randomUUID } from 'node:crypto';
 
 export class EnvManager {
     private get envFilePath(): string {
@@ -45,7 +46,7 @@ export class EnvManager {
             // Ensure directory exists
             const envDir = path.dirname(this.envFilePath);
             if (!fs.existsSync(envDir)) {
-                fs.mkdirSync(envDir, { recursive: true });
+                fs.mkdirSync(envDir, { recursive: true, mode: 0o700 });
             }
 
             let content = '';
@@ -78,7 +79,14 @@ export class EnvManager {
                 console.log(`[EnvManager] ✅ Added ${name} to ${this.envFilePath}`);
             }
 
-            fs.writeFileSync(this.envFilePath, content, 'utf-8');
+            const temporaryPath = `${this.envFilePath}.${randomUUID()}.tmp`;
+            try {
+                fs.writeFileSync(temporaryPath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+                fs.chmodSync(temporaryPath, 0o600);
+                fs.renameSync(temporaryPath, this.envFilePath);
+            } finally {
+                fs.rmSync(temporaryPath, { force: true });
+            }
 
         } catch (error) {
             console.error(`[EnvManager] ❌ Failed to write env file: ${error}`);

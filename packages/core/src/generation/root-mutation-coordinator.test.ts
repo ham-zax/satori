@@ -194,3 +194,39 @@ test('lease state honours SATORI_STATE_ROOT when no stateDir is given', (t) => {
     assert.ok(fs.existsSync(leaseFile), `expected lease file at ${leaseFile}`);
     assert.deepEqual(fs.readdirSync(fakeHome), []);
 });
+
+for (const phase of ['release', 'stale', 'write-failure'] as const) {
+    test(`root mutex preserves a replacement lock during ${phase}`, (t) => {
+        const { root, stateDir, statePath } = fixture(t);
+        const lockPath = statePath.replace(/\.json$/, '.lock');
+        const displaced = `${lockPath}.displaced`;
+        const replacement = '{"pid":123,"processStartTime":"replacement"}';
+        const failure = new Error('injected owner write failure');
+        const replace = () => {
+            fs.renameSync(lockPath, displaced);
+            fs.writeFileSync(lockPath, replacement);
+        };
+        const coordinator = new MutationLeaseCoordinator({ stateDir, lockWaitMs: 0, currentProcess: { pid: process.pid },
+            processInspector: { inspect: () => { replace(); return null; } },
+        });
+        const internals = coordinator as unknown as { withRootLock<T>(root: string, fn: () => T): T };
+        fs.mkdirSync(stateDir);
+        if (phase === 'stale') {
+            fs.writeFileSync(lockPath, '{"pid":123}');
+            const now = Date.now();
+            let calls = 0;
+            t.mock.method(Date, 'now', () => now + (calls++ < 2 ? 0 : 1));
+            assert.throws(() => internals.withRootLock(root, () => assert.fail('must not acquire replacement')), /Timed out/);
+        } else if (phase === 'write-failure') {
+            const originalWrite = fs.writeFileSync;
+            t.mock.method(fs, 'writeFileSync', (...args: Parameters<typeof fs.writeFileSync>) => {
+                if (typeof args[0] === 'number') { replace(); throw failure; }
+                return originalWrite(...args);
+            });
+            assert.throws(() => internals.withRootLock(root, () => assert.fail('write failed')), (error) => error === failure);
+        } else {
+            internals.withRootLock(root, replace);
+        }
+        assert.equal(fs.readFileSync(lockPath, 'utf8'), replacement);
+    });
+}

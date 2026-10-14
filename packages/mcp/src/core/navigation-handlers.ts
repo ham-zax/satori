@@ -1424,7 +1424,9 @@ export class NavigationHandlers {
     public async handleCallGraph(
         args: ToolArgs,
         workspacePolicy: SessionWorkspacePolicy,
+        signal?: AbortSignal,
     ): Promise<ToolTextResponse> {
+        signal?.throwIfAborted();
         const rawDirection = args?.direction;
         const direction: CallGraphDirection = rawDirection === "callers" || rawDirection === "callees" || rawDirection === "both"
             ? rawDirection
@@ -1856,6 +1858,7 @@ export class NavigationHandlers {
                     ...(callGraphPathScope ? { scope: callGraphPathScope } : {}),
                     limit: Number.MAX_SAFE_INTEGER,
                     readPublishedSource: readExactPublishedSource,
+                    signal,
                 })
             );
 
@@ -2070,7 +2073,9 @@ export class NavigationHandlers {
             if ([...fileFreshnessByPath.values()].some(value => value.sourceState !== "fresh")) {
                 relationshipBackedGraph.warnings = [...(relationshipBackedGraph.warnings ?? []), "CALL_GRAPH_SOURCE_FRESHNESS_PARTIAL"];
             }
+            signal?.throwIfAborted();
             await this.host.touchWatchedCodebase(effectiveRoot);
+            signal?.throwIfAborted();
             const navigationAuthority = resolveCallGraphNavigationAuthority({
                 publicationId: servingNavigation.publicationId,
                 relationshipManifestHash: compatibility.relationships.manifestHash,
@@ -2102,6 +2107,7 @@ export class NavigationHandlers {
                 }
                 : outcome.result;
         } catch (error: unknown) {
+            signal?.throwIfAborted();
             const pathResult = typeof args?.path === "string"
                 ? requireAbsoluteFilesystemPath(args.path)
                 : null;

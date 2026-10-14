@@ -731,17 +731,18 @@ export class MutationLeaseCoordinator {
                 break;
             } catch (error) {
                 if (descriptor !== null) {
+                    try { removeLockIfUnchanged(lockPath, fs.fstatSync(descriptor)); } catch { /* Best-effort unlock. */ }
                     try { fs.closeSync(descriptor); } catch { /* Best-effort close. */ }
-                    try { fs.unlinkSync(lockPath); } catch { /* Best-effort unlock. */ }
                     throw error;
                 }
                 if (!isRecord(error) || error.code !== 'EEXIST') throw error;
-                if (this.shouldBreakLock(lockPath)) {
-                    try {
-                        fs.unlinkSync(lockPath);
-                    } catch {
-                        // Another contender resolved the stale mutex first.
+                try {
+                    const existingStat = fs.lstatSync(lockPath);
+                    if (this.shouldBreakLock(lockPath, existingStat)) {
+                        removeLockIfUnchanged(lockPath, existingStat);
                     }
+                } catch {
+                    // Another contender resolved the stale mutex first.
                 }
                 sleepSync(this.lockRetryMs);
             }
@@ -753,19 +754,16 @@ export class MutationLeaseCoordinator {
             return fn();
         } finally {
             try {
-                fs.closeSync(descriptor);
-            } catch {
-                // Best-effort close.
-            }
-            try {
-                fs.unlinkSync(lockPath);
+                removeLockIfUnchanged(lockPath, fs.fstatSync(descriptor));
             } catch {
                 // Best-effort unlock.
+            } finally {
+                try { fs.closeSync(descriptor); } catch { /* Best-effort close. */ }
             }
         }
     }
 
-    private shouldBreakLock(lockPath: string): boolean {
+    private shouldBreakLock(lockPath: string, expectedStat?: fs.Stats): boolean {
         let parsed: unknown;
         try {
             parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
@@ -775,7 +773,7 @@ export class MutationLeaseCoordinator {
         if (!isRecord(parsed) || typeof parsed.pid !== 'number') {
             try {
                 // Allow an in-flight writer the normal lock wait interval to finish.
-                return Date.now() - fs.statSync(lockPath).mtimeMs > this.lockWaitMs;
+                return Date.now() - (expectedStat ?? fs.lstatSync(lockPath)).mtimeMs > this.lockWaitMs;
             } catch {
                 return false;
             }
@@ -789,5 +787,17 @@ export class MutationLeaseCoordinator {
         } catch {
             return false;
         }
+    }
+}
+
+/** A lock pathname may already belong to another contender by cleanup time. */
+function removeLockIfUnchanged(lockPath: string, expected: fs.Stats): void {
+    try {
+        const current = fs.lstatSync(lockPath);
+        if (current.dev === expected.dev && current.ino === expected.ino) {
+            fs.unlinkSync(lockPath);
+        }
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
 }

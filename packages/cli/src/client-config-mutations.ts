@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-parser";
 import { CliError } from "./errors.js";
+import { updateCodexConfig } from "./codex-config.js";
+import { isManagedCommandParts } from "./managed-runtime-paths.js";
 import type { InstallProfile } from "./args.js";
 import type {
     ClientTarget,
@@ -15,8 +17,6 @@ import {
     SATORI_RUNTIME_ENV_VARS,
 } from "./install-contracts.js";
 
-export const MANAGED_BLOCK_START = "# >>> satori-cli managed satori start >>>";
-export const MANAGED_BLOCK_END = "# <<< satori-cli managed satori end <<<";
 export interface CompanionMutation {
     companion: CompanionTarget;
     changed: boolean;
@@ -78,10 +78,6 @@ export function escapeRegExp(value: string): string {
 
 export function toTomlString(value: string): string {
     return JSON.stringify(value);
-}
-
-export function buildTomlArray(values: string[]): string {
-    return `[${values.map(toTomlString).join(", ")}]`;
 }
 
 export function buildSatoriProjectConfig(profile: InstallProfile): string {
@@ -223,95 +219,21 @@ export function writeTextFileAtomic(filePath: string, content: string, mode?: nu
     }
 }
 
-export function buildCodexManagedBlock(runtimeCommand: ManagedRuntimeCommand): string {
-    return [
-        MANAGED_BLOCK_START,
-        "[mcp_servers.satori]",
-        `command = ${toTomlString(runtimeCommand.command)}`,
-        `args = ${buildTomlArray(runtimeCommand.args)}`,
-        "# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js.",
-        "# env_vars forwards optional credentials and operational overrides.",
-        `env_vars = ${buildTomlArray([...SATORI_RUNTIME_ENV_VARS])}`,
-        MANAGED_BLOCK_END,
-        "",
-    ].join("\n");
-}
-
-export function codexHasUnmanagedSatoriSection(content: string): boolean {
-    if (!content.includes("[mcp_servers.satori]")) {
-        return false;
-    }
-    return !(content.includes(MANAGED_BLOCK_START) && content.includes(MANAGED_BLOCK_END));
-}
-
 export function prepareCodexInstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
-    const current = readTextIfExists(filePath) ?? "";
-    if (codexHasUnmanagedSatoriSection(current)) {
-        throw new CliError(
-            "E_USAGE",
-            `Refusing to overwrite unmanaged Satori config in ${filePath}. Remove [mcp_servers.satori] manually or convert it to the managed block first.`,
-            2
-        );
-    }
-
-    const managedBlock = buildCodexManagedBlock(runtimeCommand);
-    let next = current;
-    if (current.includes(MANAGED_BLOCK_START) && current.includes(MANAGED_BLOCK_END)) {
-        next = current.replace(
-            new RegExp(`${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"),
-            managedBlock
-        );
-    } else if (current.trim().length === 0) {
-        next = managedBlock;
-    } else {
-        next = `${normalizeTrailingNewline(current)}\n${managedBlock}`;
-    }
-
-    return {
-        changed: next !== current,
-        apply: () => {
-            if (next === current) {
-                return;
-            }
-            ensureParentDir(filePath);
-            writeTextFileAtomic(filePath, next);
-        },
-    };
+    return prepareCodexMutation(filePath, runtimeCommand, "install");
 }
 
-export function prepareCodexUninstall(filePath: string): FileMutation {
-    const current = readTextIfExists(filePath);
-    if (!current) {
-        return { changed: false, apply: () => {} };
-    }
-    if (codexHasUnmanagedSatoriSection(current)) {
-        throw new CliError(
-            "E_USAGE",
-            `Refusing to remove unmanaged Satori config in ${filePath}. Remove [mcp_servers.satori] manually instead.`,
-            2
-        );
-    }
-    if (!current.includes(MANAGED_BLOCK_START) || !current.includes(MANAGED_BLOCK_END)) {
-        return { changed: false, apply: () => {} };
-    }
+export function prepareCodexUninstall(filePath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    return prepareCodexMutation(filePath, runtimeCommand, "uninstall");
+}
 
-    const withoutManagedBlock = current
-        .replace(new RegExp(`\\n?${escapeRegExp(MANAGED_BLOCK_START)}[\\s\\S]*?${escapeRegExp(MANAGED_BLOCK_END)}\\n?`, "m"), "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .replace(/^\n+/, "");
-    const next = withoutManagedBlock;
-
-    if (next === current) {
-        return { changed: false, apply: () => {} };
-    }
-
+function prepareCodexMutation(filePath: string, runtimeCommand: ManagedRuntimeCommand, operation: "install" | "uninstall"): FileMutation {
+    const current = readTextIfExists(filePath) ?? "";
+    const next = updateCodexConfig(current, filePath, runtimeCommand, operation);
     return {
         changed: next !== current,
         apply: () => {
-            if (next === current) {
-                return;
-            }
-            writeTextFileAtomic(filePath, next);
+            if (next !== current) writeTextFileAtomic(filePath, next);
         },
     };
 }
@@ -342,42 +264,6 @@ export function buildClaudeServerConfig(runtimeCommand: ManagedRuntimeCommand, e
         args: runtimeCommand.args,
         env: buildPreservedManagedEnv(existing?.env),
     };
-}
-
-/** Ownership is this home's launcher exactly; another home's launcher belongs to that install. */
-export function isManagedLauncherPath(value: unknown, expectedLauncher: string): value is string {
-    return typeof value === "string" && canonicalPath(value) === canonicalPath(expectedLauncher);
-}
-
-/**
- * Resolves symlinks through the deepest existing ancestor, so a symlinked HOME
- * spelling matches even while the launcher file itself does not exist yet.
- */
-function canonicalPath(value: string): string {
-    const missing: string[] = [];
-    let current = path.resolve(value);
-    for (;;) {
-        try {
-            return path.join(fs.realpathSync(current), ...missing.reverse());
-        } catch {
-            const parent = path.dirname(current);
-            if (parent === current) return path.resolve(value);
-            missing.push(path.basename(current));
-            current = parent;
-        }
-    }
-}
-
-export function isManagedCommandParts(command: unknown, args: unknown, expectedLauncher: string): boolean {
-    if (!Array.isArray(args)) {
-        return false;
-    }
-
-    const entryPath = args[0];
-    return typeof command === "string"
-        && command.length > 0
-        && args.length === 1
-        && isManagedLauncherPath(entryPath, expectedLauncher);
 }
 
 export function isManagedClaudeEntry(value: unknown, expectedLauncher: string): value is Record<string, unknown> {
@@ -758,7 +644,7 @@ export function prepareConfigMutation(
     if (target.client === "codex") {
         mutation = command.kind === "install"
             ? prepareCodexInstall(target.configPath, runtimeCommand)
-            : prepareCodexUninstall(target.configPath);
+            : prepareCodexUninstall(target.configPath, runtimeCommand);
     } else if (target.client === "claude" || target.client === "agy") {
         // Both keep Satori under mcpServers.satori; uninstall removal is identical.
         mutation = command.kind === "install"

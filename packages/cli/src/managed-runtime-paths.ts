@@ -1,4 +1,5 @@
 import path from "node:path";
+import fs from "node:fs";
 import {
     MANAGED_BIN_DIR,
     MANAGED_LAUNCHER_FILE,
@@ -64,4 +65,40 @@ export function resolveManagedClientCommand(homeDir: string): ManagedRuntimeComm
         command: process.execPath,
         args: [resolveLauncherPath(homeDir)],
     };
+}
+
+/** Ownership is this home's launcher exactly; another home's launcher belongs to that install. */
+export function isManagedLauncherPath(value: unknown, expectedLauncher: string): value is string {
+    return typeof value === "string" && canonicalPath(value) === canonicalPath(expectedLauncher);
+}
+
+/**
+ * Resolves symlinks through the deepest existing ancestor, so a symlinked HOME
+ * spelling matches even while the launcher file itself does not exist yet.
+ */
+function canonicalPath(value: string): string {
+    const missing: string[] = [];
+    let current = path.resolve(value);
+    for (;;) {
+        try {
+            return path.join(fs.realpathSync(current), ...missing.reverse());
+        } catch {
+            const parent = path.dirname(current);
+            if (parent === current) return path.resolve(value);
+            missing.push(path.basename(current));
+            current = parent;
+        }
+    }
+}
+
+export function isManagedCommandParts(command: unknown, args: unknown, expectedLauncher: string): boolean {
+    if (!Array.isArray(args)) {
+        return false;
+    }
+
+    const entryPath = args[0];
+    return typeof command === "string"
+        && command.length > 0
+        && args.length === 1
+        && isManagedLauncherPath(entryPath, expectedLauncher);
 }

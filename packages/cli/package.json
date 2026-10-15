@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
-    "jsonc-parser": "^3.3.1"
+    "jsonc-parser": "^3.3.1",
+    "toml-eslint-parser": "^1.0.3"
   },
   "satoriManagedRuntime": {
     "mcp": "0.9.2",

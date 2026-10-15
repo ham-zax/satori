@@ -29,6 +29,12 @@ If no supported client is detected, Satori stops before runtime installation and
 shows explicit client commands. `satori uninstall` defaults to all supported
 clients; use `--client auto` to limit cleanup to currently detected clients.
 
+Codex entries pointing to this home's `~/.satori/bin/satori-mcp.js` are updated
+automatically, including after Codex rewrites its config. Satori changes its
+launcher wiring while preserving other servers, credentials, and user options
+such as timeouts. Comment markers are not required. Invalid TOML or a different
+custom server named `satori` stops installation before runtime downloads.
+
 The package installs the `satori` command. Run `satori` without arguments for
 human-readable help.
 

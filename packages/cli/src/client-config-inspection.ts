@@ -9,18 +9,15 @@ import type {
     ManagedRuntimeCommand,
 } from "./install-contracts.js";
 import { resolveClientTargets } from "./client-targets.js";
-import { resolveLauncherPath, resolveManagedClientCommand } from "./managed-runtime-paths.js";
+import { isManagedCommandParts, resolveLauncherPath, resolveManagedClientCommand } from "./managed-runtime-paths.js";
+import { parseCodexConfig } from "./codex-config.js";
 import { SATORI_RUNTIME_ENV_VARS } from "./install-contracts.js";
 import { parseManagedLauncherEnvironment } from "./managed-launcher-script.mjs";
 import {
-    buildCodexManagedBlock,
-    isManagedCommandParts,
-    MANAGED_BLOCK_START,
     objectValue,
     parseJsonObject,
     parseJsoncObject,
     readTextIfExists,
-    toTomlString,
 } from "./client-config-mutations.js";
 
 export function commandMatchesExpected(command: unknown, args: unknown, expected: ManagedRuntimeCommand): boolean {
@@ -67,30 +64,7 @@ export function readCodexRuntimeEnvironment(
     content: string,
     inheritedEnv: NodeJS.ProcessEnv,
 ): Readonly<Record<string, string>> {
-    let section = "";
-    const configured: Record<string, string> = {};
-    for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
-        const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
-        if (table) {
-            section = table[1];
-            continue;
-        }
-        if (section !== "mcp_servers.satori.env") {
-            continue;
-        }
-        const literal = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*("(?:[^"\\]|\\.)*"|'[^']*')\s*(?:#.*)?$/);
-        if (!literal || !SATORI_RUNTIME_ENV_VARS.includes(literal[1] as typeof SATORI_RUNTIME_ENV_VARS[number])) {
-            continue;
-        }
-        const raw = literal[2].startsWith('"')
-            ? JSON.parse(literal[2]) as string
-            : literal[2].slice(1, -1);
-        const resolved = resolveConfiguredEnvironmentValue(raw, inheritedEnv);
-        if (resolved !== undefined) {
-            configured[literal[1]] = resolved;
-        }
-    }
-    return Object.freeze(configured);
+    return filteredRuntimeEnvironment(parseCodexConfig(content).entry?.env, inheritedEnv);
 }
 
 export function verifyManagedClientTarget(
@@ -105,9 +79,13 @@ export function verifyManagedClientTarget(
     try {
         if (target.client === "codex") {
             const content = readTextIfExists(target.configPath) ?? "";
-            matches = content.includes(buildCodexManagedBlock(expected));
-            usesManagedLauncher = content.includes(toTomlString(expected.args[0]));
-            runtimeEnvironment = readCodexRuntimeEnvironment(content, inheritedEnv);
+            const entry = parseCodexConfig(content, target.configPath).entry;
+            disabled = entry?.enabled === false;
+            matches = entry?.url === undefined && commandMatchesExpected(entry?.command, entry?.args, expected) && !disabled
+                && Array.isArray(entry?.env_vars)
+                && SATORI_RUNTIME_ENV_VARS.every((name) => (entry.env_vars as unknown[]).includes(name));
+            usesManagedLauncher = entry?.url === undefined && isManagedCommandParts(entry?.command, entry?.args, expected.args[0]);
+            runtimeEnvironment = filteredRuntimeEnvironment(entry?.env, inheritedEnv);
         } else if (target.client === "claude" || target.client === "agy") {
             const config = parseJsonObject(target.configPath);
             const entry = objectValue(objectValue(config.mcpServers)?.satori);
@@ -139,8 +117,12 @@ export function verifyManagedClientTarget(
         status: matches ? "ok" : "error",
         message: matches
             ? `${target.client} config points to ${expected.args[0]}.`
+            : disabled && target.client === "codex"
+            ? `codex config has the Satori entry disabled. Set enabled to true to enable it.`
             : disabled
             ? `${target.client} config has the Satori entry disabled. Set \"disabled\" to false or rerun install --client ${target.client}.`
+            : target.client === "codex" && usesManagedLauncher
+            ? `Codex Satori launcher settings or environment forwarding need updating. Rerun install --client codex.`
             : `${target.client} config does not point exactly to ${expected.command} ${expected.args[0]}.`,
         runtimeEnvironment,
         usesManagedLauncher,
@@ -154,14 +136,16 @@ export function hasSatoriClientEntry(target: ClientTarget): boolean {
     }
     try {
         if (target.client === "codex") {
-            return content.includes(MANAGED_BLOCK_START) || /\[mcp_servers\.satori(?:\.|\])/.test(content);
+            return parseCodexConfig(content, target.configPath).entry !== undefined;
         }
         if (target.client === "claude" || target.client === "agy") {
             return objectValue(objectValue(parseJsonObject(target.configPath).mcpServers)?.satori) !== undefined;
         }
         return objectValue(objectValue(parseJsoncObject(target.configPath, content).mcp)?.satori) !== undefined;
     } catch {
-        return content.includes("satori");
+        // An invalid Codex document supplies no usable server settings. Selected
+        // install/uninstall targets still parse it strictly before any mutation.
+        return target.client !== "codex" && content.includes("satori");
     }
 }
 
@@ -186,28 +170,8 @@ export function readCodexVectorStore(filePath: string): InstallVectorStore | und
     if (content === null) {
         return undefined;
     }
-    let inSatoriEnvironment = false;
-    let selected: InstallVectorStore | undefined;
-    for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
-        const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
-        if (table) {
-            inSatoriEnvironment = table[1] === "mcp_servers.satori.env";
-            continue;
-        }
-        if (!inSatoriEnvironment || !/^\s*VECTOR_STORE_PROVIDER\s*=/.test(line)) {
-            continue;
-        }
-        const literal = line.match(/^\s*VECTOR_STORE_PROVIDER\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/);
-        const candidate = parseVectorStoreLiteral(literal?.[1] ?? literal?.[2], `Codex config '${filePath}'`);
-        if (!candidate) {
-            throw new CliError("E_USAGE", `Codex config '${filePath}' has an unreadable VECTOR_STORE_PROVIDER value.`, 2);
-        }
-        if (selected && selected !== candidate) {
-            throw new CliError("E_USAGE", `Codex config '${filePath}' contains conflicting VECTOR_STORE_PROVIDER values.`, 2);
-        }
-        selected = candidate;
-    }
-    return selected;
+    const entry = parseCodexConfig(content, filePath).entry;
+    return parseVectorStoreLiteral(objectValue(entry?.env)?.VECTOR_STORE_PROVIDER, `Codex config '${filePath}'`);
 }
 
 export function readClientVectorStore(target: ClientTarget): InstallVectorStore | undefined {

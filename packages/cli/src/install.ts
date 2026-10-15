@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { CliError } from "./errors.js";
+import { prepareConfigMutation } from "./client-config-mutations.js";
 import type {
 } from "./args.js";
 import {
@@ -16,8 +17,10 @@ import {
 } from "./install-preflight.js";
 import {
     assertAutoClientTargets,
+    selectClientTargets,
 } from "./client-targets.js";
 import {
+    resolveManagedClientCommand,
     resolvePotionAssetsRoot,
     resolveRuntimePackageRoot,
 } from "./managed-runtime-paths.js";
@@ -119,6 +122,12 @@ export async function executeInstallCommand(
     const env = options.env ?? process.env;
     if (command.kind === "install" && !command.dryRun) {
         assertAutoClientTargets(command.client, homeDir, env);
+        // Validate before acquisition, but discard these mutations. The final plan
+        // rereads mutable config after preflight and guards it again before writing.
+        const clientCommand = resolveManagedClientCommand(homeDir);
+        for (const target of selectClientTargets(homeDir, command.client, env)) {
+            prepareConfigMutation(target, command, clientCommand);
+        }
     }
     let preflight: InstallPreflightResult | undefined;
     let installedRuntimeCommand = options.runtimeCommand;

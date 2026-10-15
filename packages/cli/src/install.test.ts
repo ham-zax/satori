@@ -2113,7 +2113,7 @@ test("install is idempotent for managed Codex config", async () => {
     });
 });
 
-test("install replaces an existing managed Codex block", async () => {
+test("install updates managed Codex launcher wiring and preserves user options", async () => {
     await withTempHome(async (homeDir) => {
         const codexConfigPath = path.join(homeDir, ".codex", "config.toml");
         fs.mkdirSync(path.dirname(codexConfigPath), { recursive: true });
@@ -2124,9 +2124,10 @@ test("install replaces an existing managed Codex block", async () => {
                 "",
                 "# >>> satori-cli managed satori start >>>",
                 "[mcp_servers.satori]",
-                'command = "old-managed-satori"',
-                'args = ["old"]',
-                "startup_timeout_ms = 180000",
+                'command = "old-node"',
+                `args = [${JSON.stringify(launcherPath(homeDir))}]`,
+                "startup_timeout_sec = 180",
+                "# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js.",
                 "# <<< satori-cli managed satori end <<<",
                 "",
             ].join("\n"),
@@ -2149,8 +2150,9 @@ test("install replaces an existing managed Codex block", async () => {
         assert.equal(content.includes("# Runtime selection is installer-owned by ~/.satori/bin/satori-mcp.js."), true);
         assert.equal(content.includes("VoyageAI"), false);
         assert.equal(content.includes("node_modules"), false);
-        assert.equal(content.includes("old-managed-satori"), false);
-        assert.equal(content.includes("startup_timeout_ms"), false);
+        assert.equal(content.includes("old-node"), false);
+        // The installer owns launcher wiring, while this timeout belongs to the user.
+        assert.equal(content.includes("startup_timeout_sec = 180"), true);
     });
 });
 
@@ -2163,8 +2165,8 @@ test("install preserves user-owned Codex env values outside the managed block", 
             [
                 "# >>> satori-cli managed satori start >>>",
                 "[mcp_servers.satori]",
-                'command = "old-managed-satori"',
-                'args = ["old"]',
+                'command = "old-node"',
+                `args = [${JSON.stringify(launcherPath(homeDir))}]`,
                 "# <<< satori-cli managed satori end <<<",
                 "",
                 "[mcp_servers.satori.env]",

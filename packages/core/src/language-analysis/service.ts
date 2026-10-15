@@ -80,7 +80,7 @@ function fallbackResult(
 
 function readInputField(
     input: LanguageAnalysisInput,
-    field: keyof LanguageAnalysisInput,
+    field: 'content' | 'language' | 'relativePath',
     fallback: string,
 ): string {
     try {
@@ -223,6 +223,7 @@ export function createLanguageAnalysisService(
                     content: input.content,
                     relativePath: input.relativePath,
                     language: normalizeLanguageId(input.language),
+                    ...(input.includeEarlyExitSpans ? { includeEarlyExitSpans: true } : {}),
                 };
                 const strategy = strategyForLanguage(normalizedInput.language);
                 if (strategy.backend === 'bounded_text') {
@@ -318,6 +319,8 @@ export function createLanguageAnalysisService(
                     structuralStatus: 'complete',
                     symbols: evidence.symbols,
                     moduleBindings: evidence.moduleBindings,
+                    ...('earlyExitSpans' in evidence && evidence.earlyExitSpans
+                        ? { earlyExitSpans: evidence.earlyExitSpans } : {}),
                     callSites: evidence.callSites,
                     receiverTypeBindings: evidence.receiverTypeBindings,
                     pythonFlowFacts: evidence.pythonFlowFacts ?? [],

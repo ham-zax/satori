@@ -80,6 +80,7 @@ If you are a coding agent setting up or using Satori, follow these steps.
 **Rules**
 
 - Every `path` is absolute.
+- `manage_index action="status"` can start or join an automatic rebuild for an incompatible tracked root. Check roots serially on memory-constrained hosts.
 - Treat `call_graph` results as leads to verify, not complete proof.
 - Satori is read-only. Make source edits with your own tools.
 - The installer also ships a `satori` skill (`~/.agents/skills/satori`) with the full workflow.

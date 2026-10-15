@@ -17,6 +17,18 @@ const operation: RootMutationOperation = {
 
 const builders = new ToolResponseBuilders({} as ConstructorParameters<typeof ToolResponseBuilders>[0]);
 
+test("manage response explains unknown preflight without changing its machine-readable shape", () => {
+    const envelope = builders.buildManageResponseEnvelope("reindex", "/repo", "ok", "Started background indexing.", {
+        preflight: {
+            outcome: "unknown", confidence: "low", warnings: ["REINDEX_PREFLIGHT_UNKNOWN"],
+            explanation: "Git reports no working-tree changes.",
+        },
+    });
+    assert.equal(envelope.message, "Started background indexing.");
+    assert.equal(envelope.humanText, "Started background indexing.\nPreflight: Git reports no working-tree changes.");
+    assert.deepEqual(envelope.preflight, { outcome: "unknown", confidence: "low", probeFailed: false });
+});
+
 test("not-ready search payload carries the deterministic indexing retry hint", () => {
     const host = {
         buildManageIndexRecommendedAction: () => ({

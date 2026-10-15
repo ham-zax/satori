@@ -5,6 +5,65 @@ import { analyzeWithOxc } from './oxc-adapter';
 import { recoverFlowSymbols } from './flow-recovery';
 import { createLanguageAnalysisService } from './service';
 
+test('early-exit context includes only an adjacent const for a direct identifier test', async () => {
+    const source = [
+        'function settle(items: Item[], response: Response) {',
+        '  const stale = response.id !== expectedId;',
+        '  if (stale) { return; }',
+        '  if (items.some((stale) => stale.bad)) { throw new Error(); }',
+        '  {',
+        '    const stale = response.generation !== generation;',
+        '    if (stale) { return undefined; }',
+        '  }',
+        '  if (response.invalid) return;',
+        '}',
+    ].join('\n');
+    const result = await createLanguageAnalysisService().analyze({
+        content: source, language: 'typescript', relativePath: 'settle.ts', includeEarlyExitSpans: true,
+    });
+    assert.equal(result.structuralStatus, 'complete');
+    assert.deepEqual(result.earlyExitSpans?.map(span => [span.startLine, span.endLine]), [
+        [2, 3], [4, 4], [6, 7], [9, 9],
+    ]);
+    const { earlyExitSpans: _spans, ...ordinaryEvidence } = result;
+    assert.deepEqual(ordinaryEvidence, await createLanguageAnalysisService().analyze({
+        content: source, language: 'typescript', relativePath: 'settle.ts',
+    }), 'collecting context preserves every ordinary analysis field');
+    for (const span of _spans ?? []) {
+        assert.equal(Buffer.from(source).subarray(span.startByte, span.endByte).toString(),
+            source.slice(0, source.length).split('\n').slice(span.startLine - 1, span.endLine).join('\n').trim());
+    }
+});
+
+test('early-exit context respects adjacent statements within a switch case', () => {
+    const content = [
+        'function settle(state: string, response: Response) {',
+        '  switch (state) {',
+        '    case "done":',
+        '      const stale = response.id !== expectedId;',
+        '      if (stale) { return; }',
+        '      break;',
+        '    default:',
+        '      if (response.invalid) throw new Error();',
+        '  }',
+        '}',
+    ].join('\n');
+    const result = analyzeWithOxc({ content, language: 'typescript', relativePath: 'settle.ts', includeEarlyExitSpans: true });
+    assert.deepEqual(result.earlyExitSpans?.map(span => [span.startLine, span.endLine]), [[4, 5], [8, 8]]);
+});
+
+test('early-exit context is opt-in and uses UTF-8 spans for non-ASCII source', () => {
+    const content = '// 😀 café\r\nfunction settle(stale: boolean) {\r\n  if (stale) {\r\n    return;\r\n  }\r\n}';
+    const input = { content, language: 'typescript', relativePath: 'settle.ts' };
+    assert.equal(analyzeWithOxc(input).earlyExitSpans, undefined);
+    const result = analyzeWithOxc({ ...input, includeEarlyExitSpans: true });
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.earlyExitSpans?.map(span => [span.startLine, span.endLine]), [[3, 5]]);
+    const span = result.earlyExitSpans?.[0];
+    assert.ok(span);
+    assert.equal(Buffer.from(content).subarray(span.startByte, span.endByte).toString(), 'if (stale) {\r\n    return;\r\n  }');
+});
+
 test('JavaScript files accept JSX while retaining ordinary JavaScript evidence', () => {
     const source = 'export function Greeting() { return <div>Hello</div>; }';
     const js = analyzeWithOxc({ content: source, language: 'javascript', relativePath: 'Greeting.js' });

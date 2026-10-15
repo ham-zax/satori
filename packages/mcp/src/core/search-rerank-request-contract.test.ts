@@ -74,7 +74,7 @@ test("request contract fixtures bind focus, query, role, and document projection
     assert.ok(fixtures.documentProjectionV5SourceReferences.includes('"containing_symbol_label":"function submit_trade"'));
     assert.ok(fixtures.documentProjectionV5SourceReferences.includes('"source_references":[{'));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("search_rerank_document_v5"));
-    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("bounded_source_selection_v2"));
+    assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("bounded_source_selection_v3"));
     assert.ok(fixtures.sourceSelectionPolicyIdentity.includes("source_before_references_v1"));
     assert.equal(
         fixtures.structuralContext.callAdmission,

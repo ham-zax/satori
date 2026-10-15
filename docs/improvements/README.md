@@ -5,6 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [Live multi-repository audit, 15 October 2026](live-multi-repo-audit-2026-10-15.md) | Six repairs checked; F04 traced; latency open | F02, F03, F05, F09, F10, and F13 have checked repairs. F05 retains lexical context when optional analysis fails. The LateOn profile follows the updated contract. F04 traces identify dirty-source suppression and a file fallback demotion from provider rank 2 to fusion rank 42. The handle class finishes seventh. The inbox owner finishes third. Ranking quality and latency attribution remain open. |
 | [Codex config ownership](codex-config-ownership.md) | Implemented and verified | Semantic launcher ownership and TOML-aware edits preserve user settings; 261 focused tests and native Codex rewrite recovery passed. |
 | [Indexing native memory](indexing-native-memory-plan.md) | Implemented | Design B: baseline WASM parser processes with bounded lifetimes, bounded malloc arenas and semantic-worker release under plans <=4 GiB. 2G passes (138.5 s), 7G median 4.507 GiB / 49.7 s. |
 | [Indexing memory budget](index-memory-budget-plan.md) | Implemented | One frozen plan per full index/sync and a last-run budget hint. 7G median 4.460 GiB / 44.92 s; the 3G/2G failures are fixed by design B (indexing native memory). |

@@ -518,7 +518,7 @@ export class ManageMaintenanceHandlers {
                 const isPartial = publication.status === "partial";
                 statusMessage = isPartial
                     ? `⚠️ Codebase '${trackedRootState.root.path}' is partially indexed (limit_reached).`
-                    : `✅ Codebase '${trackedRootState.root.path}' is fully indexed and ready for search.`;
+                    : `✅ Codebase '${trackedRootState.root.path}' has a complete readable index (source parity: ${sourceFreshness?.state ?? "unverified"}).`;
                 statusMessage += `\n📊 Statistics: ${publication.vector.indexedFiles} files, ${publication.vector.totalChunks} chunks`;
                 statusMessage += `\n📅 Status: ${isPartial ? "limit_reached" : "completed"}`;
                 if (isPartial) {

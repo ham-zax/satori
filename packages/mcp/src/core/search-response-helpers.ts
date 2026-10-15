@@ -494,7 +494,7 @@ export function buildSearchGroupRecommendedAction(
                 start_line: result.evidenceSpan.startLine,
                 end_line: result.evidenceSpan.endLine,
             },
-            reason: "The symbol is large; ground the result in its matched evidence span first.",
+            reason: "Open the matched source evidence before requesting more context.",
         };
     }
 

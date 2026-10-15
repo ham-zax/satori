@@ -869,6 +869,46 @@ test("candidate survival records the exact reranker input and output suffix", as
     );
 });
 
+test("candidate survival separates provider order from definition fusion without changing published ranking", async () => {
+    const results = [
+        candidate("helper", "src/helper.ts", 0.9),
+        candidate("guard", "src/guard.ts", 0.8),
+        candidate("other", "src/other.ts", 0.7),
+    ];
+    const reranker = buildReranker((documents) => documents.map((_document, index) => ({
+        index, relevanceScore: 0.9 - index * 0.1,
+    })));
+    const host = buildHost(results, reranker);
+    host.definitionMetadata = (result) => ({
+        name: result.relativePath === "src/guard.ts" ? "rejectStaleResponse" : "helper",
+        qualifiedName: result.relativePath === "src/guard.ts" ? "rejectStaleResponse" : "helper",
+        file: result.relativePath,
+        kind: "function",
+    });
+    const input = buildInput("where does reject stale response implementation", { debugMode: "full" });
+    input.flags = { definition_discovery: true };
+    const outcome = await run(input, host);
+    assert.equal(outcome.kind, "ok");
+    if (outcome.kind !== "ok") return;
+    const stages = outcome.candidateSurvival?.stages ?? [];
+    const providerStage = stages.find((stage) => stage.stage === "reranker_provider_output");
+    const fusionStage = stages.find((stage) => stage.stage === "reranker_fusion_output");
+    const policyStage = stages.find((stage) => stage.stage === "reranker_output");
+    assert.ok(providerStage, "raw provider order must be visible before fusion");
+    assert.ok(fusionStage, "fusion order must be visible before implementation preference");
+    assert.ok(policyStage);
+    assert.deepEqual(providerStage.candidates.map((entry) => entry.candidateId), ["helper", "guard", "other"]);
+    assert.deepEqual(providerStage.candidates.map((entry) => entry.score), [0.9, 0.8, 0.7]);
+    assert.equal(fusionStage.candidates[0]?.candidateId, "guard");
+    assert.equal(policyStage.candidates[0]?.candidateId, "guard");
+    assert.equal(outcome.orderAuthority, "definition_fusion_order");
+    const withoutDiagnostics = await run({ ...input, debugMode: "none" }, host);
+    assert.equal(withoutDiagnostics.kind, "ok");
+    if (withoutDiagnostics.kind !== "ok") return;
+    assert.deepEqual(outcome.scored, withoutDiagnostics.scored);
+    assert.equal(withoutDiagnostics.candidateSurvival, undefined);
+});
+
 function typedOkProjection(result: { relativePath: string }) {
     const document = `focused rerank body ${result.relativePath}`;
     return {

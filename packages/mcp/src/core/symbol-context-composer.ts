@@ -13,7 +13,9 @@ import {
     type BoundedSourceBudgets,
     type SelectedSourceProjection,
     type SourceSelectionCapabilities,
+    type SourceLineSpan,
 } from "./bounded-source-selector.js";
+import { sourceContextEvidenceOwner, type SourceContextEvidenceOwner } from "./source-context-evidence.js";
 import {
     projectCanonicalSymbolIdentity,
     type CanonicalSymbolRegistryView,
@@ -107,6 +109,7 @@ export interface SymbolContextComposerDependencies {
     }): Promise<PrepareSymbolContextSnapshotResult>;
     prepareSource?: typeof prepareInspectableSource;
     resolveCurrentSpans?: typeof validateCurrentSourceSymbolSpansFromEvidence;
+    sourceContextEvidence?: Pick<SourceContextEvidenceOwner, "collect">;
 }
 
 export interface SymbolContextInclude {
@@ -784,6 +787,7 @@ async function composeSource(input: {
     persistedSymbol: SymbolRecord;
     prepareSource: typeof prepareInspectableSource;
     resolveCurrentSpans: typeof validateCurrentSourceSymbolSpansFromEvidence;
+    sourceContextEvidence: Pick<SourceContextEvidenceOwner, "collect">;
     reservedResponseBytesForSource(input: {
         symbol: SymbolRecord;
         freshness: SourceFreshness;
@@ -901,6 +905,8 @@ async function composeSource(input: {
                 endLine: requestedContinuation.endLine,
             }
             : resolvedSymbol.span;
+        let evidenceSpans: readonly SourceLineSpan[] | undefined;
+        let selectionCapabilities: SourceSelectionCapabilities = prepared.evidence.selectionCapabilities;
         const selectWithBudget = (maxSerializedSourceBytes: number) => selectBoundedSource({
             sourceBytes: prepared.evidence.sourceBytes,
             symbolSpan: selectionSpan,
@@ -908,7 +914,8 @@ async function composeSource(input: {
                 ...input.request.budgets.source,
                 maxSerializedSourceBytes,
             },
-            capabilities: prepared.evidence.selectionCapabilities,
+            capabilities: selectionCapabilities,
+            ...(evidenceSpans ? { evidenceSpans } : {}),
             ...(input.request.query ? { query: input.request.query } : {}),
         });
         const continuationBytesForSource = (source: SelectedSourceProjection): number => {
@@ -958,9 +965,21 @@ async function composeSource(input: {
             let selectionBudget = maximumWithoutContinuation;
             const visitedBudgets = new Set<number>();
             let fittingSelection: typeof selection | undefined;
+            let contextEvidenceRequested = false;
             while (!visitedBudgets.has(selectionBudget)) {
                 visitedBudgets.add(selectionBudget);
-                const candidate = selectWithBudget(selectionBudget);
+                let candidate = selectWithBudget(selectionBudget);
+                if (candidate.status === "selected" && candidate.source.mode === "bounded"
+                    && input.request.query?.trim() && !contextEvidenceRequested) {
+                    contextEvidenceRequested = true;
+                    const spans = await input.sourceContextEvidence.collect(prepared.evidence, resolvedSymbol.language);
+                    if (spans?.length) {
+                        evidenceSpans = spans;
+                        selectionCapabilities = { ...selectionCapabilities,
+                            syntaxBoundaries: "available", controlFlowAnchors: "available" };
+                        candidate = selectWithBudget(selectionBudget);
+                    }
+                }
                 if (candidate.status !== "selected") return minimumResourceLimit(candidate);
 
                 const continuationBytes = continuationBytesForSource(candidate.source);
@@ -1015,7 +1034,7 @@ async function composeSource(input: {
             resolvedSymbol,
             snapshotMatched: resolution.snapshotMatched,
             validatedRelativeFile: prepared.evidence.relativeFile,
-            selectionCapabilities: prepared.evidence.selectionCapabilities,
+            selectionCapabilities,
             finalizer: prepared.finalizer,
         };
     } finally {
@@ -1144,6 +1163,7 @@ export async function composeSymbolContext(
         prepareSource: dependencies.prepareSource || prepareInspectableSource,
         resolveCurrentSpans: dependencies.resolveCurrentSpans
             || validateCurrentSourceSymbolSpansFromEvidence,
+        sourceContextEvidence: dependencies.sourceContextEvidence || sourceContextEvidenceOwner,
         reservedResponseBytesForSource,
     });
     if ("status" in sourceResult && (

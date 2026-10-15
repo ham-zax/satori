@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CliError } from "./errors.js";
+import { inferManageStatusState } from "./format.js";
 import { isExecutedDirectlyForPaths, runCli, type CliSession } from "./index.js";
 import type { ListToolsResult } from "./client.js";
 
@@ -78,7 +79,7 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
                     if (statusPolls < 3) {
                         return { isError: false, content: [{ type: "text", text: "🔄 Codebase '/repo' is currently being indexed." }] };
                     }
-                    return { isError: false, content: [{ type: "text", text: `✅ Codebase '/repo' is fully indexed and ready for search. polls=${statusPolls}` }] };
+                    return { isError: false, content: [{ type: "text", text: `✅ Codebase '/repo' has a complete readable index (source parity: unverified). polls=${statusPolls}` }] };
                 }
             }
             if (mode === "manage_initial_error" && name === "manage_index" && (args.action === "create" || args.action === "reindex")) {
@@ -105,6 +106,17 @@ function createMockSession(mode: "normal" | "envelope" | "timeout_error" | "mana
         }
     };
 }
+
+test("manage status recognizes a readable index in text-only responses", () => {
+    for (const parity of ["verified", "changed", "unverified"]) {
+        assert.equal(inferManageStatusState({ content: [{ type: "text",
+            text: `✅ Codebase '/repo' has a complete readable index (source parity: ${parity}).` }] }), "indexed");
+    }
+    assert.equal(inferManageStatusState({ content: [{ type: "text",
+        text: "✅ Codebase '/repo' is fully indexed and ready for search." }] }), "indexed");
+    assert.equal(inferManageStatusState({ content: [{ type: "text",
+        text: JSON.stringify({ status: "not_ready", reason: "indexing" }) }] }), "indexing");
+});
 
 test("runCli tools list succeeds and emits JSON to stdout", async () => {
     const io = captureIo();
@@ -188,7 +200,7 @@ test("runCli returns the initial manage_index create kickoff response without po
     const { stdout } = io.read();
     assert.equal(exitCode, 0);
     assert.equal(stdout.includes("started indexing"), true);
-    assert.equal(stdout.includes("fully indexed"), false);
+    assert.equal(stdout.includes("complete readable index"), false);
     assert.equal(stdout.includes("polls=3"), false);
 });
 
@@ -215,7 +227,7 @@ test("runCli does not wait on manage_index create/reindex under low call-timeout
     assert.equal(exitCode, 0);
     assert.equal(stderr.includes("E_CALL_TIMEOUT"), false);
     assert.equal(stdout.includes("started indexing"), true);
-    assert.equal(stdout.includes("fully indexed"), false);
+    assert.equal(stdout.includes("complete readable index"), false);
     assert.equal(stdout.includes("polls=3"), false);
 });
 

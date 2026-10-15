@@ -21,6 +21,7 @@ export type ReindexPreflightResult = {
     warnings: WarningCode[];
     confidence: "high" | "low";
     probeFailed?: boolean;
+    explanation?: string;
 };
 
 type GetChangedFilesForCodebaseInput = {
@@ -178,6 +179,7 @@ export function evaluateReindexPreflight(input: EvaluateReindexPreflightInput): 
             warnings: [WARNING_CODES.IGNORE_POLICY_PROBE_FAILED],
             confidence: "low",
             probeFailed: true,
+            explanation: "The working-tree probe failed. Preflight cannot determine whether reindexing is needed.",
         };
     }
 
@@ -187,6 +189,7 @@ export function evaluateReindexPreflight(input: EvaluateReindexPreflightInput): 
             outcome: "unknown",
             warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
             confidence: "low",
+            explanation: "Git reports no working-tree changes. Preflight does not compare the working tree with the indexed source.",
         };
     }
 
@@ -197,6 +200,7 @@ export function evaluateReindexPreflight(input: EvaluateReindexPreflightInput): 
                 outcome: "unknown",
                 warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
                 confidence: "low",
+                explanation: "Only ignore-policy files changed, but no current index is available for comparison.",
             };
         }
         return {
@@ -210,5 +214,6 @@ export function evaluateReindexPreflight(input: EvaluateReindexPreflightInput): 
         outcome: "unknown",
         warnings: [WARNING_CODES.REINDEX_PREFLIGHT_UNKNOWN],
         confidence: "low",
+        explanation: "The working tree contains changes beyond ignore-policy files. Preflight cannot determine whether reindexing is needed.",
     };
 }

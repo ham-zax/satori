@@ -161,6 +161,21 @@ test("a matched evidence target keeps its bounded first read and exact symbol id
     assert.equal(result.target.symbolId, "sym_tool_handlers");
 });
 
+test("a file evidence recommendation describes the source without claiming a large symbol", () => {
+    const result = baseGroup({
+        target: { file: "README.md", span: { startLine: 1, endLine: 40 } },
+        displayLabel: "file README.md:1",
+        symbolKind: "file",
+        evidenceSpan: { startLine: 1, endLine: 40 },
+    });
+    const action = buildSearchGroupRecommendedAction("/repo", result);
+    assert.ok(action);
+    assert.deepEqual(action.args, {
+        path: "/repo/README.md", start_line: 1, end_line: 40,
+    });
+    assert.equal(action.reason, "Open the matched source evidence before requesting more context.");
+});
+
 test('search intent selects an actionable context preset without changing the result target', () => {
     const result = baseGroup({
         target: { file: 'src/owner.ts', span: { startLine: 1, endLine: 30 }, symbolId: 'owner' },

@@ -108,6 +108,9 @@ export class ToolResponseBuilders {
             pendingSync?: ManageIndexResponseEnvelope["pendingSync"];
         } = {},
     ): ManageIndexResponseEnvelope {
+        if (options.preflight?.explanation) {
+            humanText += `\nPreflight: ${options.preflight.explanation}`;
+        }
         const envelope: ManageIndexResponseEnvelope = {
             tool: "manage_index",
             version: 1,

@@ -130,11 +130,15 @@ export interface LanguageAnalysisInput {
     readonly content: string;
     readonly language: string;
     readonly relativePath: string;
+    /** Navigation context only. Indexing does not collect these spans. */
+    readonly includeEarlyExitSpans?: boolean;
 }
 
 interface LanguageAnalysisEvidence {
     readonly backend: LanguageAnalysisBackend;
     readonly symbols: readonly ExtractedSymbol[];
+    /** Exact early-exit syntax, optionally including an adjacent const declaration. No binding claims. */
+    readonly earlyExitSpans?: readonly SourceSpan[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
     readonly receiverTypeBindings: readonly ReceiverTypeBinding[];

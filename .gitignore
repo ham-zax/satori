@@ -111,3 +111,6 @@ piolium/**
 .repomarrow/
 .scratch/**
 .grok/**
+
+# Generated responses and scratch evidence from the local live audit.
+/docs/improvements/live-multi-repo-audit-2026-10-15-evidence/

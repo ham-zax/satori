@@ -232,6 +232,25 @@ export class FileSynchronizer {
         return left.length === right.length && left.every((value, index) => value === right[index]);
     }
 
+    private sourceObservationChangedError(
+        stage: 'captured_hash_validation' | 'captured_file_set_validation' | 'final_observation',
+        changedPaths: readonly string[],
+        partialScan = false,
+        unscannedDirPrefixes: readonly string[] = [],
+    ): Error {
+        const limit = 10;
+        const paths = [...changedPaths].sort(compareContractStrings);
+        const prefixes = [...unscannedDirPrefixes].sort(compareContractStrings);
+        return new Error('[Synchronizer] Source observation changed while the candidate Publication was being prepared. Details: ' + JSON.stringify({
+            stage,
+            changedPaths: paths.slice(0, limit),
+            omittedPathCount: Math.max(0, paths.length - limit),
+            partialScan,
+            unscannedDirPrefixes: prefixes.slice(0, limit),
+            omittedPrefixCount: Math.max(0, prefixes.length - limit),
+        }));
+    }
+
     private buildScanContext(
         forceFullHash: boolean,
         previousHashes: ReadonlyMap<string, string>,
@@ -321,7 +340,7 @@ export class FileSynchronizer {
             );
             for (const [relativePath, capturedHash] of capturedFullIndexSource.fileHashes) {
                 if (scanned.effective.fileHashes.get(relativePath) !== capturedHash) {
-                    throw new Error('[Synchronizer] Source observation changed while the candidate Publication was being prepared.');
+                    throw this.sourceObservationChangedError('captured_hash_validation', [relativePath]);
                 }
             }
             for (const relativePath of scanned.effective.fileHashes.keys()) {
@@ -330,7 +349,7 @@ export class FileSynchronizer {
                     && !isSemanticAuxiliaryFilename(relativePath)
                     && !this.additionalObservablePaths.has(relativePath)
                 ) {
-                    throw new Error('[Synchronizer] Source observation changed while the candidate Publication was being prepared.');
+                    throw this.sourceObservationChangedError('captured_file_set_validation', [relativePath]);
                 }
             }
             effective = scanned.effective;
@@ -386,7 +405,13 @@ export class FileSynchronizer {
                     || observed.effective.unscannedDirPrefixes.length > 0
                     || computeMerkleRoot(observed.effective.fileHashes) !== nextState.merkleRoot
                 ) {
-                    throw new Error('[Synchronizer] Source observation changed while the candidate Publication was being prepared.');
+                    const delta = this.compareStates(nextState.fileHashes, observed.effective.fileHashes);
+                    throw this.sourceObservationChangedError(
+                        'final_observation',
+                        [...delta.added, ...delta.removed, ...delta.modified],
+                        observed.effective.partialScan,
+                        observed.effective.unscannedDirPrefixes,
+                    );
                 }
             },
             commit: (assertMutationCurrent?: () => void) => {

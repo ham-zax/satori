@@ -105,7 +105,7 @@ export function inferManageStatusState(result: unknown): ManageStatusState {
     if (normalized.includes("currently being indexed") || normalized.includes("currently indexing")) {
         return "indexing";
     }
-    if (normalized.includes("fully indexed and ready")) {
+    if (normalized.includes("has a complete readable index") || normalized.includes("fully indexed and ready")) {
         return "indexed";
     }
     if (normalized.includes("indexing failed")) {

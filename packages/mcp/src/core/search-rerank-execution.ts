@@ -535,6 +535,18 @@ export function applyRerankOrder(args: {
             candidateIds: selectedCandidateIds,
             results: rerankResults,
         });
+        if (candidateSurvival) {
+            // Capture provider evidence before policy fusion changes order. Copies
+            // keep diagnostic provider scores out of the published ranking state.
+            appendSearchCandidateStage(
+                candidateSurvival,
+                "reranker_provider_output",
+                validatedItems.map((item) => ({
+                    ...rerankSlice[item.originalIndex]!,
+                    finalScore: item.relevanceScore,
+                })),
+            );
+        }
         const executionFlags = resolveSearchFlags(input.flags);
         let itemsForPolicy = [...validatedItems];
         let definitionFusionApplied = false;
@@ -570,6 +582,16 @@ export function applyRerankOrder(args: {
                 if (aBlend !== bBlend) return aBlend - bBlend;
                 return a.providerRank - b.providerRank;
             });
+        }
+        if (candidateSurvival) {
+            appendSearchCandidateStage(
+                candidateSurvival,
+                "reranker_fusion_output",
+                itemsForPolicy.map((item) => ({
+                    ...rerankSlice[item.originalIndex]!,
+                    finalScore: item.relevanceScore,
+                })),
+            );
         }
         const effectiveRerankItems = preferImplementationCandidates({
             candidates: itemsForPolicy,

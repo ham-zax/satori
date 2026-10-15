@@ -5,9 +5,43 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
+    evaluateReindexPreflight,
     getChangedFilesForCodebase,
     parseGitStatusChangedPathsZ,
 } from "./working-tree-state.js";
+
+test("reindex preflight explains uncertainty without changing its admission outcomes", () => {
+    const cases = [
+        { files: [], available: true, probeFailed: false, hasCurrentPublication: true,
+            outcome: "unknown", explanation: /no working-tree changes/, warning: "REINDEX_PREFLIGHT_UNKNOWN" },
+        { files: ["src/main.ts"], available: true, probeFailed: false, hasCurrentPublication: true,
+            outcome: "unknown", explanation: /beyond ignore-policy files/, warning: "REINDEX_PREFLIGHT_UNKNOWN" },
+        { files: [".satoriignore"], available: true, probeFailed: false, hasCurrentPublication: false,
+            outcome: "unknown", explanation: /no current index/, warning: "REINDEX_PREFLIGHT_UNKNOWN" },
+        { files: [], available: false, probeFailed: true, hasCurrentPublication: true,
+            outcome: "probe_failed", explanation: /probe failed/, warning: "IGNORE_POLICY_PROBE_FAILED" },
+    ];
+    for (const { files, available, probeFailed, hasCurrentPublication, outcome, explanation, warning } of cases) {
+        const result = evaluateReindexPreflight({
+            codebasePath: "/repo", hasCurrentPublication,
+            getWorkingTreeChangedPathsForPreflight: () => ({ files: new Set(files), available, probeFailed }),
+        });
+        assert.equal(result.outcome, outcome);
+        assert.equal(result.confidence, "low");
+        assert.deepEqual(result.warnings, [warning]);
+        assert.match(result.explanation ?? "", explanation);
+        assert.equal(result.probeFailed === true, probeFailed);
+    }
+    const ignoreOnly = evaluateReindexPreflight({
+        codebasePath: "/repo", hasCurrentPublication: true,
+        getWorkingTreeChangedPathsForPreflight: () => ({
+            files: new Set([".gitignore", ".satoriignore", "satori.toml"]), available: true, probeFailed: false,
+        }),
+    });
+    assert.equal(ignoreOnly.outcome, "reindex_unnecessary_ignore_only");
+    assert.equal(ignoreOnly.confidence, "high");
+    assert.deepEqual(ignoreOnly.warnings, ["REINDEX_UNNECESSARY_IGNORE_ONLY"]);
+});
 
 function runGit(repoPath: string, args: string[]): string {
     return execFileSync("git", ["-C", repoPath, ...args], {

@@ -12,7 +12,7 @@ import {
 import { prepareInspectableSource } from "./inspectable-source.js";
 import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 
-const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
+export const CURRENT_SOURCE_MAX_BYTES = 256 * 1024;
 
 export const CURRENT_SOURCE_SPAN_RESOLUTION_POLICY_VERSION = "current_source_span_resolution_v1" as const;
 

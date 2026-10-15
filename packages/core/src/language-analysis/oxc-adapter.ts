@@ -2,7 +2,7 @@ import type { Program } from 'oxc-parser' with { "resolution-mode": "require" };
 
 import type { ExtractedSymbol, ExtractedSymbolKind } from '../languages';
 import { Utf8SourceMap } from './source-map';
-import type { CallSite, LanguageAnalysisInput, ModuleBinding, ReceiverTypeBinding } from './types';
+import type { CallSite, LanguageAnalysisInput, ModuleBinding, ReceiverTypeBinding, SourceSpan } from './types';
 
 const { parseSync } = require('oxc-parser') as typeof import('oxc-parser', { with: { "resolution-mode": "require" } });
 
@@ -17,6 +17,7 @@ type AstNode = {
 export type OxcEvidence = {
     readonly complete: true;
     readonly symbols: readonly ExtractedSymbol[];
+    readonly earlyExitSpans?: readonly SourceSpan[];
     readonly moduleBindings: readonly ModuleBinding[];
     readonly callSites: readonly CallSite[];
     readonly receiverTypeBindings: readonly ReceiverTypeBinding[];
@@ -31,6 +32,7 @@ export type OxcEvidence = {
      */
     readonly typedJavaScriptRecoverable?: true;
     readonly symbols: readonly [];
+    readonly earlyExitSpans?: never;
     readonly moduleBindings: readonly [];
     readonly callSites: readonly [];
     readonly receiverTypeBindings: readonly [];
@@ -239,6 +241,26 @@ function oxcLanguage(language: string, relativePath: string): 'js' | 'jsx' | 'ts
     return 'jsx';
 }
 
+function earlyExitContextStart(node: AstNode, parent?: AstNode): number | undefined {
+    if (node.type !== 'IfStatement' || node.alternate || !isAstNode(node.consequent)) return undefined;
+    const consequent = node.consequent;
+    const terminal = consequent.type === 'BlockStatement' && Array.isArray(consequent.body)
+        ? consequent.body.at(-1) : consequent;
+    if (!isAstNode(terminal) || !['ReturnStatement', 'ThrowStatement'].includes(terminal.type)) return undefined;
+    if (!isAstNode(node.test) || node.test.type !== 'Identifier') return node.start;
+    const statements = parent?.type === 'SwitchCase' ? parent.consequent : parent?.body;
+    if (!Array.isArray(statements)) return node.start;
+    const preceding = statements[statements.indexOf(node) - 1];
+    if (!isAstNode(preceding) || preceding.type !== 'VariableDeclaration'
+        || preceding.kind !== 'const' || !Array.isArray(preceding.declarations) || preceding.declarations.length !== 1) return node.start;
+    const declaration = preceding.declarations[0];
+    // Adjacency and a direct identifier test establish the source context.
+    // Never infer dependencies by recursively collecting names from expressions.
+    return isAstNode(declaration) && isAstNode(declaration.id)
+        && declaration.id.type === 'Identifier' && declaration.id.name === node.test.name
+        ? preceding.start : node.start;
+}
+
 export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
     const lang = oxcLanguage(input.language, input.relativePath);
     const parsed = parseSync(input.relativePath, input.content, {
@@ -260,6 +282,7 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
 
     const sourceMap = new Utf8SourceMap(input.content);
     const symbols: ExtractedSymbol[] = [];
+    const earlyExitSpans: SourceSpan[] | undefined = input.includeEarlyExitSpans ? [] : undefined;
     const callSites: CallSite[] = [];
     const receiverTypeBindings: ReceiverTypeBinding[] = [];
     const visit = (
@@ -269,6 +292,10 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         insideCallable = false,
         insideRegistrationCallback = false,
     ): void => {
+        if (earlyExitSpans) {
+            const start = earlyExitContextStart(node, parent);
+            if (start !== undefined) earlyExitSpans.push(sourceMap.spanFromUtf16(start, node.end));
+        }
         const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
         const kind = callback ? 'function' : symbolKind(node, parent, insideCallable);
         const name = callback ?? (kind ? symbolName(node) : undefined);
@@ -348,5 +375,6 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         }
     }
 
-    return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings, pythonFlowFacts: [] };
+    return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings, pythonFlowFacts: [],
+        ...(earlyExitSpans ? { earlyExitSpans } : {}) };
 }

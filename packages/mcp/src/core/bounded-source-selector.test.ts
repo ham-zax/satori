@@ -212,6 +212,32 @@ test("bounded source selector ranks exact normalized tokens above misleading sub
     }
 });
 
+test("unrelated early-exit evidence cannot displace an exact query match", () => {
+    const lines = [
+        "function run() {",
+        "  if (!enabled) return;",
+        "  if (!connected) throw new Error('offline');",
+        ...Array.from({ length: 40 }, () => "  observe();"),
+        "  persistTransaction();",
+        "  return result;",
+        "}",
+    ];
+    const input = {
+        sourceBytes: Buffer.from(lines.join("\n")),
+        symbolSpan: { startLine: 1, endLine: lines.length },
+        query: "persist transaction",
+        budgets: budgets({ maxSourceLines: 3, maxExcerptLines: 1, maxExcerpts: 3 }),
+        capabilities,
+    };
+    const baseline = selectBoundedSource(input);
+    const result = selectBoundedSource({ ...input,
+        evidenceSpans: [{ startLine: 2, endLine: 2 }, { startLine: 3, endLine: 3 }] });
+    assert.equal(result.status, "selected");
+    if (result.status !== "selected") return;
+    assert.deepEqual(result.source.excerpts.map(excerpt => excerpt.startLine), [1, 44, 45]);
+    assert.deepEqual(result, baseline);
+});
+
 test("bounded source selector merges overlapping evidence and retains selection bases", () => {
     const lines = [
         "function decide() {",

@@ -3,6 +3,7 @@ import os from "node:os";
 import test from "node:test";
 import { ManageMaintenanceHandlers } from "./manage-maintenance-handlers.js";
 import { TrackedRootReadiness } from "./tracked-root-readiness.js";
+import { ToolResponseBuilders } from "./tool-response-builders.js";
 
 function response(
     action: string,
@@ -18,6 +19,57 @@ function response(
         }],
     };
 }
+
+test("status distinguishes readable indexes from source parity while sync remains pending", async () => {
+    for (const state of ["verified", "unverified", "changed", "index_snapshot", "partial"] as const) {
+        const root = os.tmpdir();
+        const sourceFreshness = { state, reason: state === "unverified" ? "sync_active" : "test" };
+        const operation = state === "unverified" ? {
+            id: "sync-op", action: "sync", canonicalRoot: root, generation: 2,
+            acceptedAt: new Date(0).toISOString(), phase: "preflight", progress: 0,
+            pid: 100, executorPid: 200, executorProcessGroupId: 200,
+        } : undefined;
+        const builders = new ToolResponseBuilders({} as never);
+        const handler = new ManageMaintenanceHandlers({
+            mutationRuntime: { getActiveMutation: () => operation, getOperation: () => operation },
+            prepareStatusTrackedRootRead: async () => ({
+                state: "ready", root: { path: root }, navigationStatus: "valid",
+                publication: {
+                    id: "published-1",
+                    publication: {
+                        status: state === "partial" ? "partial" : "complete",
+                        createdAt: new Date(0).toISOString(),
+                        vector: { indexedFiles: 1, totalChunks: 2, collectionName: "collection" },
+                        policy: { policyHash: "policy" },
+                    },
+                },
+            }),
+            context: { inspectSourceFreshnessCheckpoint: async () => ({ status: "valid" }) },
+            syncManager: { assessReadFreshness: async () => ({ sourceFreshness }) },
+            acquirePublicationLease: () => undefined,
+            buildSyncHint: () => ({ tool: "manage_index", args: { action: "sync", path: root } }),
+            manageResponse: (...args: Parameters<ToolResponseBuilders["buildManageResponseEnvelope"]>) => ({
+                content: [{ type: "text", text: JSON.stringify(builders.buildManageResponseEnvelope(...args)) }],
+            }),
+        } as never);
+        const result = await handler.handleGetIndexingStatus({ path: root });
+        const payload = JSON.parse(result.content[0]?.text ?? "{}");
+        assert.equal(payload.status, "ok", payload.humanText);
+        if (state === "partial") {
+            assert.match(payload.message, /partially indexed/);
+            assert.match(payload.humanText, /Search may return incomplete results/);
+        } else {
+            assert.match(payload.message, /complete readable index/);
+            assert.ok(payload.message.includes(`source parity: ${state}`));
+            assert.deepEqual(payload.sourceFreshness, sourceFreshness);
+        }
+        if (state === "unverified") {
+            assert.ok(payload.warnings.includes("SOURCE_FRESHNESS_UNVERIFIED"));
+            assert.equal(payload.pendingSync.operationId, "sync-op");
+            assert.match(payload.humanText, /Current source parity is unverified/);
+        }
+    }
+});
 
 test("cancel accepts a supervised reindex executor and never force-unlocks", async () => {
     const cancellations: Array<{ operationId: string; reason?: string }> = [];

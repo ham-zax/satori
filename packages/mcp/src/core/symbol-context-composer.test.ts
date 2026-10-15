@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as crypto from "node:crypto";
 import test from "node:test";
-import { SYMBOL_REGISTRY_SCHEMA_VERSION, type SymbolRecord, type SymbolRegistry } from "@satori-code/core";
+import { createLanguageAnalysisService, SYMBOL_REGISTRY_SCHEMA_VERSION, type SymbolRecord, type SymbolRegistry } from "@satori-code/core";
 import type { CallGraphEdgeResult as CallGraphEdge } from "./search-types.js";
 import type { CurrentSourceSymbolValidation } from "./current-source-symbols.js";
 import type { SymbolContextRelationshipProjection } from "./symbol-context-composer.js";
@@ -16,6 +16,7 @@ import {
     type PreparedSymbolContextSnapshot,
     type SymbolContextComposerDependencies,
 } from "./symbol-context-composer.js";
+import { SourceContextEvidenceOwner } from "./source-context-evidence.js";
 
 function sha256(bytes: Uint8Array): string {
     return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -288,6 +289,136 @@ function request(overrides: Partial<ComposeSymbolContextInput> = {}): ComposeSym
         ...overrides,
     } as ComposeSymbolContextInput;
 }
+
+function boundedGuardFixture() {
+    const lines = ["class Parent {", "  settle(response: Response) {",
+        ...Array.from({ length: 25 }, () => "    observeWorkerResponses();"),
+        "    const stale = response.generation !== this.generation || response.id !== this.id;",
+        "    if (stale) {", "      return;", "    }",
+        ...Array.from({ length: 25 }, () => "    observeWorkerResponses();"),
+        "    publish(response);", "  }", "}"];
+    const source = lines.join("\n");
+    const data = fixture(source);
+    const input = request({ symbolId: "parent", query: "reject stale worker responses",
+        include: { source: true, siblings: false, callers: false, callees: false },
+        budgets: { ...defaultBudgets(), source: { ...defaultBudgets().source,
+            maxSourceLines: 14, maxExcerptLines: 8, contextLines: 0 } } });
+    return { source, data, input, guard: { startLine: 28, endLine: 31 } };
+}
+
+test("bounded context returns a complete internal guard through the source-evidence owner", async () => {
+    const { source, data, input, guard } = boundedGuardFixture();
+    const deps = dependencies({ source, symbols: data.symbols });
+    const baseline = await composeSymbolContext(input, { ...deps,
+        sourceContextEvidence: { collect: async () => undefined } });
+    assert.equal(baseline.status, "ok");
+    if (baseline.status !== "ok" || !("excerpts" in baseline.context.source)) return;
+    assert.equal(baseline.context.source.excerpts.some(e => e.startLine <= guard.startLine && e.endLine >= guard.endLine), false);
+    const result = await composeSymbolContext(input, { ...deps, sourceContextEvidence: new SourceContextEvidenceOwner() });
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok" || !("excerpts" in result.context.source)) return;
+    assert.ok(result.context.source.excerpts.some(e => e.startLine <= guard.startLine && e.endLine >= guard.endLine));
+    assert.ok("returnedLines" in result.context.source);
+    assert.ok(result.context.source.returnedLines <= input.budgets.source.maxSourceLines);
+    assert.ok(result.context.source.excerptCount <= input.budgets.source.maxExcerpts);
+    assert.equal(result.context.source.selectionCapabilities.controlFlowAnchors, "available");
+});
+
+test("bounded context keeps the exact query match ahead of unrelated syntax guards", async () => {
+    const source = ["class Parent {", "  run() {",
+        "    if (!enabled) return;",
+        "    if (!connected) throw new Error('offline');",
+        ...Array.from({ length: 40 }, () => "    observe();"),
+        "    persistTransaction();", "    return result;", "  }", "}"].join("\n");
+    const data = fixture(source);
+    const input = request({ symbolId: "parent", query: "persist transaction",
+        include: { source: true, siblings: false, callers: false, callees: false },
+        budgets: { ...defaultBudgets(), source: { ...defaultBudgets().source,
+            maxSourceLines: 3, maxExcerptLines: 1, maxExcerpts: 3, contextLines: 0 } } });
+    const result = await composeSymbolContext(input, { ...dependencies({ source, symbols: data.symbols }),
+        sourceContextEvidence: new SourceContextEvidenceOwner() });
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok" || !("excerpts" in result.context.source)) return;
+    assert.deepEqual(result.context.source.excerpts.map(excerpt => excerpt.startLine), [1, 45, 46]);
+    assert.equal(result.context.source.excerpts[1].reason, "query_match");
+});
+
+test("empty syntax evidence preserves the lexical selection and unavailable capabilities", async () => {
+    const source = ["class Parent {", "  run() {",
+        ...Array.from({ length: 40 }, () => "    observe();"),
+        "    persistTransaction();", "  }", "}"].join("\n");
+    const data = fixture(source);
+    const input = request({ symbolId: "parent", query: "persist transaction",
+        include: { source: true, siblings: false, callers: false, callees: false },
+        budgets: { ...defaultBudgets(), source: { ...defaultBudgets().source,
+            maxSourceLines: 3, maxExcerptLines: 1, contextLines: 0 } } });
+    const deps = dependencies({ source, symbols: data.symbols });
+    const baseline = await composeSymbolContext(input, { ...deps,
+        sourceContextEvidence: { collect: async () => undefined } });
+    const owner = new SourceContextEvidenceOwner();
+    let collections = 0;
+    const result = await composeSymbolContext(input, { ...deps,
+        sourceContextEvidence: { collect: async (evidence, language) => {
+            collections += 1;
+            const spans = await owner.collect(evidence, language);
+            assert.deepEqual(spans, []);
+            return spans;
+        } } });
+    assert.equal(result.status, "ok");
+    assert.equal(collections, 1);
+    assert.deepEqual(result, baseline);
+});
+
+test("source edits during syntax collection remove all source evidence and release the descriptor", async () => {
+    const { source, data, input } = boundedGuardFixture();
+    let edited = false;
+    let released = 0;
+    const deps = dependencies({ source, symbols: data.symbols });
+    const prepared = sourceResult(source, async () => edited
+        ? { status: "stale", reason: "source_changed_during_inspection" }
+        : { status: "available", freshness: "current_at_final_observation" });
+    assert.equal(prepared.status, "available");
+    if (prepared.status !== "available") return;
+    prepared.finalizer.release = async () => { released += 1; };
+    const owner = new SourceContextEvidenceOwner();
+    const result = await composeSymbolContext(input, { ...deps, prepareSource: async () => prepared,
+        sourceContextEvidence: { collect: async (evidence, language) => {
+            const spans = await owner.collect(evidence, language);
+            edited = true;
+            return spans;
+        } } });
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.equal(edited, true);
+    assert.equal(result.context.source.status, "stale");
+    assert.deepEqual(result.context.source.excerpts, []);
+    assert.equal(JSON.stringify(result.context.source).includes("response.generation"), false);
+    assert.equal(result.context.continuations.length, 0);
+    assert.equal(released, 1);
+});
+
+test("syntax analysis failures preserve the first selection and capabilities and release the source", async () => {
+    const { source, data, input } = boundedGuardFixture();
+    const deps = dependencies({ source, symbols: data.symbols });
+    const baseline = await composeSymbolContext(input, { ...deps,
+        sourceContextEvidence: { collect: async () => undefined } });
+    assert.equal(baseline.status, "ok");
+    const prepared = sourceResult(source);
+    assert.equal(prepared.status, "available");
+    if (prepared.status !== "available") return;
+    let released = false;
+    prepared.finalizer.release = async () => { released = true; };
+    let analyses = 0;
+    const owner = new SourceContextEvidenceOwner({ ...createLanguageAnalysisService(), analyze: async () => {
+        analyses += 1;
+        throw new Error("injected syntax failure");
+    } });
+    const result = await composeSymbolContext(input, { ...deps, prepareSource: async () => prepared,
+        sourceContextEvidence: owner });
+    assert.equal(analyses, 1);
+    assert.deepEqual(result, baseline);
+    assert.equal(released, true);
+});
 
 test("composer uses one prepared snapshot and returns independent bounded domains", async () => {
     const source = [

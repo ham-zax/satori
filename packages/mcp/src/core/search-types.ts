@@ -249,6 +249,8 @@ export type SearchCandidateSurvivalStageName =
     | "mcp_replay_signals"
     | "mcp_filtered"
     | "reranker_input"
+    | "reranker_provider_output"
+    | "reranker_fusion_output"
     | "reranker_output"
     | "mcp_ranked"
     | "grouped"
@@ -1078,6 +1080,7 @@ export type CallGraphResponseStatus =
 
 export type CallGraphResponseReason =
     | NavigationUnavailableReason
+    | "symbol_outside_scope"
     | "invalid_symbol_ref"
     | "invalid_evidence_continuation"
     | "indexing"

@@ -418,6 +418,39 @@ test('call_graph substitutes the authorized canonical path before handler dispat
     }
 });
 
+test('call_graph distinguishes an out-of-scope symbol and releases its lease', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-call-graph-scope-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const subtree = path.join(root, 'worker');
+    fs.mkdirSync(subtree);
+    let released = false;
+    const lease = {
+        id: 'publication-1', publication: { id: 'publication-1', canonicalRoot: root },
+        release: () => { released = true; },
+    } as PublicationLease;
+    const handlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: 'ready', root: { path: root }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => 'valid',
+        isPartialIndexNavigationUnavailable: () => false,
+        withProofDebugHint: (payload: unknown) => payload,
+        normalizeRelativeFilePath: (file: string) => file,
+        stringifyToolJson: JSON.stringify,
+        touchWatchedCodebase: async () => undefined,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const result = await handlers.handleCallGraph({
+        path: subtree, symbolRef: { file: 'content/client.ts', symbolId: 'client' },
+    }, buildWorkspacePolicy([root]));
+    const payload = JSON.parse(result.content[0]?.text ?? '{}');
+    assert.equal(payload.status, 'not_found');
+    assert.equal(payload.reason, 'symbol_outside_scope');
+    assert.match(payload.message, /outside the requested call_graph path scope/);
+    assert.deepEqual(payload.nodes, []);
+    assert.deepEqual(payload.edges, []);
+    assert.equal(released, true);
+});
+
 test("call_graph cancellation stops source scanning and releases the publication lease", async (t) => {
     const root = fs.mkdtempSync(path.resolve("satori-call-graph-test-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

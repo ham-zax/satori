@@ -1702,7 +1702,7 @@ export class NavigationHandlers {
                     codebaseRoot: effectiveRoot,
                     symbolRef,
                     supported: false,
-                    reason: "missing_symbol",
+                    reason: "symbol_outside_scope",
                     message: `Symbol '${normalizedSymbolFile}' is outside the requested call_graph path scope '${absolutePath}'.`,
                     nodes: [],
                     edges: [],

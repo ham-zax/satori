@@ -440,6 +440,14 @@ Restart OpenCode after restoring the published runtime.
 
 Public paths are absolute. `read_file` is restricted to tracked searchable roots; it is not a general host-filesystem reader.
 
+Interpret response fields by their scope:
+
+- Large search targets can use matched evidence spans. Their `symbolId` still identifies the canonical declaration. Exact symbol reads and outlines return declaration spans.
+- `indexedAt` and `stalenessBucket` describe recorded index age. An unknown age does not establish current-source parity. Read source freshness separately.
+- Continuation `disclosure.truncated` describes that page. `omittedBeyondLimitGroupCount` reports results outside the caller's frozen limit, even when the last page is complete.
+- `call_graph` returns `symbol_outside_scope` when the supplied symbol lies outside the requested subtree. `missing_symbol` remains the absent-symbol reason.
+- Bounded TypeScript and JavaScript symbol context can include parser-derived early-exit guards for the supplied query. Guard context can include the immediately preceding matching const declaration. These are syntax spans, not semantic dependency claims. Source checks and excerpt limits still apply. Other source uses the existing lexical windows when guard evidence is unavailable.
+
 ## Recommended Agent Workflow
 
 ```text
@@ -454,6 +462,8 @@ Public paths are absolute. `read_file` is restricted to tracked searchable roots
 ```
 
 When a tracked Publication becomes incompatible with a managed offline runtime, Satori automatically starts or joins one background reindex and returns `not_ready`/`indexing` so the caller can retry without asking the user to repair the index. Full create/reindex candidate construction runs in a supervised child process group with no-progress and cancellation handling, so a compiler/parser crash is contained to that mutation and a previous completed Publication remains current until a replacement is activated. Automatic maintenance retries transient external/worker failures with bounded exponential backoff; deterministic configuration/incompatibility failures, resource limits, and cancellation remain suppressed until relevant state changes or a successful manual create/reindex supersedes them. Use `sync` for ordinary source changes when refreshed indexed evidence is needed. Search and navigation do not wait for a same-root sync: when a compatible completed Publication exists, they continue from that pinned generation with stale/unverified provenance and pending-sync metadata. Create/reindex operations that do not expose a readable generation still return `not_ready` with the active operation so drivers can retry deterministically. Optional semantic-provider failure does not have to discard a searchable Publication: persisted provider coverage marks the affected call graph `degraded` or `unavailable` instead of claiming complete relationship coverage. For grouped pagination, `limit` bounds the frozen result set across every page and `disclosureLimit` controls only the initial page: `limit=20, disclosureLimit=6` returns up to six initially and freezes up to twenty. Search continuation `"complete"` means complete for that caller-bounded frozen set, never for the full available pool; `omittedBeyondLimitGroupCount` reports groups excluded by `limit`. Treat inbound call-graph results as leads to verify, not compiler-grade blast-radius proof.
+
+`manage_index action="status"` uses the same readiness preparation and can start automatic maintenance. Calls for different roots can start concurrent rebuilds. Check roots serially when host memory is constrained.
 
 ## Index Profiles
 

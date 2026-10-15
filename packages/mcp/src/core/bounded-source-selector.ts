@@ -2,7 +2,7 @@ import { isUtf8 } from "node:buffer";
 
 import { compareContractStrings } from "@satori-code/core";
 
-export const BOUNDED_SOURCE_SELECTION_POLICY_VERSION = "bounded_source_selection_v2" as const;
+export const BOUNDED_SOURCE_SELECTION_POLICY_VERSION = "bounded_source_selection_v3" as const;
 
 export type BoundedSourceSelectionPolicyVersion =
     typeof BOUNDED_SOURCE_SELECTION_POLICY_VERSION;
@@ -338,17 +338,30 @@ function buildOrderedCandidates(input: {
     };
 
     const queryCandidates = buildQueryCandidates(input);
+    const queryTerms = new Set(splitQueryTerms(input.query?.trim() || ""));
+    const evidenceQueryCoverage = (span: SourceLineSpan): number => {
+        const matched = new Set<string>();
+        for (let line = span.startLine; line <= span.endLine; line += 1) {
+            for (const term of lexicalTokens(lineText(input.sourceBytes, input.lines, line))) {
+                if (queryTerms.has(term)) matched.add(term);
+            }
+        }
+        return matched.size;
+    };
     const evidenceCandidates = (input.evidenceSpans || [])
         .map((span) => clampSpanToSymbol(span, input.symbolSpan))
         .filter((span): span is SourceLineSpan => Boolean(span))
         .sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine)
-        .map((span): CandidateRange => ({
+        .map((span) => ({ span, coverage: evidenceQueryCoverage(span) }))
+        // Query slots must not be consumed by unrelated syntax evidence.
+        .filter(({ coverage }) => queryTerms.size === 0 || coverage > 0)
+        .map(({ span, coverage }): CandidateRange => ({
             ...span,
             focusLine: span.startLine,
             reason: "evidence_span",
             selectionBasis: "validated_evidence_span",
             priority: 0,
-            score: 20_000,
+            score: 20_000 + coverage * 100,
         }));
     const queryEvidence = [...evidenceCandidates, ...queryCandidates].sort((left, right) => (
         right.score - left.score

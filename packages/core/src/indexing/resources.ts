@@ -62,6 +62,11 @@ function numericBytes(text: string | undefined): number | undefined {
     return Number.isSafeInteger(number) ? number : undefined;
 }
 
+/** Reads one `key value` counter from a cgroup `memory.stat` file. */
+function statBytes(text: string | undefined, key: string): number | undefined {
+    return numericBytes(new RegExp(`^${key} (\\d+)$`, 'm').exec(text ?? '')?.[1]);
+}
+
 export function isIndexingMemoryStatus(value: unknown): value is IndexingMemoryStatus {
     if (!value || typeof value !== 'object') return false;
     const status = value as IndexingMemoryStatus;
@@ -129,8 +134,12 @@ export class IndexingResourcePlanner {
                         && !absentFiles.has(`${cgroup}/memory.max`)) unknownLimit = true;
                     if (maximum !== undefined) {
                         const current = numericBytes(read(`${cgroup}/memory.current`));
+                        // memory.current counts page cache. The kernel evicts inactive
+                        // file pages before any OOM kill, so they are headroom.
+                        const reclaimable = statBytes(read(`${cgroup}/memory.stat`), 'inactive_file') ?? 0;
                         // A finite limit with unknown usage proves no headroom.
-                        limits.push(Math.max(0, maximum - (current ?? maximum)));
+                        const used = current === undefined ? maximum : Math.max(0, current - reclaimable);
+                        limits.push(Math.max(0, maximum - used));
                     }
                     if (cgroup === CGROUP_ROOT) break;
                     cgroup = path.posix.dirname(cgroup);
@@ -156,7 +165,11 @@ export class IndexingResourcePlanner {
                         // an integer before deciding it is unlimited (>= 2^60).
                         if (maximum < 1n << 60n) {
                             const rawCurrent = read(`${cgroup}/memory.usage_in_bytes`);
-                            const current = /^\d+$/.test(rawCurrent?.trim() ?? '') ? BigInt(rawCurrent!.trim()) : maximum;
+                            // usage_in_bytes counts page cache; see the v2 branch.
+                            const stat = read(`${cgroup}/memory.stat`);
+                            const reclaimable = BigInt(statBytes(stat, 'total_inactive_file') ?? statBytes(stat, 'inactive_file') ?? 0);
+                            const usage = /^\d+$/.test(rawCurrent?.trim() ?? '') ? BigInt(rawCurrent!.trim()) : undefined;
+                            const current = usage === undefined ? maximum : usage > reclaimable ? usage - reclaimable : 0n;
                             const headroom = maximum > current ? maximum - current : 0n;
                             limits.push(Number(headroom > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : headroom));
                         }

@@ -140,6 +140,25 @@ for (const scenario of [
         '/sys/fs/cgroup/parent/memory.max': String(8 * GIB),
         '/sys/fs/cgroup/parent/memory.current': String(2 * GIB),
     }, budget: 6 * GIB, warnings: 0 },
+    { name: 'v2 inactive file cache is reclaimable headroom', membership: '0::/parent/leaf', files: {
+        '/sys/fs/cgroup/parent/memory.max': String(8 * GIB),
+        '/sys/fs/cgroup/parent/memory.current': String(7 * GIB),
+        '/sys/fs/cgroup/parent/memory.stat': `anon ${GIB}\ninactive_file ${4 * GIB}\nactive_file ${2 * GIB}\n`,
+    }, budget: 5 * GIB, warnings: 0 },
+    { name: 'v2 inactive file above usage cannot exceed the limit', membership: '0::/parent/leaf', files: {
+        '/sys/fs/cgroup/parent/memory.max': String(8 * GIB),
+        '/sys/fs/cgroup/parent/memory.current': String(2 * GIB),
+        '/sys/fs/cgroup/parent/memory.stat': `inactive_file ${4 * GIB}\n`,
+    }, budget: 8 * GIB, warnings: 0 },
+    { name: 'v2 finite limit with missing usage stays zero despite cache stats', membership: '0::/parent/leaf', files: {
+        '/sys/fs/cgroup/parent/memory.max': String(8 * GIB),
+        '/sys/fs/cgroup/parent/memory.stat': `inactive_file ${4 * GIB}\n`,
+    }, budget: 0, warnings: 0 },
+    { name: 'v1 inactive file cache is reclaimable headroom', membership: '7:memory:/scope', files: {
+        '/sys/fs/cgroup/memory/scope/memory.limit_in_bytes': String(8 * GIB),
+        '/sys/fs/cgroup/memory/scope/memory.usage_in_bytes': String(7 * GIB),
+        '/sys/fs/cgroup/memory/scope/memory.stat': `inactive_file ${GIB}\ntotal_inactive_file ${4 * GIB}\n`,
+    }, budget: 5 * GIB, warnings: 0 },
     { name: 'v2 no controller files uses MemAvailable', membership: '0::/parent/leaf', files: {}, budget: 63 * GIB, warnings: 0 },
     { name: 'v2 permission error keeps conservative fallback', membership: '0::/parent/leaf', files: {
         '/sys/fs/cgroup/parent/leaf/memory.max': 'EACCES',

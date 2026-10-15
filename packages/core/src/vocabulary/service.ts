@@ -2,21 +2,27 @@ import path from 'node:path';
 import type { PublicationRef } from '../generation/contracts';
 import { isSymbolRegistryManifest } from '../symbols/contracts';
 import { computeSymbolRegistryManifestHash } from '../symbols/registry';
-import { VOCABULARY_FILE, VOCABULARY_INDEX_VERSION, type RepositoryVocabularyIndex, type RepositoryVocabularyFilter,
+import { VOCABULARY_FILE, VOCABULARY_INDEX_VERSION, type RepositoryVocabularyFilter,
     type RepositoryVocabularyResult, type VocabularyDocument, type VocabularyLink } from './contracts';
 import { readBoundedVocabularyFile, vocabularyHash } from './storage';
 import { vocabularyTokens, vocabularyStem } from './extract';
-import { decodeRepositoryVocabularyIndex, type EncodedRepositoryVocabularyIndex } from './codec';
+import { decodeRepositoryVocabularyIndexCompact, type EncodedRepositoryVocabularyIndex } from './codec';
 
-type Posting = { document: VocabularyDocument; evidence: VocabularyLink; weight: number };
+type EncodedDocument = EncodedRepositoryVocabularyIndex['documents'][number];
+type PostingRange = { offset: number; count: number };
 type Loaded = { status: RepositoryVocabularyResult['status']; artifactHash?: string;
-    documents: number; postings: Map<string, Posting[]> };
+    documentCount: number; documents: EncodedDocument[]; dictionary: string[]; postings: Map<string, PostingRange>;
+    pairs: Uint32Array };
 interface VocabularyReadPorts {
     isReadAdmitted(publication: PublicationRef): boolean | Promise<boolean>;
     getNavigationAddress(publication: PublicationRef): { publicationId: string; navigationRoot: string } | null;
 }
-const empty = (status: Loaded['status']): Loaded => ({ status, documents: 0, postings: new Map() });
+const empty = (status: Loaded['status']): Loaded => ({ status, documentCount: 0, documents: [], dictionary: [],
+    postings: new Map(), pairs: new Uint32Array(0) });
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+const MAX_PACKED_ORIGIN = 0xffff_ffff;
+const ORIGIN_STRIDE = 48 * 3;
+const VIA_CODES = ['self', 'parent', 'call'] as const;
 
 /**
  * Automatic aliases must be usable native identifiers: a dot/`::` path of plain
@@ -29,49 +35,86 @@ function isUsableAlias(qualifiedName: string): boolean {
     return /^(?:[A-Za-z_$][A-Za-z0-9_$]*)(?:::[A-Za-z_$][A-Za-z0-9_$]*|\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(qualifiedName);
 }
 
-function prepare(index: RepositoryVocabularyIndex, artifactHash: string): Loaded {
-    const documents = new Map(index.documents.map(document => [document.symbolInstanceId, document]));
-    if (documents.size !== index.documents.length) return empty('corrupt');
-    const postings = new Map<string, Posting[]>();
-    const callers = new Map<string, VocabularyDocument[]>();
-    for (const caller of documents.values()) {
-        for (const target of caller.callees) {
-            const origins = callers.get(target) ?? [];
-            if (origins.length <= 8) origins.push(caller);
-            callers.set(target, origins);
+function prepare(index: EncodedRepositoryVocabularyIndex, artifactHash: string): Loaded {
+    const documents = index.documents;
+    const documentIndexes = new Map<string, number>();
+    for (let documentIndex = 0; documentIndex < documents.length; documentIndex++) {
+        const id = documents[documentIndex]!.symbolInstanceId;
+        if (documentIndexes.has(id)) return empty('corrupt');
+        documentIndexes.set(id, documentIndex);
+    }
+
+    const callers = new Map<number, number[]>();
+    for (let callerIndex = 0; callerIndex < documents.length; callerIndex++) {
+        for (const target of documents[callerIndex]!.callees) {
+            const targetIndex = documentIndexes.get(target);
+            if (targetIndex === undefined) continue;
+            const origins = callers.get(targetIndex) ?? [];
+            if (origins.length <= 8) origins.push(callerIndex);
+            callers.set(targetIndex, origins);
         }
     }
-    for (const document of documents.values()) {
-        const linked = new Map<string, Posting>();
-        const append = (origin: VocabularyDocument, via: VocabularyLink['via'], maximum = 48, identifiersOnly = false) => {
+
+    // originIndex * (48 terms * 3 via codes) + termIndex * 3 + via fits
+    // Uint32: 100,000 documents and at most 48 terms cap this below 14.4M.
+    const postingLists = new Map<string, number[]>();
+    let packingOverflow = false;
+    for (let documentIndex = 0; documentIndex < documents.length; documentIndex++) {
+        const document = documents[documentIndex]!;
+        const linked = new Map<string, number>();
+        const append = (originIndex: number, via: 0 | 1 | 2, maximum = 48, identifiersOnly = false) => {
+            const origin = documents[originIndex]!;
             let added = 0;
-            for (const term of origin.terms) {
+            for (let termIndex = 0; termIndex < origin.terms.length; termIndex++) {
                 if (linked.size >= 96 || added >= maximum) break;
-                if (identifiersOnly && term.kind !== 'identifier') continue;
-                const weight = via === 'self' ? (term.kind === 'identifier' ? 3 : 1) : via === 'parent' ? 0.5 : 0.4;
-                const key = vocabularyStem(term.term);
-                if (!linked.has(key)) { linked.set(key, { document, weight, evidence: {
-                    ...term, via, file: origin.file, fileHash: origin.fileHash, symbolInstanceId: origin.symbolInstanceId,
-                } }); added++; }
+                const [word, kind] = origin.terms[termIndex]!;
+                if (identifiersOnly && kind !== 0) continue;
+                const stem = vocabularyStem(index.dictionary[word]!);
+                if (!linked.has(stem)) {
+                    const packedOrigin = originIndex * ORIGIN_STRIDE + termIndex * 3 + via;
+                    if (!Number.isSafeInteger(packedOrigin) || packedOrigin < 0 || packedOrigin > MAX_PACKED_ORIGIN) {
+                        packingOverflow = true;
+                        return;
+                    }
+                    linked.set(stem, packedOrigin);
+                    added++;
+                }
             }
         };
-        append(document, 'self');
-        const parent = document.parentInstanceId ? documents.get(document.parentInstanceId) : undefined;
-        if (parent && parent.file === document.file) append(parent, 'parent', 24);
+
+        append(documentIndex, 0);
+        const parentIndex = document.parentInstanceId
+            ? documentIndexes.get(document.parentInstanceId) : undefined;
+        if (parentIndex !== undefined && documents[parentIndex]!.file === document.file) append(parentIndex, 1, 24);
         for (const id of document.callees) {
-            const callee = documents.get(id);
-            if (callee) append(callee, 'call', 4, true);
+            const calleeIndex = documentIndexes.get(id);
+            if (calleeIndex !== undefined) append(calleeIndex, 2, 4, true);
         }
         // High fan-in utilities are not evidence that all their callers share a concept.
-        const origins = callers.get(document.symbolInstanceId) ?? [];
-        if (origins.length <= 8) for (const caller of origins) append(caller, 'call', 8);
-        for (const [term, posting] of linked) {
-            const entries = postings.get(term) ?? [];
-            entries.push(posting);
-            postings.set(term, entries);
+        const origins = callers.get(documentIndex) ?? [];
+        if (origins.length <= 8) for (const callerIndex of origins) append(callerIndex, 2, 8);
+
+        if (packingOverflow) return empty('corrupt');
+        for (const [stem, packedOrigin] of linked) {
+            const entries = postingLists.get(stem) ?? [];
+            entries.push(documentIndex, packedOrigin);
+            postingLists.set(stem, entries);
         }
     }
-    return { status: 'ok', artifactHash, documents: documents.size, postings };
+
+    let pairCount = 0;
+    for (const entries of postingLists.values()) pairCount += entries.length / 2;
+    const pairs = new Uint32Array(pairCount * 2);
+    const postings = new Map<string, PostingRange>();
+    let offset = 0;
+    for (const [stem, entries] of postingLists) {
+        const count = entries.length / 2;
+        postings.set(stem, { offset: offset / 2, count });
+        pairs.set(entries, offset);
+        offset += entries.length;
+    }
+    return { status: 'ok', artifactHash, documentCount: documents.length, documents, dictionary: index.dictionary,
+        postings, pairs };
 }
 
 /** Owns generation-bound vocabulary reads and the bounded cache of immutable artifacts. */
@@ -97,17 +140,40 @@ export class RepositoryVocabularyService {
         const loaded = await pending;
         if (loaded.status !== 'ok') return { ...base, status: loaded.status };
         const queryTerms = [...new Set(vocabularyTokens(query.slice(0, 4096)).map(vocabularyStem))].slice(0, 32);
-        const scores = new Map<string, { document: VocabularyDocument; score: number; evidence: VocabularyLink[] }>();
+        const scores = new Map<string, { document: EncodedDocument | VocabularyDocument; score: number; evidence: number[] }>();
+        const acceptedDocuments = accepts ? new Map<number, VocabularyDocument>() : undefined;
+        const getAcceptedDocument = (documentIndex: number): VocabularyDocument => {
+            const cached = acceptedDocuments!.get(documentIndex);
+            if (cached) return cached;
+            const encoded = loaded.documents[documentIndex]!;
+            const materialized: VocabularyDocument = { ...encoded,
+                terms: encoded.terms.map(([word, kind, line]) => ({ term: loaded.dictionary[word]!,
+                    kind: kind === 0 ? 'identifier' : 'source', line })),
+            };
+            acceptedDocuments!.set(documentIndex, materialized);
+            return materialized;
+        };
         for (const term of queryTerms) {
-            const postings = loaded.postings.get(term) ?? [];
-            const idf = Math.log(1 + loaded.documents / (1 + postings.length));
-            for (const posting of postings) {
-                if (accepts && !accepts(posting.document)) continue;
-                const match = scores.get(posting.document.symbolInstanceId)
-                    ?? { document: posting.document, score: 0, evidence: [] };
-                match.score += posting.weight * idf;
-                match.evidence.push(posting.evidence);
-                scores.set(posting.document.symbolInstanceId, match);
+            const range = loaded.postings.get(term);
+            const idf = Math.log(1 + loaded.documentCount / (1 + (range?.count ?? 0)));
+            if (!range) continue;
+            for (let postingIndex = 0; postingIndex < range.count; postingIndex++) {
+                const pairIndex = (range.offset + postingIndex) * 2;
+                const documentIndex = loaded.pairs[pairIndex]!;
+                const packedOrigin = loaded.pairs[pairIndex + 1]!;
+                const compactDocument = loaded.documents[documentIndex]!;
+                const document = accepts ? getAcceptedDocument(documentIndex) : compactDocument;
+                if (accepts && !accepts(document as VocabularyDocument)) continue;
+                const originIndex = Math.floor(packedOrigin / ORIGIN_STRIDE);
+                const termIndex = Math.floor((packedOrigin % ORIGIN_STRIDE) / 3);
+                const via = packedOrigin % 3;
+                const [, kind] = loaded.documents[originIndex]!.terms[termIndex]!;
+                const weight = via === 0 ? (kind === 0 ? 3 : 1) : via === 1 ? 0.5 : 0.4;
+                const match = scores.get(document.symbolInstanceId)
+                    ?? { document, score: 0, evidence: [] };
+                match.score += weight * idf;
+                match.evidence.push(packedOrigin);
+                scores.set(document.symbolInstanceId, match);
             }
         }
         // Alias eligibility is decided before top4 selection so discarded overlength
@@ -121,7 +187,17 @@ export class RepositoryVocabularyService {
             .map(match => ({ symbolInstanceId: match.document.symbolInstanceId,
                 qualifiedName: match.document.qualifiedName, file: match.document.file,
                 language: match.document.language, score: match.score,
-                evidence: match.evidence.map(link => ({ ...link })) }));
+                evidence: match.evidence.map(packedOrigin => {
+                    const originIndex = Math.floor(packedOrigin / ORIGIN_STRIDE);
+                    const termIndex = Math.floor((packedOrigin % ORIGIN_STRIDE) / 3);
+                    const via = packedOrigin % 3;
+                    const origin = loaded.documents[originIndex]!;
+                    const [word, kind, line] = origin.terms[termIndex]!;
+                    const evidenceKind: VocabularyLink['kind'] = kind === 0 ? 'identifier' : 'source';
+                    return { term: loaded.dictionary[word]!, kind: evidenceKind, line,
+                        via: VIA_CODES[via]!, file: origin.file, fileHash: origin.fileHash,
+                        symbolInstanceId: origin.symbolInstanceId };
+                }) }));
         const terms = [...new Set(matches.map(match => match.qualifiedName))].filter(term => term.length <= 128);
         return { status: 'ok', publicationId: publication.id, artifactHash: loaded.artifactHash, terms, matches };
     }
@@ -136,7 +212,7 @@ export class RepositoryVocabularyService {
                 || encoded.normalizedRootPath !== publication.publication.canonicalRoot.replace(/\\/g, '/').replace(/\/$/, '')) {
                 return empty('incompatible');
             }
-            const index = decodeRepositoryVocabularyIndex(encoded);
+            const index = decodeRepositoryVocabularyIndexCompact(encoded);
             if (!index) return empty('corrupt');
             if (index.budgetExceeded) return empty('budget_exceeded');
             const manifest = JSON.parse((await readBoundedVocabularyFile(path.join(navigationRoot, 'manifest.json'))).toString('utf8'));

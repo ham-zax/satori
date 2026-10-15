@@ -2144,7 +2144,7 @@ export class SearchRequestCoordinator {
         }
 
         const nowMs = this.environment.now();
-        const lookup = routedLookup ?? this.continuationCoordinator.lookup(handle, nowMs);
+        const lookup = routedLookup ?? this.continuationCoordinator.lookupForInspection(handle, nowMs);
         if (lookup.status === "expired") {
             return fail("SEARCH_RESULT_SET_EXPIRED", "Search continuation handle has expired. Run search_codebase again.");
         }
@@ -2323,7 +2323,7 @@ export class SearchRequestCoordinator {
         });
         if (advanced !== "advanced") {
             if (advanced === "conflict") {
-                const concurrent = this.continuationCoordinator.lookup(handle, this.environment.now());
+                const concurrent = this.continuationCoordinator.lookupForInspection(handle, this.environment.now());
                 if (
                     concurrent.status === "hit"
                     && concurrent.lastPage?.expectedOffset === expectedOffset

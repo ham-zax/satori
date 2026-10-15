@@ -27,6 +27,7 @@ export interface IndexingResourcePlan {
     readonly typescriptProjectConcurrency: number;
     readonly analysisWorkers: number;
     readonly analysisWindowFiles: number;
+    readonly analysisWindowSourceBytes?: number;
     readonly analysisWorkerMode: 'thread' | 'process';
     readonly analysisProcessMaxFiles: number;
     readonly analysisProcessMaxSourceBytes: number;
@@ -83,6 +84,8 @@ export function restoreIndexingResourcePlan(value: unknown): IndexingResourcePla
         'embeddingBatchMaxItems', 'vectorWriteMaxRows'] as const;
     if (nonnegative.some(key => !Number.isSafeInteger(plan[key]) || plan[key] < 0)
         || positive.some(key => !Number.isSafeInteger(plan[key]) || plan[key] <= 0)
+        || (plan.analysisWindowSourceBytes !== undefined
+            && (!Number.isSafeInteger(plan.analysisWindowSourceBytes) || plan.analysisWindowSourceBytes <= 0))
         || !['process', 'thread'].includes(plan.analysisWorkerMode)
         || typeof plan.releaseSemanticBeforeResolution !== 'boolean'
         || !isIndexingMemoryStatus(plan.memoryBudget)) throw new Error('Invalid indexing resource plan.');
@@ -197,6 +200,7 @@ export class IndexingResourcePlanner {
         const derivedAnalysis = Math.min(cpuAnalysis, Math.max(1, Math.floor(jobBytes / ANALYSIS_JOB_BYTES)));
         const analysisWorkers = overrides.analysisWorkers ?? derivedAnalysis;
         const analysisWindowFiles = Math.max(1, analysisWorkers) * (budgetBytes > 4 * GIB ? 2 : 1);
+        const analysisWindowSourceBytes = Math.min(64 * MIB, Math.max(8 * MIB, Math.floor(workingBytes / 32)));
         // Turn 4 attribution: optimizing a generated C++ lexer used 2.30 GiB
         // of V8 native compiler allocations. Baseline WASM reduced it to 5 MiB.
         // Small plans isolate that policy and release parser/allocator capacity
@@ -216,6 +220,7 @@ export class IndexingResourcePlanner {
         });
         return Object.freeze({
             budgetBytes, burstReserveBytes, typescriptProjectConcurrency, analysisWorkers, analysisWindowFiles,
+            analysisWindowSourceBytes,
             analysisWorkerMode, analysisProcessMaxFiles: 128, analysisProcessMaxSourceBytes,
             analysisLargeFileBytes: Math.floor(analysisProcessMaxSourceBytes / 2),
             // Parser isolation exposed ~850 MiB of free glibc arenas retained

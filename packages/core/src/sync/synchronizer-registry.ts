@@ -9,6 +9,22 @@ import { FileSynchronizer } from './synchronizer';
 import type { PublicationRef } from '../generation/contracts';
 import type { PublicationSourceCheckpoint } from './snapshot-codec';
 
+export type PublicationSourceComparison = Pick<FileSynchronizer,
+    'comparePathsToOwnedCheckpoint'
+    | 'compareAllSourceToOwnedCheckpoint'
+    | 'compareSourceObservationToOwnedCheckpoint'>;
+
+// A frozen outer object alone does not witness immutable checkpoint contents.
+// Accessors and non-JSON objects cannot provide that witness either.
+function isFrozenCheckpointData(value: unknown): boolean {
+    if (value === null || typeof value !== 'object') return true;
+    const prototype = Object.getPrototypeOf(value);
+    return Object.isFrozen(value)
+        && (prototype === Object.prototype || prototype === Array.prototype)
+        && Object.values(Object.getOwnPropertyDescriptors(value)).every((descriptor) =>
+            'value' in descriptor && isFrozenCheckpointData(descriptor.value));
+}
+
 export interface SynchronizerRegistryPorts {
     canonicalizeCodebasePath(codebasePath: string): string;
     getCurrentPublicationSourceCheckpoint(codebasePath: string): {
@@ -28,8 +44,35 @@ export class SynchronizerRegistry {
         publicationId?: string;
     }>();
     private readonly synchronizerMutationTargets = new Map<string, string>();
+    private readonly sourceComparisons = new WeakMap<PublicationSourceCheckpoint, {
+        canonicalRoot: string;
+        policySignature: string;
+        comparison: PublicationSourceComparison;
+    }>();
 
     constructor(private readonly ports: SynchronizerRegistryPorts) {}
+
+    getPublicationSourceComparison(
+        canonicalRoot: string,
+        checkpoint: PublicationSourceCheckpoint,
+        ignorePatterns: readonly string[],
+        supportedExtensions: readonly string[],
+    ): PublicationSourceComparison {
+        const policySignature = JSON.stringify([ignorePatterns, supportedExtensions]);
+        const cached = this.sourceComparisons.get(checkpoint);
+        if (cached?.canonicalRoot === canonicalRoot && cached.policySignature === policySignature) {
+            return cached.comparison;
+        }
+        // Construction still validates every miss. These instances never enter
+        // the mutation registry, so commits cannot advance read-admission state.
+        const comparison = new FileSynchronizer(canonicalRoot, [...ignorePatterns], [...supportedExtensions], {
+            sourceCheckpoint: checkpoint,
+        });
+        if (isFrozenCheckpointData(checkpoint)) {
+            this.sourceComparisons.set(checkpoint, { canonicalRoot, policySignature, comparison });
+        }
+        return comparison;
+    }
 
     getSynchronizer(collectionName: string): FileSynchronizer | undefined {
         return this.synchronizers.get(collectionName)?.synchronizer;
@@ -58,6 +101,10 @@ export class SynchronizerRegistry {
         publicationId: string,
         synchronizer: FileSynchronizer,
     ): void {
+        const replaced = this.synchronizers.get(collectionName)?.synchronizer;
+        if (replaced && replaced !== synchronizer) {
+            this.retireSynchronizer(replaced);
+        }
         for (const [registeredKey, registered] of this.synchronizers.entries()) {
             if (
                 registered.synchronizer === synchronizer
@@ -84,7 +131,7 @@ export class SynchronizerRegistry {
             throw new Error(`Cannot recreate source freshness state for '${canonicalRoot}': no current Publication source checkpoint exists.`);
         }
         if (!currentSource) {
-            this.synchronizers.delete(this.ports.resolveCollectionName(canonicalRoot));
+            this.clearSynchronizerForCollection(this.ports.resolveCollectionName(canonicalRoot));
             return;
         }
         assertMutationCurrent();
@@ -107,8 +154,19 @@ export class SynchronizerRegistry {
     }
 
     clearSynchronizerForCollection(collectionName: string): void {
-        this.synchronizers.delete(collectionName);
+        const synchronizer = this.synchronizers.get(collectionName)?.synchronizer;
+        if (synchronizer) this.retireSynchronizer(synchronizer);
         this.synchronizerMutationTargets.delete(collectionName);
+    }
+
+    private retireSynchronizer(synchronizer: FileSynchronizer): void {
+        // Physical and family names alias one runtime object and retire together.
+        for (const [key, registered] of this.synchronizers) {
+            if (registered.synchronizer === synchronizer) {
+                this.synchronizers.delete(key);
+                this.synchronizerMutationTargets.delete(key);
+            }
+        }
     }
 
     getMutationTarget(synchronizerKey: string): string | undefined {

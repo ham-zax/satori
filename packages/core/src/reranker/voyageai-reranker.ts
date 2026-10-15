@@ -354,12 +354,19 @@ export class VoyageAIReranker implements Reranker {
         if (signal?.aborted) {
             throw signal.reason ?? new DOMException('The operation was aborted', 'AbortError');
         }
-        await new Promise((resolve, reject) => {
-            const timer = setTimeout(resolve, this.retryDelayMs);
-            signal?.addEventListener('abort', () => {
+        await new Promise<void>((resolve, reject) => {
+            const onAbort = () => {
                 clearTimeout(timer);
-                reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
-            }, { once: true });
+                signal?.removeEventListener('abort', onAbort);
+                reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+            };
+            const timer = setTimeout(() => {
+                // A once listener is only removed on abort; completed delays
+                // must release it too when callers reuse a signal.
+                signal?.removeEventListener('abort', onAbort);
+                resolve();
+            }, this.retryDelayMs);
+            signal?.addEventListener('abort', onAbort, { once: true });
         });
     }
 

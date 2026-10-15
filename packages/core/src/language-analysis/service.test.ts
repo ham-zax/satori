@@ -7,6 +7,7 @@ import test from 'node:test';
 import { Parser } from 'web-tree-sitter';
 
 import { createLanguageAnalysisService } from './service';
+import { createIndexingChunkPlan, type IndexingAnalysisCapability } from './indexing-analysis';
 import { getLanguageCapabilityDeclarations } from '../languages/capabilities';
 import { buildSymbolRecordsForFile, resolveOwnerSymbolForChunk } from '../symbols/registry';
 
@@ -382,6 +383,70 @@ test('language analysis keeps imports and module-level text searchable beside sy
     assert.ok(result.chunks.some((chunk) => chunk.content.includes("from './helper'")));
     assert.ok(result.chunks.some((chunk) => chunk.content.includes('module policy')));
     assert.ok(result.chunks.some((chunk) => chunk.metadata.symbolLabel === 'function run'));
+});
+
+test('indexing analysis defers chunk text and recreates complete eager chunks', async () => {
+    const service = createLanguageAnalysisService({ chunkSize: 24, chunkOverlap: 7 });
+    const indexing = service as typeof service & IndexingAnalysisCapability;
+    const samples = [
+        { relativePath: 'nested.ts', language: 'typescript', content: 'function outer() { function inner() { return "😀"; } }\n' },
+        { relativePath: 'notes.txt', language: 'text', content: 'plain text stays searchable\n' },
+    ];
+    try {
+        for (const input of samples) {
+            const [eager, deferred] = await Promise.all([
+                service.analyze(input),
+                indexing.analyzeForIndexing(input),
+            ]);
+            assert.equal('chunks' in deferred, false);
+            assert.deepEqual(
+                [...createIndexingChunkPlan({
+                    content: input.content,
+                    relativePath: input.relativePath,
+                    language: input.language,
+                    symbols: deferred.symbols,
+                    result: deferred,
+                }).chunks()],
+                eager.chunks,
+            );
+            const deferredEvidence = Object.fromEntries(
+                Object.entries(deferred).filter(([key]) => key !== 'chunkPlan'),
+            );
+            const eagerEvidence = Object.fromEntries(
+                Object.entries(eager).filter(([key]) => key !== 'chunks'),
+            );
+            assert.deepEqual(deferredEvidence, eagerEvidence);
+        }
+
+        const recoveredInput = () => {
+            let languageReads = 0;
+            return {
+                content: 'recovered fallback text remains searchable',
+                relativePath: 'notes/recovered.txt',
+                get language(): string {
+                    languageReads++;
+                    if (languageReads === 1) throw new Error('injected input normalization failure');
+                    return 'text';
+                },
+            };
+        };
+        const eagerRecovered = await service.analyze(recoveredInput());
+        const deferredRecovered = await indexing.analyzeForIndexing(recoveredInput());
+        assert.equal(deferredRecovered.structuralStatus, 'recovered');
+        assert.equal('chunks' in deferredRecovered, false);
+        assert.deepEqual(
+            [...createIndexingChunkPlan({
+                content: 'recovered fallback text remains searchable',
+                relativePath: 'notes/recovered.txt',
+                language: 'text',
+                symbols: deferredRecovered.symbols,
+                result: deferredRecovered,
+            }).chunks()],
+            eagerRecovered.chunks,
+        );
+    } finally {
+        await service.dispose?.();
+    }
 });
 
 test('language analysis chunk boundaries preserve UTF-8 text', async () => {

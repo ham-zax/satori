@@ -52,6 +52,10 @@ for (const scenario of [
         assert.ok(Object.isFrozen(plan.memoryBudget));
         assert.equal(plan.analysisWorkerMode, plan.budgetBytes <= 4 * GIB && plan.analysisWorkers > 0 ? 'process' : 'thread');
         assert.equal(plan.analysisProcessMaxFiles, 128);
+        assert.equal(plan.analysisWindowSourceBytes, Math.min(64 * MIB, Math.max(
+            8 * MIB,
+            Math.floor(Math.max(0, plan.budgetBytes - plan.burstReserveBytes - GIB) / 32),
+        )));
         assert.ok(plan.analysisProcessMaxSourceBytes >= 256 * 1024 && plan.analysisProcessMaxSourceBytes <= 8 * MIB);
         assert.equal(plan.analysisLargeFileBytes, Math.floor(plan.analysisProcessMaxSourceBytes / 2));
         assert.equal(plan.burstReserveBytes, Math.ceil(plan.budgetBytes * 0.2));
@@ -219,7 +223,18 @@ test('mutation IPC restores the same frozen resource plan and rejects malformed 
     assert.deepEqual(restored, plan);
     assert.ok(Object.isFrozen(restored));
     assert.ok(Object.isFrozen(restored.memoryBudget));
-    for (const invalid of [undefined, { ...plan, analysisProcessMaxFiles: 0 }, { ...plan, analysisWorkerMode: 'invalid' }, { ...plan, mutationMallocArenaMax: -1 }]) {
+    const legacyPlan: Record<string, unknown> = { ...plan };
+    delete legacyPlan.analysisWindowSourceBytes;
+    assert.equal(restoreIndexingResourcePlan(legacyPlan).analysisWindowSourceBytes, undefined);
+    for (const invalid of [
+        undefined,
+        { ...plan, analysisProcessMaxFiles: 0 },
+        { ...plan, analysisWorkerMode: 'invalid' },
+        { ...plan, mutationMallocArenaMax: -1 },
+        { ...plan, analysisWindowSourceBytes: 0 },
+        { ...plan, analysisWindowSourceBytes: -1 },
+        { ...plan, analysisWindowSourceBytes: 1.5 },
+    ]) {
         assert.throws(() => restoreIndexingResourcePlan(invalid), /Invalid indexing resource plan/);
     }
 });

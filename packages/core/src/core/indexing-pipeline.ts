@@ -10,13 +10,19 @@ import type {
 import {
     isIndexableFileByPolicy,
     isIndexableFileObservationByPolicy,
+    MAX_INDEXED_SOURCE_FILE_BYTES,
 } from '../config/index-policy';
 import type {
     CodeChunk,
     LanguageAnalysisPort,
     LanguageAnalysisResult,
 } from '../language-analysis';
-import { detectLanguageId } from '../language';
+import { detectLanguageId, normalizeLanguageId } from '../language';
+import {
+    createIndexingChunkPlan,
+    hasIndexingAnalysisCapability,
+    type IndexingAnalysisResult,
+} from '../language-analysis/indexing-analysis';
 import { buildSearchProjections } from './search-projections';
 import { buildIndexedChunkId } from './indexed-chunk-identity';
 import {
@@ -196,6 +202,16 @@ function chunksWithTrustedRelativePath(
     }));
 }
 
+function chunkWithTrustedRelativePath(
+    chunk: CodeChunk,
+    relativePath: RepositoryRelativePath,
+): CodeChunk {
+    return {
+        ...chunk,
+        metadata: { ...chunk.metadata, filePath: relativePath },
+    };
+}
+
 function chunksWithResolvedOwners(
     chunks: readonly CodeChunk[],
     symbols: SymbolRecord[],
@@ -213,6 +229,27 @@ function chunksWithResolvedOwners(
         };
     });
 }
+
+function chunkWithResolvedOwner(
+    chunk: CodeChunk,
+    symbols: SymbolRecord[],
+): CodeChunk {
+    const owner = resolveOwnerSymbolForChunk({ chunk, symbols });
+    return {
+        ...chunk,
+        metadata: {
+            ...chunk.metadata,
+            ownerSymbolKey: owner.symbolKey,
+            ownerSymbolInstanceId: owner.symbolInstanceId,
+            symbolKind: owner.kind,
+        },
+    };
+}
+
+type ProcessingAnalysisFile = Omit<AnalyzedIndexedFile, 'chunks'> & (
+    | { readonly chunks: CodeChunk[]; readonly deferredAnalysis: null }
+    | { readonly chunks: null; readonly deferredAnalysis: IndexingAnalysisResult }
+);
 
 export class IndexingPipeline {
     private readonly getVectorDatabase: () => VectorDatabase;
@@ -382,6 +419,52 @@ export class IndexingPipeline {
             indexPolicy,
         );
         return observation?.content ?? null;
+    }
+
+    private async analyzeFileForProcessing(
+        filePath: string,
+        codebasePath: string,
+        indexPolicy: IndexingPolicy | undefined,
+        languageAnalyzer: LanguageAnalysisPort,
+    ): Promise<ProcessingAnalysisFile | null> {
+        if (!hasIndexingAnalysisCapability(languageAnalyzer)) {
+            const analyzed = await this.analyzeIndexedFile(filePath, codebasePath, indexPolicy, languageAnalyzer);
+            return analyzed === null ? null : { ...analyzed, deferredAnalysis: null };
+        }
+        const sourceObservation = await this.readIndexableFileObservationInsideRoot(
+            filePath,
+            codebasePath,
+            indexPolicy,
+        );
+        if (sourceObservation === null) return null;
+
+        const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
+        if (!relativePath) {
+            throw new Error(`Unable to derive relative path for indexed file ${filePath}`);
+        }
+        const source = sourceObservation.content;
+        const language = detectLanguageId(filePath, source);
+        const analysis = await languageAnalyzer.analyzeForIndexing({
+            content: source,
+            language,
+            relativePath,
+        });
+        return {
+            relativePath,
+            source,
+            sourceHash: sourceObservation.sourceHash,
+            sourceStat: sourceObservation.sourceStat,
+            language,
+            structuralStatus: analysis.structuralStatus,
+            ...(analysis.structuralReason ? { structuralReason: analysis.structuralReason } : {}),
+            extractedSymbols: analysis.symbols,
+            moduleBindings: analysis.moduleBindings,
+            callSites: analysis.callSites,
+            receiverTypeBindings: analysis.receiverTypeBindings,
+            pythonFlowFacts: analysis.pythonFlowFacts ?? [],
+            chunks: null,
+            deferredAnalysis: analysis,
+        };
     }
 
     async analyzeIndexedFile(
@@ -625,23 +708,41 @@ export class IndexingPipeline {
         // analyzer's concurrency, and consumed in path order: output is the same
         // as analyzing one file at a time.
         const analysisWindow = Math.min(Math.max(1, languageAnalyzer.concurrency ?? 1) * 2, input.resourcePlan?.analysisWindowFiles ?? Infinity);
-        const pendingAnalyses = new Map<number, Promise<AnalyzedIndexedFile | null>>();
+        const analysisWindowSourceBytes = input.resourcePlan?.analysisWindowSourceBytes ?? 64 * 1024 * 1024;
+        const pendingAnalyses = new Map<number, Promise<ProcessingAnalysisFile | null>>();
+        const analysisReservations = new Map<number, number>();
+        let reservedAnalysisSourceBytes = 0;
         let nextAnalysisIndex = 0;
+        const releaseAnalysisReservation = (fileIndex: number): void => {
+            const reserved = analysisReservations.get(fileIndex);
+            if (reserved === undefined) return;
+            analysisReservations.delete(fileIndex);
+            reservedAnalysisSourceBytes -= reserved;
+        };
         const scheduleAnalyses = (consumingIndex: number) => {
             while (
                 nextAnalysisIndex < input.filePaths.length
                 && nextAnalysisIndex < consumingIndex + analysisWindow
             ) {
-                const analysis = this.analyzeIndexedFile(
-                    input.filePaths[nextAnalysisIndex],
+                const analysisIndex = nextAnalysisIndex;
+                const reservationBytes = MAX_INDEXED_SOURCE_FILE_BYTES;
+                const isCurrentFile = analysisIndex === consumingIndex;
+                if (!isCurrentFile && reservedAnalysisSourceBytes + reservationBytes > analysisWindowSourceBytes) {
+                    break;
+                }
+                analysisReservations.set(analysisIndex, reservationBytes);
+                reservedAnalysisSourceBytes += reservationBytes;
+                const analysis = this.analyzeFileForProcessing(
+                    input.filePaths[analysisIndex],
                     input.codebasePath,
                     input.indexPolicy,
                     languageAnalyzer,
                 );
                 // Observed when consumed; an early stop leaves later ones unread.
                 analysis.catch(() => undefined);
-                pendingAnalyses.set(nextAnalysisIndex, analysis);
+                pendingAnalyses.set(analysisIndex, analysis);
                 nextAnalysisIndex++;
+                if (reservedAnalysisSourceBytes > analysisWindowSourceBytes) break;
             }
         };
 
@@ -664,10 +765,19 @@ export class IndexingPipeline {
                     break;
                 }
                 indexedSourceBytes += analyzed.sourceStat.size;
-                const symbolFacts = this.buildAnalyzedFileSymbolFacts(analyzed);
-                const chunks = chunksWithResolvedOwners(
-                    analyzed.chunks,
-                    symbolFacts.symbolRecords,
+                const deferredPlan = analyzed.deferredAnalysis === null
+                    ? undefined
+                    : createIndexingChunkPlan({
+                        content: analyzed.source,
+                        relativePath: analyzed.relativePath,
+                        language: normalizeLanguageId(analyzed.language),
+                        symbols: analyzed.extractedSymbols,
+                        result: analyzed.deferredAnalysis,
+                    });
+                const chunkCount = deferredPlan ? deferredPlan.count() : analyzed.chunks!.length;
+                const chunkSpans = deferredPlan?.spans();
+                const symbolFacts = this.buildAnalyzedFileSymbolFacts(
+                    { ...analyzed, chunks: analyzed.chunks ?? [] },
                 );
                 const { relativePath } = analyzed;
                 analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
@@ -680,23 +790,33 @@ export class IndexingPipeline {
                 symbolManifestFiles.push(symbolFacts.manifestFile);
                 performance.analysisMs += Date.now() - analysisStartedAt;
 
-                if (chunks.length > 50) {
+                if (chunkCount > 50) {
                     console.warn(
-                        `[Context] ⚠️  File ${filePath} generated ${chunks.length} chunks (${Math.round(analyzed.source.length / 1024)}KB)`,
+                        `[Context] ⚠️  File ${filePath} generated ${chunkCount} chunks (${Math.round(analyzed.source.length / 1024)}KB)`,
                     );
                 } else if (analyzed.source.length > 100_000) {
                     console.log(
-                        `📄 Large file ${filePath}: ${Math.round(analyzed.source.length / 1024)}KB -> ${chunks.length} chunks`,
+                        `📄 Large file ${filePath}: ${Math.round(analyzed.source.length / 1024)}KB -> ${chunkCount} chunks`,
                     );
                 }
 
                 let fileFullyIncluded = true;
                 for (
                     let fileChunkIndex = 0;
-                    fileChunkIndex < chunks.length;
+                    fileChunkIndex < chunkCount;
                     fileChunkIndex++
                 ) {
-                    const chunk = chunks[fileChunkIndex];
+                    const span = chunkSpans?.next();
+                    if (deferredPlan && (!span || span.done)) {
+                        throw new Error(`Deferred chunk span count changed while indexing '${relativePath}'.`);
+                    }
+                    const untrustedChunk = deferredPlan
+                        ? deferredPlan.materialize(span!.value)
+                        : analyzed.chunks![fileChunkIndex];
+                    const chunk = chunkWithResolvedOwner(
+                        chunkWithTrustedRelativePath(untrustedChunk, relativePath),
+                        symbolFacts.symbolRecords,
+                    );
                     const projections = buildSearchProjections({ chunk, relativePath });
                     const chunkEstimatedTokens = estimateEmbeddingTokens(
                         projections.embeddingText,
@@ -735,7 +855,7 @@ export class IndexingPipeline {
                             `[Context] ⚠️  Chunk limit of ${INDEX_CHUNK_LIMIT} reached. Stopping indexing.`,
                         );
                         limitReached = true;
-                        fileFullyIncluded = fileChunkIndex === chunks.length - 1;
+                        fileFullyIncluded = fileChunkIndex === chunkCount - 1;
                         break;
                     }
                 }
@@ -757,13 +877,21 @@ export class IndexingPipeline {
                 // The window owns every started read, including unread files.
                 // Drain without replacing the consumed file's failure/cancellation.
                 await Promise.allSettled(pendingAnalyses.values());
+                for (const reservedIndex of [...analysisReservations.keys()]) {
+                    releaseAnalysisReservation(reservedIndex);
+                }
                 throw error;
+            } finally {
+                releaseAnalysisReservation(fileIndex);
             }
 
         }
         // A source/chunk limit can leave the rest of the window unconsumed.
         // Completed loops have no pending reads and keep their success path.
         if (pendingAnalyses.size > 0) await Promise.allSettled(pendingAnalyses.values());
+        for (const reservedIndex of [...analysisReservations.keys()]) {
+            releaseAnalysisReservation(reservedIndex);
+        }
         // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
         // for the pool here); free them before navigation starts its own workers.
         if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();

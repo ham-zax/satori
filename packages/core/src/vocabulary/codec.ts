@@ -26,8 +26,8 @@ export function encodeRepositoryVocabularyIndex(index: RepositoryVocabularyIndex
         })) };
 }
 
-/** Decode only bounded, validated evidence; callers verify the payload digest first. */
-export function decodeRepositoryVocabularyIndex(value: unknown): RepositoryVocabularyIndex | null {
+/** The single encoded validation boundary shared by expanded and compact readers. */
+function validateEncodedRepositoryVocabularyIndex(value: unknown): EncodedRepositoryVocabularyIndex | null {
     if (!value || typeof value !== 'object') return null;
     const index = value as EncodedRepositoryVocabularyIndex;
     if (index.version !== VOCABULARY_INDEX_VERSION || typeof index.publicationId !== 'string'
@@ -39,7 +39,6 @@ export function decodeRepositoryVocabularyIndex(value: unknown): RepositoryVocab
             terms: [{ term: word, kind: 'identifier', line: 1 }] }))
         || !Array.isArray(index.documents) || index.documents.length > MAX_VOCABULARY_DOCUMENTS
         || (index.budgetExceeded !== undefined && index.budgetExceeded !== true)) return null;
-    const documents: VocabularyDocument[] = [];
     for (const document of index.documents) {
         if (!document || typeof document !== 'object'
             || typeof document.symbolInstanceId !== 'string' || document.symbolInstanceId.length > 256
@@ -54,10 +53,24 @@ export function decodeRepositoryVocabularyIndex(value: unknown): RepositoryVocab
             || !document.terms.every(term => Array.isArray(term) && term.length === 3
                 && Number.isSafeInteger(term[0]) && term[0] >= 0 && term[0] < index.dictionary.length
                 && (term[1] === 0 || term[1] === 1) && Number.isSafeInteger(term[2]) && term[2] > 0)) return null;
-        documents.push({ ...document, terms: document.terms.map(([word, kind, line]) => ({
-            term: index.dictionary[word]!, kind: kind === 0 ? 'identifier' : 'source', line,
-        })) });
     }
+    return index;
+}
+
+/** Validate encoded evidence without expanding each term; intended for the internal service cache. */
+export function decodeRepositoryVocabularyIndexCompact(value: unknown): EncodedRepositoryVocabularyIndex | null {
+    return validateEncodedRepositoryVocabularyIndex(value);
+}
+
+/** Decode only bounded, validated evidence; callers verify the payload digest first. */
+export function decodeRepositoryVocabularyIndex(value: unknown): RepositoryVocabularyIndex | null {
+    const index = validateEncodedRepositoryVocabularyIndex(value);
+    if (!index) return null;
+    const documents: VocabularyDocument[] = index.documents.map(document => ({ ...document,
+        terms: document.terms.map(([word, kind, line]) => ({
+            term: index.dictionary[word]!, kind: kind === 0 ? 'identifier' : 'source', line,
+        })),
+    }));
     const decoded: RepositoryVocabularyIndex & Partial<Pick<EncodedRepositoryVocabularyIndex, 'encoding' | 'dictionary'>> = {
         ...index, documents,
     };

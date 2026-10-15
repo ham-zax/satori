@@ -38,6 +38,8 @@ type EvaluateReindexPreflightInput = {
     getWorkingTreeChangedPathsForPreflight: (codebasePath: string) => WorkingTreeChangedPathsState;
 };
 
+const MAX_CHANGED_FILES_CACHE_ROOTS = 32;
+
 export function parseGitStatusChangedPaths(
     stdout: string,
     options: { includeUntracked?: boolean } = {},
@@ -119,40 +121,36 @@ export function parseGitStatusChangedPathsZ(
 
 export function getChangedFilesForCodebase(input: GetChangedFilesForCodebaseInput): ChangedFilesState {
     const cacheKey = path.resolve(input.codebasePath);
+    // Preserve this root's stale fallback before pruning abandoned entries.
     const cached = input.changedFilesCache.get(cacheKey);
+    for (const [key, entry] of input.changedFilesCache) {
+        if (entry.expiresAtMs <= input.nowMs) input.changedFilesCache.delete(key);
+    }
+    let state: ChangedFilesState;
+    let expiresAtMs = input.nowMs + input.ttlMs;
     if (!input.forceRefresh && cached && cached.expiresAtMs > input.nowMs) {
-        return { available: cached.available, files: new Set(cached.files) };
+        state = cached;
+        expiresAtMs = cached.expiresAtMs;
+    } else {
+        try {
+            const stdout = execFileSync(
+                "git",
+                ["-C", cacheKey, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+            );
+            state = { available: true, files: parseGitStatusChangedPathsZ(stdout, { includeUntracked: true }) };
+        } catch {
+            state = cached ?? { available: false, files: new Set<string>() };
+        }
     }
 
-    try {
-        const stdout = execFileSync(
-            "git",
-            ["-C", cacheKey, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-            { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-        );
-        const files = parseGitStatusChangedPathsZ(stdout, { includeUntracked: true });
-        input.changedFilesCache.set(cacheKey, {
-            expiresAtMs: input.nowMs + input.ttlMs,
-            available: true,
-            files,
-        });
-        return { available: true, files };
-    } catch {
-        if (cached) {
-            input.changedFilesCache.set(cacheKey, {
-                expiresAtMs: input.nowMs + input.ttlMs,
-                available: cached.available,
-                files: new Set(cached.files),
-            });
-            return { available: cached.available, files: new Set(cached.files) };
-        }
-        input.changedFilesCache.set(cacheKey, {
-            expiresAtMs: input.nowMs + input.ttlMs,
-            available: false,
-            files: new Set<string>(),
-        });
-        return { available: false, files: new Set<string>() };
+    // Map insertion order is recency order for hits and every probe outcome.
+    input.changedFilesCache.delete(cacheKey);
+    input.changedFilesCache.set(cacheKey, { expiresAtMs, available: state.available, files: state.files });
+    while (input.changedFilesCache.size > MAX_CHANGED_FILES_CACHE_ROOTS) {
+        input.changedFilesCache.delete(input.changedFilesCache.keys().next().value!);
     }
+    return { available: state.available, files: new Set(state.files) };
 }
 
 export function getWorkingTreeChangedPathsForPreflight(

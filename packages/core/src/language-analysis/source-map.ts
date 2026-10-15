@@ -1,18 +1,35 @@
+import { isAscii } from 'node:buffer';
 import type { SourceSpan } from './types';
 
 export class Utf8SourceMap {
     private readonly lineStartBytes: readonly number[];
     private readonly sourceBytes: Buffer;
-    private readonly utf16ToByte: readonly number[];
+    private readonly sourceIsAscii: boolean;
+    private utf16ToByte?: readonly number[];
 
     constructor(private readonly source: string) {
         this.sourceBytes = Buffer.from(source, 'utf8');
+        // Borrowed bytes are immutable to consumers, so this witness stays valid.
+        this.sourceIsAscii = isAscii(this.sourceBytes);
         const starts = [0];
-        const utf16ToByte = new Array<number>(source.length + 1);
+        for (let newline = this.sourceBytes.indexOf(0x0a); newline !== -1;
+            newline = this.sourceBytes.indexOf(0x0a, newline + 1)) {
+            starts.push(newline + 1);
+        }
+        this.lineStartBytes = starts;
+    }
+
+    /** Shared UTF-8 storage for internal consumers. Callers must not mutate it. */
+    getSourceBytes(): Buffer {
+        return this.sourceBytes;
+    }
+
+    private buildUtf16ToByte(): readonly number[] {
+        const utf16ToByte = new Array<number>(this.source.length + 1);
         utf16ToByte[0] = 0;
         let utf16Offset = 0;
         let byteOffset = 0;
-        for (const character of source) {
+        for (const character of this.source) {
             const startByte = byteOffset;
             for (let index = 1; index < character.length; index += 1) {
                 utf16ToByte[utf16Offset + index] = startByte;
@@ -20,12 +37,8 @@ export class Utf8SourceMap {
             byteOffset += Buffer.byteLength(character, 'utf8');
             utf16Offset += character.length;
             utf16ToByte[utf16Offset] = byteOffset;
-            if (character === '\n') {
-                starts.push(byteOffset);
-            }
         }
-        this.lineStartBytes = starts;
-        this.utf16ToByte = utf16ToByte;
+        return utf16ToByte;
     }
 
     spanFromUtf16(startOffset: number, endOffset: number): SourceSpan {
@@ -66,6 +79,7 @@ export class Utf8SourceMap {
     }
 
     private byteOffsetForUtf16(offset: number): number {
+        this.utf16ToByte ??= this.buildUtf16ToByte();
         const boundedOffset = Math.min(this.source.length, Math.max(0, Math.trunc(offset)));
         return this.utf16ToByte[boundedOffset] ?? this.sourceBytes.length;
     }
@@ -73,6 +87,6 @@ export class Utf8SourceMap {
     private utf16Column(lineIndex: number, byteOffset: number): number {
         const lineStart = this.lineStartBytes[lineIndex] ?? 0;
         const prefixBytes = this.sourceBytes.subarray(lineStart, byteOffset);
-        return prefixBytes.toString('utf8').length;
+        return this.sourceIsAscii ? prefixBytes.length : prefixBytes.toString('utf8').length;
     }
 }

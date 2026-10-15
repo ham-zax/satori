@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { IndexingResourcePlanner } from '../indexing/resources';
 import { createLanguageAnalysisService } from './service';
 import { createProcessLanguageAnalysisService } from './process-service';
+import { createIndexingChunkPlan, type IndexingAnalysisCapability } from './indexing-analysis';
 
 const plan = Object.freeze({ ...new IndexingResourcePlanner({
     platform: () => 'darwin', readFile: () => { throw new Error('no proc'); },
@@ -33,6 +34,33 @@ test('recycle every file preserves parser evidence and waits for process exit', 
         assert.ok(children.every(exited));
     } finally {
         await pool.dispose(); await local.dispose?.(); childProcess.fork = original; syncBuiltinESMExports();
+    }
+});
+
+test('parser processes return structural indexing evidence without chunk strings', async () => {
+    const options = { chunkSize: 24, chunkOverlap: 7 };
+    const local = createLanguageAnalysisService(options);
+    const pool = createProcessLanguageAnalysisService(options, plan);
+    const indexing = pool as typeof pool & IndexingAnalysisCapability;
+    try {
+        const [expected, deferred] = await Promise.all([
+            local.analyze(input),
+            indexing.analyzeForIndexing(input),
+        ]);
+        assert.equal('chunks' in deferred, false);
+        assert.deepEqual(
+            [...createIndexingChunkPlan({
+                content: input.content,
+                relativePath: input.relativePath,
+                language: input.language,
+                symbols: deferred.symbols,
+                result: deferred,
+            }).chunks()],
+            expected.chunks,
+        );
+    } finally {
+        await pool.dispose();
+        await local.dispose?.();
     }
 });
 

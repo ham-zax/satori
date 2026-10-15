@@ -1,7 +1,292 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
+import workerThreads from 'node:worker_threads';
 import { ThreadedWasmSemanticProjectAnalyzer } from './wasm-threaded-analyzer';
 import { DEFAULT_MAX_SEMANTIC_SOURCE_BYTES } from './wasm-analyzer';
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+}
+
+async function flushMicrotasks() {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
+function controlledWorkers(t: import('node:test').TestContext, postFailure?: { worker: number; error: Error }) {
+    const workers: FakeWorker[] = [];
+    class FakeWorker extends EventEmitter {
+        readonly exitGate = deferred<number>();
+        readonly requests: Array<{ id: number }> = [];
+        terminateCalls = 0;
+        postError?: Error;
+        constructor() {
+            super();
+            workers.push(this);
+            if (workers.length === postFailure?.worker) this.postError = postFailure.error;
+        }
+        postMessage(request: { id: number }) {
+            if (this.postError) throw this.postError;
+            this.requests.push(request);
+        }
+        terminate() { this.terminateCalls += 1; return this.exitGate.promise; }
+        succeed(id = this.requests.at(-1)!.id) {
+            this.emit('message', { id, success: true, evidence: { language: 'go', occurrencesEntries: [['main.go', []]] } });
+        }
+    }
+    const replacement = t.mock.method(workerThreads, 'Worker', function () {
+        return new FakeWorker();
+    } as unknown as typeof workerThreads.Worker);
+    syncBuiltinESMExports();
+    const analyzer = new ThreadedWasmSemanticProjectAnalyzer(undefined, { idleReleaseMs: 10, requestTimeoutMs: 100 });
+    t.after(async () => {
+        workers.forEach(worker => worker.exitGate.resolve(0));
+        await analyzer.dispose().catch(() => undefined);
+        replacement.mock.restore();
+        syncBuiltinESMExports();
+    });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    return { workers, analyzer };
+}
+
+function assertNoPending(analyzer: ThreadedWasmSemanticProjectAnalyzer) {
+    assert.equal(analyzer['pendingRequests'].size, 0);
+    assert.equal(analyzer['idleTimer'], null);
+}
+
+for (const release of ['idle timer', 'explicit release'] as const) {
+    test(`controlled retirement: ${release} remains owned and all drains join it`, async (t) => {
+        const { analyzer, workers } = controlledWorkers(t);
+        const result = analyzer.analyze(SMALL_GO_PROJECT);
+        await flushMicrotasks();
+        workers[0].succeed();
+        assert.deepEqual(await result, { language: 'go', occurrencesByFile: new Map([['main.go', []]]) });
+        if (release === 'idle timer') t.mock.timers.tick(10);
+        let released = false;
+        const idle = analyzer.releaseIdleWorker().then(() => { released = true; });
+        let disposed = 0;
+        const disposals = [analyzer.dispose(), analyzer.dispose()].map(p => p.then(() => { disposed += 1; }));
+        await flushMicrotasks();
+        assert.equal(released, false);
+        assert.equal(disposed, 0);
+        assert.equal(analyzer.hasLiveWorker(), true);
+        assert.equal(workers[0].terminateCalls, 1);
+        assertNoPending(analyzer);
+        workers[0].exitGate.resolve(0);
+        await Promise.all([idle, ...disposals]);
+        assert.equal(analyzer.hasLiveWorker(), false);
+        await analyzer.dispose();
+    });
+}
+
+test('controlled retirement: concurrent disposal delays pending rejection until termination', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const requests = [analyzer.analyze(SMALL_GO_PROJECT), analyzer.analyze(SMALL_GO_PROJECT)];
+    const errors: unknown[] = [];
+    const observed = requests.map(p => p.catch(error => { errors.push(error); }));
+    await flushMicrotasks();
+    let disposed = 0;
+    const drains = [analyzer.dispose(), analyzer.dispose()].map(p => p.then(() => { disposed += 1; }));
+    await flushMicrotasks();
+    assert.equal(errors.length, 0);
+    assert.equal(disposed, 0);
+    assertNoPending(analyzer);
+    workers[0].emit('exit', 1);
+    workers[0].exitGate.resolve(0);
+    await Promise.all([...observed, ...drains]);
+    assert.equal(workers[0].terminateCalls, 1);
+    assert.equal(errors.length, 2);
+    for (const error of errors) assert.match(String(error), /Semantic analyzer disposed while request was pending/);
+    assert.equal(analyzer.hasLiveWorker(), false);
+});
+
+test('controlled retirement: ordinary job error leaves other admitted jobs on the live worker', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const failed = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), { message: 'job failed' });
+    let completed = false;
+    const other = analyzer.analyze(SMALL_GO_PROJECT).then(value => { completed = true; return value; });
+    await flushMicrotasks();
+    const worker = workers[0];
+    worker.emit('message', { id: worker.requests[0].id, success: false, error: 'job failed' });
+    await flushMicrotasks();
+    assert.equal(analyzer['pendingRequests'].size, 1, 'only the failed job is removed');
+    assert.equal(worker.terminateCalls, 0);
+    assert.equal(analyzer.hasLiveWorker(), true);
+    assert.equal(completed, false);
+    await failed;
+    worker.succeed(worker.requests[1].id);
+    assert.deepEqual(await other, { language: 'go', occurrencesByFile: new Map([['main.go', []]]) });
+    assert.equal(workers.length, 1);
+    assert.equal(worker.terminateCalls, 0);
+    worker.exitGate.resolve(0);
+    await analyzer.releaseIdleWorker();
+    assertNoPending(analyzer);
+});
+
+for (const failure of ['timeout', 'error', 'postMessage', 'exit'] as const) {
+    test(`controlled retirement: ${failure} joins exit before rejection and replacement`, async (t) => {
+        const { analyzer, workers } = controlledWorkers(t);
+        const original = new Error('original worker failure');
+        let requestError: unknown;
+        const request = analyzer.analyze(SMALL_GO_PROJECT).catch(error => { requestError = error; });
+        await flushMicrotasks();
+        const worker = workers[0];
+        if (failure === 'timeout') t.mock.timers.tick(100);
+        if (failure === 'error') worker.emit('error', original);
+        if (failure === 'exit') worker.emit('exit', 7);
+        let postRequest: Promise<unknown> | undefined;
+        if (failure === 'postMessage') {
+            worker.postError = original;
+            postRequest = analyzer.analyze(SMALL_GO_PROJECT).catch(error => { assert.equal(error, original); });
+            await flushMicrotasks();
+        }
+        let replacementDone = false;
+        const next = analyzer.analyze(SMALL_GO_PROJECT).then(value => { replacementDone = true; return value; });
+        await flushMicrotasks();
+        assert.equal(requestError, undefined, 'failure must wait for worker exit');
+        assert.equal(workers.length, 1, 'replacement must wait for worker exit');
+        assert.equal(worker.terminateCalls, 1);
+        assert.equal(analyzer.hasLiveWorker(), true);
+        assertNoPending(analyzer);
+        t.mock.timers.tick(1000);
+        worker.emit('exit', 99);
+        worker.exitGate.resolve(0);
+        await request;
+        await postRequest;
+        await flushMicrotasks();
+        assert.equal(workers.length, 2);
+        assert.equal(replacementDone, false);
+        const replacement = workers[1];
+        worker.succeed(replacement.requests[0].id);
+        await flushMicrotasks();
+        assert.equal(replacementDone, false, 'old worker cannot answer a replacement request');
+        replacement.succeed();
+        assert.deepEqual(await next, { language: 'go', occurrencesByFile: new Map([['main.go', []]]) });
+        if (failure === 'timeout') assert.match(String(requestError), /timed out after 100 ms/);
+        else if (failure === 'exit') assert.match(String(requestError), /exit code 7/);
+        else assert.equal(requestError, original);
+        replacement.exitGate.resolve(0);
+        await analyzer.releaseIdleWorker();
+        assertNoPending(analyzer);
+        assert.equal(analyzer.hasLiveWorker(), false);
+    });
+}
+
+test('controlled retirement: analyze rechecks disposal after joining retirement', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const first = analyzer.analyze(SMALL_GO_PROJECT);
+    await flushMicrotasks();
+    workers[0].succeed();
+    await first;
+    t.mock.timers.tick(10);
+    const next = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), /Semantic analyzer has been disposed/);
+    const drain = analyzer.dispose();
+    workers[0].exitGate.resolve(0);
+    await Promise.all([next, drain]);
+    assert.equal(workers.length, 1);
+    assertNoPending(analyzer);
+});
+
+test('controlled retirement: concurrent analyze rejoins a replacement that fails during dispatch', async (t) => {
+    const error = new Error('replacement dispatch failed');
+    const { analyzer, workers } = controlledWorkers(t, { worker: 2, error });
+    const first = analyzer.analyze(SMALL_GO_PROJECT);
+    await flushMicrotasks();
+    workers[0].succeed();
+    await first;
+    t.mock.timers.tick(10);
+    const failed = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), actual => actual === error);
+    const next = analyzer.analyze(SMALL_GO_PROJECT);
+    workers[0].exitGate.resolve(0);
+    await flushMicrotasks();
+    assert.equal(workers.length, 2, 'concurrent continuation must join the replacement retirement');
+    assert.equal(workers[1].terminateCalls, 1);
+    assertNoPending(analyzer);
+    workers[1].exitGate.resolve(0);
+    await failed;
+    await flushMicrotasks();
+    assert.equal(workers.length, 3);
+    workers[2].succeed();
+    await next;
+    workers[2].exitGate.resolve(0);
+    await analyzer.releaseIdleWorker();
+    assertNoPending(analyzer);
+});
+
+test('controlled retirement: rejected termination preserves request reason and drains without unhandled rejection', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const request = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), /disposed while request was pending/);
+    await flushMicrotasks();
+    const terminationError = new Error('terminate rejected');
+    const drains = [analyzer.dispose(), analyzer.dispose()].map(p => assert.rejects(p, error => error === terminationError));
+    assertNoPending(analyzer);
+    workers[0].exitGate.reject(terminationError);
+    await Promise.all([request, ...drains]);
+    assert.equal(analyzer.hasLiveWorker(), true, 'failed termination still owns the potentially live worker');
+    for (let i = 0; i < 2; i += 1) {
+        await assert.rejects(analyzer.dispose(), error => error === terminationError);
+        await assert.rejects(analyzer.releaseIdleWorker(), error => error === terminationError);
+    }
+    assert.equal(workers[0].terminateCalls, 1);
+    workers[0].emit('exit', 1);
+    await analyzer.dispose();
+    await analyzer.releaseIdleWorker();
+    assert.equal(analyzer.hasLiveWorker(), false);
+});
+
+test('controlled retirement: failed termination blocks replacement until actual worker exit', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const original = new Error('fatal worker error');
+    const terminationError = new Error('termination failed');
+    const request = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), error => error === original);
+    await flushMicrotasks();
+    const worker = workers[0];
+    worker.emit('error', original);
+    let drained = false;
+    const drain = assert.rejects(analyzer.releaseIdleWorker(), error => error === terminationError)
+        .then(() => { drained = true; });
+    await flushMicrotasks();
+    assert.equal(drained, false);
+    assertNoPending(analyzer);
+    worker.exitGate.reject(terminationError);
+    await Promise.all([request, drain]);
+    assert.equal(analyzer.hasLiveWorker(), true);
+    for (let i = 0; i < 2; i += 1) {
+        await assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), error => error === terminationError);
+        await assert.rejects(analyzer.releaseIdleWorker(), error => error === terminationError);
+    }
+    assert.equal(workers.length, 1, 'failed termination cannot allow replacement');
+    assert.equal(worker.terminateCalls, 1, 'failed termination is not retried');
+    worker.emit('exit', 1);
+    assert.equal(analyzer.hasLiveWorker(), false);
+    const replacement = analyzer.analyze(SMALL_GO_PROJECT);
+    await flushMicrotasks();
+    assert.equal(workers.length, 2);
+    workers[1].succeed();
+    await replacement;
+    workers[1].exitGate.resolve(0);
+    await analyzer.releaseIdleWorker();
+    assertNoPending(analyzer);
+});
+
+test('controlled retirement: exit before termination rejection does not restore failed ownership', async (t) => {
+    const { analyzer, workers } = controlledWorkers(t);
+    const request = assert.rejects(analyzer.analyze(SMALL_GO_PROJECT), /disposed while request was pending/);
+    await flushMicrotasks();
+    const terminationError = new Error('late termination rejection');
+    const drain = assert.rejects(analyzer.dispose(), error => error === terminationError);
+    await flushMicrotasks();
+    workers[0].emit('exit', 1);
+    workers[0].exitGate.reject(terminationError);
+    await Promise.all([request, drain]);
+    assert.equal(analyzer.hasLiveWorker(), false);
+    await analyzer.dispose();
+    assertNoPending(analyzer);
+});
 
 test('threaded analysis preserves skipped source and auxiliary files while analyzing admitted sources', async () => {
     const analyzer = new ThreadedWasmSemanticProjectAnalyzer();

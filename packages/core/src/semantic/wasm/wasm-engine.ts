@@ -16,9 +16,15 @@ function allocateBytes(native: NativeSemanticEngine, bytes: Uint8Array): number 
     if (ptr === 0) {
         throw new Error('Out of memory allocating buffer in WASM runtime');
     }
-    native.HEAPU8.set(bytes, ptr);
-    native.HEAPU8[ptr + bytes.length] = 0;
-    return ptr;
+    try {
+        native.HEAPU8.set(bytes, ptr);
+        native.HEAPU8[ptr + bytes.length] = 0;
+        return ptr;
+    } catch (error) {
+        // Ownership transfers to the caller only after the copy completes.
+        native._free(ptr);
+        throw error;
+    }
 }
 
 function freePtr(native: NativeSemanticEngine, ptr: number): void {
@@ -44,9 +50,11 @@ export class WasmSemanticSession {
         const pathBytes = Buffer.from(filePath, 'utf8');
         const srcBytes = Buffer.from(source, 'utf8');
 
-        const pathPtr = allocateBytes(this.native, pathBytes);
-        const srcPtr = allocateBytes(this.native, srcBytes);
+        let pathPtr = 0;
+        let srcPtr = 0;
         try {
+            pathPtr = allocateBytes(this.native, pathBytes);
+            srcPtr = allocateBytes(this.native, srcBytes);
             const rc = this.native._satori_semantic_add_source(
                 this.handle,
                 pathPtr,
@@ -71,10 +79,13 @@ export class WasmSemanticSession {
         const pathBytes = Buffer.from(filePath, 'utf8');
         const srcBytes = Buffer.from(source, 'utf8');
 
-        const rolePtr = allocateBytes(this.native, roleBytes);
-        const pathPtr = allocateBytes(this.native, pathBytes);
-        const srcPtr = allocateBytes(this.native, srcBytes);
+        let rolePtr = 0;
+        let pathPtr = 0;
+        let srcPtr = 0;
         try {
+            rolePtr = allocateBytes(this.native, roleBytes);
+            pathPtr = allocateBytes(this.native, pathBytes);
+            srcPtr = allocateBytes(this.native, srcBytes);
             const rc = this.native._satori_semantic_add_auxiliary(
                 this.handle,
                 rolePtr,

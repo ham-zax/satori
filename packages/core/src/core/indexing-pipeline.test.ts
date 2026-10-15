@@ -6,6 +6,7 @@ import {
     type AnalyzedIndexedFile,
 } from './indexing-pipeline';
 import { createLanguageAnalysisService } from '../language-analysis';
+import type { LanguageAnalysisPort } from '../language-analysis/types';
 import { noopSemanticProjectAnalyzer } from '../semantic/noop-analyzer';
 import type { SemanticProjectAnalyzer, SemanticProjectInput, SemanticProjectEvidence } from '../semantic';
 import type { VectorDatabase } from '../vectordb/types';
@@ -45,6 +46,16 @@ function createMockEmbedding(): Embedding {
             normalizationPolicy: 'none',
         }),
     } as unknown as Embedding;
+}
+
+function createEagerOnlyAnalyzer(
+    analyze: LanguageAnalysisPort['analyze'],
+): LanguageAnalysisPort {
+    return {
+        getDescription: () => 'eager test analyzer',
+        getStrategyForLanguage: () => ({ backend: 'bounded_text', structural: false }),
+        analyze,
+    };
 }
 
 
@@ -165,10 +176,11 @@ test('IndexingPipeline retains only source snapshot metadata when semantic analy
 });
 
 test('IndexingPipeline stops with limit_reached before aggregate searchable source bytes exceed the budget', async () => {
-    const languageAnalyzer = createLanguageAnalysisService();
     const pipeline = new IndexingPipeline({
         getVectorDatabase: () => createMockVectorDb(),
-        languageAnalyzer,
+        languageAnalyzer: createEagerOnlyAnalyzer(async () => {
+            throw new Error('analyzeIndexedFile override should own this test');
+        }),
         semanticAnalyzer: noopSemanticProjectAnalyzer,
         getEmbedding: () => createMockEmbedding(),
         assertEmbeddingIdentityCurrent: () => ({
@@ -221,6 +233,299 @@ test('IndexingPipeline stops with limit_reached before aggregate searchable sour
     assert.equal(result.status, 'limit_reached');
     assert.equal(result.processedFiles, 1);
     assert.deepEqual(result.sourceFiles.map((file) => file.path), ['first.ts']);
+});
+
+test('analysis source-byte reservations bound read-ahead and always admit the current file', async () => {
+    const base = new IndexingResourcePlanner({
+        platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+        totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+
+    for (const [windowBytes, expectedInitial] of [[8 * 1024 ** 2, 1], [16 * 1024 ** 2, 2], [1, 1]] as const) {
+        let releaseInitial!: () => void;
+        const initialGate = new Promise<void>(resolve => { releaseInitial = resolve; });
+        const analyzer = Object.assign(createLanguageAnalysisService(), { concurrency: 4 });
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: createMockVectorDb,
+            languageAnalyzer: analyzer,
+            semanticAnalyzer: noopSemanticProjectAnalyzer,
+            getEmbedding: createMockEmbedding,
+            assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+            isHybridEnabled: () => false,
+            canonicalizeCodebasePath: p => p,
+            normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'],
+            matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'fixture',
+        });
+        let started = 0;
+        pipeline.readIndexableFileObservationInsideRoot = async filePath => {
+            started++;
+            if (started <= expectedInitial) await initialGate;
+            return {
+                content: '', sourceHash: filePath,
+                sourceStat: { size: 0, mtimeMs: 0, ctimeMs: 0 },
+            };
+        };
+        const operation = pipeline.processFileList({
+            filePaths: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+            codebasePath: '/repo',
+            collectionName: 'fixture',
+            resourcePlan: {
+                ...base,
+                analysisWindowFiles: 4,
+                analysisWindowSourceBytes: windowBytes,
+            },
+        });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.equal(started, expectedInitial, `window ${windowBytes} admitted an unexpected number of reads`);
+            releaseInitial();
+            const result = await operation;
+            await result.payloadSettled;
+            assert.equal(result.processedFiles, 4);
+        } finally {
+            releaseInitial();
+            await operation.catch(() => undefined);
+            await analyzer.dispose?.();
+        }
+    }
+});
+
+test('deferred analysis failure waits for every already-started source read', async () => {
+    const firstError = new Error('injected deferred read failure');
+    let releaseLaterRead!: () => void;
+    const laterReadGate = new Promise<void>(resolve => { releaseLaterRead = resolve; });
+    const analyzer = Object.assign(createLanguageAnalysisService(), { concurrency: 4 });
+    const pipeline = new IndexingPipeline({
+        getVectorDatabase: createMockVectorDb,
+        languageAnalyzer: analyzer,
+        semanticAnalyzer: noopSemanticProjectAnalyzer,
+        getEmbedding: createMockEmbedding,
+        assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+        isHybridEnabled: () => false,
+        canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.ts'],
+        matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'fixture',
+    });
+    let laterReadFinished = false;
+    pipeline.readIndexableFileObservationInsideRoot = async filePath => {
+        if (filePath === 'a.ts') throw firstError;
+        await laterReadGate;
+        laterReadFinished = true;
+        return null;
+    };
+    const operation = pipeline.processFileList({
+        filePaths: ['a.ts', 'b.ts'], codebasePath: '/repo', collectionName: 'fixture',
+        resourcePlan: {
+            ...new IndexingResourcePlanner({
+                platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+                totalMemory: () => 16 * 1024 ** 3, freeMemory: () => 16 * 1024 ** 3, cpuCount: () => 8,
+            }, () => ({ diagnostics: [] })).createPlan(),
+            analysisWorkers: 2,
+            analysisWindowFiles: 2,
+            analysisWindowSourceBytes: 64 * 1024 ** 2,
+        },
+    });
+    const rejection = assert.rejects(operation, error => error === firstError);
+    let settled = false;
+    operation.then(() => { settled = true; }, () => { settled = true; });
+    try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'returned while a prefetched deferred read was in flight');
+        releaseLaterRead();
+        await rejection;
+        assert.equal(laterReadFinished, true);
+    } finally {
+        releaseLaterRead();
+        await operation.catch(() => undefined);
+        await analyzer.dispose?.();
+    }
+});
+
+test('eager custom and deferred built-in indexing publish identical ordered rows', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-indexing-deferred-equivalence-'));
+    try {
+        fs.writeFileSync(path.join(root, 'a.ts'), [
+            'const before = 1;',
+            'function outer() {',
+            '  function inner() { return "😀"; }',
+            '  return inner();',
+            '}',
+            'const after = 2;',
+            '',
+        ].join('\n'));
+        fs.writeFileSync(path.join(root, 'b.ts'), 'export const message = "雪と🚀";\n');
+
+        const basePlan = new IndexingResourcePlanner({
+            platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+            totalMemory: () => 16 * 1024 ** 3, freeMemory: () => 16 * 1024 ** 3, cpuCount: () => 8,
+        }, () => ({ diagnostics: [] })).createPlan();
+
+        const run = async (mode: 'eager' | 'deferred', files: number, sourceBytes: number) => {
+            const local = createLanguageAnalysisService({ chunkSize: 48, chunkOverlap: 11 });
+            const rows: unknown[] = [];
+            const database = createMockVectorDb();
+            database.writeDocuments = async (_collection, documents) => {
+                rows.push(...documents.map(({ document, projections }) => {
+                    const metadata = Object.fromEntries(Object.entries(document.metadata)
+                        .filter(([key]) => key !== 'indexedAt'));
+                    return { document: { ...document, metadata }, projections };
+                }));
+            };
+            const pipeline = new IndexingPipeline({
+                getVectorDatabase: () => database,
+                languageAnalyzer: mode === 'eager'
+                    ? createEagerOnlyAnalyzer(input => local.analyze(input))
+                    : local,
+                semanticAnalyzer: noopSemanticProjectAnalyzer,
+                getEmbedding: createMockEmbedding,
+                assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+                isHybridEnabled: () => false,
+                canonicalizeCodebasePath: p => p,
+                normalizeRelativePathForCodebase: (base, file) => path.relative(base, file) as RepositoryRelativePath,
+                getIndexedExtensionsForCodebase: () => ['.ts'],
+                matchesIgnorePattern: () => false,
+                getSymbolExtractorVersion: () => 'fixture',
+            });
+            try {
+                const result = await pipeline.processFileList({
+                    filePaths: [path.join(root, 'a.ts'), path.join(root, 'b.ts')],
+                    codebasePath: root,
+                    collectionName: 'fixture',
+                    resourcePlan: {
+                        ...basePlan,
+                        analysisWindowFiles: files,
+                        analysisWindowSourceBytes: sourceBytes,
+                    },
+                });
+                await result.payloadSettled;
+                return {
+                    processedFiles: result.processedFiles,
+                    totalChunks: result.totalChunks,
+                    status: result.status,
+                    sourceFiles: result.sourceFiles,
+                    symbolRecords: result.symbolRecords,
+                    symbolManifestFiles: result.symbolManifestFiles,
+                    analysisByFile: [...result.analysisByFile],
+                    rows,
+                };
+            } finally {
+                await local.dispose?.();
+            }
+        };
+
+        const eager = await run('eager', 4, 64 * 1024 ** 2);
+        const deferredWide = await run('deferred', 4, 64 * 1024 ** 2);
+        const deferredNarrow = await run('deferred', 1, 8 * 1024 ** 2);
+        assert.ok(eager.totalChunks > 2);
+        assert.deepEqual(deferredWide, eager);
+        assert.deepEqual(deferredNarrow, eager);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('eager and deferred indexing publish the same ordered prefix at the global chunk limit', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-indexing-chunk-limit-'));
+    try {
+        const source = `function huge() {\n${' \n'.repeat(225_000)}}\n`;
+        const filePath = path.join(root, 'huge.ts');
+        fs.writeFileSync(filePath, source);
+        const basePlan = new IndexingResourcePlanner({
+            platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+            totalMemory: () => 16 * 1024 ** 3, freeMemory: () => 16 * 1024 ** 3, cpuCount: () => 8,
+        }, () => ({ diagnostics: [] })).createPlan();
+
+        const run = async (mode: 'eager' | 'deferred') => {
+            const local = createLanguageAnalysisService({ chunkSize: 1, chunkOverlap: 0 });
+            const rowDigest = crypto.createHash('sha256');
+            let rowCount = 0;
+            let firstChunkIndex: unknown;
+            let lastChunkIndex: unknown;
+            const database = createMockVectorDb();
+            database.writeDocuments = async (_collection, documents) => {
+                for (const { document, projections } of documents) {
+                    const metadata = Object.fromEntries(
+                        Object.entries(document.metadata).filter(([key]) => key !== 'indexedAt'),
+                    );
+                    rowDigest.update(JSON.stringify({
+                        id: document.id,
+                        content: document.content,
+                        relativePath: document.relativePath,
+                        startLine: document.startLine,
+                        endLine: document.endLine,
+                        fileExtension: document.fileExtension,
+                        metadata,
+                        projections,
+                    }));
+                    rowDigest.update('\n');
+                    const chunkIndex = document.metadata.chunkIndex;
+                    if (rowCount === 0) firstChunkIndex = chunkIndex;
+                    lastChunkIndex = chunkIndex;
+                    rowCount++;
+                }
+            };
+            const pipeline = new IndexingPipeline({
+                getVectorDatabase: () => database,
+                languageAnalyzer: mode === 'eager'
+                    ? createEagerOnlyAnalyzer(input => local.analyze(input))
+                    : local,
+                semanticAnalyzer: noopSemanticProjectAnalyzer,
+                getEmbedding: createMockEmbedding,
+                assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+                isHybridEnabled: () => false,
+                canonicalizeCodebasePath: p => p,
+                normalizeRelativePathForCodebase: (base, file) => path.relative(base, file) as RepositoryRelativePath,
+                getIndexedExtensionsForCodebase: () => ['.ts'],
+                matchesIgnorePattern: () => false,
+                getSymbolExtractorVersion: () => 'fixture',
+            });
+            try {
+                const result = await pipeline.processFileList({
+                    filePaths: [filePath],
+                    codebasePath: root,
+                    collectionName: 'fixture',
+                    resourcePlan: {
+                        ...basePlan,
+                        analysisWindowFiles: 2,
+                        analysisWindowSourceBytes: 64 * 1024 ** 2,
+                        embeddingBatchMaxItems: 1000,
+                        vectorWriteMaxRows: 256,
+                    },
+                });
+                await result.payloadSettled;
+                return {
+                    result: {
+                        status: result.status,
+                        processedFiles: result.processedFiles,
+                        totalChunks: result.totalChunks,
+                        sourceFiles: result.sourceFiles,
+                    },
+                    rowCount,
+                    firstChunkIndex,
+                    lastChunkIndex,
+                    rowDigest: rowDigest.digest('hex'),
+                };
+            } finally {
+                await local.dispose?.();
+            }
+        };
+
+        const eager = await run('eager');
+        const deferred = await run('deferred');
+        assert.equal(eager.result.status, 'limit_reached');
+        assert.equal(eager.result.processedFiles, 0, 'the final source file is partially indexed');
+        assert.equal(eager.result.totalChunks, 450_000);
+        assert.equal(eager.rowCount, 450_000);
+        assert.equal(eager.firstChunkIndex, 0);
+        assert.equal(eager.lastChunkIndex, 449_999);
+        assert.deepEqual(deferred, eager);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 
@@ -364,7 +669,10 @@ test('operation plan bounds analysis read-ahead, queued text, embedding batches 
         embeddingBatchMaxItems: 2, vectorWriteMaxRows: 2 });
     const pipeline = new IndexingPipeline({
         getVectorDatabase: () => database,
-        languageAnalyzer: { ...local, concurrency: 16, analyze: input => { analyses++; return local.analyze(input); } },
+        languageAnalyzer: Object.assign(createEagerOnlyAnalyzer(input => {
+            analyses++;
+            return local.analyze(input);
+        }), { concurrency: 16 }),
         semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: () => embedding,
         assertEmbeddingIdentityCurrent: () => embedding.getIdentity(),
         isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
@@ -403,9 +711,10 @@ test('operation plan bounds analysis read-ahead, queued text, embedding batches 
 test('a failed file drains already-started analysis reads before the pipeline rejects', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const analyzer = createLanguageAnalysisService();
     const pipeline = new IndexingPipeline({
-        getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+        getVectorDatabase: createMockVectorDb, languageAnalyzer: createEagerOnlyAnalyzer(async () => {
+            throw new Error('analyzeIndexedFile override should own this test');
+        }),
         semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
         assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
         isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
@@ -430,7 +739,7 @@ test('a failed file drains already-started analysis reads before the pipeline re
         release();
         await rejection;
         assert.equal(readFinished, true);
-    } finally { release(); await operation.catch(() => undefined); await analyzer.dispose?.(); }
+    } finally { release(); await operation.catch(() => undefined); }
 });
 
 for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as const) {
@@ -439,9 +748,10 @@ for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as 
         const gate = new Promise<void>(resolve => { release = resolve; });
         const firstError = new Error(stop);
         if (stop === 'cancellation') firstError.name = 'AbortError';
-        const analyzer = createLanguageAnalysisService();
         const pipeline = new IndexingPipeline({
-            getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+            getVectorDatabase: createMockVectorDb, languageAnalyzer: createEagerOnlyAnalyzer(async () => {
+                throw new Error('analyzeIndexedFile override should own this test');
+            }),
             semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
             assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
             isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
@@ -484,6 +794,6 @@ for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as 
                 assert.deepEqual(result.sourceFiles, []);
                 await result.payloadSettled;
             }
-        } finally { release(); await operation.catch(() => undefined); await analyzer.dispose?.(); }
+        } finally { release(); await operation.catch(() => undefined); }
     });
 }

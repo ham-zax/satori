@@ -1,4 +1,9 @@
-import { buildAnalysisChunks } from './chunks';
+import {
+    buildAnalysisChunks,
+    createAnalysisChunkPlan,
+    type AnalysisChunkPlanKind,
+    type ChunkOptions,
+} from './chunks';
 import { isLanguageCapabilitySupportedForLanguage, normalizeLanguageId } from '../language';
 import { analyzeWithCbmDefinitions, supportsCbmDefinitions } from './cbm-definition-adapter';
 import { CbmExtractorUnavailableError } from './cbm-extractor-host';
@@ -13,12 +18,42 @@ import type {
     LanguageAnalysisServiceOptions,
     StructuralReason,
 } from './types';
+import type { IndexingAnalysisCapability, IndexingAnalysisResult } from './indexing-analysis';
 
 type AnalysisBackend = 'oxc' | 'tree_sitter_wasm';
 type LanguageStrategy = {
     readonly backend: LanguageAnalysisBackend;
     readonly structural: boolean;
 };
+
+type AnalysisFields = Pick<LanguageAnalysisResult,
+    | 'backend'
+    | 'symbols'
+    | 'earlyExitSpans'
+    | 'moduleBindings'
+    | 'callSites'
+    | 'receiverTypeBindings'
+    | 'pythonFlowFacts'
+> & {
+    readonly structuralStatus: LanguageAnalysisResult['structuralStatus'];
+    readonly structuralReason?: LanguageAnalysisResult['structuralReason'];
+};
+
+type ServiceAnalysisResult = LanguageAnalysisResult | IndexingAnalysisResult;
+
+function finishAnalysis(
+    fields: AnalysisFields,
+    input: Pick<LanguageAnalysisInput, 'content' | 'relativePath' | 'language'>,
+    options: ChunkOptions,
+    deferred: boolean,
+    kind: AnalysisChunkPlanKind = 'symbols',
+): ServiceAnalysisResult {
+    if (deferred) return { ...fields, chunkPlan: { kind, options } } as IndexingAnalysisResult;
+    const chunks = kind === 'symbols'
+        ? buildAnalysisChunks(input.content, input.relativePath, input.language, fields.symbols, options)
+        : [...createAnalysisChunkPlan(input.content, input.relativePath, input.language, fields.symbols, options, kind).chunks()];
+    return { ...fields, chunks } as LanguageAnalysisResult;
+}
 
 const BACKEND_BY_LANGUAGE: Readonly<Record<string, AnalysisBackend>> = {
     javascript: 'oxc',
@@ -52,30 +87,26 @@ function fallbackResult(
     backend: LanguageAnalysisBackend,
     structuralStatus: 'recovered' | 'unsupported',
     structuralReason: StructuralReason,
-    options: { chunkSize?: number; chunkOverlap?: number },
-): LanguageAnalysisResult {
-    const evidence = {
+    options: ChunkOptions,
+    deferred: boolean,
+): ServiceAnalysisResult {
+    const fields: AnalysisFields = {
         backend,
         symbols: [],
         moduleBindings: [],
         callSites: [],
         receiverTypeBindings: [],
         pythonFlowFacts: [],
-        chunks: buildAnalysisChunks(
-            input.content,
-            input.relativePath,
-            input.language,
-            [],
-            options,
-        ),
+        structuralStatus,
+        structuralReason: structuralStatus === 'unsupported' ? 'unsupported_language' : structuralReason,
     };
     if (structuralStatus === 'unsupported') {
-        return { ...evidence, structuralStatus, structuralReason: 'unsupported_language' };
+        return finishAnalysis(fields, input, options, deferred);
     }
     if (structuralReason === 'unsupported_language') {
         throw new Error('Recovered language analysis requires a recoverable reason');
     }
-    return { ...evidence, structuralStatus, structuralReason };
+    return finishAnalysis(fields, input, options, deferred);
 }
 
 function readInputField(
@@ -90,112 +121,14 @@ function readInputField(
     }
 }
 
-function emergencyChunkBound(value: number | undefined, fallback: number): number {
-    const configured = typeof value === 'number' && Number.isFinite(value) && value > 0
-        ? Math.floor(value)
-        : fallback;
-    // Four bytes is the largest UTF-8 code point. A smaller byte ceiling cannot
-    // preserve both valid UTF-8 and the configured bound.
-    return Math.max(4, configured);
-}
-
-function alignEmergencyByteBoundary(
-    bytes: Buffer,
-    offset: number,
-    direction: 'backward' | 'forward',
-): number {
-    let aligned = Math.max(0, Math.min(offset, bytes.length));
-    const isContinuation = (byte: number | undefined): boolean => (
-        byte !== undefined && (byte & 0xc0) === 0x80
-    );
-    if (direction === 'backward') {
-        while (aligned > 0 && isContinuation(bytes[aligned])) aligned -= 1;
-    } else {
-        while (aligned < bytes.length && isContinuation(bytes[aligned])) aligned += 1;
-    }
-    return aligned;
-}
-
-function buildEmergencyPositions(content: string, byteLength: number): Array<{ line: number; column: number }> {
-    const positions = new Array<{ line: number; column: number }>(byteLength + 1);
-    let byteOffset = 0;
-    let line = 1;
-    let column = 0;
-    positions[0] = { line, column };
-    for (const codePoint of content) {
-        const encodedLength = Buffer.byteLength(codePoint, 'utf8');
-        for (let index = 1; index < encodedLength; index += 1) {
-            positions[byteOffset + index] = { line, column };
-        }
-        byteOffset += encodedLength;
-        if (codePoint === '\n') {
-            line += 1;
-            column = 0;
-        } else {
-            column += codePoint.length;
-        }
-        positions[byteOffset] = { line, column };
-    }
-    return positions;
-}
-
 function emergencyFallbackResult(
     input: LanguageAnalysisInput,
-    options: { chunkSize?: number; chunkOverlap?: number },
-): LanguageAnalysisResult {
+    options: ChunkOptions,
+    deferred: boolean,
+): ServiceAnalysisResult {
     const content = readInputField(input, 'content', '');
     const relativePath = readInputField(input, 'relativePath', '<unknown>');
-    const bytes = Buffer.from(content, 'utf8');
-    const positions = buildEmergencyPositions(content, bytes.length);
-    const chunkSize = emergencyChunkBound(options.chunkSize, 2500);
-    const requestedOverlap = typeof options.chunkOverlap === 'number'
-        && Number.isFinite(options.chunkOverlap)
-        ? Math.max(0, Math.floor(options.chunkOverlap))
-        : 0;
-    const chunkOverlap = Math.min(requestedOverlap, Math.max(0, chunkSize - 1));
-    const chunks: Array<LanguageAnalysisResult['chunks'][number]> = [];
-
-    for (let startByte = 0; startByte < bytes.length;) {
-        let endByte = alignEmergencyByteBoundary(
-            bytes,
-            Math.min(bytes.length, startByte + chunkSize),
-            'backward',
-        );
-        if (endByte <= startByte) {
-            endByte = alignEmergencyByteBoundary(
-                bytes,
-                Math.min(bytes.length, startByte + chunkSize),
-                'forward',
-            );
-        }
-        if (endByte <= startByte) break;
-
-        const start = positions[startByte];
-        const end = positions[endByte];
-        chunks.push({
-            content: bytes.subarray(startByte, endByte).toString('utf8'),
-            metadata: {
-                startLine: start.line,
-                endLine: end.line,
-                startByte,
-                endByte,
-                startColumn: start.column,
-                endColumn: end.column,
-                language: 'text',
-                filePath: relativePath,
-            },
-        });
-
-        if (endByte === bytes.length) break;
-        const nextStart = alignEmergencyByteBoundary(
-            bytes,
-            Math.max(startByte + 1, endByte - chunkOverlap),
-            'backward',
-        );
-        startByte = nextStart > startByte ? nextStart : endByte;
-    }
-
-    return {
+    return finishAnalysis({
         backend: 'bounded_text',
         structuralStatus: 'recovered',
         structuralReason: 'analysis_failure',
@@ -204,8 +137,7 @@ function emergencyFallbackResult(
         callSites: [],
         receiverTypeBindings: [],
         pythonFlowFacts: [],
-        chunks,
-    };
+    }, { content, relativePath, language: 'text' }, options, deferred, 'emergency');
 }
 
 export function createLanguageAnalysisService(
@@ -216,145 +148,138 @@ export function createLanguageAnalysisService(
         chunkOverlap: options.chunkOverlap,
     };
 
-    return {
-        async analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
-            try {
-                const normalizedInput = {
-                    content: input.content,
-                    relativePath: input.relativePath,
-                    language: normalizeLanguageId(input.language),
-                    ...(input.includeEarlyExitSpans ? { includeEarlyExitSpans: true } : {}),
-                };
-                const strategy = strategyForLanguage(normalizedInput.language);
-                if (strategy.backend === 'bounded_text') {
+    const analyze = async (
+        input: LanguageAnalysisInput,
+        deferred: boolean,
+    ): Promise<ServiceAnalysisResult> => {
+        try {
+            const normalizedInput = {
+                content: input.content,
+                relativePath: input.relativePath,
+                language: normalizeLanguageId(input.language),
+                ...(input.includeEarlyExitSpans ? { includeEarlyExitSpans: true } : {}),
+            };
+            const strategy = strategyForLanguage(normalizedInput.language);
+            if (strategy.backend === 'bounded_text') {
+                return fallbackResult(
+                    normalizedInput,
+                    strategy.backend,
+                    'unsupported',
+                    'unsupported_language',
+                    chunkOptions,
+                    deferred,
+                );
+            }
+            if (strategy.backend === 'cbm_definitions') {
+                let symbols;
+                try {
+                    symbols = await analyzeWithCbmDefinitions(normalizedInput);
+                } catch (error) {
+                    if (!(error instanceof CbmExtractorUnavailableError)) throw error;
                     return fallbackResult(
                         normalizedInput,
                         strategy.backend,
-                        'unsupported',
-                        'unsupported_language',
+                        'recovered',
+                        'parser_unavailable',
                         chunkOptions,
+                        deferred,
                     );
                 }
-                if (strategy.backend === 'cbm_definitions') {
-                    let symbols;
-                    try {
-                        symbols = await analyzeWithCbmDefinitions(normalizedInput);
-                    } catch (error) {
-                        if (!(error instanceof CbmExtractorUnavailableError)) throw error;
-                        return fallbackResult(normalizedInput, strategy.backend, 'recovered', 'parser_unavailable', chunkOptions);
-                    }
-                    return {
+                return finishAnalysis({
+                    backend: strategy.backend,
+                    structuralStatus: 'complete',
+                    symbols,
+                    moduleBindings: [],
+                    callSites: [],
+                    receiverTypeBindings: [],
+                    pythonFlowFacts: [],
+                }, normalizedInput, chunkOptions, deferred);
+            }
+            const evidence = strategy.backend === 'oxc'
+                ? analyzeWithOxc(normalizedInput)
+                : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
+            if (!evidence.complete) {
+                if (evidence.symbols.length > 0) {
+                    return finishAnalysis({
                         backend: strategy.backend,
-                        structuralStatus: 'complete',
-                        symbols,
+                        structuralStatus: 'recovered',
+                        structuralReason: evidence.reason,
+                        symbols: evidence.symbols,
                         moduleBindings: [],
                         callSites: [],
                         receiverTypeBindings: [],
                         pythonFlowFacts: [],
-                        chunks: buildAnalysisChunks(
-                            normalizedInput.content,
-                            normalizedInput.relativePath,
-                            normalizedInput.language,
-                            symbols,
-                            chunkOptions,
-                        ),
-                    };
+                    }, normalizedInput, chunkOptions, deferred);
                 }
-                const evidence = strategy.backend === 'oxc'
-                    ? analyzeWithOxc(normalizedInput)
-                    : await analyzeWithTreeSitter(normalizedInput, options.assetRoot);
-                if (!evidence.complete) {
-                    if (evidence.symbols.length > 0) {
-                        return {
+                if ('typedJavaScriptRecoverable' in evidence && evidence.typedJavaScriptRecoverable) {
+                    // Type-annotated (Flow) JavaScript is valid for its authors; keep its declarations searchable at symbol level.
+                    const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);
+                    if (symbols.length > 0) {
+                        return finishAnalysis({
                             backend: strategy.backend,
                             structuralStatus: 'recovered',
-                            structuralReason: evidence.reason,
-                            symbols: evidence.symbols,
+                            structuralReason: 'syntax_error',
+                            symbols,
                             moduleBindings: [],
                             callSites: [],
                             receiverTypeBindings: [],
                             pythonFlowFacts: [],
-                            chunks: buildAnalysisChunks(
-                                normalizedInput.content,
-                                normalizedInput.relativePath,
-                                normalizedInput.language,
-                                evidence.symbols,
-                                chunkOptions,
-                            ),
-                        };
+                        }, normalizedInput, chunkOptions, deferred);
                     }
-                    if ('typedJavaScriptRecoverable' in evidence && evidence.typedJavaScriptRecoverable) {
-                        // Type-annotated (Flow) JavaScript is valid for its authors; keep its declarations searchable at symbol level.
-                        const symbols = recoverFlowSymbols(normalizedInput.content, normalizedInput.relativePath);
-                        if (symbols.length > 0) {
-                            return {
-                                backend: strategy.backend,
-                                structuralStatus: 'recovered',
-                                structuralReason: 'syntax_error',
-                                symbols,
-                                moduleBindings: [],
-                                callSites: [],
-                                receiverTypeBindings: [],
-                                pythonFlowFacts: [],
-                                chunks: buildAnalysisChunks(
-                                    normalizedInput.content,
-                                    normalizedInput.relativePath,
-                                    normalizedInput.language,
-                                    symbols,
-                                    chunkOptions,
-                                ),
-                            };
-                        }
-                    }
-                    return fallbackResult(
-                        normalizedInput,
-                        strategy.backend,
-                        'recovered',
-                        evidence.reason,
-                        chunkOptions,
-                    );
                 }
-                return {
-                    backend: strategy.backend,
-                    structuralStatus: 'complete',
-                    symbols: evidence.symbols,
-                    moduleBindings: evidence.moduleBindings,
-                    ...('earlyExitSpans' in evidence && evidence.earlyExitSpans
-                        ? { earlyExitSpans: evidence.earlyExitSpans } : {}),
-                    callSites: evidence.callSites,
-                    receiverTypeBindings: evidence.receiverTypeBindings,
-                    pythonFlowFacts: evidence.pythonFlowFacts ?? [],
-                    chunks: buildAnalysisChunks(
-                        normalizedInput.content,
-                        normalizedInput.relativePath,
-                        normalizedInput.language,
-                        evidence.symbols,
-                        chunkOptions,
-                    ),
-                };
-            } catch {
-                try {
-                    const fallbackLanguage = normalizeLanguageId(readInputField(input, 'language', 'text'));
-                    const fallbackBackend = strategyForLanguage(fallbackLanguage).backend;
-                    return fallbackResult(
-                        {
-                            content: readInputField(input, 'content', ''),
-                            relativePath: readInputField(input, 'relativePath', '<unknown>'),
-                            language: fallbackLanguage,
-                        },
-                        fallbackBackend,
-                        'recovered',
-                        'analysis_failure',
-                        chunkOptions,
-                    );
-                } catch {
-                    return emergencyFallbackResult(input, chunkOptions);
-                }
+                return fallbackResult(
+                    normalizedInput,
+                    strategy.backend,
+                    'recovered',
+                    evidence.reason,
+                    chunkOptions,
+                    deferred,
+                );
             }
-        },
+            return finishAnalysis({
+                backend: strategy.backend,
+                structuralStatus: 'complete',
+                symbols: evidence.symbols,
+                moduleBindings: evidence.moduleBindings,
+                ...('earlyExitSpans' in evidence && evidence.earlyExitSpans
+                    ? { earlyExitSpans: evidence.earlyExitSpans } : {}),
+                callSites: evidence.callSites,
+                receiverTypeBindings: evidence.receiverTypeBindings,
+                pythonFlowFacts: evidence.pythonFlowFacts ?? [],
+            }, normalizedInput, chunkOptions, deferred);
+        } catch {
+            try {
+                const fallbackLanguage = normalizeLanguageId(readInputField(input, 'language', 'text'));
+                const fallbackBackend = strategyForLanguage(fallbackLanguage).backend;
+                return fallbackResult(
+                    {
+                        content: readInputField(input, 'content', ''),
+                        relativePath: readInputField(input, 'relativePath', '<unknown>'),
+                        language: fallbackLanguage,
+                    },
+                    fallbackBackend,
+                    'recovered',
+                    'analysis_failure',
+                    chunkOptions,
+                    deferred,
+                );
+            } catch {
+                return emergencyFallbackResult(input, chunkOptions, deferred);
+            }
+        }
+    };
+
+    const service = {
+        analyze: async (input: LanguageAnalysisInput) => (
+            await analyze(input, false) as LanguageAnalysisResult
+        ),
+        analyzeForIndexing: async (input: LanguageAnalysisInput) => (
+            await analyze(input, true) as IndexingAnalysisResult
+        ),
         getDescription(): string {
             return 'Oxc (JS/TS), Tree-sitter WASM (polyglot), CBM definition extractors, bounded text fallback';
         },
         getStrategyForLanguage: strategyForLanguage,
-    };
+    } as LanguageAnalysisPort & IndexingAnalysisCapability;
+    return service;
 }

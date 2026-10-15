@@ -1,7 +1,75 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { RerankerRequestError, VoyageAIReranker } from './voyageai-reranker';
 import type { RerankExecutionDiagnostics } from './reranker';
+
+test('VoyageAIReranker retry delay removes its abort listener on normal completion', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const controller = new AbortController();
+    const reranker = new VoyageAIReranker({ apiKey: 'test-key', retryDelayMs: 250 });
+    let completed = false;
+    const delay = reranker['delayBeforeRetry'](controller.signal).then(() => { completed = true; });
+
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+    t.mock.timers.tick(249);
+    await Promise.resolve();
+    assert.equal(completed, false, 'the configured delay must elapse');
+    t.mock.timers.tick(1);
+    await delay;
+    assert.equal(completed, true);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    controller.abort(new Error('abort after completion'));
+    await delay;
+});
+
+test('VoyageAIReranker retry delay preserves cancellation reason and clears its timer and listener', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const clearTimer = t.mock.method(globalThis, 'clearTimeout');
+    const controller = new AbortController();
+    const reason = new Error('cancel retry delay');
+    const reranker = new VoyageAIReranker({ apiKey: 'test-key', retryDelayMs: 250 });
+    const delay = reranker['delayBeforeRetry'](controller.signal);
+    const rejection = assert.rejects(delay, (error: unknown) => error === reason);
+
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+    t.mock.timers.tick(249);
+    controller.abort(reason);
+    await rejection;
+    assert.equal(clearTimer.mock.callCount(), 1);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    t.mock.timers.tick(1);
+    await assert.rejects(delay, (error: unknown) => error === reason);
+});
+
+test('VoyageAIReranker retry delay attaches no listener or timer to a preaborted signal', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const startTimer = t.mock.method(globalThis, 'setTimeout');
+    const controller = new AbortController();
+    const reason = new Error('already cancelled');
+    controller.abort(reason);
+    const addListener = t.mock.method(controller.signal, 'addEventListener');
+    const reranker = new VoyageAIReranker({ apiKey: 'test-key', retryDelayMs: 250 });
+
+    await assert.rejects(reranker['delayBeforeRetry'](controller.signal), (error: unknown) => error === reason);
+    assert.equal(addListener.mock.callCount(), 0);
+    assert.equal(startTimer.mock.callCount(), 0);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('VoyageAIReranker repeated retry delays retain no listeners on the same signal', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const controller = new AbortController();
+    const reranker = new VoyageAIReranker({ apiKey: 'test-key', retryDelayMs: 250 });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const delay = reranker['delayBeforeRetry'](controller.signal);
+        assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+        t.mock.timers.tick(250);
+        await delay;
+        assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    }
+});
 
 type MockFetch = (
     input: Parameters<typeof fetch>[0],

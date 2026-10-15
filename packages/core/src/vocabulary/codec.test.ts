@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decodeRepositoryVocabularyIndex, encodeRepositoryVocabularyIndex } from './codec';
+import { decodeRepositoryVocabularyIndex, decodeRepositoryVocabularyIndexCompact,
+    encodeRepositoryVocabularyIndex } from './codec';
 import { MAX_VOCABULARY_TERMS, VOCABULARY_INDEX_VERSION, type RepositoryVocabularyIndex } from './contracts';
 import { vocabularyTokens } from './extract';
 
@@ -60,11 +61,13 @@ test('malformed dictionary references, kinds, lines and word evidence are reject
         const invalid = structuredClone(encoded) as unknown as { documents: { terms: unknown[] }[] };
         invalid.documents[0]!.terms[0] = term;
         assert.equal(decodeRepositoryVocabularyIndex(invalid), null, JSON.stringify(term));
+        assert.equal(decodeRepositoryVocabularyIndexCompact(invalid), null, JSON.stringify(term));
     }
     for (const word of ['x', 'has spaces', 'x'.repeat(65), 42, null]) {
         const invalid = structuredClone(encoded) as unknown as { dictionary: unknown[] };
         invalid.dictionary[0] = word;
         assert.equal(decodeRepositoryVocabularyIndex(invalid), null, JSON.stringify(word));
+        assert.equal(decodeRepositoryVocabularyIndexCompact(invalid), null, JSON.stringify(word));
     }
 });
 
@@ -74,10 +77,24 @@ test('decoding retains document and evidence bounds and empty budget-exceeded ar
     const invalid = structuredClone(encoded);
     invalid.documents[0]!.terms = Array.from({ length: MAX_VOCABULARY_TERMS + 1 }, () => [0, 0, 1]);
     assert.equal(decodeRepositoryVocabularyIndex(invalid), null);
+    assert.equal(decodeRepositoryVocabularyIndexCompact(invalid), null);
     invalid.documents[0]!.terms = [[0, 0, 1]];
     invalid.documents[0]!.file = '../foreign.ts';
     assert.equal(decodeRepositoryVocabularyIndex(invalid), null);
+    assert.equal(decodeRepositoryVocabularyIndexCompact(invalid), null);
     const empty: RepositoryVocabularyIndex = { ...index, budgetExceeded: true, documents: [] };
     assert.deepEqual(decodeRepositoryVocabularyIndex(encodeRepositoryVocabularyIndex(empty)), empty);
     assert.equal(decodeRepositoryVocabularyIndex(index), null, 'unreleased object-term artifacts use the old fallback');
+    assert.equal(decodeRepositoryVocabularyIndexCompact(index), null,
+        'the compact path accepts only the same validated encoded artifacts');
+});
+
+test('compact decoding retains safe line numbers and shares expanded validation', () => {
+    const index = fixture();
+    index.documents[0]!.terms[0]!.line = Number.MAX_SAFE_INTEGER;
+    const encoded = encodeRepositoryVocabularyIndex(index);
+    const compact = decodeRepositoryVocabularyIndexCompact(encoded);
+    assert.ok(compact);
+    assert.equal(compact.documents[0]!.terms[0]![2], Number.MAX_SAFE_INTEGER);
+    assert.deepEqual(decodeRepositoryVocabularyIndex(encoded), index);
 });

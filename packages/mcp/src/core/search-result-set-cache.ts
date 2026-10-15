@@ -68,6 +68,7 @@ export type SearchResultSetCoordinatorLookup<T, TOwner extends object> =
 
 type CacheEntry<T> = {
     value: T;
+    inspectionWitness: T | typeof UNINSPECTED_VALUE | typeof UNSUPPORTED_VALUE;
     nextOffset: number;
     expiresAtMs: number;
     reservationBytes: number;
@@ -81,6 +82,49 @@ const DEFAULT_OPTIONS: SearchResultSetCacheOptions = Object.freeze({
     maxCacheBytes: MAX_RESULT_SET_CACHE_BYTES,
     ttlMs: RESULT_SET_TTL_MS,
 });
+
+const UNINSPECTED_VALUE = Symbol("uninspected search result-set value");
+const UNSUPPORTED_VALUE = Symbol("unsupported search result-set value");
+
+function isDeeplyFreezable(value: unknown): boolean {
+    const pending: unknown[] = [value];
+    const seen = new WeakSet<object>();
+    try {
+        while (pending.length > 0) {
+            const current = pending.pop();
+            if (current === null || (typeof current !== "object" && typeof current !== "function")) continue;
+            if (typeof current === "function") return false;
+            if (seen.has(current)) continue;
+            seen.add(current);
+
+            if (Array.isArray(current)) {
+                if (Object.getPrototypeOf(current) !== Array.prototype) return false;
+            } else {
+                const prototype = Object.getPrototypeOf(current);
+                if (prototype !== Object.prototype && prototype !== null) return false;
+            }
+
+            for (const key of Reflect.ownKeys(current)) {
+                const descriptor = Object.getOwnPropertyDescriptor(current, key);
+                if (!descriptor || !("value" in descriptor)) return false;
+                pending.push(descriptor.value);
+            }
+        }
+    } catch {
+        return false;
+    }
+    return true;
+}
+
+function freezeDeep(value: unknown, seen = new WeakSet<object>()): void {
+    if (value === null || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor && "value" in descriptor) freezeDeep(descriptor.value, seen);
+    }
+    Object.freeze(value);
+}
 
 function resolveOptions(
     options: Partial<SearchResultSetCacheOptions> = {},
@@ -98,11 +142,21 @@ function resolveOptions(
 }
 
 function canonicalByteLength(value: unknown): number {
-    const json = JSON.stringify(value);
+    const jsonWithRaw = JSON as typeof JSON & { isRawJSON?: (value: unknown) => boolean };
+    let containsRawJSON = false;
+    const replacer = typeof jsonWithRaw.isRawJSON === "function"
+        ? (_key: string, current: unknown) => {
+            if (jsonWithRaw.isRawJSON!(current)) containsRawJSON = true;
+            return current;
+        }
+        : undefined;
+    const json = JSON.stringify(value, replacer);
     if (json === undefined) {
         throw new TypeError("Search result-set cache values must be JSON-serializable.");
     }
-    return Buffer.byteLength(serializeCanonicalJson(JSON.parse(json)), "utf8");
+    return containsRawJSON
+        ? Buffer.byteLength(serializeCanonicalJson(JSON.parse(json)), "utf8")
+        : Buffer.byteLength(json, "utf8");
 }
 
 export class SearchResultSetCache<T> {
@@ -143,6 +197,7 @@ export class SearchResultSetCache<T> {
         const expiresAtMs = input.nowMs + this.options.ttlMs;
         this.entries.set(handle, {
             value: structuredClone(input.value),
+            inspectionWitness: UNINSPECTED_VALUE,
             nextOffset: Math.max(0, Math.floor(input.nextOffset)),
             expiresAtMs,
             reservationBytes,
@@ -159,6 +214,24 @@ export class SearchResultSetCache<T> {
         nowMs: number,
         accepts: (value: Readonly<T>) => boolean = () => true,
     ): SearchResultSetLookup<T> {
+        return this.lookupValue(handle, nowMs, accepts, false);
+    }
+
+    /** Internal continuation-only read; a supported cache-owned value is deeply frozen before borrowing. */
+    public lookupForInspection(
+        handle: string,
+        nowMs: number,
+        accepts: (value: Readonly<T>) => boolean = () => true,
+    ): SearchResultSetLookup<T> {
+        return this.lookupValue(handle, nowMs, accepts, true);
+    }
+
+    private lookupValue(
+        handle: string,
+        nowMs: number,
+        accepts: (value: Readonly<T>) => boolean,
+        inspect: boolean,
+    ): SearchResultSetLookup<T> {
         const entry = this.entries.get(handle);
         if (!entry) return { status: "not_found" };
         if (nowMs >= entry.expiresAtMs) {
@@ -168,9 +241,25 @@ export class SearchResultSetCache<T> {
         if (!accepts(entry.value)) return { status: "not_found" };
         this.entries.delete(handle);
         this.entries.set(handle, entry);
+        let value: T;
+        if (!inspect) {
+            value = structuredClone(entry.value);
+        } else {
+            if (entry.inspectionWitness === UNINSPECTED_VALUE) {
+                if (isDeeplyFreezable(entry.value)) {
+                    freezeDeep(entry.value);
+                    entry.inspectionWitness = entry.value;
+                } else {
+                    entry.inspectionWitness = UNSUPPORTED_VALUE;
+                }
+            }
+            value = entry.inspectionWitness === entry.value
+                ? entry.value
+                : structuredClone(entry.value);
+        }
         return {
             status: "hit",
-            entry: structuredClone(entry.value),
+            entry: value,
             nextOffset: entry.nextOffset,
             expiresAtMs: entry.expiresAtMs,
             lastPage: entry.lastPage ? structuredClone(entry.lastPage) : null,
@@ -262,6 +351,15 @@ export class SearchResultSetCoordinatorPool<T> {
         return this.cache.lookup(handle, nowMs, (entry) => entry.scopeId === scopeId);
     }
 
+    /** Internal continuation-only read preserving the same scope and cache policy checks as lookup. */
+    public lookupForInspection(
+        scopeId: string,
+        handle: string,
+        nowMs: number,
+    ): SearchResultSetLookup<ScopedOwnedSearchResultSet<T>> {
+        return this.cache.lookupForInspection(handle, nowMs, (entry) => entry.scopeId === scopeId);
+    }
+
     public advance(scopeId: string, input: {
         handle: string;
         expectedOffset: number;
@@ -338,7 +436,22 @@ export class SearchResultSetCoordinator<T, TOwner extends object> {
     }
 
     public lookup(handle: string, nowMs: number): SearchResultSetCoordinatorLookup<T, TOwner> {
-        const lookup = this.pool.lookup(this.scopeId, handle, nowMs);
+        return this.resolveLookup(handle, nowMs, false);
+    }
+
+    /** Internal continuation-only read; only a cache-owned deeply frozen value may be borrowed. */
+    public lookupForInspection(handle: string, nowMs: number): SearchResultSetCoordinatorLookup<T, TOwner> {
+        return this.resolveLookup(handle, nowMs, true);
+    }
+
+    private resolveLookup(
+        handle: string,
+        nowMs: number,
+        inspect: boolean,
+    ): SearchResultSetCoordinatorLookup<T, TOwner> {
+        const lookup = inspect
+            ? this.pool.lookupForInspection(this.scopeId, handle, nowMs)
+            : this.pool.lookup(this.scopeId, handle, nowMs);
         if (lookup.status !== "hit") return lookup;
         const owner = this.owners.get(lookup.entry.ownerId);
         if (!owner) {

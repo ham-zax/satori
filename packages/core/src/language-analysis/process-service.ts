@@ -4,9 +4,13 @@ import type { IndexingResourcePlan } from '../indexing/resources';
 import { createLanguageAnalysisService } from './service';
 import type { AnalysisWorkerRequest, AnalysisWorkerResponse } from './analysis-worker-runner';
 import type { LanguageAnalysisInput, LanguageAnalysisPort, LanguageAnalysisResult, LanguageAnalysisServiceOptions } from './types';
+import type {
+    AnalysisWorkerPayload,
+    IndexingAnalysisResult,
+} from './indexing-analysis';
 
 type ParserPlan = Pick<IndexingResourcePlan, 'analysisWorkers' | 'analysisProcessMaxFiles' | 'analysisProcessMaxSourceBytes' | 'analysisLargeFileBytes'>;
-type Job = { id: number; input: LanguageAnalysisInput; resolve(result: LanguageAnalysisResult): void; reject(error: Error): void };
+type Job = { id: number; input: LanguageAnalysisInput; mode?: 'indexing'; resolve(result: AnalysisWorkerPayload): void; reject(error: Error): void };
 type Entry = { child: ChildProcess; exited: Promise<void>; stopping: boolean; files: number; bytes: number; job?: Job };
 
 /** Small-budget parser owner: baseline WASM, bounded reuse, and process exit before slot reuse. */
@@ -90,24 +94,38 @@ export function createProcessLanguageAnalysisService(options: LanguageAnalysisSe
                 }
                 const job = queue.shift()!;
                 entry.job = job;
-                entry.child.send({ id: job.id, input: job.input } satisfies AnalysisWorkerRequest, error => {
+                entry.child.send({
+                    id: job.id,
+                    ...(job.mode ? { mode: job.mode } : {}),
+                    input: job.input,
+                } satisfies AnalysisWorkerRequest, error => {
                     if (error) void shutdown(error);
                 });
             }
         } catch (error) { await shutdown(error instanceof Error ? error : new Error(String(error))); }
         finally { pumping = false; }
     };
-    return {
+    const submit = (
+        input: LanguageAnalysisInput,
+        mode?: 'indexing',
+    ): Promise<AnalysisWorkerPayload> => {
+        if (failure) return (drain ?? Promise.resolve()).then(() => { throw failure; });
+        return new Promise<AnalysisWorkerPayload>((resolve, reject) => {
+            queue.push({ id: ++nextId, input, ...(mode ? { mode } : {}), resolve, reject });
+            void pump();
+        });
+    };
+    const service = {
         concurrency: plan.analysisWorkers,
         getDescription: () => local.getDescription(),
-        getStrategyForLanguage: language => local.getStrategyForLanguage(language),
-        analyze(input) {
-            if (failure) return (drain ?? Promise.resolve()).then(() => { throw failure; });
-            return new Promise<LanguageAnalysisResult>((resolve, reject) => {
-                queue.push({ id: ++nextId, input, resolve, reject });
-                void pump();
-            });
+        getStrategyForLanguage: (language: string) => local.getStrategyForLanguage(language),
+        analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
+            return submit(input) as Promise<LanguageAnalysisResult>;
+        },
+        analyzeForIndexing(input: LanguageAnalysisInput): Promise<IndexingAnalysisResult> {
+            return submit(input, 'indexing') as Promise<IndexingAnalysisResult>;
         },
         dispose: () => shutdown(new Error('Language analysis service was disposed.')),
     };
+    return service;
 }

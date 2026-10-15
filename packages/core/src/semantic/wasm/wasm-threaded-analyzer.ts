@@ -32,6 +32,8 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
     private disposed = false;
     private nextRequestId = 1;
     private idleTimer: NodeJS.Timeout | null = null;
+    private readonly retiring = new Set<Promise<void>>();
+    private failedRetirement: { worker: Worker; error: unknown } | null = null;
     private readonly pendingRequests = new Map<number, PendingSemanticRequest>();
     private readonly fallbackAnalyzer: WasmSemanticProjectAnalyzer;
     private readonly idleReleaseMs: number;
@@ -56,13 +58,15 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
         return pending;
     }
 
-    private rejectPendingFor(worker: Worker, error: Error): void {
+    private detachPendingFor(worker: Worker): PendingSemanticRequest[] {
+        const requests: PendingSemanticRequest[] = [];
         for (const [id, pending] of this.pendingRequests) {
             if (pending.worker !== worker) continue;
             this.pendingRequests.delete(id);
             clearTimeout(pending.timer);
-            pending.reject(error);
+            requests.push(pending);
         }
+        return requests;
     }
 
     private scheduleIdleRelease(): void {
@@ -77,26 +81,58 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
     }
 
     /** Stops the current worker; the next analyze() starts a fresh one. */
-    private releaseWorker(error?: Error): void {
-        const worker = this.worker;
-        if (!worker) return;
+    private releaseWorker(error?: Error, worker = this.worker, exited = false): void {
+        if (!worker || this.worker !== worker) return;
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        this.idleTimer = null;
         this.worker = null;
-        if (error) this.rejectPendingFor(worker, error);
-        void worker.terminate();
+        const requests = this.detachPendingFor(worker);
+        const rejectRequests = () => {
+            for (const request of requests) request.reject(error!);
+        };
+        const onExit = () => {
+            exited = true;
+            if (this.failedRetirement?.worker === worker) this.failedRetirement = null;
+        };
+        if (!exited) worker.once('exit', onExit);
+        // Keep ownership through termination, including synchronous throws.
+        // Exit events cannot replace the captured request failure once detached.
+        const retirement = Promise.resolve().then(() => worker.terminate()).then(
+            () => {
+                worker.off('exit', onExit);
+                rejectRequests();
+            },
+            (terminationError: unknown) => {
+                // A rejected terminate does not prove the isolate stopped.
+                // Retain ownership until this worker's actual exit event.
+                if (!exited) this.failedRetirement = { worker, error: terminationError };
+                rejectRequests();
+                throw terminationError;
+            },
+        );
+        this.retiring.add(retirement);
+        // Both branches handle background retirement; no ignored rejecting finally chain.
+        void retirement.then(
+            () => { this.retiring.delete(retirement); },
+            () => { this.retiring.delete(retirement); },
+        );
+    }
+
+    private async awaitRetirements(): Promise<void> {
+        const results = await Promise.allSettled([...this.retiring]);
+        if (this.failedRetirement) throw this.failedRetirement.error;
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
     }
 
     /** True while a worker (and its WebAssembly memory) is alive. */
     hasLiveWorker(): boolean {
-        return this.worker !== null;
+        return this.worker !== null || this.retiring.size > 0 || this.failedRetirement !== null;
     }
 
     async releaseIdleWorker(): Promise<void> {
-        if (this.pendingRequests.size > 0) return;
-        if (this.idleTimer) clearTimeout(this.idleTimer);
-        this.idleTimer = null;
-        const worker = this.worker;
-        this.worker = null;
-        if (worker) await worker.terminate();
+        if (this.pendingRequests.size === 0) this.releaseWorker();
+        await this.awaitRetirements();
     }
 
     supportsLanguage(language: string): boolean {
@@ -115,6 +151,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             this.worker = worker;
 
             worker.on('message', (response: WasmWorkerResponse) => {
+                if (this.pendingRequests.get(response.id)?.worker !== worker) return;
                 const pending = this.takePending(response.id);
                 if (!pending) return;
                 if (response.success) {
@@ -133,25 +170,24 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
             });
 
             worker.on('error', (err) => {
-                this.rejectPendingFor(worker, err);
+                this.releaseWorker(err, worker);
             });
 
             worker.on('exit', (code) => {
                 // Only this worker's requests: a released worker may exit after
                 // its replacement has taken new requests.
-                this.rejectPendingFor(
-                    worker,
+                this.releaseWorker(
                     new Error(`CBM Semantic Worker stopped unexpectedly with exit code ${code}`),
+                    worker,
+                    true,
                 );
-                if (this.worker === worker) {
-                    this.worker = null;
-                }
             });
         }
         return this.worker;
     }
 
     async analyze(input: SemanticProjectInput): Promise<SemanticProjectEvidence> {
+        if (this.failedRetirement) throw this.failedRetirement.error;
         if (this.disposed) {
             throw new Error('Semantic analyzer has been disposed');
         }
@@ -160,6 +196,12 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
                 language: input.language,
                 occurrencesByFile: new Map(),
             };
+        }
+
+        // Another resumed caller can retire a replacement before this one resumes.
+        while (this.retiring.size > 0 || this.failedRetirement) await this.awaitRetirements();
+        if (this.disposed) {
+            throw new Error('Semantic analyzer has been disposed');
         }
 
         const id = this.nextRequestId++;
@@ -176,31 +218,24 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
                 // The worker is stuck in this request; stopping it is the only way out.
                 this.releaseWorker(new Error(
                     `Semantic analysis for '${input.language}' timed out after ${this.requestTimeoutMs} ms`,
-                ));
+                ), worker);
             }, this.requestTimeoutMs);
             timer.unref();
             this.pendingRequests.set(id, { worker, timer, resolve, reject });
-            worker.postMessage(request);
+            try {
+                worker.postMessage(request);
+            } catch (error) {
+                this.releaseWorker(error as Error, worker);
+            }
         });
     }
 
     async dispose(): Promise<void> {
-        if (this.disposed) return;
         this.disposed = true;
         if (this.idleTimer) clearTimeout(this.idleTimer);
         this.idleTimer = null;
 
-        const worker = this.worker;
-        this.worker = null;
-
-        for (const [, req] of this.pendingRequests) {
-            clearTimeout(req.timer);
-            req.reject(new Error('Semantic analyzer disposed while request was pending'));
-        }
-        this.pendingRequests.clear();
-
-        if (worker) {
-            await worker.terminate();
-        }
+        this.releaseWorker(new Error('Semantic analyzer disposed while request was pending'));
+        await this.awaitRetirements();
     }
 }

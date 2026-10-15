@@ -821,7 +821,7 @@ export class Context {
         canonicalRoot: string,
         publication?: PublicationRef,
     ): {
-        synchronizer: FileSynchronizer;
+        synchronizer: ReturnType<SynchronizerRegistry['getPublicationSourceComparison']>;
         publicationId: string;
     } | null {
         const ref = publication ?? this.publicationStore.getCurrent(canonicalRoot);
@@ -829,11 +829,11 @@ export class Context {
         const checkpoint = this.publicationStore.getSourceCheckpoint(canonicalRoot, ref.id);
         if (!checkpoint) return null;
         return {
-            synchronizer: new FileSynchronizer(
+            synchronizer: this.synchronizerRegistry.getPublicationSourceComparison(
                 canonicalRoot,
-                [...ref.publication.policy.effectiveIgnorePatterns],
-                [...ref.publication.policy.supportedExtensions],
-                { sourceCheckpoint: checkpoint },
+                checkpoint,
+                ref.publication.policy.effectiveIgnorePatterns,
+                ref.publication.policy.supportedExtensions,
             ),
             publicationId: ref.id,
         };

@@ -10,6 +10,11 @@ import type {
     LanguageAnalysisResult,
     LanguageAnalysisServiceOptions,
 } from './types';
+import type {
+    AnalysisWorkerPayload,
+    IndexingAnalysisCapability,
+    IndexingAnalysisResult,
+} from './indexing-analysis';
 
 /** Parsers and grammar WASM stay resident per worker; release idle workers to return that memory. */
 const ANALYSIS_WORKER_IDLE_RELEASE_MS = 30_000;
@@ -32,7 +37,7 @@ export function resolveAnalysisWorkerCount(): number {
 }
 
 type PendingAnalysis = {
-    resolve: (result: LanguageAnalysisResult) => void;
+    resolve: (result: AnalysisWorkerPayload) => void;
     reject: (error: Error) => void;
 };
 
@@ -52,6 +57,7 @@ export function createParallelLanguageAnalysisService(
     workerCount = resolveAnalysisWorkerCount(),
 ): ParallelLanguageAnalysisPort {
     const local = createLanguageAnalysisService(options);
+    const localIndexing = local as LanguageAnalysisPort & IndexingAnalysisCapability;
     const workers: PoolWorker[] = [];
     const retiring = new Set<Promise<number>>();
     let nextId = 1;
@@ -123,25 +129,37 @@ export function createParallelLanguageAnalysisService(
         return workers.reduce((best, entry) => (entry.pending.size < best.pending.size ? entry : best));
     };
 
-    return {
+    const dispatch = (
+        input: LanguageAnalysisInput,
+        mode?: 'indexing',
+    ): Promise<AnalysisWorkerPayload> => {
+        if (idleTimer) {
+            clearTimeout(idleTimer);
+            idleTimer = undefined;
+        }
+        const entry = leastBusyWorker();
+        const id = nextId++;
+        return new Promise<AnalysisWorkerPayload>((resolve, reject) => {
+            entry.pending.set(id, { resolve, reject });
+            entry.worker.postMessage({
+                id,
+                ...(mode ? { mode } : {}),
+                input: { content: input.content, language: input.language, relativePath: input.relativePath },
+            } satisfies AnalysisWorkerRequest);
+        });
+    };
+
+    const service = {
         concurrency: Math.max(1, workerCount),
         getDescription: () => local.getDescription(),
-        getStrategyForLanguage: (language) => local.getStrategyForLanguage(language),
+        getStrategyForLanguage: (language: string) => local.getStrategyForLanguage(language),
         async analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
             if (workerCount === 0 || disposed) return local.analyze(input);
-            if (idleTimer) {
-                clearTimeout(idleTimer);
-                idleTimer = undefined;
-            }
-            const entry = leastBusyWorker();
-            const id = nextId++;
-            return new Promise<LanguageAnalysisResult>((resolve, reject) => {
-                entry.pending.set(id, { resolve, reject });
-                entry.worker.postMessage({
-                    id,
-                    input: { content: input.content, language: input.language, relativePath: input.relativePath },
-                } satisfies AnalysisWorkerRequest);
-            });
+            return await dispatch(input) as LanguageAnalysisResult;
+        },
+        async analyzeForIndexing(input: LanguageAnalysisInput): Promise<IndexingAnalysisResult> {
+            if (workerCount === 0 || disposed) return localIndexing.analyzeForIndexing(input);
+            return await dispatch(input, 'indexing') as IndexingAnalysisResult;
         },
         releaseIdleWorkers(): void {
             if (pendingCount() > 0) return;
@@ -160,4 +178,5 @@ export function createParallelLanguageAnalysisService(
             await Promise.all([...all.map(retire), ...retiring]);
         },
     };
+    return service as ParallelLanguageAnalysisPort & IndexingAnalysisCapability;
 }

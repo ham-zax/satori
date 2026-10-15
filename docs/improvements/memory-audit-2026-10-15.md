@@ -1,5 +1,176 @@
 # Memory audit and scoped repairs, 15 October 2026
 
+## Completed project checkpoint, 16 October 2026
+
+Baseline: `668e3ff2` on `master`. Hamza requested repairs for all ten remaining
+findings through Claive, then requested this project checkpoint. All ten are
+implemented, integrated, independently reviewed, and checked. The earlier
+M01/M02/M06 repairs remain intact. No production indexes or user data changed.
+
+Final checks on the combined source:
+
+- Core: **270 passed across 16 files**. The command uses Core's raw test flags
+  with concurrency 1 and the exact changed-owner test paths.
+- MCP: **61 passed across 7 files**, including real continuation ownership,
+  shared runtime, vocabulary consumers, freshness, and Git-status retention.
+- **331 focused tests passed across 23 files.**
+- `pnpm run check` passed after the final ASCII change: lint, all three package
+  typechecks, version freshness, and package scope. Existing lint warnings
+  remain in unchanged files. Whitespace checks and scratch ShellCheck pass.
+- No required implementation or verification work remains running. The parent
+  closes the task's idle workers and removes inspected scratch state after
+  recording acceptance. Worker reports remain in Claive's normal history.
+
+Implementation results:
+
+| Finding | Delivered behavior |
+|---|---|
+| M03 | Shared codec validation, encoded terms, flat posting pairs, evidence created for matches. The empty-parent-ID review regression is corrected. The two-entry cache policy remains. |
+| M04 | Built-in indexing defers chunk strings until consumption. Local/thread/process delivery carries serializable structural evidence. Byte reservations bound read-ahead and drain on all exits. Public eager callers and custom analyzers retain their behavior. |
+| M05 | Lazy UTF-16 tables, one shared source buffer, and a native ASCII witness that avoids prefix decoding. Unicode retains the existing decoder. |
+| M07 | Single-pass ordinary JSON byte accounting, exact fallback for raw JSON, and immutable owned inspection without full continuation clones. Ordinary lookup copies and stale/admission error order remain. |
+| M08 | Registry-owned comparison reuse behind deeply frozen checkpoint identity, root, and policy. Context delegates. Mutation synchronizers remain separate. |
+| M09 | Replacement and clearing retire every alias and mutation target belonging to the displaced synchronizer object. Other roots and candidates remain independent. |
+| M10 | Retirement joins, concurrent disposal, replacement gating, and failed-termination ownership. Ordinary job errors remain isolated from other requests. |
+| M11 | Expired roots are pruned. Every access and probe respects a 32-root LRU limit. The requested root's captured stale fallback survives a failed probe. Evicted abandoned entries are forgotten. |
+| M12 | Retry delays remove abort listeners on normal completion and cancellation. |
+| M13 | Allocation and copy failures free all buffers already acquired, exactly once, while preserving original errors. |
+
+Before/after results are medians of three isolated runs on the same input.
+Array-buffer memory is included in external memory, so do not add it twice.
+
+| Fixture / journey | Before | Final or measured step |
+|---|---|---|
+| M03, 10,000 documents / 480,000 postings | 106.39 MiB heap plus external, 359,800 KiB peak RSS | 44.22 MiB heap plus external, 215,940 KiB peak RSS |
+| M04/M05, four 217,795-byte nested-function files, window 4 | 415,832 KiB peak RSS, 5,722 ms | 345,840 KiB peak RSS, 2,520 ms |
+| M04/M05, same fixture with one file | 265,580 KiB peak RSS, 1,481 ms | 271,248 KiB peak RSS, 539 ms |
+| M05 lazy-table step, 1 MiB Unicode source, byte-only use | 7,915,624 B retained heap, 1,048,640 B external | 213,056 B retained heap, 1,048,640 B external |
+| M07, rejected 11,173,781-byte / 36,000-row value | 88.3 MiB heap delta, 288.4 MiB peak RSS | 12.3 MiB heap delta, 153.2 MiB peak RSS |
+| M07, 32 warm reads of 2,400 rows | 5.82 MiB heap delta, 188.7 ms | 0.206 MiB heap delta, 0.124 ms |
+| M08, one cold plus 30 warm checkpoint acquisitions | 1,197.242 ms, 304,164 KiB peak RSS | 92.031 ms, 136,032 KiB peak RSS |
+
+M04/M05 four-file output is identical: 39,600 chunks, 98,524,980 text bytes,
+SHA-256 `bbd5906d04ec440bcbf257cde74d83fc00b4feb73b2060b1a3586b0daad7124a`.
+Median one-minute load is 1.79 before and 2.11 after on 15 available CPUs.
+The one-file RSS median is about 2.1% higher. Its before range is
+265,552–276,800 KiB and final range is 264,840–286,016 KiB. Do not claim a
+single-file peak-RSS win or universal memory reduction. Sampled heap is lower,
+but timer sampling can miss synchronous allocation peaks. Process RSS uses
+Node's operating-system high-water mark.
+
+The first isolated M04 implementation regressed peak RSS to 340,908 KiB.
+The parent did not accept that as an improvement. A bounded source-position
+experiment identified unnecessary ASCII prefix decoding. The final M05 witness
+uses native `isAscii`, byte length only for proven ASCII, and the old Unicode
+decoder otherwise. Tests count real allocations/decodes and fail when the
+witness is corrupted. The final four-file measurement is for the combined
+M04/M05 implementation, not deferred chunking alone.
+
+Other limits: M03 uses a valid 6,348,682-byte synthetic artifact because the
+original exact artifact was unavailable. Two simultaneous compact entries
+were not measured, and the suggested 4 MiB target was not achieved. M08 uses
+a 1.640 MB synthetic checkpoint. Its cold acquisition rises from 48.581 ms
+to 91.948 ms due to the first immutability check. M07's read measurement is
+warm and excludes the first freeze. M03 timing is confounded by different
+machine loads. No host-wide or native-model leak-free claim is made.
+
+Execution used four reusable Claive workers:
+
+| Worker | Model | Work |
+|---|---|---|
+| `0812a3f48f46` | Luna max | M03, empty-ID correction, M07 |
+| `b0684802cea5` | Luna max | M04 |
+| `8e67bc38256e` | Sol 6.1 medium | M12/M13/M10/M11, consumer wiring, independent reviews |
+| `b01da1ff4232` | Sol 6.1 medium | M08/M09/M05, ASCII witness, independent reviews |
+
+The isolated snapshots use copied source and Git metadata, with links to
+installed dependencies. No main-repository branch or worktree was created.
+Heavy work shared a serial lock. Scratch commands below describe the executed
+experiments. Their temporary harnesses are removed after acceptance. Final
+reports remain under `/home/hamza/.local/state/claive/`.
+
+Retrospective proposals only: split a 15-file implementation into smaller
+checkable worker turns to avoid late handoffs. Use short-line limit fixtures
+to exercise the real 450,000-row cap without unrelated quadratic column work.
+Check end-to-end memory before accepting a deferred-allocation design. Existing
+checks already cover lint and types, so no new CI gate or global rule is added.
+
+## Remaining repair execution, 16 October 2026
+
+TaskStartSnapshot: `668e3ff2`, clean working tree. Hamza authorizes fixing all
+ten remaining findings through Claive with Luna max and Sol 6.1 medium or low.
+Reuse the completed audit. Preserve public contracts and search/index outputs.
+No dependency, release, push, production-data deletion, or branch change is
+part of this task. The parent owns integration and this checkpoint.
+
+Decision: code-change. Each finding has a demonstrated allocation or cleanup
+mismatch. Fix the recorded owner rather than adding a downstream workaround.
+Architecture review is required for the internal M04 analysis boundary and
+M08 checkpoint reuse. The remaining repairs stay at their existing owners.
+Failure cleanup tests run before repairs. Optimizations require old/new output
+equivalence and mutation checks. Performance results use three comparable runs.
+
+Execution queue, each with focused tests, parent inspection, and Sol review:
+
+1. M03: codec-owned compact validation and compact vocabulary postings.
+2. M04: internal deferred chunk materialization and byte-bounded read-ahead.
+3. M05: lazy source-map conversion data and shared source bytes.
+4. M07: continuation accounting and lookup without unnecessary full copies.
+5. M08: reuse validated publication checkpoints at their domain owner.
+6. M09: retire generation aliases with the synchronizer that owns them.
+7. M10: retain and join semantic-worker termination promises.
+8. M11: prune expired Git-status entries and bound retained roots.
+9. M12: remove retry abort listeners on every settlement path.
+10. M13: unwind native allocations from the first successful allocation.
+
+Historical execution notes follow. The completed checkpoint above is current.
+All ten implementations are integrated and their final combined checks pass. Luna implements one bounded slice per turn. Sol reviews
+specification first, then correctness. Heavy checks share a serial lock.
+
+- M03: Luna `0812a3f48f46` replaces posting/evidence objects with encoded terms
+  and flat posting pairs. Seventeen focused tests pass. Deliberately corrupting
+  link decoding makes the independent reference tests fail. Sol found an empty
+  parent-ID equivalence defect. Luna added a failing fixture and restored the
+  old truthiness condition. Parent checked the correction. Final review remains.
+- M08: Sol `b01da1ff4232` adds a weak comparison cache to SynchronizerRegistry.
+  Context only delegates. The checkpoint must be deeply frozen, with matching
+  root and policy. Mutation synchronizers remain separate. Ten focused tests
+  pass. Disabling reuse, weakening the witness, and ignoring policy each fail
+  their regression checks. Parent inspected and integrated the three files.
+- M12: Sol `8e67bc38256e` removes retry listeners on normal and abort settlement.
+  New tests fail before repair. All 31 reranker tests pass in the worker and
+  main checkout. Parent and independent Sol review find no concrete defect.
+- M13: The same Sol worker protects allocations from the first successful
+  allocation, including copy failures. Eleven fault cases fail before repair.
+  All 25 tests pass, including native tests. Parent integrated the changes.
+  Independent Sol review finds no concrete defect.
+- M04: Luna `b0684802cea5` owns deferred indexing analysis in an isolated copy.
+- M07: Luna `0812a3f48f46` next owns continuation allocation and trusted reads.
+- M09: Sol `b01da1ff4232` next owns synchronizer alias retirement.
+- M10: Sol `8e67bc38256e` owns termination draining. Parent review requests
+  preservation of ordinary job-error isolation and ownership after failed
+  termination. The first passing result is not accepted as final.
+
+M03 measurement: three isolated runs per version use 10,000 documents, 48
+terms each, 480,000 postings, and a 6,348,682-byte valid synthetic artifact.
+The prior exact artifact was unavailable. Median retained heap is 106.26 MiB
+before and 40.43 MiB after. Array buffers grow to 3.66 MiB. Heap plus external
+retention falls from 106.39 MiB to 44.22 MiB. Median peak RSS falls from
+359,800 KiB to 215,940 KiB. Duration is 419.1 ms before and 326.8 ms after,
+but machine load differs, 0.91 versus 4.70. No latency improvement is claimed.
+Command: `node --expose-gc --import tsx /tmp/satori-memory-remaining-20261016/measure-m03.mts`.
+The two-entry policy remains. Combined retention of two entries is unmeasured.
+The proposed 4 MiB expectation was not achieved or claimed.
+
+M08 measurement: three isolated runs use a 1.640 MB synthetic checkpoint with
+10,000 files. Median cold acquisition rises from 48.581 ms to 91.948 ms due to
+the one-time immutability check. Median warm acquisition falls from 37.746 ms
+to 0.000870 ms. One cold plus 30 warm acquisitions falls from 1,197.242 ms to
+92.031 ms. Retained heap is 3,224,968 B before and 3,191,768 B after. Median
+peak process RSS falls from 304,164 KiB to 136,032 KiB. Load is 2.42 versus
+2.30 on 16 logical CPUs. These are acquisition measurements, not request latency.
+Command: `flock /tmp/satori-memory-remaining-20261016/heavy.lock bash /tmp/satori-memory-remaining-20261016/run-m08.sh`.
+
 ## Scope and authorization
 
 Hamza requested a repository memory audit, then authorized scoped repairs through
@@ -43,17 +214,17 @@ focused tests passing did not prove that the repository was leak-free.
 |---|---|---|---|---|
 | M01 | `packages/mcp/src/server/shared-runtime-transport.ts`, `BoundedSocketTransport.send` | Request IDs leave admission accounting before response writes settle. A blocked SDK peer retained 4,201,526 output bytes and 64 handlers while the transport reported zero pending IDs, despite its 16-request limit. | Retain request ownership through writes. Bound all outgoing frames, including notifications, using the existing size and count ceilings. Replace oversized responses with a bounded call error. | Repaired and reviewed, 31 focused tests pass |
 | M02 | `packages/mcp/src/core/sync.ts`, watcher registration and shutdown | Registration checks the watcher map before awaits. Two registrations created two watchers and shutdown closed only one. A registration also installed a watcher after watcher mode stopped. | Share each root's registration flight. Invalidate and drain registrations before shutdown or unwatch returns. | Repaired and reviewed, 13 focused tests pass |
-| M03 | `packages/core/src/vocabulary/service.ts`, preparation and artifact cache | A valid 5.8258 MiB artifact with 10,000 documents and 480,000 postings retained about 105.49 MiB of extra heap after GC. The cache retains two artifacts without an idle or byte budget. | Compact postings and bound retained memory at this owner. Preserve vocabulary results and provenance. | Open, opt-in path |
-| M04 | `packages/core/src/language-analysis/chunks.ts` and indexing read-ahead | A valid 217,795-byte JavaScript fixture with 100 nested functions produced 9,900 chunks containing 24,631,245 bytes of text. Results materialize before indexing queue limits apply. Process peak RSS was 155.33 MiB, including the harness. | Bound chunk production and read-ahead retention while preserving output and order. | Open, design required |
-| M05 | `packages/core/src/language-analysis/source-map.ts`, `Utf8SourceMap` | Three 1 MiB fixtures allocated about 8.904 MiB of heap plus a 1 MiB buffer each. Byte-offset-only callers still construct the dense UTF-16 conversion array. Chunking creates another source buffer. | Construct conversion data only when needed. Share source bytes and prove Unicode equivalence. | Open |
+| M03 | `packages/core/src/vocabulary/service.ts`, preparation and artifact cache | A valid 5.8258 MiB artifact with 10,000 documents and 480,000 postings retained about 105.49 MiB of extra heap after GC. The cache retains two artifacts without an idle or byte budget. | Keep terms encoded, flatten postings, and create matched evidence on demand. | Repaired and reviewed, 17 vocabulary tests pass; opt-in |
+| M04 | `packages/core/src/language-analysis/chunks.ts` and indexing read-ahead | A valid 217,795-byte JavaScript fixture with 100 nested functions produced 9,900 chunks containing 24,631,245 bytes of text. Results materialize before indexing queue limits apply. Process peak RSS was 155.33 MiB, including the harness. | Defer indexing strings, bound source read-ahead, and preserve outputs and eager callers. | Repaired with M05; output equivalence and measured limits above |
+| M05 | `packages/core/src/language-analysis/source-map.ts`, `Utf8SourceMap` | Three 1 MiB fixtures allocated about 8.904 MiB of heap plus a 1 MiB buffer each. Byte-offset-only callers still construct the dense UTF-16 conversion array. Chunking creates another source buffer. | Build conversion tables lazily, share source bytes, and use a native ASCII witness with Unicode fallback. | Repaired and reviewed; lazy, sharing, Unicode and witness tests pass |
 | M06 | `packages/mcp/src/server/provider-runtime.ts`, `createRuntime` | A backend, Context, sync manager, and continuation owner exist before lifecycle startup completes. Failure cleanup closes only embedding and reranker resources. Worker fault injection showed three failed attempts, zero backend closes, zero Context disposals, and three retained owner tokens. | Keep construction ownership local and unwind every resource before rejecting startup. | Repaired and reviewed, 43 focused tests pass |
-| M07 | `packages/mcp/src/core/search-result-set-cache.ts` | Byte accounting performs JSON serialization, parsing, and canonical serialization before rejecting oversized entries. A value of 11,173,781 serialized bytes caused temporary heap deltas of 87.96, 87.47, and 87.48 MiB. Lookups clone complete payloads before caller replay/cursor checks. | Avoid redundant size-accounting copies. Perform metadata checks before copying payloads where the existing contract permits. | Open |
-| M08 | `packages/core/src/core/context.ts`, `getPublicationSourceSynchronizer`, and `sync/snapshot-codec.ts` | Exact-path checks construct a new synchronizer from the complete checkpoint. Reconstruction serializes and reparses the checkpoint, then copies maps. Parent runs on a 10,000-file, 1,457,886-byte checkpoint took 82.33, 64.05, and 62.58 ms. | Reuse immutable validated checkpoint state behind its publication witness. Keep Context as a facade. | Open |
-| M09 | `packages/core/src/sync/synchronizer-registry.ts`, full publication and clear callers | Registration retires old aliases only when they reference the same synchronizer object. Four replacement generations retained four distinct synchronizers under five keys. Clearing the family alias left four physical aliases. | Retire root/publication aliases together at the registry owner. | Open, reused Core contexts |
-| M10 | `packages/core/src/semantic/wasm/wasm-threaded-analyzer.ts`, `releaseWorker` | The owner clears its worker reference and discards `terminate()`'s promise. Injected delayed termination showed both later idle release and disposal returning before exit. | Retain retiring-worker promises and join them during cleanup. | Open |
-| M11 | `packages/mcp/src/core/working-tree-state.ts` and the module-level `read_file` cache | Expiry controls freshness but does not remove abandoned roots. A reproduction retained all 25 expired roots after accessing another root. Each entry can retain its changed-file set. | Bound roots and prune expired entries at the cache owner. | Open |
-| M12 | `packages/core/src/reranker/voyageai-reranker.ts`, `delayBeforeRetry` | Five completed retry delays left five abort listeners on the same signal. Listeners survive until cancellation or collection of that signal. | Remove the abort listener when the delay completes normally. | Open, small retained closures |
-| M13 | `packages/core/src/semantic/wasm/wasm-engine.ts`, `WasmSemanticSession` allocations | Allocations happen before cleanup protection. A later allocation returning zero left one prior allocation unfreed in `addSource` and two in `addAuxiliary`. | Protect ownership from the first successful allocation. | Open, allocation-failure path |
+| M07 | `packages/mcp/src/core/search-result-set-cache.ts` | Byte accounting performs JSON serialization, parsing, and canonical serialization before rejecting oversized entries. A value of 11,173,781 serialized bytes caused temporary heap deltas of 87.96, 87.47, and 87.48 MiB. Lookups clone complete payloads before caller replay/cursor checks. | Use single-pass byte accounting with raw-JSON fallback and trusted frozen inspection. Preserve admission and error order. | Repaired and reviewed, 28 cache/continuation/runtime tests pass |
+| M08 | `packages/core/src/core/context.ts`, `getPublicationSourceSynchronizer`, and `sync/snapshot-codec.ts` | Exact-path checks construct a new synchronizer from the complete checkpoint. Reconstruction serializes and reparses the checkpoint, then copies maps. Parent runs on a 10,000-file, 1,457,886-byte checkpoint took 82.33, 64.05, and 62.58 ms. | Reuse comparison synchronizers behind frozen checkpoint/root/policy witnesses at the registry owner. Context delegates. | Repaired and reviewed; 16 combined synchronizer tests pass |
+| M09 | `packages/core/src/sync/synchronizer-registry.ts`, full publication and clear callers | Registration retires old aliases only when they reference the same synchronizer object. Four replacement generations retained four distinct synchronizers under five keys. Clearing the family alias left four physical aliases. | Retire aliases and mutation targets with the displaced or cleared synchronizer object. | Repaired and reviewed; 16 combined synchronizer tests pass |
+| M10 | `packages/core/src/semantic/wasm/wasm-threaded-analyzer.ts`, `releaseWorker` | The owner clears its worker reference and discards `terminate()`'s promise. Injected delayed termination showed both later idle release and disposal returning before exit. | Retain retiring-worker promises and join them during cleanup. | Repaired and reviewed, 23 tests pass |
+| M11 | `packages/mcp/src/core/working-tree-state.ts` and the module-level `read_file` cache | Expiry controls freshness but does not remove abandoned roots. A reproduction retained all 25 expired roots after accessing another root. Each entry can retain its changed-file set. | Bound roots and prune expired entries at the cache owner. | Repaired and reviewed, 21 tests pass |
+| M12 | `packages/core/src/reranker/voyageai-reranker.ts`, `delayBeforeRetry` | Five completed retry delays left five abort listeners on the same signal. Listeners survive until cancellation or collection of that signal. | Remove the abort listener when the delay completes normally. | Repaired and reviewed, 31 tests pass |
+| M13 | `packages/core/src/semantic/wasm/wasm-engine.ts`, `WasmSemanticSession` allocations | Allocations happen before cleanup protection. A later allocation returning zero left one prior allocation unfreed in `addSource` and two in `addAuxiliary`. | Protect ownership from the first successful allocation. | Repaired and reviewed, 25 tests pass |
 
 M03 is not a default-runtime RAM explanation. Vocabulary indexing and search are
 off by default. Indexing requires `SATORI_REPOSITORY_VOCABULARY_INDEX=1`, and search
@@ -235,12 +406,12 @@ its README entry, and the existing Python relationship repair. No push is
 authorized. M03 and M04 below remain proposals, with no implementation or new
 memory measurement claimed.
 
-## Proposed repairs for items 10 and 9: M03 and M04
+## Approved design baseline for items 10 and 9: M03 and M04
 
 Hamza supplied both proposals. Sol medium worker `935c35d2f6be` assessed the
-owning code without repeating the audit. Both findings remain **open**.
-The order is item 10 (M03), then item 9 (M04). These are designs, not completed
-repairs or measured improvements.
+owning code without repeating the audit. Hamza later authorized implementation.
+The following design is historical. The completed checkpoint above records
+the final implementation, checks, measurements, and remaining limits.
 
 ### Item 10 / M03: compact vocabulary cache
 

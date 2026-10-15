@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLanguageAnalysisService } from './service';
 import { createParallelLanguageAnalysisService } from './parallel-service';
+import { createIndexingChunkPlan, type IndexingAnalysisCapability } from './indexing-analysis';
 
 const inputs = [
     { relativePath: 'src/app.ts', language: 'typescript', content: 'import { b } from "./b";\nexport class A {\n  run(x: number) { return b(x); }\n}\n' },
@@ -34,6 +35,34 @@ test('zero workers analyze in-process and dispose is safe', async () => {
     assert.equal(result.structuralStatus, 'complete');
     await pool.dispose();
     assert.equal((await pool.analyze(inputs[0])).structuralStatus, 'complete');
+});
+
+test('thread workers return structural indexing evidence without chunk strings', async () => {
+    const options = { chunkSize: 24, chunkOverlap: 7 };
+    const local = createLanguageAnalysisService(options);
+    const pool = createParallelLanguageAnalysisService(options, 1);
+    const indexing = pool as typeof pool & IndexingAnalysisCapability;
+    try {
+        const input = inputs[0];
+        const [expected, deferred] = await Promise.all([
+            local.analyze(input),
+            indexing.analyzeForIndexing(input),
+        ]);
+        assert.equal('chunks' in deferred, false);
+        assert.deepEqual(
+            [...createIndexingChunkPlan({
+                content: input.content,
+                relativePath: input.relativePath,
+                language: input.language,
+                symbols: deferred.symbols,
+                result: deferred,
+            }).chunks()],
+            expected.chunks,
+        );
+    } finally {
+        await pool.dispose();
+        await local.dispose?.();
+    }
 });
 
 test('failed parser workers remain owned until disposal has awaited their exit', async () => {

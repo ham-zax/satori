@@ -5,7 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
-| [Memory audit and scoped repairs, 15–16 October 2026](memory-audit-2026-10-15.md) | All thirteen repairs checked | Records the earlier three repairs and ten completed Luna/Sol Claive repairs, 331 focused tests, static checks, measured memory changes, and remaining measurement limits. |
+| [Memory audit and scoped repairs, 15–16 October 2026](memory-audit-2026-10-15.md) | Thirteen repairs and three review corrections checked | Records the original 331 tests, three Luna/Sol review corrections, 55 follow-up tests, static checks, and the measured throughput/RAM tradeoff. |
 | [Live multi-repository audit, 15 October 2026](live-multi-repo-audit-2026-10-15.md) | Six repairs checked; F04 traced; latency open | F02, F03, F05, F09, F10, and F13 have checked repairs. F05 retains lexical context when optional analysis fails. The LateOn profile follows the updated contract. F04 traces identify dirty-source suppression and a file fallback demotion from provider rank 2 to fusion rank 42. The handle class finishes seventh. The inbox owner finishes third. Ranking quality and latency attribution remain open. |
 | [Codex config ownership](codex-config-ownership.md) | Implemented and verified | Semantic launcher ownership and TOML-aware edits preserve user settings; 261 focused tests and native Codex rewrite recovery passed. |
 | [Indexing native memory](indexing-native-memory-plan.md) | Implemented | Design B: baseline WASM parser processes with bounded lifetimes, bounded malloc arenas and semantic-worker release under plans <=4 GiB. 2G passes (138.5 s), 7G median 4.507 GiB / 49.7 s. |

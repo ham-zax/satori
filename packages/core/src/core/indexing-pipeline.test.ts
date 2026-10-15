@@ -14,6 +14,7 @@ import type { Embedding } from '../embedding';
 import { buildSymbolRecordsForFile } from '../symbols/registry';
 import { IndexingResourcePlanner } from '../indexing/resources';
 import { createParallelLanguageAnalysisService } from '../language-analysis';
+import { hasIndexingAnalysisCapability } from '../language-analysis/indexing-analysis';
 
 function createMockVectorDb(): VectorDatabase {
     return {
@@ -291,6 +292,154 @@ test('analysis source-byte reservations bound read-ahead and always admit the cu
         }
     }
 });
+
+for (const [observedSize, expectedAdmitted] of [[1, 16], [8 * 1024 ** 2, 8]] as const) {
+    test(`verified ${observedSize}-byte observations admit ${expectedAdmitted} files while the first analysis is blocked`, async () => {
+        let releaseReads!: () => void;
+        const readGate = new Promise<void>(resolve => { releaseReads = resolve; });
+        let releaseAnalysis!: () => void;
+        const analysisGate = new Promise<void>(resolve => { releaseAnalysis = resolve; });
+        const analyzer = Object.assign(createLanguageAnalysisService(), { concurrency: 8 });
+        assert.ok(hasIndexingAnalysisCapability(analyzer));
+        const analyze = analyzer.analyzeForIndexing.bind(analyzer);
+        const analyzedPaths: string[] = [];
+        analyzer.analyzeForIndexing = async input => {
+            analyzedPaths.push(input.relativePath);
+            if (input.relativePath === '0.ts') await analysisGate;
+            return analyze(input);
+        };
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+            semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+            assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+            isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+            normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'fixture',
+        });
+        const startedPaths: string[] = [];
+        pipeline.readIndexableFileObservationInsideRoot = async filePath => {
+            startedPaths.push(filePath);
+            await readGate;
+            return {
+                content: '', sourceHash: filePath,
+                sourceStat: { size: observedSize, mtimeMs: 0, ctimeMs: 0 },
+            };
+        };
+        const filePaths = Array.from({ length: 20 }, (_, index) => `${index}.ts`);
+        const operation = pipeline.processFileList({
+            filePaths, codebasePath: '/repo', collectionName: 'fixture',
+            resourcePlan: {
+                ...new IndexingResourcePlanner({
+                    platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+                    totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+                }, () => ({ diagnostics: [] })).createPlan(),
+                analysisWindowFiles: 16, analysisWindowSourceBytes: 64 * 1024 ** 2,
+            },
+        });
+        try {
+            assert.equal(startedPaths.length, 8, 'unobserved sources must retain conservative reservations');
+            releaseReads();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.deepEqual(startedPaths, filePaths.slice(0, expectedAdmitted));
+            assert.deepEqual(analyzedPaths, filePaths.slice(0, expectedAdmitted));
+            releaseAnalysis();
+            const result = await operation;
+            await result.payloadSettled;
+            assert.equal(result.processedFiles, filePaths.length);
+            assert.deepEqual(result.sourceFiles.map(file => file.path), filePaths);
+        } finally {
+            releaseReads();
+            releaseAnalysis();
+            await operation.catch(() => undefined);
+            await analyzer.dispose?.();
+        }
+    });
+}
+
+for (const mode of ['eager', 'deferred'] as const) {
+    for (const stop of ['failure', 'source limit'] as const) {
+        test(`${mode} observation callbacks stop refilling and drain every started read after ${stop}`, async () => {
+            let releaseReads!: () => void;
+            const readGate = new Promise<void>(resolve => { releaseReads = resolve; });
+            let releaseLastRead!: () => void;
+            const lastReadGate = new Promise<void>(resolve => { releaseLastRead = resolve; });
+            const firstError = new Error('injected first read failure');
+            const analyzer = Object.assign(mode === 'deferred'
+                ? createLanguageAnalysisService()
+                : createEagerOnlyAnalyzer(async () => { throw new Error('unexpected eager analysis'); }),
+            { concurrency: 8 });
+            const pipeline = new IndexingPipeline({
+                getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+                semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+                assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+                isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+                normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+                getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+                getSymbolExtractorVersion: () => 'fixture',
+            });
+            const startedPaths: string[] = [];
+            const finishedPaths: string[] = [];
+            const observe = async (filePath: string) => {
+                startedPaths.push(filePath);
+                if (filePath === '0.ts') {
+                    if (stop === 'failure') throw firstError;
+                } else {
+                    await (filePath === '7.ts' ? lastReadGate : readGate);
+                }
+                finishedPaths.push(filePath);
+                return {
+                    content: '', sourceHash: filePath,
+                    sourceStat: {
+                        size: filePath === '0.ts' ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION + 1 : 1,
+                        mtimeMs: 0, ctimeMs: 0,
+                    },
+                };
+            };
+            if (mode === 'deferred') pipeline.readIndexableFileObservationInsideRoot = observe;
+            else pipeline.analyzeIndexedFile = async filePath => {
+                const observation = await observe(filePath);
+                return {
+                    relativePath: filePath as RepositoryRelativePath, source: observation.content,
+                    sourceHash: observation.sourceHash, sourceStat: observation.sourceStat,
+                    language: 'typescript', structuralStatus: 'complete', chunks: [], extractedSymbols: [],
+                    moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [],
+                };
+            };
+            const operation = pipeline.processFileList({
+                filePaths: Array.from({ length: 20 }, (_, index) => `${index}.ts`),
+                codebasePath: '/repo', collectionName: 'fixture',
+            });
+            const outcome = stop === 'failure' ? assert.rejects(operation, error => error === firstError) : operation;
+            let settled = false;
+            operation.then(() => { settled = true; }, () => { settled = true; });
+            try {
+                await new Promise<void>(resolve => setImmediate(resolve));
+                assert.equal(startedPaths.length, 8);
+                assert.equal(settled, false);
+                releaseReads();
+                await new Promise<void>(resolve => setImmediate(resolve));
+                assert.equal(startedPaths.length, 8, 'late observations must not refill the stopped window');
+                assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 6);
+                assert.equal(settled, false, 'the last started read is still owned by the operation');
+                releaseLastRead();
+                await outcome;
+                assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 7);
+                if (stop === 'source limit') {
+                    const result = await operation;
+                    assert.equal(result.status, 'limit_reached');
+                    assert.deepEqual(result.sourceFiles, []);
+                    await result.payloadSettled;
+                }
+            } finally {
+                releaseReads();
+                releaseLastRead();
+                await operation.catch(() => undefined);
+                await analyzer.dispose?.();
+            }
+        });
+    }
+}
 
 test('deferred analysis failure waits for every already-started source read', async () => {
     const firstError = new Error('injected deferred read failure');

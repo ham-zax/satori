@@ -2244,6 +2244,9 @@ export class SyncManager {
         const existing = this.pendingWatcherRegistrations.get(codebasePath);
         if (existing) {
             await existing.completion;
+            if (existing.cancelled && this.watchedCodebases.has(codebasePath)) {
+                await this.registerCodebaseWatcher(codebasePath);
+            }
             return;
         }
 

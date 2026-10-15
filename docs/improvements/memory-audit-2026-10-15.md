@@ -1,5 +1,90 @@
 # Memory audit and scoped repairs, 15 October 2026
 
+## Review follow-up, 16 October 2026
+
+Baseline: `85a9b4c2` on `master`. Hamza requested the three findings from the
+review of `4e5b61cb`, `668e3ff2`, and `85a9b4c2` be fixed.
+
+- Analysis reservations retain the 8 MiB maximum until the source read completes.
+  Verified source size then replaces that reservation and refills the requested
+  window. Sixteen tiny files can enter a 64 MiB window. Eight 8 MiB files retain
+  the same bound. Failure and source-limit cleanup stop refills before draining
+  every started read. No stat preflight or public API change was added.
+- Watcher callers retry a cancelled registration after its completion. The retry
+  checks the watch list and uses the existing mode and publication guards.
+  Concurrent callers share one replacement. Stop and unwatch prevent resurrection.
+- Python package import bindings now prevent false submodule call edges when
+  their bound name shadows the requested import. Tests cover re-exports, aliases,
+  dotted imports, and an unrelated import that still permits a real submodule.
+  Existing claim classification remains unchanged.
+
+Checks on the integrated result:
+
+- Core: **21 indexing tests and 21 Python-resolution tests pass**.
+- MCP: **13 tests pass** across watcher lifecycle, read freshness, and `read_file` roots.
+- Total: **55 focused tests across five files**.
+- The static check caught a missing internal capability assertion in a new test.
+  The parent added the assertion. Both affected cases and `pnpm run check` pass.
+  Production code stayed unchanged after the measurement.
+- `git diff --check` passes. Hamza authorized a separate commit for these follow-up changes.
+
+The focused commands use each package's raw Node flags and concurrency 1:
+
+```sh
+pnpm --filter @satori-code/core exec node --liftoff-only --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=1 src/core/indexing-pipeline.test.ts src/relationships/python-resolution.test.ts
+pnpm --filter @satori-code/mcp exec node --import tsx --import ./src/test-state-root.ts --test --test-reporter=../../scripts/satori-test-reporter.mjs --test-concurrency=1 src/core/sync-watcher-lifecycle.test.ts src/core/sync-read-freshness.test.ts src/tools/read_file-root.test.ts
+pnpm run check
+```
+
+Measurement: three alternating runs per variant use 277 repository TypeScript
+files, totaling 2,651,574 bytes. Selection takes non-test files between 1 and
+32 KiB. Both variants use eight real analysis threads, a sixteen-file window,
+and the 64 MiB source cap. Embeddings and database writes use local test doubles.
+The measurement covers reads, analysis, chunks, projections, rows, and pool
+shutdown. It excludes semantic project analysis and external service latency.
+
+| Local indexing measurement | `85a9b4c2` | Repaired |
+|---|---:|---:|
+| Median time | 1,714.077 ms | 1,644.572 ms |
+| Median peak RSS | 755,156 KiB | 801,760 KiB |
+| Time runs, ms | 1761.143 / 1710.670 / 1714.077 | 1738.163 / 1644.572 / 1609.195 |
+| Peak RSS runs, KiB | 799584 / 755156 / 745732 | 895416 / 801760 / 781116 |
+
+The repair improves median time by **4.1%** and increases median peak RSS by
+**6.2%**. More small files occupy the window. This is a throughput tradeoff,
+not an additional RAM reduction. All runs produce 7,360 identical document rows
+and projections, excluding `indexedAt`. Their SHA-256 digest is
+`d8e2bcf8b4c84971ebdaa228b41546ba0717c6fbeb68ae2ff0e28b12f92d495d`.
+
+Node is `v24.19.0`, with 15 available CPUs. One-minute load ranges from 2.62 to
+2.97 during the final pairs. The large-host resource plan is configured for
+this comparison. The command uses the inspected scratch harness:
+
+```sh
+node --liftoff-only --import /home/hamza/repo/satori/node_modules/tsx/dist/loader.mjs /tmp/satori-review-fixes-20261016/benchmark.ts "$variant"
+```
+
+An earlier three-pair comparison gives 1,636.902 ms for `668e3ff2` and
+1,703.062 ms for `85a9b4c2`, with identical output. Changing only the original
+byte cap to admit sixteen files gives noisy results. That comparison does not
+isolate the full cause of the earlier slowdown. The final paired measurement
+above supports the repair's local throughput result only.
+
+Claive workers: Luna max `17ea3a534273` handles watcher and Python fixes.
+Sol 6.1 medium `b5eb2de4517c` handles the analysis-window fix in an isolated
+checkout. The parent checks both diffs, integrates the two pipeline files,
+fixes the test type assertion, and runs the final checks. Normal Claive history
+retains worker evidence. Both workers are accepted and closed. The parent removed
+the inspected scratch files after integration and final checks.
+
+Brief process review: concurrent writers required isolation, so an isolated
+checkout replaced the refused shared-workspace launch. Future runs must select
+isolation before launching concurrent writers. The first benchmark used document
+wrapper fields in its digest. The parent corrected the digest and repeated all
+reported output comparisons. Future harnesses must inspect one document before
+running measurement batches. No additional product change is proposed.
+
+
 ## Completed project checkpoint, 16 October 2026
 
 Baseline: `668e3ff2` on `master`. Hamza requested repairs for all ten remaining

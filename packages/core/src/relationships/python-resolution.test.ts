@@ -201,6 +201,90 @@ test('resolvePythonRelationships resolves calls through from-imported submodules
     );
 });
 
+test('resolvePythonRelationships keeps package imports from shadowing submodules', async (t) => {
+    const scenarios = [
+        {
+            name: 'from-import re-export',
+            packageInit: 'from .other import config\n',
+            otherSource: 'def config(): return 0\n',
+            extraFiles: {},
+            resolvesSubmodule: false,
+        },
+        {
+            name: 'alias re-export',
+            packageInit: 'from .other import other_config as config\n',
+            otherSource: 'def other_config(): return 0\n',
+            extraFiles: {},
+            resolvesSubmodule: false,
+        },
+        {
+            name: 'plain import with alias',
+            packageInit: 'import pkg.other as config\n',
+            otherSource: 'def helper(): return 0\n',
+            extraFiles: {},
+            resolvesSubmodule: false,
+        },
+        {
+            name: 'dotted import binds its first component',
+            packageInit: 'import config.helpers\n',
+            otherSource: 'def unrelated(): return 0\n',
+            extraFiles: {
+                'lib/config/__init__.py': '',
+                'lib/config/helpers.py': 'def helper(): return 2\n',
+            },
+            resolvesSubmodule: false,
+        },
+        {
+            name: 'unrelated package import leaves the submodule available',
+            packageInit: 'from .other import unrelated\n',
+            otherSource: 'def unrelated(): return 0\n',
+            extraFiles: {},
+            resolvesSubmodule: true,
+        },
+    ] as const;
+
+    for (const scenario of scenarios) {
+        await t.test(scenario.name, async () => {
+            const callerFile = 'lib/pkg/cli.py';
+            const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+                'lib/pkg/__init__.py': scenario.packageInit,
+                'lib/pkg/other.py': scenario.otherSource,
+                'lib/pkg/config.py': 'def helper(): return 1\n',
+                [callerFile]: 'from pkg import config\n\ndef run():\n    config.helper()\n',
+                ...scenario.extraFiles,
+            });
+            const result = resolvePythonRelationships({ registry, analysisByFile });
+            const symbolsById = registry.symbolsByInstanceId;
+            const rows = result.records
+                .filter((record) => record.file === callerFile)
+                .map((record) => [
+                    record.file,
+                    record.type,
+                    symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+                    symbolsById.get(record.targetInstanceId || '')?.file,
+                    symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+                ]);
+
+            assert.deepEqual(
+                rows,
+                scenario.resolvesSubmodule
+                    ? [['lib/pkg/cli.py', 'CALLS', 'run', 'lib/pkg/config.py', 'helper']]
+                    : [],
+            );
+            const claims = result.claimsByFile.get(callerFile) ?? [];
+            assert.equal(claims.length, 1);
+            const [claim] = claims;
+            assert.equal(claim?.observation?.calleeText, 'config.helper');
+            assert.equal(claim?.relationshipType, scenario.resolvesSubmodule ? 'CALLS' : 'REFERENCES');
+            if (scenario.resolvesSubmodule) {
+                assert.equal(claim?.decision, 'resolved');
+            } else {
+                assert.notEqual(claim?.decision, 'resolved');
+            }
+        });
+    }
+});
+
 test('resolvePythonRelationships resolves typed member calls with parameter proof', async () => {
     const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
         'src/ledger.py': 'class SignalLedger:\n    def record(self): pass\n',

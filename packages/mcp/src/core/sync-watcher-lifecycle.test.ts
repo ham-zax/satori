@@ -124,15 +124,21 @@ test("stop joins and cancels a registration blocked while building its matcher",
     internal.watcherModeStarted = true;
     const matcherGate = deferred<void>();
     const matcherStarted = deferred<void>();
-    gateMatcher(t, manager, matcherGate.promise, () => matcherStarted.resolve());
+    let matcherAttempts = 0;
+    gateMatcher(t, manager, matcherGate.promise, () => {
+        matcherAttempts += 1;
+        matcherStarted.resolve();
+    });
 
     const registration = manager.registerCodebaseWatcher(root);
     await matcherStarted.promise;
+    const waiter = manager.registerCodebaseWatcher(root);
     const stopping = manager.stopWatcherMode();
     matcherGate.resolve();
-    await Promise.all([registration, stopping]);
+    await Promise.all([registration, waiter, stopping]);
 
     assert.equal(watchers.length, 0, "a cancelled registration never creates a late watcher");
+    assert.equal(matcherAttempts, 1, "a waiter does not restart registration after watcher mode stops");
     assert.equal(internal.watchers.has(root), false);
     assert.equal(internal.watcherIgnoreMatchers.has(root), false);
 });
@@ -142,17 +148,47 @@ test("unwatch joins and cancels a registration blocked while building its matche
     internal.watcherModeStarted = true;
     const matcherGate = deferred<void>();
     const matcherStarted = deferred<void>();
-    gateMatcher(t, manager, matcherGate.promise, () => matcherStarted.resolve());
+    let matcherAttempts = 0;
+    gateMatcher(t, manager, matcherGate.promise, () => {
+        matcherAttempts += 1;
+        matcherStarted.resolve();
+    });
 
     const registration = manager.registerCodebaseWatcher(root);
     await matcherStarted.promise;
+    const waiter = manager.registerCodebaseWatcher(root);
     const unwatching = manager.unwatchCodebase(root);
     matcherGate.resolve();
-    await Promise.all([registration, unwatching]);
+    await Promise.all([registration, waiter, unwatching]);
 
     assert.equal(watchers.length, 0, "unwatch prevents a late watcher from being installed");
+    assert.equal(matcherAttempts, 1, "a waiter does not restart a root removed from the watch list");
     assert.equal(internal.watchers.has(root), false);
     assert.equal(internal.watcherIgnoreMatchers.has(root), false);
+});
+
+test("touches joining a cancelled registration deduplicate its replacement", async (t) => {
+    const { manager, internal, watchers } = createFixture(t);
+    internal.watcherModeStarted = true;
+    const matcherGate = deferred<void>();
+    const matcherStarted = deferred<void>();
+    let matcherAttempts = 0;
+    gateMatcher(t, manager, matcherGate.promise, () => {
+        matcherAttempts += 1;
+        if (matcherAttempts === 1) matcherStarted.resolve();
+    }, true);
+
+    const first = manager.touchWatchedCodebase(root);
+    await matcherStarted.promise;
+    const unwatching = manager.unwatchCodebase(root);
+    const firstLaterTouch = manager.touchWatchedCodebase(root);
+    const secondLaterTouch = manager.touchWatchedCodebase(root);
+    matcherGate.resolve();
+    await Promise.all([first, unwatching, firstLaterTouch, secondLaterTouch]);
+
+    assert.equal(matcherAttempts, 2, "cancelled waiters share one replacement matcher build");
+    assert.equal(watchers.length, 1, "the later touches install exactly one replacement watcher");
+    assert.equal(internal.watchers.get(root), watchers[0]);
 });
 
 test("policy replacement cancels a pending watcher and admits the replacement", async (t) => {

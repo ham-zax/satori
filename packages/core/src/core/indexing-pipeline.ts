@@ -426,9 +426,11 @@ export class IndexingPipeline {
         codebasePath: string,
         indexPolicy: IndexingPolicy | undefined,
         languageAnalyzer: LanguageAnalysisPort,
+        onSourceObserved?: (sourceBytes: number) => void,
     ): Promise<ProcessingAnalysisFile | null> {
         if (!hasIndexingAnalysisCapability(languageAnalyzer)) {
             const analyzed = await this.analyzeIndexedFile(filePath, codebasePath, indexPolicy, languageAnalyzer);
+            if (analyzed !== null) onSourceObserved?.(analyzed.sourceStat.size);
             return analyzed === null ? null : { ...analyzed, deferredAnalysis: null };
         }
         const sourceObservation = await this.readIndexableFileObservationInsideRoot(
@@ -437,6 +439,7 @@ export class IndexingPipeline {
             indexPolicy,
         );
         if (sourceObservation === null) return null;
+        onSourceObserved?.(sourceObservation.sourceStat.size);
 
         const relativePath = this.normalizeRelativePathForCodebase(codebasePath, filePath);
         if (!relativePath) {
@@ -713,15 +716,18 @@ export class IndexingPipeline {
         const analysisReservations = new Map<number, number>();
         let reservedAnalysisSourceBytes = 0;
         let nextAnalysisIndex = 0;
+        let consumingIndex = 0;
+        let schedulingStopped = false;
         const releaseAnalysisReservation = (fileIndex: number): void => {
             const reserved = analysisReservations.get(fileIndex);
             if (reserved === undefined) return;
             analysisReservations.delete(fileIndex);
             reservedAnalysisSourceBytes -= reserved;
         };
-        const scheduleAnalyses = (consumingIndex: number) => {
+        const scheduleAnalyses = () => {
             while (
-                nextAnalysisIndex < input.filePaths.length
+                !schedulingStopped
+                && nextAnalysisIndex < input.filePaths.length
                 && nextAnalysisIndex < consumingIndex + analysisWindow
             ) {
                 const analysisIndex = nextAnalysisIndex;
@@ -737,6 +743,16 @@ export class IndexingPipeline {
                     input.codebasePath,
                     input.indexPolicy,
                     languageAnalyzer,
+                    (sourceBytes) => {
+                        const reserved = analysisReservations.get(analysisIndex);
+                        if (reserved === undefined) return;
+                        // The verified observation replaces the worst-case read
+                        // reservation; retained source stays charged until consumed.
+                        const observedReservation = Math.min(reserved, Math.max(0, sourceBytes));
+                        analysisReservations.set(analysisIndex, observedReservation);
+                        reservedAnalysisSourceBytes -= reserved - observedReservation;
+                        scheduleAnalyses();
+                    },
                 );
                 // Observed when consumed; an early stop leaves later ones unread.
                 analysis.catch(() => undefined);
@@ -747,10 +763,11 @@ export class IndexingPipeline {
         };
 
         for (let fileIndex = 0; fileIndex < input.filePaths.length; fileIndex++) {
+            consumingIndex = fileIndex;
             const filePath = input.filePaths[fileIndex];
             try {
                 const analysisStartedAt = Date.now();
-                scheduleAnalyses(fileIndex);
+                scheduleAnalyses();
                 const analyzed = await pendingAnalyses.get(fileIndex)!;
                 pendingAnalyses.delete(fileIndex);
                 if (analyzed === null) continue;
@@ -870,6 +887,7 @@ export class IndexingPipeline {
                 }
                 if (limitReached) break;
             } catch (error) {
+                schedulingStopped = true;
                 console.error(
                     `[Context] ❌ Failed to index file ${filePath}: ${describeError(error)}`,
                 );
@@ -886,6 +904,7 @@ export class IndexingPipeline {
             }
 
         }
+        schedulingStopped = true;
         // A source/chunk limit can leave the rest of the window unconsumed.
         // Completed loops have no pending reads and keep their success path.
         if (pendingAnalyses.size > 0) await Promise.allSettled(pendingAnalyses.values());

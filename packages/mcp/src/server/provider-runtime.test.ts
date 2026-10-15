@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +6,7 @@ import path from "node:path";
 import { CapabilityResolver } from "../core/capabilities.js";
 import { SearchContinuationCoordinator } from "../core/handlers.js";
 import type { SearchRequestCoordinator } from "../core/search-request-coordinator.js";
+import { SyncManager } from "../core/sync.js";
 import {
     buildRuntimeIndexFingerprint,
     ContextMcpConfig,
@@ -22,6 +23,7 @@ import {
     startProviderSyncLifecycle,
 } from "./provider-runtime.js";
 import {
+    Context,
     Embedding,
     EMBEDDING_PROJECTION_VERSION,
     LANGUAGE_PARSER_VERSION,
@@ -29,6 +31,7 @@ import {
     RELATIONSHIP_BUILDER_VERSION,
     SYMBOL_EXTRACTOR_VERSION,
     type Reranker,
+    type VectorDatabase,
 } from "@satori-code/core";
 
 function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig {
@@ -62,6 +65,197 @@ function createRuntime(
         searchContinuationCoordinator,
     });
 }
+
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+}
+
+class StartupTestEmbedding extends Embedding {
+    protected maxTokens = 1;
+    async detectDimension() { return this.getDimension(); }
+    async embedQuery(): Promise<never> { throw new Error("unexpected embedding I/O"); }
+    async embedDocuments(): Promise<never> { throw new Error("unexpected embedding I/O"); }
+    getDimension() { return 1024; }
+    getProvider() { return "VoyageAI"; }
+    getIdentity() { return this.buildIdentity("voyage-4-large"); }
+}
+
+function startupFixture(t: TestContext) {
+    const config = baseConfig({ voyageKey: "test", milvusEndpoint: "test" });
+    const coordinator = new SearchContinuationCoordinator();
+    const runtime = new ProviderRuntime({
+        config,
+        runtimeFingerprint: buildRuntimeIndexFingerprint(config, 1024),
+        capabilities: new CapabilityResolver(config),
+        readFileMaxLines: 1000,
+        watchSyncEnabled: true,
+        startSyncLifecycle: true,
+        searchContinuationCoordinator: coordinator,
+    });
+    const internals = runtime as unknown as {
+        createEmbeddingProvider(): Promise<Embedding>;
+        createVectorBackend(): Promise<VectorDatabase>;
+        createReranker(): Reranker | null;
+        activeContexts: ToolContext[];
+        activeEmbeddings: Set<Embedding>;
+        activeRerankers: Set<Reranker>;
+    };
+    const events: string[] = [];
+    const startupError = new Error("watcher startup failed");
+    const state = {
+        failStartup: true,
+        failReranker: false,
+        failContext: false,
+        cleanupFailure: "",
+        drain: async () => {},
+        dispose: async () => {},
+    };
+    const cleanup = (name: string) => {
+        events.push(name);
+        if (state.cleanupFailure === name) throw new Error(`${name} cleanup failed`);
+    };
+    t.mock.method(internals, "createEmbeddingProvider", async () => {
+        const embedding = new StartupTestEmbedding();
+        t.mock.method(embedding, "close", async () => { cleanup("embedding"); });
+        return embedding;
+    });
+    t.mock.method(internals, "createVectorBackend", async () => ({
+        getBackendInfo: () => {
+            if (state.failContext) throw startupError;
+            return undefined;
+        },
+        close: () => { cleanup("backend"); },
+    } as unknown as VectorDatabase));
+    t.mock.method(internals, "createReranker", () => {
+        if (state.failReranker) throw startupError;
+        return {
+            getIdentity: () => ({ provider: "test", model: "test", profile: "test" }),
+            rerank: async () => [],
+            close: async () => { cleanup("reranker"); },
+        };
+    });
+    t.mock.method(SyncManager.prototype, "startBackgroundSync", () => {});
+    t.mock.method(SyncManager.prototype, "stopBackgroundSync", () => {});
+    t.mock.method(SyncManager.prototype, "startWatcherMode", async () => {
+        if (state.failStartup) throw startupError;
+    });
+    t.mock.method(SyncManager.prototype, "stopWatcherMode", async () => {});
+    t.mock.method(SyncManager.prototype, "stopAndDrainLifecycle", async () => {
+        events.push("drain_start");
+        await state.drain();
+        cleanup("drain_end");
+    });
+    const dispose = Context.prototype.dispose;
+    t.mock.method(Context.prototype, "dispose", async function (this: Context) {
+        await state.dispose();
+        await dispose.call(this);
+        cleanup("context");
+    });
+    const unregister = coordinator.unregisterOwner;
+    t.mock.method(coordinator, "unregisterOwner", (owner: SearchRequestCoordinator) => {
+        unregister.call(coordinator, owner);
+        cleanup("owner");
+    });
+    const owners = (coordinator as unknown as { owners: Map<string, unknown> }).owners;
+    const assertUnowned = () => {
+        assert.equal(owners.size, 0);
+        assert.equal(internals.activeContexts.length, 0);
+        assert.equal(internals.activeEmbeddings.size, 0);
+        assert.equal(internals.activeRerankers.size, 0);
+    };
+    return { runtime, events, state, startupError, owners, assertUnowned };
+}
+
+test("failed provider startup waits for active work to drain and all cleanup before rejecting", async (t) => {
+    const fixture = startupFixture(t);
+    const { runtime, events, state, startupError, owners } = fixture;
+    const drainStarted = deferred();
+    const drainGate = deferred();
+    const disposalStarted = deferred();
+    const disposalGate = deferred();
+    state.drain = async () => { drainStarted.resolve(); await drainGate.promise; };
+    state.dispose = async () => { disposalStarted.resolve(); await disposalGate.promise; };
+    // A synchronous cleanup failure must neither skip later cleanup nor mask startup.
+    state.cleanupFailure = "backend";
+    let settled = false;
+    const outcome = runtime.requireToolContext("embedding_vector").then(
+        () => { settled = true; return undefined; },
+        (error: unknown) => { settled = true; return error; },
+    );
+    try {
+        assert.equal(await Promise.race([
+            drainStarted.promise.then(() => "draining"),
+            outcome.then(() => "settled"),
+        ]), "draining");
+        assert.equal(settled, false);
+        assert.equal(owners.size, 1);
+        assert.deepEqual(events, ["drain_start"]);
+        drainGate.resolve();
+        await disposalStarted.promise;
+        assert.equal(settled, false);
+        assert.deepEqual(events, ["drain_start", "drain_end", "owner", "backend"]);
+    } finally {
+        drainGate.resolve();
+        disposalGate.resolve();
+        await outcome;
+    }
+    assert.equal(await outcome, startupError);
+    assert.deepEqual(events, ["drain_start", "drain_end", "owner", "backend", "context", "reranker", "embedding"]);
+    fixture.assertUnowned();
+    await runtime.shutdown();
+    assert.equal(events.length, 7);
+});
+
+test("failed provider startup retries without retained owners or double cleanup", async (t) => {
+    const fixture = startupFixture(t);
+    const { runtime, events, state, startupError, owners } = fixture;
+    const failureCleanup = ["drain_start", "drain_end", "owner", "backend", "context", "reranker", "embedding"];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        await assert.rejects(runtime.requireToolContext("embedding_vector"), (error) => error === startupError);
+        fixture.assertUnowned();
+        assert.deepEqual(events.splice(0), failureCleanup);
+    }
+    state.failStartup = false;
+    const result = await runtime.requireToolContext("embedding_vector");
+    assert.ok("toolHandlers" in result);
+    assert.equal(owners.size, 1);
+    assert.deepEqual(events, []);
+    await runtime.shutdown();
+    assert.equal(owners.size, 0);
+    for (const action of failureCleanup) assert.equal(events.filter((event) => event === action).length, 1, action);
+    const afterShutdown = [...events];
+    await runtime.shutdown();
+    assert.deepEqual(events, afterShutdown);
+});
+
+test("startup unwind continues after rejected cleanup actions and preserves the original error", async (t) => {
+    for (const action of ["drain_end", "owner", "context", "reranker", "embedding"]) {
+        await t.test(action, async (t) => {
+            const fixture = startupFixture(t);
+            fixture.state.cleanupFailure = action;
+            await assert.rejects(fixture.runtime.requireToolContext("embedding_vector"), (error) => error === fixture.startupError);
+            assert.deepEqual(fixture.events, ["drain_start", "drain_end", "owner", "backend", "context", "reranker", "embedding"]);
+            fixture.assertUnowned();
+        });
+    }
+});
+
+test("earlier provider construction failures unwind only successfully acquired resources", async (t) => {
+    for (const phase of ["context", "reranker"]) {
+        await t.test(phase, async (t) => {
+            const fixture = startupFixture(t);
+            fixture.state.failContext = phase === "context";
+            fixture.state.failReranker = phase === "reranker";
+            await assert.rejects(fixture.runtime.requireToolContext("embedding_vector"), (error) => error === fixture.startupError);
+            assert.deepEqual(fixture.events, phase === "context"
+                ? ["backend", "embedding"]
+                : ["drain_start", "drain_end", "backend", "context", "embedding"]);
+            fixture.assertUnowned();
+        });
+    }
+});
 
 test("embedding/vector operations require provider key and MILVUS_ADDRESS", () => {
     const cases: Array<{ config: ContextMcpConfig; expected: string[] }> = [

@@ -3,7 +3,11 @@ import type {
     JSONRPCMessage,
     MessageExtraInfo,
 } from "@modelcontextprotocol/sdk/types.js";
-import { CancelledNotificationSchema, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+    CancelledNotificationSchema,
+    ErrorCode,
+    JSONRPCMessageSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { Socket } from "node:net";
 import {
     SHARED_RUNTIME_MAX_PENDING_REQUESTS,
@@ -25,12 +29,21 @@ function responseKey(message: JSONRPCMessage): string | null {
     return `${typeof message.id}:${String(message.id)}`;
 }
 
+type PendingWrite = {
+    bytes: number;
+    completedRequest: string | null;
+    resolve: () => void;
+    reject: (error: Error) => void;
+};
+
 export class BoundedSocketTransport implements Transport {
     onclose?: () => void;
     onerror?: (error: Error) => void;
     onmessage?: <T extends JSONRPCMessage>(message: T, extra?: MessageExtraInfo) => void;
     private buffer = Buffer.alloc(0);
     private readonly pendingRequests = new Set<string>();
+    private readonly pendingWrites = new Set<PendingWrite>();
+    private pendingWriteBytes = 0;
     private started = false;
     private closed = false;
 
@@ -62,18 +75,72 @@ export class BoundedSocketTransport implements Transport {
 
     async send(message: JSONRPCMessage): Promise<void> {
         if (this.closed || this.socket.destroyed) {
-            throw new Error("Shared runtime session transport is closed.");
+            const error = new Error("Shared runtime session transport is closed.");
+            if (!this.closed) void this.close();
+            throw error;
         }
         const completedRequest = responseKey(message);
-        if (completedRequest !== null) {
-            this.pendingRequests.delete(completedRequest);
+        let serialized: string;
+        try {
+            serialized = `${JSON.stringify(message)}\n`;
+            if (
+                Buffer.byteLength(serialized) - 1 > this.maximumMessageBytes
+                && completedRequest !== null
+                && "id" in message
+            ) {
+                serialized = `${JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    error: {
+                        code: ErrorCode.InternalError,
+                        message: "Response exceeds size limit.",
+                    },
+                })}\n`;
+            }
+        } catch (error) {
+            this.fail(error instanceof Error ? error : new Error(String(error)));
+            throw error;
         }
-        const serialized = `${JSON.stringify(message)}\n`;
+        const frameBytes = Buffer.byteLength(serialized) - 1;
+        if (frameBytes > this.maximumMessageBytes) {
+            const error = new Error(
+                `Shared runtime outgoing JSON-RPC frame exceeds ${this.maximumMessageBytes} bytes.`,
+            );
+            this.fail(error);
+            throw error;
+        }
+        const writeBytes = frameBytes + 1;
+        const maximumPendingWriteBytes = this.maximumPendingRequests * (this.maximumMessageBytes + 1);
+        if (
+            this.pendingWrites.size >= this.maximumPendingRequests
+            || this.pendingWriteBytes + writeBytes > maximumPendingWriteBytes
+        ) {
+            const error = new Error(
+                `Shared runtime session exceeds its outgoing writes limit (${this.maximumPendingRequests}).`,
+            );
+            this.fail(error);
+            throw error;
+        }
+
         await new Promise<void>((resolve, reject) => {
-            this.socket.write(serialized, (error) => {
-                if (error) reject(error);
-                else resolve();
-            });
+            const write: PendingWrite = {
+                bytes: writeBytes,
+                completedRequest,
+                resolve,
+                reject,
+            };
+            this.pendingWrites.add(write);
+            this.pendingWriteBytes += writeBytes;
+            try {
+                this.socket.write(serialized, (error) => {
+                    if (!this.settleWrite(write, error ?? undefined)) return;
+                    if (error) this.fail(error);
+                });
+            } catch (error) {
+                const writeError = error instanceof Error ? error : new Error(String(error));
+                this.settleWrite(write, writeError);
+                this.fail(writeError);
+            }
         });
     }
 
@@ -189,5 +256,26 @@ export class BoundedSocketTransport implements Transport {
         this.socket.off("close", this.handleClose);
         this.buffer = Buffer.alloc(0);
         this.pendingRequests.clear();
+        this.rejectPendingWrites(new Error("Shared runtime session transport is closed."));
+    }
+
+    private settleWrite(write: PendingWrite, error?: Error): boolean {
+        if (!this.pendingWrites.delete(write)) return false;
+        this.pendingWriteBytes -= write.bytes;
+        if (error) {
+            write.reject(error);
+        } else {
+            if (write.completedRequest !== null) {
+                this.pendingRequests.delete(write.completedRequest);
+            }
+            write.resolve();
+        }
+        return true;
+    }
+
+    private rejectPendingWrites(error: Error): void {
+        for (const write of this.pendingWrites) {
+            this.settleWrite(write, error);
+        }
     }
 }

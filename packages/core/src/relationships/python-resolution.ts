@@ -666,7 +666,6 @@ function resolvePythonModuleQualifiedTarget(input: {
         if (
             binding.kind !== 'import'
             || !binding.moduleSpecifier
-            || binding.importedName
             || !pythonImportBindingVisibleToSource({
                 binding,
                 source: input.source,
@@ -674,6 +673,26 @@ function resolvePythonModuleQualifiedTarget(input: {
                 atSpan: input.call.span,
             })
         ) {
+            continue;
+        }
+        if (binding.importedName) {
+            if (binding.localName !== receiver) continue;
+            // `from pkg import name` binds a submodule only when the package itself
+            // defines no `name`. Python prefers the package attribute, so an
+            // indexed definition of `name` there leaves the receiver unproven.
+            const packageFile = resolvePythonModulePath(
+                input.source.file,
+                binding.moduleSpecifier,
+                input.registry,
+                input.availableFiles,
+            );
+            if (packageFile && (input.registry.symbolsByFile.get(packageFile) ?? [])
+                .some((candidate) => candidate.name === binding.importedName)) {
+                return undefined;
+            }
+            moduleSpecifiers.add(binding.moduleSpecifier.endsWith('.')
+                ? `${binding.moduleSpecifier}${binding.importedName}`
+                : `${binding.moduleSpecifier}.${binding.importedName}`);
             continue;
         }
         const matchesReceiver = binding.localName

@@ -157,6 +157,50 @@ test('resolvePythonRelationships resolves direct imported calls with exact bindi
     assert.equal(admitted[0].resolutionAuthority, 'direct_binding');
 });
 
+test('resolvePythonRelationships resolves calls through from-imported submodules', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'lib/pkg/__init__.py': 'def shadow(): return 0\n',
+        'lib/pkg/config.py': 'def allowed(): return 1\n',
+        'lib/pkg/util.py': 'def helper(): return 2\n',
+        'lib/pkg/shadow.py': 'def helper(): return 3\n',
+        'lib/pkg/cli.py': [
+            'from pkg import config',
+            'from . import util as u',
+            'from pkg import shadow',
+            '',
+            'def run():',
+            '    config.allowed()',
+            '    u.helper()',
+            '    shadow.helper()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const symbolsById = registry.symbolsByInstanceId;
+
+    // `shadow` is defined in the package itself, so `shadow.helper()` stays unproven.
+    assert.deepEqual(
+        result.records.map((record) => [
+            record.type,
+            symbolsById.get(record.sourceInstanceId || '')?.qualifiedName,
+            symbolsById.get(record.targetInstanceId || '')?.file,
+            symbolsById.get(record.targetInstanceId || '')?.qualifiedName,
+        ]),
+        [
+            ['CALLS', 'run', 'lib/pkg/config.py', 'allowed'],
+            ['CALLS', 'run', 'lib/pkg/util.py', 'helper'],
+        ],
+    );
+    const claims = result.claimsByFile.get('lib/pkg/cli.py') ?? [];
+    assert.deepEqual(
+        claims.map((claim) => [claim.observation?.calleeText, claim.decision]),
+        [
+            ['config.allowed', 'resolved'],
+            ['u.helper', 'resolved'],
+            ['shadow.helper', 'ambiguous'],
+        ],
+    );
+});
+
 test('resolvePythonRelationships resolves typed member calls with parameter proof', async () => {
     const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
         'src/ledger.py': 'class SignalLedger:\n    def record(self): pass\n',

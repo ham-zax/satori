@@ -177,6 +177,11 @@ export type CandidateWatcherPolicy = Readonly<{
     effectiveIgnorePatterns: readonly string[];
 }>;
 
+type WatcherRegistrationFlight = {
+    cancelled: boolean;
+    completion: Promise<void>;
+};
+
 export type WatcherBootstrapCapture = Readonly<{
     canonicalRoot: string;
     watcherGeneration: number;
@@ -412,6 +417,10 @@ export class SyncManager {
     private watchEnabled: boolean;
     private watchedCodebases: Set<string> = new Set();
     private watchers: Map<string, FSWatcher> = new Map();
+    // A root has one registration owner until its async setup has settled.
+    private pendingWatcherRegistrations: Map<string, WatcherRegistrationFlight> = new Map();
+    // Keep a close owned and joinable after removing its watcher from the active map.
+    private watcherCloseFlights: Map<string, Promise<void>> = new Map();
     private watcherLifecycleStates: Map<string, WatcherLifecycleState> = new Map();
     private watcherErrorCodes: Map<string, string> = new Map();
     private watcherIgnoreMatchers: Map<string, IndexIgnoreMatcher> = new Map();
@@ -2052,7 +2061,7 @@ export class SyncManager {
                 effectiveIgnorePatterns: Object.freeze([...candidatePolicy.effectiveIgnorePatterns]),
             });
             if (
-                this.watchers.has(codebasePath)
+                (this.watchers.has(codebasePath) || this.pendingWatcherRegistrations.has(codebasePath))
                 && previousCandidatePolicy?.policyHash !== candidatePolicy.policyHash
             ) {
                 await this.unregisterCodebaseWatcher(codebasePath);
@@ -2102,50 +2111,84 @@ export class SyncManager {
         this.watcherErrorCodes.delete(codebasePath);
     }
 
-    public async registerCodebaseWatcher(codebasePath: string): Promise<void> {
-        codebasePath = this.canonicalWatcherRoot(codebasePath);
-        if (!this.watchEnabled || !this.watcherModeStarted) {
+    private isCurrentWatcherRegistration(
+        codebasePath: string,
+        registration: WatcherRegistrationFlight,
+    ): boolean {
+        return this.pendingWatcherRegistrations.get(codebasePath) === registration
+            && !registration.cancelled
+            && this.watchEnabled
+            && this.watcherModeStarted
+            && this.canObserveRoot(codebasePath);
+    }
+
+    private retireWatcherRegistration(
+        codebasePath: string,
+        registration: WatcherRegistrationFlight,
+    ): void {
+        if (this.pendingWatcherRegistrations.get(codebasePath) === registration) {
+            this.pendingWatcherRegistrations.delete(codebasePath);
+        }
+    }
+
+    private async performWatcherRegistration(
+        codebasePath: string,
+        registration: WatcherRegistrationFlight,
+    ): Promise<void> {
+        if (!this.isCurrentWatcherRegistration(codebasePath, registration)) {
             return;
         }
-
-        if (!this.canObserveRoot(codebasePath)) {
-            return;
-        }
-
-        if (this.watchers.has(codebasePath)) {
-            return;
-        }
-
-        try {
-            const stat = await fs.promises.stat(codebasePath);
-            if (!stat.isDirectory()) {
+        const closeFlight = this.watcherCloseFlights.get(codebasePath);
+        if (closeFlight) {
+            await closeFlight;
+            if (!this.isCurrentWatcherRegistration(codebasePath, registration)) {
                 return;
             }
+        }
+
+        let stat: Awaited<ReturnType<typeof fs.promises.stat>>;
+        try {
+            stat = await fs.promises.stat(codebasePath);
         } catch {
+            return;
+        }
+        if (!this.isCurrentWatcherRegistration(codebasePath, registration)) {
+            return;
+        }
+        if (!stat.isDirectory()) {
             return;
         }
 
         let watcher: FSWatcher;
         try {
             const candidatePolicy = this.watcherCandidatePolicies.get(codebasePath);
-            this.watcherIgnoreMatchers.set(
+            const matcher = await this.buildIgnoreMatcherForCodebase(
                 codebasePath,
-                await this.buildIgnoreMatcherForCodebase(
-                    codebasePath,
-                    candidatePolicy?.effectiveIgnorePatterns,
-                )
+                candidatePolicy?.effectiveIgnorePatterns,
             );
+            if (!this.isCurrentWatcherRegistration(codebasePath, registration)) {
+                return;
+            }
+            this.watcherIgnoreMatchers.set(codebasePath, matcher);
             watcher = chokidar.watch(codebasePath, {
                 persistent: true,
                 ignoreInitial: true,
                 ignored: (watchPath) => this.shouldIgnoreWatchPath(codebasePath, watchPath),
             });
         } catch (error) {
+            if (!this.isCurrentWatcherRegistration(codebasePath, registration)) {
+                return;
+            }
+            // Error recovery can drain registrations, so this flight must no longer
+            // be visible before recovery awaits stop/unregister for this root.
+            this.retireWatcherRegistration(codebasePath, registration);
             this.watcherIgnoreMatchers.delete(codebasePath);
             await this.handleWatcherError(codebasePath, error);
             return;
         }
 
+        // There is no await between the last current-flight check and installation.
+        this.retireWatcherRegistration(codebasePath, registration);
         const onPathChange = (
             watchPath: string,
             eventReason: Exclude<WatcherEventReason, 'ignore_rules_changed'>,
@@ -2184,24 +2227,85 @@ export class SyncManager {
         console.log(`[SYNC-WATCH] Observing '${codebasePath}' for source events.`);
     }
 
-    public async unregisterCodebaseWatcher(codebasePath: string): Promise<void> {
+    public async registerCodebaseWatcher(codebasePath: string): Promise<void> {
         codebasePath = this.canonicalWatcherRoot(codebasePath);
-        this.watcherIgnoreMatchers.delete(codebasePath);
-
-        const watcher = this.watchers.get(codebasePath);
-        if (!watcher) {
+        if (!this.watchEnabled || !this.watcherModeStarted) {
             return;
         }
 
+        if (!this.canObserveRoot(codebasePath)) {
+            return;
+        }
+
+        if (this.watchers.has(codebasePath)) {
+            return;
+        }
+
+        const existing = this.pendingWatcherRegistrations.get(codebasePath);
+        if (existing) {
+            await existing.completion;
+            return;
+        }
+
+        const registration: WatcherRegistrationFlight = {
+            cancelled: false,
+            completion: Promise.resolve(),
+        };
+        // Queue setup by one microtask so the shared completion is installed before
+        // any async setup or reentrant caller can observe this record.
+        const completion = Promise.resolve()
+            .then(() => this.performWatcherRegistration(codebasePath, registration))
+            .finally(() => this.retireWatcherRegistration(codebasePath, registration));
+        registration.completion = completion;
+        this.pendingWatcherRegistrations.set(codebasePath, registration);
+        await completion;
+    }
+
+    private closeWatcher(codebasePath: string, watcher: FSWatcher): Promise<void> {
+        const existing = this.watcherCloseFlights.get(codebasePath);
+        if (existing) {
+            return existing;
+        }
+
+        let closing!: Promise<void>;
+        closing = Promise.resolve()
+            .then(async () => {
+                try {
+                    await watcher.close();
+                } catch (error) {
+                    console.error(`[SYNC-WATCH] Failed to close watcher for '${codebasePath}':`, error);
+                }
+            })
+            .finally(() => {
+                if (this.watcherCloseFlights.get(codebasePath) === closing) {
+                    this.watcherCloseFlights.delete(codebasePath);
+                }
+            });
+        this.watcherCloseFlights.set(codebasePath, closing);
+        return closing;
+    }
+
+    public async unregisterCodebaseWatcher(codebasePath: string): Promise<void> {
+        codebasePath = this.canonicalWatcherRoot(codebasePath);
+        const registration = this.pendingWatcherRegistrations.get(codebasePath);
+        if (registration) {
+            registration.cancelled = true;
+            await registration.completion;
+        }
+
+        const watcher = this.watchers.get(codebasePath);
+        if (!watcher) {
+            await this.watcherCloseFlights.get(codebasePath);
+            this.watcherIgnoreMatchers.delete(codebasePath);
+            return;
+        }
+
+        this.watcherIgnoreMatchers.delete(codebasePath);
         if (this.watcherLifecycleStates.get(codebasePath) !== 'failed') {
             this.setWatcherCoverage(codebasePath, 'stopped');
         }
         this.watchers.delete(codebasePath);
-        try {
-            await watcher.close();
-        } catch (error) {
-            console.error(`[SYNC-WATCH] Failed to close watcher for '${codebasePath}':`, error);
-        }
+        await this.closeWatcher(codebasePath, watcher);
     }
 
     public async refreshWatchersFromWatchList(): Promise<void> {
@@ -2239,6 +2343,10 @@ export class SyncManager {
 
     public async stopWatcherMode(): Promise<void> {
         this.watcherModeStarted = false;
+        const registrations = Array.from(this.pendingWatcherRegistrations.values());
+        for (const registration of registrations) {
+            registration.cancelled = true;
+        }
 
         for (const codebasePath of this.watchers.keys()) {
             this.setWatcherCoverage(codebasePath, 'stopped');
@@ -2255,16 +2363,15 @@ export class SyncManager {
         this.sourceObservationState.clearAll();
         this.watchedCodebases.clear();
 
-        const watchers = Array.from(this.watchers.values());
+        const watchers = Array.from(this.watchers.entries());
         this.watchers.clear();
 
-        await Promise.all(watchers.map(async (watcher) => {
-            try {
-                await watcher.close();
-            } catch (error) {
-                console.error('[SYNC-WATCH] Failed to close watcher:', error);
-            }
-        }));
+        const closing = watchers.map(([codebasePath, watcher]) => this.closeWatcher(codebasePath, watcher));
+        await Promise.all([
+            ...registrations.map((registration) => registration.completion),
+            ...closing,
+            ...this.watcherCloseFlights.values(),
+        ]);
         this.watcherLifecycleStates.clear();
     }
 }

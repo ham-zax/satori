@@ -441,10 +441,14 @@ export class ProviderRuntime {
     private async createRuntime(requireEmbedding: boolean): Promise<ToolContext> {
         const bootstrap = await this.resolveRuntimeBootstrap(requireEmbedding);
         const embedding = await this.createEmbeddingProvider(bootstrap);
+        let vectorDatabase: VectorDatabase | null = null;
+        let context: Context | null = null;
+        let syncManager: SyncManager | null = null;
         let reranker: Reranker | null = null;
+        let toolHandlers: ToolHandlers | null = null;
         try {
-            const vectorDatabase = await this.createVectorBackend(bootstrap);
-            const context = new Context({
+            vectorDatabase = await this.createVectorBackend(bootstrap);
+            context = new Context({
                 embedding,
                 vectorDatabase,
                 vectorStoreProvider: this.config.vectorStoreProvider,
@@ -453,7 +457,7 @@ export class ProviderRuntime {
                 navigationStore: this.navigationStore,
                 ...(this.publicationRuntime ? { publicationRuntime: this.publicationRuntime } : {}),
             } satisfies ContextConfig);
-            const syncManager = new SyncManager(context, {
+            syncManager = new SyncManager(context, {
                 watchEnabled: this.watchSyncEnabled,
                 onSyncCompleted: this.createSyncCompletionHook(context),
                 mutationRuntime: this.mutationRuntime,
@@ -478,7 +482,7 @@ export class ProviderRuntime {
                     `[RERANKER] ${bootstrap.reranker?.kind ?? "unknown"} reranker initialized.`,
                 );
             }
-            const toolHandlers = new ToolHandlers(
+            toolHandlers = new ToolHandlers(
                 context,
                 syncManager,
                 this.runtimeFingerprint,
@@ -527,8 +531,22 @@ export class ProviderRuntime {
             this.activeContexts.push(toolContext);
             return toolContext;
         } catch (error) {
-            await reranker?.close?.().catch(() => undefined);
-            await embedding.close();
+            // Until startup succeeds, these resources have no active runtime owner.
+            // Drain work before releasing its dependencies, and preserve the startup
+            // failure even when an individual cleanup throws or rejects.
+            const cleanup = async (release: () => unknown): Promise<void> => {
+                try {
+                    await release();
+                } catch {
+                    // Every acquired resource must still get its cleanup attempt.
+                }
+            };
+            await cleanup(() => syncManager?.stopAndDrainLifecycle());
+            await cleanup(() => toolHandlers?.releaseSearchContinuationOwnership());
+            await cleanup(() => vectorDatabase?.close?.());
+            await cleanup(() => context?.dispose());
+            await cleanup(() => reranker?.close?.());
+            await cleanup(() => embedding.close());
             throw error;
         }
     }

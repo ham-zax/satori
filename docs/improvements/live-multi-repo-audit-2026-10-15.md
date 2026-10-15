@@ -2,7 +2,7 @@
 
 Current repair status: F02, F03, F05, F09, F10, and F13 have checked repairs in the checkout. F05 returns the complete guard for the audited request. F04 ranking quality and F11 latency remain open. Earlier observations and checkpoints remain chronological below.
 
-Integration requirement: include the unstaged `runtime-profile-v6-d128.json` correction with the staged request-contract change. Committing only the staged snapshot leaves LateOn unable to load.
+Integration requirement: keep the generated request contract, runtime profile, and acquisition manifest synchronized. The runtime profile pins the request-contract digest. The acquisition manifest pins the SHA-256 digest of the exact runtime-profile bytes. A profile edit also requires an acquisition-manifest update.
 
 Evidence storage: the generated evidence directory is local only and Git ignores it. References below name local artifacts. A clone does not contain them.
 
@@ -535,3 +535,9 @@ The first owner loss is recorded by `runSearchExecution` and enforced by `fuseCa
 The local-only artifact `live-multi-repo-audit-2026-10-15-evidence/repair-f04-three-query-stages.json` preserves the declared oracle, exact requests, responses, identity binding, removals, and runner sources. The local-only artifact `live-multi-repo-audit-2026-10-15-evidence/repair-f04-preflight-blocker.json` preserves the contract failure and its resolution. Expected source hashes, repository HEAD values, and Git-status hashes remain identical before and after each successful capture. Satori source freshness is changed, so these captures do not reproduce the original publication.
 
 F04 now has source-backed stage evidence, not a ranking repair. F11 remains open. These requests do not supply the required cold/warm medians. The three-query process peaks at 1,104,592 KiB RSS. The standalone handle capture has no peak-memory result. Neither observation supports a performance claim. Future contract changes must include the existing runtime-profile test in their focused checks.
+
+## Acquisition manifest correction after the CLI suite
+
+The user's CLI suite exposes another consumer missed by the profile repair. `readLateOnAcquisitionAuthority` hashes the exact runtime-profile bytes. The acquisition manifest still pins the old profile digest, so installation rejects the package. The existing `acquisition manifest binds the exact frozen profile digest` test reproduces this failure before the correction.
+
+The repair changes only `runtimeProfileSha256` in `runtime-profile-v6-d128.acquisition.json` to `1b0021653d7330c3676eadd9e60d2b94e75eb5e1879964f49d831ef4a5e521e5`. A comparison against HEAD checks that every other manifest field remains identical. The runtime profile itself remains unchanged. Existing model-store and installation-preflight tests pass: 101 tests across two files. The digest assertion remains intact. No new tests, code, dependencies, installation, or commit are needed. `git diff --check` passes.

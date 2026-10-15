@@ -500,13 +500,33 @@ export function readSatoriSkillSource(): string {
     return fs.readFileSync(SATORI_SKILL_SOURCE_URL, "utf8");
 }
 
-/** Writes the canonical skill copy; refuses to replace a skill Satori did not write. */
-export function prepareSkillInstall(skillDir: string, source: string = readSatoriSkillSource()): FileMutation {
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const dirStats = lstatIfExists(skillDir);
-    if (dirStats && !dirStats.isDirectory()) {
-        throw new CliError("E_USAGE", `Refusing to replace ${skillDir}: it is not a Satori-managed skill directory.`, 2);
+/**
+ * Resolves the directory that holds the canonical skill. A symlink (for example one
+ * a skill manager such as Skillshare created) is followed to a real directory; the
+ * ownership marker in SKILL.md, not the path type, then decides ownership.
+ */
+function resolveSkillDirectory(skillDir: string): string {
+    const stats = lstatIfExists(skillDir);
+    if (!stats) return skillDir;
+    if (stats.isSymbolicLink()) {
+        const resolved = (() => {
+            try {
+                return fs.realpathSync(skillDir);
+            } catch {
+                return undefined;
+            }
+        })();
+        if (resolved && fs.statSync(resolved).isDirectory()) return resolved;
+    } else if (stats.isDirectory()) {
+        return skillDir;
     }
+    throw new CliError("E_USAGE", `Refusing to replace ${skillDir}: it is not a Satori-managed skill directory.`, 2);
+}
+
+/** Writes the canonical skill copy; refuses to replace a skill Satori did not write. */
+export function prepareSkillInstall(linkedSkillDir: string, source: string = readSatoriSkillSource()): FileMutation {
+    const skillDir = resolveSkillDirectory(linkedSkillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
     const current = readTextIfExists(skillFile);
     if (current !== null && !current.includes(SATORI_SKILL_OWNERSHIP_MARKER)) {
         throw new CliError("E_USAGE", `Refusing to overwrite unmanaged skill at ${skillFile}. Move it aside and rerun install.`, 2);
@@ -524,6 +544,7 @@ export function prepareSkillInstall(skillDir: string, source: string = readSator
     };
 }
 
+/** Removes only a real directory; a linked skill stays with the tool that owns the link. */
 export function prepareSkillRemoval(skillDir: string): FileMutation {
     const skillFile = path.join(skillDir, "SKILL.md");
     const current = readTextIfExists(skillFile);
@@ -568,9 +589,18 @@ function linkPointsTo(linkPath: string, target: string): boolean {
     return path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === path.resolve(target);
 }
 
+/** True when the link and the target already reach the same real directory (for example both link to one Skillshare copy). */
+function linkResolvesTo(linkPath: string, target: string): boolean {
+    try {
+        return fs.realpathSync(linkPath) === fs.realpathSync(target);
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Links an agent's own skills directory to the canonical skill. Anything else at
- * the link path (a real directory, a file, another symlink) is unmanaged: the
+ * the link path (a real directory, a file, a symlink to another directory) is unmanaged: the
  * install fails and the user removes it; it is never replaced.
  */
 export function prepareSkillLinkInstall(linkPath: string, target: string): FileMutation {
@@ -578,7 +608,7 @@ export function prepareSkillLinkInstall(linkPath: string, target: string): FileM
         return unchangedMutation();
     }
     const stats = lstatIfExists(linkPath);
-    if (stats?.isSymbolicLink() && linkPointsTo(linkPath, target)) {
+    if (stats?.isSymbolicLink() && (linkPointsTo(linkPath, target) || linkResolvesTo(linkPath, target))) {
         return unchangedMutation();
     }
     if (stats) {

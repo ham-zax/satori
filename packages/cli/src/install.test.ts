@@ -2350,6 +2350,78 @@ test("canonical skill is never overwritten unless Satori owns it and is removed 
     });
 });
 
+// Skillshare layout: every agent's skills/satori links to one shared copy of the Satori skill.
+test("skill paths linked to one shared Satori-marked copy stay managed through install and uninstall", async () => {
+    await withTempHome(async (homeDir) => {
+        const source = readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md"));
+        const shared = path.join(homeDir, ".config", "skillshare", "skills", "satori");
+        const sharedFile = path.join(shared, "SKILL.md");
+        const links = [
+            path.join(homeDir, ".agents", "skills", "satori"),
+            path.join(homeDir, ".claude", "skills", "satori"),
+        ];
+        fs.mkdirSync(shared, { recursive: true });
+        fs.writeFileSync(sharedFile, source.replace("Satori", "Satori (stale)"), "utf8");
+        for (const link of links) {
+            fs.mkdirSync(path.dirname(link), { recursive: true });
+            fs.symlinkSync(shared, link, "junction");
+        }
+
+        await executeInstallCommand({ kind: "install", client: "all", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        assert.equal(readFile(sharedFile), source);
+        for (const link of links) {
+            assert.equal(fs.realpathSync(link), fs.realpathSync(shared));
+        }
+
+        const again = await executeInstallCommand({ kind: "install", client: "all", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        assert.equal(again.results.some((result) => result.status === "updated"), false);
+
+        await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: false }, { homeDir });
+        assert.equal(readFile(sharedFile), source);
+        for (const link of links) {
+            assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+        }
+    });
+});
+
+test("a linked canonical skill without the marker, a dangling link, or a linked file is refused before runtime preflight", async () => {
+    const cases: Array<[string, (homeDir: string, canonical: string) => void]> = [
+        ["unmarked", (homeDir, canonical) => {
+            const other = path.join(homeDir, "other-skill");
+            fs.mkdirSync(other, { recursive: true });
+            fs.writeFileSync(path.join(other, "SKILL.md"), "# my own satori notes\n", "utf8");
+            fs.symlinkSync(other, canonical, "junction");
+        }],
+        ["dangling", (homeDir, canonical) => fs.symlinkSync(path.join(homeDir, "missing"), canonical, "junction")],
+        ["file", (homeDir, canonical) => {
+            const file = path.join(homeDir, "a-file");
+            fs.writeFileSync(file, "x", "utf8");
+            fs.symlinkSync(file, canonical);
+        }],
+    ];
+    for (const [name, arrange] of cases) {
+        await withTempHome(async (homeDir) => {
+            const canonical = path.join(homeDir, ".agents", "skills", "satori");
+            fs.mkdirSync(path.dirname(canonical), { recursive: true });
+            arrange(homeDir, canonical);
+            let preflightCalls = 0;
+            await assert.rejects(
+                executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, {
+                    ...installOptions(homeDir),
+                    preflightRunner: async () => {
+                        preflightCalls += 1;
+                        throw new Error("preflight must not run");
+                    },
+                }),
+                name === "unmarked" ? /Refusing to overwrite unmanaged skill/ : /not a Satori-managed skill directory/,
+                name,
+            );
+            assert.equal(preflightCalls, 0, name);
+            assert.equal(fs.lstatSync(canonical).isSymbolicLink(), true, name);
+        });
+    }
+});
+
 test("uninstall --purge stops servers and deletes all Satori data; a dry run only lists it", async () => {
     await withTempHome(async (homeDir) => {
         await executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir));

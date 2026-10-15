@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { CliError } from "./errors.js";
-import { prepareConfigMutation } from "./client-config-mutations.js";
+import { prepareMutation } from "./client-config-mutations.js";
 import type {
 } from "./args.js";
 import {
@@ -126,7 +126,7 @@ export async function executeInstallCommand(
         // rereads mutable config after preflight and guards it again before writing.
         const clientCommand = resolveManagedClientCommand(homeDir);
         for (const target of selectClientTargets(homeDir, command.client, env)) {
-            prepareConfigMutation(target, command, clientCommand);
+            prepareMutation(target, command, clientCommand);
         }
     }
     let preflight: InstallPreflightResult | undefined;

@@ -689,7 +689,10 @@ export class SemanticSearchService {
                 }] : [])],
             }));
             return productResults.map((result) => (
-                toSemanticSearchResult(result, 'lexical_rank')
+                toSemanticSearchResult(
+                    result,
+                    productLexicalFallback.length > 0 ? 'rrf_fusion' : 'lexical_rank',
+                )
             ));
         }
 

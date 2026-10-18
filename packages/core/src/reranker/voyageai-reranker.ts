@@ -263,7 +263,19 @@ export class VoyageAIReranker implements Reranker {
                     );
                 }
 
-                const result = JSON.parse(await readRerankResponseBody(response)) as { data?: unknown };
+                const responseBody = await readRerankResponseBody(response);
+                let result: { data?: unknown };
+                try {
+                    result = JSON.parse(responseBody) as { data?: unknown };
+                } catch (error) {
+                    if (!(error instanceof SyntaxError)) {
+                        throw error;
+                    }
+                    throw Object.assign(
+                        new Error(`VoyageAI Rerank API returned invalid JSON: ${errorMessage(error)}`),
+                        { rerankerValidationFailure: true, rerankerHttpStatus: response.status },
+                    );
+                }
                 if (!result.data || !Array.isArray(result.data)) {
                     throw Object.assign(
                         new Error('VoyageAI Rerank API returned invalid response'),

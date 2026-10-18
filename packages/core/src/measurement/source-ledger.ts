@@ -174,10 +174,22 @@ export async function withSourceMeasurementOperation<T>(
     };
 
     return await operationStorage.run(scope, async () => {
+        let workFailed = false;
         try {
             return await work();
+        } catch (error) {
+            workFailed = true;
+            throw error;
         } finally {
-            flushScope(scope);
+            if (workFailed) {
+                try {
+                    flushScope(scope);
+                } catch {
+                    // A failed ledger append must not replace the work failure.
+                }
+            } else {
+                flushScope(scope);
+            }
         }
     });
 }

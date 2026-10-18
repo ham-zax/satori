@@ -409,6 +409,40 @@ test('VoyageAIReranker does not retry an invalid successful response', async () 
     assert.equal(calls.length, 1);
 });
 
+test('VoyageAIReranker classifies malformed successful JSON as a terminal invalid response', async () => {
+    let calls = 0;
+    await withMutedConsoleError(async () => {
+        await withMockedFetch(async () => {
+            calls += 1;
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({}),
+                text: async () => '',
+                body: new ReadableStream<Uint8Array>({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode('{ malformed json'));
+                        controller.close();
+                    },
+                }),
+            };
+        }, async () => {
+            const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key', retryDelayMs: 0 });
+            await assert.rejects(
+                () => reranker.rerank('find auth', ['alpha document']),
+                (error: unknown) => {
+                    assert.ok(error instanceof RerankerRequestError);
+                    assert.equal(error.kind, 'invalid_response');
+                    assert.equal(error.status, 200);
+                    assert.equal(error.attempts, 1);
+                    return true;
+                },
+            );
+        });
+    });
+    assert.equal(calls, 1);
+});
+
 test('VoyageAIReranker rejects immediately when the caller pre-aborted the signal', async () => {
     const controller = new AbortController();
     controller.abort();

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { VectorCandidate, VectorDocument } from '../vectordb';
-import { buildSemanticSearchCandidateTrace } from './semantic-search-service';
+import type { PublicationRef } from '../generation/contracts';
+import type { VectorCandidate, VectorDatabase, VectorDocument } from '../vectordb';
+import { buildSemanticSearchCandidateTrace, SemanticSearchService } from './semantic-search-service';
 import {
     fuseVectorCandidatesWithRrf,
     VECTOR_CANDIDATE_RRF_K_V1,
@@ -71,6 +72,124 @@ test('A short all-terms arm is supplemented, and its rows outrank fallback-only 
     });
 
     assert.deepEqual(fused.map((row) => row.document.id), ['all-terms', 'any-terms']);
+});
+
+test('Sparse lexical fallback fusion reports RRF scores only when fallback rows are present', async () => {
+    const primary = candidate('all-terms', 'src/owner.ts', 5);
+    const fallback = candidate('any-terms', 'src/other.ts', 40);
+    let fallbackCandidates: VectorCandidate[] = [fallback];
+    const lexicalRequests: Array<{ query: string; matchMode?: string }> = [];
+    const vectorDatabase = {
+        getBackendInfo: () => ({
+            provider: 'lancedb',
+            transport: 'embedded',
+            address: 'test',
+            lexicalMatchModes: ['all_terms', 'any_terms'],
+            defaultLexicalMatchMode: 'all_terms',
+        }),
+        retrieveLexical: async (
+            _collectionName: string,
+            request: { query: string; matchMode?: string },
+        ) => {
+            lexicalRequests.push(request);
+            return request.matchMode === 'any_terms' ? fallbackCandidates : [primary];
+        },
+    } as unknown as VectorDatabase;
+    const service = new SemanticSearchService({
+        getVectorDatabase: () => vectorDatabase,
+        embeddingAccess: {
+            getEmbedding: () => {
+                throw new Error('Sparse search must not access embeddings.');
+            },
+            assertEmbeddingIdentityCurrent: () => undefined,
+        },
+        authority: {
+            acquireCurrentRead: () => null,
+            isReadAdmitted: async () => true,
+        },
+        isHybridEnabled: () => true,
+        canonicalizeCodebasePath: (codebasePath) => codebasePath,
+    });
+    const publication: PublicationRef = {
+        id: 'publication-1',
+        publication: {
+            version: 2,
+            id: 'publication-1',
+            canonicalRoot: '/repo',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            status: 'complete',
+            policy: {
+                profile: 'default',
+                customExtensions: [],
+                customIgnorePatterns: [],
+                fileBasedIgnorePatterns: [],
+                supportedExtensions: [],
+                effectiveIgnorePatterns: [],
+                policyHash: 'test-policy',
+                controlSignature: 'test-control',
+            },
+            format: {
+                indexFormatVersion: 'test-index-format',
+                embeddingIdentity: 'test-embedding',
+                relationshipVersion: 'test-relationships',
+            },
+            vector: { collectionName: 'test-collection', indexedFiles: 2, totalChunks: 2 },
+            packageOwnership: false,
+            navigation: null,
+        },
+    };
+    const request = {
+        codebasePath: '/repo',
+        query: 'target helper',
+        topK: 2,
+        retrievalMode: 'lexical' as const,
+        lexicalMatchMode: 'all_terms' as const,
+        lexicalFallbackTerms: ['target'],
+    };
+
+    const fusedResults = await service.searchInPublication(publication, request);
+    const expectedFused = fuseVectorCandidatesWithRrf({
+        dense: [],
+        lexical: [primary],
+        lexicalFallback: [fallback],
+        lexicalFallbackLimit: 2,
+        k: VECTOR_CANDIDATE_RRF_K_V1,
+        limit: 2,
+    });
+    assert.deepEqual(
+        fusedResults.map(({ candidateId, score, backendScore }) => ({
+            candidateId,
+            score,
+            backendScore,
+        })),
+        expectedFused.map(({ document, score }) => ({
+            candidateId: document.id,
+            score,
+            backendScore: score,
+        })),
+    );
+    assert.deepEqual(fusedResults.map((result) => result.backendScoreKind), ['rrf_fusion', 'rrf_fusion']);
+    assert.deepEqual(lexicalRequests.map(({ query, matchMode }) => ({ query, matchMode })), [
+        { query: 'target helper', matchMode: 'all_terms' },
+        { query: 'target', matchMode: 'any_terms' },
+    ]);
+
+    fallbackCandidates = [];
+    const emptyFallbackResults = await service.searchInPublication(publication, request);
+    assert.deepEqual(emptyFallbackResults.map((result) => result.backendScoreKind), ['lexical_rank']);
+    assert.deepEqual(emptyFallbackResults.map((result) => result.score), [primary.score]);
+
+    const plainLexicalResults = await service.searchInPublication(publication, {
+        ...request,
+        lexicalFallbackTerms: undefined,
+    });
+    assert.deepEqual(plainLexicalResults.map((result) => result.backendScoreKind), ['lexical_rank']);
+    assert.deepEqual(plainLexicalResults.map((result) => result.score), [primary.score]);
+    assert.deepEqual(lexicalRequests.slice(-3).map(({ matchMode }) => matchMode), [
+        'all_terms',
+        'any_terms',
+        'all_terms',
+    ]);
 });
 
 test('Product and diagnostic fallback rows are traced as distinct stages', () => {

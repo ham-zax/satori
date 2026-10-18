@@ -169,3 +169,64 @@ test('source measurement rejects mixed acquisition bases within one observation'
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });
+
+test('source measurement preserves the work rejection when ledger flush fails', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-source-flush-failure-'));
+    const ledgerParent = path.join(directory, 'missing-parent');
+    const ledgerFile = path.join(ledgerParent, 'source.jsonl');
+    const sourceFile = path.join(directory, 'source.ts');
+    const failures: unknown[] = [new Error('work failed'), 'primitive failure', undefined];
+
+    try {
+        assert.equal(fs.existsSync(ledgerParent), false);
+        for (const failure of failures) {
+            await assert.rejects(
+                () => withSourceMeasurementOperation({
+                    operation: 'read_file',
+                    ledgerFile,
+                    rootDir: directory,
+                }, () => {
+                    const observation = beginSourceMeasurementObservation({
+                        owner: 'validation',
+                        filePath: sourceFile,
+                        logicalBytesRequested: 1,
+                        scanKind: 'complete',
+                    });
+                    assert.ok(observation);
+                    throw failure;
+                }),
+                (error: unknown) => error === failure,
+            );
+        }
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('source measurement still rejects when successful work cannot flush its ledger', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-source-flush-success-'));
+    const ledgerFile = path.join(directory, 'missing-parent', 'source.jsonl');
+    const sourceFile = path.join(directory, 'source.ts');
+
+    try {
+        await assert.rejects(
+            () => withSourceMeasurementOperation({
+                operation: 'read_file',
+                ledgerFile,
+                rootDir: directory,
+            }, () => {
+                const observation = beginSourceMeasurementObservation({
+                    owner: 'validation',
+                    filePath: sourceFile,
+                    logicalBytesRequested: 1,
+                    scanKind: 'complete',
+                });
+                assert.ok(observation);
+                return 'work completed';
+            }),
+            /ENOENT/,
+        );
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});

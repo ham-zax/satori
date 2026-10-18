@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { FileSynchronizer } from './synchronizer';
 
 function diagnostic(error: unknown): Record<string, unknown> {
@@ -12,6 +13,42 @@ function diagnostic(error: unknown): Record<string, unknown> {
     assert.ok(details, error.message);
     return JSON.parse(details[1]!);
 }
+
+test('POSIX literal-backslash entries do not block or alias supported source observations', {
+    skip: process.platform === 'win32',
+}, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-source-observation-'));
+    try {
+        const supportedSources = new Map([
+            ['normal.ts', 'export const normal = 1;\n'],
+            ['a/b.ts', 'export const represented = 2;\n'],
+        ]);
+        fs.mkdirSync(path.join(root, 'a'));
+        for (const [file, source] of supportedSources) {
+            fs.writeFileSync(path.join(root, file), source);
+        }
+        const expectedHashes = new Map([...supportedSources].map(([file, source]) => [
+            file,
+            createHash('sha256').update(source).digest('hex'),
+        ]));
+        const synchronizer = new FileSynchronizer(root, [], ['.ts']);
+        const baseline = await synchronizer.prepareChanges();
+        assert.deepEqual(baseline.fileHashes, expectedHashes);
+
+        fs.writeFileSync(path.join(root, 'a\\b.ts'), 'export const unrepresentable = 300;\n');
+        const unsupportedDirectory = path.join(root, 'a\\nested');
+        fs.mkdirSync(unsupportedDirectory);
+        fs.writeFileSync(path.join(unsupportedDirectory, 'source.ts'), 'export const hidden = 400;\n');
+
+        const prepared = await synchronizer.prepareChanges();
+        assert.deepEqual(prepared.fileHashes, expectedHashes);
+        assert.equal(prepared.changes.partialScan, false);
+        assert.deepEqual(prepared.changes.unscannedDirPrefixes, []);
+        await prepared.assertSourceObservationCurrent();
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
 
 for (const mutation of ['modify', 'add'] as const) {
     test(`captured source refusal identifies the ${mutation} stage and path`, async () => {

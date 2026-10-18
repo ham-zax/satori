@@ -715,6 +715,40 @@ test('getCodeFiles keeps built-in denylisted files excluded despite policy re-in
     }
 });
 
+test('getCodeFiles skips unrepresentable POSIX names before they can alias supported paths', {
+    skip: process.platform === 'win32',
+}, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-code-files-portable-'));
+    try {
+        fs.mkdirSync(path.join(root, 'a'));
+        fs.writeFileSync(path.join(root, 'normal.ts'), 'export const normal = 1;\n');
+        fs.writeFileSync(path.join(root, 'a', 'b.ts'), 'export const represented = 2;\n');
+        fs.writeFileSync(path.join(root, 'a\\b.ts'), 'export const unrepresentable = 3;\n');
+        fs.mkdirSync(path.join(root, 'a\\nested'));
+        fs.writeFileSync(path.join(root, 'a\\nested', 'hidden.ts'), 'export const hidden = 4;\n');
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: () => createMockVectorDb(),
+            languageAnalyzer: createLanguageAnalysisService(),
+            semanticAnalyzer: noopSemanticProjectAnalyzer,
+            getEmbedding: () => createMockEmbedding(),
+            assertEmbeddingIdentityCurrent: () => ({
+                provider: 'test', model: 'test', dimension: 768,
+                artifactDigest: null, normalizationPolicy: 'none',
+            }),
+            isHybridEnabled: () => false,
+            canonicalizeCodebasePath: (value) => value,
+            normalizeRelativePathForCodebase: (_root, value) => value as unknown as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'],
+            matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'extractor-v1',
+        });
+        const files = await pipeline.getCodeFiles(root);
+        assert.deepEqual(files.map((file) => path.relative(root, file)), ['a/b.ts', 'normal.ts']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('IndexingPipeline publishes the analyzer outcome without losing recovery reasons', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-index-parser-outcome-'));
     try {

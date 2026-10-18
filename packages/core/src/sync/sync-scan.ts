@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import type { IndexIgnoreMatcher } from '../core/ignore-matcher';
 import { compareContractStrings } from '../utils/compare-contract-strings';
-import { canonicalizeRepositoryRelativePath } from '../paths/repository-path';
+import { canonicalizeRepositoryRelativePath, isRepositoryRelativePath } from '../paths/repository-path';
 import {
     isObservableFileByPolicy,
     isObservableFileObservationByPolicy,
@@ -300,6 +300,10 @@ async function inspectDirectoryEntries(
         entries.length,
         async (currentIndex) => {
             const entry = entries[currentIndex];
+            // Check raw names before normalization can alias an unsupported name.
+            if (!isRepositoryRelativePath(entry.name)) {
+                return { kind: 'skip' };
+            }
             if (entry.isSymbolicLink()) {
                 return { kind: 'skip' };
             }

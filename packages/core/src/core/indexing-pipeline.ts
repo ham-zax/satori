@@ -33,7 +33,7 @@ import type {
     SymbolRecord,
     SymbolRegistryManifestFile,
 } from '../symbols';
-import type { RepositoryRelativePath } from '../paths/repository-path';
+import { isRepositoryRelativePath, type RepositoryRelativePath } from '../paths/repository-path';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../semantic/descriptor';
 import type { SemanticProjectAnalyzer } from '../semantic';
@@ -309,6 +309,8 @@ export class IndexingPipeline {
             const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
             entries.sort((left, right) => compareContractStrings(left.name, right.name));
             for (const entry of entries) {
+                // Full indexing and sync admit the same portable raw path names.
+                if (!isRepositoryRelativePath(entry.name)) continue;
                 const fullPath = path.join(currentPath, entry.name);
                 if (this.matchesIgnorePattern(
                     fullPath,

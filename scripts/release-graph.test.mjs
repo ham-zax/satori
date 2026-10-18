@@ -407,6 +407,30 @@ test('snapshots are sorted and include package.json, assets, and executable bits
   assert.equal(manifest.executable, false);
 });
 
+test('non-ASCII paths use deterministic code-unit ordering for snapshot diffs', () => {
+  const leftRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-snap-code-unit-left-'));
+  const rightRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-snap-code-unit-right-'));
+  try {
+    writeTree(leftRoot, { 'package/z.txt': 'unchanged' });
+    writeTree(rightRoot, {
+      'package/é.txt': 'added',
+      'package/z.txt': 'unchanged',
+    });
+
+    const left = createFileTreeSnapshot(leftRoot);
+    const right = createFileTreeSnapshot(rightRoot);
+    assert.deepEqual(left.map((entry) => entry.path), ['package/z.txt']);
+    assert.deepEqual(right.map((entry) => entry.path), ['package/z.txt', 'package/é.txt']);
+    assert.deepEqual(createFileTreeSnapshot(rightRoot), right);
+    assert.deepEqual(compareFileTreeSnapshots(left, right).changes, [
+      { path: 'package/é.txt', change: 'added' },
+    ]);
+  } finally {
+    fs.rmSync(leftRoot, { recursive: true, force: true });
+    fs.rmSync(rightRoot, { recursive: true, force: true });
+  }
+});
+
 function reportInput(overrides = {}) {
   return {
     packages: {

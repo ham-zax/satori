@@ -13,6 +13,7 @@ function harness({
   statuses = report('published-identical', 'stale-version'),
   changed = [{ key: 'mcp', to: '0.9.0' }, { key: 'cli', to: '0.6.3' }],
   fail,
+  failError,
 } = {}) {
   const calls = [];
   let built = false;
@@ -24,7 +25,7 @@ function harness({
       execFileSyncImpl: (command, args) => {
         calls.push(command === 'pnpm' ? ['build'] : args);
         if (command === 'pnpm') built = true;
-        if (args[0] === fail) throw new Error(`${fail} failed`);
+        if (args[0] === fail) throw failError || new Error(`${fail} failed`);
         if (args[0] === 'status') return dirty || (built && dirtyAfterBuild) ? ' M source.ts' : '';
         if (args[0] === 'branch') return branch;
         if (args[0] === 'rev-parse') return 'head';
@@ -90,6 +91,23 @@ test('dirty, wrong-branch, divergent, and build-dirtied checkouts stop before bu
     await assert.rejects(runRelease(options));
     assert.equal(calls.some(([name]) => name === 'bump'), false);
   }
+
+  const { calls, options } = harness({
+    fail: 'merge-base',
+    failError: Object.assign(new Error('merge-base exited 1'), { status: 1 }),
+  });
+  await assert.rejects(runRelease(options), /not an ancestor of HEAD/);
+  assert.equal(calls.some(([name]) => name === 'bump'), false);
+});
+
+test('unexpected ancestry-check errors stop before release side effects and preserve the error', async () => {
+  const failure = Object.assign(new Error('merge-base exited 128'), { status: 128 });
+  const { calls, options } = harness({ fail: 'merge-base', failError: failure });
+  await assert.rejects(runRelease(options), (error) => error === failure);
+  assert.equal(
+    calls.some(([name]) => ['build', 'bump', 'add', 'commit', 'push', 'publish'].includes(name)),
+    false,
+  );
 });
 
 test('build, commit, and push failures prevent publication', async () => {

@@ -57,8 +57,11 @@ export async function runRelease(options = {}) {
       try {
         git('merge-base', '--is-ancestor', CANONICAL_RELEASE_REF, 'HEAD');
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        if (error && typeof error === 'object' && error.status === 1) {
+          return false;
+        }
+        throw error;
       }
     },
   });

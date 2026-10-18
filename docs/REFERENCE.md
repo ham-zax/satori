@@ -119,8 +119,8 @@ Compatible Codex, Claude Code, OpenCode, and subagent sessions can attach to one
 ## Architecture
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/architecture/satori-architecture.dark.png">
-  <img alt="Satori architecture: agent queries flow through MCP tools into candidate search (Potion vectors + BM25), reciprocal rank fusion, LateOn reranking, and owner-symbol grouping over one pinned LanceDB index version; background workers scan changed files, build the next index, and publish it atomically." src="./docs/architecture/satori-architecture.light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./architecture/satori-architecture.dark.png">
+  <img alt="Satori architecture: agent queries flow through MCP tools into candidate search (Potion vectors + BM25), reciprocal rank fusion, LateOn reranking, and owner-symbol grouping over one pinned LanceDB index version; background workers scan changed files, build the next index, and publish it atomically." src="./architecture/satori-architecture.light.png">
 </picture>
 
 - **Search path (read-only):** dense and BM25 candidates merge through reciprocal rank fusion, LateOn rescores a bounded top set, and matching chunks resolve to their owning symbols.
@@ -657,13 +657,13 @@ SATORI_LATEON_ACTIVATION_POLICY=lateon_context_v6_d128_owner_default_v1
 ```
 
 Any other LateOn profile ID is rejected and cannot execute; reinstall the
-managed runtime to bind v5. One local
+managed runtime to bind v6. One local
 LateOn worker serves overlapping searches through a FIFO queue instead of
 falling back merely because another search is already reranking. Cancellation,
 a genuine worker/output failure, or the hard safety ceiling restores the
 frozen baseline retrieval order for that request.
 
-Projection-v4 rerank context sends the exact question once plus a
+Projection-v5 rerank context sends the exact question once plus a
 positive-only answer-type line (the implementation focus never names
 competing artifact classes), and each projected document is a bounded answer
 packet: factual `candidate_role` derived from path classification plus trusted

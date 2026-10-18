@@ -273,7 +273,7 @@ export function createFileTreeSnapshot(rootDirectory) {
       );
     }
   }
-  entries.sort((left, right) => left.path.localeCompare(right.path));
+  entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   return Object.freeze(entries);
 }
 

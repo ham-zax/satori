@@ -42,6 +42,14 @@ const fixedFlags = [
 ];
 function fail(message) { throw new Error(`CBM extractor build: ${message}`); }
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
+function isMemoryFailureReason(reason) {
+    return typeof reason === 'string' && reason.startsWith('exceeded the ') && reason.endsWith(' build memory budget');
+}
+function findKnownFailure(failures, row, sourceSha256, memoryFailure, checkOnly) {
+    return failures.find((entry) => entry.cbmLanguage === row.cbmLanguage &&
+        entry.sourceSha256 === sourceSha256 &&
+        (checkOnly ? isMemoryFailureReason(entry.reason) : entry.reason === memoryFailure));
+}
 function filesUnder(dir) {
     return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
         const filename = path.join(dir, entry.name);
@@ -165,8 +173,7 @@ for (const row of only ? selected.filter((candidate) => only.has(candidate.cbmLa
         entry.sourceSha256 === sourceSha256 && entry.pack === pack && entry.file === file);
     const cached = previous && existsSync(output) && previous.sizeBytes === statSync(output).size &&
         previous.sha256 === moduleMetadata(output).sha256;
-    const knownFailure = oldManifest?.failures?.find((entry) => entry.cbmLanguage === row.cbmLanguage &&
-        entry.sourceSha256 === sourceSha256 && entry.reason === memoryFailure);
+    const knownFailure = findKnownFailure(oldManifest?.failures ?? [], row, sourceSha256, memoryFailure, checkOnly);
     if (knownFailure) {
         failures.push(knownFailure);
         continue;
@@ -248,5 +255,5 @@ if (checkOnly) {
     writeFileSync(manifestPath, rendered);
     console.log(`Manifest written: ${modules.length} modules, ${built} built, ${reused} reused, ${((Date.now() - startTime) / 1000).toFixed(1)} s`);
 }
-const buildErrors = failures.filter((entry) => entry.reason !== memoryFailure);
+const buildErrors = failures.filter((entry) => !isMemoryFailureReason(entry.reason));
 if (buildErrors.length > 0) fail(`emcc failed for ${buildErrors.map((entry) => entry.cbmLanguage).join(', ')}`);

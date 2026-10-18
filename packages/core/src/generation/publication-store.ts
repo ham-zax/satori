@@ -690,7 +690,7 @@ export class PublicationStore {
             }
             return;
         }
-        this.writeDurableFile(sourcePath, `${JSON.stringify(validated, null, 2)}\n`);
+        this.publishExclusiveMetadataFile(sourcePath, `${JSON.stringify(validated, null, 2)}\n`);
     }
 
     stagePackageOwnership(
@@ -717,7 +717,7 @@ export class PublicationStore {
             }
             return;
         }
-        this.writeDurableFile(ownershipPath, `${JSON.stringify(validated, null, 2)}\n`);
+        this.publishExclusiveMetadataFile(ownershipPath, `${JSON.stringify(validated, null, 2)}\n`);
     }
 
     activate(publication: Publication, lease: RootMutationLease): PublicationRef {
@@ -751,7 +751,7 @@ export class PublicationStore {
                         throw new Error(`Publication '${validated.id}' is immutable and already has different metadata.`);
                     }
                 } else {
-                    this.writeDurableFile(descriptorPath, `${JSON.stringify(validated, null, 2)}\n`);
+                    this.publishExclusiveMetadataFile(descriptorPath, `${JSON.stringify(validated, null, 2)}\n`);
                 }
 
                 const navigationRoot = validated.navigation === null
@@ -1301,6 +1301,19 @@ export class PublicationStore {
             fs.fsyncSync(descriptor);
         } finally {
             fs.closeSync(descriptor);
+        }
+    }
+
+    private publishExclusiveMetadataFile(targetPath: string, contents: string): void {
+        const temporaryPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        try {
+            this.writeDurableFile(temporaryPath, contents);
+            // Publish only the complete durable inode. Linking preserves exclusive
+            // creation if another writer creates the target while we stage it.
+            fs.linkSync(temporaryPath, targetPath);
+            this.fsyncDirectory(path.dirname(targetPath));
+        } finally {
+            fs.rmSync(temporaryPath, { force: true });
         }
     }
 

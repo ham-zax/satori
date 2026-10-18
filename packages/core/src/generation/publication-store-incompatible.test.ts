@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import { buildPublicationSourceCheckpoint } from '../sync/snapshot-codec';
 import { PublicationStore, resolvePublicationGenerationRoot } from './publication-store';
-import { RootMutationRuntime, getRootMutationCoordinator } from './root-mutation-runtime';
+import { RootMutationRuntime, getCurrentRootMutationLease, getRootMutationCoordinator } from './root-mutation-runtime';
 
 const INCOMPATIBLE_ID = 'legacy-publication';
 
@@ -78,3 +79,32 @@ test('an unindexed root reports a missing current state', withFixture(({ createS
     fs.mkdirSync(otherRoot);
     assert.deepEqual(store.getCurrentState(otherRoot), { kind: 'missing' });
 }));
+
+test('cold startup still rejects previously corrupted source metadata without a current pointer', async (t) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-corrupt-source-'));
+    t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+    const repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, 'repo-')));
+    const runtime = new RootMutationRuntime({ stateDir: path.join(tempRoot, 'mutations') });
+    const options = {
+        stateRoot: path.join(tempRoot, 'state'),
+        mutationCoordinator: getRootMutationCoordinator(runtime),
+    };
+    const store = new PublicationStore(options);
+    const generationRoot = resolvePublicationGenerationRoot(repoRoot, 'corrupt-source', options.stateRoot);
+    const sourcePath = path.join(generationRoot, 'source.json');
+    await runtime.run(repoRoot, 'create', async () => {
+        store.stageSourceCheckpoint(repoRoot, 'corrupt-source', buildPublicationSourceCheckpoint(repoRoot, {
+            fileHashes: new Map(),
+            fileStats: new Map(),
+            unprocessedPaths: [],
+        }), getCurrentRootMutationLease(runtime, repoRoot));
+        fs.truncateSync(sourcePath, 10);
+    });
+    const corruptContents = fs.readFileSync(sourcePath, 'utf8');
+    const restarted = new PublicationStore(options);
+    // Bypass only the per-process constructor cache, keeping startup validation intact.
+    assert.throws(() => {
+        (restarted as unknown as { pruneStartupOrphans(): void }).pruneStartupOrphans();
+    }, SyntaxError);
+    assert.equal(fs.readFileSync(sourcePath, 'utf8'), corruptContents);
+});

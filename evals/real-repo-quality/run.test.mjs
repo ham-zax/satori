@@ -58,7 +58,9 @@ function fixture(t) {
     fs.writeFileSync(path.join(root, 'session.mjs'), `
         import * as lancedb from ${JSON.stringify(lanceUrl)};
         import path from 'node:path';
+        import fs from 'node:fs';
         export async function openLocalSession({ stateRoot }) {
+            fs.appendFileSync(${JSON.stringify(path.join(root, 'sessions'))}, 'started\\n');
             const db = await lancedb.connect(path.join(stateRoot, 'vector/lancedb'));
             return {
                 stderr: [], protocolErrors: [], async close() {},
@@ -112,10 +114,11 @@ function fixture(t) {
     fs.writeFileSync(preload, `import { register } from 'node:module'; register('./loader.mjs', import.meta.url);`);
 
     return {
-        repos, writeCases,
-        run(names, revision = '1') {
+        repos, writeCases, root, outDir,
+        sessionsStarted: () => fs.existsSync(path.join(root, 'sessions')),
+        run(names, revision = '1', extraArgs = []) {
             execFileSync(process.execPath, ['--import', preload, runner,
-                '--cases', casesFile, '--repos', names, '--state-root', stateRoot, '--out', outDir], {
+                '--cases', casesFile, '--repos', names, '--state-root', stateRoot, '--out', outDir, ...extraArgs], {
                 cwd: workspaceRoot, encoding: 'utf8', timeout: 30_000,
                 env: { ...process.env, SATORI_HARNESS_TEST_REVISION: revision },
                 stdio: ['ignore', 'pipe', 'pipe'],
@@ -161,4 +164,43 @@ test('rerunning React replaces its records and preserves Polars in all JSON outp
     assert.deepEqual(after.result.repos[0], before.result.repos[1]);
     assert.deepEqual(after['harness-log'][0], before['harness-log'][1]);
     assert.deepEqual(after['fused-pool'].queries.polars1, before['fused-pool'].queries.polars1);
+});
+
+for (const kind of ['missing', 'malformed', 'unreadable']) {
+    test(`an explicitly requested ${kind} baseline fails before starting sessions`, t => {
+        const f = fixture(t);
+        const baseline = path.join(f.root, 'baseline.json');
+        if (kind === 'malformed') fs.writeFileSync(baseline, '{broken');
+        if (kind === 'unreadable') fs.mkdirSync(baseline);
+        assert.throws(() => f.run('react', '1', ['--baseline', baseline]), error => {
+            assert.notEqual(error.status, 0);
+            assert.ok(error.stderr.includes(baseline));
+            assert.match(error.stderr, kind === 'missing' ? /ENOENT/ : kind === 'unreadable' ? /EISDIR/ : /SyntaxError/);
+            return true;
+        });
+        assert.equal(f.sessionsStarted(), false);
+        assert.equal(fs.existsSync(f.outDir), false);
+    });
+}
+
+for (const wrapped of [false, true]) {
+    test(`a valid ${wrapped ? 'records-wrapper' : 'array'} baseline retains paired comparisons`, t => {
+        const f = fixture(t);
+        const records = f.run('react')['harness-log'];
+        const baseline = path.join(f.root, 'baseline.json');
+        fs.writeFileSync(baseline, JSON.stringify(wrapped ? { records } : records));
+        f.run('react', '1', ['--baseline', baseline]);
+        const summary = fs.readFileSync(path.join(f.outDir, 'harness-summary.md'), 'utf8');
+        assert.match(summary, /Paired Baseline Comparison/);
+        assert.match(summary, /UNCHANGED/);
+    });
+}
+
+test('an empty baseline retains the ordinary report without paired rows', t => {
+    const f = fixture(t);
+    const baseline = path.join(f.root, 'baseline.json');
+    fs.writeFileSync(baseline, '[]');
+    f.run('react', '1', ['--baseline', baseline]);
+    const summary = fs.readFileSync(path.join(f.outDir, 'harness-summary.md'), 'utf8');
+    assert.doesNotMatch(summary, /Paired Baseline Comparison/);
 });

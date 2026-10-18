@@ -258,6 +258,16 @@ function extractHits(json) {
 }
 
 async function main() {
+    let baselineMap = null;
+    if (baselinePath) {
+        try {
+            const baseJson = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+            const baseList = Array.isArray(baseJson) ? baseJson : (baseJson.records || []);
+            baselineMap = new Map(baseList.map((r) => [r.query_id, r]));
+        } catch (error) {
+            throw new Error(`Failed to load baseline ${baselinePath}: ${error.message}`, { cause: error });
+        }
+    }
     assertRuntimeDistFresh(workspaceRoot);
     fs.mkdirSync(outDir, { recursive: true });
     const log = (line) => process.stderr.write(`${line}\n`);
@@ -394,16 +404,6 @@ async function main() {
     fs.writeFileSync(path.join(outDir, 'result.json'), `${json}\n`);
     fs.writeFileSync(path.join(outDir, 'summary.md'), summarize(result));
 
-    let baselineMap = null;
-    if (baselinePath && fs.existsSync(baselinePath)) {
-        try {
-            const baseJson = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-            const baseList = Array.isArray(baseJson) ? baseJson : (baseJson.records || []);
-            baselineMap = new Map(baseList.map((r) => [r.query_id, r]));
-        } catch {
-            // baseline parse error ignored
-        }
-    }
     const harnessReport = computeSummaryReport(harnessRecords, baselineMap);
     fs.writeFileSync(harnessLogPath, JSON.stringify(harnessRecords, null, 2) + '\n');
     fs.writeFileSync(path.join(outDir, 'harness-summary.md'), generateHarnessSummaryMarkdown(harnessRecords, harnessReport) + '\n');

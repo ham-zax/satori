@@ -721,22 +721,59 @@ async function startOpenCodeServer(command, repoRoot, environment, logFile) {
         shell: false,
         windowsHide: true,
     });
-    const logStream = fs.createWriteStream(logFile, { flags: "a" });
-    child.stdout.pipe(logStream, { end: false });
-    child.stderr.pipe(logStream, { end: false });
-    await waitForServer(url, child);
-    return { child, url, logStream };
+    // Startup owns the process until readiness transfers ownership to the caller.
+    const server = { child, url, logStream: null, closed: false };
+    server.completion = new Promise((resolve) => child.once("close", () => {
+        server.closed = true;
+        resolve();
+    }));
+    try {
+        server.logStream = fs.createWriteStream(logFile, { flags: "a" });
+        child.stdout.pipe(server.logStream, { end: false });
+        child.stderr.pipe(server.logStream, { end: false });
+        await waitForServer(url, child);
+        return server;
+    } catch (error) {
+        try {
+            await stopOpenCodeServer(server);
+        } catch {
+            // Cleanup must not replace the original startup failure.
+        }
+        throw error;
+    }
 }
 
 async function stopOpenCodeServer(server) {
     if (!server) return;
-    if (server.child.exitCode === null) server.child.kill("SIGTERM");
-    await Promise.race([
-        new Promise((resolve) => server.child.once("close", resolve)),
-        new Promise((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (server.child.exitCode === null) server.child.kill("SIGKILL");
-    server.logStream.end();
+    let timer;
+    try {
+        if (!server.closed) {
+            if (server.child.exitCode === null && server.child.signalCode === null) {
+                server.child.kill("SIGTERM");
+            }
+            await Promise.race([
+                server.completion,
+                new Promise((resolve) => { timer = setTimeout(resolve, 5_000); }),
+            ]);
+            if (!server.closed) {
+                if (server.child.exitCode === null && server.child.signalCode === null) {
+                    server.child.kill("SIGKILL");
+                }
+                await server.completion;
+            }
+        }
+    } finally {
+        clearTimeout(timer);
+        if (server.logStream && !server.logStream.closed) {
+            let logError;
+            await new Promise((resolve) => {
+                server.logStream.once("close", resolve);
+                server.logStream.once("error", error => { logError = error; });
+                server.logStream.end();
+            });
+            if (logError) throw logError;
+        }
+    }
 }
 
 function mcpCommand(resolvedConfig) {

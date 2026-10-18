@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { EventEmitter } from "node:events";
+import vm from "node:vm";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -911,4 +913,131 @@ test("agent result parser finds a result object after an unmatched prose brace",
         status: "success",
         answer: {},
     });
+});
+
+// Isolate only the production lifecycle functions. No sockets or processes run.
+function serverLifecycleFixture({ startupError, setupFailure, synchronousClose = true } = {}) {
+    const source = fs.readFileSync(new URL("./run-opencode.mjs", import.meta.url), "utf8");
+    const start = source.indexOf("async function startOpenCodeServer(");
+    const end = source.indexOf("\nfunction mcpCommand(", start);
+    assert.ok(start >= 0 && end > start);
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = null;
+    const signals = [];
+    const closeChild = () => {
+        child.signalCode = signals.at(-1);
+        child.emit("close");
+    };
+    child.kill = signal => {
+        signals.push(signal);
+        if (synchronousClose) closeChild();
+        return true;
+    };
+    child.stdout = { pipe() { if (setupFailure === "pipe") throw startupError; } };
+    child.stderr = { pipe() {} };
+    const logStream = new EventEmitter();
+    logStream.closed = false;
+    logStream.writableEnded = false;
+    logStream.end = () => {
+        logStream.writableEnded = true;
+        queueMicrotask(() => {
+            logStream.closed = true;
+            logStream.emit("close");
+        });
+    };
+    const timers = new Map();
+    let nextTimer = 0;
+    const context = vm.createContext({
+        reservePort: async () => 1234,
+        spawn: () => child,
+        fs: { createWriteStream() {
+            if (setupFailure === "stream") throw startupError;
+            return logStream;
+        } },
+        waitForServer: async () => { if (startupError) throw startupError; },
+        setTimeout(callback, delay) {
+            assert.equal(delay, 5_000);
+            timers.set(++nextTimer, callback);
+            return nextTimer;
+        },
+        clearTimeout: timer => timers.delete(timer),
+    });
+    vm.runInContext(source.slice(start, end), context);
+    return {
+        child, logStream, signals, timers, closeChild,
+        start: () => context.startOpenCodeServer("opencode", "/repo", {}, "/log"),
+        stop: server => context.stopOpenCodeServer(server),
+    };
+}
+
+test("server readiness rejection closes its child and log before rethrowing the original error", async () => {
+    const startupError = new Error("readiness failed");
+    const f = serverLifecycleFixture({ startupError });
+    await assert.rejects(f.start(), error => error === startupError);
+    assert.deepEqual(f.signals, ["SIGTERM"]);
+    assert.equal(f.child.signalCode, "SIGTERM");
+    assert.equal(f.logStream.writableEnded, true);
+    assert.equal(f.logStream.closed, true);
+    assert.equal(f.timers.size, 0);
+});
+
+for (const setupFailure of ["stream", "pipe"]) {
+    test(`server ${setupFailure} setup rejection closes every created resource`, async () => {
+        const startupError = new Error("setup failed");
+        const f = serverLifecycleFixture({ startupError, setupFailure });
+        await assert.rejects(f.start(), error => error === startupError);
+        assert.equal(f.child.signalCode, "SIGTERM");
+        assert.equal(f.logStream.closed, setupFailure !== "stream");
+        assert.equal(f.logStream.writableEnded, setupFailure !== "stream");
+        assert.equal(f.timers.size, 0);
+    });
+}
+
+test("successful readiness transfers live resources to the caller for shutdown", async () => {
+    const f = serverLifecycleFixture();
+    const server = await f.start();
+    assert.equal(server.child, f.child);
+    assert.equal(server.logStream, f.logStream);
+    assert.equal(server.url, "http://127.0.0.1:1234");
+    assert.deepEqual(f.signals, []);
+    assert.equal(f.logStream.writableEnded, false);
+    await f.stop(server);
+    assert.equal(f.child.signalCode, "SIGTERM");
+    assert.equal(f.logStream.closed, true);
+    assert.equal(f.timers.size, 0);
+});
+
+test("startup rejection waits for close after SIGKILL escalation", async () => {
+    const startupError = new Error("readiness failed");
+    const f = serverLifecycleFixture({ startupError, synchronousClose: false });
+    let settled = false;
+    const result = f.start().then(
+        () => { settled = true; assert.fail("startup must reject"); },
+        error => { settled = true; assert.equal(error, startupError); },
+    );
+    // Flush the reserve-port and readiness continuations without wall-clock sleeps.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    assert.deepEqual(f.signals, ["SIGTERM"]);
+    assert.equal(f.timers.size, 1);
+    [...f.timers.values()][0]();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"]);
+    assert.equal(settled, false);
+    assert.equal(f.logStream.writableEnded, false);
+    f.closeChild();
+    await result;
+    assert.equal(f.logStream.closed, true);
+    assert.equal(f.timers.size, 0);
+});
+
+test("shutdown observes a child that closes before the caller starts cleanup", async () => {
+    const f = serverLifecycleFixture();
+    const server = await f.start();
+    f.child.exitCode = 0;
+    f.closeChild();
+    await f.stop(server);
+    assert.deepEqual(f.signals, []);
+    assert.equal(f.logStream.closed, true);
+    assert.equal(f.timers.size, 0);
 });

@@ -17,7 +17,7 @@ for (const fault of ['mid-file death', 'recycled startup failure', 'cancellation
         await assertParserFailureNoPublication(plan, async (context, runtime, root, tempRoot) => {
             const preload = path.join(tempRoot, 'hold-parser.cjs');
             // Test-only job-boundary fault injection: the real parser runner
-            // enters analyze(), announces its active file, then holds it until
+            // enters analyzeForIndexing(), announces its active file, then holds it until
             // the parent kills/cancels it. No sleeps or production diagnostics.
             fs.writeFileSync(preload, `
 const Module=require('node:module'),load=Module._load;
@@ -25,7 +25,7 @@ Module._load=function(request,parent,...rest){
  const result=load.call(this,request,parent,...rest);
  if(request==='./service' && parent?.filename.includes('analysis-process-runner')){
   const create=result.createLanguageAnalysisService;
-  return {...result,createLanguageAnalysisService:options=>({...create(options),analyze:async()=>{
+  return {...result,createLanguageAnalysisService:options=>({...create(options),analyzeForIndexing:async()=>{
    process.send({id:0,testStarted:true});await new Promise(()=>{});
   }})};
  }

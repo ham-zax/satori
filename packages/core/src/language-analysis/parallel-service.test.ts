@@ -28,6 +28,40 @@ test('worker-pool analysis is identical to in-process analysis across backends',
     }
 });
 
+test('worker-pool analysis preserves opt-in TypeScript early-exit spans', async () => {
+    const input = {
+        relativePath: 'src/settle.ts',
+        language: 'typescript',
+        content: '// 😀 café\r\nfunction settle(stale: boolean) {\r\n  if (stale) {\r\n    return;\r\n  }\r\n}',
+    };
+    const local = createLanguageAnalysisService();
+    const pool = createParallelLanguageAnalysisService({}, 1);
+    try {
+        const [directWithoutSpans, pooledWithoutSpans] = await Promise.all([
+            local.analyze(input),
+            pool.analyze(input),
+        ]);
+        assert.deepStrictEqual(pooledWithoutSpans, directWithoutSpans);
+        assert.equal(directWithoutSpans.earlyExitSpans, undefined);
+        assert.equal(pooledWithoutSpans.earlyExitSpans, undefined);
+
+        const inputWithSpans = { ...input, includeEarlyExitSpans: true };
+        const [direct, pooled] = await Promise.all([
+            local.analyze(inputWithSpans),
+            pool.analyze(inputWithSpans),
+        ]);
+        const { earlyExitSpans: directSpans, ...directEvidence } = direct;
+        const { earlyExitSpans: pooledSpans, ...pooledEvidence } = pooled;
+        assert.deepStrictEqual(pooledSpans, directSpans);
+        assert.deepStrictEqual(pooledSpans?.map(span => [span.startLine, span.endLine]), [[3, 5]]);
+        assert.deepStrictEqual(pooledEvidence, directEvidence);
+        assert.deepStrictEqual(pooledEvidence, directWithoutSpans);
+    } finally {
+        await pool.dispose();
+        await local.dispose?.();
+    }
+});
+
 test('zero workers analyze in-process and dispose is safe', async () => {
     const pool = createParallelLanguageAnalysisService({}, 0);
     assert.equal(pool.concurrency, 1);

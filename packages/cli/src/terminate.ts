@@ -72,7 +72,14 @@ function inspectProcessDefault(pid: number): ProcessObservation | null {
     }
     try {
         process.kill(pid, 0);
-    } catch {
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EPERM") {
+            throw new CliError(
+                "E_TERMINATION_FAILED",
+                `Failed to inspect Satori server process pid=${pid}: ${(error as Error).message}`,
+                1,
+            );
+        }
         return null;
     }
     if (process.platform !== "linux") {

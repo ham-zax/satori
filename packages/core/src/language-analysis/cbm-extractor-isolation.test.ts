@@ -5,14 +5,15 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { filterWorkerExecArgv } from '../utils/worker-threads';
-import { cbmExtractorHost } from './cbm-extractor-host';
+import { cbmExtractorHost, CbmExtractorUnavailableError } from './cbm-extractor-host';
 
 function parentRequest(assetRoot: string, method: 'extract' | 'extractInProcess' = 'extract'): Promise<{ code: number | null; output: string }> {
     const hostPath = path.join(__dirname, `cbm-extractor-host${path.extname(__filename)}`);
-    const script = `const { cbmExtractorHost } = require(${JSON.stringify(hostPath)});
+    const script = `const { cbmExtractorHost, CbmExtractorUnavailableError } = require(${JSON.stringify(hostPath)});
         cbmExtractorHost(${JSON.stringify(assetRoot)}).${method}('swift', 'a.swift', 'func foo() {}')
             .then(records => process.stdout.write(JSON.stringify({ records })))
-            .catch(error => process.stdout.write(JSON.stringify({ error: error.message, name: error.constructor.name })));`;
+            .catch(error => process.stdout.write(JSON.stringify({ error: error.message, name: error.constructor.name,
+                unavailable: error instanceof CbmExtractorUnavailableError })));`;
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, [...filterWorkerExecArgv(), '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
         let output = '';
@@ -71,6 +72,25 @@ test('Swift isolation preserves missing module diagnostics', async () => {
         const response = await parentRequest(root);
         assert.equal(response.code, 0, response.output);
         assert.equal(JSON.parse(response.output).name, 'CbmExtractorUnavailableError');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('missing extractor glue is typed unavailable in direct and Swift isolated extraction', async () => {
+    const root = assets('module.exports = async () => { throw new Error("must not load missing glue"); };');
+    fs.unlinkSync(path.join(root, 'extractor.cjs'));
+    try {
+        await assert.rejects(
+            cbmExtractorHost(root).extractInProcess('swift', 'a.swift', 'func foo() {}'),
+            (error: unknown) => error instanceof CbmExtractorUnavailableError
+                && /CBM extractor glue missing/.test(error.message),
+        );
+
+        const response = await parentRequest(root);
+        assert.equal(response.code, 0, response.output);
+        const parsed = JSON.parse(response.output);
+        assert.equal(parsed.unavailable, true, response.output);
+        assert.equal(parsed.name, 'CbmExtractorUnavailableError', response.output);
+        assert.match(parsed.error, /CBM extractor glue missing/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

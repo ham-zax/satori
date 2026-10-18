@@ -108,7 +108,11 @@ class CbmExtractorHost {
         if (!fs.existsSync(wasmPath)) {
             return Promise.reject(new CbmExtractorUnavailableError(`CBM extractor module missing: ${wasmPath}`));
         }
-        const create = localRequire(path.join(this.assetRoot, manifest.glue.file)) as CreateExtractor;
+        const gluePath = path.join(this.assetRoot, manifest.glue.file);
+        if (!fs.existsSync(gluePath)) {
+            return Promise.reject(new CbmExtractorUnavailableError(`CBM extractor glue missing: ${gluePath}`));
+        }
+        const create = localRequire(gluePath) as CreateExtractor;
         const loading = create({ locateFile: () => wasmPath });
         this.instances.set(language, loading);
         loading.catch(() => this.instances.delete(language));

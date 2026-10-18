@@ -144,7 +144,14 @@ export function createParallelLanguageAnalysisService(
             entry.worker.postMessage({
                 id,
                 ...(mode ? { mode } : {}),
-                input: { content: input.content, language: input.language, relativePath: input.relativePath },
+                input: {
+                    content: input.content,
+                    language: input.language,
+                    relativePath: input.relativePath,
+                    ...(input.includeEarlyExitSpans === undefined
+                        ? {}
+                        : { includeEarlyExitSpans: input.includeEarlyExitSpans }),
+                },
             } satisfies AnalysisWorkerRequest);
         });
     };

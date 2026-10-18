@@ -7,6 +7,7 @@ import {
     formatTerminateText,
     terminateSatoriServers,
 } from "./terminate.js";
+import { CliError } from "./errors.js";
 
 function withStateRoot(run: (stateRoot: string) => Promise<void>): Promise<void> {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "satori-terminate-"));
@@ -94,6 +95,57 @@ test("terminate ignores stale PID records instead of signaling a replacement pro
         assert.equal(result.staleRecordCount, 1);
         assert.equal(signalCount, 0);
         assert.equal(formatTerminateText(result), "No Satori servers are running.\n");
+    });
+});
+
+test("terminate fails closed when process inspection is denied and keeps missing PIDs stale", async () => {
+    await withStateRoot(async (stateRoot) => {
+        const runtimeDirectory = path.join(stateRoot, "runtime-owner");
+        fs.mkdirSync(runtimeDirectory, { recursive: true });
+        fs.writeFileSync(path.join(runtimeDirectory, "owners.json"), JSON.stringify({
+            formatVersion: "v1",
+            updatedAt: "2026-07-26T00:00:00.000Z",
+            owners: [{
+                ownerId: "inspection-owner",
+                pid: 41004,
+                processStartTime: "100",
+            }],
+        }));
+
+        const originalKill = process.kill;
+        const realKill = process.kill.bind(process);
+        let inspectionCode: "EPERM" | "ESRCH" = "EPERM";
+        process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+            if (pid === 41004 && signal === 0) {
+                const error = new Error(inspectionCode === "EPERM" ? "permission denied" : "no such process") as NodeJS.ErrnoException;
+                error.code = inspectionCode;
+                throw error;
+            }
+            return realKill(pid, signal);
+        }) as typeof process.kill;
+
+        const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+        const options = {
+            env: { SATORI_STATE_ROOT: stateRoot },
+            signalProcess: (pid: number, signal: NodeJS.Signals) => signals.push({ pid, signal }),
+        };
+        try {
+            await assert.rejects(terminateSatoriServers(options), (error: unknown) => {
+                if (!(error instanceof CliError)) return false;
+                assert.equal(error.token, "E_TERMINATION_FAILED");
+                assert.match(error.message, /Failed to inspect Satori server process pid=41004: permission denied/);
+                return true;
+            });
+            assert.deepEqual(signals, []);
+
+            inspectionCode = "ESRCH";
+            const result = await terminateSatoriServers(options);
+            assert.equal(result.status, "not_running");
+            assert.equal(result.staleRecordCount, 1);
+            assert.deepEqual(signals, []);
+        } finally {
+            process.kill = originalKill;
+        }
     });
 });
 

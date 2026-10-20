@@ -75,5 +75,27 @@ decided after the profile. Remove them only if their measured cost is above
 
 ## State
 
-- Step 1 (profile of `ee5e91ca`, native): started. Evidence folder
-  `bench-bugs/libreoffice-perf-20261020/napi-loop/profile-1`.
+- Step 1 done (profile of `ee5e91ca`, native, evidence
+  `bench-bugs/libreoffice-perf-20261020/napi-loop/profile-1`): critical path
+  395.8 s (profiled), payload 254.7 s, navigation 62.8 s, anonymous peak
+  4,423 MiB, start load 1.69. Payload window, main thread: idle 48.3 s,
+  GC 12.9 s.
+- Ranked main-thread costs in the payload window (inclusive):
+  1. Lease hooks of the projection stream: 20.6 s (`sleepSync` 15.4 s self).
+     By caller: `streamIndexingProjections` (beforeConsume) 13.5 s, `produce`
+     (beforePrepare) 7.1 s, existing write guard (`flushVectorWriteBuffer`)
+     0.05 s. Above the 1 s rule: remove both hooks.
+  2. Potion transport: `handleStdout` 18.7 s (`handleFrame` 9.2 s,
+     `TextEncoder.encode` 7.2 s self). Candidate B.
+  3. Policy admission in the payload: `isIndexableFileObservationByPolicy`
+     16.8 s, `hasSearchableShebang` 13.3 s, `openInsideRoot` 13.5 s. TypeScript
+     file-check fix, not Rust.
+  4. Native projection wrapper: `prepare` 15.0 s, of which `supported()`
+     9.8 s (regex `[a-zA-Z0-9_$]{257}` alone 9.9 s self) and `flush` 3.4 s.
+     Candidate A.
+  5. LanceDB `encodeSearchableRow` 14.0 s. Candidate C.
+  6. A sync-scan runs inside the payload window: `sync-scan.ts:270/303`
+     10.5 s. Not yet explained.
+- Next: candidate A slice = remove both lease hooks (update the five tests
+  that encode them) and replace `supported()` with one linear pass or move it
+  into the addon. Then step 4 screening pair.

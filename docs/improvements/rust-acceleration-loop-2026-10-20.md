@@ -323,6 +323,28 @@ decided after the profile. Remove them only if their measured cost is above
   must stay covered (the publication source check already rejects changed
   sources).
 - Loop paused at Hamza's request. Base worktree removed.
+- Hamza asked to proceed and to merge to main: `master` fast-forwarded to
+  `b3807bb4` (not pushed).
+- P4' ceiling screening (`screen-NW`, one build at `b3807bb4`, no code
+  change, order candNW, base, ref, start load 0.15 / 1.87 / 1.78). candNW
+  is native with `MCP_ENABLE_WATCHER=false`. base is native with the
+  watcher. ref is the TypeScript default path with the watcher. Artifacts
+  identical (compare exit 0).
+  | Run | Total (server start to commit) | observe_inputs | scanFiles | navigation | Peak anon |
+  | --- | --- | --- | --- | --- | --- |
+  | candNW | 323.8 s | 3.5 s | 38.6 s | 66.1 s | 3,601 MiB |
+  | base | 345.6 s | 28.9 s | 19.3 s | 71.7 s | 4,487 MiB |
+  | ref | 377.1 s | 28.7 s | 18.8 s | 75.4 s | 4,317 MiB |
+- Without the watcher, `observe_inputs` loses 25.4 s, but `scanFiles` gains
+  19.3 s. candNW ran first with a cold cache, and the watcher crawl no
+  longer warms the cache for the scan. Net gain 21.8 s, above the ±10 s
+  noise, and peak anonymous memory falls by 886 MiB. The order favors base,
+  so the gain is a lower bound for this order.
+- Total now against the loop start (`ee5e91ca`, r2): TypeScript default
+  377.1 s against a median of 428.2 s, native 345.6 s against 411.4 /
+  421.4 s.
+- Next: P4' design for Hamza's approval (when the watcher crawl starts
+  relative to a full index), then 3 + 3 runs.
 
 ## Overlap design (option 2), 20 October 2026
 

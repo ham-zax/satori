@@ -223,10 +223,13 @@ export class IndexingResourcePlanner {
             analysisWindowSourceBytes,
             analysisWorkerMode, analysisProcessMaxFiles: 128, analysisProcessMaxSourceBytes,
             analysisLargeFileBytes: Math.floor(analysisProcessMaxSourceBytes / 2),
-            // Parser isolation exposed ~850 MiB of free glibc arenas retained
-            // by native payload writes. Bound arenas at mutation-process spawn;
-            // release the completed semantic worker before admitting a Program.
-            mutationMallocArenaMax: smallBudget && this.observation.platform() === 'linux' ? 2 : 0,
+            // Native LanceDB work (payload writes, FTS build) leaves freed glibc
+            // arenas resident in the mutation process at every budget: the FTS
+            // build alone kept 1.45 GiB on a 547k-chunk index, enough to OOM
+            // navigation staging in 6 GiB. Bound arenas at mutation-process
+            // spawn; the measured cost was ~5 s on that FTS build and none on
+            // the payload loop.
+            mutationMallocArenaMax: this.observation.platform() === 'linux' ? 2 : 0,
             releaseSemanticBeforeResolution: smallBudget,
             queuedEmbeddingTextBytes,
             embeddingBatchMaxItems: Math.max(8, Math.min(1000, Math.floor(queuedEmbeddingTextBytes / (16 * 1024)))),

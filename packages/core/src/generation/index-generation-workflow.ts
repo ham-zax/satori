@@ -469,7 +469,42 @@ export class IndexGenerationWorkflow {
                 semanticManifestByLanguage.set(file.language, list);
             }
 
+            const recordUnavailableProvider = (language: string, sourceFileCount: number, error: unknown): void => {
+                const descriptor = semanticRegistry.getDescriptor(language);
+                if (!descriptor) {
+                    throw new Error(`Semantic provider metadata is unavailable for '${language}'.`);
+                }
+                const coverage = unavailableProviderCoverage({
+                    language,
+                    providerId: descriptor.providerId,
+                    providerVersion: descriptor.providerVersion,
+                    environmentConfigId: descriptor.environmentConfigId,
+                    sourceFileCount,
+                    error,
+                });
+                providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                semanticEvidenceByLanguage.set(language, {
+                    language,
+                    occurrencesByFile: new Map(),
+                    coverage,
+                });
+                console.warn(
+                    `[Context] Optional semantic provider '${coverage.providerId}' failed for '${language}'; `
+                    + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                );
+            };
             for (const [language, semanticFiles] of semanticManifestByLanguage) {
+                // Skip re-reading every source when captured sizes already prove
+                // the provider session would fail; the outcome is the same
+                // degraded coverage analyze() reports for that failure.
+                const capturedSizes = semanticFiles.map((file) => capturedSourcesByPath.get(validateRepositoryRelativePath(file.path))?.sourceStat.size);
+                const limitFailure = capturedSizes.every((size): size is number => size !== undefined)
+                    ? this.ports.semanticAnalyzer.provableLimitFailure?.(language, capturedSizes)
+                    : undefined;
+                if (limitFailure !== undefined) {
+                    recordUnavailableProvider(language, semanticFiles.length, new Error(limitFailure));
+                    continue;
+                }
                 const sourceFiles: SemanticSourceFile[] = [];
                 for (const file of semanticFiles) {
                     const absoluteFile = path.resolve(canonicalRoot, file.path);
@@ -519,24 +554,7 @@ export class IndexGenerationWorkflow {
                     };
                     providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
                 } catch (error) {
-                    const coverage = unavailableProviderCoverage({
-                        language,
-                        providerId: descriptor.providerId,
-                        providerVersion: descriptor.providerVersion,
-                        environmentConfigId: descriptor.environmentConfigId,
-                        sourceFileCount: sourceFiles.length,
-                        error,
-                    });
-                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
-                    semanticEvidenceByLanguage.set(language, {
-                        language,
-                        occurrencesByFile: new Map(),
-                        coverage,
-                    });
-                    console.warn(
-                        `[Context] Optional semantic provider '${coverage.providerId}' failed for '${language}'; `
-                        + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
-                    );
+                    recordUnavailableProvider(language, sourceFiles.length, error);
                 }
             }
         }

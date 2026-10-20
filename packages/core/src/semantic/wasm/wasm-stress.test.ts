@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadSemanticEngine } from './wasm-loader.js';
 import { WasmSemanticEngine } from './wasm-engine.js';
+import { NATIVE_MAX_SESSION_SOURCE_BYTES, NATIVE_MAX_SESSION_SOURCES, WasmSemanticProjectAnalyzer } from './wasm-analyzer.js';
 
 test('WASM C ABI rejects unsupported languages at creation time', async () => {
     const engine = await loadSemanticEngine();
@@ -214,4 +215,26 @@ func main() {
         assert.equal(results[0].targetName, 'Run');
         session.destroy();
     }
+});
+
+test('provableLimitFailure reports only sessions that sizes prove over a native limit', () => {
+    const analyzer = new WasmSemanticProjectAnalyzer(undefined, undefined, ['cpp'], 1_048_576);
+    const certain = Math.floor(1_048_576 / 3);
+    assert.equal(analyzer.provableLimitFailure('cpp', [certain, certain]), undefined);
+    // Files whose decoded size may cross the per-file budget give no proof.
+    assert.equal(
+        analyzer.provableLimitFailure('cpp', Array.from({ length: Math.ceil(NATIVE_MAX_SESSION_SOURCE_BYTES / (certain + 1)) + 1 }, () => certain + 1)),
+        undefined,
+    );
+    assert.equal(analyzer.provableLimitFailure('cpp', Array.from({ length: NATIVE_MAX_SESSION_SOURCES }, () => 1)), undefined);
+    assert.match(
+        analyzer.provableLimitFailure('cpp', Array.from({ length: NATIVE_MAX_SESSION_SOURCES + 1 }, () => 1)) ?? '',
+        /Source count limit exceeded/,
+    );
+    const overBytes = Math.floor(NATIVE_MAX_SESSION_SOURCE_BYTES / certain) + 1;
+    assert.match(
+        analyzer.provableLimitFailure('cpp', Array.from({ length: overBytes }, () => certain)) ?? '',
+        /Total source bytes limit exceeded/,
+    );
+    assert.equal(analyzer.provableLimitFailure('python', Array.from({ length: overBytes }, () => certain)), undefined);
 });

@@ -257,3 +257,67 @@ for (const readKind of ['auxiliary', 'source'] as const) {
         });
     }
 }
+
+test('stageSymbolRegistryForCompletedIndex skips semantic source reads when sizes prove a provider limit failure', async () => {
+    const stopped = new Error('stop after semantic loop');
+    const filePath = 'src/big.cpp';
+    const hash = 'hash-big';
+    const reads: string[] = [];
+    const sizesSeen: number[][] = [];
+    let analyzeCalls = 0;
+    const warnings: string[] = [];
+    const ports: Partial<IndexGenerationWorkflowPorts> = {
+        canonicalizeCodebasePath: (p) => p,
+        buildRootFingerprint: () => 'root-fp',
+        buildIndexPolicyHash: () => 'policy-hash',
+        getLanguageRouterVersion: () => 'router-v1',
+        getSymbolExtractorVersion: () => 'extractor-v1',
+        getRelationshipVersion: () => 'rel-v1',
+        readIndexableFileObservationInsideRoot: async (absolutePath: string) => {
+            reads.push(absolutePath);
+            throw new Error('semantic source must not be re-read');
+        },
+        semanticAnalyzer: {
+            supportsLanguage: (language: string) => language === 'cpp',
+            provableLimitFailure: (_language: string, sizes: readonly number[]) => {
+                sizesSeen.push([...sizes]);
+                return 'session exceeds native source limit';
+            },
+            analyze: async () => {
+                analyzeCalls += 1;
+                throw new Error('analyze must not run');
+            },
+            releaseIdleWorker: async () => {
+                throw stopped;
+            },
+        },
+    };
+    const workflow = new IndexGenerationWorkflow(ports as IndexGenerationWorkflowPorts);
+    const originalWarn = console.warn;
+    console.warn = (message: string) => { warnings.push(message); };
+    try {
+        await assert.rejects(
+            () => workflow.stageSymbolRegistryForCompletedIndex(
+                '/mock/repo',
+                'publication-test',
+                '/mock/publication-test/navigation',
+                [],
+                [{ path: filePath, language: 'cpp', hash, symbolCount: 0, definitionStatus: 'definitions_present' }],
+                new Map([[filePath, hash]]),
+                undefined,
+                new Map([[filePath, { moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [] }]]),
+                undefined,
+                [{ path: filePath, sourceHash: hash, sourceStat: { size: 4096, mtimeMs: 1, ctimeMs: 1 } }] as never,
+                undefined,
+                { releaseSemanticBeforeResolution: true } as never,
+            ),
+            (error) => error === stopped,
+        );
+    } finally {
+        console.warn = originalWarn;
+    }
+    assert.deepEqual(reads, []);
+    assert.equal(analyzeCalls, 0);
+    assert.deepEqual(sizesSeen, [[4096]]);
+    assert.ok(warnings.some((message) => message.includes("for 'cpp'") && message.includes('session exceeds native source limit')));
+});

@@ -139,6 +139,11 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
         return this.fallbackAnalyzer.supportsLanguage(language);
     }
 
+    provableLimitFailure(language: string, sourceFileBytes: readonly number[]): string | undefined {
+        // The worker runs the same analyzer with the same default budget.
+        return this.fallbackAnalyzer.provableLimitFailure(language, sourceFileBytes);
+    }
+
     private getOrCreateWorker(): Worker {
         if (this.disposed) {
             throw new Error('Semantic analyzer has been disposed');

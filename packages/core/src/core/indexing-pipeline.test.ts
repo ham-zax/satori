@@ -754,7 +754,7 @@ test('concurrent getCodeFiles returns the same sorted files as the one-at-a-time
         write('a-c.ts', 'export const ac = 1;\n');
         write('a/b.ts', 'export const b = 1;\n');
         write('a/nested/deep.ts', 'export const deep = 1;\n');
-        write('ignored/x.ts', 'export const x = 1;\n');
+        write('ignored/x.ts', 'x\n');
         write('skip.gen.ts', 'export const gen = 1;\n');
         write('script', '#!/usr/bin/env python3\nprint(1)\n');
         write('notes', 'plain text without a shebang\n');
@@ -791,7 +791,7 @@ test('concurrent getCodeFiles reports the first failure in walk order after in-f
     try {
         fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
         fs.mkdirSync(path.join(root, 'b'));
-        fs.writeFileSync(path.join(root, 'b', 'x.ts'), 'export const x = 1;\n');
+        fs.writeFileSync(path.join(root, 'b', 'x.ts'), 'x\n');
         fs.writeFileSync(path.join(root, 'c.ts'), 'export const c = 1;\n');
         fs.mkdirSync(path.join(root, 'd'));
         fs.writeFileSync(path.join(root, 'd', 'y.ts'), 'export const y = 1;\n');
@@ -1203,6 +1203,90 @@ test('a failed concurrent embedding request waits for in-flight requests and wri
     } finally {
         fail();
         release();
+        await local.dispose?.();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('a failed final chunk flush waits for in-flight embedding requests and writes nothing after the failure', { timeout: 10_000 }, async () => {
+    const { root, filePaths, resourcePlan } = createConcurrencyFixture(13);
+    const local = createLanguageAnalysisService({ chunkSize: 40, chunkOverlap: 0 });
+    const lastFile = path.basename(filePaths[filePaths.length - 1]);
+    fs.writeFileSync(filePaths[filePaths.length - 1], 'x\n');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fail!: () => void;
+    const failGate = new Promise<void>(resolve => { fail = resolve; });
+    let releaseLast!: () => void;
+    const lastGate = new Promise<void>(resolve => { releaseLast = resolve; });
+    let reachLastFile!: () => void;
+    const loopAtLastFile = new Promise<void>(resolve => { reachLastFile = resolve; });
+    try {
+        const embedding = createMockEmbedding();
+        const embed = embedding.embedDocuments.bind(embedding);
+        let calls = 0;
+        let inFlight = 0;
+        embedding.getBatchPolicy = () => ({ preferredMaxItems: 3, hardMaxItems: 3, maxConcurrentRequests: 3 });
+        embedding.embedDocuments = async texts => {
+            const call = calls++;
+            inFlight++;
+            try {
+                if (call === 0) {
+                    await failGate;
+                    throw new Error('injected embedding failure');
+                }
+                if (call === 1) await gate;
+                return await embed(texts);
+            } finally {
+                inFlight--;
+            }
+        };
+        const database = createMockVectorDb();
+        const writtenIds: string[] = [];
+        database.getWriteAggregationPolicy = () => ({ preferredMaxRows: 256 });
+        database.writeDocuments = async (_collection, documents) => {
+            writtenIds.push(...documents.map(({ document }) => document.id));
+        };
+        // Each fixture file has four chunks. The last file has one, so it stays in
+        // the buffer for the final flush. The last file is held so the loop is
+        // parked before it when request 0 fails: the failure is recorded before
+        // the final flush, which then throws while request 1 is still pending.
+        const gatedLocal: LanguageAnalysisPort = {
+            ...local,
+            analyze: async input => {
+                if (input.relativePath === lastFile) await lastGate;
+                return local.analyze(input);
+            },
+        };
+        let settled = false;
+        let inFlightAtSettle: number | undefined;
+        const processing = createConcurrencyPipeline(embedding, database, gatedLocal)
+            .processFileList({
+                filePaths,
+                codebasePath: root,
+                collectionName: 'fixture',
+                resourcePlan,
+                onFileProcessed: (_file, processed) => { if (processed === filePaths.length - 1) reachLastFile(); },
+            });
+        const rejection = assert.rejects(processing, /injected embedding failure/);
+        processing.then(() => { settled = true; inFlightAtSettle = inFlight; }, () => { settled = true; inFlightAtSettle = inFlight; });
+        // Request 0 is held, so only the first requests start; the loop still
+        // submits every earlier batch and parks on the held last file.
+        await loopAtLastFile;
+        assert.ok(calls >= 2, 'requests 0 and 1 must be pending before the failure');
+        fail();
+        for (let tick = 0; tick < 20; tick++) await new Promise(resolve => setImmediate(resolve));
+        releaseLast();
+        for (let tick = 0; tick < 20; tick++) await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'processFileList rejected while an embedding request was in flight');
+        release();
+        await rejection;
+        assert.equal(inFlightAtSettle, 0);
+        assert.deepEqual(writtenIds, []);
+    } finally {
+        fail();
+        release();
+        releaseLast();
         await local.dispose?.();
         fs.rmSync(root, { recursive: true, force: true });
     }

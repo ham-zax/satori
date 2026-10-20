@@ -154,6 +154,16 @@ Hamza asked Claude to follow what semble and cbm do, decide, and record.
   measurements after D2-D4 still show the write path as a top cost.
 - D6. Data XML (Slice 5) and the Potion pool: decided after Slice 1 and the
   eval, by measured MRR and wall time.
+- D7 (Hamza approved). Mutation worker gets `MALLOC_ARENA_MAX=2` on Linux at
+  every budget (`indexing/resources.ts`), not only at 4 GiB or less. Reason:
+  r9 completed within 6 GiB with it (arenas 420 MiB vs 2.2 GiB in r8).
+- D8 (Hamza approved, option 1). The C++ semantic provider (cbm WASM engine)
+  fails on LibreOffice: "Total source bytes limit exceeded (100MB)"
+  (`third_party/cbm-semantic/satori_semantic.c:303`; also 20,000 sources max,
+  22,312 C++ files here). Fail fast: `provableLimitFailure` on the analyzer
+  port proves the limit from captured file sizes and the workflow skips the
+  source re-read, with the same degraded coverage. C++ call-graph coverage
+  stays degraded; splitting into sessions (option 2) is the later real fix.
 
 ## Run r8 (D2 + D3, 20 October)
 
@@ -161,6 +171,18 @@ Payload loop complete (35,760 files, 547,349 chunks) at about 319 s, no
 faster than r6/r7. Kernel `oom-kill` at 6 GiB at 420 s, in navigation
 staging (progress 90). Mutation worker malloc arenas: about 1.0 GiB up to
 87 %, then 2.2 GiB in navigation staging; D3 did not stop arena growth.
+
+## Run r9 (D2 + D3 + `MALLOC_ARENA_MAX=2`, 20 October)
+
+First complete index within 6 GiB: 35,760 files, 547,349 chunks, published
+about 740 s after the run started. Peak anonymous memory 4,445 MiB, cgroup
+peak 5.7 GiB. Worker arenas about 420 MiB in 26 arenas (r8: 2.2 GiB).
+Spans: scan 34.2 s, payload loop 323.3 s (r8 about 319 s, so the arena limit
+did not slow it), analysis wait 194.0 s, vector writes 55.1 s summed,
+finalize 26.5 s (overlaps navigation), navigation 258.4 s (stage 139.9 s,
+relationships 59.1 s), publication 0.6 s. About 125 s of the 740 s are not in
+these spans (not yet explained). Isolated FTS build: the arena limit costs
+about 5 s there.
 
 ## Store prototype (D5 check, 20 October)
 
@@ -180,6 +202,67 @@ writes and the product FTS config. Same input, one process each.
 Result: a replacement saves about 9 s of index time and makes keyword search
 about 17 times slower. Store writes are no longer a top cost after D2, so D5
 does not apply. LanceDB stays.
+
+## D8 verification (20 October)
+
+- `wasm-stress.test.ts`: 7 pass. Mutation `bytes > max` (for `bytes * 3 > max`)
+  fails the new limit test. Restored.
+- `index-generation-workflow.test.ts`: new test proves the skip path reads no
+  semantic source and does not call `analyze()`. 9 pass. Mutation (skip
+  disabled) fails the test. Restored.
+- `tsc --noEmit` clean in `packages/core`. Core and mcp `dist` not rebuilt.
+
+## Review of the staged diff (cloud review, 20 October)
+
+The review covered the staged diff only, not the gaps or the comparisons.
+Claude checked each finding against the code. No finding is fixed yet.
+
+| # | Finding | Status | Proposed action |
+|---|---|---|---|
+| 1 | `getPublicationSourceSynchronizer` (`core/context.ts:821-835`) now awaits `collectPublicationSourceControls` with no catch. `discoverPackageOwnership` throws on a bad `pnpm-workspace.yaml` (`packages/ownership.ts:138-164`). `search-request-coordinator.ts:1607` and `:1975` do not catch, so the search fails instead of `unavailable`. | Confirmed, regression | Catch and return `null`. Callers map `null` to `unavailable`. Add a test with a bad workspace file. |
+| 2 | The diff removes `INDEX_CHUNK_LIMIT` and `MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION`. `symbolRecords`, `symbolManifestFiles` and `analysisByFile` grow with repository size. `packages/mcp/README.md:119-122` still documents the 512 MiB cap. | Confirmed. The claim "cause of the LibreOffice OOM" is out of date: r9 completed in 6 GiB after D7. | No new cap. Stream the accumulators with navigation staging (gap 1). Update the README. |
+| 3 | The final `flushChunkBuffer('final chunk batch')` (`core/indexing-pipeline.ts:972`) is outside a try. If it throws, `stopPayload` does not run and embedding requests continue after the reject. This breaks the invariant at lines 781-783. | Confirmed | Wrap the final flush, call `stopPayload(error)`, then throw. Add a fault-injection test. |
+| 4 | Each freshness check recomputes the source controls: sync `discoverPackageOwnership` reads and a TS resolution worker request on every search. | Confirmed (no cache in code). Cost not measured. | Cache per checkpoint ID behind the control files' stat signatures. Add a differential test and a mutation check. |
+| 5 | `IndexingPipeline` no longer returns `limit_reached`. The union types and branches stay (`generation/index-generation-workflow.ts:1054`, `mcp/src/tools/list_codebases.ts:44`, `mcp/src/core/manage-maintenance-handlers.ts:520`). | Confirmed, dead code | Remove with finding 2 if no cap returns. |
+
+Order: findings 1 and 3 first (correctness), then 4, then 2 and 5.
+
+## cbm comparison on LibreOffice (20 October)
+
+Upstream cbm (`codebase-memory-mcp` 0.12.1, `~/repo/codebase-memory-mcp` at
+`11b662f9`) has no whole-project C++ session and no 100 MB / 20,000-source
+limit. Those limits are Satori's own (`third_party/cbm-semantic/satori_semantic.h:26-35`).
+cbm parses each file once in parallel (`src/pipeline/pass_parallel.c`, phase
+3A), builds one registry serially (3B), then resolves calls per file in
+parallel against that registry (phase 4, `resolve_worker`, with the fused
+cross-file LSP step in `pass_lsp_cross.c`). Retained source is capped at
+1 GiB total and 32 MiB per file. A file outside retention is read again on
+demand. Memory has back-pressure and spills to disk near the budget.
+
+Run: `codebase-memory-mcp cli index_repository` mode `full`, under
+`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0`, private
+`CBM_CACHE_DIR` and `CBM_RUNTIME_DIR`, one run.
+
+| Measure | cbm 0.12.1 | Satori r9 |
+|---|---|---|
+| Wall time to complete index | 236 s | about 740 s |
+| Memory | budget 2,990 MiB (auto, RAM fraction), spill started at 2,804 MiB charged. Peak RSS not measured (the daemon did the work). | anon peak 4,445 MiB, cgroup peak 5.7 GiB |
+| Files indexed | 44,065 File nodes (91,585 excluded) | 35,760 files |
+| Partial parses | 7,621 partial, 61 unusable | 9,175 recovered (syntax_error) |
+| Symbols / nodes | 602,680 nodes (220,603 Method, 94,565 Class, 88,680 Field, 36,839 Function, 23,402 Macro) | 380,839 symbols |
+| Edges | 3,115,365 (USAGE 1,321,901, CALLS 698,194, DEFINES 576,845, IMPORTS 212,506) | not counted |
+| CALLS by source language | C/C++ 646,370, Java 36,849, Python 10,759, other 4,216 | C++ semantic provider degraded (D8) |
+| Vector search | cbm `node_vectors` per symbol | 547,349 chunk embeddings |
+| On-disk store | 3.3 GiB SQLite | about 1.5-1.7 GiB state |
+
+Findings:
+- cbm completes C++ call resolution on LibreOffice in 236 s within a 3 GiB
+  budget. Satori gives up C++ semantic coverage and takes about 3 times longer.
+- The file sets differ (44,065 vs 35,760), so counts are not like for like.
+- The cbm method (per-file parallel resolution against one shared registry)
+  is the model for D8 option 2, instead of one 100 MB session.
+- Satori r9 relationship edge count is not measured yet. Measure it before a
+  CALLS comparison.
 
 ## Risks
 

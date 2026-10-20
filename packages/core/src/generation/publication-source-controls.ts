@@ -40,3 +40,29 @@ export async function collectPublicationSourceControls(
         ])].sort(),
     };
 }
+
+const warnedControlFailures = new Set<string>();
+
+/**
+ * Read-time variant: a failure to discover controls means freshness cannot be
+ * proven, so callers get `null` (unavailable) instead of a rejected search.
+ * The failure is warned once per publication id.
+ */
+export async function tryCollectPublicationSourceControls(
+    publicationId: string,
+    codebasePath: string,
+    sourcePaths: readonly string[],
+    analyzer?: ResolutionProjectAnalyzer,
+): Promise<Awaited<ReturnType<typeof collectPublicationSourceControls>> | null> {
+    try {
+        return await collectPublicationSourceControls(codebasePath, sourcePaths, analyzer);
+    } catch (error) {
+        if (!warnedControlFailures.has(publicationId)) {
+            warnedControlFailures.add(publicationId);
+            console.warn(
+                `[Context] Publication '${publicationId}' freshness is unavailable: source control discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+        return null;
+    }
+}

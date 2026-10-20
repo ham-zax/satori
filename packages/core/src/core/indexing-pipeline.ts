@@ -961,21 +961,25 @@ export class IndexingPipeline {
 
         }
         schedulingStopped = true;
-        // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
-        // for the pool here); free them before navigation starts its own workers.
-        if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();
+        try {
+            // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
+            // for the pool here); free them before navigation starts its own workers.
+            if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();
 
-        if (chunkBuffer.length > 0) {
-            const searchType = isHybrid ? 'hybrid' : 'regular';
-            console.log(
-                `📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`,
-            );
-            await flushChunkBuffer('final chunk batch');
-        }
-        if (sourceFiles.length !== processedFiles) {
-            const error = new Error(
-                `Completed full index source coverage is inconsistent: ${processedFiles} processed files but ${sourceFiles.length} source observations.`,
-            );
+            if (chunkBuffer.length > 0) {
+                const searchType = isHybrid ? 'hybrid' : 'regular';
+                console.log(
+                    `📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`,
+                );
+                await flushChunkBuffer('final chunk batch');
+            }
+            if (sourceFiles.length !== processedFiles) {
+                throw new Error(
+                    `Completed full index source coverage is inconsistent: ${processedFiles} processed files but ${sourceFiles.length} source observations.`,
+                );
+            }
+        } catch (error) {
+            // Submitted embedding requests must settle before the caller sees the failure.
             await stopPayload(error);
             throw error;
         }

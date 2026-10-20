@@ -82,7 +82,7 @@ import type {
     SnapshotFileStatSignature,
 } from '../sync/snapshot-codec';
 import { SynchronizerRegistry } from '../sync/synchronizer-registry';
-import { collectPublicationSourceControls } from '../generation/publication-source-controls';
+import { tryCollectPublicationSourceControls } from '../generation/publication-source-controls';
 export type { ProvenSourceFreshnessCheckpointEvidence } from '../sync/synchronizer';
 
 import type {
@@ -829,11 +829,14 @@ export class Context {
         if (!ref || ref.publication.canonicalRoot !== canonicalRoot) return null;
         const checkpoint = this.publicationStore.getSourceCheckpoint(canonicalRoot, ref.id);
         if (!checkpoint) return null;
-        const { publicationSourceControls } = await collectPublicationSourceControls(
+        const controls = await tryCollectPublicationSourceControls(
+            ref.id,
             canonicalRoot,
             checkpoint.fileHashes.map(([filePath]) => filePath),
             this.resolutionAnalyzer,
         );
+        if (!controls) return null;
+        const { publicationSourceControls } = controls;
         return {
             synchronizer: this.synchronizerRegistry.getPublicationSourceComparison(
                 canonicalRoot,

@@ -111,6 +111,26 @@ for (const initialConfig of [false, true]) {
     });
 }
 
+test('freshness comparisons report unavailable when source control discovery throws', async () => {
+    const fixture = await createFixture({
+        'satori.toml': '[index]\nprofile = "minimal"\n',
+        'package.json': '{"name":"fixture"}\n',
+        'main.ts': 'export const value = 1;\n',
+    });
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        fs.writeFileSync(path.join(fixture.root, 'pnpm-workspace.yaml'), 'packages: 42\n');
+        assert.deepEqual(
+            await fixture.context.compareSourcePathsToFreshnessCheckpoint(fixture.root, ['main.ts']),
+            { status: 'unavailable' },
+        );
+        assert.deepEqual(await fixture.context.compareAllSourceToFreshnessCheckpoint(fixture.root), { status: 'unavailable' });
+        assert.deepEqual(await fixture.context.compareSourceObservationToFreshnessCheckpoint(fixture.root), { status: 'unavailable' });
+    } finally {
+        await fixture.close();
+    }
+});
+
 async function readNavigation(context: Context, root: string) {
     const current = context.getCurrentPublication(root);
     assert.ok(current);

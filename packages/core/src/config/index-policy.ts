@@ -214,3 +214,22 @@ export async function isObservableFileByPolicy(
     }
     return isIndexableFileByPolicy(relativePath, absolutePath, size, supportedExtensions);
 }
+
+/** A path can prove rejection, but admission still needs the full observation. */
+export function classifyFilePathByPolicy(
+    relativePath: string,
+    supportedExtensions: SupportedExtensionsInput,
+): 'reject' | 'unsure' {
+    // Auxiliary observation belongs to the synchronizer even when search rejects it.
+    if (isSemanticAuxiliaryFilename(relativePath)) return 'unsure';
+    const extension = path.extname(relativePath).toLowerCase();
+    // hasSearchableShebang probes every suffix the registry does not recognize.
+    if (!getLanguageAdapterByExtension(extension)) return 'unsure';
+    const extensionSet = toExtensionSet(supportedExtensions);
+    if (extensionSet.has(ALL_TEXT_INDEX_MARKER)
+        || extensionSet.has(extension)
+        || isAllowedExactFilename(relativePath, extensionSet)) {
+        return 'unsure';
+    }
+    return 'reject';
+}

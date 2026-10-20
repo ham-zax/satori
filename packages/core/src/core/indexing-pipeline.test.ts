@@ -58,7 +58,8 @@ function createEagerOnlyAnalyzer(
 
 import { isRepositoryRelativePath, type RepositoryRelativePath } from '../paths/repository-path';
 import { createIndexIgnoreMatcher } from './ignore-matcher';
-import { isIndexableFileByPolicy } from '../config/index-policy';
+import { isIndexableFileByPolicy, MAX_INDEXED_SOURCE_FILE_BYTES } from '../config/index-policy';
+import { ALL_TEXT_INDEX_MARKER, DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 
 test('IndexingPipeline has no full-source semantic retention channel when semantic analyzer supports no languages', async () => {
@@ -739,6 +740,70 @@ async function serialReferenceCodeFiles(
         path.relative(root, right).replace(/\\/g, '/'),
     ));
 }
+
+test('getCodeFiles rejects before stat and preserves the reference scan across admission branches', {
+    skip: process.platform === 'win32',
+}, async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-code-files-admission-'));
+    const root = path.join(directory, 'repo');
+    fs.mkdirSync(root);
+    try {
+        const write = (name: string, content: string) => fs.writeFileSync(path.join(root, name), content);
+        write('known.ts', 'export const known = 1;\n');
+        write('excluded.py', '#!/usr/bin/env python3\nprint(1)\n');
+        write('unknown.cgi', '#!/usr/bin/env python3\nprint(1)\n');
+        write('unknown.data', 'ordinary notes\n');
+        write('script', '#!/usr/bin/env python3\nprint(1)\n');
+        write('ignored.ts', 'export const ignored = 1;\n');
+        write('Makefile', 'all:\n\techo hello\n');
+        write('Cargo.toml', '[package]\nname = "fixture"\n');
+        write('asset.js', 'x'.repeat(128 * 1024));
+        write('binary.data', '\0binary');
+        write('oversize.ts', '');
+        fs.truncateSync(path.join(root, 'oversize.ts'), MAX_INDEXED_SOURCE_FILE_BYTES + 1);
+        fs.writeFileSync(path.join(directory, 'outside.ts'), 'export const outside = 1;\n');
+        fs.symlinkSync(path.join(root, 'known.ts'), path.join(root, 'inside-link.ts'));
+        fs.symlinkSync(path.join(directory, 'outside.ts'), path.join(root, 'outside-link.ts'));
+        fs.symlinkSync(directory, path.join(root, 'outside-dir'));
+
+        const originalStat = fs.promises.stat;
+        let recording = false;
+        const statPaths: string[] = [];
+        t.mock.method(fs.promises, 'stat', async (...args: Parameters<typeof fs.promises.stat>) => {
+            if (recording) statPaths.push(String(args[0]));
+            return originalStat(...args);
+        });
+        for (const extensions of [
+            ['.ts', '.js'],
+            [...DEFAULT_SUPPORTED_EXTENSIONS],
+            [...DEFAULT_SUPPORTED_EXTENSIONS, ALL_TEXT_INDEX_MARKER],
+        ]) {
+            const policy = { supportedExtensions: extensions, effectiveIgnorePatterns: ['ignored.ts'] };
+            recording = false;
+            const expected = await serialReferenceCodeFiles(root, policy);
+            statPaths.length = 0;
+            recording = true;
+            const actual = await createScanPipeline(extensions).getCodeFiles(root, policy);
+            recording = false;
+            assert.deepEqual(actual, expected, 'selected paths and their order must match the old walk');
+            const relative = actual.map((file) => path.relative(root, file));
+            for (const admitted of ['known.ts', 'unknown.cgi', 'script', 'Makefile']) {
+                assert.ok(relative.includes(admitted), admitted);
+            }
+            for (const rejected of ['ignored.ts', 'inside-link.ts', 'outside-link.ts', 'oversize.ts', 'asset.js', 'Cargo.toml', 'binary.data']) {
+                assert.ok(!relative.includes(rejected), rejected);
+            }
+            assert.equal(relative.includes('unknown.data'), extensions.includes(ALL_TEXT_INDEX_MARKER));
+            if (!extensions.includes('.py')) {
+                assert.ok(!relative.includes('excluded.py'));
+                assert.ok(!statPaths.includes(path.join(root, 'excluded.py')), 'a proven rejection must not call stat');
+            }
+            assert.ok(statPaths.includes(path.join(root, 'unknown.cgi')), 'unrecognized suffixes still need a shebang probe');
+        }
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
 
 test('concurrent getCodeFiles returns the same sorted files as the one-at-a-time walk', {
     skip: process.platform === 'win32',

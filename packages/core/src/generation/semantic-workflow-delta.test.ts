@@ -407,6 +407,11 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
         assert.equal(initialRelationships.status, 'ok');
         if (initialRelationships.status !== 'ok') throw new Error('initial relationships missing');
         assert.equal(initialRelationships.records.some((record) => record.type === 'CALLS'), true);
+        const initialCallerEvidence = initialRelationships.analysisByFile.get(fileB);
+        const initialClaims = initialCallerEvidence?.resolutionClaims;
+        assert.ok(initialClaims?.some((claim) => (
+            claim.decision === 'resolved' && claim.targetInstanceId === helper1.symbolInstanceId
+        )));
 
         const contentA2 = 'package pkg\nfunc Helper() { println("changed") }\n';
         fs.writeFileSync(path.join(tmpDir, fileA), contentA2);
@@ -441,6 +446,11 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
                 receiverTypeBindings: [],
                 pythonFlowFacts: [],
             }]]),
+            {
+                records: initialRelationships.records,
+                analysisByFile: initialRelationships.analysisByFile,
+                providerCoverage: initialRelationships.manifest.providerCoverage,
+            },
         );
         assert.ok(delta.candidate);
         const deltaRelationships = await readRelationshipSidecar({
@@ -451,6 +461,14 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
         assert.equal(deltaRelationships.status, 'ok');
         if (deltaRelationships.status !== 'ok') throw new Error('delta relationships missing');
         assert.equal(deltaRelationships.records.some((record) => record.type === 'CALLS'), false);
+        const staleResolvedClaims = [...deltaRelationships.analysisByFile.values()]
+            .flatMap((evidence) => evidence.resolutionClaims ?? [])
+            .filter((claim) => (
+                claim.decision === 'resolved' && claim.targetInstanceId === helper1.symbolInstanceId
+            ));
+        assert.equal(staleResolvedClaims.length, 0);
+        assert.strictEqual(initialRelationships.analysisByFile.get(fileB), initialCallerEvidence);
+        assert.strictEqual(initialCallerEvidence?.resolutionClaims, initialClaims);
         const goCoverage = deltaRelationships.manifest.providerCoverage.find(
             (coverage) => coverage.language === 'go',
         );

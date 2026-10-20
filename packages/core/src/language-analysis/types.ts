@@ -126,12 +126,21 @@ export type ReceiverTypeBinding =
         readonly span: SourceSpan;
     };
 
+export interface LanguageAnalysisTiming {
+    parseMs: number;
+    parseCount: number;
+    traversalMs: number;
+    traversalCount: number;
+}
+
 export interface LanguageAnalysisInput {
     readonly content: string;
     readonly language: string;
     readonly relativePath: string;
     /** Navigation context only. Indexing does not collect these spans. */
     readonly includeEarlyExitSpans?: boolean;
+    /** Worker-local diagnostic accumulator, present only during performance tracing. */
+    readonly perfTiming?: LanguageAnalysisTiming;
 }
 
 interface LanguageAnalysisEvidence {
@@ -167,6 +176,8 @@ export interface LanguageAnalysisPort {
      * delay; later analyze calls start workers again.
      */
     releaseIdleWorkers?(): void;
+    /** Emits and clears accumulated worker timings at the end of one payload run. */
+    reportPerfTrace?(): void;
     getDescription(): string;
     getStrategyForLanguage(language: string): {
         backend: LanguageAnalysisBackend;

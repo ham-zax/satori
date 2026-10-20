@@ -125,14 +125,29 @@ function getEvidenceEntries(
 function attachResolutionClaims(
     analysisByFile: Map<string, RelationshipAnalysisEvidence> | Record<string, RelationshipAnalysisEvidence>,
     claimsByFile: Map<string, ResolutionClaim[]>,
+    sourceFiles?: ReadonlySet<string>,
 ): void {
-    for (const [file, claims] of claimsByFile) {
-        const evidence = getEvidence(analysisByFile, file);
-        if (evidence) {
-            (evidence as { resolutionClaims?: readonly ResolutionClaim[] }).resolutionClaims =
-                [...claims].sort((left, right) =>
+    for (const [file, evidence] of getEvidenceEntries(analysisByFile)) {
+        if (sourceFiles && !sourceFiles.has(file)) continue;
+        // Rebuilt owners replace all claims, even when a provider returns none.
+        // Retained evidence can still belong to the previous publication, so
+        // copy instead of mutating. No claims omits the field, as a fresh build does.
+        const claims = claimsByFile.get(file);
+        if (!claims && evidence.resolutionClaims === undefined) continue;
+        const rest: { -readonly [K in keyof RelationshipAnalysisEvidence]: RelationshipAnalysisEvidence[K] } = { ...evidence };
+        delete rest.resolutionClaims;
+        const nextEvidence: RelationshipAnalysisEvidence = claims
+            ? {
+                ...rest,
+                resolutionClaims: [...claims].sort((left, right) =>
                     left.callSpan.startByte - right.callSpan.startByte
-                );
+                ),
+            }
+            : rest;
+        if (analysisByFile instanceof Map) {
+            analysisByFile.set(file, nextEvidence);
+        } else {
+            analysisByFile[file] = nextEvidence;
         }
     }
 }
@@ -323,7 +338,7 @@ function* buildCallRelationshipsForRegistryWork(input: BuildCallRelationshipsFor
         record.strategy = record.resolutionAuthority === 'direct_binding' || record.resolutionAuthority === 'origin_flow'
             ? 'rule' : 'heuristic';
     }
-    attachResolutionClaims(input.analysisByFile, allClaimsByFile);
+    attachResolutionClaims(input.analysisByFile, allClaimsByFile, input.sourceFiles);
     return [...recordsByKey.values()].sort(compareRelationshipRecords);
 }
 

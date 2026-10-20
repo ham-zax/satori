@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import { createIndexIgnoreMatcher, type IndexIgnoreMatcher } from './ignore-matcher';
 import type {
     Embedding,
@@ -8,6 +9,8 @@ import type {
     EmbeddingVector,
 } from '../embedding';
 import {
+    classifyFilePathByPolicy,
+    normalizeSupportedExtensions,
     isIndexableFileByPolicy,
     isIndexableFileObservationByPolicy,
     MAX_INDEXED_SOURCE_FILE_BYTES,
@@ -311,8 +314,10 @@ export class IndexingPipeline {
         indexPolicy?: IndexingPolicy,
     ): Promise<string[]> {
         const files: string[] = [];
-        const supportedExtensions = indexPolicy?.supportedExtensions
-            ?? this.getIndexedExtensionsForCodebase(codebasePath);
+        // Normalize once per scan; policy checks take a Set as already normalized.
+        const supportedExtensions: ReadonlySet<string> = new Set(normalizeSupportedExtensions(
+            indexPolicy?.supportedExtensions ?? this.getIndexedExtensionsForCodebase(codebasePath),
+        ));
         const policyMatcher = indexPolicy
             ? createIndexIgnoreMatcher(indexPolicy.effectiveIgnorePatterns)
             : null;
@@ -362,11 +367,12 @@ export class IndexingPipeline {
                 if (entry.isDirectory()) {
                     queue.push({ fullPath, run: () => visitDirectory(fullPath) });
                 } else if (entry.isFile()) {
+                    const relativePath = path.relative(codebasePath, fullPath).replace(/\\/g, '/');
+                    if (classifyFilePathByPolicy(relativePath, supportedExtensions) === 'reject') continue;
                     queue.push({
                         fullPath,
                         run: async () => {
                             const stat = await fs.promises.stat(fullPath);
-                            const relativePath = path.relative(codebasePath, fullPath).replace(/\\/g, '/');
                             if (await isIndexableFileByPolicy(
                                 relativePath,
                                 fullPath,
@@ -622,6 +628,7 @@ export class IndexingPipeline {
         try {
             return await this.processFileListWithAnalyzer(input, analyzer);
         } finally {
+            if (isPerfTraceEnabled()) analyzer.reportPerfTrace?.();
             // Each operation owns its pool. Await exit before returning or throwing,
             // including failed file loops; shared custom ports keep their owner.
             if (analyzer !== this.languageAnalyzer) await analyzer.dispose?.();
@@ -632,6 +639,34 @@ export class IndexingPipeline {
         input: Parameters<IndexingPipeline['processFileList']>[0],
         languageAnalyzer: LanguageAnalysisPort,
     ): Promise<ProcessedFileList> {
+        const tracing = isPerfTraceEnabled();
+        const timing = tracing ? {
+            planMs: 0, planCount: 0, countMs: 0, countCount: 0,
+            factsMs: 0, factsCount: 0,
+        } : undefined;
+        const cpuBefore = tracing ? process.cpuUsage() : undefined;
+        const threadCpuUsage = (process as typeof process & {
+            threadCpuUsage?: (previous?: NodeJS.CpuUsage) => NodeJS.CpuUsage;
+        }).threadCpuUsage;
+        const threadCpuBefore = tracing && threadCpuUsage ? threadCpuUsage() : undefined;
+        let timingReported = false;
+        const reportTiming = timing ? (): void => {
+            if (timingReported || !cpuBefore) return;
+            timingReported = true;
+            perfTrace('payload.chunk_plan', timing.planMs, { count: timing.planCount });
+            perfTrace('payload.chunk_count', timing.countMs, { count: timing.countCount });
+            perfTrace('payload.symbol_facts', timing.factsMs, { count: timing.factsCount });
+            // process.cpuUsage includes every worker thread, so report its scope explicitly.
+            const cpu = process.cpuUsage(cpuBefore);
+            perfTrace('payload.process.cpu', (cpu.user + cpu.system) / 1000, {
+                userMs: cpu.user / 1000, systemMs: cpu.system / 1000,
+            });
+            const threadCpu = threadCpuBefore && threadCpuUsage ? threadCpuUsage(threadCpuBefore) : undefined;
+            perfTrace('payload.main_thread.cpu', threadCpu ? (threadCpu.user + threadCpu.system) / 1000 : 0, {
+                available: threadCpu !== undefined,
+                userMs: (threadCpu?.user ?? 0) / 1000, systemMs: (threadCpu?.system ?? 0) / 1000,
+            });
+        } : undefined;
         const isHybrid = this.isHybridEnabled();
         const embedding = this.getEmbedding();
         const batchPolicy = embedding.getBatchPolicy?.() ?? null;
@@ -850,6 +885,7 @@ export class IndexingPipeline {
                 const analyzed = await pendingAnalyses.get(fileIndex)!;
                 pendingAnalyses.delete(fileIndex);
                 if (analyzed === null) continue;
+                const planStartedAt = timing ? globalThis.performance.now() : 0;
                 const deferredPlan = analyzed.deferredAnalysis === null
                     ? undefined
                     : createIndexingChunkPlan({
@@ -859,11 +895,25 @@ export class IndexingPipeline {
                         symbols: analyzed.extractedSymbols,
                         result: analyzed.deferredAnalysis,
                     });
+                if (timing && deferredPlan) {
+                    timing.planMs += globalThis.performance.now() - planStartedAt;
+                    timing.planCount++;
+                }
+                const countStartedAt = timing ? globalThis.performance.now() : 0;
                 const chunkCount = deferredPlan ? deferredPlan.count() : analyzed.chunks!.length;
+                if (timing) {
+                    timing.countMs += globalThis.performance.now() - countStartedAt;
+                    timing.countCount++;
+                }
                 const chunkSpans = deferredPlan?.spans();
+                const factsStartedAt = timing ? globalThis.performance.now() : 0;
                 const symbolFacts = this.buildAnalyzedFileSymbolFacts(
                     { ...analyzed, chunks: analyzed.chunks ?? [] },
                 );
+                if (timing) {
+                    timing.factsMs += globalThis.performance.now() - factsStartedAt;
+                    timing.factsCount++;
+                }
                 const { relativePath } = analyzed;
                 analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
                 sourceFiles.push({
@@ -954,6 +1004,7 @@ export class IndexingPipeline {
                 for (const reservedIndex of [...analysisReservations.keys()]) {
                     releaseAnalysisReservation(reservedIndex);
                 }
+                reportTiming?.();
                 throw error;
             } finally {
                 releaseAnalysisReservation(fileIndex);
@@ -981,18 +1032,23 @@ export class IndexingPipeline {
         } catch (error) {
             // Submitted embedding requests must settle before the caller sees the failure.
             await stopPayload(error);
+            reportTiming?.();
             throw error;
         }
         const payloadSettled = payloadChain.then(async () => {
-            if (payloadError) throw payloadError;
-            if (pendingVectorWrites.length > 0) {
-                const batch = pendingVectorWrites.splice(0, pendingVectorWrites.length);
-                await this.flushVectorWriteBuffer(
-                    input.collectionName,
-                    batch,
-                    input.assertMutationCurrent,
-                    performance,
-                );
+            try {
+                if (payloadError) throw payloadError;
+                if (pendingVectorWrites.length > 0) {
+                    const batch = pendingVectorWrites.splice(0, pendingVectorWrites.length);
+                    await this.flushVectorWriteBuffer(
+                        input.collectionName,
+                        batch,
+                        input.assertMutationCurrent,
+                        performance,
+                    );
+                }
+            } finally {
+                reportTiming?.();
             }
         });
         // Observed by the caller; this only prevents an unhandled rejection if

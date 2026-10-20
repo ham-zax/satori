@@ -165,6 +165,85 @@ test('full file processing reserves progress for relationship resolution', async
     assert.equal(percentages.at(-1), 90);
 });
 
+test('full index membership matches array inclusion without repeated linear lookups', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-selected-sources-'));
+    try {
+        for (const { selected, consumed } of [
+            { selected: [], consumed: [] },
+            { selected: ['a.ts', 'b.ts'], consumed: ['b.ts', 'a.ts'] },
+            { selected: ['a.ts', 'a.ts', 'b.ts'], consumed: ['a.ts', 'a.ts'] },
+            { selected: ['a.ts'], consumed: ['outside.ts'] },
+        ]) {
+            let linearLookups = 0;
+            // Array map/filter preserve this species through source selection.
+            class SelectedPaths extends Array<string> {
+                override includes(value: string, fromIndex?: number): boolean {
+                    linearLookups++;
+                    return super.includes(value, fromIndex);
+                }
+            }
+            const ports: Partial<IndexGenerationWorkflowPorts> = {
+                embedding: {} as IndexGenerationWorkflowPorts['embedding'],
+                vectorDatabase: {
+                    dropCollection: async () => undefined,
+                    hasCollection: async () => false,
+                } as unknown as IndexGenerationWorkflowPorts['vectorDatabase'],
+                canonicalizeCodebasePath: (value) => value,
+                getIsHybrid: () => false,
+                assertResolvedIndexPolicyRoot: () => undefined,
+                setIndexProfileForCodebase: () => undefined,
+                resolvePublicationCollectionName: () => 'candidate',
+                reserveIndexCandidate: () => undefined,
+                prepareCollection: async () => undefined,
+                markIndexCandidateCollectionCreated: () => undefined,
+                getCodeFiles: async () => new SelectedPaths(...selected.map((name) => path.join(root, name))),
+                normalizeRelativePathForCodebase: (_root, filePath) => path.relative(root, filePath) as ReturnType<IndexGenerationWorkflowPorts['normalizeRelativePathForCodebase']>,
+                processFileList: async () => ({
+                    processedFiles: consumed.length,
+                    totalChunks: 0,
+                    status: 'limit_reached',
+                    symbolRecords: [],
+                    symbolManifestFiles: [],
+                    analysisByFile: new Map(),
+                    sourceFiles: consumed.map((filePath) => ({
+                        path: filePath as NonNullable<ReturnType<IndexGenerationWorkflowPorts['normalizeRelativePathForCodebase']>>,
+                        sourceHash: 'hash',
+                        sourceStat: { size: 1, mtimeMs: 1, ctimeMs: 1 },
+                    })),
+                    performance: {
+                        analysisMs: 0, embeddedInputBytes: 0,
+                        logicalEmbeddingRequests: 0, logicalEmbeddingDurationMs: 0,
+                        logicalVectorWriteRequests: 0, logicalVectorWriteDurationMs: 0,
+                    },
+                    payloadSettled: Promise.resolve(),
+                }),
+                subtractEmbeddingMetrics: () => null,
+                subtractVectorWriteMetrics: () => null,
+                summarizeVectorWriteMetrics: () => null,
+                discardUnpublishedPublication: () => undefined,
+                clearIndexCandidate: () => undefined,
+            };
+            const workflow = new IndexGenerationWorkflow(ports as IndexGenerationWorkflowPorts);
+            const operation = workflow.indexCodebase(root, undefined, {
+                rootMutationLease: { canonicalRoot: root, operationId: 'candidate' } as never,
+                indexPolicy: { profile: 'default' } as never,
+                deferPartialPublication: true,
+            });
+            const expectedRejection = [...new Set(consumed)].some((filePath) => !selected.includes(filePath));
+            if (expectedRejection) {
+                await assert.rejects(operation, /captured source evidence for a path outside the selected source set/);
+            } else {
+                const result = await operation;
+                assert.deepEqual(result.indexedPaths, consumed);
+                assert.equal(result.publication.status, 'staged');
+            }
+            assert.equal(linearLookups, 0, 'membership must use one compiled Set');
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 for (const readKind of ['auxiliary', 'source'] as const) {
     for (const swapKind of ['file', 'directory'] as const) {
         test(`semantic ${readKind} read rejects a ${swapKind} symlink swap after root resolution`, async (t) => {

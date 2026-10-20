@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import {
     RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION,
     isRelationshipManifest,
@@ -24,6 +25,7 @@ import {
     fsyncPath,
     getRelationshipAnalysisEvidence,
     samePathIdentity,
+    settleShardBatch,
     uniqueSidecarEntryName,
     writeRelationshipSidecarInternal,
     writeSymbolRegistrySidecarInternal,
@@ -156,7 +158,7 @@ async function fsyncDirectoryTree(
     const writtenFiles: string[] = [];
     for (let offset = 0; offset < files.length; offset += SHARD_IO_CONCURRENCY) {
         const batch = files.slice(offset, offset + SHARD_IO_CONCURRENCY);
-        const stats = await Promise.all(batch.map(async (filePath) => {
+        const stats = await settleShardBatch(batch.map(async (filePath) => {
             const relativePath = path.relative(rootPath, filePath).replace(/\\/g, '/');
             const sharedSize = sharedFileSizes.get(relativePath);
             return sharedSize === undefined
@@ -173,7 +175,7 @@ async function fsyncDirectoryTree(
         }
     }
     for (let offset = 0; offset < writtenFiles.length; offset += SHARD_IO_CONCURRENCY) {
-        await Promise.all(writtenFiles.slice(offset, offset + SHARD_IO_CONCURRENCY).map(fsyncPath));
+        await settleShardBatch(writtenFiles.slice(offset, offset + SHARD_IO_CONCURRENCY).map(fsyncPath));
     }
     for (const directory of directories) await fsyncPath(directory);
     return {
@@ -264,10 +266,13 @@ export async function stagePublicationNavigation(
     let navigationStat: fs.Stats | undefined;
     let renamed = false;
     try {
+        const symbolsStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const symbolResult = await writeSymbolRegistrySidecarInternal({
             navigationRoot: buildRoot,
             registry: input.registry,
         }, reuse?.symbols);
+        if (symbolsStartedAt !== undefined) perfTrace('navigation.stage.symbols', performance.now() - symbolsStartedAt);
+        const relationshipsStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const relationshipResult = await writeRelationshipSidecarInternal({
             navigationRoot: buildRoot,
             normalizedRootPath: input.registry.manifest.normalizedRootPath,
@@ -279,20 +284,34 @@ export async function stagePublicationNavigation(
             analysisByFile: input.analysisByFile,
             providerCoverage: input.providerCoverage,
         }, reuse?.relationships);
+        if (relationshipsStartedAt !== undefined) perfTrace('navigation.stage.relationships', performance.now() - relationshipsStartedAt);
 
         if (input.repositoryVocabularyEnabled === true) {
+            const vocabularyStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
             await stageRepositoryVocabularyIndex({
                 navigationRoot: buildRoot, registry: input.registry, records: input.records,
                 publicationId: input.publicationId, symbolManifestHash: symbolResult.manifestHash,
                 relationshipManifestHash: relationshipResult.manifestHash,
             });
+            if (vocabularyStartedAt !== undefined) perfTrace('navigation.stage.vocabulary', performance.now() - vocabularyStartedAt);
         }
+        const fsyncStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const physical = await fsyncDirectoryTree(buildRoot, reuse?.symbols.sharedFileSizes);
+        if (fsyncStartedAt !== undefined) {
+            perfTrace('navigation.stage.fsync_tree', performance.now() - fsyncStartedAt, {
+                count: 1, files: physical.writtenFiles, sharedFiles: physical.sharedFiles,
+                writtenBytes: physical.physicallyWrittenBytes,
+            });
+        }
+        const mkdirStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         await fs.promises.mkdir(path.dirname(navigationRoot), { recursive: true });
+        if (mkdirStartedAt !== undefined) perfTrace('navigation.stage.mkdir', performance.now() - mkdirStartedAt, { stage: 'publish', count: 1 });
+        const publishStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         await fs.promises.rename(buildRoot, navigationRoot);
         renamed = true;
         navigationStat = await fs.promises.lstat(navigationRoot);
         await fsyncPath(path.dirname(navigationRoot));
+        if (publishStartedAt !== undefined) perfTrace('navigation.stage.publish', performance.now() - publishStartedAt);
 
         const candidate: StagedPublicationNavigation = {
             rootPath: navigationRoot,

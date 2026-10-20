@@ -11,13 +11,13 @@ Node v24.19.0. Corpus: LibreOffice, 149,719 files in 9,249 directories,
 
 ## Run results
 
-| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) |
-| --- | --- | --- | --- | --- |
-| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s |
-| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s |
-| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s |
-| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s |
-| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB |
+| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) | r15 (`c4458339`) |
+| --- | --- | --- | --- | --- | --- |
+| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s | 449.2 s |
+| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s | 253.6 s |
+| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s | 67.0 s |
+| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s | 4.4 s |
+| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB | 4,391 MiB |
 
 The goal is a critical path of 200 s or less.
 
@@ -94,9 +94,11 @@ promise forms:
   `observe_inputs` 31 s, `index.scanFiles` 28.5 s, `prepare_changes` 53 s
   (`finalize_collection` 27 s runs in parallel), and `source_current`
   36.5 s. Together that is about 149 s of the critical path.
-- Prototype (not committed): `lstat`, `realpath` and the policy probe in sync
+- Fixed in `427ec19d`: `lstat`, `realpath` and the policy probe in sync
   form. The validating scan time goes from 34.3 s to 17.3 s, with the same
-  35,769 files.
+  35,769 files. In r15, `index.scanFiles` is 21.9 s (r13 28.6 s),
+  `prepare_changes` is 46.3 s (53.1 s) and `source_current` is 22.7 s
+  (36.5 s). `observe_inputs` stays at 31.7 s.
 - The remaining 17 s is mostly the 9,231 directory opens. Each directory
   open does several promise calls (open, fstat, readlink, realpath), and the
   scan visits one directory at a time.
@@ -130,9 +132,11 @@ promise forms:
 - Finding (r14): `assertCurrent` → `isCurrent` → `withRootLock` in
   `generation/root-mutation-coordinator.ts` uses 17.8 s inclusive (19 % of
   the navigation window). `sleepSync` alone uses 11.1 s.
-- Why (hypothesis, not yet checked in the code): the relationship phase
-  checks the mutation lease very often, and each check takes the root lock
-  and can wait in a sync sleep.
+- Why: the relationship phase checked the mutation lease on every call, and
+  each check takes the root lock and can wait in a sync sleep.
+- Fixed in `c4458339`: the check runs once per yield to the event loop. In
+  r15, `navigation.relationships` is 24.3 s (r13 50.6 s) and
+  `index.navigation` is 67.0 s (r13 100.1 s).
 - Other navigation costs: relationship resolution 41.6 s inclusive, of which
   Python resolution is 19.3 s.
 

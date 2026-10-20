@@ -116,3 +116,54 @@ test("stale candidate recovery preserves collections referenced by any Publicati
         fs.rmSync(stateDir, { recursive: true, force: true });
     }
 });
+
+test("stale candidate recovery ignores a receipt whose stored root now resolves to the active root", async () => {
+    const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "satori-candidate-moved-root-")));
+    const rootA = path.join(stateDir, "repo-a");
+    const rootB = path.join(stateDir, "repo-b");
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+    const runtime = new RootMutationRuntime({ stateDir: path.join(stateDir, "mutations") });
+    const receipt = candidateReceipt(rootA);
+    const backendCalls: string[] = [];
+    const cleared: string[] = [];
+
+    const maintenance = new VectorBackendMaintenance({
+        context: {
+            getVectorStore: () => ({
+                hasCollection: async (name: string) => {
+                    backendCalls.push(`has:${name}`);
+                    return true;
+                },
+                dropCollection: async (name: string) => {
+                    backendCalls.push(`drop:${name}`);
+                },
+            }),
+            listIndexCandidateReceipts: () => [receipt],
+            isPublicationCollectionReferenced: () => false,
+            clearIndexCandidateReceiptForCollection: (_root: string, collectionName: string) => {
+                cleared.push(collectionName);
+                return true;
+            },
+        },
+        canonicalizeCodebasePath: (value: string) => fs.realpathSync(value),
+        resolveCollectionName: () => "unused",
+        unwatchCodebase: async () => undefined,
+        mutationRuntime: runtime,
+    } as never);
+
+    try {
+        fs.rmSync(rootA, { recursive: true });
+        fs.symlinkSync(rootB, rootA, "dir");
+        await runtime.run(rootB, "create", async () => undefined);
+        const result = await runtime.run(rootB, "reindex", async () => (
+            maintenance.recoverStaleIndexCandidates(rootB)
+        ));
+
+        assert.deepEqual(result, { recoveredCollections: [], clearedReceipts: [] });
+        assert.deepEqual(backendCalls, []);
+        assert.deepEqual(cleared, []);
+    } finally {
+        fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+});

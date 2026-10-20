@@ -234,6 +234,39 @@ test('scanSynchronizerState preserves previous evidence for unreadable paths', a
     });
 });
 
+test('scanSynchronizerState marks files unreadable when their directory moves during inspection', async (t) => {
+    await withTempDir(async (rootDir) => {
+        fs.mkdirSync(path.join(rootDir, 'a'));
+        fs.writeFileSync(path.join(rootDir, 'a', 'x.ts'), 'export const x = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(rootDir, 'a', 'y.ts'), 'export const y = 1;\n', 'utf8');
+        fs.writeFileSync(path.join(rootDir, 'top.ts'), 'export const top = 1;\n', 'utf8');
+        // Reused evidence means neither the hash nor the policy probe reopens the files.
+        const first = await scanSynchronizerState(makeContext(rootDir));
+        const originalLstatSync = fs.lstatSync;
+        let moved = false;
+        t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof originalLstatSync>) => {
+            const result = originalLstatSync(...args);
+            // The root listing is already read, so the renamed directory is never visited.
+            if (!moved && String(args[0]).endsWith(`${path.sep}x.ts`)) {
+                moved = true;
+                fs.renameSync(path.join(rootDir, 'a'), path.join(rootDir, 'moved'));
+            }
+            return result;
+        });
+
+        const output = await scanSynchronizerState(makeContext(rootDir, {
+            forceFullHash: false,
+            previousHashes: new Map(first.fileHashes),
+            previousStats: new Map(first.fileStats),
+        }));
+
+        assert.equal(moved, true);
+        assert.equal(output.partialScan, true);
+        assert.deepEqual([...output.unreadableFiles].sort(), ['a/x.ts', 'a/y.ts']);
+        assert.deepEqual(output.unscannedDirPrefixes, []);
+    });
+});
+
 test('scanSynchronizerState records unreadable files that fail the index-policy probe', async (t) => {
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
         t.skip('cannot simulate unreadable paths as root');

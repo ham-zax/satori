@@ -15,7 +15,7 @@ import {
     descriptorPathInsideRoot,
     isRealPathInsideRoot,
     RootBoundFileError,
-    openDirectoryInsideRoot,
+    openDirectoryInsideRootSync,
     openRegularFileInsideRoot,
     openRegularFileInsideRootNoFollow,
     openRegularFileWithIdentityInsideRoot,
@@ -413,7 +413,7 @@ test('readFileHandleExactly records failed and partial complete-scan attempts ho
     }
 });
 
-test('openDirectoryInsideRoot keeps enumeration bound when its pathname becomes an outside symlink', async (t) => {
+test('openDirectoryInsideRootSync keeps enumeration bound when its pathname becomes an outside symlink', async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-dir-bound-root-'));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-dir-bound-out-'));
     const nested = path.join(root, 'nested');
@@ -422,7 +422,7 @@ test('openDirectoryInsideRoot keeps enumeration bound when its pathname becomes 
     fs.writeFileSync(path.join(nested, 'inside.ts'), 'export const inside = true;\n', 'utf8');
     fs.writeFileSync(path.join(outside, 'secret.ts'), 'export const secret = "leaked";\n', 'utf8');
 
-    const opened = await openDirectoryInsideRoot(nested, root);
+    const opened = openDirectoryInsideRootSync(nested, root);
     try {
         fs.renameSync(nested, moved);
         if (!createDirectorySymlinkOrSkip(t, outside, nested)) {
@@ -432,7 +432,7 @@ test('openDirectoryInsideRoot keeps enumeration bound when its pathname becomes 
         const entries = await fsp.readdir(opened.descriptorPath, { withFileTypes: true });
         assert.deepEqual(entries.map((entry) => entry.name), ['inside.ts']);
     } finally {
-        await opened.handle.close();
+        fs.closeSync(opened.fd);
         fs.rmSync(root, { recursive: true, force: true });
         fs.rmSync(outside, { recursive: true, force: true });
     }

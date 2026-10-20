@@ -117,13 +117,17 @@ export function assertDescriptorBoundIndexingSupported(): void {
 }
 
 function descriptorLink(handle: fsp.FileHandle): string {
+    return descriptorLinkForFd(handle.fd);
+}
+
+function descriptorLinkForFd(fd: number): string {
     if (process.platform !== 'linux') {
         throw new RootBoundFileError(
             'path_identity_unavailable',
             `Descriptor-bound root validation is unavailable on ${process.platform}`,
         );
     }
-    return `/proc/self/fd/${handle.fd}`;
+    return `/proc/self/fd/${fd}`;
 }
 
 export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: string): Promise<string> {
@@ -134,7 +138,21 @@ export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: 
     } catch (error: unknown) {
         throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`, { cause: error });
     }
+    return validateDescriptorPath(openedPath, rootDir);
+}
 
+/** Synchronous form of descriptorPathInsideRoot for a raw descriptor. */
+export function descriptorPathInsideRootSync(fd: number, rootDir: string): string {
+    let openedPath: string;
+    try {
+        openedPath = fsSync.readlinkSync(descriptorLinkForFd(fd));
+    } catch (error: unknown) {
+        throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`, { cause: error });
+    }
+    return validateDescriptorPath(openedPath, rootDir);
+}
+
+function validateDescriptorPath(openedPath: string, rootDir: string): string {
     if (!path.isAbsolute(openedPath) || openedPath.endsWith(' (deleted)')) {
         throw new Error(`Opened descriptor has no stable absolute path: ${openedPath}`);
     }
@@ -502,18 +520,60 @@ export async function readFileHandleExactly(
 }
 
 export interface OpenedDirectoryInsideRoot {
-    handle: fsp.FileHandle;
+    fd: number;
     descriptorPath: string;
     realPath: string;
 }
 
-export async function openDirectoryInsideRoot(
+/**
+ * Synchronous form of openInsideRoot for directories, with the same checks in
+ * the same order. A scan opens every directory, and the async form costs about
+ * six thread-pool round trips each; under indexing load the pool also serves
+ * vector and payload I/O, so those waits dominate the scan. The caller closes
+ * the descriptor with fs.closeSync.
+ */
+export function openDirectoryInsideRootSync(
     directoryPath: string,
     rootDir: string,
-): Promise<OpenedDirectoryInsideRoot> {
-    const opened = await openInsideRoot(directoryPath, rootDir, 'directory');
-    return {
-        ...opened,
-        descriptorPath: descriptorLink(opened.handle),
-    };
+): OpenedDirectoryInsideRoot {
+    let realPath: string;
+    try {
+        realPath = trimTrailingSeparators(path.normalize(fsSync.realpathSync.native(directoryPath)));
+    } catch {
+        throw new Error(`Path is unreadable: ${directoryPath}`);
+    }
+    if (!isRealPathInsideRoot(realPath, rootDir)) {
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Resolved path escapes indexed root.',
+        );
+    }
+
+    const preStat = fsSync.lstatSync(realPath);
+    if (preStat.isSymbolicLink() || !preStat.isDirectory()) {
+        throw new Error(`Attempted to open non-directory path: ${directoryPath}`);
+    }
+
+    const fd = fsSync.openSync(
+        realPath,
+        fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW') | requiredOpenFlag('O_DIRECTORY'),
+    );
+    try {
+        const postStat = fsSync.fstatSync(fd);
+        if (!postStat.isDirectory() || !sameFileIdentity(postStat, preStat)) {
+            throw new Error(`Opened descriptor drifted from verified path: ${directoryPath}`);
+        }
+        return {
+            fd,
+            realPath: descriptorPathInsideRootSync(fd, rootDir),
+            descriptorPath: descriptorLinkForFd(fd),
+        };
+    } catch (error) {
+        try {
+            fsSync.closeSync(fd);
+        } catch {
+            // The open error is the one to report.
+        }
+        throw error;
+    }
 }

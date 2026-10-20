@@ -11,9 +11,9 @@ import {
     type SupportedExtensionsInput,
 } from '../config/index-policy';
 import {
-    openDirectoryInsideRoot,
+    descriptorPathInsideRootSync,
+    openDirectoryInsideRootSync,
     openRegularFileInsideRoot,
-    resolveInsideRoot,
 } from './root-bound-fs';
 import type { SnapshotFileStatSignature } from './snapshot-codec';
 
@@ -343,8 +343,12 @@ async function inspectDirectoryEntries(
                 return { kind: 'skip' };
             }
 
-            const fileReal = resolveInsideRoot(absolutePath, context.rootDir);
-            if (!fileReal || fileReal !== path.join(context.rootDir, relativePath)) {
+            // The entry is a regular file read through the verified directory
+            // descriptor, so its real path is the directory's real path plus the
+            // raw name. scanDirectory re-verifies the directory path once after
+            // inspection; a name that normalization changes cannot resolve here.
+            const fileReal = path.join(context.rootDir, relativePath);
+            if (relativePath !== (relativeDirectoryPath ? `${relativeDirectoryPath}/${entry.name}` : entry.name)) {
                 return {
                     kind: 'unreadable',
                     relativePath,
@@ -396,7 +400,7 @@ async function scanDirectory(
 ): Promise<void> {
     let openedDirectory;
     try {
-        openedDirectory = await openDirectoryInsideRoot(directoryPath, context.rootDir);
+        openedDirectory = openDirectoryInsideRootSync(directoryPath, context.rootDir);
     } catch (error: unknown) {
         if (!relativeDirectoryPath) {
             throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`, { cause: error });
@@ -420,7 +424,7 @@ async function scanDirectory(
 
         let entries: fsSync.Dirent[];
         try {
-            entries = await fsp.readdir(openedDirectory.descriptorPath, { withFileTypes: true });
+            entries = fsSync.readdirSync(openedDirectory.descriptorPath, { withFileTypes: true });
         } catch (error: unknown) {
             if (!relativeDirectoryPath) {
                 throw new Error(`[Synchronizer] Cannot read root directory ${directoryPath}: ${errorMessage(error)}`, { cause: error });
@@ -441,7 +445,20 @@ async function scanDirectory(
             openedDirectory.descriptorPath,
             relativeDirectoryPath,
         );
+        // One descriptor check covers every file entry inspected above: if the
+        // directory moved, none of them resolves to its indexed root entry.
+        let directoryStillInPlace: boolean;
+        try {
+            directoryStillInPlace = descriptorPathInsideRootSync(openedDirectory.fd, context.rootDir) === expectedDirectoryPath;
+        } catch {
+            directoryStillInPlace = false;
+        }
         for (const observation of observations) {
+            if (!directoryStillInPlace && observation.kind === 'file') {
+                result.unreadableFiles.add(observation.relativePath);
+                console.warn(`[Synchronizer] Cannot inspect ${observation.relativePath}: path no longer resolves to the indexed root entry`);
+                continue;
+            }
             if (observation.kind === 'skip') {
                 continue;
             }
@@ -484,7 +501,11 @@ async function scanDirectory(
             });
         }
     } finally {
-        await openedDirectory.handle.close().catch(() => undefined);
+        try {
+            fsSync.closeSync(openedDirectory.fd);
+        } catch {
+            // Closing a read-only directory descriptor cannot lose data.
+        }
     }
 }
 

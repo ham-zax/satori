@@ -5,6 +5,8 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [LibreOffice fundamentals review, 20 October 2026](libreoffice-fundamentals-review-2026-10-20.md) | Read-only review complete; performance proposals unimplemented | Source evidence, four reproduced findings, measured graph counts, ranked changes, architecture options, and resume notes. |
+| [LibreOffice 200 s implementation plan, 20 October 2026](libreoffice-200s-implementation-plan-2026-10-20.md) | Revised after source review; runtime and storage decisions open | Spill before semantic redesign, measured C++ runtime selection, no MRR regression, and explicit incremental, cancellation, durability, and low-memory gates. |
 | [LibreOffice full-index parity plan, 20 October 2026](libreoffice-index-parity-plan-2026-10-20.md) | Plan; r5 without the chunk cap hit OOM at 6 GiB | Goal under 200 s with no fixed limits. Measured Satori r4 368.3 s against semble 134.2 s by stage, then six slices: memory owners, parity-mode ceiling, analysis, vector storage, embedding text, file selection. |
 | [Sync repairs, 20 October 2026](sync-fixes-2026-10-20.md) | Eight repairs checked | Shared source-control discovery, existing edits preserved, 114 targeted tests, and lint, type, version, and scope checks. |
 | [Memory audit and scoped repairs, 15–16 October 2026](memory-audit-2026-10-15.md) | Thirteen repairs and three review corrections checked | Records the original 331 tests, three Luna/Sol review corrections, 55 follow-up tests, static checks, and the measured throughput/RAM tradeoff. |

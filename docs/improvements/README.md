@@ -5,6 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [Rust acceleration loop, 20 October 2026](rust-acceleration-loop-2026-10-20.md) | Approved working plan; resume point | Six-step loop per candidate (profile, cheap check, slice, screening pair, three-run validation, record), candidate queue, roles, fixed facts and current state. |
 | [Rust projection implementation, 20 October 2026](napi-rs-implementation-2026-10-20.md) | First experimental slice in progress | Isolated batched ASCII projection addon, TypeScript fallback, cancellation, differential tests, and measurement tools. Production adoption gates remain open. |
 | [LibreOffice performance findings, 20 October 2026](libreoffice-performance-findings-2026-10-20.md) | Living note; runs r10-r14 and scratch benchmarks | Why each part is slow and which form is fast: one syncfs against per-file fsync, per-chunk memo, sync against promise fs calls, synchronizer scan probes, analysis wait as main-thread CPU, payload and navigation costs. |
 | [napi-rs indexing experiment, 20 October 2026](napi-rs-indexing-experiment-2026-10-20.md) | Projection prototype and opt-in integration checked; full performance objective open | Ranked costs of the r16 critical path (403.9 s). Projection corpus parity passes, serial gain is 11.3%, and concurrent sample calls expose missing pipeline parallelism. Other bottlenecks, full-index measurements, and packaging remain open. |

@@ -5,6 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [LibreOffice performance findings, 20 October 2026](libreoffice-performance-findings-2026-10-20.md) | Living note; runs r10-r14 and scratch benchmarks | Why each part is slow and which form is fast: one syncfs against per-file fsync, per-chunk memo, sync against promise fs calls, synchronizer scan probes, analysis wait as main-thread CPU, payload and navigation costs. |
 | [LibreOffice fundamentals review, 20 October 2026](libreoffice-fundamentals-review-2026-10-20.md) | Read-only review complete; performance proposals unimplemented | Source evidence, four reproduced findings, measured graph counts, ranked changes, architecture options, and resume notes. |
 | [LibreOffice 200 s implementation plan, 20 October 2026](libreoffice-200s-implementation-plan-2026-10-20.md) | Revised after source review; runtime and storage decisions open | Spill before semantic redesign, measured C++ runtime selection, no MRR regression, and explicit incremental, cancellation, durability, and low-memory gates. |
 | [LibreOffice full-index parity plan, 20 October 2026](libreoffice-index-parity-plan-2026-10-20.md) | Plan; r5 without the chunk cap hit OOM at 6 GiB | Goal under 200 s with no fixed limits. Measured Satori r4 368.3 s against semble 134.2 s by stage, then six slices: memory owners, parity-mode ceiling, analysis, vector storage, embedding text, file selection. |

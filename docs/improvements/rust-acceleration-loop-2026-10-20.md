@@ -275,3 +275,126 @@ decided after the profile. Remove them only if their measured cost is above
   through the directory descriptor (`openRegularFileAtDirectoryDescriptorSync`).
 - Next: stop the loop. Ask Hamza about B2 and off-main-thread or overlap
   architecture (navigation 63-70 s and finalize_collection 22-25 s are serial).
+- Hamza approved option 2 (overlap and off-main-thread architecture), design
+  first. Design below. No code until Hamza approves a proposal.
+
+## Overlap design (option 2), 20 October 2026
+
+Source run: `screen-B1/base-2` (critical path 357.9 s). Times are seconds
+from server start.
+
+### Dependency graph of the full index
+
+`index-generation-workflow.ts` full-index flow (about lines 780-1000):
+
+| Stage | Span (s) | Needs | Produces |
+| --- | --- | --- | --- |
+| policy observe | 0-30 (29.8) | root control files | ignore patterns, control signature |
+| scan | 30-50 (20.0) | policy | `codeFiles`, publication source controls |
+| payload analysis | 52-259 (205) | `codeFiles` | symbols, `analysisByFile`, `sourceFiles` (hash + stat) |
+| payload drain + finalize | 259-304 | analysis | searchable collection |
+| prepare_changes | 260-276 (15.9) | captured hashes and stats | `fileHashes` (captured + auxiliary), source checkpoint |
+| navigation | 276-346 (69.7) | analysis, `fileHashes` | staged navigation |
+| publication | 346-357 (11) | navigation, drain, checkpoint | active Publication |
+
+Facts that constrain the design:
+
+- Navigation uses `preparedChanges.fileHashes` only in
+  `collectSemanticAuxiliariesForLanguage` (workflow :1878). That function
+  reads semantic auxiliary files (for example build files for Java) and
+  checks each hash against the map. Everything else in navigation uses
+  analysis output. So the 15.9 s prepare_changes wait protects only the
+  auxiliary-file inputs.
+- The source checkpoint and `assertSourceObservationCurrent` (8.3 s at
+  publication) stay the authority for "source unchanged". Every proposal
+  keeps both checks.
+- The policy walk (`observeNestedGitignores`, ignore-file-inputs.ts:114) is
+  a serial `readdirSync` walk by design (warm: sync 3 s vs promise 10 s). In
+  base-2 it is cold and takes 29.8 s. The scan (`getCodeFiles`, 16 reads in
+  flight) then reads the same directories again and stats every file. No
+  span splits the 20.0 s scan into readdir, stat and source-control parts.
+- Navigation profile (`profile-2/navigation.txt`, 63.6 s window): 22.7 %
+  idle, Python resolution about 13 s self time, `serializeShardJson` 3.1 s,
+  file system calls (open, close, stat, write, mkdir) about 11 s.
+- Stage sub-spans: symbols 9.1 s, relationships 14.9 s, fsync_tree 5.7 s.
+  `writeSymbolRegistrySidecarInternal` (sidecar-lifecycle.ts:311) needs only
+  the registry, not the relationship records.
+- Java semantic: language loop 9.6 s, of which `analyze` is 4.5 s. The other
+  5 s re-read and re-hash every Java source and the auxiliary files.
+- Payload analysis alone ends at 259 s. Without a faster payload, the 200 s
+  goal is not reachable by overlap. Overlap can remove at most the serial
+  work after 259 s (about 98 s) and part of the 50 s before 52 s.
+
+### Proposals, ranked by expected critical-path saving per risk
+
+P1. prepare_changes in parallel with navigation (expected 10-16 s).
+- Start `synchronizer.prepareChanges` and navigation at the same time after
+  analysis. Navigation gets the auxiliary files from its own observation:
+  the scan already walks the same tree with the same ignore matcher, so the
+  scan also returns the semantic auxiliary paths (`isSemanticAuxiliaryFilename`).
+  Navigation reads and hashes them as today.
+- Before publication, a new check requires that the auxiliary paths and
+  hashes navigation used equal the auxiliary entries of
+  `preparedChanges.fileHashes`. A mismatch throws
+  `source_observation_changed`, the same error class as today.
+- Failure handling: if either branch throws, the workflow awaits the other
+  branch before it rethrows (no background work after return). Navigation
+  stays staged, not published, so a failure leaves nothing published.
+- Interface change: `getCodeFiles` (or a new scan result field) returns the
+  auxiliary paths. `stageSymbolRegistryForCompletedIndex` takes auxiliary
+  observations instead of `observedFileHashes`.
+- Equivalence test: same artifacts with and without an auxiliary file, a
+  test where an auxiliary file changes between the two observations (must
+  fail before publication), and a fault-injection test where
+  prepare_changes throws while navigation runs.
+
+P2. Stage symbol sidecars in parallel with semantic and relationships
+(expected 4-9 s).
+- Start `writeSymbolRegistrySidecarInternal` right after the registry is
+  built, and join it in `stagePublicationNavigation`. The symbol shards then
+  overlap the Java semantic run (worker) and Python resolution. The file
+  system part overlaps on the main thread. The 3.1 s of JSON serialization
+  overlaps only if it moves to a worker thread (second step, only if the
+  first step measures less than 4 s).
+- Invariant: the symbol manifest hash and the fsync of the full build tree
+  stay after both writes complete. Same join-before-throw rule as P1.
+
+P3. Remove the Java source re-read in semantic (expected about 4 s, not
+overlap).
+- Reuse the analysis-time content when `sourceFiles` keeps it, else keep the
+  read. Listed for completeness: it needs a memory check (Java content of
+  LibreOffice in RAM until navigation ends) and is a cache, so it needs a
+  witness (the captured hash) and a differential test.
+
+P4. Merge or parallelize the policy walk and the scan (up to 20-30 s, not
+yet measurable).
+- Step 1 is measurement only: add sub-spans to the scan (readdir, stat,
+  source controls) and time a cold policy walk serial vs 16 reads in flight.
+- Then choose one: (a) the policy walk keeps its directory listings and the
+  scan reuses them (saves the second readdir), or (b) a parallel cold walk.
+  The scan cannot start before the policy is resolved, so plain overlap is
+  not possible.
+
+P5. Split relationship building by language so non-Java languages resolve
+while Java semantic runs (up to 9.6 s, high risk). Deferred: the builder
+takes all evidence in one call, and record order must stay deterministic.
+
+Not proposed: moving `assertSourceObservationCurrent` earlier (it must stay
+the last source check), and streaming navigation into the payload window
+(the registry and relationships need the complete analysis).
+
+### Open decisions (recommendation first)
+
+1. Order: P1, then P2, then P4 measurement. Recommended: the three give an
+   expected 15-25 s now, and P4 decides if the pre-payload 50 s can shrink.
+2. P1 auxiliary source: from the scan walk (recommended, no extra walk) or a
+   separate small walk (simpler interface, adds a third cold-ish walk).
+3. P3 and P5: defer until P1 and P2 are measured. Recommended.
+
+### Measurement plan
+
+Per proposal: one screening pair (both orders if the gain is under 15 s),
+then 3 + 3 runs if the screening gain exceeds the ±10 s noise. Report
+median critical path, navigation span, peak anonymous memory and start
+load. Artifacts must stay identical (`compare.mjs` exit 0). The PC must
+stay awake during each pair.

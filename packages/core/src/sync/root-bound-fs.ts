@@ -75,10 +75,13 @@ export function trimTrailingSeparators(inputPath: string): string {
  * Resolve `candidatePath` to a real path that stays under `rootDir`.
  * Returns null when missing, unreadable, or escaped (including intermediate symlinks).
  */
-export async function resolveInsideRoot(candidatePath: string, rootDir: string): Promise<string | null> {
+export function resolveInsideRoot(candidatePath: string, rootDir: string): string | null {
     let realPath: string;
     try {
-        realPath = await fsp.realpath(candidatePath);
+        // Synchronous by design: the promise form costs about 6 times the CPU
+        // per call, and a scan resolves every observed entry. The native form
+        // is the same realpath(3) call the promise form makes.
+        realPath = fsSync.realpathSync.native(candidatePath);
     } catch {
         return null;
     }

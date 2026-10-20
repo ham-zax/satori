@@ -321,7 +321,7 @@ async function inspectDirectoryEntries(
 
             let stat: fsSync.Stats;
             try {
-                stat = await fsp.lstat(absolutePath);
+                stat = fsSync.lstatSync(absolutePath);
             } catch (error: unknown) {
                 return {
                     kind: 'unreadable',
@@ -343,7 +343,7 @@ async function inspectDirectoryEntries(
                 return { kind: 'skip' };
             }
 
-            const fileReal = await resolveInsideRoot(absolutePath, context.rootDir);
+            const fileReal = resolveInsideRoot(absolutePath, context.rootDir);
             if (!fileReal || fileReal !== path.join(context.rootDir, relativePath)) {
                 return {
                     kind: 'unreadable',

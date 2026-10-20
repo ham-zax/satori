@@ -81,14 +81,14 @@ test('resolveInsideRoot rejects intermediate directory symlink escape', async (t
         fs.writeFileSync(path.join(outside, 'file.ts'), 'export const secret = "leaked";\n', 'utf8');
 
         const logicalFile = path.join(root, 'nested', 'file.ts');
-        assert.equal(await resolveInsideRoot(logicalFile, root), path.resolve(logicalFile));
+        assert.equal(resolveInsideRoot(logicalFile, root), path.resolve(logicalFile));
 
         fs.rmSync(nested, { recursive: true, force: true });
         if (!createDirectorySymlinkOrSkip(t, outside, nested)) {
             return;
         }
 
-        assert.equal(await resolveInsideRoot(logicalFile, root), null);
+        assert.equal(resolveInsideRoot(logicalFile, root), null);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
         fs.rmSync(outside, { recursive: true, force: true });

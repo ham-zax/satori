@@ -20,7 +20,7 @@ review's "no MRR loss" line is superseded by this decision.
 
 Batch 1 is Tasks 0, 0b (R1, R2), 1, 2, 3 and 4a. Workers wrote the slices in
 separate worktrees from `9dfffaaf`. The reviewer merged them into the main
-tree. Nothing is committed.
+tree. Commits: `e9f5f725` (batch 1), `88e80b78` (Task 4a helper).
 
 | Task | State | Evidence |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ tree. Nothing is committed.
 | 0b R2 | Done | `settleShardBatch` (`Promise.allSettled`, first rejection in input order) in symbol, relationship and fsync batches. Two gated fault-injection tests. A mutation (`Promise.all`) fails both. |
 | 1, 2 | Done | 12 files. r10 tables below. About 197 s of payload main-thread CPU has no span yet. |
 | 3 | Done, target missed | Set for selected paths, extension set once per scan, reject before `stat`. A mutation (no reject) fails "a proven rejection must not call stat". r10 scan: 30.1 s (r9 34.2 s). The target is under 10 s. |
-| 4a | Shipped, not committed | Batch pooling at about 3.2 times the old speed, output bit-identical. New helper sha256 `1b2aa8b6…`, 4,325,240 bytes. Manifest, CLI pin and contract fixture updated. |
+| 4a | Shipped, committed (`88e80b78`) | Batch pooling at about 3.2 times the old speed, output bit-identical. New helper sha256 `1b2aa8b6…`, 4,325,240 bytes. Manifest, CLI pin and contract fixture updated. |
 | D11 | Not approved | Not in batch 1. |
 
 Focused checks after the merge: ESLint is clean on the changed core files. 11 core test files pass
@@ -137,6 +137,45 @@ Findings from r10:
 - Task 3 cut the scan by 4.1 s only. The scan remains 30.1 s.
 - After publication, the watcher started a `sync` (generation 2). This note
   does not change the numbers above.
+
+### Progress after batch 1 (r11-r13)
+
+Two fixes, each committed with a differential or fault test and mutation checks:
+
+- `664051e3`: `createIdentifierSplitter` in `core/search-projections.ts`
+  splits each identifier token once per chunk. The r11 profile showed
+  `buildSearchProjections` at 104.8 s inclusive in the payload window. A
+  differential test compares the memo with an uncached reference copy.
+  Mutations (lowercase key, length key) fail. Microbenchmark on 26,938
+  LibreOffice chunks: 7,275 ms to 3,317 ms (median of 3).
+- `71cc4659`: `syncStagedFileSystem` in `symbols/sidecar-lifecycle.ts`. On
+  Linux, if the staged tree is on one ext4, xfs or btrfs device, one
+  `sync -f` replaces the per-file fsync. Else, or on failure, the per-file
+  fsync runs. `sidecar-lifecycle.test.ts` (4 tests). Mutations M1-M4 each
+  fail at least 1 test. No test covers the device-mismatch branch.
+  Benchmark (ext4 on WSL2, 71,523 files of 14.6 KB): 66.2 s to 7.7-8.1 s.
+
+Runs (MemoryMax=6G, one run each, r11 with CPU profiling, 35,760 files,
+all published). Spans: `full-rNN/rNN-spans.tsv` in the bench folder.
+
+| Metric | r10 | r11 (profiled) | r12 (`664051e3`) | r13 (`71cc4659`) |
+| --- | --- | --- | --- | --- |
+| Script wall | 752.2 s | 677.5 s | 643.4 s | 544.1 s |
+| Critical path | 696.1 s | 628.8 s | 600.6 s | 494.0 s |
+| Peak anonymous memory | 4,222 MiB | 4,283 MiB | 4,248 MiB | 4,310 MiB |
+| `index.scanFiles` | 30.1 s | 29.4 s | 28.9 s | 28.6 s |
+| `index.payloadPipeline` | 352.8 s | 299.7 s | 232.9 s | 238.2 s |
+| Analysis wait | 213.8 s | 180.3 s | 169.2 s | 173.6 s |
+| Vector writes | 64.8 s | 57.7 s | 54.3 s | 56.2 s |
+| `prepare_changes` | 55.6 s | 55.7 s | 52.5 s | 53.1 s |
+| `index.navigation` | 177.1 s | 166.8 s | 213.1 s | 100.1 s |
+| `fsync_tree` | 81.1 s | 83.7 s | 123.4 s | 8.0 s |
+| Publication tail | 40.5 s | 43.8 s | 40.4 s | 41.4 s |
+
+Remaining costs, largest first: analysis wait 174 s (worker throughput),
+repeated freshness (`observe_inputs` + `prepare_changes` + `source_current`,
+about 125 s, Task 5), navigation relationships about 60 s, vector writes
+56 s, scan 29 s, embedding JSON transport about 20 s.
 
 Parent documents:
 

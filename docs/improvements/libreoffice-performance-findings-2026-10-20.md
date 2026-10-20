@@ -1,6 +1,6 @@
 # LibreOffice indexing: performance findings, 20 October 2026
 
-This note records what the LibreOffice runs r10 to r14 and the scratch
+This note records what the LibreOffice runs r10 to r17 and the scratch
 benchmarks show: why each part is slow, which form is fast, and when to use
 it. The plan and the run tables are in
 `libreoffice-200s-implementation-plan-2026-10-20.md`.
@@ -11,13 +11,13 @@ Node v24.19.0. Corpus: LibreOffice, 149,719 files in 9,249 directories,
 
 ## Run results
 
-| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) | r15 (`c4458339`) | r16 (`78d5c4f0`) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s | 449.2 s | 403.9 s |
-| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s | 253.6 s | 257.5 s |
-| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s | 67.0 s | 75.1 s |
-| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s | 4.4 s | 6.5 s |
-| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB | 4,391 MiB | 4,288 MiB |
+| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) | r15 (`c4458339`) | r16 (`78d5c4f0`) | r17 (`cfac56cc`, loaded) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s | 449.2 s | 403.9 s | 480.9 s |
+| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s | 253.6 s | 257.5 s | 272.7 s |
+| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s | 67.0 s | 75.1 s | 121.2 s |
+| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s | 4.4 s | 6.5 s | 12.3 s |
+| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB | 4,391 MiB | 4,288 MiB | 4,277 MiB |
 
 The goal is a critical path of 200 s or less.
 
@@ -117,6 +117,19 @@ promise forms:
   `source_current` 22.7 s to 11.1 s, critical path 449.2 s to 403.9 s.
   `observe_inputs` stays at 31.3 s and `index.scanFiles` at 20.2 s. Both
   still walk with one promise `readdir` per directory.
+- Fixed in `cfac56cc`: the nested ignore-file walk of `observe_inputs` uses
+  `readdirSync`. Alone, the walk goes from 2.32 s to 1.19 s. With 16
+  concurrent promise reads, it goes from 11.11 s to 2.97 s. The policy output
+  is identical.
+- r17 (full run, 5-minute load average 6.46 during the run): `observe_inputs`
+  29.9 s (r16 31.3 s). The walk is therefore not the main cost of
+  `observe_inputs`. The cause of the remaining 30 s is not known. All other
+  phases were slower under the load (critical path 480.9 s), so r17 is not
+  a valid comparison for them.
+- Not done: the same sync change in `getCodeFiles` (`index.scanFiles`). Two
+  tests in `indexing-pipeline.test.ts` inject faults through
+  `fs.promises.readdir` and `fs.promises.stat`, and check in-flight probes.
+  A sync walk needs new fault tests first.
 - Rule: if a descriptor already proves the location of a directory, check
   that location once per directory, not once per entry.
 

@@ -540,6 +540,10 @@ export function createMcpConfig(): ContextMcpConfig {
         autoIndexWorkspace: envManager.get('SATORI_AUTO_INDEX_WORKSPACE')?.toLowerCase() === 'true',
     };
 
+    // Make in-process readers and spawned children use the same state root as the config.
+    if (process.env.SATORI_STATE_ROOT === undefined) {
+        process.env.SATORI_STATE_ROOT = config.stateRoot;
+    }
     return config;
 }
 

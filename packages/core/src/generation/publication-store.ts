@@ -393,9 +393,12 @@ export class PublicationStore {
             phase: 'collection_created' as const,
             updatedAt: new Date().toISOString(),
         });
+        // Stage outside candidates, as reserveIndexCandidate does: a crash
+        // before the rename must not leave an entry enumeration rejects.
         this.replaceDurableFile(
             this.candidateReceiptPath(canonicalRoot, operationId),
             `${JSON.stringify(updated, null, 2)}\n`,
+            this.publicationRoot(canonicalRoot),
         );
         return updated;
     }
@@ -531,11 +534,14 @@ export class PublicationStore {
             }
             const canonicalRoot = canonicalizeRoot(publication.canonicalRoot);
             if (
-                canonicalRoot !== publication.canonicalRoot
-                || publicationRootKey(canonicalRoot) !== rootEntry.name
+                publicationRootKey(publication.canonicalRoot) !== rootEntry.name
                 || publication.id !== pointer.publicationId
             ) {
                 throw new Error(`Current Publication state at '${publicationRoot}' has inconsistent root/id ownership.`);
+            }
+            if (canonicalRoot !== publication.canonicalRoot) {
+                console.warn(`Skipping stale Publication state at '${publicationRoot}': stored root '${publication.canonicalRoot}' now resolves to '${canonicalRoot}'.`);
+                continue;
             }
             current.push({ id: publication.id, publication });
         }
@@ -988,14 +994,17 @@ export class PublicationStore {
         current: CurrentPublicationPointer | null,
         candidateReceipts: readonly IndexCandidateReceipt[],
     ): string | null {
-        const acceptRoot = (candidate: string, expected?: string): string => {
+        const acceptRoot = (candidate: string, expected?: string): string | null => {
             const canonicalRoot = canonicalizeRoot(candidate);
             if (
-                canonicalRoot !== candidate
-                || publicationRootKey(canonicalRoot) !== path.basename(publicationRoot)
-                || (expected !== undefined && expected !== canonicalRoot)
+                publicationRootKey(candidate) !== path.basename(publicationRoot)
+                || (expected !== undefined && expected !== candidate)
             ) {
                 throw new Error(`Publication startup state at '${publicationRoot}' has inconsistent root ownership.`);
+            }
+            if (canonicalRoot !== candidate) {
+                console.warn(`Skipping stale Publication startup state at '${publicationRoot}': stored root '${candidate}' now resolves to '${canonicalRoot}'.`);
+                return null;
             }
             return canonicalRoot;
         };
@@ -1020,15 +1029,18 @@ export class PublicationStore {
                 throw new Error(`Current Publication '${current.publicationId}' does not match its descriptor.`);
             }
             const currentRoot = acceptRoot(publication.canonicalRoot);
+            if (currentRoot === null) return null;
             for (const receipt of candidateReceipts) {
-                acceptRoot(receipt.canonicalRoot, currentRoot);
+                if (acceptRoot(receipt.canonicalRoot, currentRoot) === null) return null;
             }
             return currentRoot;
         }
 
         let canonicalRoot: string | undefined;
         for (const receipt of candidateReceipts) {
-            canonicalRoot = acceptRoot(receipt.canonicalRoot, canonicalRoot);
+            const acceptedRoot = acceptRoot(receipt.canonicalRoot, canonicalRoot);
+            if (acceptedRoot === null) return null;
+            canonicalRoot = acceptedRoot;
         }
         for (const entry of generationEntries) {
             if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
@@ -1048,7 +1060,9 @@ export class PublicationStore {
                 if (!isRecord(parsed) || typeof parsed[rootField] !== 'string') {
                     throw new Error(`Publication startup evidence at '${evidencePath}' has no root identity.`);
                 }
-                canonicalRoot = acceptRoot(parsed[rootField] as string, canonicalRoot);
+                const acceptedRoot = acceptRoot(parsed[rootField] as string, canonicalRoot);
+                if (acceptedRoot === null) return null;
+                canonicalRoot = acceptedRoot;
                 break;
             }
         }
@@ -1317,9 +1331,11 @@ export class PublicationStore {
         }
     }
 
-    private replaceDurableFile(targetPath: string, contents: string): void {
+    private replaceDurableFile(targetPath: string, contents: string, stagingDirectory?: string): void {
         fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        const temporaryPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        const temporaryPath = stagingDirectory === undefined
+            ? `${targetPath}.${process.pid}.${crypto.randomUUID()}.tmp`
+            : path.join(stagingDirectory, `${path.basename(targetPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
         try {
             this.writeDurableFile(temporaryPath, contents);
             fs.renameSync(temporaryPath, targetPath);

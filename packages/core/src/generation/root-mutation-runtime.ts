@@ -91,6 +91,7 @@ type RootMutationControl = Readonly<{
 const coordinators = new WeakMap<RootMutationRuntime, MutationLeaseCoordinator>();
 const operationScopes = new WeakMap<RootMutationRuntime, AsyncLocalStorage<RootMutationLease>>();
 const operationControls = new WeakMap<RootMutationRuntime, Map<string, RootMutationControl>>();
+const pendingReleases = new WeakMap<RootMutationRuntime, Map<string, RootMutationLease>>();
 
 function isRootMutationContinuation<T>(value: unknown): value is RootMutationContinuation<T> {
     if (typeof value !== 'object' || value === null) return false;
@@ -136,6 +137,7 @@ export class RootMutationRuntime {
         coordinators.set(this, coordinator);
         operationScopes.set(this, new AsyncLocalStorage<RootMutationLease>());
         operationControls.set(this, new Map());
+        pendingReleases.set(this, new Map());
     }
 
     async run<T>(
@@ -155,6 +157,17 @@ export class RootMutationRuntime {
             return await work(requireOperationControl(this, current.operationId).execution);
         }
 
+        const pending = requirePendingReleases(this);
+        for (const lease of pending.values()) {
+            // The coordinator owns canonical root comparison, including aliases.
+            if (!coordinator.isLeaseForRoot(lease, root)) continue;
+            const released = coordinator.release(lease);
+            if (released || !coordinator.isCurrent(lease)) {
+                pending.delete(lease.canonicalRoot);
+                requireOperationControls(this).delete(lease.operationId);
+            }
+            break;
+        }
         const acquired = coordinator.acquire(root, action);
         if (!acquired.acquired) {
             throw new RootMutationInProgressError(activityFromLease(acquired.activeLease));
@@ -170,21 +183,34 @@ export class RootMutationRuntime {
                     cancellationReason(options.signal?.reason),
                 ),
             );
+            let outcome: { failed: false; value: T } | { failed: true; error: unknown };
             try {
-                return await work(control.execution);
-            } finally {
-                unlinkSourceCancellation();
-                if (control.controller.signal.aborted && coordinator.isCurrent(acquired.lease)) {
-                    const operation = coordinator.getOperationForLease(acquired.lease);
-                    if (operation && !isTerminalMutationOperationPhase(operation.phase)) {
-                        coordinator.updateOperation(acquired.lease, 'cancelled');
-                    }
+                outcome = { failed: false, value: await work(control.execution) };
+            } catch (error) {
+                outcome = { failed: true, error };
+            }
+            unlinkSourceCancellation();
+            if (control.controller.signal.aborted && coordinator.isCurrent(acquired.lease)) {
+                const operation = coordinator.getOperationForLease(acquired.lease);
+                if (operation && !isTerminalMutationOperationPhase(operation.phase)) {
+                    coordinator.updateOperation(acquired.lease, 'cancelled');
                 }
+            }
+            try {
                 const released = coordinator.release(acquired.lease);
                 if (released || !coordinator.isCurrent(acquired.lease)) {
                     requireOperationControls(this).delete(acquired.lease.operationId);
                 }
+            } catch (releaseError) {
+                // A failed release stays pending and is retried before the next acquire.
+                pending.set(acquired.lease.canonicalRoot, acquired.lease);
+                if (!outcome.failed) throw releaseError;
+                console.warn(
+                    `Mutation lease release for '${acquired.lease.canonicalRoot}' remains pending: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+                );
             }
+            if (outcome.failed) throw outcome.error;
+            return outcome.value;
         });
     }
 
@@ -369,6 +395,12 @@ function requireOperationControls(runtime: RootMutationRuntime): Map<string, Roo
     const controls = operationControls.get(runtime);
     if (!controls) throw new Error('Root mutation runtime is not initialized.');
     return controls;
+}
+
+function requirePendingReleases(runtime: RootMutationRuntime): Map<string, RootMutationLease> {
+    const pending = pendingReleases.get(runtime);
+    if (!pending) throw new Error('Root mutation runtime is not initialized.');
+    return pending;
 }
 
 function requireOperationControl(runtime: RootMutationRuntime, operationId: string): RootMutationControl {

@@ -24,6 +24,137 @@ function createWorkflow(): IndexGenerationWorkflow {
     return new IndexGenerationWorkflow({} as IndexGenerationWorkflowPorts);
 }
 
+for (const outcome of ['drop fails', 'drop succeeds', 'publish succeeds'] as const) {
+    test(`atomic delta candidate receipt: ${outcome}`, async (t) => {
+        const canonicalRoot = '/mock/repo';
+        const publicationId = 'delta-candidate';
+        const candidateCollectionName = 'candidate-collection';
+        const lease = { canonicalRoot, operationId: publicationId };
+        const calls: string[] = [];
+        let receipt: 'reserved' | 'collection_created' | undefined;
+        let collectionExists = false;
+        const failure = new Error('injected delta payload failure');
+        const dropFailure = new Error('injected collection drop failure');
+        const warnings: unknown[][] = [];
+        t.mock.method(console, 'warn', (...args: unknown[]) => warnings.push(args));
+        const sourcePublication = {
+            id: 'source',
+            publication: { navigation: {}, vector: { totalChunks: 1 } },
+        };
+        const ports: Partial<IndexGenerationWorkflowPorts> = {
+            getCurrentPublicationSourceCheckpoint: () => ({ ref: sourcePublication }) as ReturnType<IndexGenerationWorkflowPorts['getCurrentPublicationSourceCheckpoint']>,
+            getPublicationNavigation: () => ({ navigationRoot: '/mock/navigation' }) as ReturnType<IndexGenerationWorkflowPorts['getPublicationNavigation']>,
+            resolvePublicationCollectionName: () => candidateCollectionName,
+            reserveIndexCandidate: (root, collection, mutationLease) => {
+                assert.equal(root, canonicalRoot);
+                assert.equal(collection, candidateCollectionName);
+                assert.equal(mutationLease, lease);
+                calls.push('reserve');
+                receipt = 'reserved';
+            },
+            markIndexCandidateCollectionCreated: (root, id, mutationLease) => {
+                assert.equal(root, canonicalRoot);
+                assert.equal(id, publicationId);
+                assert.equal(mutationLease, lease);
+                calls.push('mark');
+                receipt = 'collection_created';
+            },
+            clearIndexCandidate: (root, id, mutationLease) => {
+                assert.equal(root, canonicalRoot);
+                assert.equal(id, publicationId);
+                assert.equal(mutationLease, lease);
+                calls.push('clear');
+                receipt = undefined;
+            },
+            vectorDatabase: {
+                forkCollection: async (source: string, candidate: string) => {
+                    assert.equal(source, 'source-collection');
+                    assert.equal(candidate, candidateCollectionName);
+                    calls.push('fork');
+                    collectionExists = true;
+                },
+                dropCollection: async (collection: string) => {
+                    assert.equal(collection, candidateCollectionName);
+                    calls.push('drop');
+                    if (outcome === 'drop fails') throw dropFailure;
+                    collectionExists = false;
+                    calls.push('dropped');
+                },
+            } as unknown as IndexGenerationWorkflowPorts['vectorDatabase'],
+            countIndexedPayloadExactly: async () => 1,
+            deleteFileChunks: async () => {
+                calls.push('payload');
+                if (outcome !== 'publish succeeds') throw failure;
+            },
+            preparePublicationNavigationRoot: () => '/mock/candidate-navigation',
+            stagePublicationPackageOwnership: () => undefined,
+            stagePublicationSourceCheckpoint: () => undefined,
+            isObservedIndexPolicyControlSignatureCurrent: async () => true,
+            activatePublication: () => {
+                calls.push('activate');
+                return { id: publicationId } as ReturnType<IndexGenerationWorkflowPorts['activatePublication']>;
+            },
+            resolveNavigationObservationToken: () => null,
+            registerSynchronizerForPublication: () => undefined,
+            collectPublicationGarbage: async () => [],
+            discardUnpublishedPublication: () => { calls.push('discard'); },
+        };
+        const workflow = new IndexGenerationWorkflow(ports as IndexGenerationWorkflowPorts);
+        const internals = workflow as unknown as {
+            performAtomicDeltaPublication(input: unknown): Promise<unknown>;
+            resolveReusableNavigationDeltaState(): unknown;
+            rebuildNavigationArtifactsForSyncDelta(): Promise<unknown>;
+            verifyPreparedSyncPublication(): Promise<void>;
+            buildTask2Publication(): unknown;
+        };
+        t.mock.method(internals, 'resolveReusableNavigationDeltaState', () => ({
+            registry: { manifest: { files: [{ path: 'removed.ts' }] } },
+        }));
+        t.mock.method(internals, 'rebuildNavigationArtifactsForSyncDelta', async () => ({ candidate: {}, state: {} }));
+        t.mock.method(internals, 'verifyPreparedSyncPublication', async () => undefined);
+        t.mock.method(internals, 'buildTask2Publication', () => ({ id: publicationId }));
+        const operation = internals.performAtomicDeltaPublication({
+            codebasePath: canonicalRoot,
+            canonicalRoot,
+            sourcePublication,
+            sourceCollectionName: 'source-collection',
+            sealedPolicy: {},
+            synchronizerKey: 'source-collection',
+            synchronizer: {},
+            preparedChanges: {
+                changes: { added: [], modified: [], removed: ['removed.ts'] },
+                fileHashes: new Map(),
+                sourceCheckpoint: { fileStats: [] },
+                assertSourceObservationCurrent: async () => undefined,
+                commit: async () => { calls.push('commit'); },
+            },
+            resolutionSourceControls: new Set(),
+            packageOwnershipSourceControls: new Set(),
+            options: { rootMutationLease: lease },
+            resourcePlan: {},
+        });
+
+        if (outcome === 'publish succeeds') {
+            await operation;
+            assert.deepEqual(calls, ['reserve', 'fork', 'mark', 'payload', 'activate', 'commit', 'clear']);
+            assert.equal(receipt, undefined);
+            assert.equal(collectionExists, true);
+        } else {
+            await assert.rejects(operation, (error) => error === failure);
+            assert.deepEqual(calls, outcome === 'drop fails'
+                ? ['reserve', 'fork', 'mark', 'payload', 'discard', 'drop']
+                : ['reserve', 'fork', 'mark', 'payload', 'discard', 'drop', 'dropped', 'clear']);
+            assert.equal(receipt, outcome === 'drop fails' ? 'collection_created' : undefined);
+            assert.equal(collectionExists, outcome === 'drop fails');
+        }
+        if (outcome === 'drop fails') {
+            assert.ok(warnings.some((args) => args.some((arg) => String(arg).includes(dropFailure.message))));
+        } else {
+            assert.deepEqual(warnings, []);
+        }
+    });
+}
+
 test('IndexGenerationWorkflow removes serialized reindex queue entries after success and failure', async () => {
     const workflow = createWorkflow();
     const internals = getWorkflowInternals(workflow);

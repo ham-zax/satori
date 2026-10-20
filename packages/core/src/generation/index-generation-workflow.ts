@@ -1409,12 +1409,19 @@ export class IndexGenerationWorkflow {
                     throw new Error(`Atomic delta publication is missing source stat evidence for '${filePath}'.`);
                 }
             }
+            this.ports.reserveIndexCandidate(input.canonicalRoot, candidateCollectionName, mutationLease);
             await measurePublicationPhase(
                 'publication_fork',
                 () => this.ports.vectorDatabase.forkCollection!(
                     input.sourceCollectionName,
                     candidateCollectionName,
                 ),
+            );
+
+            this.ports.markIndexCandidateCollectionCreated(
+                input.canonicalRoot,
+                publicationId,
+                mutationLease,
             );
 
             const payloadDelta = await measurePublicationPhase(
@@ -1613,6 +1620,13 @@ export class IndexGenerationWorkflow {
                     }
                     publicationState.activated = true;
                     await input.preparedChanges.commit(input.options.assertMutationCurrent);
+                    try {
+                        this.ports.clearIndexCandidate(input.canonicalRoot, publicationId, mutationLease);
+                    } catch (receiptError) {
+                        console.warn(
+                            `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
+                        );
+                    }
                     const navigationObservationToken = this.ports.resolveNavigationObservationToken(
                         input.canonicalRoot,
                         publicationId,
@@ -1678,7 +1692,14 @@ export class IndexGenerationWorkflow {
                         `[Context] Failed to discard unpublished Publication '${publicationId}': ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
                     );
                 }
-                await this.ports.vectorDatabase.dropCollection(candidateCollectionName).catch(() => undefined);
+                try {
+                    await this.ports.vectorDatabase.dropCollection(candidateCollectionName);
+                    this.ports.clearIndexCandidate(input.canonicalRoot, publicationId, mutationLease);
+                } catch (cleanupError) {
+                    console.warn(
+                        `[Context] Unpublished collection '${candidateCollectionName}' remains cleanup-pending; retaining its durable candidate receipt: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                    );
+                }
             }
             throw error;
         }
@@ -1869,13 +1890,15 @@ export class IndexGenerationWorkflow {
             const match = registry.matchAuxiliaries(relativePath).find((entry) => entry.language === language);
             if (!match) continue;
             const handle = await openRegularFileInsideRoot(path.resolve(codebasePath, relativePath), codebasePath);
-            let content: string;
+            let contentBytes: Buffer;
             try {
-                content = await handle.readFile('utf8');
+                contentBytes = await handle.readFile();
             } finally {
                 await handle.close();
             }
-            const sourceHash = crypto.createHash('sha256').update(content).digest('hex');
+            // Observed hashes cover raw bytes: hash before decoding so non-UTF-8 sources match.
+            const sourceHash = crypto.createHash('sha256').update(contentBytes).digest('hex');
+            const content = contentBytes.toString('utf8');
             if (sourceHash !== expectedHash) {
                 throw new Error(`Semantic auxiliary source hash mismatch for ${relativePath}: expected ${expectedHash}, got ${sourceHash}`);
             }
@@ -2011,18 +2034,20 @@ export class IndexGenerationWorkflow {
                     const langFiles = mergedManifestFiles.filter((f) => f.language === lang);
                     for (const f of langFiles) {
                         const fullPath = path.resolve(codebasePath, f.path);
-                        let source: string;
+                        let sourceBytes: Buffer;
                         try {
                             const handle = await openRegularFileInsideRoot(fullPath, codebasePath);
                             try {
-                                source = await handle.readFile('utf8');
+                                sourceBytes = await handle.readFile();
                             } finally {
                                 await handle.close();
                             }
                         } catch {
                             throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
                         }
-                        const sourceHash = crypto.createHash('sha256').update(source).digest('hex');
+                        // Manifest hashes cover raw bytes: hash before decoding so non-UTF-8 sources match.
+                        const sourceHash = crypto.createHash('sha256').update(sourceBytes).digest('hex');
+                        const source = sourceBytes.toString('utf8');
                         if (f.hash && f.hash !== sourceHash) {
                             throw new Error(`Semantic source hash mismatch for ${f.path}: expected ${f.hash}, got ${sourceHash}`);
                         }

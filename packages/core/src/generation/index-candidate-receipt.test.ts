@@ -122,6 +122,41 @@ for (const failurePoint of ['write', 'fsync'] as const) {
     });
 }
 
+test('crash before the collection_created rename leaves no stray candidate entry and startup remains usable', async (t) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-candidate-mark-crash-'));
+    t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+    const repoRoot = path.join(tempRoot, 'repo');
+    fs.mkdirSync(repoRoot);
+    const runtime = new RootMutationRuntime({ stateDir: path.join(tempRoot, 'mutations') });
+    const options = {
+        stateRoot: path.join(tempRoot, 'state'),
+        mutationCoordinator: getRootMutationCoordinator(runtime),
+    };
+    const store = new PublicationStore(options);
+    await runtime.run(repoRoot, 'create', async () => {
+        const lease = getCurrentRootMutationLease(runtime, repoRoot);
+        store.reserveIndexCandidate(repoRoot, 'candidate', lease);
+        const crash = new Error('injected crash before rename');
+        const originalRm = fs.rmSync;
+        // A process crash runs no finally block: the staged temp file stays.
+        t.mock.method(fs, 'renameSync', () => { throw crash; });
+        t.mock.method(fs, 'rmSync', (...args: Parameters<typeof fs.rmSync>) => {
+            if (String(args[0]).endsWith('.tmp')) return;
+            return originalRm(...args);
+        });
+        assert.throws(
+            () => store.markIndexCandidateCollectionCreated(repoRoot, lease.operationId, lease),
+            (error) => error === crash,
+        );
+        t.mock.restoreAll();
+        const restarted = new PublicationStore(options);
+        (restarted as unknown as { pruneStartupOrphans(): void }).pruneStartupOrphans();
+        const receipts = restarted.listIndexCandidateReceipts();
+        assert.equal(receipts.length, 1);
+        assert.equal(receipts[0]?.phase, 'reserved');
+    });
+});
+
 test('candidate receipt publication is exclusive against a competing creator', async (t) => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-candidate-exclusive-'));
     t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));

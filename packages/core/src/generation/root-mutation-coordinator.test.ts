@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 
-import { MutationExecutorStillActiveError, MutationLeaseCoordinator } from './root-mutation-coordinator';
-import { RootMutationRuntime } from './root-mutation-runtime';
+import { MutationExecutorStillActiveError, MutationLeaseCoordinator, type RootMutationLease } from './root-mutation-coordinator';
+import { RootMutationRuntime, getRootMutationCoordinator } from './root-mutation-runtime';
 
 test('the last operation retains its indexing budget hint after runtime restart', async (t) => {
     const { root, stateDir } = fixture(t);
@@ -34,6 +34,101 @@ function fixture(t: TestContext): { root: string; stateDir: string; statePath: s
         statePath: path.join(stateDir, `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`),
     };
 }
+
+test('runtime preserves the work error when lease release also fails', async (t) => {
+    const { root, stateDir } = fixture(t);
+    const runtime = new RootMutationRuntime({ stateDir });
+    const coordinator = getRootMutationCoordinator(runtime);
+    const workError = new Error('injected work failure');
+    const releaseError = Object.assign(new Error('injected release ENOSPC'), { code: 'ENOSPC' });
+    const warnings: unknown[][] = [];
+    t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args); });
+    const release = t.mock.method(coordinator, 'release', () => { throw releaseError; });
+    await assert.rejects(runtime.run(root, 'create', () => { throw workError; }), (error) => error === workError);
+    assert.equal(release.mock.callCount(), 1);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].some((value) => String(value).includes(releaseError.message)));
+});
+
+test('runtime retries a failed release before acquiring the same canonical root', async (t) => {
+    const { root, stateDir } = fixture(t);
+    const alias = `${root}-alias`;
+    fs.symlinkSync(root, alias, 'dir');
+    const runtime = new RootMutationRuntime({ stateDir });
+    const coordinator = getRootMutationCoordinator(runtime);
+    const originalRelease = coordinator.release.bind(coordinator);
+    const releaseError = Object.assign(new Error('injected release EIO'), { code: 'EIO' });
+    const calls: string[] = [];
+    const release = t.mock.method(coordinator, 'release', (lease: RootMutationLease) => {
+        calls.push(`release:${lease.operationId}`);
+        if (calls.length === 1) throw releaseError;
+        return originalRelease(lease);
+    });
+    let firstId = '';
+    await assert.rejects(runtime.run(root, 'create', (execution) => {
+        firstId = execution.id;
+        return 'first result';
+    }), (error) => error === releaseError);
+    assert.equal(coordinator.getActiveLease(root)?.operationId, firstId);
+    let secondId = '';
+    assert.equal(await runtime.run(alias, 'reindex', (execution) => {
+        secondId = execution.id;
+        calls.push('second work');
+        return 'second result';
+    }), 'second result');
+    assert.notEqual(secondId, firstId);
+    assert.deepEqual(calls, [`release:${firstId}`, `release:${firstId}`, 'second work', `release:${secondId}`]);
+    assert.equal(release.mock.callCount(), 3);
+    assert.equal(coordinator.getActiveLease(root), undefined);
+    assert.equal(runtime.requestCancellation(firstId), false);
+});
+
+test('runtime propagates a pending release error before another acquire', async (t) => {
+    const { root, stateDir } = fixture(t);
+    const runtime = new RootMutationRuntime({ stateDir });
+    const coordinator = getRootMutationCoordinator(runtime);
+    const releaseError = new Error('injected persistent release failure');
+    const release = t.mock.method(coordinator, 'release', () => { throw releaseError; });
+    const acquire = t.mock.method(coordinator, 'acquire');
+    await assert.rejects(runtime.run(root, 'create', () => 'first result'), (error) => error === releaseError);
+    let secondWorkRan = false;
+    await assert.rejects(runtime.run(root, 'reindex', () => { secondWorkRan = true; }), (error) => error === releaseError);
+    assert.equal(secondWorkRan, false);
+    assert.equal(release.mock.callCount(), 2);
+    assert.equal(acquire.mock.callCount(), 1);
+});
+
+test('active lease listing skips a moved canonical root and preserves its state', (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const healthyRoot = path.join(path.dirname(root), 'healthy');
+    const targetRoot = path.join(path.dirname(root), 'target');
+    fs.mkdirSync(healthyRoot);
+    fs.mkdirSync(targetRoot);
+    const coordinator = new MutationLeaseCoordinator({ stateDir });
+    assert.ok(coordinator.acquire(root, 'create').acquired);
+    const healthy = coordinator.acquire(healthyRoot, 'create');
+    assert.ok(healthy.acquired);
+    const before = fs.readFileSync(statePath, 'utf8');
+    fs.renameSync(root, `${root}-original`);
+    fs.symlinkSync(targetRoot, root, 'dir');
+    const warnings: string[] = [];
+    t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.join(' ')); });
+    assert.deepEqual(new MutationLeaseCoordinator({ stateDir }).listActiveLeases(), [healthy.lease]);
+    assert.equal(warnings.length, 1);
+    for (const value of [statePath, root, targetRoot]) assert.ok(warnings[0].includes(value));
+    assert.equal(fs.readFileSync(statePath, 'utf8'), before);
+});
+
+test('active lease listing still rejects a root key mismatch', (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const coordinator = new MutationLeaseCoordinator({ stateDir });
+    assert.ok(coordinator.acquire(root, 'create').acquired);
+    const wrongPath = path.join(stateDir, `${'0'.repeat(64)}.json`);
+    fs.renameSync(statePath, wrongPath);
+    assert.throws(() => coordinator.listActiveLeases(), {
+        message: `Mutation lease state '${wrongPath}' has inconsistent root ownership.`,
+    });
+});
 
 test('failed lock owner write closes the descriptor and removes the incomplete lock', (t) => {
     const { root, stateDir, statePath } = fixture(t);

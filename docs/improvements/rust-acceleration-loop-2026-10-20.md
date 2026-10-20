@@ -277,6 +277,31 @@ decided after the profile. Remove them only if their measured cost is above
   architecture (navigation 63-70 s and finalize_collection 22-25 s are serial).
 - Hamza approved option 2 (overlap and off-main-thread architecture), design
   first. Design below. No code until Hamza approves a proposal.
+- Hamza approved the order P1, P2, then P4 measurement. P1 was built as a
+  lazy await: `prepare_changes` starts before navigation, and only Java
+  semantic auxiliary collection waits for its file hashes. P2 starts the
+  symbol sidecar write right after `navigation.registry` and finishes or
+  aborts it at `navigation.stage`. Both have failure-path tests with
+  mutation checks.
+- P1 + P2 screening pair (`screen-P12`, candP12 first, start load 1.70 /
+  1.70): artifacts identical. Navigation 94.9 / 72.3 s, prepare_changes
+  26.3 / 16.0 s, stage 16.6 / 35.3 s. Java semantic needs the hashes about
+  3 s into navigation, and a parallel `prepare_changes` is slower.
+- DECISION: P1 DROPPED. Prepare plus navigation 95 s parallel against 88 s
+  serial.
+- P2-only screening pair (`screen-P2`, candP2 first, start load 1.93 /
+  1.90): critical path (server start to `publication.commit`) candP2
+  350 s, base 340 s. Navigation 66.6 / 68.3 s, stage 16.5 / 33.4 s, Java
+  semantic language 19.4 / 9.4 s, C# semantic language 4.1 / 0.5 s,
+  scanFiles 25.0 / 19.0 s (unchanged code), prepare_changes 18.0 / 15.9 s.
+  Peak anonymous 4,337 / 4,460 MiB. Artifacts identical (compare exit 0).
+  States of both pairs deleted.
+- DECISION: P2 DROPPED. The sidecar write saves 16.9 s of stage, but it
+  slows semantic analysis by about 14 s (the write and the semantic reads
+  share the disk). Navigation gains 1.7 s, inside the ±10 s noise. Patch
+  kept at `screen-P2/candP2.patch`. The P1 code was reverted before the
+  pair and has no patch.
+- Next: P4 step 1 (measurement only).
 
 ## Overlap design (option 2), 20 October 2026
 

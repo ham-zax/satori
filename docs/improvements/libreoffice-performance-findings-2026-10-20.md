@@ -11,13 +11,13 @@ Node v24.19.0. Corpus: LibreOffice, 149,719 files in 9,249 directories,
 
 ## Run results
 
-| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) | r15 (`c4458339`) |
-| --- | --- | --- | --- | --- | --- |
-| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s | 449.2 s |
-| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s | 253.6 s |
-| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s | 67.0 s |
-| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s | 4.4 s |
-| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB | 4,391 MiB |
+| Metric | r10 | r12 (`664051e3`) | r13 (`71cc4659`) | r14 (profiled) | r15 (`c4458339`) | r16 (`78d5c4f0`) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Critical path | 696.1 s | 600.6 s | 494.0 s | 500.8 s | 449.2 s | 403.9 s |
+| `index.payloadPipeline` | 352.8 s | 232.9 s | 238.2 s | 247.0 s | 253.6 s | 257.5 s |
+| `index.navigation` | 177.1 s | 213.1 s | 100.1 s | 91.4 s | 67.0 s | 75.1 s |
+| `fsync_tree` | 81.1 s | 123.4 s | 8.0 s | 6.7 s | 4.4 s | 6.5 s |
+| Peak anonymous memory | 4,222 MiB | 4,248 MiB | 4,310 MiB | 4,139 MiB | 4,391 MiB | 4,288 MiB |
 
 The goal is a critical path of 200 s or less.
 
@@ -102,6 +102,23 @@ promise forms:
 - The remaining 17 s is mostly the 9,231 directory opens. Each directory
   open does several promise calls (open, fstat, readlink, realpath), and the
   scan visits one directory at a time.
+- Profile of the 18.2 s stat-reuse scan (warm, alone): per-file
+  `realpathSync.native` 4.6 s, idle 4.3 s (the promise calls of the
+  directory opens), `lstat` 1.5 s. Alone, `observe_inputs` takes only 2.3 s
+  warm. Its 31.7 s in r15 probably comes from a cold cache and load, but
+  that is not proved.
+- Fixed in `78d5c4f0`: a regular file read through the verified directory
+  descriptor already has a known real path. One descriptor check per
+  directory after inspection replaces the per-file `realpath`. The
+  directory open makes the same checks with sync calls. The stat-reuse scan
+  goes from 17.47 s to 6.26 s, and the final check from 17.18 s to 5.98 s
+  (warm, alone, median of 3). The output is byte-identical (35,767 files).
+- r16 (full run, under load): `prepare_changes` 46.3 s to 27.9 s,
+  `source_current` 22.7 s to 11.1 s, critical path 449.2 s to 403.9 s.
+  `observe_inputs` stays at 31.3 s and `index.scanFiles` at 20.2 s. Both
+  still walk with one promise `readdir` per directory.
+- Rule: if a descriptor already proves the location of a directory, check
+  that location once per directory, not once per entry.
 
 ### 5. "Analysis wait" does not mean that the analysis workers are slow
 

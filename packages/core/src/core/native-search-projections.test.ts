@@ -11,8 +11,10 @@ import {
     loadAddon,
     MAX_BYTES,
     nativeProjectionBinding,
+    nativeInputBytes,
     projectionInputBytes,
     rawBytes,
+    rawStrings,
     type Counts,
     type NativeAddon,
     type RawInput,
@@ -34,6 +36,39 @@ function binding(onBatch: (inputs: RawInput[]) => void = () => {}): NativeAddon 
         buildProjectionBatch: async inputs => { onBatch(inputs); return inputs.map(reference); },
     };
 }
+
+test('nativeInputBytes matches the regex policy and UTF-8 byte count', () => {
+    const oracle = (raw: RawInput) => rawStrings(raw).every(v => !/[\x80-\uffff]/.test(v) && !/[a-zA-Z0-9_$]{257}/.test(v)) && rawBytes(raw) <= MAX_BYTES ? rawBytes(raw) : undefined;
+    const check = (raw: RawInput) => assert.equal(nativeInputBytes(raw), oracle(raw));
+    check({ content: '', relativePath: '' });
+    check({ content: '', relativePath: '', language: '', symbolKind: '', symbolLabel: '', breadcrumbs: [''] });
+    check({ content: 'const x = 1;', relativePath: 'src/a.ts', language: 'typescript', symbolKind: 'function', symbolLabel: 'parse', breadcrumbs: ['module'] });
+    const checkFields = (value: string) => {
+        check({ content: value, relativePath: '' });
+        check({ content: '', relativePath: value });
+        check({ content: '', relativePath: '', symbolLabel: value });
+        check({ content: '', relativePath: '', breadcrumbs: [value] });
+    };
+    for (const value of ['é', '\ud800', '\udc00', '😀', '\x7f', '\x80']) checkFields(value);
+    for (const char of ['a', 'Z', '0', '_', '$']) {
+        checkFields(char.repeat(256));
+        checkFields(char.repeat(257));
+        checkFields(`${char.repeat(256)}-${char.repeat(256)}`);
+        checkFields(`${char.repeat(200)} ${char.repeat(100)}`);
+    }
+    check({ content: 'a'.repeat(200), relativePath: 'Z'.repeat(200) });
+    check({ content: '-'.repeat(MAX_BYTES), relativePath: '' });
+    check({ content: '-'.repeat(MAX_BYTES + 1), relativePath: '' });
+    let seed = 0x12345678;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 0x100000000; };
+    const alphabet = ['a', 'Z', '9', '_', '$', '-', ' ', '\n', 'é', '\ud800', '😀'];
+    for (let sample = 0; sample < 2000; sample++) {
+        const length = Math.floor(random() * 601);
+        let value = '';
+        while (value.length < length) value += random() < 0.85 ? 'a' : alphabet[Math.floor(random() * alphabet.length)];
+        checkFields(value.slice(0, length));
+    }
+});
 
 test('batch policy preserves projections, validates paths and bounds dispatch by count and bytes', async () => {
     const batches: RawInput[][] = [];

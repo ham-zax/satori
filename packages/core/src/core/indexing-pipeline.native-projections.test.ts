@@ -145,7 +145,7 @@ function configure(t: TestContext, enabled: boolean) {
 }
 
 for (const chunked of [true, false]) {
-    test(`pipeline lease observations follow ${chunked ? '641 chunk batches' : '257 empty-file event windows'}`, async t => {
+    test(`native lease observations match the reference write boundaries across ${chunked ? '641 chunk batches' : '257 empty-file event windows'}`, async t => {
         configure(t, false);
         const fileCount = chunked ? 641 : 257;
         const sources = Object.fromEntries(Array.from({ length: fileCount }, (_, index) => [
@@ -167,9 +167,7 @@ for (const chunked of [true, false]) {
         assert.equal(after.totalChunks, chunked ? 641 : 0);
         assert.equal(after.processedFiles, fileCount);
         assert.deepEqual(batches, chunked ? [...Array<number>(10).fill(64), 1] : []);
-        const consumptionWindows = chunked ? batches.length : Math.ceil(fileCount / 128);
-        assert.equal(checks - baselineChecks, batches.length + consumptionWindows,
-            'native lease observations belong to submission and ordered consumption windows');
+        assert.equal(checks, baselineChecks, 'native lease observations are the reference write guards');
         assert.deepEqual(native.documents, baseline.documents);
         assert.deepEqual(native.embeddingInputs, baseline.embeddingInputs);
         assert.deepEqual(native.callbacks, baseline.callbacks);
@@ -177,13 +175,14 @@ for (const chunked of [true, false]) {
 }
 
 for (const reason of [null, new Error('lease lost after native settlement')]) {
-    test(`lease observation after native settlement preserves ${String(reason)} and drains before rejection`, async t => {
+    test(`lease loss at the first write guard wraps ${String(reason)} as the reference write failure and drains before rejection`, async t => {
         configure(t, true);
         const started = gate();
         const releaseFirst = gate();
         const releaseOthers = gate();
         const readStarted = gate();
         const releaseRead = gate();
+        const leaseChecked = gate();
         const root = new AbortController();
         let calls = 0;
         let settledCalls = 0;
@@ -213,32 +212,28 @@ for (const reason of [null, new Error('lease lost after native settlement')]) {
             },
         });
         const operation = fixture.run(() => {
-            if (++checks === 5) { assert.equal(settledCalls, 1); throw reason; }
-            assert.ok(checks <= 4, 'no lease callbacks follow a failed consumption check');
+            checks++;
+            leaseChecked.release();
+            if (checks === 1) throw reason;
+            assert.fail('no lease callback follows a failed write guard');
         });
         operation.then(() => { returned = true; }, () => { returned = true; });
-        const rejected = assert.rejects(operation, error => error === reason);
+        const rejected = assert.rejects(operation, error => error instanceof Error && error.message.startsWith('Failed to persist') && error.cause === reason);
         try {
             await Promise.all([started.promise, readStarted.promise]);
             releaseFirst.release();
-            await setImmediate();
-            assert.equal(checks, 5);
-            assert.equal(returned, false);
-            assert.equal(settledCalls, 1);
-            assert.equal(cancellations, 3);
-            assert.equal(root.signal.aborted, false);
-            assert.equal(fixture.embeddingInputs.length, 0);
-            assert.equal(fixture.documents.length, 0);
-            assert.equal(fixture.callbacks.length, 0);
             releaseOthers.release();
+            await leaseChecked.promise;
             await setImmediate();
-            assert.equal(settledCalls, calls);
-            assert.equal(readSettled, false);
-            assert.equal(returned, false, 'the pending source read still belongs to this operation');
+            assert.equal(returned, false);
+            assert.equal(fixture.documents.length, 0);
+            assert.equal(root.signal.aborted, false);
+            assert.equal(readSettled, false, 'the pending source read still belongs to this operation');
             releaseRead.release();
             await rejected;
             assert.equal(readSettled, true);
-            assert.equal(checks, 5);
+            assert.equal(checks, 1);
+            assert.equal(settledCalls, calls);
             assert.equal(root.signal.aborted, false);
             assert.equal(fixture.documents.length, 0);
             assert.equal(fixture.callbacks.length, 0);
@@ -428,7 +423,9 @@ for (const stop of ['cancellation', 'lease loss'] as const) {
             if (!valid) { assert.equal(nativeFinished, 4); throw staleLease; }
         });
         operation.then(() => { settled = true; }, () => { settled = true; });
-        const rejected = assert.rejects(operation, error => error === (stop === 'cancellation' ? null : staleLease));
+        const rejected = assert.rejects(operation, error => stop === 'cancellation'
+            ? error === null
+            : error instanceof Error && error.message.startsWith('Failed to persist') && error.cause === staleLease);
         try {
             await entered.promise;
             valid = false;
@@ -437,13 +434,15 @@ for (const stop of ['cancellation', 'lease loss'] as const) {
             assert.equal(cancelled, stop === 'cancellation' ? 4 : 0);
             assert.equal(nativeFinished, 0);
             assert.equal(settled, false);
-            assert.equal(checks, 4, 'each submitted batch checks its lease without escaping the drain');
+            assert.equal(checks, 0, 'no lease check runs while native work is pending');
             assert.equal(fixture.documents.length, 0);
             release.release();
             await rejected;
+            assert.equal(checks, stop === 'cancellation' ? 0 : 1);
             assert.equal(nativeFinished, 4);
             assert.equal(fixture.documents.length, 0);
-            assert.equal(fixture.embeddingInputs.length, 0);
+            // Like the reference path, lease loss surfaces at the write guard after its embedding batch.
+            assert.equal(fixture.embeddingInputs.length, stop === 'cancellation' ? 0 : 1);
             assert.equal(fixture.callbacks.length, 0);
             assert.equal(traces.length, 1);
             assert.equal(traces[0].calls, 4);

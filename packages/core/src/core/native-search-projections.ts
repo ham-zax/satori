@@ -49,9 +49,30 @@ export function rawStrings(input: RawInput): string[] {
 export function rawBytes(input: RawInput): number {
     return rawStrings(input).reduce((sum, value) => sum + Buffer.byteLength(value, 'utf8'), 0);
 }
-function supported(input: RawInput): boolean {
+export function nativeInputBytes(input: RawInput): number | undefined {
     // Reject lone surrogates here, before napi converts JavaScript UTF-16 to Rust UTF-8.
-    return rawStrings(input).every(value => !/[\x80-\uffff]/.test(value) && !/[a-zA-Z0-9_$]{257}/.test(value));
+    let total = 0;
+    const breadcrumbs = input.breadcrumbs;
+    for (let field = 0; field < 5 + (breadcrumbs?.length ?? 0); field++) {
+        const value = (field === 0 ? input.content
+            : field === 1 ? input.relativePath
+            : field === 2 ? input.language
+            : field === 3 ? input.symbolKind
+            : field === 4 ? input.symbolLabel
+            : breadcrumbs![field - 5]) ?? '';
+        total += value.length;
+        if (total > MAX_BYTES) return undefined;
+        let run = 0;
+        for (let index = 0; index < value.length; index++) {
+            const code = value.charCodeAt(index);
+            if (code >= 0x80) return undefined;
+            if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+                || (code >= 48 && code <= 57) || code === 95 || code === 36) {
+                if (++run >= 257) return undefined;
+            } else run = 0;
+        }
+    }
+    return total;
 }
 function checkAbort(signal?: AbortSignal): void {
     if (signal?.aborted) throw signal.reason;
@@ -110,9 +131,10 @@ export function createNativeProjectionBatchBuilder(options: Options = {}): Nativ
         for (let index = 0; index < inputs.length; index++) {
             checkAbort(signal);
             if ((inputs[index].chunk.metadata.breadcrumbs?.length ?? 0) > 256) continue;
+            if (!addon) continue;
             const raw = flatten(inputs[index]);
-            const size = rawBytes(raw);
-            if (!addon || size > MAX_BYTES || !supported(raw)) continue;
+            const size = nativeInputBytes(raw);
+            if (size === undefined) continue;
             if (batch.length === MAX_INPUTS || bytes + size > MAX_BYTES) await flush();
             batch.push(raw);
             indices.push(index);

@@ -25,7 +25,7 @@ interface Slot {
 export async function* streamIndexingProjections(
     source: AsyncIterable<IndexingProjectionEvent>,
     builder: NativeProjectionBatchBuilder,
-    options: { beforePrepare?: () => void; beforeConsume?: () => void; onTelemetry?: (metrics: ProjectionQueueTelemetry) => void } = {},
+    options: { onTelemetry?: (metrics: ProjectionQueueTelemetry) => void } = {},
 ): AsyncGenerator<ProjectedIndexingEvent, void, unknown> {
     const iterator = source[Symbol.asyncIterator]();
     const slots: Slot[] = [];
@@ -86,7 +86,6 @@ export async function* streamIndexingProjections(
                     if (stopped || failed) { settle({ ok: true, results: [] }); break; }
                     builder.assertActive();
                     if (!inputs.length) { settle({ ok: true, results: [] }); continue; }
-                    options.beforePrepare?.();
                     const job = builder.prepare(inputs);
                     inputs = [];
                     working++;
@@ -141,7 +140,6 @@ export async function* streamIndexingProjections(
                 else throw result.error;
                 return;
             }
-            options.beforeConsume?.();
             let index = 0;
             for (const event of slot.events) {
                 if (event.kind === 'chunk') {

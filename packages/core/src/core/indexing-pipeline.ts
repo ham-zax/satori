@@ -1017,10 +1017,6 @@ export class IndexingPipeline {
                     }
                 };
                 for await (const event of streamIndexingProjections(events(), nativeProjections, {
-                    beforePrepare: input.assertMutationCurrent,
-                    // Queued native results pass a lease check at ordered batch entry.
-                    // Existing write boundaries check again after asynchronous consumer work.
-                    beforeConsume: input.assertMutationCurrent,
                     onTelemetry: metrics => perfTrace('payload.native_projection_queue', 0, { ...metrics }),
                 })) {
                     activeFilePath = event.filePath;

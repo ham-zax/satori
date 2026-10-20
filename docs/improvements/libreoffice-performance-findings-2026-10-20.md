@@ -170,6 +170,24 @@ promise forms:
 - Other navigation costs: relationship resolution 41.6 s inclusive, of which
   Python resolution is 19.3 s.
 
+### 8. Native projections: lease hooks and a backtracking regex (Candidate A)
+
+- Finding (profile-1 of `ee5e91ca`, native): the projection stream checked
+  the mutation lease at every batch submission and consumption, 20.6 s
+  inclusive (`sleepSync` 15.4 s self). The native support check
+  `/[a-zA-Z0-9_$]{257}/` backtracks at every position, 9.9 s self.
+- Why: the same root-lock check as in finding 7, now per projection batch.
+  The reference path checks the lease only at the vector write guard.
+- Fix: remove both hooks (the native path keeps the reference write guard)
+  and replace the regex check and second byte count with one `charCodeAt`
+  pass, `nativeInputBytes()`. Microbenchmark on 12,643 chunks: 586.9 ms to
+  135.4 ms, same decisions.
+- Result (3 interleaved runs per variant, start load 0.84-1.86): critical
+  path reference 378.1, 363.6, 375.1 s, native 337.0, 328.2, 345.3 s. Median
+  375.1 to 337.0 s (-38.1 s). `index.payloadPipeline` median 244.3 to
+  211.3 s. Anonymous peak 4,311-4,352 MiB to 4,381-4,408 MiB. Artifacts
+  identical in both compared pairs.
+
 ## Method notes
 
 - Profile before a change. Use `--cpu-prof` on the full run, then

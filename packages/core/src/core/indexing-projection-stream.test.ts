@@ -53,19 +53,14 @@ function controlled(signal?: AbortSignal) {
 }
 
 for (const smallFiles of [true, false]) {
-    test(`lease observations follow bounded windows across ${smallFiles ? '641 files' : '641 chunks'}`, async () => {
+    test(`ordered output follows bounded native batches across ${smallFiles ? '641 files' : '641 chunks'}`, async () => {
         const batches: number[] = [];
-        let submissions = 0;
-        let consumptions = 0;
         const builder = createNativeProjectionBatchBuilder({ loader: () => ({
             ProjectionCancellation: class { cancel(): void {} },
             buildProjectionBatch: async inputs => { batches.push(inputs.length); return inputs.map(reference); },
         }) });
         const output = [];
-        for await (const event of streamIndexingProjections(events(641, smallFiles), builder, {
-            beforePrepare: () => { submissions++; },
-            beforeConsume: () => { consumptions++; },
-        })) output.push(event);
+        for await (const event of streamIndexingProjections(events(641, smallFiles), builder)) output.push(event);
         const expected = [];
         for await (const event of events(641, smallFiles)) {
             expected.push(event.kind === 'chunk' ? { ...event, projections: buildSearchProjections(event.input) } : event);
@@ -73,40 +68,36 @@ for (const smallFiles of [true, false]) {
         assert.deepEqual(output, expected);
         assert.deepEqual(batches, [...Array<number>(10).fill(64), 1]);
         assert.equal(output.length, smallFiles ? 1282 : 642);
-        assert.equal(submissions, batches.length);
-        assert.equal(consumptions, batches.length);
     });
 }
 
-test('zero-chunk lease observations follow 128-event windows', async () => {
-    let submissions = 0;
-    let consumptions = 0;
+test('zero-chunk windows submit no native work', async () => {
+    let calls = 0;
+    const builder = createNativeProjectionBatchBuilder({ loader: () => ({
+        ProjectionCancellation: class { cancel(): void {} },
+        buildProjectionBatch: async inputs => { calls++; return inputs.map(reference); },
+    }) });
     async function* source(): AsyncGenerator<IndexingProjectionEvent> {
         for (let index = 0; index < 257; index++) {
             yield { kind: 'file-complete', filePath: `empty${index}.ts`, fileIndex: index };
         }
     }
     let callbacks = 0;
-    for await (const event of streamIndexingProjections(source(), createNativeProjectionBatchBuilder(), {
-        beforePrepare: () => { submissions++; },
-        beforeConsume: () => { consumptions++; },
-    })) {
+    for await (const event of streamIndexingProjections(source(), builder)) {
         assert.equal(event.kind, 'file-complete');
         callbacks++;
     }
     assert.equal(callbacks, 257);
-    assert.equal(submissions, 0);
-    assert.equal(consumptions, Math.ceil(callbacks / 128));
+    assert.equal(calls, 0);
 });
 
 for (const reason of [null, new Error('lease lost at batch entry')]) {
-    test(`beforeConsume preserves ${String(reason)} and drains tasks and source before rejection`, async () => {
+    test(`consumer failure preserves ${String(reason)} and drains tasks and source before rejection`, async () => {
         const root = new AbortController();
         const work = controlled(root.signal);
         const closeStarted = gate();
         const closeRelease = gate();
         let closed = false;
-        let consumptions = 0;
         let yielded = 0;
         let returned = false;
         async function* source() {
@@ -114,11 +105,8 @@ for (const reason of [null, new Error('lease lost at batch entry')]) {
             finally { closeStarted.release(); await closeRelease.promise; closed = true; }
         }
         const operation = (async () => {
-            for await (const event of streamIndexingProjections(source(), work.builder, {
-                beforeConsume: () => { consumptions++; throw reason; },
-            })) {
-                yielded++;
-                if (event.kind === 'file-error') throw event.error;
+            for await (const event of streamIndexingProjections(source(), work.builder)) {
+                yielded++; throw reason;
             }
         })();
         operation.then(() => { returned = true; }, () => { returned = true; });
@@ -128,10 +116,10 @@ for (const reason of [null, new Error('lease lost at batch entry')]) {
             await work.started[3].promise;
             work.releases[0].release();
             await setImmediate();
-            assert.equal(consumptions, 1);
+            assert.equal(yielded, 1);
             await closeStarted.promise;
             assert.deepEqual(work.state(), { calls: 4, running: 3, settled: 1, cancelled: 3 });
-            assert.equal(yielded, 0);
+            assert.equal(yielded, 1);
             assert.equal(returned, false);
             assert.equal(closed, false);
             work.releases.forEach(item => item.release());
@@ -143,8 +131,8 @@ for (const reason of [null, new Error('lease lost at batch entry')]) {
             assert.equal(closed, true);
             assert.equal(root.signal.aborted, false);
             assert.equal(work.state().running, 0);
-            assert.equal(consumptions, 1);
-            assert.equal(yielded, 0);
+            assert.equal(yielded, 1);
+            assert.equal(yielded, 1);
         } finally {
             work.releases.forEach(item => item.release()); closeRelease.release();
             await operation.catch(() => undefined);
@@ -249,11 +237,8 @@ test('later native failure stops submission and follows earlier chunks and callb
         },
     }) });
     const output: IndexingProjectionEvent[] = [];
-    let consumptions = 0;
     const operation = (async () => {
-        for await (const event of streamIndexingProjections(events(400, true), builder, {
-            beforeConsume: () => { assert.equal(++consumptions, 1, 'a failed job must retain its native error'); },
-        })) output.push(event);
+        for await (const event of streamIndexingProjections(events(400, true), builder)) output.push(event);
     })();
     try {
         await failed.promise;
@@ -265,7 +250,6 @@ test('later native failure stops submission and follows earlier chunks and callb
         assert.equal(output.length, 129);
         assert.equal(output[127].kind, 'file-complete');
         assert.deepEqual(output[128], { kind: 'file-error', filePath: 'file64.ts', fileIndex: 64, error: failure });
-        assert.equal(consumptions, 1);
     } finally { release.release(); await operation; }
 });
 

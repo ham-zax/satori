@@ -27,10 +27,17 @@ export async function drainResolutionWorkAsync<T>(
     let sinceYield = 0;
     let lastYield = performance.now();
     try {
+        // The lease is checked at the start, after every yield and before the
+        // result returns, not per step: each check takes the cross-process
+        // state lock. Steps between yields change only local iterator state,
+        // and publication rechecks the lease under the same lock.
+        options.assertCurrent?.();
         while (true) {
-            options.assertCurrent?.();
             const step = work.next();
-            if (step.done) return step.value;
+            if (step.done) {
+                options.assertCurrent?.();
+                return step.value;
+            }
             sinceYield++;
             if (sinceYield === 1 && step.value.completedCalls === 1
                 || sinceYield >= 64 || performance.now() - lastYield >= 25

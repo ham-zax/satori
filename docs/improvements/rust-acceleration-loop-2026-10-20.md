@@ -143,8 +143,135 @@ decided after the profile. Remove them only if their measured cost is above
   14.5 s), native 337.0 s (spread 17.1 s), gain 38.1 s. Every native run
   is faster than every reference run. Payload median 244.3 to 211.3 s.
   Findings note section 8.
-- Step 6: Candidate A committed on `exp/napi-projections`.
-- Next: profile the Candidate A build (step 1 again) and re-rank. Expected
-  leaders from profile-1: Potion transport 18.7 s (B), policy admission in
-  the payload (TypeScript), `encodeSearchableRow` 14.0 s (C), the
-  in-payload sync-scan 10.5 s.
+- Step 6: Candidate A committed on `exp/napi-projections` (`207496e6`). Worktree removed.
+- Step 1 again done (profile-2 of `207496e6`, native, evidence
+  `napi-loop/profile-2`, start load 1.57, 15-min load 5.50): critical path
+  393.9 s (profiled), payload 237.9 s, navigation 63.6 s, anonymous peak
+  4,400 MiB. Payload window: idle 47.6 s, GC 13.1 s.
+- Ranked main-thread costs in the payload window (inclusive):
+  1. Policy admission 25.6 s. Of it, 21.0 s is a blocking `readSync` in the
+     shebang probe: `read` <- `readSync` <- index-policy.ts:166 (the sync
+     `readProbe` of `isIndexableFileByPolicy`) <- `hasSearchableShebang`
+     (:85) <- `isIndexableFileObservationByPolicy` (:123), resumed from a
+     microtask. The sync-scan frames `sync-scan.ts:270/303` (10.6 s) run in
+     the same window. Owner question: which operation starts that scan
+     during the payload, and does it repeat the create's own scan?
+  2. Potion transport: `handleStdout` 19.1 s (`handleFrame` 9.2 s, `encode`
+     8.2 s self). Candidate B.
+  3. `flushVectorWriteBuffer` 14.8 s, of which `encodeSearchableRow` 14.2 s.
+     Candidate C.
+  4. `openInsideRoot` 14.3 s, `readIndexableFileObservationInsideRoot`
+     13.1 s.
+  5. Native projection `prepare` 6.7 s (was 15.0 s), `flush` 3.7 s self.
+- Trace done. The sync-scan is not inside the payload. Profile clock (IST)
+  against spans (UTC): scan bursts at 240-280 s and 340-365 s match
+  `index.prepare_changes` (35.9 s, after the payload ends) and
+  `publication.source_current` (20.0 s), both serial on the critical path.
+  Owner: `IndexGenerationWorkflow` full-index path
+  (index-generation-workflow.ts:910 and :964) calls
+  `Synchronizer.prepareChanges` (validates the captured source) and
+  `assertSourceObservationCurrent` (final freshness check). Both are
+  required freshness checks, not accidental duplicates. Each one walks the
+  tree again and runs policy admission on every file.
+- Cost per scan: shebang probe 22.2 s of `prepare_changes`, 13.9 s of
+  `source_current`, 22.9 s in the payload window (`getCodeFiles`). Cause:
+  cold reads. A scratch pass over 149,685 corpus files (open, read 8 KiB,
+  close): cold 23.0 s (154 us/file), warm 1.6 s (11 us/file). The 6G cgroup
+  charges page cache, anonymous peak is about 4.4 GiB, so the probed files
+  leave the cache between scans. About 91,000 `.png`/`.svg` files have no
+  language and get probed in every scan.
+- Candidate D (TypeScript, owner `config/index-policy.ts`): an admission
+  verdict cache behind the stat witness the synchronizer already trusts to
+  skip hashing (size, mtimeMs, ctimeMs, plus dev, ino). Key: absolute path
+  and policy identity. Bounded, process-wide, misses fall back to the probe.
+  Callers that hold a stat (`getCodeFiles`, sync-scan `isSupportedFile`)
+  pass it. Expected: up to 36 s off the serial tail (later scans skip the
+  probe reads). Steps 2-5 as usual.
+- Candidate D slice (steps 2-3) done in worktree
+  `/home/hamza/repo/satori-wt-candD` (uncommitted, dist built). Optional
+  `statWitness` on `isIndexableFileByPolicy` and `isObservableFileByPolicy`.
+  Cache key `dev:ino` plus relative path, hit requires equal size, mtimeMs,
+  ctimeMs and policy key (sorted extension set plus all-text limit).
+  262,144 entries, cleared on overflow. Callers `getCodeFiles` and sync-scan
+  `isSupportedFile` pass their stat. Focused tests: index-policy 6/0
+  (2 new: differential against the uncached path, and witness/policy
+  misses), sync-scan 18/0, synchronizer-observation 4/0, indexing-pipeline
+  24/0, `tsc` clean. Mutations (no ctime check, constant policy key, no
+  ino in key) each fail a test.
+- Runner: `napi-loop/tools/run.mjs` reads `SATORI_BENCH_ROOT` (default main
+  tree), so a pair can compare the main tree with a worktree build.
+- Step 4 screening pair D (`napi-loop/screen-D`, start load 0.60 / 1.71):
+  base (207496e6 native) critical path 333.1 s, candD 332.6 s. Spans base
+  / candD: scanFiles 18.9 / 19.4 s, payload 213.0 / 212.0 s,
+  prepare_changes 14.1 / 13.4 s, source_current 5.9 / 4.3 s, navigation
+  63.4 / 65.2 s, finalize_collection 22.3 / 23.3 s. Peak anonymous 4,397 /
+  4,558 MiB. Verdict: DROPPED. The gain (about 2 s of spans, 0.5 s
+  critical path) is noise. The patch is kept at `screen-D/candD.patch`.
+  Worktree and run states removed. No artifact comparison (see runner).
+- Lesson: the CPU profile overstated blocking I/O. Unprofiled,
+  `prepare_changes` is 14.1 s (profiled 35.9 s) and `source_current` 5.9 s
+  (profiled 20.0 s). Before a candidate that targets a sync-I/O frame,
+  check the unprofiled span first.
+- Runner fix: `summary.json` took `phase` from the terminal status
+  operation, which is the post-publication background `sync` (phase
+  `preflight`), so `compare.mjs` refused both runs. The summary now reports
+  `completed` when that sync owns the terminal status and the create
+  published (the loop guard already judged the create). `criticalSeconds` in
+  such a summary belongs to the sync. Use the spans critical path.
+- Unprofiled critical path ranking (base): payload 213.0 s, navigation
+  63.4 s, finalize_collection 22.3 s, scanFiles 18.9 s, prepare_changes
+  14.1 s, source_current 5.9 s.
+- Correction to the profile-2 ranking: `windows.json` payload window ends at
+  280.1 s profile time, so it includes `prepare_changes` (240-278 s). The
+  21.0 s shebang `readSync` belongs to that scan, not to the payload. True
+  payload (profile 42.2-240 s, 197.8 s main thread): idle 47.3 s, GC 12.5 s.
+  Analysis worker threads are 70-78% idle, so the main thread feeds the
+  pipeline. Inclusive main-thread costs: Potion transport `handleStdout`
+  19.0 s (byte scan loop 9.0 s self, `JSON.parse` in `handleFrame` 7.3 s,
+  `toString` 1.7 s, `Buffer.concat` 0.9 s); LanceDB `makeArrowTable` 16.3 s
+  (Arrow UTF-8 `encode` 8.2 s self: this is the `encode` frame, not Potion);
+  `openInsideRoot` 14.2 s (`realpath` 3.8 s, `fstat` 3.8 s + 2.4 s);
+  `prepareFile` 12.3 s; hash `update`+`Hash` 8.0 s; native projections
+  `flush` 3.6 s + `prepare` 2.4 s self.
+- Candidate B1 (TypeScript, owner `PotionEmbedding.handleStdout`,
+  potion-embedding.ts:505): frame on `\n` with `Buffer.indexOf` and a resume
+  offset instead of the brace-matching rescan from byte 0 on every chunk.
+  Contract: the helper writes every worker frame as compact JSON plus `\n`
+  in one write (`write_frame`, experiments/potion-l0-l1/src/main.rs:74).
+  Differences only for output that breaks that contract (two objects on one
+  line, an object without `\n`). Expected gain up to 9 s of main thread.
+  B2 (binary vectors, needs a rebuilt shipped helper) is out of loop scope
+  without Hamza's approval.
+- B1 slice (worktree /home/hamza/repo/satori-b1 from 207496e6, built core,
+  mcp, cli). Microbenchmark (200 frames of 64 x 256 JSON floats, 64.8 MB,
+  64 KiB chunks, median of 7): framing only 374.0 ms old vs 28.8 ms new,
+  framing + `JSON.parse` 535.3 vs 192.5 ms. New tests in
+  potion-embedding.test.ts drive `handleStdout` directly: every 2-chunk
+  split, 1-byte chunks and 50 seeded random chunkings give the one-chunk
+  result; non-`{` frame, two objects on one line, and > 1 MiB frames (with
+  and without `\n`) reject. Mutation: no scan offset reset after a frame
+  fails "split at byte 49". Potion tests 27 + pool 5 pass, tsc and eslint
+  clean. Screening pair `napi-loop/screen-B1` running.
+- B1 screening pair 1 (`screen-B1`, start load 0.82 / 1.72): artifacts
+  identical (compare exit 0). The PC slept during candB1 `scanFiles` (wall
+  clock jump of about 2.7 h), so its critical path is invalid. Payload,
+  outside the pause: base 221.1 s, candB1 221.0 s, no gain. Base critical
+  381.0 s with a cold cache (prepare_changes 25.0 s, source_current
+  20.1 s). Peak anonymous 4,631 / 4,462 MiB. States deleted. Pair 2 runs
+  in reversed order (candB1 first) as `base-2` / `candB1-2`.
+- B1 screening pair 2 (candB1 first, start load 1.36 / 1.79): critical path
+  (server start to `publication.commit`) candB1 354.6 s, base 357.9 s.
+  Payload 215.3 / 226.5 s, navigation 70.2 / 69.7 s, finalize_collection
+  24.4 / 25.3 s, scanFiles 23.8 / 20.0 s. Peak anonymous 4,222 / 4,429 MiB.
+  Artifacts identical (compare exit 0). States deleted.
+- DECISION: B1 DROPPED. Critical-path gain 3.3 s and payload gains 0.1 s and
+  11.2 s are inside run noise (about ±10 s). The 9 s of main-thread framing
+  work does not shorten the payload span: the main thread is not the payload
+  limit at this size of saving. Patch kept at `screen-B1/candB1.patch`.
+  Worktree removed.
+- Interleaved review repairs (outside the loop, from the follow-up review in
+  `libreoffice-fundamentals-review-2026-10-20.md`): R5 receipt recovery
+  matches the stored canonical root exactly; R6 scan policy probes read
+  through the directory descriptor (`openRegularFileAtDirectoryDescriptorSync`).
+- Next: stop the loop. Ask Hamza about B2 and off-main-thread or overlap
+  architecture (navigation 63-70 s and finalize_collection 22-25 s are serial).

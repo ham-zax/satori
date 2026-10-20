@@ -106,7 +106,7 @@ for (const reason of [null, new Error('lease lost at batch entry')]) {
         }
         const operation = (async () => {
             for await (const event of streamIndexingProjections(source(), work.builder)) {
-                yielded++; throw reason;
+                void event; yielded++; throw reason;
             }
         })();
         operation.then(() => { returned = true; }, () => { returned = true; });

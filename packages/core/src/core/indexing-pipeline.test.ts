@@ -120,6 +120,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 
+// These tests pin the TypeScript projection path and its backpressure bounds.
+// indexing-pipeline.native-projections.test.ts owns the native path, the linux-x64 default.
+process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS = '';
+
 test('IndexingPipeline retains only source snapshot metadata when semantic analyzer supports language', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-indexing-pipeline-test-'));
     try {

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "platform": "linux",
+  "architecture": "x64",
+  "target": "x86_64-unknown-linux-gnu",
+  "addon": {
+    "sourceRepository": "satori/experiments/napi-search-projections",
+    "sourceRevision": "ee5e91cad264b9bc23482932a10c3623527a2d65",
+    "rustToolchain": "1.98.0",
+    "build": "napi build --platform --release",
+    "napiVersion": 4,
+    "license": "AGPL-3.0-only",
+    "dynamicRuntime": [
+      "glibc",
+      "libgcc_s"
+    ]
+  },
+  "files": [
+    {
+      "path": "projection.node",
+      "bytes": 719976,
+      "sha256": "0db6a439725e744c748e6a6a3bc383dc9447eac17bfe4580e21f1da2ccf5ab13"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 259158,
+      "sha256": "3d6755af58087ef292cf890b38b3e88f5dc38585604e6cafe839c9667ac84cf9"
+    }
+  ]
+}

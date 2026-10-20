@@ -42,11 +42,18 @@ facade and the Rust build source in `src/lib.rs`. The pipeline does not import
 experiment files or discover a platform package.
 
 Build the release addon from this directory with
-`pnpm --ignore-workspace run build`. To enable the real full-index pipeline,
-set `SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS` to the absolute `.node` path, for
-example `/home/hamza/repo/satori/experiments/napi-search-projections/projection.linux-x64-gnu.node`.
-An unset or empty variable keeps the original synchronous TypeScript path.
-The pipeline reads the variable and loads the binding once per operation.
+`pnpm --ignore-workspace run build`. Core ships the release build as
+`packages/core/assets/native-projections/linux-x64/projection.node`, with a
+`manifest.json` (source revision, toolchain, sha256) and
+`THIRD_PARTY_NOTICES.md`. To refresh it, copy the new build there, regenerate
+the notices from `cargo tree --locked -e normal`, and update the manifest.
+`native-search-projections.test.ts` fails when the manifest and files differ.
+
+On linux-x64, the full-index pipeline uses the bundled addon by default when
+its sha256 matches the manifest. `SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS` set
+to an absolute `.node` path overrides it. An empty value keeps the original
+synchronous TypeScript path. Other platforms also use TypeScript.
+The pipeline resolves the addon and loads the binding once per operation.
 An invalid path, missing addon, or load exception uses TypeScript.
 A native computation failure rejects the operation after owned work settles.
 

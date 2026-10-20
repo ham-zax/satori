@@ -8,7 +8,8 @@ Check it with `node licenses.mjs --check`. Both commands use `cargo metadata
 --locked` and fail if a package has no license declaration. Upstream source and
 license texts are available in the local Cargo registry package directories
 reported by `cargo metadata --locked --format-version 1` (`manifest_path`).
-No native binary is distributed by this experiment.
+`@satori-code/core` distributes the linux-x64 release build with
+`THIRD_PARTY_NOTICES.md`, which holds the license text of every linked crate.
 
 napi-derive's build dependencies include Unicode identifier/segmentation crates.
 The projection kernel uses only ASCII byte predicates. The kernel adds no

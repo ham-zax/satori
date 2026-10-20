@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { isAbsolute, extname } from 'node:path';
+import { isAbsolute, extname, join, resolve } from 'node:path';
 import { buildSearchProjections, type SearchProjectionInput } from './search-projections';
 import { validateRepositoryRelativePath } from '../paths/repository-path';
 import type { SearchProjections } from '../vectordb/types';
@@ -29,8 +31,46 @@ export interface Options {
     counts?: Counts;
 }
 const requireAddon = createRequire(__filename);
+const BUNDLED_ADDON_ROOT = resolve(__dirname, '../../assets/native-projections/linux-x64');
+const verifiedBundledAddons = new Map<string, string | undefined>();
 
-/** Core loads only the explicitly configured local binary. Packaging stays outside this owner. */
+/** The bundled linux-x64 addon, only when its bytes match the shipped manifest. */
+function verifiedBundledAddonPath(assetRoot: string): string | undefined {
+    if (verifiedBundledAddons.has(assetRoot)) return verifiedBundledAddons.get(assetRoot);
+    let addonPath: string | undefined;
+    try {
+        const manifest = JSON.parse(readFileSync(join(assetRoot, 'manifest.json'), 'utf8')) as {
+            schemaVersion?: number;
+            files?: { path?: string; sha256?: string }[];
+        };
+        const entry = manifest.schemaVersion === 1 ? manifest.files?.find(file => file.path === 'projection.node') : undefined;
+        const candidate = join(assetRoot, 'projection.node');
+        if (entry?.sha256 && createHash('sha256').update(readFileSync(candidate)).digest('hex') === entry.sha256) addonPath = candidate;
+    } catch {
+        addonPath = undefined;
+    }
+    verifiedBundledAddons.set(assetRoot, addonPath);
+    return addonPath;
+}
+
+/**
+ * SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS overrides the addon path, and an empty
+ * value turns native projections off. Without it, linux-x64 uses the bundled
+ * addon. Every other case keeps the TypeScript projections, which give the same output.
+ */
+export function resolveNativeProjectionAddonPath(
+    env: NodeJS.ProcessEnv = process.env,
+    platform: NodeJS.Platform = process.platform,
+    arch: string = process.arch,
+    assetRoot: string = BUNDLED_ADDON_ROOT,
+): string | undefined {
+    const configured = env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS;
+    if (configured !== undefined) return configured || undefined;
+    if (platform !== 'linux' || arch !== 'x64') return undefined;
+    return verifiedBundledAddonPath(assetRoot);
+}
+
+/** Core loads only an absolute .node path; a failed load keeps the TypeScript projections. */
 export function loadAddon(addonPath?: string): NativeAddon | undefined {
     if (!addonPath || !isAbsolute(addonPath) || extname(addonPath) !== '.node') return undefined;
     try { return requireAddon(addonPath) as NativeAddon; } catch { return undefined; }
@@ -176,7 +216,7 @@ export function projectionInputBytes(input: SearchProjectionInput): number {
 export function createConfiguredNativeProjectionBatchBuilder(getSignal?: () => AbortSignal | undefined): {
     report(): void;
 } & NativeProjectionBatchBuilder | undefined {
-    const addonPath = process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS;
+    const addonPath = resolveNativeProjectionAddonPath();
     if (!addonPath) return undefined;
     const startedAt = performance.now();
     const signal = getSignal?.();

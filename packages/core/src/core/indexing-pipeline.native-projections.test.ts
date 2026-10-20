@@ -128,7 +128,7 @@ function configure(t: TestContext, enabled: boolean) {
         }
     });
     if (enabled) process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS = '/test/projection.node';
-    else delete process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS;
+    else process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS = '';
     delete process.env.EMBEDDING_BATCH_SIZE;
     process.env.SATORI_PERF_TRACE = '1';
     const traces: Array<{ span: string; total: number; native: number; fallback: number; calls: number; ms: number }> = [];
@@ -186,12 +186,11 @@ for (const reason of [null, new Error('lease lost after native settlement')]) {
         const root = new AbortController();
         let calls = 0;
         let settledCalls = 0;
-        let cancellations = 0;
         let checks = 0;
         let returned = false;
         let readSettled = false;
         t.mock.method(nativeProjectionBinding, 'load', () => ({
-            ProjectionCancellation: class { cancel(): void { cancellations++; } },
+            ProjectionCancellation: class { cancel(): void { /* not observed by this test */ } },
             buildProjectionBatch: async (inputs: RawInput[]) => {
                 const call = calls++;
                 if (calls === 4) started.release();

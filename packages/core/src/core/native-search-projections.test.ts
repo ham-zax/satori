@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getEventListeners } from 'node:events';
 import { setImmediate } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { buildSearchProjections, type SearchProjectionInput } from './search-projections';
 import {
     buildProjectionBatch,
@@ -15,6 +19,7 @@ import {
     projectionInputBytes,
     rawBytes,
     rawStrings,
+    resolveNativeProjectionAddonPath,
     type Counts,
     type NativeAddon,
     type RawInput,
@@ -158,10 +163,8 @@ test('operation captures configuration, signal and addon once and reports aggreg
         if (trace === undefined) delete process.env.SATORI_PERF_TRACE;
         else process.env.SATORI_PERF_TRACE = trace;
     });
-    delete process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS;
-    assert.equal(createConfiguredNativeProjectionBatchBuilder(() => { assert.fail('disabled feature requested a signal'); }), undefined);
     process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS = '';
-    assert.equal(createConfiguredNativeProjectionBatchBuilder(), undefined);
+    assert.equal(createConfiguredNativeProjectionBatchBuilder(() => { assert.fail('disabled feature requested a signal'); }), undefined);
     process.env.SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS = '/explicit/addon.node';
     process.env.SATORI_PERF_TRACE = '1';
     let loads = 0;
@@ -228,4 +231,64 @@ test('local cancellation preserves null and cancels every native flag without ab
     await Promise.all(rejections);
     assert.equal(settled, 4);
     assert.throws(() => builder.finish(input(), null), reason => reason === null);
+});
+
+const BUNDLED_ADDON_ROOT = resolve(__dirname, '../../assets/native-projections/linux-x64');
+const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+
+test('the shipped manifest matches every bundled native projection file', () => {
+    const manifest = JSON.parse(readFileSync(join(BUNDLED_ADDON_ROOT, 'manifest.json'), 'utf8')) as {
+        schemaVersion: number; target: string; files: { path: string; bytes: number; sha256: string }[];
+    };
+    assert.equal(manifest.schemaVersion, 1);
+    assert.equal(manifest.target, 'x86_64-unknown-linux-gnu');
+    assert.deepEqual(manifest.files.map(file => file.path), ['projection.node', 'THIRD_PARTY_NOTICES.md']);
+    for (const file of manifest.files) {
+        const bytes = readFileSync(join(BUNDLED_ADDON_ROOT, file.path));
+        assert.equal(bytes.length, file.bytes, file.path);
+        assert.equal(sha256(bytes), file.sha256, file.path);
+    }
+});
+
+test('linux-x64 defaults to the verified bundled addon and every other case keeps its rule', t => {
+    const root = mkdtempSync(join(tmpdir(), 'satori-native-addon-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const assetRoot = (name: string, bytes: string, manifestSha: string): string => {
+        const dir = mkdtempSync(join(root, `${name}-`));
+        writeFileSync(join(dir, 'projection.node'), bytes);
+        writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ schemaVersion: 1, files: [{ path: 'projection.node', sha256: manifestSha }] }));
+        return dir;
+    };
+    const valid = assetRoot('valid', 'addon bytes', sha256('addon bytes'));
+    const tampered = assetRoot('tampered', 'changed bytes', sha256('addon bytes'));
+    const missing = join(root, 'missing');
+
+    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', valid), join(valid, 'projection.node'));
+    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', tampered), undefined);
+    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'x64', missing), undefined);
+    assert.equal(resolveNativeProjectionAddonPath({}, 'darwin', 'x64', valid), undefined);
+    assert.equal(resolveNativeProjectionAddonPath({}, 'linux', 'arm64', valid), undefined);
+    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '' }, 'linux', 'x64', valid), undefined);
+    assert.equal(resolveNativeProjectionAddonPath({ SATORI_EXPERIMENTAL_NATIVE_PROJECTIONS: '/explicit/addon.node' }, 'darwin', 'arm64', valid), '/explicit/addon.node');
+    if (process.platform === 'linux' && process.arch === 'x64') {
+        assert.equal(resolveNativeProjectionAddonPath({}), join(BUNDLED_ADDON_ROOT, 'projection.node'));
+    }
+});
+
+test('the bundled addon produces the reference projections', { skip: process.platform !== 'linux' || process.arch !== 'x64' }, async () => {
+    const addonPath = resolveNativeProjectionAddonPath({});
+    assert.ok(addonPath);
+    const addon = loadAddon(addonPath);
+    assert.ok(addon, 'the bundled addon must load on linux-x64');
+    const fixtures = [
+        input(), input('class HTTPServer { handle_request($req) { return parseJSON(req.body); } }'),
+        input('fn main() -> Result<(), Error> { let x_y = 1; }', { language: 'rust', symbolKind: 'function', symbolLabel: 'main' }, 'src/main.rs'),
+        input('value', { breadcrumbs: ['Outer', 'innerScope'] }, 'lib/a/b.py'),
+        input('a'.repeat(256)), input('a'.repeat(257)), input('café naïve'), input(''), input('  \n\t '),
+        ...Array.from({ length: 70 }, (_, i) => input(`getValue${i} set_value_${i} VALUE${i}`)),
+    ];
+    const counts: Counts = { total: 0, native: 0, fallback: 0, calls: 0 };
+    const actual = await buildProjectionBatch(fixtures, { loader: () => addon, counts });
+    assert.deepEqual(actual, fixtures.map(buildSearchProjections));
+    assert.ok(counts.native > 0 && counts.calls > 0, JSON.stringify(counts));
 });

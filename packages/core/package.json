@@ -72,6 +72,9 @@
     "assets/cbm-extractor/*.wasm",
     "assets/cbm-extractor/manifest.json",
     "assets/semantic-engine/**",
+    "assets/native-projections/linux-x64/projection.node",
+    "assets/native-projections/linux-x64/manifest.json",
+    "assets/native-projections/linux-x64/THIRD_PARTY_NOTICES.md",
     "README.md",
     "!dist/**/*.test.*"
   ],

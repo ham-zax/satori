@@ -6,14 +6,15 @@ import type { IndexIgnoreMatcher } from '../core/ignore-matcher';
 import { compareContractStrings } from '../utils/compare-contract-strings';
 import { canonicalizeRepositoryRelativePath, isRepositoryRelativePath } from '../paths/repository-path';
 import {
-    isObservableFileByPolicy,
     isObservableFileObservationByPolicy,
     type SupportedExtensionsInput,
 } from '../config/index-policy';
 import {
     descriptorPathInsideRootSync,
     openDirectoryInsideRootSync,
+    openRegularFileAtDirectoryDescriptorSync,
     openRegularFileInsideRoot,
+    RootBoundFileError,
 } from './root-bound-fs';
 import type { SnapshotFileStatSignature } from './snapshot-codec';
 
@@ -150,16 +151,28 @@ function shouldIgnore(
 async function isSupportedFile(
     context: SynchronizerScanContext,
     relativePath: string,
-    absolutePath: string,
-    size: number,
+    descriptorFilePath: string,
+    stat: fsSync.Stats,
 ): Promise<boolean> {
     if (context.additionalObservablePaths?.has(relativePath)) return true;
-    return isObservableFileByPolicy(
-        relativePath,
-        absolutePath,
-        size,
-        context.supportedExtensions,
-    );
+    // Synchronous by design: scans probe most unrecognized files, and the
+    // promise form of open, read and close costs about 15 times as much.
+    let descriptor: number | undefined;
+    try {
+        return await isObservableFileObservationByPolicy(
+            relativePath,
+            stat.size,
+            context.supportedExtensions,
+            async () => {
+                descriptor ??= openRegularFileAtDirectoryDescriptorSync(descriptorFilePath, stat);
+                const buffer = Buffer.alloc(Math.min(stat.size, 8192));
+                const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, 0);
+                return buffer.subarray(0, bytesRead);
+            },
+        );
+    } finally {
+        if (descriptor !== undefined) fsSync.closeSync(descriptor);
+    }
 }
 
 async function hashFileBytes(
@@ -343,10 +356,11 @@ async function inspectDirectoryEntries(
                 return { kind: 'skip' };
             }
 
-            // The entry is a regular file read through the verified directory
+            // The entry is a regular file under the verified directory
             // descriptor, so its real path is the directory's real path plus the
-            // raw name. scanDirectory re-verifies the directory path once after
-            // inspection; a name that normalization changes cannot resolve here.
+            // raw name. Policy probes read through that descriptor, and
+            // scanDirectory re-verifies the directory path once after inspection;
+            // a name that normalization changes cannot resolve here.
             const fileReal = path.join(context.rootDir, relativePath);
             if (relativePath !== (relativeDirectoryPath ? `${relativeDirectoryPath}/${entry.name}` : entry.name)) {
                 return {
@@ -358,13 +372,18 @@ async function inspectDirectoryEntries(
             }
             let supported: boolean;
             try {
-                supported = await isSupportedFile(context, relativePath, fileReal, stat.size);
+                supported = await isSupportedFile(context, relativePath, absolutePath, stat);
             } catch (error: unknown) {
                 // The index-policy probe (shebang or large-asset read) opens the
-                // file; an unreadable file must keep its last-known evidence
-                // like any other unreadable path instead of failing the scan.
+                // file; an unreadable or swapped file must keep its last-known
+                // evidence like any other unreadable path instead of failing the scan.
                 const code = errorCode(error);
-                if (code !== 'EACCES' && code !== 'ENOENT') {
+                if (
+                    code !== 'EACCES'
+                    && code !== 'ENOENT'
+                    && code !== 'ELOOP'
+                    && !(error instanceof RootBoundFileError && error.code === 'path_identity_changed_during_inspection')
+                ) {
                     throw error;
                 }
                 return {

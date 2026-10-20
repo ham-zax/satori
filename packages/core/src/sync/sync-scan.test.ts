@@ -267,6 +267,53 @@ test('scanSynchronizerState marks files unreadable when their directory moves du
     });
 });
 
+test('scanSynchronizerState probes policy through the directory descriptor when the directory is replaced by an outside symlink', async (t) => {
+    await withTempDir(async (rootDir) => {
+        const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-sync-scan-outside-')));
+        try {
+            const script = '#!/usr/bin/env python3\nprint("inside")\n';
+            fs.mkdirSync(path.join(rootDir, 'a'));
+            fs.writeFileSync(path.join(rootDir, 'a', 'run'), script, 'utf8');
+            fs.writeFileSync(path.join(outside, 'run'), '#!/usr/bin/env python3\nprint("outside")\n', 'utf8');
+            // Reused evidence means the hash does not reopen the file, so only the
+            // extensionless shebang probe can read it.
+            const first = await scanSynchronizerState(makeContext(rootDir));
+            assert.equal(first.fileHashes.has('a/run'), true);
+            const originalLstatSync = fs.lstatSync;
+            const originalReadSync = fs.readSync;
+            let moved = false;
+            let outsideReads = 0;
+            t.mock.method(fs, 'lstatSync', (...args: Parameters<typeof originalLstatSync>) => {
+                const result = originalLstatSync(...args);
+                if (!moved && String(args[0]).endsWith(`${path.sep}run`)) {
+                    moved = true;
+                    fs.renameSync(path.join(rootDir, 'a'), path.join(rootDir, 'moved'));
+                    fs.symlinkSync(outside, path.join(rootDir, 'a'), 'dir');
+                }
+                return result;
+            });
+            t.mock.method(fs, 'readSync', (...args: Parameters<typeof originalReadSync>) => {
+                if (fs.readlinkSync(`/proc/self/fd/${args[0]}`).startsWith(outside)) outsideReads += 1;
+                return originalReadSync(...args);
+            });
+
+            const output = await scanSynchronizerState(makeContext(rootDir, {
+                forceFullHash: false,
+                previousHashes: new Map(first.fileHashes),
+                previousStats: new Map(first.fileStats),
+            }));
+
+            assert.equal(moved, true);
+            assert.equal(outsideReads, 0);
+            assert.equal(output.partialScan, true);
+            assert.deepEqual([...output.unreadableFiles], ['a/run']);
+            assert.equal(output.fileHashes.get('a/run'), first.fileHashes.get('a/run'));
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
+    });
+});
+
 test('scanSynchronizerState records unreadable files that fail the index-policy probe', async (t) => {
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
         t.skip('cannot simulate unreadable paths as root');

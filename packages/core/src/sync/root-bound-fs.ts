@@ -105,6 +105,37 @@ function requiredOpenFlag(name: 'O_NOFOLLOW' | 'O_DIRECTORY'): number {
 }
 
 /**
+ * Open a regular file by its name under an open directory descriptor
+ * (`/proc/self/fd/<dir>/<name>`), never by its pathname: replacing the
+ * directory's pathname cannot redirect the read. O_NOFOLLOW refuses a name
+ * swapped to a symlink, and the identity check refuses any other swap after
+ * `expected` was observed. The caller closes the descriptor with fs.closeSync.
+ */
+export function openRegularFileAtDirectoryDescriptorSync(
+    descriptorFilePath: string,
+    expected: Pick<fsSync.Stats, 'dev' | 'ino'>,
+): number {
+    const fd = fsSync.openSync(descriptorFilePath, fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW'));
+    try {
+        const opened = fsSync.fstatSync(fd);
+        if (!opened.isFile() || !sameFileIdentity(opened, expected)) {
+            throw new RootBoundFileError(
+                'path_identity_changed_during_inspection',
+                'File changed identity during inspection.',
+            );
+        }
+        return fd;
+    } catch (error) {
+        try {
+            fsSync.closeSync(fd);
+        } catch {
+            // The identity error is the one to report.
+        }
+        throw error;
+    }
+}
+
+/**
  * Fail before indexing mutates durable state when the runtime cannot provide
  * the descriptor guarantees required by root-bound source and policy reads.
  */

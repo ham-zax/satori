@@ -1,3 +1,4 @@
+import childProcess from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
@@ -145,6 +146,39 @@ async function collectDirectoryTreePaths(
     directories.push(rootPath);
 }
 
+// Filesystems whose syncfs(2) commits file data, inodes and directory entries
+// to stable storage (their sync_fs commits the journal and flushes the device).
+// Network, FUSE and 9p filesystems may not, so they keep per-file fsync.
+const SYNCFS_DURABLE_FILESYSTEM_TYPES = new Set([
+    0xef53, // ext2, ext3, ext4
+    0x58465342, // xfs
+    0x9123683e, // btrfs
+]);
+const SYNCFS_COMMANDS = ['/usr/bin/sync', '/bin/sync'];
+
+/**
+ * Makes the staged tree durable with one syncfs(2) (coreutils `sync -f`)
+ * instead of one fsync per file. Each fsync costs a journal commit and a
+ * device flush: 71,523 LibreOffice shards took 66 s that way and 8 s with one
+ * syncfs on WSL2 ext4. Returns false when the fast path cannot prove
+ * durability, and the caller then fsyncs every path. A failed syncfs marks
+ * only the filesystem error as seen; each file's writeback error stays
+ * unseen, so the per-file fallback still reports it.
+ */
+async function syncStagedFileSystem(rootPath: string, devices: ReadonlySet<number>): Promise<boolean> {
+    if (process.platform !== 'linux' || devices.size !== 1) return false;
+    if ((await fs.promises.stat(rootPath)).dev !== [...devices][0]) return false;
+    if (!SYNCFS_DURABLE_FILESYSTEM_TYPES.has((await fs.promises.statfs(rootPath)).type)) return false;
+    for (const command of SYNCFS_COMMANDS) {
+        const error = await new Promise<childProcess.ExecFileException | null>((resolve) => {
+            childProcess.execFile(command, ['-f', rootPath], { timeout: 600_000 }, (failure) => resolve(failure));
+        });
+        if (!error) return true;
+        if (error.code !== 'ENOENT') return false;
+    }
+    return false;
+}
+
 async function fsyncDirectoryTree(
     rootPath: string,
     sharedFileSizes: ReadonlyMap<string, number> = new Map(),
@@ -156,14 +190,16 @@ async function fsyncDirectoryTree(
     let physicallyWrittenBytes = 0;
     let sharedFiles = 0;
     const writtenFiles: string[] = [];
+    const devices = new Set<number>();
     for (let offset = 0; offset < files.length; offset += SHARD_IO_CONCURRENCY) {
         const batch = files.slice(offset, offset + SHARD_IO_CONCURRENCY);
         const stats = await settleShardBatch(batch.map(async (filePath) => {
             const relativePath = path.relative(rootPath, filePath).replace(/\\/g, '/');
             const sharedSize = sharedFileSizes.get(relativePath);
-            return sharedSize === undefined
-                ? { filePath, size: (await fs.promises.stat(filePath)).size, shared: false }
-                : { filePath, size: sharedSize, shared: true };
+            if (sharedSize !== undefined) return { filePath, size: sharedSize, shared: true };
+            const stat = await fs.promises.stat(filePath);
+            devices.add(stat.dev);
+            return { filePath, size: stat.size, shared: false };
         }));
         for (const { filePath, size, shared } of stats) {
             logicalBytes += size;
@@ -174,10 +210,15 @@ async function fsyncDirectoryTree(
             }
         }
     }
-    for (let offset = 0; offset < writtenFiles.length; offset += SHARD_IO_CONCURRENCY) {
-        await settleShardBatch(writtenFiles.slice(offset, offset + SHARD_IO_CONCURRENCY).map(fsyncPath));
+    // Shared shards are hard links, so they live on the written shards'
+    // filesystem; directories must be checked because one could be a mount.
+    for (const directory of directories) devices.add((await fs.promises.stat(directory)).dev);
+    if (!await syncStagedFileSystem(rootPath, devices)) {
+        for (let offset = 0; offset < writtenFiles.length; offset += SHARD_IO_CONCURRENCY) {
+            await settleShardBatch(writtenFiles.slice(offset, offset + SHARD_IO_CONCURRENCY).map(fsyncPath));
+        }
+        for (const directory of directories) await fsyncPath(directory);
     }
-    for (const directory of directories) await fsyncPath(directory);
     return {
         logicalBytes,
         physicallyWrittenBytes,

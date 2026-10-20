@@ -281,6 +281,8 @@ export class ManageIndexingHandlers {
             // policy at process startup; the child consumes this same value.
             const resourcePlan = new IndexingResourcePlanner().createPlan();
             let completedResult: Readonly<Record<string, unknown>> | undefined;
+            // The worker reports "writing" first when its source scan ends.
+            let sourceScanCompleted = false;
             const worker = spawnSupervisedMutationWorker({
                 operationId: execution.id,
                 workerPath: resolveMutationIndexWorkerPath(),
@@ -310,6 +312,10 @@ export class ManageIndexingHandlers {
                     }
                 },
                 onProgress: (progress) => {
+                    if (progress.phase === "writing" && !sourceScanCompleted) {
+                        sourceScanCompleted = true;
+                        input.onSourceScanCompleted();
+                    }
                     const percentage = progress.progress ?? 0;
                     input.onProgress({
                         phase: progress.phase ?? "writing",
@@ -558,7 +564,12 @@ export class ManageIndexingHandlers {
                     this.host.mutationRuntime.assertCurrent(absolutePath);
                     const operation = transitionOperation("scanning", { progress: 0 });
                     trackCodebasePath(absolutePath);
-                    await this.host.touchWatchedCodebase(absolutePath);
+                    // A root without a Publication has nothing to keep fresh. Its
+                    // first watcher is the candidate watcher, which the full
+                    // index starts after the source scan.
+                    if (this.host.context.getCurrentPublication(absolutePath)) {
+                        await this.host.touchWatchedCodebase(absolutePath);
+                    }
                     this.host.mutationRuntime.assertCurrent(absolutePath);
 
                     const fullIndexOperation = new FullIndexOperation(

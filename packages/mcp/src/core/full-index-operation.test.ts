@@ -137,3 +137,99 @@ test("parent lifecycle accepts a bounded supervised candidate result", async () 
     assert.equal(phases.at(-1), "completed");
     assert.equal(phases.includes("failed"), false);
 });
+
+function watcherOrderFixture(events: string[], current: () => unknown) {
+    return {
+        context: {
+            getCurrentPublication: current,
+            resolveIndexPolicyForReindex: async () => policy,
+            getEmbeddingEngine: () => ({
+                getProvider: () => "fixture",
+                getDimension: () => 3,
+            }),
+        },
+        mutationRuntime: {
+            assertCurrent: () => undefined,
+            isCurrent: () => true,
+            getCurrentOperation: () => ({ id: "op-reindex" }),
+            updateCurrentOperation: (_root: string, phase: string) => ({ id: "op-reindex", phase }),
+        },
+        syncManager: {
+            beginFullIndexSourceHandoff: () => undefined,
+            touchWatchedCodebase: async (_root: string, options: { policyHash: string }) => {
+                events.push(`touch:${options.policyHash}`);
+            },
+            captureWatcherBootstrap: () => {
+                events.push("capture");
+                return undefined;
+            },
+            rejectFullIndexSourceHandoff: () => true,
+            restoreActiveWatcherPolicy: async () => {
+                events.push("restore");
+            },
+        },
+        setIndexingStats: () => undefined,
+        buildCollectionLimitMessage: async () => "limit",
+    };
+}
+
+const activatedCandidate = {
+    indexedFiles: 1,
+    totalChunks: 8,
+    status: "completed" as const,
+    collectionName: "collection-new",
+    publication: { id: "op-reindex", status: "activated" as const },
+};
+
+test("candidate watcher starts when the source scan completes", async () => {
+    const events: string[] = [];
+    let current = publication("old", "collection-old", 4);
+    const operation = new FullIndexOperation(watcherOrderFixture(events, () => current) as never, async (input) => {
+        events.push("scan");
+        input.onSourceScanCompleted();
+        events.push("write");
+        input.onSourceScanCompleted();
+        current = publication("op-reindex", "collection-new", 8);
+        return activatedCandidate;
+    });
+
+    await operation.run({ codebasePath: "/repo", forceReindex: true });
+
+    assert.deepEqual(events.slice(0, 4), ["scan", "touch:policy", "write", "capture"]);
+});
+
+test("candidate watcher starts before the capture when the runner never reports its scan", async () => {
+    const events: string[] = [];
+    let current = publication("old", "collection-old", 4);
+    const operation = new FullIndexOperation(watcherOrderFixture(events, () => current) as never, async () => {
+        events.push("run");
+        current = publication("op-reindex", "collection-new", 8);
+        return activatedCandidate;
+    });
+
+    await operation.run({ codebasePath: "/repo", forceReindex: true });
+
+    assert.deepEqual(events.slice(0, 3), ["run", "touch:policy", "capture"]);
+});
+
+test("candidate failure restores the watcher only after the in-flight registration settles", async () => {
+    const events: string[] = [];
+    let releaseTouch!: () => void;
+    const host = watcherOrderFixture(events, () => publication("old", "collection-old", 4));
+    host.syncManager.touchWatchedCodebase = async (_root, options) => {
+        events.push(`touch:${options.policyHash}`);
+        await new Promise<void>((resolve) => {
+            releaseTouch = resolve;
+        });
+        events.push("touch-settled");
+    };
+    const operation = new FullIndexOperation(host as never, async (input) => {
+        input.onSourceScanCompleted();
+        setImmediate(() => releaseTouch());
+        throw new Error("candidate failed");
+    });
+
+    await operation.run({ codebasePath: "/repo", forceReindex: true });
+
+    assert.deepEqual(events, ["touch:policy", "touch-settled", "restore"]);
+});

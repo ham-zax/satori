@@ -345,6 +345,28 @@ decided after the profile. Remove them only if their measured cost is above
   421.4 s.
 - Next: P4' design for Hamza's approval (when the watcher crawl starts
   relative to a full index), then 3 + 3 runs.
+- P4' design (approved by Hamza): Core reports the end of the source scan
+  through `onSourceScanCompleted`. The mutation worker changes its phase to
+  "writing" at that point, and `FullIndexOperation` then starts the
+  candidate watcher. A root without a Publication gets no policy-less
+  watcher before the index. The watcher stays required for the source
+  handoff, and it is ready long before the final source check.
+- P4' 3 + 3 screening (`screen-P4`, base worktree at `0ef07ffd`, order
+  base, cand, cand, base, base, cand, start load 1.76 to 1.99). Artifacts
+  identical in all three pairs and against `reference-1` (compare exit 0).
+  No run logged an unverified source handoff or a watcher failure.
+  | Run | Total | observe_inputs | scanFiles | navigation | Peak anon | Watcher starts |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | base-1 | 343.6 s | 27.6 s | 38.9 s | 59.3 s | 4,336 MiB | 0 s, 28 s |
+  | base-2 | 332.9 s | 28.6 s | 19.1 s | 64.6 s | 4,363 MiB | 0 s, 29 s |
+  | base-3 | 346.8 s | 28.5 s | 19.0 s | 76.9 s | 4,322 MiB | 0 s, 29 s |
+  | candP4-1 | 302.3 s | 1.1 s | 18.4 s | 63.5 s | 4,346 MiB | 20 s |
+  | candP4-2 | 304.8 s | 1.1 s | 18.3 s | 64.3 s | 4,506 MiB | 20 s |
+  | candP4-3 | 309.7 s | 1.2 s | 18.4 s | 69.3 s | 4,285 MiB | 20 s |
+- P4' kept: median total 343.6 s to 304.8 s (-38.8 s). The policy walk
+  loses 27 s, and the root is crawled once instead of twice. Peak memory
+  does not change. Native total against the loop start (r2 median about
+  416 s): -111 s.
 
 ## Overlap design (option 2), 20 October 2026
 

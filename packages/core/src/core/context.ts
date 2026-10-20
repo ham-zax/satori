@@ -308,6 +308,8 @@ type ReindexByChangeOptions = {
 type MutationGuardOptions = {
     deferPartialPublication?: boolean;
     indexPolicy?: ObservedResolvedIndexPolicy;
+    /** Called once when the full-index source scan has finished. */
+    onSourceScanCompleted?: () => void;
 };
 
 type ReindexByChangeResult = {

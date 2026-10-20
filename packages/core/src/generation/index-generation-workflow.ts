@@ -108,6 +108,8 @@ type MutationGuardOptions = {
     rootMutationLease?: RootMutationLease;
     deferPartialPublication?: boolean;
     indexPolicy?: ObservedResolvedIndexPolicy;
+    /** Called once when the full-index source scan has finished. */
+    onSourceScanCompleted?: () => void;
 };
 type ReindexByChangeResult = {
     added: number;
@@ -817,6 +819,7 @@ export class IndexGenerationWorkflow {
         const publicationControlSet = new Set(publicationSourceControls);
         const codeFiles = scannedCodeFiles.filter((filePath, index) => !publicationControlSet.has(scannedRelativePaths[index]));
         scanFilesMs = Date.now() - scanStartedAt;
+        options.onSourceScanCompleted?.();
         console.log(`[Context] 📁 Found ${codeFiles.length} searchable code files`);
         const indexingStartPercentage = 10;
         const indexingEndPercentage = 90;

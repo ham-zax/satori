@@ -57,8 +57,9 @@ export class SynchronizerRegistry {
         checkpoint: PublicationSourceCheckpoint,
         ignorePatterns: readonly string[],
         supportedExtensions: readonly string[],
+        additionalObservablePaths: readonly string[] = [],
     ): PublicationSourceComparison {
-        const policySignature = JSON.stringify([ignorePatterns, supportedExtensions]);
+        const policySignature = JSON.stringify([ignorePatterns, supportedExtensions, additionalObservablePaths]);
         const cached = this.sourceComparisons.get(checkpoint);
         if (cached?.canonicalRoot === canonicalRoot && cached.policySignature === policySignature) {
             return cached.comparison;
@@ -67,6 +68,7 @@ export class SynchronizerRegistry {
         // the mutation registry, so commits cannot advance read-admission state.
         const comparison = new FileSynchronizer(canonicalRoot, [...ignorePatterns], [...supportedExtensions], {
             sourceCheckpoint: checkpoint,
+            additionalObservablePaths,
         });
         if (isFrozenCheckpointData(checkpoint)) {
             this.sourceComparisons.set(checkpoint, { canonicalRoot, policySignature, comparison });

@@ -921,6 +921,8 @@ export class PotionEmbedding extends Embedding {
         return {
             preferredMaxItems: this.maxBatchItems,
             hardMaxItems: this.maxBatchItems,
+            // Full batches that fit the worker's pending capacity at once.
+            maxConcurrentRequests: Math.floor(this.maxPendingItems / this.maxBatchItems),
         };
     }
 

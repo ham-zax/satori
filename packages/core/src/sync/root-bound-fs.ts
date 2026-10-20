@@ -53,9 +53,14 @@ export function isRealPathInsideRoot(realPath: string, rootDir: string): boolean
     if (process.platform === 'win32') {
         const rootKey = root.toLowerCase();
         const candidateKey = candidate.toLowerCase();
-        return candidateKey === rootKey || candidateKey.startsWith(`${rootKey}\\`);
+        return candidateKey === rootKey || candidateKey.startsWith(withTrailingSeparator(rootKey, '\\'));
     }
-    return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+    return candidate === root || candidate.startsWith(withTrailingSeparator(root, path.sep));
+}
+
+/** A filesystem root (`/`, `C:\`) already ends in a separator; appending another rejects every descendant. */
+function withTrailingSeparator(root: string, separator: string): string {
+    return root.endsWith(separator) ? root : `${root}${separator}`;
 }
 
 export function trimTrailingSeparators(inputPath: string): string {
@@ -346,12 +351,18 @@ export async function openRegularFileInsideRootNoFollow(
     const normalizedRoot = trimTrailingSeparators(path.normalize(rootDir));
     const normalizedPath = path.normalize(path.resolve(filePath));
     if (!isRealPathInsideRoot(normalizedPath, normalizedRoot)) {
-        throw new Error(`Path escapes indexed root or is unreadable: ${filePath}`);
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            `Path escapes indexed root or is unreadable: ${filePath}`,
+        );
     }
 
     const preStat = await fsp.lstat(normalizedPath);
     if (preStat.isSymbolicLink() || !preStat.isFile()) {
-        throw new Error(`Attempted to open symbolic-link or non-file path: ${filePath}`);
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            `Attempted to open symbolic-link or non-file path: ${filePath}`,
+        );
     }
 
     const handle = await fsp.open(

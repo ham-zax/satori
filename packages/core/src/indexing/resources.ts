@@ -230,7 +230,9 @@ export class IndexingResourcePlanner {
             releaseSemanticBeforeResolution: smallBudget,
             queuedEmbeddingTextBytes,
             embeddingBatchMaxItems: Math.max(8, Math.min(1000, Math.floor(queuedEmbeddingTextBytes / (16 * 1024)))),
-            vectorWriteMaxRows: Math.max(8, Math.min(256, Math.floor(queuedEmbeddingTextBytes / (32 * 1024)))),
+            // A pending row holds content, lexical text, metadata and a 256-d vector
+            // (about 4-6 KiB); 8 KiB per row keeps a write within twice the queue.
+            vectorWriteMaxRows: Math.max(8, Math.floor(queuedEmbeddingTextBytes / (8 * 1024))),
             memoryBudget,
         });
     }

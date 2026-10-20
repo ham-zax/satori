@@ -1,10 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-    IndexingPipeline,
-    MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION,
-    type AnalyzedIndexedFile,
-} from './indexing-pipeline';
+import { IndexingPipeline } from './indexing-pipeline';
 import { createLanguageAnalysisService } from '../language-analysis';
 import type { LanguageAnalysisPort } from '../language-analysis/types';
 import { noopSemanticProjectAnalyzer } from '../semantic/noop-analyzer';
@@ -60,7 +56,10 @@ function createEagerOnlyAnalyzer(
 }
 
 
-import type { RepositoryRelativePath } from '../paths/repository-path';
+import { isRepositoryRelativePath, type RepositoryRelativePath } from '../paths/repository-path';
+import { createIndexIgnoreMatcher } from './ignore-matcher';
+import { isIndexableFileByPolicy } from '../config/index-policy';
+import { compareContractStrings } from '../utils/compare-contract-strings';
 
 test('IndexingPipeline has no full-source semantic retention channel when semantic analyzer supports no languages', async () => {
     const languageAnalyzer = createLanguageAnalysisService();
@@ -174,66 +173,6 @@ test('IndexingPipeline retains only source snapshot metadata when semantic analy
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
-});
-
-test('IndexingPipeline stops with limit_reached before aggregate searchable source bytes exceed the budget', async () => {
-    const pipeline = new IndexingPipeline({
-        getVectorDatabase: () => createMockVectorDb(),
-        languageAnalyzer: createEagerOnlyAnalyzer(async () => {
-            throw new Error('analyzeIndexedFile override should own this test');
-        }),
-        semanticAnalyzer: noopSemanticProjectAnalyzer,
-        getEmbedding: () => createMockEmbedding(),
-        assertEmbeddingIdentityCurrent: () => ({
-            provider: 'test',
-            model: 'test',
-            dimension: 768,
-            artifactDigest: null,
-            normalizationPolicy: 'none',
-        }),
-        isHybridEnabled: () => false,
-        canonicalizeCodebasePath: (p) => p,
-        normalizeRelativePathForCodebase: (_cb, p) => p as unknown as RepositoryRelativePath,
-        getIndexedExtensionsForCodebase: () => ['.ts'],
-        matchesIgnorePattern: () => false,
-        getSymbolExtractorVersion: () => 'extractor-v1',
-    });
-
-    let analyzedCount = 0;
-    pipeline.analyzeIndexedFile = async (filePath): Promise<AnalyzedIndexedFile> => {
-        analyzedCount += 1;
-        return {
-            relativePath: filePath as unknown as RepositoryRelativePath,
-            source: '',
-            sourceHash: `hash-${analyzedCount}`,
-            sourceStat: {
-                size: analyzedCount === 1
-                    ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION
-                    : 1,
-                mtimeMs: 0,
-                ctimeMs: 0,
-            },
-            language: 'typescript',
-            structuralStatus: 'complete',
-            chunks: [],
-            extractedSymbols: [],
-            moduleBindings: [],
-            callSites: [],
-            receiverTypeBindings: [],
-            pythonFlowFacts: [],
-        };
-    };
-
-    const result = await pipeline.processFileList({
-        filePaths: ['first.ts', 'second.ts'],
-        codebasePath: '/repo',
-        collectionName: 'test_col',
-    });
-
-    assert.equal(analyzedCount, 2);
-    assert.equal(result.status, 'limit_reached');
-    assert.equal(result.processedFiles, 1);
-    assert.deepEqual(result.sourceFiles.map((file) => file.path), ['first.ts']);
 });
 
 test('analysis source-byte reservations bound read-ahead and always admit the current file', async () => {
@@ -358,87 +297,76 @@ for (const [observedSize, expectedAdmitted] of [[1, 16], [8 * 1024 ** 2, 8]] as 
 }
 
 for (const mode of ['eager', 'deferred'] as const) {
-    for (const stop of ['failure', 'source limit'] as const) {
-        test(`${mode} observation callbacks stop refilling and drain every started read after ${stop}`, async () => {
-            let releaseReads!: () => void;
-            const readGate = new Promise<void>(resolve => { releaseReads = resolve; });
-            let releaseLastRead!: () => void;
-            const lastReadGate = new Promise<void>(resolve => { releaseLastRead = resolve; });
-            const firstError = new Error('injected first read failure');
-            const analyzer = Object.assign(mode === 'deferred'
-                ? createLanguageAnalysisService()
-                : createEagerOnlyAnalyzer(async () => { throw new Error('unexpected eager analysis'); }),
-            { concurrency: 8 });
-            const pipeline = new IndexingPipeline({
-                getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
-                semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
-                assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
-                isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
-                normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
-                getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
-                getSymbolExtractorVersion: () => 'fixture',
-            });
-            const startedPaths: string[] = [];
-            const finishedPaths: string[] = [];
-            const observe = async (filePath: string) => {
-                startedPaths.push(filePath);
-                if (filePath === '0.ts') {
-                    if (stop === 'failure') throw firstError;
-                } else {
-                    await (filePath === '7.ts' ? lastReadGate : readGate);
-                }
-                finishedPaths.push(filePath);
-                return {
-                    content: '', sourceHash: filePath,
-                    sourceStat: {
-                        size: filePath === '0.ts' ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION + 1 : 1,
-                        mtimeMs: 0, ctimeMs: 0,
-                    },
-                };
-            };
-            if (mode === 'deferred') pipeline.readIndexableFileObservationInsideRoot = observe;
-            else pipeline.analyzeIndexedFile = async filePath => {
-                const observation = await observe(filePath);
-                return {
-                    relativePath: filePath as RepositoryRelativePath, source: observation.content,
-                    sourceHash: observation.sourceHash, sourceStat: observation.sourceStat,
-                    language: 'typescript', structuralStatus: 'complete', chunks: [], extractedSymbols: [],
-                    moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [],
-                };
-            };
-            const operation = pipeline.processFileList({
-                filePaths: Array.from({ length: 20 }, (_, index) => `${index}.ts`),
-                codebasePath: '/repo', collectionName: 'fixture',
-            });
-            const outcome = stop === 'failure' ? assert.rejects(operation, error => error === firstError) : operation;
-            let settled = false;
-            operation.then(() => { settled = true; }, () => { settled = true; });
-            try {
-                await new Promise<void>(resolve => setImmediate(resolve));
-                assert.equal(startedPaths.length, 8);
-                assert.equal(settled, false);
-                releaseReads();
-                await new Promise<void>(resolve => setImmediate(resolve));
-                assert.equal(startedPaths.length, 8, 'late observations must not refill the stopped window');
-                assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 6);
-                assert.equal(settled, false, 'the last started read is still owned by the operation');
-                releaseLastRead();
-                await outcome;
-                assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 7);
-                if (stop === 'source limit') {
-                    const result = await operation;
-                    assert.equal(result.status, 'limit_reached');
-                    assert.deepEqual(result.sourceFiles, []);
-                    await result.payloadSettled;
-                }
-            } finally {
-                releaseReads();
-                releaseLastRead();
-                await operation.catch(() => undefined);
-                await analyzer.dispose?.();
-            }
+    test(`${mode} observation callbacks stop refilling and drain every started read after failure`, async () => {
+        let releaseReads!: () => void;
+        const readGate = new Promise<void>(resolve => { releaseReads = resolve; });
+        let releaseLastRead!: () => void;
+        const lastReadGate = new Promise<void>(resolve => { releaseLastRead = resolve; });
+        const firstError = new Error('injected first read failure');
+        const analyzer = Object.assign(mode === 'deferred'
+            ? createLanguageAnalysisService()
+            : createEagerOnlyAnalyzer(async () => { throw new Error('unexpected eager analysis'); }),
+        { concurrency: 8 });
+        const pipeline = new IndexingPipeline({
+            getVectorDatabase: createMockVectorDb, languageAnalyzer: analyzer,
+            semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+            assertEmbeddingIdentityCurrent: () => createMockEmbedding().getIdentity(),
+            isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+            normalizeRelativePathForCodebase: (_base, p) => p as RepositoryRelativePath,
+            getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+            getSymbolExtractorVersion: () => 'fixture',
         });
-    }
+        const startedPaths: string[] = [];
+        const finishedPaths: string[] = [];
+        const observe = async (filePath: string) => {
+            startedPaths.push(filePath);
+            if (filePath === '0.ts') {
+                throw firstError;
+            } else {
+                await (filePath === '7.ts' ? lastReadGate : readGate);
+            }
+            finishedPaths.push(filePath);
+            return {
+                content: '', sourceHash: filePath,
+                sourceStat: { size: 1, mtimeMs: 0, ctimeMs: 0 },
+            };
+        };
+        if (mode === 'deferred') pipeline.readIndexableFileObservationInsideRoot = observe;
+        else pipeline.analyzeIndexedFile = async filePath => {
+            const observation = await observe(filePath);
+            return {
+                relativePath: filePath as RepositoryRelativePath, source: observation.content,
+                sourceHash: observation.sourceHash, sourceStat: observation.sourceStat,
+                language: 'typescript', structuralStatus: 'complete', chunks: [], extractedSymbols: [],
+                moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [],
+            };
+        };
+        const operation = pipeline.processFileList({
+            filePaths: Array.from({ length: 20 }, (_, index) => `${index}.ts`),
+            codebasePath: '/repo', collectionName: 'fixture',
+        });
+        const outcome = assert.rejects(operation, error => error === firstError);
+        let settled = false;
+        operation.then(() => { settled = true; }, () => { settled = true; });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.equal(startedPaths.length, 8);
+            assert.equal(settled, false);
+            releaseReads();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            assert.equal(startedPaths.length, 8, 'late observations must not refill the stopped window');
+            assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 6);
+            assert.equal(settled, false, 'the last started read is still owned by the operation');
+            releaseLastRead();
+            await outcome;
+            assert.equal(finishedPaths.filter(file => file !== '0.ts').length, 7);
+        } finally {
+            releaseReads();
+            releaseLastRead();
+            await operation.catch(() => undefined);
+            await analyzer.dispose?.();
+        }
+    });
 }
 
 test('deferred analysis failure waits for every already-started source read', async () => {
@@ -577,7 +505,7 @@ test('eager custom and deferred built-in indexing publish identical ordered rows
     }
 });
 
-test('eager and deferred indexing publish the same ordered prefix at the global chunk limit', async () => {
+test('eager and deferred indexing publish every chunk past 450,000 in the same order', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-indexing-chunk-limit-'));
     try {
         const source = `function huge() {\n${' \n'.repeat(225_000)}}\n`;
@@ -665,12 +593,13 @@ test('eager and deferred indexing publish the same ordered prefix at the global 
 
         const eager = await run('eager');
         const deferred = await run('deferred');
-        assert.equal(eager.result.status, 'limit_reached');
-        assert.equal(eager.result.processedFiles, 0, 'the final source file is partially indexed');
-        assert.equal(eager.result.totalChunks, 450_000);
-        assert.equal(eager.rowCount, 450_000);
+        // No fixed chunk count stops a full index (the old cap was 450,000).
+        assert.equal(eager.result.status, 'completed');
+        assert.equal(eager.result.processedFiles, 1);
+        assert.ok(eager.result.totalChunks > 450_000, `expected more than 450,000 chunks, got ${eager.result.totalChunks}`);
+        assert.equal(eager.rowCount, eager.result.totalChunks);
         assert.equal(eager.firstChunkIndex, 0);
-        assert.equal(eager.lastChunkIndex, 449_999);
+        assert.equal(eager.lastChunkIndex, eager.result.totalChunks - 1);
         assert.deepEqual(deferred, eager);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
@@ -744,6 +673,163 @@ test('getCodeFiles skips unrepresentable POSIX names before they can alias suppo
         });
         const files = await pipeline.getCodeFiles(root);
         assert.deepEqual(files.map((file) => path.relative(root, file)), ['a/b.ts', 'normal.ts']);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+function createScanPipeline(extensions: string[]) {
+    return new IndexingPipeline({
+        getVectorDatabase: () => createMockVectorDb(),
+        languageAnalyzer: createLanguageAnalysisService(),
+        semanticAnalyzer: noopSemanticProjectAnalyzer,
+        getEmbedding: () => createMockEmbedding(),
+        assertEmbeddingIdentityCurrent: () => ({
+            provider: 'test', model: 'test', dimension: 768,
+            artifactDigest: null, normalizationPolicy: 'none',
+        }),
+        isHybridEnabled: () => false,
+        canonicalizeCodebasePath: (value) => value,
+        normalizeRelativePathForCodebase: (_root, value) => value as unknown as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => extensions,
+        matchesIgnorePattern: (filePath, codebasePath, isDirectory, matcher) => {
+            const relativePath = path.relative(codebasePath, filePath).split(path.sep).join('/');
+            return isDirectory
+                ? (matcher?.ignores(relativePath) || matcher?.ignores(`${relativePath}/`)) ?? false
+                : matcher?.ignores(relativePath) ?? false;
+        },
+        getSymbolExtractorVersion: () => 'extractor-v1',
+    });
+}
+
+// The one-at-a-time walk getCodeFiles used before its scan became concurrent.
+async function serialReferenceCodeFiles(
+    root: string,
+    policy: { supportedExtensions: string[]; effectiveIgnorePatterns: string[] },
+): Promise<string[]> {
+    const matcher = createIndexIgnoreMatcher(policy.effectiveIgnorePatterns);
+    const ignored = (fullPath: string, isDirectory: boolean) => {
+        const relativePath = path.relative(root, fullPath).split(path.sep).join('/');
+        return isDirectory
+            ? matcher.ignores(relativePath) || matcher.ignores(`${relativePath}/`)
+            : matcher.ignores(relativePath);
+    };
+    const files: string[] = [];
+    const traverse = async (currentPath: string): Promise<void> => {
+        const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
+        entries.sort((left, right) => compareContractStrings(left.name, right.name));
+        for (const entry of entries) {
+            if (!isRepositoryRelativePath(entry.name)) continue;
+            const fullPath = path.join(currentPath, entry.name);
+            if (ignored(fullPath, entry.isDirectory())) continue;
+            if (entry.isDirectory()) {
+                await traverse(fullPath);
+            } else if (entry.isFile()) {
+                const stat = await fs.promises.stat(fullPath);
+                const relativePath = path.relative(root, fullPath).replace(/\\/g, '/');
+                if (await isIndexableFileByPolicy(relativePath, fullPath, stat.size, policy.supportedExtensions)) {
+                    files.push(fullPath);
+                }
+            }
+        }
+    };
+    await traverse(root);
+    return files.sort((left, right) => compareContractStrings(
+        path.relative(root, left).replace(/\\/g, '/'),
+        path.relative(root, right).replace(/\\/g, '/'),
+    ));
+}
+
+test('concurrent getCodeFiles returns the same sorted files as the one-at-a-time walk', {
+    skip: process.platform === 'win32',
+}, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-code-files-concurrent-'));
+    try {
+        const write = (relativePath: string, content: string | Buffer) => {
+            fs.mkdirSync(path.dirname(path.join(root, relativePath)), { recursive: true });
+            fs.writeFileSync(path.join(root, relativePath), content);
+        };
+        // Depth-first visit order differs from sorted path order here: 'a-c.ts' < 'a/b.ts'.
+        write('a.ts', 'export const a = 1;\n');
+        write('a-c.ts', 'export const ac = 1;\n');
+        write('a/b.ts', 'export const b = 1;\n');
+        write('a/nested/deep.ts', 'export const deep = 1;\n');
+        write('ignored/x.ts', 'export const x = 1;\n');
+        write('skip.gen.ts', 'export const gen = 1;\n');
+        write('script', '#!/usr/bin/env python3\nprint(1)\n');
+        write('notes', 'plain text without a shebang\n');
+        write('data.bin', Buffer.from([0, 1, 2, 3, 0, 255]));
+        write('a\\b.ts', 'export const unrepresentable = 1;\n');
+        fs.mkdirSync(path.join(root, 'empty'));
+        fs.symlinkSync(path.join(root, 'a.ts'), path.join(root, 'link-file.ts'));
+        fs.symlinkSync(path.join(root, 'a'), path.join(root, 'link-dir'));
+        for (let directory = 0; directory < 10; directory++) {
+            for (let file = 0; file < 6; file++) {
+                write(`many/dir${directory}/f${file}.ts`, `export const v${directory}_${file} = 1;\n`);
+            }
+        }
+        const policy = { supportedExtensions: ['.ts', '.py'], effectiveIgnorePatterns: ['ignored/', '*.gen.ts'] };
+        const pipeline = createScanPipeline(policy.supportedExtensions);
+
+        const expected = await serialReferenceCodeFiles(root, policy);
+        const actual = await pipeline.getCodeFiles(root, policy);
+        assert.deepEqual(actual, expected);
+        const relative = actual.map((file) => path.relative(root, file));
+        assert.equal(relative.length, 64 + (relative.includes('script') ? 1 : 0));
+        assert.ok(relative.indexOf('a-c.ts') < relative.indexOf('a/b.ts'));
+        assert.ok(!relative.includes('ignored/x.ts') && !relative.includes('skip.gen.ts'));
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('concurrent getCodeFiles reports the first failure in walk order after in-flight probes settle', {
+    skip: process.platform === 'win32',
+    timeout: 10_000,
+}, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-code-files-failure-'));
+    try {
+        fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
+        fs.mkdirSync(path.join(root, 'b'));
+        fs.writeFileSync(path.join(root, 'b', 'x.ts'), 'export const x = 1;\n');
+        fs.writeFileSync(path.join(root, 'c.ts'), 'export const c = 1;\n');
+        fs.mkdirSync(path.join(root, 'd'));
+        fs.writeFileSync(path.join(root, 'd', 'y.ts'), 'export const y = 1;\n');
+
+        const realReaddir = fs.promises.readdir.bind(fs.promises);
+        const realStat = fs.promises.stat.bind(fs.promises);
+        let failD!: () => void;
+        const dFailed = new Promise<void>((resolve) => { failD = resolve; });
+        let bFailed = false;
+        let releaseA!: () => void;
+        const aReleased = new Promise<void>((resolve) => { releaseA = resolve; });
+        // 'd' fails first in time, 'b' fails later but first in walk order,
+        // and the probe of 'a.ts' stays in flight after both failures.
+        t.mock.method(fs.promises, 'readdir', async (target: string, options: unknown) => {
+            if (target === path.join(root, 'd')) {
+                failD();
+                throw new Error('injected readdir failure: d');
+            }
+            if (target === path.join(root, 'b')) {
+                await dFailed;
+                bFailed = true;
+                throw new Error('injected readdir failure: b');
+            }
+            return realReaddir(target, options as { withFileTypes: true });
+        });
+        t.mock.method(fs.promises, 'stat', async (target: string) => {
+            if (target === path.join(root, 'a.ts')) await aReleased;
+            return realStat(target);
+        });
+
+        let settled = false;
+        const scan = createScanPipeline(['.ts']).getCodeFiles(root);
+        scan.then(() => { settled = true; }, () => { settled = true; });
+        while (!bFailed) await new Promise((resolve) => setImmediate(resolve));
+        for (let tick = 0; tick < 10; tick++) await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(settled, false, 'getCodeFiles must wait for the in-flight probe');
+        releaseA();
+        await assert.rejects(scan, /injected readdir failure: b/);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -925,7 +1011,7 @@ test('a failed file drains already-started analysis reads before the pipeline re
     } finally { release(); await operation.catch(() => undefined); }
 });
 
-for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as const) {
+for (const stop of ['analysis failure', 'cancellation'] as const) {
     test(`${stop} drains later read failures without replacing the first outcome`, async () => {
         let release!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
@@ -952,7 +1038,7 @@ for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as 
             if (stop === 'analysis failure') throw firstError;
             return {
                 relativePath: file as RepositoryRelativePath, source: '', sourceHash: 'fixture',
-                sourceStat: { size: stop === 'source byte limit' ? MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION + 1 : 1, mtimeMs: 0, ctimeMs: 0 },
+                sourceStat: { size: 1, mtimeMs: 0, ctimeMs: 0 },
                 language: 'typescript', structuralStatus: 'complete', chunks: [], extractedSymbols: [],
                 moduleBindings: [], callSites: [], receiverTypeBindings: [], pythonFlowFacts: [],
             };
@@ -961,7 +1047,7 @@ for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as 
             filePaths: ['a.ts', 'b.ts'], codebasePath: '/repo', collectionName: 'fixture',
             onFileProcessed: () => { if (stop === 'cancellation') throw firstError; },
         });
-        const outcome = stop === 'source byte limit' ? operation : assert.rejects(operation, error => error === firstError);
+        const outcome = assert.rejects(operation, error => error === firstError);
         let settled = false;
         operation.then(() => { settled = true; }, () => { settled = true; });
         try {
@@ -970,13 +1056,154 @@ for (const stop of ['analysis failure', 'cancellation', 'source byte limit'] as 
             release();
             await outcome;
             assert.equal(readFinished, true);
-            if (stop === 'source byte limit') {
-                const result = await operation;
-                assert.equal(result.status, 'limit_reached');
-                assert.equal(result.processedFiles, 0);
-                assert.deepEqual(result.sourceFiles, []);
-                await result.payloadSettled;
-            }
         } finally { release(); await operation.catch(() => undefined); }
     });
 }
+
+function createConcurrencyFixture(files: number) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-pipeline-embedding-concurrency-'));
+    const filePaths = Array.from({ length: files }, (_, index) => {
+        const file = path.join(root, `${String(index).padStart(2, '0')}.ts`);
+        fs.writeFileSync(file, `export const value${index} = ${index};\nexport function f${index}() { return ${index}; }\n`);
+        return file;
+    });
+    const plan = new IndexingResourcePlanner({
+        platform: () => 'darwin', readFile: () => { throw new Error('unexpected memory read'); },
+        totalMemory: () => 64 * 1024 ** 3, freeMemory: () => 64 * 1024 ** 3, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+    // Batches of 3 and writes of 5 rows: write boundaries cross embedding batches.
+    const resourcePlan = Object.freeze({ ...plan, embeddingBatchMaxItems: 3, vectorWriteMaxRows: 5 });
+    return { root, filePaths, resourcePlan };
+}
+
+function createConcurrencyPipeline(embedding: Embedding, database: VectorDatabase, local: LanguageAnalysisPort) {
+    return new IndexingPipeline({
+        getVectorDatabase: () => database,
+        languageAnalyzer: createEagerOnlyAnalyzer(input => local.analyze(input)),
+        semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: () => embedding,
+        assertEmbeddingIdentityCurrent: () => embedding.getIdentity(),
+        isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (base, p) => path.relative(base, p) as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.ts'], matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'fixture',
+    });
+}
+
+test('concurrent embedding requests publish the same ordered rows and write batches as one at a time', { timeout: 10_000 }, async () => {
+    const { root, filePaths, resourcePlan } = createConcurrencyFixture(14);
+    const local = createLanguageAnalysisService({ chunkSize: 40, chunkOverlap: 0 });
+    try {
+        const run = async (maxConcurrentRequests: number | undefined, totalCalls: number) => {
+            const embedding = createMockEmbedding();
+            let calls = 0;
+            let maxInFlight = 0;
+            const waiting: Array<() => void> = [];
+            embedding.getBatchPolicy = () => ({ preferredMaxItems: 3, hardMaxItems: 3, maxConcurrentRequests });
+            embedding.embedDocuments = async texts => {
+                calls++;
+                await new Promise<void>(resolve => {
+                    waiting.push(resolve);
+                    maxInFlight = Math.max(maxInFlight, waiting.length);
+                    // Hold requests until the provider limit is in flight (or
+                    // none can follow), then complete the newest first.
+                    if (waiting.length === (maxConcurrentRequests ?? 1) || calls === totalCalls) {
+                        void (async () => {
+                            for (const done of waiting.splice(0).reverse()) {
+                                done();
+                                await new Promise(next => setImmediate(next));
+                            }
+                        })();
+                    }
+                });
+                return texts.map(text => {
+                    const digest = crypto.createHash('sha256').update(text).digest();
+                    return { vector: Array.from({ length: 768 }, (_, index) => digest[index % 32] / 255), dimension: 768 };
+                });
+            };
+            const database = createMockVectorDb();
+            const writes: unknown[][] = [];
+            database.getWriteAggregationPolicy = () => ({ preferredMaxRows: 256 });
+            database.writeDocuments = async (_collection, documents) => {
+                writes.push(documents.map(({ document, projections }) => {
+                    const metadata = Object.fromEntries(Object.entries(document.metadata)
+                        .filter(([key]) => key !== 'indexedAt'));
+                    return { document: { ...document, metadata }, projections };
+                }));
+            };
+            const result = await createConcurrencyPipeline(embedding, database, local)
+                .processFileList({ filePaths, codebasePath: root, collectionName: 'fixture', resourcePlan });
+            await result.payloadSettled;
+            return { writes, maxInFlight, calls, totalChunks: result.totalChunks };
+        };
+
+        const serial = await run(undefined, Infinity);
+        const concurrent = await run(4, serial.calls);
+        assert.ok(serial.calls >= 8, 'fixture must produce several embedding batches');
+        assert.equal(serial.maxInFlight, 1);
+        assert.equal(concurrent.maxInFlight, 4);
+        assert.ok(serial.writes.some(batch => batch.length === 5));
+        assert.deepEqual(concurrent.writes, serial.writes);
+        assert.equal(concurrent.totalChunks, serial.totalChunks);
+    } finally {
+        await local.dispose?.();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('a failed concurrent embedding request waits for in-flight requests and writes nothing after it', { timeout: 10_000 }, async () => {
+    const { root, filePaths, resourcePlan } = createConcurrencyFixture(14);
+    const local = createLanguageAnalysisService({ chunkSize: 40, chunkOverlap: 0 });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fail!: () => void;
+    const failGate = new Promise<void>(resolve => { fail = resolve; });
+    try {
+        const embedding = createMockEmbedding();
+        const embed = embedding.embedDocuments.bind(embedding);
+        let calls = 0;
+        let inFlight = 0;
+        embedding.getBatchPolicy = () => ({ preferredMaxItems: 3, hardMaxItems: 3, maxConcurrentRequests: 3 });
+        embedding.embedDocuments = async texts => {
+            const call = calls++;
+            inFlight++;
+            try {
+                if (call === 1) {
+                    await failGate;
+                    throw new Error('injected embedding failure');
+                }
+                if (call === 2) await gate;
+                return await embed(texts);
+            } finally {
+                inFlight--;
+            }
+        };
+        const database = createMockVectorDb();
+        const writtenIds: string[] = [];
+        database.getWriteAggregationPolicy = () => ({ preferredMaxRows: 256 });
+        database.writeDocuments = async (_collection, documents) => {
+            writtenIds.push(...documents.map(({ document }) => document.id));
+        };
+        // The file loop finishes while requests 1 and 2 are held, so only
+        // payload settlement remains: no file I/O can delay the check below.
+        const result = await createConcurrencyPipeline(embedding, database, local)
+            .processFileList({ filePaths, codebasePath: root, collectionName: 'fixture', resourcePlan });
+        assert.ok(calls >= 3);
+        let inFlightAtSettle: number | undefined;
+        result.payloadSettled.then(() => { inFlightAtSettle = inFlight; }, () => { inFlightAtSettle = inFlight; });
+        const rejection = assert.rejects(result.payloadSettled, /injected embedding failure/);
+        fail();
+        for (let tick = 0; tick < 20; tick++) await new Promise(resolve => setImmediate(resolve));
+        assert.equal(inFlightAtSettle, undefined, 'payload settled while a later embedding request was in flight');
+        release();
+        await rejection;
+        assert.equal(inFlightAtSettle, 0);
+        // Only the first batch (3 rows) precedes the failure; one write of 5
+        // rows cannot have filled, so nothing is written.
+        assert.deepEqual(writtenIds, []);
+    } finally {
+        fail();
+        release();
+        await local.dispose?.();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

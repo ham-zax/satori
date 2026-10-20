@@ -93,6 +93,48 @@ test('ignore and extension policy changes rebuild and match uncached results', a
     });
 });
 
+test('comparison observes publication controls outside the extension and ignore policy', async () => {
+    await fixture(async (root) => {
+        const controls = ['package.json', 'config/tsconfig.json'];
+        fs.mkdirSync(path.join(root, 'config'));
+        for (const control of controls) fs.writeFileSync(path.join(root, control), '{}\n');
+        const ignores = ['config/**'];
+        const checkpoint = freeze((await new FileSynchronizer(root, ignores, ['.ts'], {
+            additionalObservablePaths: controls,
+        }).prepareChanges()).sourceCheckpoint);
+        const owner = registry();
+        const comparison = owner.getPublicationSourceComparison(root, checkpoint, ignores, ['.ts'], controls);
+        assert.deepEqual(await results(comparison), Array(3).fill({ status: 'matches' }));
+        assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint(controls), { status: 'matches' });
+        for (const control of controls) {
+            fs.writeFileSync(path.join(root, control), '{"changed":true}\n');
+            assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint([control]), { status: 'differs' });
+            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
+            assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), { status: 'differs' });
+            fs.writeFileSync(path.join(root, control), '{}\n');
+            fs.unlinkSync(path.join(root, control));
+            assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint([control]), { status: 'differs' });
+            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
+            fs.writeFileSync(path.join(root, control), '{}\n');
+        }
+    });
+});
+
+test('new control paths invalidate cached comparison policy and detect additions', async () => {
+    await fixture(async (root, checkpoint) => {
+        freeze(checkpoint);
+        const owner = registry();
+        const previous = owner.getPublicationSourceComparison(root, checkpoint, [], ['.ts'], []);
+        fs.writeFileSync(path.join(root, 'package.json'), '{}\n');
+        const comparison = owner.getPublicationSourceComparison(root, checkpoint, [], ['.ts'], ['package.json']);
+        assert.notEqual(comparison, previous);
+        assert.equal(owner.getPublicationSourceComparison(root, checkpoint, [], ['.ts'], ['package.json']), comparison);
+        assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint(['package.json']), { status: 'differs' });
+        assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
+        assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), { status: 'differs' });
+    });
+});
+
 test('mutable and shallow frozen checkpoints never cache and hash mutation changes admission', async () => {
     await fixture(async (root, checkpoint) => {
         const owner = registry();

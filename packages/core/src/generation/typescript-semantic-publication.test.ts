@@ -76,6 +76,41 @@ async function createFixture(
     };
 }
 
+for (const initialConfig of [false, true]) {
+    test(`freshness comparisons observe current controls with initial tsconfig=${initialConfig}`, async () => {
+        const fixture = await createFixture({
+            'satori.toml': '[index]\nprofile = "minimal"\n',
+            'package.json': '{"name":"fixture"}\n',
+            'main.ts': 'export const value = 1;\n',
+            ...(initialConfig ? { 'tsconfig.json': '{"include":["*.ts"]}\n' } : {}),
+        });
+        try {
+            await fixture.context.indexCodebase(fixture.root);
+            const publication = fixture.context.getCurrentPublication(fixture.root);
+            assert.ok(publication);
+            assert.equal(publication.publication.policy.supportedExtensions.includes('.json'), false);
+            const comparisons = async () => [
+                await fixture.context.compareSourcePathsToFreshnessCheckpoint(fixture.root, ['package.json']),
+                await fixture.context.compareAllSourceToFreshnessCheckpoint(fixture.root),
+                await fixture.context.compareSourceObservationToFreshnessCheckpoint(fixture.root),
+            ];
+            assert.deepEqual(await comparisons(), Array(3).fill({ status: 'matches' }));
+
+            fs.writeFileSync(path.join(fixture.root, 'tsconfig.json'), '{"include":["*.ts"],"compilerOptions":{"strict":true}}\n');
+            assert.deepEqual(
+                await fixture.context.compareSourcePathsToFreshnessCheckpoint(fixture.root, ['tsconfig.json']),
+                { status: 'differs' },
+            );
+            assert.deepEqual(await fixture.context.compareAllSourceToFreshnessCheckpoint(fixture.root), { status: 'differs' });
+            assert.deepEqual(await fixture.context.compareSourceObservationToFreshnessCheckpoint(fixture.root), { status: 'differs' });
+            fs.writeFileSync(path.join(fixture.root, 'package.json'), '{"name":"changed-fixture"}\n');
+            assert.deepEqual(await comparisons(), Array(3).fill({ status: 'differs' }));
+        } finally {
+            await fixture.close();
+        }
+    });
+}
+
 async function readNavigation(context: Context, root: string) {
     const current = context.getCurrentPublication(root);
     assert.ok(current);

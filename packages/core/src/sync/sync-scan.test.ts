@@ -234,6 +234,121 @@ test('scanSynchronizerState preserves previous evidence for unreadable paths', a
     });
 });
 
+test('scanSynchronizerState records unreadable files that fail the index-policy probe', async (t) => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+        t.skip('cannot simulate unreadable paths as root');
+        return;
+    }
+    await withTempDir(async (rootDir) => {
+        fs.writeFileSync(path.join(rootDir, 'ok.ts'), 'export const ok = true;\n', 'utf8');
+        // An unknown extension triggers the shebang probe; a large .js triggers the large-asset probe.
+        fs.writeFileSync(path.join(rootDir, 'notes.custom'), '#!/usr/bin/env node\n', 'utf8');
+        fs.writeFileSync(path.join(rootDir, 'bundle.js'), 'x'.repeat(200 * 1024), 'utf8');
+        fs.chmodSync(path.join(rootDir, 'notes.custom'), 0o000);
+        fs.chmodSync(path.join(rootDir, 'bundle.js'), 0o000);
+
+        const output = await scanSynchronizerState(makeContext(rootDir, {
+            extensions: ['.ts', '.js'],
+            previousHashes: new Map([['bundle.js', 'previous-hash']]),
+            previousStats: new Map([['bundle.js', { size: 1, mtimeMs: 1, ctimeMs: 1 }]]),
+        }));
+
+        assert.equal(output.partialScan, true);
+        assert.equal(output.unreadableFiles.has('notes.custom'), true);
+        assert.equal(output.unreadableFiles.has('bundle.js'), true);
+        assert.equal(output.fileHashes.get('bundle.js'), 'previous-hash');
+        assert.equal(output.fileHashes.has('ok.ts'), true);
+    });
+});
+
+for (const code of ['EACCES', 'ENOENT']) {
+    test(`policy-probe ${code} preserves evidence while other files scan`, async (t) => {
+        await withTempDir(async (rootDir) => {
+            fs.writeFileSync(path.join(rootDir, 'ok.ts'), 'export const ok = true;\n');
+            fs.writeFileSync(path.join(rootDir, 'notes.custom'), '#!/usr/bin/env node\nconsole.log(1);\n');
+            fs.writeFileSync(path.join(rootDir, 'bundle.js'), `// bundle\n${'x'.repeat(200 * 1024)}`);
+            const baseline = await scanSynchronizerState(makeContext(rootDir, { extensions: ['.ts', '.js'] }));
+            const targets = ['notes.custom', 'bundle.js'];
+            const originalOpen = fs.promises.open;
+            t.mock.method(fs.promises, 'open', async (...args: Parameters<typeof originalOpen>) => {
+                if (targets.some((target) => args[0] === path.join(rootDir, target))) {
+                    throw Object.assign(new Error(`injected ${code}`), { code });
+                }
+                return originalOpen(...args);
+            });
+            const output = await scanSynchronizerState(makeContext(rootDir, {
+                extensions: ['.ts', '.js'],
+                previousHashes: new Map(baseline.fileHashes),
+                previousStats: new Map(baseline.fileStats),
+            }));
+            assert.equal(output.partialScan, true);
+            assert.deepEqual([...output.unreadableFiles].sort(), targets.sort());
+            for (const target of targets) {
+                assert.ok(baseline.fileHashes.has(target));
+                assert.equal(output.fileHashes.get(target), baseline.fileHashes.get(target));
+                assert.deepEqual(output.fileStats.get(target), baseline.fileStats.get(target));
+            }
+            assert.equal(output.fileHashes.get('ok.ts'), baseline.fileHashes.get('ok.ts'));
+        });
+    });
+}
+
+test('bounded hashing preserves complete hashes for empty, one-byte, and multi-chunk sources', async () => {
+    await withTempDir(async (rootDir) => {
+        const files = new Map([
+            ['empty.ts', ''],
+            ['one.ts', 'x'],
+            ['chunks.ts', 'x'.repeat(128 * 1024) + 'z'],
+        ]);
+        for (const [file, content] of files) fs.writeFileSync(path.join(rootDir, file), content);
+        const context = makeContext(rootDir);
+        const scanned = await scanSynchronizerState(context);
+        assert.deepEqual(scanned.fileHashes, new Map([...files].map(([file, content]) => [file, sha256(content)])));
+        for (const [file, content] of files) {
+            const observed = await observeSynchronizerPath(context, file);
+            assert.equal(observed.kind, 'indexed');
+            assert.equal(observed.hash, sha256(content));
+        }
+    });
+});
+
+test('observeSynchronizerPath reads at most one byte past the observed size of a growing file', async () => {
+    await withTempDir(async (rootDir) => {
+        const targetPath = path.join(rootDir, 'grow.ts');
+        const original = 'export const grow = 1;\n';
+        fs.writeFileSync(targetPath, original, 'utf8');
+
+        // createHash runs after the size was observed and before the stream opens,
+        // so growing the file here models a writer racing the hash read.
+        const realCreateHash = crypto.createHash;
+        let hashedBytes = 0;
+        let grew = false;
+        (crypto as { createHash: typeof crypto.createHash }).createHash = ((algorithm: string) => {
+            const hasher = realCreateHash(algorithm);
+            if (!grew) {
+                grew = true;
+                fs.appendFileSync(targetPath, 'y'.repeat(8 * 1024 * 1024));
+            }
+            const update = hasher.update.bind(hasher) as (chunk: Buffer) => crypto.Hash;
+            hasher.update = ((chunk: Buffer) => {
+                hashedBytes += chunk.length;
+                return update(chunk);
+            }) as typeof hasher.update;
+            return hasher;
+        }) as typeof crypto.createHash;
+        try {
+            await assert.rejects(
+                () => observeSynchronizerPath(makeContext(rootDir), 'grow.ts'),
+                /File changed while being hashed/,
+            );
+        } finally {
+            (crypto as { createHash: typeof crypto.createHash }).createHash = realCreateHash;
+        }
+        assert.equal(grew, true);
+        assert.ok(hashedBytes <= Buffer.byteLength(original) + 1, `hashed ${hashedBytes} bytes`);
+    });
+});
+
 test('scanSynchronizerState bounds concurrent hashing to hashConcurrency', async () => {
     await withTempDir(async (rootDir) => {
         writeSparseAnchor(path.join(rootDir, 'anchor.ts'));
@@ -341,5 +456,32 @@ test('observeSynchronizerPath classifies explicit paths', async () => {
         } finally {
             fs.rmSync(outside, { recursive: true, force: true });
         }
+    });
+});
+
+test('observeSynchronizerPath reports a path below a regular file as absent', async () => {
+    await withTempDir(async (rootDir) => {
+        fs.writeFileSync(path.join(rootDir, 'file.txt'), 'plain\n', 'utf8');
+        const observed = await observeSynchronizerPath(makeContext(rootDir), 'file.txt/a.ts');
+        assert.equal(observed.kind, 'absent');
+    });
+});
+
+test('observeSynchronizerPath does not index a path below a symlinked directory', async (t) => {
+    await withTempDir(async (rootDir) => {
+        fs.mkdirSync(path.join(rootDir, 'real'));
+        fs.writeFileSync(path.join(rootDir, 'real', 'a.ts'), 'export const a = 1;\n', 'utf8');
+        try {
+            fs.symlinkSync(path.join(rootDir, 'real'), path.join(rootDir, 'link'), 'dir');
+        } catch {
+            t.skip('directory symlinks are unavailable on this platform');
+            return;
+        }
+        const context = makeContext(rootDir);
+        assert.equal((await observeSynchronizerPath(context, 'real/a.ts')).kind, 'indexed');
+        assert.equal((await observeSynchronizerPath(context, 'link/a.ts')).kind, 'not_indexable');
+        // Matches the scan, which never descends into the symlinked directory.
+        const scanned = await scanSynchronizerState(context);
+        assert.deepEqual([...scanned.fileHashes.keys()], ['real/a.ts']);
     });
 });

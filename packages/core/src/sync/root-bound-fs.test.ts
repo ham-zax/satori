@@ -14,6 +14,7 @@ import {
     canPublishRootBoundFileIdentity,
     descriptorPathInsideRoot,
     isRealPathInsideRoot,
+    RootBoundFileError,
     openDirectoryInsideRoot,
     openRegularFileInsideRoot,
     openRegularFileInsideRootNoFollow,
@@ -60,6 +61,14 @@ test('isRealPathInsideRoot requires a path-separator boundary', () => {
     assert.equal(isRealPathInsideRoot('/tmp/foobar', '/tmp/foo'), false);
     assert.equal(isRealPathInsideRoot('/tmp/fo', '/tmp/foo'), false);
     assert.equal(isRealPathInsideRoot('/other/foo', '/tmp/foo'), false);
+});
+
+test('isRealPathInsideRoot accepts descendants of a filesystem root', () => {
+    assert.equal(isRealPathInsideRoot('/tmp', '/'), true);
+    assert.equal(isRealPathInsideRoot('/', '/'), true);
+    const nativeRoot = path.parse(path.resolve(os.tmpdir())).root;
+    assert.equal(isRealPathInsideRoot(path.join(nativeRoot, 'satori-child'), nativeRoot), true);
+    assert.equal(isRealPathInsideRoot(nativeRoot, nativeRoot), true);
 });
 
 test('resolveInsideRoot rejects intermediate directory symlink escape', async (t) => {
@@ -151,6 +160,30 @@ test('openRegularFileInsideRootNoFollow rejects a final-component symlink inside
         );
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('openRegularFileInsideRootNoFollow reports root escape and a final symlink as RootBoundFileError', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-nofollow-class-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-nofollow-out-'));
+    try {
+        const isRootBinding = (error: unknown) => error instanceof RootBoundFileError
+            && error.code === 'root_binding_invalid';
+        await assert.rejects(
+            () => openRegularFileInsideRootNoFollow(path.join(outside, 'x.ignore'), root),
+            isRootBinding,
+        );
+
+        const targetPath = path.join(root, 'actual.ignore');
+        const linkPath = path.join(root, '.gitignore');
+        fs.writeFileSync(targetPath, 'generated/**\n', 'utf8');
+        if (!createFileSymlinkOrSkip(t, targetPath, linkPath)) {
+            return;
+        }
+        await assert.rejects(() => openRegularFileInsideRootNoFollow(linkPath, root), isRootBinding);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
     }
 });
 

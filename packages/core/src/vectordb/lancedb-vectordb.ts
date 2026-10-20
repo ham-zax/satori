@@ -8,6 +8,7 @@ import {
     Index,
     MatchQuery,
     Operator,
+    Session,
     type Connection,
     type Table,
 } from '@lancedb/lancedb';
@@ -47,8 +48,16 @@ import {
     type VectorWriteAggregationPolicy,
 } from './types';
 
-const DEFAULT_MAX_WRITE_BATCH_SIZE = 512;
-const DEFAULT_WRITE_AGGREGATION_BATCH_SIZE = 256;
+// One table.add per logical write: each add is a table version, and every
+// version's manifest lists all fragments, so small adds cost time and
+// metadata-cache memory quadratic in the add count (547k rows at 256 rows per
+// add: 42 s and a full 1 GiB cache; at 16,384 rows: 9 s and 1 MiB). The
+// indexing resource plan bounds the logical write size by memory.
+const DEFAULT_MAX_WRITE_BATCH_SIZE = 16_384;
+// LanceDB's default metadata cache is 1 GiB per session. Manifests of old
+// versions are not needed after a write; the index cache keeps its default
+// because search reads the FTS index through it.
+const METADATA_CACHE_BYTES = 128n * 1024n * 1024n;
 const STABLE_TIE_INITIAL_MULTIPLIER = 2;
 const STABLE_TIE_MINIMUM_FETCH = 32;
 /**
@@ -465,6 +474,15 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     private readonly maxWriteBatchSize: number;
     private connectionPromise: Promise<Connection> | null = null;
     private closed = false;
+    // Tables this adapter created with a deferred index build and has not yet
+    // finalized: the full-index candidate build window, owned by one process
+    // through the root mutation lease. Invariant: `ids` holds every id the table
+    // contains, so a row whose id is absent is appended without the existing-row
+    // query and merge, whose cost grows with table size. The full-index payload
+    // chain issues one write at a time; an overlapping write is refused, because
+    // it could race an in-flight append. Any write or delete error, finalization,
+    // and drop end tracking; later writes then take the query-and-merge path.
+    private readonly appendOnlyTables = new Map<string, { ids: Set<string>; writing: boolean }>();
 
     constructor(config: LanceDbConfig) {
         if (!path.isAbsolute(config.databasePath)) {
@@ -484,7 +502,10 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     private getConnection(): Promise<Connection> {
         if (this.closed) throw new Error('LanceDB adapter is closed.');
         if (!this.connectionPromise) {
-            this.connectionPromise = connect(this.databasePath, { readConsistencyInterval: 0 })
+            this.connectionPromise = connect(this.databasePath, {
+                readConsistencyInterval: 0,
+                session: new Session(null, METADATA_CACHE_BYTES),
+            })
                 .catch((error) => {
                     this.connectionPromise = null;
                     throw error;
@@ -527,13 +548,16 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         options?: CollectionCreateOptions,
     ): Promise<void> {
         await this.createDataTable(collectionName, dimension);
-        if (!options?.deferIndexBuild) {
+        if (options?.deferIndexBuild) {
+            this.appendOnlyTables.set(collectionName, { ids: new Set(), writing: false });
+        } else {
             await this.finalizeCollectionForSearch(collectionName);
         }
     }
 
     async finalizeCollectionForSearch(collectionName: string): Promise<void> {
         assertCollectionName(collectionName);
+        this.appendOnlyTables.delete(collectionName);
         const connection = await this.getConnection();
         // Publication finalization only establishes search readiness (FTS).
         // Compaction/optimize is maintenance, not a Publication activation requirement:
@@ -609,6 +633,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
 
     async dropCollection(collectionName: string): Promise<void> {
         assertCollectionName(collectionName);
+        this.appendOnlyTables.delete(collectionName);
         const connection = await this.getConnection();
         if (await this.hasTable(collectionName, connection)) {
             await connection.dropTable(collectionName);
@@ -643,7 +668,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
     }
 
     getWriteAggregationPolicy(): VectorWriteAggregationPolicy {
-        return { preferredMaxRows: DEFAULT_WRITE_AGGREGATION_BATCH_SIZE };
+        return { preferredMaxRows: this.maxWriteBatchSize };
     }
 
     private async vectorDimension(table: Table): Promise<number> {
@@ -682,25 +707,51 @@ export class LanceDbVectorDatabase implements VectorDatabase {
             }
 
             const rows = [...rowsById.values()];
-            for (let offset = 0; offset < rows.length; offset += this.maxWriteBatchSize) {
-                const batch = rows.slice(offset, offset + this.maxWriteBatchSize);
-                const filter = serializeLanceDbFilter(idFilter(batch.map((row) => row.id as string)));
-                const existingRows = await table.query()
-                    .where(filter)
-                    .select(['id', 'contentHash'])
-                    .toArray() as LanceDbPhysicalRow[];
-                const hashesById = new Map(existingRows.map((row) => [
-                    requiredString(row, 'id', 'existing document'),
-                    requiredString(row, 'contentHash', 'existing document'),
-                ]));
-                const changed = batch.filter((row) => hashesById.get(row.id as string) !== row.contentHash);
-                if (changed.length === 0) continue;
-                await table.mergeInsert('id')
-                    .whenMatchedUpdateAll()
-                    .whenNotMatchedInsertAll()
-                    .execute(changed);
+            const appendOnly = this.beginAppendOnlyWrite(collectionName);
+            try {
+                const appendRows = appendOnly ? rows.filter((row) => !appendOnly.ids.has(row.id as string)) : [];
+                const mergeRows = appendOnly ? rows.filter((row) => appendOnly.ids.has(row.id as string)) : rows;
+                for (let offset = 0; offset < appendRows.length; offset += this.maxWriteBatchSize) {
+                    const batch = appendRows.slice(offset, offset + this.maxWriteBatchSize);
+                    await table.add(batch);
+                    for (const row of batch) appendOnly!.ids.add(row.id as string);
+                }
+                for (let offset = 0; offset < mergeRows.length; offset += this.maxWriteBatchSize) {
+                    const batch = mergeRows.slice(offset, offset + this.maxWriteBatchSize);
+                    const filter = serializeLanceDbFilter(idFilter(batch.map((row) => row.id as string)));
+                    const existingRows = await table.query()
+                        .where(filter)
+                        .select(['id', 'contentHash'])
+                        .toArray() as LanceDbPhysicalRow[];
+                    const hashesById = new Map(existingRows.map((row) => [
+                        requiredString(row, 'id', 'existing document'),
+                        requiredString(row, 'contentHash', 'existing document'),
+                    ]));
+                    const changed = batch.filter((row) => hashesById.get(row.id as string) !== row.contentHash);
+                    if (changed.length === 0) continue;
+                    await table.mergeInsert('id')
+                        .whenMatchedUpdateAll()
+                        .whenNotMatchedInsertAll()
+                        .execute(changed);
+                }
+            } catch (error) {
+                this.appendOnlyTables.delete(collectionName);
+                throw error;
+            } finally {
+                if (appendOnly) appendOnly.writing = false;
             }
         });
+    }
+
+    /** Claims the append-only state of a tracked table; refuses an overlapping write. */
+    private beginAppendOnlyWrite(collectionName: string): { ids: Set<string>; writing: boolean } | undefined {
+        const state = this.appendOnlyTables.get(collectionName);
+        if (!state) return undefined;
+        if (state.writing) {
+            throw new Error(`LanceDB candidate collection '${collectionName}' received overlapping writes.`);
+        }
+        state.writing = true;
+        return state;
     }
 
     private async retrieveStableCandidates(
@@ -844,6 +895,7 @@ export class LanceDbVectorDatabase implements VectorDatabase {
         if (ids.some((id) => id.length === 0)) {
             throw new Error('LanceDB document deletion contains an empty document ID.');
         }
+        this.appendOnlyTables.delete(collectionName);
         const connection = await this.getConnection();
         await withTable(connection, collectionName, async (table) => {
             await table.delete(serializeLanceDbFilter(idFilter(ids)));

@@ -47,10 +47,10 @@ import type { IndexProfile } from '../config/defaults';
 import type { ResolvedIndexPolicy, IndexPolicyRuntimeService } from '../policy/index-policy-runtime-service';
 import type { Embedding, EmbeddingOperationMetricsSnapshot } from '../embedding';
 import { FileSynchronizer } from '../sync/synchronizer';
+import { collectPublicationSourceControls } from './publication-source-controls';
 import type { PublicationSourceCheckpoint } from '../sync/snapshot-codec';
 import type { IndexAuthorityCoordinator } from './index-authority-coordinator';
 import {
-    MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION,
     type IndexedSourceFileObservation,
     type ProcessedFileList,
 } from '../core/indexing-pipeline';
@@ -62,7 +62,6 @@ import { validateRepositoryRelativePath, type RepositoryRelativePath } from '../
 import type { CustomIndexPolicyUpdate } from './contracts';
 import {
     buildPublicationPackageOwnership,
-    discoverPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
 
@@ -121,13 +120,6 @@ type ReindexByChangeResult = {
     totalChunks?: number;
     indexStatus?: 'completed' | 'limit_reached';
 };
-const TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
-
-function isTypeScriptResolutionSource(filePath: string): boolean {
-    const lower = filePath.toLowerCase();
-    return TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension));
-}
-
 function boundedProviderFailureMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.trim() || 'provider failure';
@@ -784,14 +776,10 @@ export class IndexGenerationWorkflow {
             }
             return relativePath;
         });
-        const resolutionSourceControls = await this.collectResolutionSourceControls(
+        const { publicationSourceControls } = await collectPublicationSourceControls(
             canonicalRoot,
             scannedRelativePaths,
-        );
-        const packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        const publicationSourceControls = this.mergePublicationSourceControls(
-            resolutionSourceControls,
-            packageOwnershipSourceControls,
+            this.ports.resolutionAnalyzer,
         );
         const publicationControlSet = new Set(publicationSourceControls);
         const codeFiles = scannedCodeFiles.filter((filePath, index) => !publicationControlSet.has(scannedRelativePaths[index]));
@@ -1314,17 +1302,10 @@ export class IndexGenerationWorkflow {
         try {
             input.options.assertMutationCurrent?.();
             const sourceStats = new Map(input.preparedChanges.sourceCheckpoint.fileStats);
-            let searchableSourceBytes = 0;
             for (const filePath of input.preparedChanges.fileHashes.keys()) {
-                if (!isSearchable(filePath)) continue;
-                const size = sourceStats.get(filePath)?.size;
-                if (size === undefined) {
+                if (isSearchable(filePath) && sourceStats.get(filePath)?.size === undefined) {
                     throw new Error(`Atomic delta publication is missing source stat evidence for '${filePath}'.`);
                 }
-                if (searchableSourceBytes > MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION - size) {
-                    throw new Error(`Atomic delta publication reached the searchable source byte resource limit of ${MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION}.`);
-                }
-                searchableSourceBytes += size;
             }
             await measurePublicationPhase(
                 'publication_fork',
@@ -1680,14 +1661,14 @@ export class IndexGenerationWorkflow {
             this.ports.getIndexedExtensionsForCodebase(codebasePath),
             { sourceCheckpoint: currentPublicationSource.checkpoint },
         );
-        let resolutionSourceControls = await this.collectResolutionSourceControls(
-            canonicalRoot,
-            currentSynchronizer.getTrackedRelativePaths(),
-        );
-        let packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        let publicationSourceControls = this.mergePublicationSourceControls(
+        let {
             resolutionSourceControls,
             packageOwnershipSourceControls,
+            publicationSourceControls,
+        } = await collectPublicationSourceControls(
+            canonicalRoot,
+            currentSynchronizer.getTrackedRelativePaths(),
+            this.ports.resolutionAnalyzer,
         );
         currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
 
@@ -1707,14 +1688,14 @@ export class IndexGenerationWorkflow {
         const nextResolutionSourcePaths = new Set(currentSynchronizer.getTrackedRelativePaths());
         for (const filePath of preparedChanges.changes.removed) nextResolutionSourcePaths.delete(filePath);
         for (const filePath of preparedChanges.changes.added) nextResolutionSourcePaths.add(filePath);
-        const nextResolutionSourceControls = await this.collectResolutionSourceControls(
+        const {
+            resolutionSourceControls: nextResolutionSourceControls,
+            packageOwnershipSourceControls: nextPackageOwnershipSourceControls,
+            publicationSourceControls: nextPublicationSourceControls,
+        } = await collectPublicationSourceControls(
             canonicalRoot,
             [...nextResolutionSourcePaths],
-        );
-        const nextPackageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        const nextPublicationSourceControls = this.mergePublicationSourceControls(
-            nextResolutionSourceControls,
-            nextPackageOwnershipSourceControls,
+            this.ports.resolutionAnalyzer,
         );
         if (JSON.stringify(nextPublicationSourceControls) !== JSON.stringify(publicationSourceControls)) {
             resolutionSourceControls = nextResolutionSourceControls;
@@ -1769,35 +1750,6 @@ export class IndexGenerationWorkflow {
             progressCallback,
             resourcePlan,
         });
-    }
-
-    private async collectResolutionSourceControls(
-        codebasePath: string,
-        sourcePaths: readonly string[],
-    ): Promise<string[]> {
-        const analyzer = this.ports.resolutionAnalyzer;
-        if (!analyzer?.getSourceControlFiles || !analyzer.supportsLanguage('typescript')) return [];
-        const typeScriptFiles = sourcePaths
-            .map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, ''))
-            .filter(isTypeScriptResolutionSource);
-        if (typeScriptFiles.length === 0) return [];
-        return [...new Set(await analyzer.getSourceControlFiles({
-            rootPath: codebasePath,
-            language: 'typescript',
-            sourceFiles: typeScriptFiles,
-        }))].sort();
-    }
-
-    private collectPackageOwnershipSourceControls(codebasePath: string): string[] {
-        return discoverPackageOwnership(codebasePath).controlFiles
-            .map(([filePath]) => filePath)
-            .filter((filePath) => path.posix.basename(filePath) !== 'Cargo.toml');
-    }
-
-    private mergePublicationSourceControls(
-        ...controlSets: readonly (readonly string[])[]
-    ): string[] {
-        return [...new Set(controlSets.flatMap((controls) => [...controls]))].sort();
     }
 
     private async collectSemanticAuxiliariesForLanguage(

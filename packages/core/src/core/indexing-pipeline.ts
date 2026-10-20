@@ -55,8 +55,9 @@ import { resolveRepositoryVocabularyIndexingEnabled } from '../vocabulary/config
 
 const DEFAULT_EMBEDDING_BATCH_SIZE = 100;
 const MAX_EMBEDDING_BATCH_SIZE = 1000;
-const INDEX_CHUNK_LIMIT = 450_000;
-export const MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION = 512 * 1024 * 1024;
+// October 2026 LibreOffice scan (159k entries): 1 at a time 53 s, 16 at a
+// time 33 s; 64 gives no more because the JS thread becomes the limit.
+const SOURCE_SCAN_CONCURRENCY = 16;
 
 export type IndexingPipelineMetrics = {
     analysisMs: number;
@@ -171,6 +172,17 @@ type IndexingPipelineConfig = Readonly<{
     repositoryVocabularyEnabled?: boolean;
 }>;
 
+
+/** Orders paths below one root as the name-sorted depth-first walk visits them. */
+function compareSourceWalkOrder(left: string, right: string): number {
+    const leftParts = left.split(path.sep);
+    const rightParts = right.split(path.sep);
+    for (let index = 0; index < Math.min(leftParts.length, rightParts.length); index++) {
+        const order = compareContractStrings(leftParts[index], rightParts[index]);
+        if (order !== 0) return order;
+    }
+    return leftParts.length - rightParts.length;
+}
 
 function resolveEmbeddingBatchSize(
     rawValue: string | undefined,
@@ -305,9 +317,36 @@ export class IndexingPipeline {
             ? createIndexIgnoreMatcher(indexPolicy.effectiveIgnorePatterns)
             : null;
 
-        const traverseDirectory = async (currentPath: string): Promise<void> => {
+        // Directory reads and file probes run SOURCE_SCAN_CONCURRENCY at a time.
+        // The result is sorted below, so visit order never reaches it. Every
+        // task settles before this returns or throws, and the failure reported
+        // is the one the name-sorted depth-first walk meets first.
+        const queue: Array<{ fullPath: string; run: () => Promise<void> }> = [];
+        // Assigned only inside tasks; the cast keeps TypeScript from narrowing it to null.
+        let firstFailure = null as { fullPath: string; error: unknown } | null;
+        let active = 0;
+        let settle!: () => void;
+        const settled = new Promise<void>((resolve) => { settle = resolve; });
+        const pump = (): void => {
+            while (active < SOURCE_SCAN_CONCURRENCY && queue.length > 0) {
+                const task = queue.pop()!;
+                // A task after a known failure in walk order, and everything
+                // below it, cannot change which failure is reported.
+                if (firstFailure && compareSourceWalkOrder(task.fullPath, firstFailure.fullPath) > 0) continue;
+                active++;
+                void task.run().catch((error: unknown) => {
+                    if (!firstFailure || compareSourceWalkOrder(task.fullPath, firstFailure.fullPath) < 0) {
+                        firstFailure = { fullPath: task.fullPath, error };
+                    }
+                }).finally(() => {
+                    active--;
+                    pump();
+                    if (active === 0 && queue.length === 0) settle();
+                });
+            }
+        };
+        const visitDirectory = async (currentPath: string): Promise<void> => {
             const entries = await fs.promises.readdir(currentPath, { withFileTypes: true });
-            entries.sort((left, right) => compareContractStrings(left.name, right.name));
             for (const entry of entries) {
                 // Full indexing and sync admit the same portable raw path names.
                 if (!isRepositoryRelativePath(entry.name)) continue;
@@ -321,23 +360,31 @@ export class IndexingPipeline {
                     continue;
                 }
                 if (entry.isDirectory()) {
-                    await traverseDirectory(fullPath);
+                    queue.push({ fullPath, run: () => visitDirectory(fullPath) });
                 } else if (entry.isFile()) {
-                    const stat = await fs.promises.stat(fullPath);
-                    const relativePath = path.relative(codebasePath, fullPath).replace(/\\/g, '/');
-                    if (await isIndexableFileByPolicy(
-                        relativePath,
+                    queue.push({
                         fullPath,
-                        stat.size,
-                        supportedExtensions,
-                    )) {
-                        files.push(fullPath);
-                    }
+                        run: async () => {
+                            const stat = await fs.promises.stat(fullPath);
+                            const relativePath = path.relative(codebasePath, fullPath).replace(/\\/g, '/');
+                            if (await isIndexableFileByPolicy(
+                                relativePath,
+                                fullPath,
+                                stat.size,
+                                supportedExtensions,
+                            )) {
+                                files.push(fullPath);
+                            }
+                        },
+                    });
                 }
             }
         };
 
-        await traverseDirectory(codebasePath);
+        queue.push({ fullPath: codebasePath, run: () => visitDirectory(codebasePath) });
+        pump();
+        await settled;
+        if (firstFailure) throw firstFailure.error;
         return files.sort((left, right) => compareContractStrings(
             path.relative(codebasePath, left).replace(/\\/g, '/'),
             path.relative(codebasePath, right).replace(/\\/g, '/'),
@@ -576,7 +623,7 @@ export class IndexingPipeline {
             return await this.processFileListWithAnalyzer(input, analyzer);
         } finally {
             // Each operation owns its pool. Await exit before returning or throwing,
-            // including failed/limited file loops; shared custom ports keep their owner.
+            // including failed file loops; shared custom ports keep their owner.
             if (analyzer !== this.languageAnalyzer) await analyzer.dispose?.();
         }
     }
@@ -611,14 +658,15 @@ export class IndexingPipeline {
                 );
             }
         }
-        const vectorWriteMaxRows = Math.min(writeAggregationPolicy?.preferredMaxRows ?? 256, input.resourcePlan?.vectorWriteMaxRows ?? 256);
+        const vectorWriteMaxRows = Math.min(
+            writeAggregationPolicy?.preferredMaxRows ?? Number.MAX_SAFE_INTEGER,
+            input.resourcePlan?.vectorWriteMaxRows ?? 256,
+        );
         let pendingVectorWrites: IndexedVectorDocument[] = [];
         let chunkBuffer: PendingIndexedChunk[] = [];
         let chunkBufferEstimatedTokens = 0;
         let processedFiles = 0;
         let totalChunks = 0;
-        let indexedSourceBytes = 0;
-        let limitReached = false;
         const symbolRecords: SymbolRecord[] = [];
         const symbolManifestFiles: SymbolRegistryManifestFile[] = [];
         const analysisByFile = new Map<string, RelationshipAnalysisEvidence>();
@@ -634,20 +682,36 @@ export class IndexingPipeline {
         const describeError = (error: unknown): string => (
             error instanceof Error ? error.message : String(error)
         );
-        // Embedding and vector writes run as one ordered background chain so the
-        // file loop (and the caller's navigation work) is not held behind them.
-        // Queued embedding text is bounded; the loop waits when it is exceeded.
+        // Embedding and vector writes run in the background so the file loop (and
+        // the caller's navigation work) is not held behind them. Up to
+        // embeddingConcurrency embedding requests overlap; vector writes stay one
+        // chain in submission order, so write order and batch boundaries are the
+        // same as one request at a time. Queued embedding text is bounded; the
+        // loop waits for the oldest batches when it is exceeded.
+        const embeddingConcurrency = batchPolicy?.maxConcurrentRequests ?? 1;
+        if (!Number.isSafeInteger(embeddingConcurrency) || embeddingConcurrency <= 0) {
+            throw new Error(
+                `Invalid EmbeddingBatchPolicy maxConcurrentRequests: ${embeddingConcurrency}. Must be a positive safe integer.`,
+            );
+        }
+        const queuedPayloadByteLimit = input.resourcePlan?.queuedEmbeddingTextBytes ?? 64 * 1024 * 1024;
         let payloadChain: Promise<void> = Promise.resolve();
         let payloadError: Error | undefined;
         let queuedPayloadBytes = 0;
-        const persistChunks = async (chunks: PendingIndexedChunk[], failureContext: string): Promise<void> => {
+        // Settlement of each of the last embeddingConcurrency embedding requests;
+        // a request starts only after the one embeddingConcurrency earlier settles.
+        const embeddingSlots: Promise<void>[] = [];
+        let submittedPayloads = 0;
+        // Write steps not yet settled, oldest first; each removes itself.
+        const pendingPayloadSteps: Promise<void>[] = [];
+        const persistChunks = async (
+            embedded: Promise<IndexedVectorDocument[]>,
+            failureContext: string,
+        ): Promise<void> => {
             const searchType = isHybrid ? 'hybrid' : 'regular';
             try {
-                const documents = await this.processChunkBuffer(
-                    chunks,
-                    input.collectionName,
-                    performance,
-                );
+                const documents = await embedded;
+                if (payloadError) return;
                 pendingVectorWrites.push(...documents);
                 if (writeAggregationPolicy) {
                     while (pendingVectorWrites.length >= vectorWriteMaxRows) {
@@ -689,21 +753,34 @@ export class IndexingPipeline {
             chunkBuffer = [];
             chunkBufferEstimatedTokens = 0;
             queuedPayloadBytes += chunkBytes;
+            const slot = submittedPayloads % embeddingConcurrency;
+            submittedPayloads++;
+            const embedded = (embeddingSlots[slot] ?? Promise.resolve()).then(() => (
+                payloadError ? [] : this.processChunkBuffer(chunks, input.collectionName, performance)
+            ));
+            // Observed by its write step below, which every path awaits.
+            embedded.catch(() => undefined);
+            embeddingSlots[slot] = embedded.then(() => undefined, () => undefined);
             payloadChain = payloadChain.then(async () => {
                 try {
-                    if (!payloadError) await persistChunks(chunks, failureContext);
+                    await persistChunks(embedded, failureContext);
                 } catch (error) {
                     payloadError ??= error instanceof Error ? error : new Error(String(error));
                 } finally {
                     queuedPayloadBytes -= chunkBytes;
+                    pendingPayloadSteps.shift();
                 }
             });
-            if (queuedPayloadBytes > (input.resourcePlan?.queuedEmbeddingTextBytes ?? 64 * 1024 * 1024)) await payloadChain;
+            pendingPayloadSteps.push(payloadChain);
+            while (queuedPayloadBytes > queuedPayloadByteLimit && pendingPayloadSteps.length > 0) {
+                await pendingPayloadSteps[0];
+            }
             if (payloadError) throw payloadError;
         };
 
         // A failed index must not return while embedding or vector writes are
         // still running: callers clean up the candidate collection on failure.
+        // payloadChain awaits every submitted embedding request in order.
         const stopPayload = async (error: unknown): Promise<void> => {
             payloadError ??= error instanceof Error ? error : new Error(String(error));
             await payloadChain;
@@ -773,17 +850,6 @@ export class IndexingPipeline {
                 const analyzed = await pendingAnalyses.get(fileIndex)!;
                 pendingAnalyses.delete(fileIndex);
                 if (analyzed === null) continue;
-                if (
-                    indexedSourceBytes + analyzed.sourceStat.size
-                    > MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION
-                ) {
-                    console.warn(
-                        `[Context] ⚠️  Searchable source byte limit of ${MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION} reached before '${analyzed.relativePath}'. Stopping indexing with a partial candidate.`,
-                    );
-                    limitReached = true;
-                    break;
-                }
-                indexedSourceBytes += analyzed.sourceStat.size;
                 const deferredPlan = analyzed.deferredAnalysis === null
                     ? undefined
                     : createIndexingChunkPlan({
@@ -819,7 +885,6 @@ export class IndexingPipeline {
                     );
                 }
 
-                let fileFullyIncluded = true;
                 for (
                     let fileChunkIndex = 0;
                     fileChunkIndex < chunkCount;
@@ -869,25 +934,14 @@ export class IndexingPipeline {
                     if (chunkBuffer.length >= embeddingBatchSize) {
                         await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
                     }
-                    if (totalChunks >= INDEX_CHUNK_LIMIT) {
-                        console.warn(
-                            `[Context] ⚠️  Chunk limit of ${INDEX_CHUNK_LIMIT} reached. Stopping indexing.`,
-                        );
-                        limitReached = true;
-                        fileFullyIncluded = fileChunkIndex === chunkCount - 1;
-                        break;
-                    }
                 }
 
-                if (fileFullyIncluded) {
-                    processedFiles++;
-                    input.onFileProcessed?.(
-                        filePath,
-                        processedFiles,
-                        input.filePaths.length,
-                    );
-                }
-                if (limitReached) break;
+                processedFiles++;
+                input.onFileProcessed?.(
+                    filePath,
+                    processedFiles,
+                    input.filePaths.length,
+                );
             } catch (error) {
                 schedulingStopped = true;
                 console.error(
@@ -907,12 +961,6 @@ export class IndexingPipeline {
 
         }
         schedulingStopped = true;
-        // A source/chunk limit can leave the rest of the window unconsumed.
-        // Completed loops have no pending reads and keep their success path.
-        if (pendingAnalyses.size > 0) await Promise.allSettled(pendingAnalyses.values());
-        for (const reservedIndex of [...analysisReservations.keys()]) {
-            releaseAnalysisReservation(reservedIndex);
-        }
         // Analysis is done. Each analysis worker holds its parsers (about 1.2 GB
         // for the pool here); free them before navigation starts its own workers.
         if (languageAnalyzer === this.languageAnalyzer) languageAnalyzer.releaseIdleWorkers?.();
@@ -924,7 +972,7 @@ export class IndexingPipeline {
             );
             await flushChunkBuffer('final chunk batch');
         }
-        if (!limitReached && sourceFiles.length !== processedFiles) {
+        if (sourceFiles.length !== processedFiles) {
             const error = new Error(
                 `Completed full index source coverage is inconsistent: ${processedFiles} processed files but ${sourceFiles.length} source observations.`,
             );
@@ -949,7 +997,7 @@ export class IndexingPipeline {
         return {
             processedFiles,
             totalChunks,
-            status: limitReached ? 'limit_reached' : 'completed',
+            status: 'completed',
             symbolRecords,
             symbolManifestFiles,
             analysisByFile,

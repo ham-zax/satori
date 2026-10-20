@@ -6,3 +6,4 @@ export * from './openai-embedding';
 export * from './voyageai-embedding';
 export * from './gemini-embedding';
 export * from './potion-embedding';
+export * from './potion-embedding-pool';

@@ -211,7 +211,9 @@ async function hashFileBytes(
             };
         }
         const hasher = crypto.createHash('sha256');
-        const stream = handle.createReadStream({ autoClose: false });
+        // `end` is inclusive: read at most one byte past the observed size so a
+        // concurrently growing file fails the size check instead of streaming on.
+        const stream = handle.createReadStream({ autoClose: false, start: 0, end: before.size });
         for await (const chunk of stream) {
             hasher.update(chunk as Buffer);
         }
@@ -350,7 +352,25 @@ async function inspectDirectoryEntries(
                     message: 'path no longer resolves to the indexed root entry',
                 };
             }
-            if (!await isSupportedFile(context, relativePath, fileReal, stat.size)) {
+            let supported: boolean;
+            try {
+                supported = await isSupportedFile(context, relativePath, fileReal, stat.size);
+            } catch (error: unknown) {
+                // The index-policy probe (shebang or large-asset read) opens the
+                // file; an unreadable file must keep its last-known evidence
+                // like any other unreadable path instead of failing the scan.
+                const code = errorCode(error);
+                if (code !== 'EACCES' && code !== 'ENOENT') {
+                    throw error;
+                }
+                return {
+                    kind: 'unreadable',
+                    relativePath,
+                    directory: false,
+                    message: errorMessage(error),
+                };
+            }
+            if (!supported) {
                 return { kind: 'skip' };
             }
 
@@ -588,6 +608,19 @@ export async function scanSynchronizerState(
     };
 }
 
+/** The scan never descends into symlinked directories, so paths below one are not indexable. */
+async function hasSymbolicLinkParent(rootDir: string, relativePath: string): Promise<boolean> {
+    const parents = relativePath.split('/').slice(0, -1);
+    let current = rootDir;
+    for (const segment of parents) {
+        current = path.join(current, segment);
+        if ((await fsp.lstat(current)).isSymbolicLink()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Observe one explicit repository-relative path without advancing any state. */
 export async function observeSynchronizerPath(
     context: SynchronizerScanContext,
@@ -598,7 +631,9 @@ export async function observeSynchronizerPath(
     try {
         pathStat = await fsp.lstat(absolutePath);
     } catch (error: unknown) {
-        if (errorCode(error) === 'ENOENT') {
+        // ENOTDIR: a parent component is a regular file, so the path cannot exist.
+        const code = errorCode(error);
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
             return { kind: 'absent' };
         }
         throw error;
@@ -608,6 +643,7 @@ export async function observeSynchronizerPath(
         pathStat.isSymbolicLink()
         || !pathStat.isFile()
         || shouldIgnore(context, relativePath, false)
+        || await hasSymbolicLinkParent(context.rootDir, relativePath)
     ) {
         return {
             kind: 'not_indexable',

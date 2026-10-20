@@ -11,6 +11,8 @@ export interface EmbeddingBatchPolicy {
     hardMaxItems: number;
     targetEstimatedTokens?: number;
     hardTokenLimit?: number;
+    /** embedDocuments calls the provider can usefully serve at once; absent means 1. */
+    maxConcurrentRequests?: number;
 }
 
 export interface EmbeddingOperationMetricsSnapshot {

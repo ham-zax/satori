@@ -5,6 +5,8 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [LibreOffice full-index parity plan, 20 October 2026](libreoffice-index-parity-plan-2026-10-20.md) | Plan; r5 without the chunk cap hit OOM at 6 GiB | Goal under 200 s with no fixed limits. Measured Satori r4 368.3 s against semble 134.2 s by stage, then six slices: memory owners, parity-mode ceiling, analysis, vector storage, embedding text, file selection. |
+| [Sync repairs, 20 October 2026](sync-fixes-2026-10-20.md) | Eight repairs checked | Shared source-control discovery, existing edits preserved, 114 targeted tests, and lint, type, version, and scope checks. |
 | [Memory audit and scoped repairs, 15–16 October 2026](memory-audit-2026-10-15.md) | Thirteen repairs and three review corrections checked | Records the original 331 tests, three Luna/Sol review corrections, 55 follow-up tests, static checks, and the measured throughput/RAM tradeoff. |
 | [Live multi-repository audit, 15 October 2026](live-multi-repo-audit-2026-10-15.md) | Six repairs checked; F04 traced; latency open | F02, F03, F05, F09, F10, and F13 have checked repairs. F05 retains lexical context when optional analysis fails. The LateOn profile follows the updated contract. F04 traces identify dirty-source suppression and a file fallback demotion from provider rank 2 to fusion rank 42. The handle class finishes seventh. The inbox owner finishes third. Ranking quality and latency attribution remain open. |
 | [Codex config ownership](codex-config-ownership.md) | Implemented and verified | Semantic launcher ownership and TOML-aware edits preserve user settings; 261 focused tests and native Codex rewrite recovery passed. |

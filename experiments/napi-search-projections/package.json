@@ -1,0 +1,19 @@
+{
+  "name": "@satori-experiments/napi-search-projections",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:test": "napi build --platform --features test-faults",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "node --import tsx --test --test-concurrency=1 --test-timeout=60000 test/*.test.ts",
+    "test:faults": "NAPI_TEST_FAULTS=1 node --import tsx --test --test-concurrency=1 --test-timeout=60000 test/*.test.ts",
+    "compare": "node --import tsx tools.ts compare",
+    "benchmark": "node --import tsx tools.ts benchmark",
+    "licenses": "node licenses.mjs"
+  },
+  "napi": { "binaryName": "projection" },
+  "devDependencies": { "@napi-rs/cli": "3.10.8", "tsx": "4.22.4", "@types/node": "22.19.0", "typescript": "6.0.3" }
+}

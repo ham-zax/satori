@@ -1,0 +1,4 @@
+{"relativePath":"src/parser.ts","chunk":{"content":"parseHTTPResponse raw_value HTTPServer2","metadata":{"startLine":1,"endLine":1,"language":"typescript","symbolLabel":"Parser.parseHTTPResponse","breadcrumbs":["Parser","parseHTTPResponse"]}}}
+{"relativePath":"empty.ts","chunk":{"content":"","metadata":{"startLine":1,"endLine":1,"breadcrumbs":[]}}}
+{"relativePath":"unicode/Ä.ts","chunk":{"content":"café ΔeltaValue","metadata":{"startLine":1,"endLine":1}}}
+{"relativePath":"controls.ts","chunk":{"content":"fooBar\r\n\t\"\\\u0000","metadata":{"startLine":1,"endLine":2,"breadcrumbs":["","FooBar"]}}}

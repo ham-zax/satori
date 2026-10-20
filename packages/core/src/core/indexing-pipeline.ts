@@ -27,6 +27,8 @@ import {
     type IndexingAnalysisResult,
 } from '../language-analysis/indexing-analysis';
 import { buildSearchProjections } from './search-projections';
+import { createConfiguredNativeProjectionBatchBuilder } from './native-search-projections';
+import { streamIndexingProjections, type IndexingProjectionEvent } from './indexing-projection-stream';
 import { buildIndexedChunkId } from './indexed-chunk-identity';
 import {
     buildSymbolRecordsForFile,
@@ -153,6 +155,7 @@ interface PendingIndexedChunk extends ProjectedChunkEntry {
 type IndexingPipelineConfig = Readonly<{
     getVectorDatabase: () => VectorDatabase;
     languageAnalyzer: LanguageAnalysisPort;
+    getMutationSignal?: (root: string) => AbortSignal;
     createIndexingAnalyzer?: (plan: IndexingResourcePlan, root: string) => LanguageAnalysisPort;
     semanticAnalyzer?: SemanticProjectAnalyzer;
     semanticLanguageRegistry?: SemanticLanguageRegistry;
@@ -270,6 +273,7 @@ export class IndexingPipeline {
     private readonly getVectorDatabase: () => VectorDatabase;
     private readonly languageAnalyzer: LanguageAnalysisPort;
     private readonly createIndexingAnalyzer?: IndexingPipelineConfig['createIndexingAnalyzer'];
+    private readonly getMutationSignal?: IndexingPipelineConfig['getMutationSignal'];
     private readonly semanticAnalyzer?: SemanticProjectAnalyzer;
     private readonly semanticLanguageRegistry: SemanticLanguageRegistry;
     private readonly getEmbedding: () => Embedding;
@@ -290,6 +294,7 @@ export class IndexingPipeline {
         this.getVectorDatabase = config.getVectorDatabase;
         this.languageAnalyzer = config.languageAnalyzer;
         this.createIndexingAnalyzer = config.createIndexingAnalyzer;
+        this.getMutationSignal = config.getMutationSignal;
         this.semanticAnalyzer = config.semanticAnalyzer;
         this.semanticLanguageRegistry = config.semanticLanguageRegistry ?? defaultSemanticLanguageRegistry;
         this.getEmbedding = config.getEmbedding;
@@ -639,6 +644,10 @@ export class IndexingPipeline {
         input: Parameters<IndexingPipeline['processFileList']>[0],
         languageAnalyzer: LanguageAnalysisPort,
     ): Promise<ProcessedFileList> {
+        const nativeProjections = createConfiguredNativeProjectionBatchBuilder(
+            () => this.getMutationSignal?.(input.codebasePath),
+        );
+        try {
         const tracing = isPerfTraceEnabled();
         const timing = tracing ? {
             planMs: 0, planCount: 0, countMs: 0, countCount: 0,
@@ -876,140 +885,180 @@ export class IndexingPipeline {
             }
         };
 
-        for (let fileIndex = 0; fileIndex < input.filePaths.length; fileIndex++) {
+        const prepareFile = async (fileIndex: number) => {
             consumingIndex = fileIndex;
             const filePath = input.filePaths[fileIndex];
-            try {
-                const analysisStartedAt = Date.now();
-                scheduleAnalyses();
-                const analyzed = await pendingAnalyses.get(fileIndex)!;
-                pendingAnalyses.delete(fileIndex);
-                if (analyzed === null) continue;
-                const planStartedAt = timing ? globalThis.performance.now() : 0;
-                const deferredPlan = analyzed.deferredAnalysis === null
-                    ? undefined
-                    : createIndexingChunkPlan({
-                        content: analyzed.source,
-                        relativePath: analyzed.relativePath,
-                        language: normalizeLanguageId(analyzed.language),
-                        symbols: analyzed.extractedSymbols,
-                        result: analyzed.deferredAnalysis,
-                    });
-                if (timing && deferredPlan) {
-                    timing.planMs += globalThis.performance.now() - planStartedAt;
-                    timing.planCount++;
-                }
-                const countStartedAt = timing ? globalThis.performance.now() : 0;
-                const chunkCount = deferredPlan ? deferredPlan.count() : analyzed.chunks!.length;
-                if (timing) {
-                    timing.countMs += globalThis.performance.now() - countStartedAt;
-                    timing.countCount++;
-                }
-                const chunkSpans = deferredPlan?.spans();
-                const factsStartedAt = timing ? globalThis.performance.now() : 0;
-                const symbolFacts = this.buildAnalyzedFileSymbolFacts(
-                    { ...analyzed, chunks: analyzed.chunks ?? [] },
-                );
-                if (timing) {
-                    timing.factsMs += globalThis.performance.now() - factsStartedAt;
-                    timing.factsCount++;
-                }
-                const { relativePath } = analyzed;
-                analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
-                sourceFiles.push({
-                    path: analyzed.relativePath,
-                    sourceHash: analyzed.sourceHash,
-                    sourceStat: analyzed.sourceStat,
+            const analysisStartedAt = Date.now();
+            scheduleAnalyses();
+            const analyzed = await pendingAnalyses.get(fileIndex)!;
+            pendingAnalyses.delete(fileIndex);
+            if (analyzed === null) return null;
+            const planStartedAt = timing ? globalThis.performance.now() : 0;
+            const deferredPlan = analyzed.deferredAnalysis === null
+                ? undefined
+                : createIndexingChunkPlan({
+                    content: analyzed.source,
+                    relativePath: analyzed.relativePath,
+                    language: normalizeLanguageId(analyzed.language),
+                    symbols: analyzed.extractedSymbols,
+                    result: analyzed.deferredAnalysis,
                 });
-                symbolRecords.push(...symbolFacts.symbolRecords);
-                symbolManifestFiles.push(symbolFacts.manifestFile);
-                performance.analysisMs += Date.now() - analysisStartedAt;
+            if (timing && deferredPlan) {
+                timing.planMs += globalThis.performance.now() - planStartedAt;
+                timing.planCount++;
+            }
+            const countStartedAt = timing ? globalThis.performance.now() : 0;
+            const chunkCount = deferredPlan ? deferredPlan.count() : analyzed.chunks!.length;
+            if (timing) {
+                timing.countMs += globalThis.performance.now() - countStartedAt;
+                timing.countCount++;
+            }
+            const chunkSpans = deferredPlan?.spans();
+            const factsStartedAt = timing ? globalThis.performance.now() : 0;
+            const symbolFacts = this.buildAnalyzedFileSymbolFacts(
+                { ...analyzed, chunks: analyzed.chunks ?? [] },
+            );
+            if (timing) {
+                timing.factsMs += globalThis.performance.now() - factsStartedAt;
+                timing.factsCount++;
+            }
+            const { relativePath } = analyzed;
+            analysisByFile.set(relativePath, symbolFacts.relationshipEvidence);
+            sourceFiles.push({
+                path: analyzed.relativePath,
+                sourceHash: analyzed.sourceHash,
+                sourceStat: analyzed.sourceStat,
+            });
+            symbolRecords.push(...symbolFacts.symbolRecords);
+            symbolManifestFiles.push(symbolFacts.manifestFile);
+            performance.analysisMs += Date.now() - analysisStartedAt;
 
-                if (chunkCount > 50) {
-                    console.warn(
-                        `[Context] ⚠️  File ${filePath} generated ${chunkCount} chunks (${Math.round(analyzed.source.length / 1024)}KB)`,
-                    );
-                } else if (analyzed.source.length > 100_000) {
-                    console.log(
-                        `📄 Large file ${filePath}: ${Math.round(analyzed.source.length / 1024)}KB -> ${chunkCount} chunks`,
-                    );
-                }
-
-                for (
-                    let fileChunkIndex = 0;
-                    fileChunkIndex < chunkCount;
-                    fileChunkIndex++
-                ) {
-                    const span = chunkSpans?.next();
-                    if (deferredPlan && (!span || span.done)) {
-                        throw new Error(`Deferred chunk span count changed while indexing '${relativePath}'.`);
-                    }
-                    const untrustedChunk = deferredPlan
-                        ? deferredPlan.materialize(span!.value)
-                        : analyzed.chunks![fileChunkIndex];
-                    const chunk = chunkWithResolvedOwner(
-                        chunkWithTrustedRelativePath(untrustedChunk, relativePath),
-                        symbolFacts.symbolRecords,
-                    );
-                    const projections = buildSearchProjections({ chunk, relativePath });
-                    const chunkEstimatedTokens = estimateEmbeddingTokens(
-                        projections.embeddingText,
-                    );
-                    if (
-                        hardTokenLimit !== undefined
-                        && chunkEstimatedTokens > hardTokenLimit
-                    ) {
-                        throw new Error(
-                            `Embedding projection for '${relativePath}' chunk ${fileChunkIndex} is estimated at ${chunkEstimatedTokens} tokens, exceeding the provider hard limit of ${hardTokenLimit}.`,
-                        );
-                    }
-                    if (
-                        chunkBuffer.length > 0
-                        && targetEstimatedTokens !== undefined
-                        && chunkBufferEstimatedTokens + chunkEstimatedTokens
-                            > targetEstimatedTokens
-                    ) {
-                        await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
-                    }
-                    chunkBuffer.push({
-                        chunk,
-                        codebasePath: input.codebasePath,
-                        relativePath,
-                        fileChunkIndex,
-                        projections,
-                    });
-                    chunkBufferEstimatedTokens += chunkEstimatedTokens;
-                    totalChunks++;
-
-                    if (chunkBuffer.length >= embeddingBatchSize) {
-                        await flushChunkBuffer(`chunk batch while indexing ${filePath}`);
-                    }
-                }
-
-                processedFiles++;
-                input.onFileProcessed?.(
-                    filePath,
-                    processedFiles,
-                    input.filePaths.length,
+            if (chunkCount > 50) {
+                console.warn(
+                    `[Context] ⚠️  File ${filePath} generated ${chunkCount} chunks (${Math.round(analyzed.source.length / 1024)}KB)`,
                 );
-            } catch (error) {
-                schedulingStopped = true;
-                console.error(
-                    `[Context] ❌ Failed to index file ${filePath}: ${describeError(error)}`,
+            } else if (analyzed.source.length > 100_000) {
+                console.log(
+                    `📄 Large file ${filePath}: ${Math.round(analyzed.source.length / 1024)}KB -> ${chunkCount} chunks`,
                 );
-                await stopPayload(error);
-                // The window owns every started read, including unread files.
-                // Drain without replacing the consumed file's failure/cancellation.
-                await Promise.allSettled(pendingAnalyses.values());
-                for (const reservedIndex of [...analysisReservations.keys()]) {
-                    releaseAnalysisReservation(reservedIndex);
-                }
-                reportTiming?.();
-                throw error;
-            } finally {
-                releaseAnalysisReservation(fileIndex);
             }
 
+            // Both paths consume the same deferred iterator exactly once and resolve
+            // trusted identity before projection. Only the opt-in path retains a window.
+            const resolveChunk = (fileChunkIndex: number): CodeChunk => {
+                const span = chunkSpans?.next();
+                if (deferredPlan && (!span || span.done)) {
+                    throw new Error(`Deferred chunk span count changed while indexing '${relativePath}'.`);
+                }
+                const untrustedChunk = deferredPlan
+                    ? deferredPlan.materialize(span!.value)
+                    : analyzed.chunks![fileChunkIndex];
+                return chunkWithResolvedOwner(
+                    chunkWithTrustedRelativePath(untrustedChunk, relativePath),
+                    symbolFacts.symbolRecords,
+                );
+            };
+            return { chunkCount, relativePath, resolveChunk };
+        };
+        // Both paths share token checks, identities and embedding batch boundaries.
+        // The default loop awaits only a real embedding flush.
+        const enqueueChunk = (
+            chunk: CodeChunk,
+            relativePath: RepositoryRelativePath,
+            fileChunkIndex: number,
+            projections: SearchProjections,
+            filePath: string,
+        ): Promise<void> | undefined => {
+            const chunkEstimatedTokens = estimateEmbeddingTokens(projections.embeddingText);
+            if (hardTokenLimit !== undefined && chunkEstimatedTokens > hardTokenLimit) {
+                throw new Error(
+                    `Embedding projection for '${relativePath}' chunk ${fileChunkIndex} is estimated at ${chunkEstimatedTokens} tokens, exceeding the provider hard limit of ${hardTokenLimit}.`,
+                );
+            }
+            const append = (): Promise<void> | undefined => {
+                chunkBuffer.push({ chunk, codebasePath: input.codebasePath, relativePath, fileChunkIndex, projections });
+                chunkBufferEstimatedTokens += chunkEstimatedTokens;
+                totalChunks++;
+                if (chunkBuffer.length >= embeddingBatchSize) {
+                    return flushChunkBuffer(`chunk batch while indexing ${filePath}`);
+                }
+            };
+            if (chunkBuffer.length > 0 && targetEstimatedTokens !== undefined
+                && chunkBufferEstimatedTokens + chunkEstimatedTokens > targetEstimatedTokens) {
+                return flushChunkBuffer(`chunk batch while indexing ${filePath}`).then(append);
+            }
+            return append();
+        };
+        const completeFile = (filePath: string): void => {
+            processedFiles++;
+            input.onFileProcessed?.(filePath, processedFiles, input.filePaths.length);
+        };
+        let activeFilePath = input.filePaths[0];
+        try {
+            if (nativeProjections) {
+                const events = async function* (): AsyncGenerator<IndexingProjectionEvent> {
+                    for (let fileIndex = 0; fileIndex < input.filePaths.length; fileIndex++) {
+                        const filePath = input.filePaths[fileIndex];
+                        try {
+                            const prepared = await prepareFile(fileIndex);
+                            if (prepared === null) continue;
+                            for (let fileChunkIndex = 0; fileChunkIndex < prepared.chunkCount; fileChunkIndex++) {
+                                const chunk = prepared.resolveChunk(fileChunkIndex);
+                                yield { kind: 'chunk', input: { chunk, relativePath: prepared.relativePath }, filePath, fileIndex, fileChunkIndex };
+                            }
+                            yield { kind: 'file-complete', filePath, fileIndex };
+                        } catch (error) {
+                            yield { kind: 'file-error', filePath, fileIndex, error };
+                            return;
+                        } finally {
+                            // Emitted chunks now belong to the separately bounded projection queue.
+                            releaseAnalysisReservation(fileIndex);
+                        }
+                    }
+                };
+                for await (const event of streamIndexingProjections(events(), nativeProjections, {
+                    beforePrepare: input.assertMutationCurrent,
+                    // Queued native results pass a lease check at ordered batch entry.
+                    // Existing write boundaries check again after asynchronous consumer work.
+                    beforeConsume: input.assertMutationCurrent,
+                    onTelemetry: metrics => perfTrace('payload.native_projection_queue', 0, { ...metrics }),
+                })) {
+                    activeFilePath = event.filePath;
+                    if (event.kind === 'file-error') throw event.error;
+                    if (event.kind === 'file-complete') completeFile(event.filePath);
+                    else {
+                        const pending = enqueueChunk(
+                            event.input.chunk, event.input.relativePath as RepositoryRelativePath,
+                            event.fileChunkIndex, event.projections, event.filePath,
+                        );
+                        if (pending) await pending;
+                    }
+                }
+            } else {
+                for (let fileIndex = 0; fileIndex < input.filePaths.length; fileIndex++) {
+                    activeFilePath = input.filePaths[fileIndex];
+                    try {
+                        const prepared = await prepareFile(fileIndex);
+                        if (prepared === null) continue;
+                        for (let fileChunkIndex = 0; fileChunkIndex < prepared.chunkCount; fileChunkIndex++) {
+                            const chunk = prepared.resolveChunk(fileChunkIndex);
+                            const pending = enqueueChunk(chunk, prepared.relativePath, fileChunkIndex,
+                                buildSearchProjections({ chunk, relativePath: prepared.relativePath }), activeFilePath);
+                            if (pending) await pending;
+                        }
+                        completeFile(activeFilePath);
+                    } finally { releaseAnalysisReservation(fileIndex); }
+                }
+            }
+        } catch (error) {
+            schedulingStopped = true;
+            console.error(`[Context] ❌ Failed to index file ${activeFilePath}: ${describeError(error)}`);
+            // The projection iterator closes and drains before payload/read cleanup begins.
+            await stopPayload(error);
+            await Promise.allSettled(pendingAnalyses.values());
+            for (const reservedIndex of [...analysisReservations.keys()]) releaseAnalysisReservation(reservedIndex);
+            reportTiming?.();
+            throw error;
         }
         schedulingStopped = true;
         try {
@@ -1065,6 +1114,9 @@ export class IndexingPipeline {
             performance,
             payloadSettled,
         };
+        } finally {
+            nativeProjections?.report();
+        }
     }
 
     async getExpectedChunksAndSymbols(

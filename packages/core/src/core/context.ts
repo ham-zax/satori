@@ -607,6 +607,7 @@ export class Context {
         });
 
         this.indexingPipeline = new IndexingPipeline({
+            getMutationSignal: root => this.rootMutationRuntime.getCurrentSignal(root),
             getVectorDatabase: () => this.vectorDatabase,
             languageAnalyzer: this.languageAnalyzer,
             createIndexingAnalyzer: config.languageAnalyzer ? undefined : (plan, root) => (

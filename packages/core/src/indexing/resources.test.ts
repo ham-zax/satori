@@ -218,6 +218,12 @@ test('mutation IPC restores the same frozen resource plan and rejects malformed 
     }, () => ({ diagnostics: [] }));
     const plan = planner.createPlan();
     assert.equal(plan.mutationMallocArenaMax, 2);
+    const largePlan = new IndexingResourcePlanner({
+        platform: () => 'linux', readFile: file => file === '/proc/self/cgroup' ? '0::/' : 'max',
+        totalMemory: () => 64 * GIB, freeMemory: () => 64 * GIB, cpuCount: () => 16,
+    }, () => ({ diagnostics: [] })).createPlan();
+    assert.ok(largePlan.budgetBytes > 4 * GIB);
+    assert.equal(largePlan.mutationMallocArenaMax, 2);
     assert.equal(plan.releaseSemanticBeforeResolution, true);
     const restored = restoreIndexingResourcePlan(JSON.parse(JSON.stringify(plan)));
     assert.deepEqual(restored, plan);

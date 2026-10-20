@@ -1554,6 +1554,7 @@ export async function analyzeWithTreeSitter(
             pythonFlowFacts: [],
         };
     }
+    const parseStartedAt = input.perfTiming ? performance.now() : 0;
     let tree: ReturnType<Parser['parse']>;
     try {
         tree = parser.parse(input.content);
@@ -1568,6 +1569,11 @@ export async function analyzeWithTreeSitter(
             receiverTypeBindings: [],
             pythonFlowFacts: [],
         };
+    } finally {
+        if (input.perfTiming) {
+            input.perfTiming.parseMs += performance.now() - parseStartedAt;
+            input.perfTiming.parseCount++;
+        }
     }
     if (!tree) {
         parser.delete();
@@ -1581,6 +1587,7 @@ export async function analyzeWithTreeSitter(
             pythonFlowFacts: [],
         };
     }
+    const traversalStartedAt = input.perfTiming ? performance.now() : 0;
     try {
         try {
             const sourceMap = new Utf8SourceMap(input.content);
@@ -1622,6 +1629,10 @@ export async function analyzeWithTreeSitter(
             };
         }
     } finally {
+        if (input.perfTiming) {
+            input.perfTiming.traversalMs += performance.now() - traversalStartedAt;
+            input.perfTiming.traversalCount++;
+        }
         tree.delete();
         parser.delete();
     }

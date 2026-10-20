@@ -82,6 +82,7 @@ import type {
     SnapshotFileStatSignature,
 } from '../sync/snapshot-codec';
 import { SynchronizerRegistry } from '../sync/synchronizer-registry';
+import { tryCollectPublicationSourceControls } from '../generation/publication-source-controls';
 export type { ProvenSourceFreshnessCheckpointEvidence } from '../sync/synchronizer';
 
 import type {
@@ -307,6 +308,8 @@ type ReindexByChangeOptions = {
 type MutationGuardOptions = {
     deferPartialPublication?: boolean;
     indexPolicy?: ObservedResolvedIndexPolicy;
+    /** Called once when the full-index source scan has finished. */
+    onSourceScanCompleted?: () => void;
 };
 
 type ReindexByChangeResult = {
@@ -606,6 +609,7 @@ export class Context {
         });
 
         this.indexingPipeline = new IndexingPipeline({
+            getMutationSignal: root => this.rootMutationRuntime.getCurrentSignal(root),
             getVectorDatabase: () => this.vectorDatabase,
             languageAnalyzer: this.languageAnalyzer,
             createIndexingAnalyzer: config.languageAnalyzer ? undefined : (plan, root) => (
@@ -817,23 +821,32 @@ export class Context {
         return this.publicationStore.getCurrent(codebasePath)?.id ?? null;
     }
 
-    private getPublicationSourceSynchronizer(
+    private async getPublicationSourceSynchronizer(
         canonicalRoot: string,
         publication?: PublicationRef,
-    ): {
+    ): Promise<{
         synchronizer: ReturnType<SynchronizerRegistry['getPublicationSourceComparison']>;
         publicationId: string;
-    } | null {
+    } | null> {
         const ref = publication ?? this.publicationStore.getCurrent(canonicalRoot);
         if (!ref || ref.publication.canonicalRoot !== canonicalRoot) return null;
         const checkpoint = this.publicationStore.getSourceCheckpoint(canonicalRoot, ref.id);
         if (!checkpoint) return null;
+        const controls = await tryCollectPublicationSourceControls(
+            ref.id,
+            canonicalRoot,
+            checkpoint.fileHashes.map(([filePath]) => filePath),
+            this.resolutionAnalyzer,
+        );
+        if (!controls) return null;
+        const { publicationSourceControls } = controls;
         return {
             synchronizer: this.synchronizerRegistry.getPublicationSourceComparison(
                 canonicalRoot,
                 checkpoint,
                 ref.publication.policy.effectiveIgnorePatterns,
                 ref.publication.policy.supportedExtensions,
+                publicationSourceControls,
             ),
             publicationId: ref.id,
         };
@@ -854,7 +867,7 @@ export class Context {
         if (checkpoint.status !== 'valid') {
             return { status: 'unavailable' };
         }
-        const source = this.getPublicationSourceSynchronizer(canonicalRoot, publication);
+        const source = await this.getPublicationSourceSynchronizer(canonicalRoot, publication);
         if (!source || source.publicationId !== checkpoint.publicationId) {
             return { status: 'unavailable' };
         }
@@ -881,7 +894,7 @@ export class Context {
         if (checkpoint.status !== 'valid') {
             return { status: 'unavailable' };
         }
-        const source = this.getPublicationSourceSynchronizer(canonicalRoot, publication);
+        const source = await this.getPublicationSourceSynchronizer(canonicalRoot, publication);
         if (!source || source.publicationId !== checkpoint.publicationId) {
             return { status: 'unavailable' };
         }
@@ -910,7 +923,7 @@ export class Context {
         if (checkpoint.status !== 'valid') {
             return { status: 'unavailable' };
         }
-        const source = this.getPublicationSourceSynchronizer(canonicalRoot, publication);
+        const source = await this.getPublicationSourceSynchronizer(canonicalRoot, publication);
         if (!source || source.publicationId !== checkpoint.publicationId) {
             return { status: 'unavailable' };
         }

@@ -77,9 +77,7 @@ function parseFileStats(value: unknown, canonicalRoot: string): Map<string, Snap
             !Number.isSafeInteger(signature.size)
             || Number(signature.size) < 0
             || !Number.isFinite(signature.mtimeMs)
-            || Number(signature.mtimeMs) < 0
             || !Number.isFinite(signature.ctimeMs)
-            || Number(signature.ctimeMs) < 0
         ) {
             throw new Error(`[Synchronizer] Invalid publication source stat for '${normalizedPath}'.`);
         }

@@ -1,5 +1,6 @@
 import os from 'node:os';
 import { Worker } from 'node:worker_threads';
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import { envManager } from '../utils/env-manager';
 import { filterWorkerExecArgv, resolveWorkerScriptPath } from '../utils/worker-threads';
 import { createLanguageAnalysisService } from './service';
@@ -39,6 +40,8 @@ export function resolveAnalysisWorkerCount(): number {
 type PendingAnalysis = {
     resolve: (result: AnalysisWorkerPayload) => void;
     reject: (error: Error) => void;
+    submittedAt?: number;
+    sourceBytes?: number;
 };
 
 type PoolWorker = {
@@ -63,6 +66,29 @@ export function createParallelLanguageAnalysisService(
     let nextId = 1;
     let idleTimer: NodeJS.Timeout | undefined;
     let disposed = false;
+    const totals = isPerfTraceEnabled() ? {
+        count: 0, parseMs: 0, parseCount: 0, traversalMs: 0, traversalCount: 0,
+        queueMs: 0, transferMs: 0, analysisMs: 0, sourceBytes: 0, resultBytes: 0, resultSizingMs: 0,
+        cpuCount: 0, cpuUserMicros: 0, cpuSystemMicros: 0,
+    } : undefined;
+    const reportPerfTrace = (): void => {
+        if (!totals || totals.count === 0) return;
+        perfTrace('payload.worker.parse', totals.parseMs, { count: totals.parseCount });
+        perfTrace('payload.worker.traversal', totals.traversalMs, { count: totals.traversalCount });
+        perfTrace('payload.worker.queue', totals.queueMs, { count: totals.count });
+        perfTrace('payload.worker.transfer', totals.transferMs, { count: totals.count });
+        perfTrace('payload.worker.analysis', totals.analysisMs, { count: totals.count });
+        perfTrace('payload.worker.result_sizing', totals.resultSizingMs, { count: totals.count });
+        perfTrace('payload.worker.bytes', 0, {
+            count: totals.count, sourceBytes: totals.sourceBytes,
+            resultJsonBytes: totals.resultBytes,
+        });
+        perfTrace('payload.worker.cpu', (totals.cpuUserMicros + totals.cpuSystemMicros) / 1000, {
+            count: totals.cpuCount, available: totals.cpuCount > 0,
+            userMs: totals.cpuUserMicros / 1000, systemMs: totals.cpuSystemMicros / 1000,
+        });
+        for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] = 0;
+    };
 
     const pendingCount = () => workers.reduce((sum, entry) => sum + entry.pending.size, 0);
 
@@ -110,6 +136,26 @@ export function createParallelLanguageAnalysisService(
             const pending = entry.pending.get(response.id);
             if (!pending) return;
             entry.pending.delete(response.id);
+            if (response.ok && response.perfTiming && totals && pending.submittedAt !== undefined) {
+                const timing = response.perfTiming;
+                totals.count++;
+                totals.parseMs += timing.parseMs;
+                totals.parseCount += timing.parseCount;
+                totals.traversalMs += timing.traversalMs;
+                totals.traversalCount += timing.traversalCount;
+                // performance.now() shares one monotonic clock across Node worker threads.
+                totals.queueMs += timing.startedAt - pending.submittedAt;
+                totals.transferMs += performance.now() - timing.finishedAt;
+                totals.analysisMs += timing.finishedAt - timing.startedAt - timing.resultSizingMs;
+                totals.resultSizingMs += timing.resultSizingMs;
+                totals.sourceBytes += pending.sourceBytes ?? 0;
+                totals.resultBytes += timing.resultBytes;
+                if (timing.cpuUserMicros !== undefined && timing.cpuSystemMicros !== undefined) {
+                    totals.cpuCount++;
+                    totals.cpuUserMicros += timing.cpuUserMicros;
+                    totals.cpuSystemMicros += timing.cpuSystemMicros;
+                }
+            }
             if (response.ok) pending.resolve(response.result);
             else pending.reject(new Error(response.error));
             if (pendingCount() === 0) scheduleIdleRelease();
@@ -140,7 +186,12 @@ export function createParallelLanguageAnalysisService(
         const entry = leastBusyWorker();
         const id = nextId++;
         return new Promise<AnalysisWorkerPayload>((resolve, reject) => {
-            entry.pending.set(id, { resolve, reject });
+            const pending: PendingAnalysis = { resolve, reject };
+            if (totals) {
+                pending.sourceBytes = Buffer.byteLength(input.content, 'utf8');
+                pending.submittedAt = performance.now();
+            }
+            entry.pending.set(id, pending);
             entry.worker.postMessage({
                 id,
                 ...(mode ? { mode } : {}),
@@ -159,6 +210,7 @@ export function createParallelLanguageAnalysisService(
     const service = {
         concurrency: Math.max(1, workerCount),
         getDescription: () => local.getDescription(),
+        reportPerfTrace,
         getStrategyForLanguage: (language: string) => local.getStrategyForLanguage(language),
         async analyze(input: LanguageAnalysisInput): Promise<LanguageAnalysisResult> {
             if (workerCount === 0 || disposed) return local.analyze(input);

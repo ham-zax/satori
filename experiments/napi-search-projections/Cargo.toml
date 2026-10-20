@@ -1,0 +1,21 @@
+[package]
+name = "satori-napi-search-projections"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+test-faults = []
+
+[dependencies]
+napi = { version = "=2.16.17", default-features = false, features = ["napi4"] }
+napi-derive = "=2.16.13"
+serde_json = { version = "=1.0.143", features = ["preserve_order"] }
+
+[build-dependencies]
+napi-build = "=2.1.3"

@@ -20,11 +20,27 @@ function splitIdentifierComponents(token: string): string[] {
         .filter(Boolean);
 }
 
-function buildAdditiveLexicalTerms(values: readonly string[]): string[] {
+type IdentifierSplitter = (token: string) => readonly string[];
+
+// Chunks repeat the same tokens many times, and splitting is a pure function
+// of the token. One memo per projection keeps memory bounded by one chunk.
+function createIdentifierSplitter(): IdentifierSplitter {
+    const components = new Map<string, readonly string[]>();
+    return (token) => {
+        let cached = components.get(token);
+        if (cached === undefined) {
+            cached = splitIdentifierComponents(token);
+            components.set(token, cached);
+        }
+        return cached;
+    };
+}
+
+function buildAdditiveLexicalTerms(values: readonly string[], split: IdentifierSplitter): string[] {
     const terms = new Set<string>();
     for (const value of values) {
         for (const token of value.match(IDENTIFIER_TOKEN_PATTERN) ?? []) {
-            for (const component of splitIdentifierComponents(token)) {
+            for (const component of split(token)) {
                 if (component !== token) terms.add(component);
             }
         }
@@ -32,10 +48,14 @@ function buildAdditiveLexicalTerms(values: readonly string[]): string[] {
     return [...terms];
 }
 
-function buildLexicalIdentifierAliases(identityValues: readonly string[], content: string): string[] {
+function buildLexicalIdentifierAliases(
+    identityValues: readonly string[],
+    content: string,
+    split: IdentifierSplitter,
+): string[] {
     const aliases = new Set<string>();
     const add = (token: string): void => {
-        const components = splitIdentifierComponents(token);
+        const components = split(token);
         if (components.length > 1) aliases.add(components.join(''));
         for (const component of components) {
             // Short prefixes are too broad to identify an owner. Keep exact
@@ -50,7 +70,7 @@ function buildLexicalIdentifierAliases(identityValues: readonly string[], conten
     }
     // Source contributes compound identifiers, not prefixes of every prose word.
     for (const token of content.match(IDENTIFIER_TOKEN_PATTERN) ?? []) {
-        if (splitIdentifierComponents(token).length > 1) add(token);
+        if (split(token).length > 1) add(token);
     }
     return [...aliases];
 }
@@ -70,14 +90,15 @@ export function buildSearchProjections(input: SearchProjectionInput): SearchProj
         metadata.symbolLabel,
         ...(metadata.breadcrumbs ?? []),
     ].filter((value): value is string => Boolean(value));
+    const split = createIdentifierSplitter();
     const additiveLexicalTerms = buildAdditiveLexicalTerms([
         ...metadataValues,
         chunk.content,
-    ]);
+    ], split);
     const lexicalIdentifierAliases = buildLexicalIdentifierAliases([
         metadata.symbolLabel ?? '',
         ...(metadata.breadcrumbs ?? []),
-    ], chunk.content);
+    ], chunk.content, split);
     const projectionMetadata = JSON.stringify({
         path: relativePath,
         ...(metadata.language ? { language: metadata.language } : {}),
@@ -89,7 +110,7 @@ export function buildSearchProjections(input: SearchProjectionInput): SearchProj
     const semanticIdentifierTerms = buildAdditiveLexicalTerms([
         metadata.symbolLabel ?? '',
         ...(metadata.breadcrumbs ?? []),
-    ]);
+    ], split);
     const semanticIdentity = [
         `path:${JSON.stringify(relativePath)}`,
         ...(metadata.language ? [`language:${JSON.stringify(metadata.language)}`] : []),

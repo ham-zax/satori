@@ -159,6 +159,7 @@ export function createLanguageAnalysisService(
                 language: normalizeLanguageId(input.language),
                 ...(input.includeEarlyExitSpans ? { includeEarlyExitSpans: true } : {}),
             };
+            if (input.perfTiming) Object.assign(normalizedInput, { perfTiming: input.perfTiming });
             const strategy = strategyForLanguage(normalizedInput.language);
             if (strategy.backend === 'bounded_text') {
                 return fallbackResult(

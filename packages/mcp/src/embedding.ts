@@ -2,9 +2,11 @@ import {
     Embedding,
     GeminiEmbedding,
     OpenAIEmbedding,
-    PotionEmbedding,
+    PotionEmbeddingPool,
     VoyageAIEmbedding,
+    defaultPotionHelperCount,
 } from "@satori-code/core";
+import os from "node:os";
 import { ContextMcpConfig } from "./config.js";
 
 // Helper function to create embedding instance based on provider
@@ -64,11 +66,11 @@ export async function createEmbeddingInstance(config: ContextMcpConfig): Promise
             if (!config.potionHelperPath || !config.potionModelPath) {
                 throw new Error('POTION_HELPER_PATH and POTION_MODEL_PATH are required for Potion');
             }
-            const potionEmbedding = await PotionEmbedding.create({
+            const potionEmbedding = await PotionEmbeddingPool.create({
                 helperPath: config.potionHelperPath,
                 modelPath: config.potionModelPath,
                 requestTimeoutMs: config.potionRequestTimeoutMs,
-            });
+            }, defaultPotionHelperCount(os.availableParallelism()));
             console.error(`[EMBEDDING] ✅ Potion embedding instance created successfully`);
             return potionEmbedding;
         }

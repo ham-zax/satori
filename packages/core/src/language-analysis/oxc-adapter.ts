@@ -263,10 +263,19 @@ function earlyExitContextStart(node: AstNode, parent?: AstNode): number | undefi
 
 export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
     const lang = oxcLanguage(input.language, input.relativePath);
-    const parsed = parseSync(input.relativePath, input.content, {
-        lang,
-        sourceType: 'unambiguous',
-    });
+    const parseStartedAt = input.perfTiming ? performance.now() : 0;
+    let parsed: ReturnType<typeof parseSync>;
+    try {
+        parsed = parseSync(input.relativePath, input.content, {
+            lang,
+            sourceType: 'unambiguous',
+        });
+    } finally {
+        if (input.perfTiming) {
+            input.perfTiming.parseMs += performance.now() - parseStartedAt;
+            input.perfTiming.parseCount++;
+        }
+    }
     if (parsed.errors.some((error) => error.severity === 'Error')) {
         return {
             complete: false,
@@ -280,101 +289,109 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         };
     }
 
-    const sourceMap = new Utf8SourceMap(input.content);
-    const symbols: ExtractedSymbol[] = [];
-    const earlyExitSpans: SourceSpan[] | undefined = input.includeEarlyExitSpans ? [] : undefined;
-    const callSites: CallSite[] = [];
-    const receiverTypeBindings: ReceiverTypeBinding[] = [];
-    const visit = (
-        node: AstNode,
-        parent?: AstNode,
-        parents: readonly string[] = [],
-        insideCallable = false,
-        insideRegistrationCallback = false,
-    ): void => {
-        if (earlyExitSpans) {
-            const start = earlyExitContextStart(node, parent);
-            if (start !== undefined) earlyExitSpans.push(sourceMap.spanFromUtf16(start, node.end));
-        }
-        const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
-        const kind = callback ? 'function' : symbolKind(node, parent, insideCallable);
-        const name = callback ?? (kind ? symbolName(node) : undefined);
-        const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
-            ? [...parents, name]
-            : parents;
-        if (kind && name) {
-            const span = sourceMap.spanFromUtf16(node.start, node.end);
-            symbols.push({
-                kind,
-                name,
-                label: labelFor(kind, name),
-                qualifiedName: [...parents, name].join('.'),
-                parentQualifiedNamePath: parents,
-                span,
-            });
-        }
-        const annotationBinding = variableAnnotationBinding(node, sourceMap);
-        if (annotationBinding) receiverTypeBindings.push(annotationBinding);
-        if (node.type === 'CallExpression' || node.type === 'NewExpression') {
-            const name = calleeName(node);
-            if (name) {
-                callSites.push({
-                    calleeName: name,
-                    ...(Array.isArray(node.arguments) && node.arguments.every(isAstNode)
-                        ? { args: node.arguments.map(argument => input.content.slice(argument.start, argument.end)) } : {}),
-                    ...callSiteEvidence(node, input.content),
-                    span: sourceMap.spanFromUtf16(node.start, node.end),
+    const traversalStartedAt = input.perfTiming ? performance.now() : 0;
+    try {
+        const sourceMap = new Utf8SourceMap(input.content);
+        const symbols: ExtractedSymbol[] = [];
+        const earlyExitSpans: SourceSpan[] | undefined = input.includeEarlyExitSpans ? [] : undefined;
+        const callSites: CallSite[] = [];
+        const receiverTypeBindings: ReceiverTypeBinding[] = [];
+        const visit = (
+            node: AstNode,
+            parent?: AstNode,
+            parents: readonly string[] = [],
+            insideCallable = false,
+            insideRegistrationCallback = false,
+        ): void => {
+            if (earlyExitSpans) {
+                const start = earlyExitContextStart(node, parent);
+                if (start !== undefined) earlyExitSpans.push(sourceMap.spanFromUtf16(start, node.end));
+            }
+            const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
+            const kind = callback ? 'function' : symbolKind(node, parent, insideCallable);
+            const name = callback ?? (kind ? symbolName(node) : undefined);
+            const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
+                ? [...parents, name]
+                : parents;
+            if (kind && name) {
+                const span = sourceMap.spanFromUtf16(node.start, node.end);
+                symbols.push({
+                    kind,
+                    name,
+                    label: labelFor(kind, name),
+                    qualifiedName: [...parents, name].join('.'),
+                    parentQualifiedNamePath: parents,
+                    span,
+                });
+            }
+            const annotationBinding = variableAnnotationBinding(node, sourceMap);
+            if (annotationBinding) receiverTypeBindings.push(annotationBinding);
+            if (node.type === 'CallExpression' || node.type === 'NewExpression') {
+                const name = calleeName(node);
+                if (name) {
+                    callSites.push({
+                        calleeName: name,
+                        ...(Array.isArray(node.arguments) && node.arguments.every(isAstNode)
+                            ? { args: node.arguments.map(argument => input.content.slice(argument.start, argument.end)) } : {}),
+                        ...callSiteEvidence(node, input.content),
+                        span: sourceMap.spanFromUtf16(node.start, node.end),
+                    });
+                }
+            }
+            const childInsideCallable = insideCallable || (
+                node.type === 'FunctionDeclaration'
+                || node.type === 'FunctionExpression'
+                || node.type === 'ArrowFunctionExpression'
+                || node.type === 'MethodDefinition'
+                || node.type === 'TSAbstractMethodDefinition'
+                || (node.type === 'PropertyDefinition' && isFunctionValue(node.value))
+            );
+            const childRegistrationCallback = isFunctionValue(node) || node.type === 'FunctionDeclaration'
+                || node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition'
+                ? Boolean(callback)
+                : insideRegistrationCallback;
+            for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable, childRegistrationCallback);
+        };
+        visit(parsed.program as Program & AstNode);
+
+        const moduleBindings: ModuleBinding[] = [];
+        for (const item of parsed.module.staticImports) {
+            const span = sourceMap.spanFromUtf16(item.start, item.end);
+            if (item.entries.length === 0) {
+                moduleBindings.push({ kind: 'import', moduleSpecifier: item.moduleRequest.value, typeOnly: false, span });
+            }
+            for (const entry of item.entries) {
+                moduleBindings.push({
+                    kind: 'import',
+                    moduleSpecifier: item.moduleRequest.value,
+                    importedName: entry.importName.name ?? undefined,
+                    localName: entry.localName.value,
+                    typeOnly: entry.isType,
+                    span,
                 });
             }
         }
-        const childInsideCallable = insideCallable || (
-            node.type === 'FunctionDeclaration'
-            || node.type === 'FunctionExpression'
-            || node.type === 'ArrowFunctionExpression'
-            || node.type === 'MethodDefinition'
-            || node.type === 'TSAbstractMethodDefinition'
-            || (node.type === 'PropertyDefinition' && isFunctionValue(node.value))
-        );
-        const childRegistrationCallback = isFunctionValue(node) || node.type === 'FunctionDeclaration'
-            || node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition'
-            ? Boolean(callback)
-            : insideRegistrationCallback;
-        for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable, childRegistrationCallback);
-    };
-    visit(parsed.program as Program & AstNode);
-
-    const moduleBindings: ModuleBinding[] = [];
-    for (const item of parsed.module.staticImports) {
-        const span = sourceMap.spanFromUtf16(item.start, item.end);
-        if (item.entries.length === 0) {
-            moduleBindings.push({ kind: 'import', moduleSpecifier: item.moduleRequest.value, typeOnly: false, span });
+        for (const item of parsed.module.staticExports) {
+            const span = sourceMap.spanFromUtf16(item.start, item.end);
+            for (const entry of item.entries) {
+                moduleBindings.push({
+                    kind: entry.moduleRequest ? 'reexport' : 'export',
+                    moduleSpecifier: entry.moduleRequest?.value,
+                    importedName: entry.importName.name ?? undefined,
+                    exportedName: entry.exportName.name ?? undefined,
+                    localName: entry.localName.name ?? undefined,
+                    typeOnly: entry.isType,
+                    span,
+                });
+            }
         }
-        for (const entry of item.entries) {
-            moduleBindings.push({
-                kind: 'import',
-                moduleSpecifier: item.moduleRequest.value,
-                importedName: entry.importName.name ?? undefined,
-                localName: entry.localName.value,
-                typeOnly: entry.isType,
-                span,
-            });
+
+        return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings, pythonFlowFacts: [],
+            ...(earlyExitSpans ? { earlyExitSpans } : {}) };
+    } finally {
+        if (input.perfTiming) {
+            input.perfTiming.traversalMs += performance.now() - traversalStartedAt;
+            input.perfTiming.traversalCount++;
         }
     }
-    for (const item of parsed.module.staticExports) {
-        const span = sourceMap.spanFromUtf16(item.start, item.end);
-        for (const entry of item.entries) {
-            moduleBindings.push({
-                kind: entry.moduleRequest ? 'reexport' : 'export',
-                moduleSpecifier: entry.moduleRequest?.value,
-                importedName: entry.importName.name ?? undefined,
-                exportedName: entry.exportName.name ?? undefined,
-                localName: entry.localName.name ?? undefined,
-                typeOnly: entry.isType,
-                span,
-            });
-        }
-    }
-
-    return { complete: true, symbols, moduleBindings, callSites, receiverTypeBindings, pythonFlowFacts: [],
-        ...(earlyExitSpans ? { earlyExitSpans } : {}) };
 }

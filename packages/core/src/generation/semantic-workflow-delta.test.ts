@@ -407,6 +407,11 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
         assert.equal(initialRelationships.status, 'ok');
         if (initialRelationships.status !== 'ok') throw new Error('initial relationships missing');
         assert.equal(initialRelationships.records.some((record) => record.type === 'CALLS'), true);
+        const initialCallerEvidence = initialRelationships.analysisByFile.get(fileB);
+        const initialClaims = initialCallerEvidence?.resolutionClaims;
+        assert.ok(initialClaims?.some((claim) => (
+            claim.decision === 'resolved' && claim.targetInstanceId === helper1.symbolInstanceId
+        )));
 
         const contentA2 = 'package pkg\nfunc Helper() { println("changed") }\n';
         fs.writeFileSync(path.join(tmpDir, fileA), contentA2);
@@ -441,6 +446,11 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
                 receiverTypeBindings: [],
                 pythonFlowFacts: [],
             }]]),
+            {
+                records: initialRelationships.records,
+                analysisByFile: initialRelationships.analysisByFile,
+                providerCoverage: initialRelationships.manifest.providerCoverage,
+            },
         );
         assert.ok(delta.candidate);
         const deltaRelationships = await readRelationshipSidecar({
@@ -451,6 +461,14 @@ test('IndexGenerationWorkflow delta rebuild removes stale semantic calls when th
         assert.equal(deltaRelationships.status, 'ok');
         if (deltaRelationships.status !== 'ok') throw new Error('delta relationships missing');
         assert.equal(deltaRelationships.records.some((record) => record.type === 'CALLS'), false);
+        const staleResolvedClaims = [...deltaRelationships.analysisByFile.values()]
+            .flatMap((evidence) => evidence.resolutionClaims ?? [])
+            .filter((claim) => (
+                claim.decision === 'resolved' && claim.targetInstanceId === helper1.symbolInstanceId
+            ));
+        assert.equal(staleResolvedClaims.length, 0);
+        assert.strictEqual(initialRelationships.analysisByFile.get(fileB), initialCallerEvidence);
+        assert.strictEqual(initialCallerEvidence?.resolutionClaims, initialClaims);
         const goCoverage = deltaRelationships.manifest.providerCoverage.find(
             (coverage) => coverage.language === 'go',
         );
@@ -632,6 +650,145 @@ test('IndexGenerationWorkflow delta rebuild: go.mod/go.work deltas trigger whole
         assert.ok(workDeltaResult.candidate);
         assert.equal(analyzeCallCount, 3);
         assert.deepEqual(lastAuxiliaryFiles, ['go.mod', 'go.work']);
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});
+
+test('IndexGenerationWorkflow delta rebuild verifies non-UTF-8 sources and auxiliaries by raw byte hash', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-semantic-delta-latin1-'));
+    const stateRoot = path.join(tmpDir, '.satori-state');
+    fs.mkdirSync(stateRoot, { recursive: true });
+    const sha256Bytes = (bytes: Buffer): string => crypto.createHash('sha256').update(bytes).digest('hex');
+
+    try {
+        const fileA = 'main.go';
+        const auxMod = 'go.mod';
+        // 0xE9 is Latin-1 'é' and invalid UTF-8; decoding replaces it, so a
+        // decoded-text hash differs from the observed raw-byte hash.
+        const bytesA = Buffer.concat([
+            Buffer.from('package main\n\n// caf', 'latin1'),
+            Buffer.from([0xe9]),
+            Buffer.from('\nfunc main() {\n\tprintln("hello")\n}\n', 'latin1'),
+        ]);
+        const bytesMod1 = Buffer.concat([Buffer.from('// caf'), Buffer.from([0xe9]), Buffer.from('\nmodule example.com/app\n\ngo 1.21\n')]);
+        fs.writeFileSync(path.join(tmpDir, fileA), bytesA);
+        fs.writeFileSync(path.join(tmpDir, auxMod), bytesMod1);
+        assert.notEqual(sha256Bytes(bytesA), sha256(bytesA.toString('utf8')));
+
+        const analyzer = new WasmSemanticProjectAnalyzer();
+        let analyzeCallCount = 0;
+        const trackingAnalyzer = {
+            supportsLanguage: (lang: string) => analyzer.supportsLanguage(lang),
+            analyze: async (input: Parameters<typeof analyzer.analyze>[0]) => {
+                analyzeCallCount++;
+                return analyzer.analyze(input);
+            },
+        };
+
+        const manifestA: SymbolRegistryManifestFile = {
+            path: fileA,
+            language: 'go',
+            hash: sha256Bytes(bytesA),
+            symbolCount: 1,
+            definitionStatus: 'definitions_present',
+        };
+        const symMain: SymbolRecord = {
+            symbolKey: 'main.go#main',
+            symbolInstanceId: 'inst-main',
+            name: 'main',
+            label: 'main',
+            qualifiedName: 'main.main',
+            kind: 'function',
+            file: fileA,
+            language: 'go',
+            span: { startByte: 22, endByte: 57, startLine: 4, endLine: 6, startColumn: 0, endColumn: 1 },
+            parentQualifiedNamePath: [],
+            fileHash: manifestA.hash,
+            extractorVersion: 'e-1',
+        };
+        const initialRegistry = buildSymbolRegistry({
+            manifest: {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: tmpDir,
+                rootFingerprint: 'fp-1',
+                indexPolicyHash: 'policy-1',
+                languageRouterVersion: 'r-1',
+                extractorVersion: 'e-1',
+                relationshipVersion: 'rel-1',
+                builtAt: new Date().toISOString(),
+                files: [manifestA],
+            },
+            symbols: [symMain],
+        });
+
+        const mockPorts: Partial<IndexGenerationWorkflowPorts> = {
+            canonicalizeCodebasePath: (p) => p,
+            buildRootFingerprint: () => 'fp-1',
+            buildIndexPolicyHash: () => 'policy-1',
+            getLanguageRouterVersion: () => 'r-1',
+            getSymbolExtractorVersion: () => 'e-1',
+            getRelationshipVersion: () => 'rel-1',
+            readIndexableFileObservationInsideRoot: async (filePath: string) => {
+                const bytes = fs.readFileSync(filePath);
+                return { content: bytes.toString('utf8'), sourceHash: sha256Bytes(bytes) };
+            },
+            languageAnalyzer: {
+                analyze: async () => ({
+                    moduleBindings: [],
+                    callSites: [],
+                    receiverTypeBindings: [],
+                    pythonFlowFacts: [],
+                }),
+                supportedExtensions: ['.go'],
+                canAnalyze: () => true,
+            } as unknown as IndexGenerationWorkflowPorts['languageAnalyzer'],
+            semanticAnalyzer: trackingAnalyzer as unknown as IndexGenerationWorkflowPorts['semanticAnalyzer'],
+            semanticLanguageRegistry: new DefaultSemanticLanguageRegistry(),
+        };
+        const workflow = new IndexGenerationWorkflow(mockPorts as IndexGenerationWorkflowPorts);
+        const internals = workflow as unknown as WorkflowNavigationInternals;
+
+        const initialPublicationId = 'publication-initial';
+        const initialNavigationRoot = path.join(stateRoot, initialPublicationId, 'navigation');
+        const observedFileHashes = new Map([
+            [fileA, manifestA.hash], [auxMod, sha256Bytes(bytesMod1)],
+        ]);
+        const initialPublication = await internals.stageSymbolRegistryForCompletedIndex(
+            tmpDir,
+            initialPublicationId,
+            initialNavigationRoot,
+            initialRegistry.symbols,
+            initialRegistry.manifest.files,
+            observedFileHashes,
+            undefined,
+            undefined,
+            undefined,
+            [{ path: fileA, sourceHash: manifestA.hash }],
+        );
+        assert.ok(initialPublication);
+        assert.equal(analyzeCallCount, 1);
+
+        // An auxiliary-only delta reanalyzes the whole Go project, which
+        // re-reads and re-verifies both the source and the auxiliary.
+        const bytesMod2 = Buffer.concat([Buffer.from('// caf'), Buffer.from([0xe9]), Buffer.from('\nmodule example.com/app\n\ngo 1.22\n')]);
+        fs.writeFileSync(path.join(tmpDir, auxMod), bytesMod2);
+        observedFileHashes.set(auxMod, sha256Bytes(bytesMod2));
+        const deltaPublicationId = 'publication-delta';
+        const deltaResult = await internals.rebuildNavigationArtifactsForSyncDelta(
+            tmpDir,
+            initialRegistry,
+            [auxMod],
+            [],
+            [],
+            initialPublicationId,
+            initialNavigationRoot,
+            deltaPublicationId,
+            path.join(stateRoot, deltaPublicationId, 'navigation'),
+            observedFileHashes,
+        );
+        assert.ok(deltaResult.candidate);
+        assert.equal(analyzeCallCount, 2);
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

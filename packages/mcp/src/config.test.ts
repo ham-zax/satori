@@ -1,6 +1,29 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { logConfigurationSummary, type ContextMcpConfig } from "./config.js";
+import { createMcpConfig, logConfigurationSummary, type ContextMcpConfig } from "./config.js";
+
+test("configuration exports the state root from the home env file for readers and children", (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "satori-config-env-"));
+    const previous = process.env.SATORI_STATE_ROOT;
+    t.after(() => {
+        if (previous === undefined) delete process.env.SATORI_STATE_ROOT;
+        else process.env.SATORI_STATE_ROOT = previous;
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+    t.mock.method(os, "homedir", () => home);
+    const configuredRoot = path.join(home, "custom-state");
+    fs.mkdirSync(path.join(home, ".satori"));
+    fs.writeFileSync(path.join(home, ".satori", ".env"), `SATORI_STATE_ROOT=${configuredRoot}\n`);
+    delete process.env.SATORI_STATE_ROOT;
+
+    const config = createMcpConfig();
+
+    assert.equal(config.stateRoot, configuredRoot);
+    assert.equal(process.env.SATORI_STATE_ROOT, config.stateRoot);
+});
 
 test("configuration summary redacts OpenAI endpoint credentials and query", (t) => {
     const messages: string[] = [];

@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import {
     getSupportedExtensionsForIndexProfile,
     type IndexProfile,
@@ -128,11 +129,19 @@ export class IndexPolicyRuntimeService {
         inheritActiveCustomPolicy: boolean,
         activateRuntimeProfile: boolean,
     ): Promise<ObservedResolvedIndexPolicy> {
+        const policyStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const observedInputs = await observeIndexPolicyInputs(canonicalRoot);
         const profile = observedInputs.profileConfig.profile;
+        if (policyStartedAt !== undefined) {
+            perfTrace('index.policy.observe_inputs', performance.now() - policyStartedAt, { profile });
+        }
+        const profileStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         if (activateRuntimeProfile) {
             this.setIndexProfileForCodebase(canonicalRoot, profile);
             this.recomputePolicyRuntimeCompatibility(canonicalRoot, this.getPublishedResolvedPolicy(canonicalRoot));
+        }
+        if (profileStartedAt !== undefined) {
+            perfTrace('index.policy.activate_profile', performance.now() - profileStartedAt, { profile, active: activateRuntimeProfile });
         }
         const ignoreRules = this.getIgnoreRuleService();
         const customExtensions = update.customExtensions === undefined
@@ -150,7 +159,7 @@ export class IndexPolicyRuntimeService {
         const effectiveIgnorePatterns = [
             ...ignoreRules.getBasePatterns(), ...customIgnorePatterns, ...fileBasedPatterns,
         ];
-        return {
+        const policy = {
             canonicalRoot,
             profile,
             customExtensions,
@@ -161,6 +170,10 @@ export class IndexPolicyRuntimeService {
             policyHash: computeIndexPolicyHash(profile, supportedExtensions, effectiveIgnorePatterns),
             controlSignature: observedInputs.controlSignature,
         };
+        if (policyStartedAt !== undefined) {
+            perfTrace('index.policy.resolve_inputs', performance.now() - policyStartedAt, { profile });
+        }
+        return policy;
     }
 
     async isObservedIndexPolicyControlSignatureCurrent(policy: ObservedResolvedIndexPolicy): Promise<boolean> {

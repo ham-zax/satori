@@ -1,4 +1,5 @@
-import { lstat, readdir } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
     openRegularFileInsideRootNoFollow,
@@ -126,7 +127,10 @@ async function observeNestedGitignores(
         visitDirectory?.(directory);
         let entries;
         try {
-            entries = await readdir(path.join(canonicalRoot, directory), { withFileTypes: true });
+            // Sync by design: the walk reads every admitted directory one at a
+            // time, and each promise readdir waits behind other thread-pool
+            // work. On LibreOffice with 16 reads in flight: 10 s promise, 3 s sync.
+            entries = readdirSync(path.join(canonicalRoot, directory), { withFileTypes: true });
         } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;
             if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') return;

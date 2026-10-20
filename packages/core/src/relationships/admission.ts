@@ -1,3 +1,4 @@
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import { isCallableSymbolKind, type RelationshipRecord, type SymbolRegistry } from '../symbols';
 import type { ResolutionClaim } from './resolution';
 import { isCanonicalResolutionClaim } from './resolution-claim-validation';
@@ -13,6 +14,7 @@ export function admitAuthoritativeProofBackedCalls(input: {
     registry: SymbolRegistry;
     claims: readonly ResolutionClaim[];
 }): RelationshipRecord[] {
+    const startedAt = isPerfTraceEnabled() ? performance.now() : undefined;
     const symbolsByInstanceId = new Map(
         input.registry.symbols.map((symbol) => [symbol.symbolInstanceId, symbol]),
     );
@@ -74,6 +76,9 @@ export function admitAuthoritativeProofBackedCalls(input: {
         admitted.push(record);
     }
 
+    if (startedAt !== undefined) {
+        perfTrace('navigation.admission', performance.now() - startedAt, { claims: input.claims.length, admitted: admitted.length });
+    }
     return admitted;
 }
 

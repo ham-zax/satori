@@ -46,6 +46,15 @@ function loadEngineManifestLanguages(): Set<string> {
  */
 export const DEFAULT_MAX_SEMANTIC_SOURCE_BYTES = 1_048_576;
 
+/**
+ * Session limits enforced by the native engine
+ * (third_party/cbm-semantic/satori_semantic.h: SATORI_MAX_SOURCES,
+ * SATORI_MAX_AGGREGATE_SOURCE_BYTES). The engine stays the authority; these
+ * mirrors only let callers skip a session that is provably over a limit.
+ */
+export const NATIVE_MAX_SESSION_SOURCES = 20_000;
+export const NATIVE_MAX_SESSION_SOURCE_BYTES = 100 * 1024 * 1024;
+
 export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
     private readonly compiledNativeLanguages: Set<string>;
     private readonly maxSourceBytes: number;
@@ -74,6 +83,28 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
         const canonical = language.toLowerCase();
         // Intersection of: (1) descriptor registered in registry AND (2) language compiled into native WASM engine
         return this.languageRegistry.supportsLanguage(canonical) && this.compiledNativeLanguages.has(canonical);
+    }
+
+    provableLimitFailure(language: string, sourceFileBytes: readonly number[]): string | undefined {
+        if (!this.supportsLanguage(language)) return undefined;
+        // Decoded UTF-8 is at least the on-disk size (invalid bytes only grow
+        // into U+FFFD) and at most three times it. A file with 3 * size within
+        // the per-file budget is therefore certainly added to the session, so
+        // these files give a lower bound on the session's sources and bytes.
+        let certainSources = 0;
+        let certainBytes = 0;
+        for (const bytes of sourceFileBytes) {
+            if (bytes * 3 > this.maxSourceBytes) continue;
+            certainSources += 1;
+            certainBytes += bytes;
+        }
+        if (certainSources > NATIVE_MAX_SESSION_SOURCES) {
+            return `Source count limit exceeded (${NATIVE_MAX_SESSION_SOURCES}): at least ${certainSources} ${language} sources`;
+        }
+        if (certainBytes > NATIVE_MAX_SESSION_SOURCE_BYTES) {
+            return `Total source bytes limit exceeded (100MB): at least ${certainBytes} ${language} source bytes`;
+        }
+        return undefined;
     }
 
     async analyze(input: SemanticProjectInput): Promise<SemanticProjectEvidence> {

@@ -6,9 +6,98 @@ import test from 'node:test';
 
 import { buildPublicationSourceCheckpoint } from '../sync/snapshot-codec';
 import { PublicationStore, resolvePublicationGenerationRoot } from './publication-store';
+import type { Publication } from './contracts';
 import { RootMutationRuntime, getCurrentRootMutationLease, getRootMutationCoordinator } from './root-mutation-runtime';
 
 const INCOMPATIBLE_ID = 'legacy-publication';
+
+function writeCurrent(stateRoot: string, canonicalRoot: string): string {
+    const publication: Publication = {
+        version: 2,
+        id: 'current',
+        canonicalRoot,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        status: 'partial',
+        policy: {
+            profile: 'default', customExtensions: [], customIgnorePatterns: [],
+            fileBasedIgnorePatterns: [], supportedExtensions: ['.ts'], effectiveIgnorePatterns: [],
+            policyHash: 'test-policy', controlSignature: 'test-control',
+        },
+        format: { indexFormatVersion: 'test', embeddingIdentity: 'test', relationshipVersion: 'test' },
+        vector: { collectionName: 'test-collection', indexedFiles: 0, totalChunks: 0 },
+        packageOwnership: false,
+        navigation: null,
+    };
+    const generationRoot = resolvePublicationGenerationRoot(canonicalRoot, publication.id, stateRoot);
+    fs.mkdirSync(generationRoot, { recursive: true });
+    fs.writeFileSync(path.join(generationRoot, 'publication.json'), JSON.stringify(publication));
+    const publicationRoot = path.dirname(path.dirname(generationRoot));
+    fs.writeFileSync(path.join(publicationRoot, 'current.json'), JSON.stringify({ version: 1, publicationId: publication.id }));
+    return publicationRoot;
+}
+
+for (const phase of ['startup', 'listing'] as const) {
+    test(`${phase} skips a moved canonical root and preserves its state`, (t) => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-moved-publication-'));
+        t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+        const staleRoot = path.join(directory, 'stale');
+        const healthyRoot = path.join(directory, 'healthy');
+        const targetRoot = path.join(directory, 'target');
+        for (const root of [staleRoot, healthyRoot, targetRoot]) fs.mkdirSync(root);
+        const runtime = new RootMutationRuntime({ stateDir: path.join(directory, 'mutations') });
+        const options = { stateRoot: path.join(directory, 'state'), mutationCoordinator: getRootMutationCoordinator(runtime) };
+        const stalePublicationRoot = writeCurrent(options.stateRoot, staleRoot);
+        const healthyPublicationRoot = writeCurrent(options.stateRoot, healthyRoot);
+        const store = phase === 'listing' ? new PublicationStore(options) : undefined;
+        const staleOrphan = path.join(stalePublicationRoot, 'generations', 'orphan', 'source.json');
+        const healthyOrphan = path.join(healthyPublicationRoot, 'generations', 'orphan', 'source.json');
+        for (const [file, canonicalRoot] of [[staleOrphan, staleRoot], [healthyOrphan, healthyRoot]]) {
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, JSON.stringify({ canonicalRoot }));
+        }
+        const staleFiles = [
+            path.join(stalePublicationRoot, 'current.json'),
+            path.join(stalePublicationRoot, 'generations', 'current', 'publication.json'),
+            staleOrphan,
+        ];
+        const before = staleFiles.map((file) => fs.readFileSync(file, 'utf8'));
+        fs.renameSync(staleRoot, `${staleRoot}-original`);
+        fs.symlinkSync(targetRoot, staleRoot, 'dir');
+        const warnings: string[] = [];
+        t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args.join(' ')); });
+        const checkWarning = () => {
+            assert.equal(warnings.length, 1);
+            for (const value of [stalePublicationRoot, staleRoot, targetRoot]) assert.ok(warnings[0].includes(value));
+            warnings.length = 0;
+        };
+        const restarted = store ?? new PublicationStore(options);
+        if (phase === 'startup') {
+            checkWarning();
+            assert.equal(fs.existsSync(healthyOrphan), false, 'startup continues pruning healthy roots');
+        }
+        assert.deepEqual(restarted.listCurrent().map((ref) => ref.publication.canonicalRoot), [healthyRoot]);
+        checkWarning();
+        assert.deepEqual(staleFiles.map((file) => fs.readFileSync(file, 'utf8')), before);
+    });
+
+    test(`${phase} still rejects a Publication root key mismatch`, (t) => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-publication-key-'));
+        t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+        const root = path.join(directory, 'repo');
+        fs.mkdirSync(root);
+        const runtime = new RootMutationRuntime({ stateDir: path.join(directory, 'mutations') });
+        const options = { stateRoot: path.join(directory, 'state'), mutationCoordinator: getRootMutationCoordinator(runtime) };
+        const publicationRoot = writeCurrent(options.stateRoot, root);
+        const store = phase === 'listing' ? new PublicationStore(options) : undefined;
+        const wrongRoot = path.join(path.dirname(publicationRoot), '0'.repeat(64));
+        fs.renameSync(publicationRoot, wrongRoot);
+        assert.throws(() => store ? store.listCurrent() : new PublicationStore(options), {
+            message: phase === 'startup'
+                ? `Publication startup state at '${wrongRoot}' has inconsistent root ownership.`
+                : `Current Publication state at '${wrongRoot}' has inconsistent root/id ownership.`,
+        });
+    });
+}
 
 /** Lays out a current Publication whose descriptor is from a previous format version. */
 function writeIncompatibleCurrent(tempRoot: string, repoRoot: string): { stateRoot: string; generationRoot: string } {

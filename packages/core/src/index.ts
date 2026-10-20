@@ -56,6 +56,7 @@ export {
     PotionEmbedding,
     restoreVerifiedOwnerExecutableBit,
 } from './embedding/potion-embedding';
+export { PotionEmbeddingPool, defaultPotionHelperCount } from './embedding/potion-embedding-pool';
 export {
     VoyageAIEmbedding,
 } from './embedding/voyageai-embedding';

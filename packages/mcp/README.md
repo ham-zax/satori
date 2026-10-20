@@ -116,10 +116,8 @@ and 64 MiB across the compiler project. Skipped or failed provider work remains
 searchable but is persisted as `degraded` / `unavailable` provider coverage, so
 `manage_index status` capability evidence cannot report a healthy call graph
 when the owning provider did not cover the required source set. Search itself
-has separate admission limits: 8 MiB per searchable source and 512 MiB of
-aggregate searchable source bytes per full Publication; the aggregate limit
-publishes `limit_reached` partial search state rather than running until heap
-exhaustion. Broad workspace roots (filesystem root, home directory, state root)
+skips searchable sources over 8 MiB. A full Publication has no aggregate source
+byte or chunk limit. Broad workspace roots (filesystem root, home directory, state root)
 stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
 
 <!-- TOOLS_START -->

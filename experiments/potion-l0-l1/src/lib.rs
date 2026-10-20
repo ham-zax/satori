@@ -81,16 +81,32 @@ impl std::fmt::Display for StrictEncodeError {
 
 impl std::error::Error for StrictEncodeError {}
 
+/// Holds one embedding copy after load: the copied pooling data when the
+/// witness passes, otherwise the library model.
 pub struct StrictPotionModel {
-    model: StaticModel,
+    model: Option<StaticModel>,
     tokenizer: Tokenizer,
+    pooling: Option<RawReferenceModel>,
     unknown_token_id: Option<u32>,
     normalize: bool,
     retained_token_limit: usize,
+    pooling_witness_passed: bool,
 }
 
 impl StrictPotionModel {
     pub fn load(model_dir: &Path, retained_token_limit: usize) -> Result<Self> {
+        let mut loaded = Self::load_with_both_paths(model_dir, retained_token_limit)?;
+        if loaded.pooling_witness_passed {
+            loaded.model = None;
+        } else {
+            loaded.pooling = None;
+        }
+        Ok(loaded)
+    }
+
+    /// Loads the library model and the copied pooling data, then runs the
+    /// witness. `load` keeps only the path the witness selected.
+    fn load_with_both_paths(model_dir: &Path, retained_token_limit: usize) -> Result<Self> {
         if retained_token_limit == 0 {
             bail!("retained token limit must be positive");
         }
@@ -113,6 +129,9 @@ impl StrictPotionModel {
             .and_then(|model| model.get("unk_token"))
             .and_then(Value::as_str);
         let unknown_token_id = unknown_token.and_then(|token| tokenizer.token_to_id(token));
+        let model2vec_unknown_token_id = compute_model2vec_unknown_token_id(&tokenizer)?;
+        let unknown_token_rules_match =
+            unknown_token_id.map(|id| id as usize) == model2vec_unknown_token_id;
 
         let model_bytes = fs::read(model_dir.join("model.safetensors"))
             .context("failed to read model artifact")?;
@@ -128,33 +147,27 @@ impl StrictPotionModel {
             StaticModel::from_bytes(&strict_tokenizer_bytes, &model_bytes, &config_bytes, None)
                 .context("failed to load pinned model2vec-rs model")?;
 
-        let tensor_file =
-            SafeTensors::deserialize(&model_bytes).context("failed to inspect model dimensions")?;
-        let embedding_tensor = tensor_file
-            .tensor("embeddings")
-            .or_else(|_| tensor_file.tensor("0"))
-            .or_else(|_| tensor_file.tensor("embedding.weight"))
-            .context("embedding tensor is missing")?;
-        let dimensions = embedding_tensor
-            .shape()
-            .get(1)
-            .copied()
-            .ok_or_else(|| anyhow!("embedding tensor is not two dimensional"))?;
-        if dimensions != EXPECTED_DIMENSION {
+        let pooling = RawReferenceModel::from_bytes(&model_bytes, normalize)?;
+        if pooling.columns != EXPECTED_DIMENSION {
             return Err(StrictEncodeError::WrongDimensions {
-                actual: dimensions,
+                actual: pooling.columns,
                 expected: EXPECTED_DIMENSION,
             }
             .into());
         }
 
-        Ok(Self {
-            model,
+        let mut loaded = Self {
+            model: Some(model),
             tokenizer,
+            pooling: Some(pooling),
             unknown_token_id,
             normalize,
             retained_token_limit,
-        })
+            pooling_witness_passed: false,
+        };
+        loaded.pooling_witness_passed =
+            unknown_token_rules_match && loaded.pooling_witness_passes();
+        Ok(loaded)
     }
 
     pub fn normalize(&self) -> bool {
@@ -196,6 +209,65 @@ impl StrictPotionModel {
         Ok(retained)
     }
 
+    fn library(&self) -> std::result::Result<&StaticModel, StrictEncodeError> {
+        self.model.as_ref().ok_or(StrictEncodeError::ModelEncodingFailed)
+    }
+
+    fn pool_ids(&self, ids: &[u32]) -> std::result::Result<Vec<f32>, StrictEncodeError> {
+        let pooling = self
+            .pooling
+            .as_ref()
+            .ok_or(StrictEncodeError::ModelEncodingFailed)?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pooling.mean_pool(ids)))
+            .map_err(|_| StrictEncodeError::ModelEncodingFailed)
+    }
+
+    fn pooling_witness_passes(&self) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.pooling_witness_vectors_match()
+        }))
+        .unwrap_or(false)
+    }
+
+    fn pooling_witness_vectors_match(&self) -> bool {
+        let Some(library) = self.model.as_ref() else {
+            return false;
+        };
+        let texts = pooling_witness_texts();
+        let encodings = match self.tokenizer.encode_batch_fast(
+            texts.iter().map(String::as_str).collect::<Vec<_>>(),
+            false,
+        ) {
+            Ok(encodings) if encodings.len() == texts.len() => encodings,
+            _ => return false,
+        };
+        if let Some(unknown_token_id) = self.unknown_token_id {
+            if !encodings[4].get_ids().contains(&unknown_token_id) {
+                return false;
+            }
+        }
+        for (text, encoding) in texts.iter().zip(encodings.iter()) {
+            let retained_ids = match self.retain_known(encoding.get_ids()) {
+                Ok(ids) => ids,
+                Err(_) => return false,
+            };
+            let Ok(own_vector) = self.pool_ids(&retained_ids) else {
+                return false;
+            };
+            let library_vectors = library.encode_with_args(&[text.clone()], None, 1);
+            if library_vectors.len() != 1
+                || own_vector.len() != library_vectors[0].len()
+                || !own_vector
+                    .iter()
+                    .zip(library_vectors[0].iter())
+                    .all(|(own, library)| own.to_bits() == library.to_bits())
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn encode_query(
         &self,
         text: &str,
@@ -212,8 +284,17 @@ impl StrictPotionModel {
 
     pub fn encode(&self, text: &str) -> std::result::Result<StrictEncoding, StrictEncodeError> {
         let retained_ids = self.retained_token_ids(text)?;
+        if self.pooling_witness_passed {
+            let vector = self.pool_ids(&retained_ids)?;
+            validate_vector(&vector, EXPECTED_DIMENSION)?;
+            return Ok(StrictEncoding {
+                vector,
+                retained_token_count: retained_ids.len(),
+            });
+        }
+        let library = self.library()?;
         let vectors = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.model.encode_with_args(&[text.to_owned()], None, 1)
+            library.encode_with_args(&[text.to_owned()], None, 1)
         }))
         .map_err(|_| StrictEncodeError::ModelEncodingFailed)?;
         let vector = vectors
@@ -235,18 +316,12 @@ impl StrictPotionModel {
         &self,
         texts: &[String],
     ) -> std::result::Result<Vec<usize>, StrictEncodeError> {
-        let per_text = || {
-            texts
-                .iter()
-                .map(|text| self.retained_token_ids(text).map(|tokens| tokens.len()))
-                .collect::<std::result::Result<Vec<_>, _>>()
-        };
         let encodings = match self
             .tokenizer
             .encode_batch_fast(texts.iter().map(|text| text.as_str()).collect::<Vec<_>>(), false)
         {
             Ok(encodings) if encodings.len() == texts.len() => encodings,
-            _ => return per_text(),
+            _ => return self.retained_token_counts_per_text(texts),
         };
         texts
             .iter()
@@ -260,13 +335,24 @@ impl StrictPotionModel {
             .collect()
     }
 
-    pub fn encode_batch(
+    fn retained_token_counts_per_text(
+        &self,
+        texts: &[String],
+    ) -> std::result::Result<Vec<usize>, StrictEncodeError> {
+        texts
+            .iter()
+            .map(|text| self.retained_token_ids(text).map(|tokens| tokens.len()))
+            .collect()
+    }
+
+    fn encode_batch_with_library(
         &self,
         texts: &[String],
     ) -> std::result::Result<Vec<StrictEncoding>, StrictEncodeError> {
         let retained_counts = self.retained_token_counts(texts)?;
+        let library = self.library()?;
         let vectors = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.model.encode_with_args(texts, None, texts.len().max(1))
+            library.encode_with_args(texts, None, texts.len().max(1))
         }))
         .map_err(|_| StrictEncodeError::ModelEncodingFailed)?;
         if vectors.len() != texts.len() {
@@ -284,6 +370,82 @@ impl StrictPotionModel {
             })
             .collect()
     }
+
+    pub fn encode_batch(
+        &self,
+        texts: &[String],
+    ) -> std::result::Result<Vec<StrictEncoding>, StrictEncodeError> {
+        if !self.pooling_witness_passed {
+            return self.encode_batch_with_library(texts);
+        }
+
+        let encodings = match self.tokenizer.encode_batch_fast(
+            texts.iter().map(String::as_str).collect::<Vec<_>>(),
+            false,
+        ) {
+            Ok(encodings) if encodings.len() == texts.len() => Some(encodings),
+            _ => None,
+        };
+        // A batch tokenizer failure takes the per-text path, so the first
+        // failing text and its error are unchanged.
+        let retained_ids = match encodings {
+            Some(encodings) => texts
+                .iter()
+                .zip(encodings.iter())
+                .map(|(text, encoding)| {
+                    if text.trim().is_empty() {
+                        return Err(StrictEncodeError::EmptyInput);
+                    }
+                    self.retain_known(encoding.get_ids())
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            None => texts
+                .iter()
+                .map(|text| self.retained_token_ids(text))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        let vectors = retained_ids
+            .iter()
+            .map(|ids| self.pool_ids(ids))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        vectors
+            .into_iter()
+            .zip(retained_ids)
+            .map(|(vector, retained_token_ids)| {
+                validate_vector(&vector, EXPECTED_DIMENSION)?;
+                Ok(StrictEncoding {
+                    vector,
+                    retained_token_count: retained_token_ids.len(),
+                })
+            })
+            .collect()
+    }
+}
+
+fn compute_model2vec_unknown_token_id(tokenizer: &Tokenizer) -> Result<Option<usize>> {
+    let specification: Value =
+        serde_json::to_value(tokenizer).context("failed to serialize tokenizer")?;
+    let unknown_token = specification
+        .get("model")
+        .and_then(|model| model.get("unk_token"))
+        .and_then(Value::as_str);
+    match unknown_token {
+        Some(token) => tokenizer
+            .token_to_id(token)
+            .map(|id| Some(id as usize))
+            .ok_or_else(|| anyhow!("unk_token '{token}' not found in vocabulary")),
+        None => Ok(None),
+    }
+}
+
+fn pooling_witness_texts() -> Vec<String> {
+    vec![
+        "Where is runtime profile validation implemented?".to_owned(),
+        "pub fn add(left: i32, right: i32) -> i32 { left + right }".to_owned(),
+        "fn normalize_path(入力: &str) -> String { format!(\"✓ {入力}\") }".to_owned(),
+        "a ".repeat(513),
+        "Where is runtime profile validation implemented? \u{10ffff}".to_owned(),
+    ]
 }
 
 pub fn validate_vector(
@@ -333,7 +495,19 @@ impl RawReferenceModel {
     pub fn load(model_dir: &Path) -> Result<Self> {
         let model_bytes = fs::read(model_dir.join("model.safetensors"))
             .context("failed to read reference model artifact")?;
-        let tensors = SafeTensors::deserialize(&model_bytes)
+        let config: Value = serde_json::from_slice(
+            &fs::read(model_dir.join("config.json")).context("failed to read reference config")?,
+        )
+        .context("failed to parse reference config")?;
+        let normalize = config
+            .get("normalize")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| anyhow!("reference config does not declare normalize"))?;
+        Self::from_bytes(&model_bytes, normalize)
+    }
+
+    fn from_bytes(model_bytes: &[u8], normalize: bool) -> Result<Self> {
+        let tensors = SafeTensors::deserialize(model_bytes)
             .context("failed to parse reference model artifact")?;
         let embedding = tensors
             .tensor("embeddings")
@@ -358,14 +532,6 @@ impl RawReferenceModel {
             .ok()
             .map(|tensor| decode_mapping(tensor.dtype(), tensor.data()))
             .transpose()?;
-        let config: Value = serde_json::from_slice(
-            &fs::read(model_dir.join("config.json")).context("failed to read reference config")?,
-        )
-        .context("failed to parse reference config")?;
-        let normalize = config
-            .get("normalize")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| anyhow!("reference config does not declare normalize"))?;
         Ok(Self {
             embeddings,
             rows,
@@ -376,55 +542,69 @@ impl RawReferenceModel {
         })
     }
 
+    fn row_index(&self, token_id: usize) -> usize {
+        self.mapping
+            .as_ref()
+            .and_then(|mapping| mapping.get(token_id))
+            .copied()
+            .unwrap_or(token_id)
+    }
+
     pub fn pool(&self, original_token_ids: &[u32]) -> Result<Vec<f32>> {
         if original_token_ids.is_empty() {
             bail!("reference pooling requires at least one retained token");
         }
+        if original_token_ids
+            .iter()
+            .any(|id| self.row_index(*id as usize) >= self.rows)
+        {
+            bail!("reference mapping points outside the embedding table");
+        }
+        let pooled = self.mean_pool(original_token_ids);
+        validate_vector(&pooled, EXPECTED_DIMENSION)?;
+        Ok(pooled)
+    }
+
+    /// Mean pooling copied operation for operation from the pinned
+    /// model2vec-rs `StaticModel::pool_ids`, so the result is bit-identical.
+    /// `StrictPotionModel` checks that claim at load against the library.
+    /// Panics when a row index is outside the table, as the library does.
+    fn mean_pool(&self, ids: &[u32]) -> Vec<f32> {
         let mut sum = vec![0.0_f32; self.columns];
-        for original_id in original_token_ids {
-            let token_id = *original_id as usize;
-            let row_index = self
-                .mapping
-                .as_ref()
-                .and_then(|mapping| mapping.get(token_id))
-                .copied()
-                .unwrap_or(token_id);
-            if row_index >= self.rows {
-                bail!("reference mapping points outside the embedding table");
-            }
-            let weight = self
+        let mut count = 0usize;
+        for &id in ids {
+            let token_id = id as usize;
+            let row_index = self.row_index(token_id);
+            let scale = self
                 .weights
                 .as_ref()
                 .and_then(|weights| weights.get(token_id))
                 .copied()
                 .unwrap_or(1.0);
+            assert!(row_index < self.rows);
             let row_start = row_index * self.columns;
-            for (output, component) in sum
-                .iter_mut()
-                .zip(&self.embeddings[row_start..row_start + self.columns])
-            {
-                *output += component * weight;
+            let row = &self.embeddings[row_start..row_start + self.columns];
+            for (total, &value) in sum.iter_mut().zip(row.iter()) {
+                *total += value * scale;
             }
+            count += 1;
         }
-        let retained_count = original_token_ids.len() as f32;
-        for component in &mut sum {
-            *component /= retained_count;
+        let denominator = count.max(1) as f32;
+        for value in &mut sum {
+            *value /= denominator;
         }
         if self.normalize {
             let norm = sum
                 .iter()
-                .map(|component| component * component)
+                .map(|&value| value * value)
                 .sum::<f32>()
-                .sqrt();
-            if !norm.is_finite() || norm <= f32::EPSILON {
-                bail!("reference output has invalid norm");
-            }
-            for component in &mut sum {
-                *component /= norm;
+                .sqrt()
+                .max(1e-12);
+            for value in &mut sum {
+                *value /= norm;
             }
         }
-        validate_vector(&sum, EXPECTED_DIMENSION)?;
-        Ok(sum)
+        sum
     }
 }
 
@@ -932,25 +1112,5 @@ fn nearest_rank(values: &mut [Duration], percentile: f64) -> Duration {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_zero_nonfinite_and_wrong_dimension_vectors() {
-        assert_eq!(
-            validate_vector(&vec![0.0; EXPECTED_DIMENSION], EXPECTED_DIMENSION),
-            Err(StrictEncodeError::ZeroNormOutput),
-        );
-        assert_eq!(
-            validate_vector(&vec![f32::INFINITY; EXPECTED_DIMENSION], EXPECTED_DIMENSION),
-            Err(StrictEncodeError::NonFiniteOutput),
-        );
-        assert_eq!(
-            validate_vector(&vec![1.0; EXPECTED_DIMENSION - 1], EXPECTED_DIMENSION),
-            Err(StrictEncodeError::WrongDimensions {
-                actual: EXPECTED_DIMENSION - 1,
-                expected: EXPECTED_DIMENSION,
-            }),
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

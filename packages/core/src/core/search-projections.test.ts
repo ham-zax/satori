@@ -119,3 +119,72 @@ test('buildSearchProjections serializes newline-bearing metadata without collisi
     assert.notEqual(pathWithHeaderText.lexicalText, separateLanguage.lexicalText);
     assert.match(pathWithHeaderText.embeddingText, /path:"a\\nlanguage: typescript"/);
 });
+
+// Reference copy of the uncached identifier helpers. The projection memoizes
+// splitting per chunk and must publish exactly what these produce.
+const referenceTokenPattern = /[\p{L}\p{N}_$]+/gu;
+function referenceSplit(token: string): string[] {
+    return token
+        .replace(/([\p{Ll}\p{N}])([\p{Lu}])/gu, '$1 $2')
+        .replace(/([\p{Lu}])([\p{Lu}][\p{Ll}])/gu, '$1 $2')
+        .split(/[_$\s]+/u)
+        .filter(Boolean);
+}
+function referenceAdditiveTerms(values: readonly string[]): string[] {
+    const terms = new Set<string>();
+    for (const value of values) {
+        for (const token of value.match(referenceTokenPattern) ?? []) {
+            for (const component of referenceSplit(token)) if (component !== token) terms.add(component);
+        }
+    }
+    return [...terms];
+}
+function referenceAliases(identityValues: readonly string[], content: string): string[] {
+    const aliases = new Set<string>();
+    const add = (token: string): void => {
+        const components = referenceSplit(token);
+        if (components.length > 1) aliases.add(components.join(''));
+        for (const component of components) {
+            for (let length = 4; length < component.length; length++) aliases.add(component.slice(0, length));
+        }
+    };
+    for (const value of identityValues) for (const token of value.match(referenceTokenPattern) ?? []) add(token);
+    for (const token of content.match(referenceTokenPattern) ?? []) if (referenceSplit(token).length > 1) add(token);
+    return [...aliases];
+}
+
+test('buildSearchProjections memoized splitting matches the uncached identifier helpers', () => {
+    const fixtures: Array<{ content: string; symbolLabel?: string; breadcrumbs?: string[]; path: string }> = [
+        // Repeated tokens, same-length distinct tokens, and case-only variants.
+        { content: 'fooBar foobar FooBar fooBaz fooBar FOO_BAR fooBar', symbolLabel: 'fooBar', breadcrumbs: ['FooBar'], path: 'a/foo_bar.ts' },
+        { content: 'HTTPServer_v2 parseHTTPResponse utf8Decode $scope __proto__ a$b$c', symbolLabel: 'HTTPServer_v2', path: 'src/HTTPServer.ts' },
+        { content: 'ÄpfelBaum café_au_lait naïveCase ΔeltaValue 東京Tower ÄpfelBaum', symbolLabel: 'ÄpfelBaum', breadcrumbs: ['naïveCase'], path: 'unicode/ÄpfelBaum.java' },
+        { content: '', path: 'empty.c' },
+        { content: 'plain words only here and here', breadcrumbs: [], path: 'notes.md' },
+    ];
+    for (const fixture of fixtures) {
+        const chunk: CodeChunk = {
+            content: fixture.content,
+            metadata: {
+                startLine: 1,
+                endLine: 1,
+                language: 'typescript',
+                ...(fixture.symbolLabel ? { symbolLabel: fixture.symbolLabel } : {}),
+                ...(fixture.breadcrumbs ? { breadcrumbs: fixture.breadcrumbs } : {}),
+            },
+        };
+        const projection = buildSearchProjections({ chunk, relativePath: fixture.path });
+        const identity = [fixture.symbolLabel ?? '', ...(fixture.breadcrumbs ?? [])];
+        const lexicalJson = (label: string): unknown =>
+            JSON.parse(new RegExp(`\\n${label}:(.*)$`, 'm').exec(projection.lexicalText)?.[1] ?? 'null');
+        assert.deepEqual(
+            lexicalJson('identifier-components'),
+            referenceAdditiveTerms([fixture.path, 'typescript', ...identity.filter(Boolean), fixture.content]),
+            fixture.path,
+        );
+        assert.deepEqual(lexicalJson('identifier-aliases'), referenceAliases(identity, fixture.content), fixture.path);
+        const symbolTerms = referenceAdditiveTerms(identity);
+        const embeddedTerms = /\nsymbol-terms:(.*)\n/.exec(projection.embeddingText)?.[1];
+        assert.equal(embeddedTerms, symbolTerms.length ? JSON.stringify(symbolTerms.join(' ')) : undefined, fixture.path);
+    }
+});

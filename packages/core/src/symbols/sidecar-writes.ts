@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isPerfTraceEnabled, perfTrace } from '../utils/perf-trace';
 import {
     RELATIONSHIP_FILE_CONTRIBUTION_SCHEMA_VERSION,
     RELATIONSHIP_MANIFEST_SCHEMA_VERSION,
@@ -80,14 +81,86 @@ export interface WriteRelationshipSidecarResult {
     relationshipCount: number;
 }
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.promises.writeFile(filePath, serializeJson(value), 'utf8');
+interface SidecarWriteTiming {
+    serializeMs: number;
+    serializeCount: number;
+    mkdirMs: number;
+    mkdirCount: number;
+    writeMs: number;
+    writeCount: number;
 }
 
-async function writeSerializedJson(filePath: string, serialized: string): Promise<void> {
+function createWriteTiming(): SidecarWriteTiming | undefined {
+    return isPerfTraceEnabled()
+        ? { serializeMs: 0, serializeCount: 0, mkdirMs: 0, mkdirCount: 0, writeMs: 0, writeCount: 0 }
+        : undefined;
+}
+
+function reportWriteTiming(stage: string, timing?: SidecarWriteTiming): void {
+    if (!timing) return;
+    // I/O durations overlap inside each existing batch. They are summed service time.
+    perfTrace('navigation.stage.serialize', timing.serializeMs, { stage, count: timing.serializeCount });
+    perfTrace('navigation.stage.mkdir', timing.mkdirMs, { stage, count: timing.mkdirCount });
+    perfTrace('navigation.stage.write', timing.writeMs, { stage, count: timing.writeCount });
+}
+
+function timedSerialize(value: unknown, timing?: SidecarWriteTiming, shard = false): string {
+    if (!timing) return shard ? serializeShardJson(value) : serializeJson(value);
+    const startedAt = performance.now();
+    try {
+        return shard ? serializeShardJson(value) : serializeJson(value);
+    } finally {
+        timing.serializeMs += performance.now() - startedAt;
+        timing.serializeCount++;
+    }
+}
+
+async function writeJson(filePath: string, value: unknown, timing?: SidecarWriteTiming): Promise<void> {
+    let startedAt = timing ? performance.now() : 0;
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    if (timing) {
+        timing.mkdirMs += performance.now() - startedAt;
+        timing.mkdirCount++;
+    }
+    const serialized = timedSerialize(value, timing);
+    if (timing) startedAt = performance.now();
     await fs.promises.writeFile(filePath, serialized, 'utf8');
+    if (timing) {
+        timing.writeMs += performance.now() - startedAt;
+        timing.writeCount++;
+    }
+}
+
+async function writeSerializedJson(filePath: string, serialized: string, timing?: SidecarWriteTiming): Promise<void> {
+    let startedAt = timing ? performance.now() : 0;
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    if (timing) {
+        timing.mkdirMs += performance.now() - startedAt;
+        timing.mkdirCount++;
+        startedAt = performance.now();
+    }
+    await fs.promises.writeFile(filePath, serialized, 'utf8');
+    if (timing) {
+        timing.writeMs += performance.now() - startedAt;
+        timing.writeCount++;
+    }
+}
+
+/**
+ * Runs a shard batch so that every started writer settles before the batch
+ * reports a failure. A failed batch makes the caller remove the build root,
+ * so a writer that is still running could write into a removed directory.
+ * The reported failure is the first rejection in input order; the successful
+ * path returns the settled values in input order.
+ */
+export async function settleShardBatch<T>(batch: readonly Promise<T>[]): Promise<T[]> {
+    const results = await Promise.allSettled(batch);
+    const values: T[] = [];
+    for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+        values.push(result.value);
+    }
+    return values;
 }
 
 async function fsyncPath(targetPath: string): Promise<void> {
@@ -107,12 +180,23 @@ function uniqueSidecarEntryName(kind: string): string {
     return `${kind}${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
 }
 
-async function writeJsonAtomically(filePath: string, value: unknown, beforePublish?: () => void): Promise<void> {
+async function writeJsonAtomically(filePath: string, value: unknown, beforePublish?: () => void, timing?: SidecarWriteTiming): Promise<void> {
     const directory = path.dirname(filePath);
+    let startedAt = timing ? performance.now() : 0;
     await fs.promises.mkdir(directory, { recursive: true });
+    if (timing) {
+        timing.mkdirMs += performance.now() - startedAt;
+        timing.mkdirCount++;
+    }
     const temporaryPath = path.join(directory, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
     try {
-        await fs.promises.writeFile(temporaryPath, serializeJson(value), 'utf8');
+        const serialized = timedSerialize(value, timing);
+        if (timing) startedAt = performance.now();
+        await fs.promises.writeFile(temporaryPath, serialized, 'utf8');
+        if (timing) {
+            timing.writeMs += performance.now() - startedAt;
+            timing.writeCount++;
+        }
         beforePublish?.();
         await fs.promises.rename(temporaryPath, filePath);
     } catch (error) {
@@ -178,6 +262,7 @@ async function writeSymbolRegistrySidecarInternal(
     input: WriteSymbolRegistrySidecarInput,
     reuse?: SymbolShardReuse,
 ): Promise<WriteSymbolRegistrySidecarResult> {
+    const timing = createWriteTiming();
     const rootPath = path.resolve(input.navigationRoot);
     const symbolsDir = path.join(rootPath, SYMBOLS_DIR_NAME);
     const temporarySymbolsDir = path.join(rootPath, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
@@ -190,12 +275,16 @@ async function writeSymbolRegistrySidecarInternal(
     );
 
     try {
+        const mkdirStartedAt1 = timing ? performance.now() : 0;
         await fs.promises.mkdir(rootPath, { recursive: true });
+        if (timing) { timing.mkdirMs += performance.now() - mkdirStartedAt1; timing.mkdirCount++; }
+        const mkdirStartedAt2 = timing ? performance.now() : 0;
         await fs.promises.mkdir(byFileDir, { recursive: true });
+        if (timing) { timing.mkdirMs += performance.now() - mkdirStartedAt2; timing.mkdirCount++; }
 
         for (let offset = 0; offset < input.registry.manifest.files.length; offset += SHARD_IO_CONCURRENCY) {
             const batch = input.registry.manifest.files.slice(offset, offset + SHARD_IO_CONCURRENCY);
-            await Promise.all(batch.map(async (file) => {
+            await settleShardBatch(batch.map(async (file) => {
                 const shardFileName = fileShardName(file.path, file.hash);
                 const targetPath = path.join(byFileDir, shardFileName);
                 if (reuse && !reuse.filesToRewrite.has(file.path)) {
@@ -226,22 +315,24 @@ async function writeSymbolRegistrySidecarInternal(
                         language: file.language,
                         symbols,
                     };
-                    await writeSerializedJson(targetPath, serializeShardJson(shard));
+                    await writeSerializedJson(targetPath, timedSerialize(shard, timing, true), timing);
                 }
             }));
         }
-        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash));
+        await writeJson(path.join(temporarySymbolsDir, 'index.json'), buildSymbolIndex(input.registry.manifest, manifestHash), timing);
 
         await replaceDirectoryWithRollback(
             symbolsDir,
             temporarySymbolsDir,
-            () => writeJsonAtomically(path.join(rootPath, 'manifest.json'), input.registry.manifest, input.beforePublish),
+            () => writeJsonAtomically(path.join(rootPath, 'manifest.json'), input.registry.manifest, input.beforePublish, timing),
             input.beforePublish,
         );
 
     } catch (error) {
         await fs.promises.rm(temporarySymbolsDir, { recursive: true, force: true }).catch(() => undefined);
         throw error;
+    } finally {
+        reportWriteTiming('symbols', timing);
     }
 
     return {
@@ -508,6 +599,7 @@ async function writeRelationshipSidecarInternal(
     input: WriteRelationshipSidecarInput,
     reuse?: RelationshipShardReuse,
 ): Promise<WriteRelationshipSidecarResult> {
+    const timing = createWriteTiming();
     const rootPath = path.resolve(input.navigationRoot);
     const relationshipsDir = path.join(rootPath, RELATIONSHIPS_DIR_NAME);
     const temporaryRelationshipsDir = path.join(rootPath, uniqueSidecarEntryName(TEMP_ENTRY_PREFIX));
@@ -537,8 +629,12 @@ async function writeRelationshipSidecarInternal(
 
     let manifestHash: string;
     try {
+        const mkdirStartedAt1 = timing ? performance.now() : 0;
         await fs.promises.mkdir(rootPath, { recursive: true });
+        if (timing) { timing.mkdirMs += performance.now() - mkdirStartedAt1; timing.mkdirCount++; }
+        const mkdirStartedAt2 = timing ? performance.now() : 0;
         await fs.promises.mkdir(relationshipByFileDir, { recursive: true });
+        if (timing) { timing.mkdirMs += performance.now() - mkdirStartedAt2; timing.mkdirCount++; }
         const manifestFiles: RelationshipManifestFile[] = [];
 
         const sortedShardPaths = [...shardPaths].sort(compareStrings);
@@ -548,7 +644,7 @@ async function writeRelationshipSidecarInternal(
             offset += RELATIONSHIP_SHARD_IO_CONCURRENCY
         ) {
             const batch = sortedShardPaths.slice(offset, offset + RELATIONSHIP_SHARD_IO_CONCURRENCY);
-            const batchFiles = await Promise.all(batch.map(async (filePath): Promise<RelationshipManifestFile> => {
+            const batchFiles = await settleShardBatch(batch.map(async (filePath): Promise<RelationshipManifestFile> => {
                 const fileHash = filesByPath.get(filePath)?.hash || input.symbolRegistryManifestHash;
                 const shardPath = path.posix.join(RELATIONSHIPS_DIR_NAME, 'by-file', fileShardName(filePath, fileHash));
                 const targetPath = path.join(temporaryRelationshipsDir, 'by-file', path.basename(shardPath));
@@ -588,7 +684,7 @@ async function writeRelationshipSidecarInternal(
                     relationships: records,
                     analysisEvidence,
                 };
-                await writeSerializedJson(targetPath, serializeShardJson(shard));
+                await writeSerializedJson(targetPath, timedSerialize(shard, timing, true), timing);
                 return {
                     path: filePath,
                     hash: fileHash,
@@ -607,17 +703,20 @@ async function writeRelationshipSidecarInternal(
             manifestFiles,
             input.providerCoverage,
         );
-        const serializedManifest = serializeJson(manifest);
+        const serializedManifest = timedSerialize(manifest, timing);
         manifestHash = hashSerializedString(serializedManifest);
         await writeSerializedJson(
             path.join(temporaryRelationshipsDir, 'manifest.json'),
             serializedManifest,
+            timing,
         );
 
         await replaceDirectoryWithRollback(relationshipsDir, temporaryRelationshipsDir, undefined, input.beforePublish);
     } catch (error) {
         await fs.promises.rm(temporaryRelationshipsDir, { recursive: true, force: true }).catch(() => undefined);
         throw error;
+    } finally {
+        reportWriteTiming('relationships', timing);
     }
 
     return {

@@ -285,8 +285,12 @@ export class MutationLeaseCoordinator {
                 throw new Error(`Invalid mutation lease state at ${statePath}`);
             }
             const canonicalRoot = canonicalizeRoot(parsed.canonicalRoot);
-            if (canonicalRoot !== parsed.canonicalRoot || `${rootKey(canonicalRoot)}.json` !== entry.name) {
+            if (`${rootKey(parsed.canonicalRoot)}.json` !== entry.name) {
                 throw new Error(`Mutation lease state '${statePath}' has inconsistent root ownership.`);
+            }
+            if (canonicalRoot !== parsed.canonicalRoot) {
+                console.warn(`Skipping stale mutation lease state '${statePath}': stored root '${parsed.canonicalRoot}' now resolves to '${canonicalRoot}'.`);
+                continue;
             }
             const lease = this.readState(canonicalRoot).lease;
             if (lease && this.isOwnerLive(lease)) leases.push(lease);

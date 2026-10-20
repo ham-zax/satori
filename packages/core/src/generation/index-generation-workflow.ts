@@ -23,7 +23,7 @@ import type {
     ResolutionProjectAnalyzer,
     ResolutionProjectEvidence,
 } from '../relationships';
-import { perfSpan, perfTrace } from '../utils/perf-trace';
+import { isPerfTraceEnabled, perfSpan, perfTrace } from '../utils/perf-trace';
 import { relationshipIndexingProgress } from '../relationships/resolution-work';
 import { buildRelationshipDeltaAsync, buildRelationshipsForRegistryAsync, type RelationshipResolutionProgress } from '../relationships';
 import type {
@@ -47,10 +47,10 @@ import type { IndexProfile } from '../config/defaults';
 import type { ResolvedIndexPolicy, IndexPolicyRuntimeService } from '../policy/index-policy-runtime-service';
 import type { Embedding, EmbeddingOperationMetricsSnapshot } from '../embedding';
 import { FileSynchronizer } from '../sync/synchronizer';
+import { collectPublicationSourceControls } from './publication-source-controls';
 import type { PublicationSourceCheckpoint } from '../sync/snapshot-codec';
 import type { IndexAuthorityCoordinator } from './index-authority-coordinator';
 import {
-    MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION,
     type IndexedSourceFileObservation,
     type ProcessedFileList,
 } from '../core/indexing-pipeline';
@@ -62,7 +62,6 @@ import { validateRepositoryRelativePath, type RepositoryRelativePath } from '../
 import type { CustomIndexPolicyUpdate } from './contracts';
 import {
     buildPublicationPackageOwnership,
-    discoverPackageOwnership,
     type PublicationPackageOwnership,
 } from '../packages/ownership';
 
@@ -109,6 +108,8 @@ type MutationGuardOptions = {
     rootMutationLease?: RootMutationLease;
     deferPartialPublication?: boolean;
     indexPolicy?: ObservedResolvedIndexPolicy;
+    /** Called once when the full-index source scan has finished. */
+    onSourceScanCompleted?: () => void;
 };
 type ReindexByChangeResult = {
     added: number;
@@ -121,13 +122,6 @@ type ReindexByChangeResult = {
     totalChunks?: number;
     indexStatus?: 'completed' | 'limit_reached';
 };
-const TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
-
-function isTypeScriptResolutionSource(filePath: string): boolean {
-    const lower = filePath.toLowerCase();
-    return TYPESCRIPT_RESOLUTION_SOURCE_EXTENSIONS.some((extension) => lower.endsWith(extension));
-}
-
 function boundedProviderFailureMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.trim() || 'provider failure';
@@ -406,6 +400,7 @@ export class IndexGenerationWorkflow {
         }
         const canonicalRoot = this.ports.canonicalizeCodebasePath(codebasePath);
         const manifestFiles = [...symbolManifestFiles].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+        const registryStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const registry = buildSymbolRegistry({
             manifest: {
                 schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
@@ -420,6 +415,7 @@ export class IndexGenerationWorkflow {
             },
             symbols: symbolRecords,
         });
+        if (registryStartedAt !== undefined) perfTrace('navigation.registry', performance.now() - registryStartedAt);
 
         const analysisByFile = new Map(suppliedAnalysisByFile ?? []);
         const capturedSourcesByPath = new Map(
@@ -477,74 +473,101 @@ export class IndexGenerationWorkflow {
                 semanticManifestByLanguage.set(file.language, list);
             }
 
-            for (const [language, semanticFiles] of semanticManifestByLanguage) {
-                const sourceFiles: SemanticSourceFile[] = [];
-                for (const file of semanticFiles) {
-                    const absoluteFile = path.resolve(canonicalRoot, file.path);
-                    const sourceObservation = await this.ports.readIndexableFileObservationInsideRoot(
-                        absoluteFile,
-                        canonicalRoot,
-                        indexPolicy,
-                    );
-                    if (sourceObservation === null) {
-                        throw new Error(`Semantic source no longer satisfies the active policy for '${file.path}'.`);
-                    }
-                    if (sourceObservation.sourceHash !== file.hash) {
-                        throw new Error(`Source changed before semantic navigation publication for '${file.path}'.`);
-                    }
-                    sourceFiles.push({
-                        path: file.path,
-                        source: sourceObservation.content,
-                        sourceHash: sourceObservation.sourceHash,
-                    });
-                }
-
-                const auxiliaryFiles = await this.collectSemanticAuxiliariesForLanguage(
-                    codebasePath,
-                    language,
-                    semanticRegistry,
-                    observedFileHashes,
-                );
+            const recordUnavailableProvider = (language: string, sourceFileCount: number, error: unknown): void => {
                 const descriptor = semanticRegistry.getDescriptor(language);
                 if (!descriptor) {
                     throw new Error(`Semantic provider metadata is unavailable for '${language}'.`);
                 }
+                const coverage = unavailableProviderCoverage({
+                    language,
+                    providerId: descriptor.providerId,
+                    providerVersion: descriptor.providerVersion,
+                    environmentConfigId: descriptor.environmentConfigId,
+                    sourceFileCount,
+                    error,
+                });
+                providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                semanticEvidenceByLanguage.set(language, {
+                    language,
+                    occurrencesByFile: new Map(),
+                    coverage,
+                });
+                console.warn(
+                    `[Context] Optional semantic provider '${coverage.providerId}' failed for '${language}'; `
+                    + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                );
+            };
+            for (const [language, semanticFiles] of semanticManifestByLanguage) {
+                const semanticLoopStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 try {
-                    const evidence = await perfSpan('navigation.semantic', () => this.ports.semanticAnalyzer!.analyze({
+                    // Skip re-reading every source when captured sizes already prove
+                    // the provider session would fail; the outcome is the same
+                    // degraded coverage analyze() reports for that failure.
+                    const capturedSizes = semanticFiles.map((file) => capturedSourcesByPath.get(validateRepositoryRelativePath(file.path))?.sourceStat?.size);
+                    const limitFailure = capturedSizes.every((size): size is number => size !== undefined)
+                        ? this.ports.semanticAnalyzer.provableLimitFailure?.(language, capturedSizes)
+                        : undefined;
+                    if (limitFailure !== undefined) {
+                        recordUnavailableProvider(language, semanticFiles.length, new Error(limitFailure));
+                        continue;
+                    }
+                    const sourceFiles: SemanticSourceFile[] = [];
+                    for (const file of semanticFiles) {
+                        const absoluteFile = path.resolve(canonicalRoot, file.path);
+                        const sourceObservation = await this.ports.readIndexableFileObservationInsideRoot(
+                            absoluteFile,
+                            canonicalRoot,
+                            indexPolicy,
+                        );
+                        if (sourceObservation === null) {
+                            throw new Error(`Semantic source no longer satisfies the active policy for '${file.path}'.`);
+                        }
+                        if (sourceObservation.sourceHash !== file.hash) {
+                            throw new Error(`Source changed before semantic navigation publication for '${file.path}'.`);
+                        }
+                        sourceFiles.push({
+                            path: file.path,
+                            source: sourceObservation.content,
+                            sourceHash: sourceObservation.sourceHash,
+                        });
+                    }
+
+                    const auxiliaryFiles = await this.collectSemanticAuxiliariesForLanguage(
+                        codebasePath,
                         language,
-                        sourceFiles,
-                        auxiliaryFiles,
-                    }), { language: language, files: sourceFiles.length });
-                    semanticEvidenceByLanguage.set(language, evidence);
-                    const coverage = evidence.coverage ?? {
-                        language,
-                        providerId: descriptor.providerId,
-                        providerVersion: descriptor.providerVersion,
-                        environmentConfigId: descriptor.environmentConfigId,
-                        status: 'complete' as const,
-                        sourceFileCount: sourceFiles.length,
-                        analyzedSourceFileCount: sourceFiles.length,
-                    };
-                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
-                } catch (error) {
-                    const coverage = unavailableProviderCoverage({
-                        language,
-                        providerId: descriptor.providerId,
-                        providerVersion: descriptor.providerVersion,
-                        environmentConfigId: descriptor.environmentConfigId,
-                        sourceFileCount: sourceFiles.length,
-                        error,
-                    });
-                    providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
-                    semanticEvidenceByLanguage.set(language, {
-                        language,
-                        occurrencesByFile: new Map(),
-                        coverage,
-                    });
-                    console.warn(
-                        `[Context] Optional semantic provider '${coverage.providerId}' failed for '${language}'; `
-                        + `continuing with degraded relationship coverage: ${coverage.failureMessage}`,
+                        semanticRegistry,
+                        observedFileHashes,
                     );
+                    const descriptor = semanticRegistry.getDescriptor(language);
+                    if (!descriptor) {
+                        throw new Error(`Semantic provider metadata is unavailable for '${language}'.`);
+                    }
+                    try {
+                        const evidence = await perfSpan('navigation.semantic', () => this.ports.semanticAnalyzer!.analyze({
+                            language,
+                            sourceFiles,
+                            auxiliaryFiles,
+                        }), { language: language, files: sourceFiles.length });
+                        semanticEvidenceByLanguage.set(language, evidence);
+                        const coverage = evidence.coverage ?? {
+                            language,
+                            providerId: descriptor.providerId,
+                            providerVersion: descriptor.providerVersion,
+                            environmentConfigId: descriptor.environmentConfigId,
+                            status: 'complete' as const,
+                            sourceFileCount: sourceFiles.length,
+                            analyzedSourceFileCount: sourceFiles.length,
+                        };
+                        providerCoverageByKey.set(providerCoverageKey(coverage), coverage);
+                    } catch (error) {
+                        recordUnavailableProvider(language, sourceFiles.length, error);
+                    }
+                } finally {
+                    if (semanticLoopStartedAt !== undefined) {
+                        perfTrace('navigation.semantic.language', performance.now() - semanticLoopStartedAt, {
+                            language, files: semanticFiles.length,
+                        });
+                    }
                 }
             }
         }
@@ -749,13 +772,17 @@ export class IndexGenerationWorkflow {
         const searchType = isHybrid === true ? 'hybrid search' : 'semantic search';
         console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`);
 
+        const profileStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         if (options.indexPolicy) {
             this.ports.setIndexProfileForCodebase(codebasePath, options.indexPolicy.profile);
         } else {
             this.ports.loadIndexProfileForCodebase(codebasePath);
         }
+        if (profileStartedAt !== undefined) perfTrace('index.profile', performance.now() - profileStartedAt);
+        const policyStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         const indexPolicy = options.indexPolicy
             ?? await this.resolveIndexPolicyForCodebase(codebasePath);
+        if (policyStartedAt !== undefined) perfTrace('index.policy', performance.now() - policyStartedAt);
 
         progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 });
         const writeCollectionName = this.ports.resolvePublicationCollectionName(codebasePath, publicationId);
@@ -784,18 +811,15 @@ export class IndexGenerationWorkflow {
             }
             return relativePath;
         });
-        const resolutionSourceControls = await this.collectResolutionSourceControls(
+        const { publicationSourceControls } = await collectPublicationSourceControls(
             canonicalRoot,
             scannedRelativePaths,
-        );
-        const packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        const publicationSourceControls = this.mergePublicationSourceControls(
-            resolutionSourceControls,
-            packageOwnershipSourceControls,
+            this.ports.resolutionAnalyzer,
         );
         const publicationControlSet = new Set(publicationSourceControls);
         const codeFiles = scannedCodeFiles.filter((filePath, index) => !publicationControlSet.has(scannedRelativePaths[index]));
         scanFilesMs = Date.now() - scanStartedAt;
+        options.onSourceScanCompleted?.();
         console.log(`[Context] 📁 Found ${codeFiles.length} searchable code files`);
         const indexingStartPercentage = 10;
         const indexingEndPercentage = 90;
@@ -835,13 +859,16 @@ export class IndexGenerationWorkflow {
                 await processed.payloadSettled;
                 payloadPipelineMs = Date.now() - payloadStartedAt;
                 const finalizeStartedAt = Date.now();
+                const collectionFinalizeStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 await this.finalizePreparedCollection(writeCollectionName, options.assertMutationCurrent);
+                if (collectionFinalizeStartedAt !== undefined) perfTrace('index.finalize_collection', performance.now() - collectionFinalizeStartedAt);
                 finalizeCollectionMs = Date.now() - finalizeStartedAt;
             })();
             payloadDrain.catch(() => undefined);
 
             console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`);
 
+            const sourcePathsStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
             const selectedSourcePaths = codeFiles.map((filePath) => {
                 const relativePath = this.ports.normalizeRelativePathForCodebase(codebasePath, filePath);
                 if (!relativePath) {
@@ -849,15 +876,21 @@ export class IndexGenerationWorkflow {
                 }
                 return relativePath;
             });
+            if (sourcePathsStartedAt !== undefined) perfTrace('index.source_paths', performance.now() - sourcePathsStartedAt);
+            const sourceCoverageStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
+            const selectedSourcePathSet = new Set(selectedSourcePaths);
             const consumedSourcePaths = new Set(result.sourceFiles.map((source) => source.path));
-            if ([...consumedSourcePaths].some((filePath) => !selectedSourcePaths.includes(filePath))) {
+            if ([...consumedSourcePaths].some((filePath) => !selectedSourcePathSet.has(filePath))) {
                 throw new Error('Full index captured source evidence for a path outside the selected source set.');
             }
+            if (sourceCoverageStartedAt !== undefined) perfTrace('index.source_coverage', performance.now() - sourceCoverageStartedAt);
+            const sourceCaptureStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
             const capturedFullIndexSource = {
                 fileHashes: new Map(result.sourceFiles.map((source) => [source.path, source.sourceHash])),
                 fileStats: new Map(result.sourceFiles.map((source) => [source.path, source.sourceStat])),
                 unprocessedPaths: selectedSourcePaths.filter((filePath) => !consumedSourcePaths.has(filePath)),
             };
+            if (sourceCaptureStartedAt !== undefined) perfTrace('index.source_capture', performance.now() - sourceCaptureStartedAt);
 
             if (result.status === 'completed') {
                 if (result.sourceFiles.length !== result.processedFiles) {
@@ -868,21 +901,27 @@ export class IndexGenerationWorkflow {
                 if (capturedFullIndexSource.unprocessedPaths.length > 0) {
                     throw new Error('Completed full index source coverage is missing selected source paths.');
                 }
+                const synchronizerStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 synchronizer = new FileSynchronizer(
                     codebasePath,
                     indexPolicy.effectiveIgnorePatterns,
                     indexPolicy.supportedExtensions,
                     { additionalObservablePaths: publicationSourceControls },
                 );
+                if (synchronizerStartedAt !== undefined) perfTrace('index.synchronizer', performance.now() - synchronizerStartedAt);
+                const prepareChangesStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 const preparedChanges = await synchronizer.prepareChanges({
                     capturedFullIndexSource,
                 });
+                if (prepareChangesStartedAt !== undefined) perfTrace('index.prepare_changes', performance.now() - prepareChangesStartedAt);
                 const navigationStartedAt = Date.now();
+                const navigationRootStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 const navigationRoot = this.ports.preparePublicationNavigationRoot(
                     canonicalRoot,
                     publicationId,
                     mutationLease,
                 );
+                if (navigationRootStartedAt !== undefined) perfTrace('navigation.root', performance.now() - navigationRootStartedAt);
                 navigationCandidate = await this.stageSymbolRegistryForCompletedIndex(
                     codebasePath,
                     publicationId,
@@ -898,33 +937,46 @@ export class IndexGenerationWorkflow {
                     resourcePlan,
                 );
                 navigationMs = Date.now() - navigationStartedAt;
+                const payloadDrainStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 await payloadDrain;
+                if (payloadDrainStartedAt !== undefined) perfTrace('publication.payload_drain', performance.now() - payloadDrainStartedAt);
+                const packageOwnershipStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 const packageOwnership = buildPublicationPackageOwnership(
                     canonicalRoot,
                     result.sourceFiles.map((source) => source.path),
                     preparedChanges.fileHashes,
                 );
+                if (packageOwnershipStartedAt !== undefined) perfTrace('publication.package_ownership.build', performance.now() - packageOwnershipStartedAt);
+                const packageStageStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 this.ports.stagePublicationPackageOwnership(
                     canonicalRoot,
                     publicationId,
                     packageOwnership,
                     mutationLease,
                 );
+                if (packageStageStartedAt !== undefined) perfTrace('publication.package_ownership.stage', performance.now() - packageStageStartedAt);
+                const checkpointStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 this.ports.stagePublicationSourceCheckpoint(
                     canonicalRoot,
                     publicationId,
                     preparedChanges.sourceCheckpoint,
                     mutationLease,
                 );
+                if (checkpointStartedAt !== undefined) perfTrace('publication.source_checkpoint', performance.now() - checkpointStartedAt);
+                const sourceCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 await preparedChanges.assertSourceObservationCurrent();
+                if (sourceCurrentStartedAt !== undefined) perfTrace('publication.source_current', performance.now() - sourceCurrentStartedAt);
+                const policyCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 if (!await this.ports.isObservedIndexPolicyControlSignatureCurrent(indexPolicy)) {
                     throw new Error(`index_policy_changed: Repository index-policy controls changed while indexing '${canonicalRoot}'.`);
                 }
+                if (policyCurrentStartedAt !== undefined) perfTrace('publication.policy_current', performance.now() - policyCurrentStartedAt);
                 options.assertMutationCurrent?.();
                 const publicationStartedAt = Date.now();
                 if (!navigationCandidate) {
                     throw new Error(`Completed index candidate for '${canonicalRoot}' did not produce sealed navigation.`);
                 }
+                const publicationBuildStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 const publication = this.buildTask2Publication({
                     publicationId,
                     canonicalRoot,
@@ -934,6 +986,8 @@ export class IndexGenerationWorkflow {
                     totalChunks: result.totalChunks,
                     status: 'complete',
                 });
+                if (publicationBuildStartedAt !== undefined) perfTrace('publication.build', performance.now() - publicationBuildStartedAt);
+                const activationStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 try {
                     this.ports.activatePublication(publication, mutationLease);
                 } catch (error) {
@@ -946,7 +1000,9 @@ export class IndexGenerationWorkflow {
                     }
                     console.warn(`[Context] Publication '${publicationId}' became crash-durable before activation acknowledgement failed: ${error.activationCause instanceof Error ? error.activationCause.message : String(error.activationCause)}`);
                 }
+                if (activationStartedAt !== undefined) perfTrace('publication.activate', performance.now() - activationStartedAt);
                 publicationStatus = 'activated';
+                const candidateClearStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 try {
                     this.ports.clearIndexCandidate(canonicalRoot, publicationId, mutationLease);
                 } catch (receiptError) {
@@ -954,57 +1010,81 @@ export class IndexGenerationWorkflow {
                         `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
                     );
                 }
+                if (candidateClearStartedAt !== undefined) perfTrace('publication.candidate_clear', performance.now() - candidateClearStartedAt);
+                const promoteStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 this.promotePreparedNavigationDelta(
                     navigationCandidate,
                     () => this.ports.resolveNavigationObservationToken(canonicalRoot, publicationId),
                 );
+                if (promoteStartedAt !== undefined) perfTrace('publication.navigation_promote', performance.now() - promoteStartedAt);
+                const commitStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 await preparedChanges.commit(options.assertMutationCurrent);
+                if (commitStartedAt !== undefined) perfTrace('publication.commit', performance.now() - commitStartedAt);
+                const registerCandidateStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 this.ports.registerSynchronizerForPublication(
                     writeCollectionName,
                     publicationId,
                     synchronizer,
                 );
+                if (registerCandidateStartedAt !== undefined) perfTrace('publication.synchronizer.register_candidate', performance.now() - registerCandidateStartedAt);
+                const registerCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 this.ports.registerSynchronizerForPublication(
                     this.ports.resolveCollectionName(codebasePath),
                     publicationId,
                     synchronizer,
                 );
+                if (registerCurrentStartedAt !== undefined) perfTrace('publication.synchronizer.register_current', performance.now() - registerCurrentStartedAt);
                 publicationMs = Date.now() - publicationStartedAt;
             } else {
                 await payloadDrain;
                 console.warn('[Context] ⚠️  Skipping symbol registry sidecar write because indexing stopped before processing the full file set.');
                 if (!options.deferPartialPublication) {
+                    const synchronizerStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     synchronizer = new FileSynchronizer(
                         codebasePath,
                         indexPolicy.effectiveIgnorePatterns,
                         indexPolicy.supportedExtensions,
                         { additionalObservablePaths: publicationSourceControls },
                     );
+                    if (synchronizerStartedAt !== undefined) perfTrace('index.synchronizer', performance.now() - synchronizerStartedAt);
+                    const prepareChangesStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     const preparedChanges = await synchronizer.prepareChanges({
                         capturedFullIndexSource,
                     });
+                    if (prepareChangesStartedAt !== undefined) perfTrace('index.prepare_changes', performance.now() - prepareChangesStartedAt);
+                    const packageOwnershipStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     const packageOwnership = buildPublicationPackageOwnership(
                         canonicalRoot,
                         result.sourceFiles.slice(0, result.processedFiles).map((source) => source.path),
                         preparedChanges.fileHashes,
                     );
+                    if (packageOwnershipStartedAt !== undefined) perfTrace('publication.package_ownership.build', performance.now() - packageOwnershipStartedAt);
+                    const packageStageStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     this.ports.stagePublicationPackageOwnership(
                         canonicalRoot,
                         publicationId,
                         packageOwnership,
                         mutationLease,
                     );
+                    if (packageStageStartedAt !== undefined) perfTrace('publication.package_ownership.stage', performance.now() - packageStageStartedAt);
+                    const checkpointStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     this.ports.stagePublicationSourceCheckpoint(
                         canonicalRoot,
                         publicationId,
                         preparedChanges.sourceCheckpoint,
                         mutationLease,
                     );
+                    if (checkpointStartedAt !== undefined) perfTrace('publication.source_checkpoint', performance.now() - checkpointStartedAt);
+                    const sourceCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     await preparedChanges.assertSourceObservationCurrent();
+                    if (sourceCurrentStartedAt !== undefined) perfTrace('publication.source_current', performance.now() - sourceCurrentStartedAt);
+                    const policyCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     if (!await this.ports.isObservedIndexPolicyControlSignatureCurrent(indexPolicy)) {
                         throw new Error(`index_policy_changed: Repository index-policy controls changed while indexing '${canonicalRoot}'.`);
                     }
+                    if (policyCurrentStartedAt !== undefined) perfTrace('publication.policy_current', performance.now() - policyCurrentStartedAt);
                     const publicationStartedAt = Date.now();
+                    const publicationBuildStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     const publication = this.buildTask2Publication({
                         publicationId,
                         canonicalRoot,
@@ -1014,6 +1094,8 @@ export class IndexGenerationWorkflow {
                         totalChunks: result.totalChunks,
                         status: 'partial',
                     });
+                    if (publicationBuildStartedAt !== undefined) perfTrace('publication.build', performance.now() - publicationBuildStartedAt);
+                    const activationStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     try {
                         this.ports.activatePublication(publication, mutationLease);
                     } catch (error) {
@@ -1026,7 +1108,9 @@ export class IndexGenerationWorkflow {
                         }
                         console.warn(`[Context] Publication '${publicationId}' became crash-durable before activation acknowledgement failed: ${error.activationCause instanceof Error ? error.activationCause.message : String(error.activationCause)}`);
                     }
+                    if (activationStartedAt !== undefined) perfTrace('publication.activate', performance.now() - activationStartedAt);
                     publicationStatus = 'activated';
+                    const candidateClearStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     try {
                         this.ports.clearIndexCandidate(canonicalRoot, publicationId, mutationLease);
                     } catch (receiptError) {
@@ -1034,17 +1118,24 @@ export class IndexGenerationWorkflow {
                             `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
                         );
                     }
+                    if (candidateClearStartedAt !== undefined) perfTrace('publication.candidate_clear', performance.now() - candidateClearStartedAt);
+                    const commitStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     await preparedChanges.commit(options.assertMutationCurrent);
+                    if (commitStartedAt !== undefined) perfTrace('publication.commit', performance.now() - commitStartedAt);
+                    const registerCandidateStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     this.ports.registerSynchronizerForPublication(
                         writeCollectionName,
                         publicationId,
                         synchronizer,
                     );
+                    if (registerCandidateStartedAt !== undefined) perfTrace('publication.synchronizer.register_candidate', performance.now() - registerCandidateStartedAt);
+                    const registerCurrentStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     this.ports.registerSynchronizerForPublication(
                         this.ports.resolveCollectionName(codebasePath),
                         publicationId,
                         synchronizer,
                     );
+                    if (registerCurrentStartedAt !== undefined) perfTrace('publication.synchronizer.register_current', performance.now() - registerCurrentStartedAt);
                     console.warn('[Context] ⚠️  Activated limit_reached partial Publication (navigation remains null).');
                     publicationMs = Date.now() - publicationStartedAt;
                 }
@@ -1052,7 +1143,9 @@ export class IndexGenerationWorkflow {
 
             if (publicationStatus === 'activated') {
                 try {
+                    const gcStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     await this.ports.collectPublicationGarbage(canonicalRoot, mutationLease);
+                    if (gcStartedAt !== undefined) perfTrace('publication.gc', performance.now() - gcStartedAt);
                 } catch (gcError) {
                     console.warn(
                         `[Context] Publication GC after full-index activation retained retryable historical state for '${canonicalRoot}': ${gcError instanceof Error ? gcError.message : String(gcError)}`,
@@ -1314,24 +1407,24 @@ export class IndexGenerationWorkflow {
         try {
             input.options.assertMutationCurrent?.();
             const sourceStats = new Map(input.preparedChanges.sourceCheckpoint.fileStats);
-            let searchableSourceBytes = 0;
             for (const filePath of input.preparedChanges.fileHashes.keys()) {
-                if (!isSearchable(filePath)) continue;
-                const size = sourceStats.get(filePath)?.size;
-                if (size === undefined) {
+                if (isSearchable(filePath) && sourceStats.get(filePath)?.size === undefined) {
                     throw new Error(`Atomic delta publication is missing source stat evidence for '${filePath}'.`);
                 }
-                if (searchableSourceBytes > MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION - size) {
-                    throw new Error(`Atomic delta publication reached the searchable source byte resource limit of ${MAX_INDEXED_SOURCE_BYTES_PER_PUBLICATION}.`);
-                }
-                searchableSourceBytes += size;
             }
+            this.ports.reserveIndexCandidate(input.canonicalRoot, candidateCollectionName, mutationLease);
             await measurePublicationPhase(
                 'publication_fork',
                 () => this.ports.vectorDatabase.forkCollection!(
                     input.sourceCollectionName,
                     candidateCollectionName,
                 ),
+            );
+
+            this.ports.markIndexCandidateCollectionCreated(
+                input.canonicalRoot,
+                publicationId,
+                mutationLease,
             );
 
             const payloadDelta = await measurePublicationPhase(
@@ -1530,6 +1623,13 @@ export class IndexGenerationWorkflow {
                     }
                     publicationState.activated = true;
                     await input.preparedChanges.commit(input.options.assertMutationCurrent);
+                    try {
+                        this.ports.clearIndexCandidate(input.canonicalRoot, publicationId, mutationLease);
+                    } catch (receiptError) {
+                        console.warn(
+                            `[Context] Publication '${publicationId}' is active but its stale candidate receipt could not be cleared: ${receiptError instanceof Error ? receiptError.message : String(receiptError)}`,
+                        );
+                    }
                     const navigationObservationToken = this.ports.resolveNavigationObservationToken(
                         input.canonicalRoot,
                         publicationId,
@@ -1595,7 +1695,14 @@ export class IndexGenerationWorkflow {
                         `[Context] Failed to discard unpublished Publication '${publicationId}': ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
                     );
                 }
-                await this.ports.vectorDatabase.dropCollection(candidateCollectionName).catch(() => undefined);
+                try {
+                    await this.ports.vectorDatabase.dropCollection(candidateCollectionName);
+                    this.ports.clearIndexCandidate(input.canonicalRoot, publicationId, mutationLease);
+                } catch (cleanupError) {
+                    console.warn(
+                        `[Context] Unpublished collection '${candidateCollectionName}' remains cleanup-pending; retaining its durable candidate receipt: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+                    );
+                }
             }
             throw error;
         }
@@ -1680,14 +1787,14 @@ export class IndexGenerationWorkflow {
             this.ports.getIndexedExtensionsForCodebase(codebasePath),
             { sourceCheckpoint: currentPublicationSource.checkpoint },
         );
-        let resolutionSourceControls = await this.collectResolutionSourceControls(
-            canonicalRoot,
-            currentSynchronizer.getTrackedRelativePaths(),
-        );
-        let packageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        let publicationSourceControls = this.mergePublicationSourceControls(
+        let {
             resolutionSourceControls,
             packageOwnershipSourceControls,
+            publicationSourceControls,
+        } = await collectPublicationSourceControls(
+            canonicalRoot,
+            currentSynchronizer.getTrackedRelativePaths(),
+            this.ports.resolutionAnalyzer,
         );
         currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
 
@@ -1707,14 +1814,14 @@ export class IndexGenerationWorkflow {
         const nextResolutionSourcePaths = new Set(currentSynchronizer.getTrackedRelativePaths());
         for (const filePath of preparedChanges.changes.removed) nextResolutionSourcePaths.delete(filePath);
         for (const filePath of preparedChanges.changes.added) nextResolutionSourcePaths.add(filePath);
-        const nextResolutionSourceControls = await this.collectResolutionSourceControls(
+        const {
+            resolutionSourceControls: nextResolutionSourceControls,
+            packageOwnershipSourceControls: nextPackageOwnershipSourceControls,
+            publicationSourceControls: nextPublicationSourceControls,
+        } = await collectPublicationSourceControls(
             canonicalRoot,
             [...nextResolutionSourcePaths],
-        );
-        const nextPackageOwnershipSourceControls = this.collectPackageOwnershipSourceControls(canonicalRoot);
-        const nextPublicationSourceControls = this.mergePublicationSourceControls(
-            nextResolutionSourceControls,
-            nextPackageOwnershipSourceControls,
+            this.ports.resolutionAnalyzer,
         );
         if (JSON.stringify(nextPublicationSourceControls) !== JSON.stringify(publicationSourceControls)) {
             resolutionSourceControls = nextResolutionSourceControls;
@@ -1771,35 +1878,6 @@ export class IndexGenerationWorkflow {
         });
     }
 
-    private async collectResolutionSourceControls(
-        codebasePath: string,
-        sourcePaths: readonly string[],
-    ): Promise<string[]> {
-        const analyzer = this.ports.resolutionAnalyzer;
-        if (!analyzer?.getSourceControlFiles || !analyzer.supportsLanguage('typescript')) return [];
-        const typeScriptFiles = sourcePaths
-            .map((filePath) => filePath.replace(/\\/g, '/').replace(/^\/+/, ''))
-            .filter(isTypeScriptResolutionSource);
-        if (typeScriptFiles.length === 0) return [];
-        return [...new Set(await analyzer.getSourceControlFiles({
-            rootPath: codebasePath,
-            language: 'typescript',
-            sourceFiles: typeScriptFiles,
-        }))].sort();
-    }
-
-    private collectPackageOwnershipSourceControls(codebasePath: string): string[] {
-        return discoverPackageOwnership(codebasePath).controlFiles
-            .map(([filePath]) => filePath)
-            .filter((filePath) => path.posix.basename(filePath) !== 'Cargo.toml');
-    }
-
-    private mergePublicationSourceControls(
-        ...controlSets: readonly (readonly string[])[]
-    ): string[] {
-        return [...new Set(controlSets.flatMap((controls) => [...controls]))].sort();
-    }
-
     private async collectSemanticAuxiliariesForLanguage(
         codebasePath: string,
         language: string,
@@ -1815,13 +1893,15 @@ export class IndexGenerationWorkflow {
             const match = registry.matchAuxiliaries(relativePath).find((entry) => entry.language === language);
             if (!match) continue;
             const handle = await openRegularFileInsideRoot(path.resolve(codebasePath, relativePath), codebasePath);
-            let content: string;
+            let contentBytes: Buffer;
             try {
-                content = await handle.readFile('utf8');
+                contentBytes = await handle.readFile();
             } finally {
                 await handle.close();
             }
-            const sourceHash = crypto.createHash('sha256').update(content).digest('hex');
+            // Observed hashes cover raw bytes: hash before decoding so non-UTF-8 sources match.
+            const sourceHash = crypto.createHash('sha256').update(contentBytes).digest('hex');
+            const content = contentBytes.toString('utf8');
             if (sourceHash !== expectedHash) {
                 throw new Error(`Semantic auxiliary source hash mismatch for ${relativePath}: expected ${expectedHash}, got ${sourceHash}`);
             }
@@ -1957,18 +2037,20 @@ export class IndexGenerationWorkflow {
                     const langFiles = mergedManifestFiles.filter((f) => f.language === lang);
                     for (const f of langFiles) {
                         const fullPath = path.resolve(codebasePath, f.path);
-                        let source: string;
+                        let sourceBytes: Buffer;
                         try {
                             const handle = await openRegularFileInsideRoot(fullPath, codebasePath);
                             try {
-                                source = await handle.readFile('utf8');
+                                sourceBytes = await handle.readFile();
                             } finally {
                                 await handle.close();
                             }
                         } catch {
                             throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
                         }
-                        const sourceHash = crypto.createHash('sha256').update(source).digest('hex');
+                        // Manifest hashes cover raw bytes: hash before decoding so non-UTF-8 sources match.
+                        const sourceHash = crypto.createHash('sha256').update(sourceBytes).digest('hex');
+                        const source = sourceBytes.toString('utf8');
                         if (f.hash && f.hash !== sourceHash) {
                             throw new Error(`Semantic source hash mismatch for ${f.path}: expected ${f.hash}, got ${sourceHash}`);
                         }
@@ -2162,8 +2244,16 @@ export class IndexGenerationWorkflow {
         update: CustomIndexPolicyUpdate = {},
     ): Promise<ObservedResolvedIndexPolicy> {
         const canonicalRoot = this.ports.canonicalizeCodebasePath(codebasePath);
+        const loadPolicyStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
         this.ports.indexPolicyRuntimeService.loadCurrentPublicationPolicy(canonicalRoot);
-        return this.ports.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, true, true);
+        if (loadPolicyStartedAt !== undefined) perfTrace('index.policy.load_publication', performance.now() - loadPolicyStartedAt);
+        if (!isPerfTraceEnabled()) {
+            return this.ports.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, true, true);
+        }
+        const policyStartedAt = performance.now();
+        const policy = await this.ports.resolveIndexPolicyFromCurrentInputs(canonicalRoot, update, true, true);
+        perfTrace('index.policy.resolve_observed', performance.now() - policyStartedAt, { profile: policy.profile });
+        return policy;
     }
 
     resolveReusableNavigationDeltaState(

@@ -31,6 +31,8 @@ export type FullIndexCandidateRunner = (input: Readonly<{
     indexPolicy: ObservedResolvedIndexPolicy;
     deferPartialPublication: boolean;
     onProgress: (progress: IndexingProgress) => void;
+    /** Called once when the candidate's source scan has finished. */
+    onSourceScanCompleted: () => void;
 }>) => Promise<FullIndexCandidateResult>;
 
 export interface FullIndexOperationHost {
@@ -78,6 +80,7 @@ export class FullIndexOperation {
             {
                 deferPartialPublication: input.deferPartialPublication,
                 indexPolicy: input.indexPolicy,
+                onSourceScanCompleted: input.onSourceScanCompleted,
             },
         );
     }
@@ -178,29 +181,44 @@ export class FullIndexOperation {
                     { publicationId: candidatePublicationId },
                 );
             }
-            try {
-                await this.host.syncManager.touchWatchedCodebase(absolutePath, {
-                    policyHash: candidatePolicy.policyHash,
-                    effectiveIgnorePatterns: candidatePolicy.effectiveIgnorePatterns,
+            // The watcher's initial crawl competes with the policy walk and the
+            // scan, so it starts when the scan ends. It is ready long before the
+            // final source check, which the source handoff needs.
+            const watcherPolicy = candidatePolicy;
+            let candidateWatcher: Promise<void> | undefined;
+            const startCandidateWatcher = (): void => {
+                candidateWatcher ??= this.host.syncManager.touchWatchedCodebase(absolutePath, {
+                    policyHash: watcherPolicy.policyHash,
+                    effectiveIgnorePatterns: watcherPolicy.effectiveIgnorePatterns,
+                }).catch((watcherError: unknown) => {
+                    console.warn(`[BACKGROUND-INDEX] Failed to establish candidate watcher for '${absolutePath}': ${formatUnknownError(watcherError)}`);
                 });
-            } catch (watcherError) {
-                console.warn(`[BACKGROUND-INDEX] Failed to establish candidate watcher for '${absolutePath}': ${formatUnknownError(watcherError)}`);
-            }
+            };
 
             const embedding = this.host.context.getEmbeddingEngine();
             console.log(`[BACKGROUND-INDEX] 🧠 Using embedding provider: ${embedding.getProvider()} with dimension: ${embedding.getDimension()}`);
             console.log("[BACKGROUND-INDEX] 🚀 Core is constructing the full publication candidate...");
-            const stats = await this.runCandidate({
-                codebasePath: absolutePath,
-                forceReindex,
-                indexPolicy: candidatePolicy,
-                deferPartialPublication: previousCompleteGeneration !== null,
-                onProgress: (progress) => {
-                    this.host.mutationRuntime.assertCurrent(absolutePath);
-                    const publicProgress = Math.min(progress.percentage, 99);
-                    publishBackgroundPhase("writing", { progress: publicProgress, memoryBudget: progress.memoryBudget });
-                },
-            });
+            let stats: FullIndexCandidateResult;
+            try {
+                stats = await this.runCandidate({
+                    codebasePath: absolutePath,
+                    forceReindex,
+                    indexPolicy: candidatePolicy,
+                    deferPartialPublication: previousCompleteGeneration !== null,
+                    onProgress: (progress) => {
+                        this.host.mutationRuntime.assertCurrent(absolutePath);
+                        const publicProgress = Math.min(progress.percentage, 99);
+                        publishBackgroundPhase("writing", { progress: publicProgress, memoryBudget: progress.memoryBudget });
+                    },
+                    onSourceScanCompleted: startCandidateWatcher,
+                });
+                // A runner that never reported its scan still binds the
+                // candidate policy before the capture.
+                startCandidateWatcher();
+            } finally {
+                // Cleanup paths unwatch the root: no registration may be in flight.
+                await candidateWatcher;
+            }
             targetCollectionName = stats.collectionName;
             candidatePublicationId = stats.publication.id;
             candidatePublicationActivated = stats.publication.status === "activated";

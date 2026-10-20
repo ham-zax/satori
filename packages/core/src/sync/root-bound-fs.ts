@@ -53,9 +53,14 @@ export function isRealPathInsideRoot(realPath: string, rootDir: string): boolean
     if (process.platform === 'win32') {
         const rootKey = root.toLowerCase();
         const candidateKey = candidate.toLowerCase();
-        return candidateKey === rootKey || candidateKey.startsWith(`${rootKey}\\`);
+        return candidateKey === rootKey || candidateKey.startsWith(withTrailingSeparator(rootKey, '\\'));
     }
-    return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+    return candidate === root || candidate.startsWith(withTrailingSeparator(root, path.sep));
+}
+
+/** A filesystem root (`/`, `C:\`) already ends in a separator; appending another rejects every descendant. */
+function withTrailingSeparator(root: string, separator: string): string {
+    return root.endsWith(separator) ? root : `${root}${separator}`;
 }
 
 export function trimTrailingSeparators(inputPath: string): string {
@@ -70,10 +75,13 @@ export function trimTrailingSeparators(inputPath: string): string {
  * Resolve `candidatePath` to a real path that stays under `rootDir`.
  * Returns null when missing, unreadable, or escaped (including intermediate symlinks).
  */
-export async function resolveInsideRoot(candidatePath: string, rootDir: string): Promise<string | null> {
+export function resolveInsideRoot(candidatePath: string, rootDir: string): string | null {
     let realPath: string;
     try {
-        realPath = await fsp.realpath(candidatePath);
+        // Synchronous by design: the promise form costs about 6 times the CPU
+        // per call, and a scan resolves every observed entry. The native form
+        // is the same realpath(3) call the promise form makes.
+        realPath = fsSync.realpathSync.native(candidatePath);
     } catch {
         return null;
     }
@@ -97,6 +105,37 @@ function requiredOpenFlag(name: 'O_NOFOLLOW' | 'O_DIRECTORY'): number {
 }
 
 /**
+ * Open a regular file by its name under an open directory descriptor
+ * (`/proc/self/fd/<dir>/<name>`), never by its pathname: replacing the
+ * directory's pathname cannot redirect the read. O_NOFOLLOW refuses a name
+ * swapped to a symlink, and the identity check refuses any other swap after
+ * `expected` was observed. The caller closes the descriptor with fs.closeSync.
+ */
+export function openRegularFileAtDirectoryDescriptorSync(
+    descriptorFilePath: string,
+    expected: Pick<fsSync.Stats, 'dev' | 'ino'>,
+): number {
+    const fd = fsSync.openSync(descriptorFilePath, fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW'));
+    try {
+        const opened = fsSync.fstatSync(fd);
+        if (!opened.isFile() || !sameFileIdentity(opened, expected)) {
+            throw new RootBoundFileError(
+                'path_identity_changed_during_inspection',
+                'File changed identity during inspection.',
+            );
+        }
+        return fd;
+    } catch (error) {
+        try {
+            fsSync.closeSync(fd);
+        } catch {
+            // The identity error is the one to report.
+        }
+        throw error;
+    }
+}
+
+/**
  * Fail before indexing mutates durable state when the runtime cannot provide
  * the descriptor guarantees required by root-bound source and policy reads.
  */
@@ -109,13 +148,17 @@ export function assertDescriptorBoundIndexingSupported(): void {
 }
 
 function descriptorLink(handle: fsp.FileHandle): string {
+    return descriptorLinkForFd(handle.fd);
+}
+
+function descriptorLinkForFd(fd: number): string {
     if (process.platform !== 'linux') {
         throw new RootBoundFileError(
             'path_identity_unavailable',
             `Descriptor-bound root validation is unavailable on ${process.platform}`,
         );
     }
-    return `/proc/self/fd/${handle.fd}`;
+    return `/proc/self/fd/${fd}`;
 }
 
 export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: string): Promise<string> {
@@ -126,7 +169,21 @@ export async function descriptorPathInsideRoot(handle: fsp.FileHandle, rootDir: 
     } catch (error: unknown) {
         throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`, { cause: error });
     }
+    return validateDescriptorPath(openedPath, rootDir);
+}
 
+/** Synchronous form of descriptorPathInsideRoot for a raw descriptor. */
+export function descriptorPathInsideRootSync(fd: number, rootDir: string): string {
+    let openedPath: string;
+    try {
+        openedPath = fsSync.readlinkSync(descriptorLinkForFd(fd));
+    } catch (error: unknown) {
+        throw new Error(`Cannot verify opened descriptor against indexed root: ${String(error)}`, { cause: error });
+    }
+    return validateDescriptorPath(openedPath, rootDir);
+}
+
+function validateDescriptorPath(openedPath: string, rootDir: string): string {
     if (!path.isAbsolute(openedPath) || openedPath.endsWith(' (deleted)')) {
         throw new Error(`Opened descriptor has no stable absolute path: ${openedPath}`);
     }
@@ -346,12 +403,18 @@ export async function openRegularFileInsideRootNoFollow(
     const normalizedRoot = trimTrailingSeparators(path.normalize(rootDir));
     const normalizedPath = path.normalize(path.resolve(filePath));
     if (!isRealPathInsideRoot(normalizedPath, normalizedRoot)) {
-        throw new Error(`Path escapes indexed root or is unreadable: ${filePath}`);
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            `Path escapes indexed root or is unreadable: ${filePath}`,
+        );
     }
 
     const preStat = await fsp.lstat(normalizedPath);
     if (preStat.isSymbolicLink() || !preStat.isFile()) {
-        throw new Error(`Attempted to open symbolic-link or non-file path: ${filePath}`);
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            `Attempted to open symbolic-link or non-file path: ${filePath}`,
+        );
     }
 
     const handle = await fsp.open(
@@ -488,18 +551,60 @@ export async function readFileHandleExactly(
 }
 
 export interface OpenedDirectoryInsideRoot {
-    handle: fsp.FileHandle;
+    fd: number;
     descriptorPath: string;
     realPath: string;
 }
 
-export async function openDirectoryInsideRoot(
+/**
+ * Synchronous form of openInsideRoot for directories, with the same checks in
+ * the same order. A scan opens every directory, and the async form costs about
+ * six thread-pool round trips each; under indexing load the pool also serves
+ * vector and payload I/O, so those waits dominate the scan. The caller closes
+ * the descriptor with fs.closeSync.
+ */
+export function openDirectoryInsideRootSync(
     directoryPath: string,
     rootDir: string,
-): Promise<OpenedDirectoryInsideRoot> {
-    const opened = await openInsideRoot(directoryPath, rootDir, 'directory');
-    return {
-        ...opened,
-        descriptorPath: descriptorLink(opened.handle),
-    };
+): OpenedDirectoryInsideRoot {
+    let realPath: string;
+    try {
+        realPath = trimTrailingSeparators(path.normalize(fsSync.realpathSync.native(directoryPath)));
+    } catch {
+        throw new Error(`Path is unreadable: ${directoryPath}`);
+    }
+    if (!isRealPathInsideRoot(realPath, rootDir)) {
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Resolved path escapes indexed root.',
+        );
+    }
+
+    const preStat = fsSync.lstatSync(realPath);
+    if (preStat.isSymbolicLink() || !preStat.isDirectory()) {
+        throw new Error(`Attempted to open non-directory path: ${directoryPath}`);
+    }
+
+    const fd = fsSync.openSync(
+        realPath,
+        fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW') | requiredOpenFlag('O_DIRECTORY'),
+    );
+    try {
+        const postStat = fsSync.fstatSync(fd);
+        if (!postStat.isDirectory() || !sameFileIdentity(postStat, preStat)) {
+            throw new Error(`Opened descriptor drifted from verified path: ${directoryPath}`);
+        }
+        return {
+            fd,
+            realPath: descriptorPathInsideRootSync(fd, rootDir),
+            descriptorPath: descriptorLinkForFd(fd),
+        };
+    } catch (error) {
+        try {
+            fsSync.closeSync(fd);
+        } catch {
+            // The open error is the one to report.
+        }
+        throw error;
+    }
 }

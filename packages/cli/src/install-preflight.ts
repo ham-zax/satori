@@ -26,7 +26,7 @@ import type { InstallReranker } from "./reranker-providers.js";
 
 const DEFAULT_POTION_REQUEST_TIMEOUT_MS = "5000";
 const PREFLIGHT_COLLECTION = "satori_install_preflight";
-const POTION_MANIFEST_SHA256 = "bad8260921b46eb781d104b16c9f7faa0fc4405ef55652d636df1370307a0eb9";
+const POTION_MANIFEST_SHA256 = "07a369a32bb7e182781405aa9c1d2a7935ae2fe2425771bd202a7457d58a2d2c";
 
 export interface InstallPreflightInput {
     runtime: InstallRuntime;

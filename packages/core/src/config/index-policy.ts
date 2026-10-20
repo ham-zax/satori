@@ -1,4 +1,4 @@
-import * as fsp from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { TextDecoder } from 'util';
 import {
@@ -159,21 +159,23 @@ export async function isIndexableFileByPolicy(
     size: number,
     supportedExtensions: SupportedExtensionsInput,
 ): Promise<boolean> {
-    let handle: fsp.FileHandle | undefined;
+    // Synchronous by design: scans probe most unrecognized files, and the
+    // promise form of open, read and close costs about 15 times as much.
+    let descriptor: number | undefined;
     try {
         return await isIndexableFileObservationByPolicy(
             relativePath,
             size,
             supportedExtensions,
             async () => {
-                handle ??= await fsp.open(absolutePath, 'r');
+                descriptor ??= fsSync.openSync(absolutePath, 'r');
                 const buffer = Buffer.alloc(Math.min(size, TEXT_PROBE_BYTES));
-                const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+                const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, 0);
                 return buffer.subarray(0, bytesRead);
             },
         );
     } finally {
-        await handle?.close();
+        if (descriptor !== undefined) fsSync.closeSync(descriptor);
     }
 }
 
@@ -213,4 +215,23 @@ export async function isObservableFileByPolicy(
         return true;
     }
     return isIndexableFileByPolicy(relativePath, absolutePath, size, supportedExtensions);
+}
+
+/** A path can prove rejection, but admission still needs the full observation. */
+export function classifyFilePathByPolicy(
+    relativePath: string,
+    supportedExtensions: SupportedExtensionsInput,
+): 'reject' | 'unsure' {
+    // Auxiliary observation belongs to the synchronizer even when search rejects it.
+    if (isSemanticAuxiliaryFilename(relativePath)) return 'unsure';
+    const extension = path.extname(relativePath).toLowerCase();
+    // hasSearchableShebang probes every suffix the registry does not recognize.
+    if (!getLanguageAdapterByExtension(extension)) return 'unsure';
+    const extensionSet = toExtensionSet(supportedExtensions);
+    if (extensionSet.has(ALL_TEXT_INDEX_MARKER)
+        || extensionSet.has(extension)
+        || isAllowedExactFilename(relativePath, extensionSet)) {
+        return 'unsure';
+    }
+    return 'reject';
 }

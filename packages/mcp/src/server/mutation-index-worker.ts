@@ -108,10 +108,6 @@ function assertNotCancelled(): void {
     throw workerRuntime.signal.reason ?? new Error("Mutation index worker was cancelled.");
 }
 
-function progressPhase(percentage: number): MutationOperationPhase {
-    return percentage <= 10 ? "scanning" : "writing";
-}
-
 async function main(): Promise<void> {
     const input = parseInput(process.argv[2]);
     await workerRuntime.started;
@@ -150,6 +146,9 @@ async function main(): Promise<void> {
                 assertNotCancelled();
 
                 let lastProgress = 0;
+                // The parent starts the candidate watcher on the first "writing"
+                // progress, so the phase changes only when the source scan ends.
+                let phase: MutationOperationPhase = "scanning";
                 const indexed = await toolContext.context.indexCodebase(
                     input.path,
                     (progress) => {
@@ -160,7 +159,7 @@ async function main(): Promise<void> {
                         );
                         lastProgress = nextProgress;
                         workerRuntime.progress({
-                            phase: progressPhase(nextProgress),
+                            phase,
                             progress: nextProgress,
                             memoryBudget: progress.memoryBudget,
                         });
@@ -169,6 +168,10 @@ async function main(): Promise<void> {
                     {
                         deferPartialPublication: input.deferPartialPublication,
                         indexPolicy: input.indexPolicy,
+                        onSourceScanCompleted: () => {
+                            phase = "writing";
+                            workerRuntime.progress({ phase, progress: lastProgress });
+                        },
                     },
                 );
                 assertNotCancelled();

@@ -1,0 +1,7 @@
+/node_modules/
+/target/
+/*.node
+/index.js
+/index.d.ts
+/projection.js
+/projection.d.ts

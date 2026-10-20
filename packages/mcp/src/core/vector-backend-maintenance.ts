@@ -349,8 +349,11 @@ Agent instructions:
             throw new Error(`No live mutation owns stale candidate recovery for '${canonicalRoot}'.`);
         }
 
+        // Destructive authority needs the exact stored root. Re-resolving a stored
+        // root would hand a moved root's receipt (A, now a symlink to B) to B's
+        // lease, and B's Publications do not protect A's collection.
         const receipts = this.host.context.listIndexCandidateReceipts()
-            .filter((receipt) => this.host.canonicalizeCodebasePath(receipt.canonicalRoot) === canonicalRoot)
+            .filter((receipt) => receipt.canonicalRoot === canonicalRoot)
             .filter((receipt) => receipt.operationId !== activeMutation.id);
         const recoveredCollections: string[] = [];
         const clearedReceipts: string[] = [];

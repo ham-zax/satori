@@ -301,7 +301,28 @@ decided after the profile. Remove them only if their measured cost is above
   share the disk). Navigation gains 1.7 s, inside the ±10 s noise. Patch
   kept at `screen-P2/candP2.patch`. The P1 code was reverted before the
   pair and has no patch.
-- Next: P4 step 1 (measurement only).
+- P4 step 1 (measurement, no product change). In both P2 runs,
+  `index.policy.observe_inputs` takes 28.6 s. Alone, the same walk
+  (`observeIndexPolicyInputs` from core dist, LibreOffice corpus) takes
+  1.1-1.2 s (3.7 s on the first, colder run). The MCP sync watcher starts
+  `chokidar.watch` on the whole root 2 ms before the walk
+  (`packages/mcp/src/core/sync.ts:2173`, log `[SYNC-WATCH] Observing`).
+  Scratch test, walk with a concurrent chokidar watch (ignores only `.git`
+  and `node_modules`): walk 22.0 / 20.6 s, watch ready 21.4 / 20.0 s, peak
+  RSS 964 MB against 90 MB alone. The walk ends only when the chokidar
+  crawl ends. Script: session scratchpad `walk-vs-watch.mjs`.
+- Finding: about 19-27 s of the pre-payload critical path is contention
+  with the initial chokidar crawl, not the policy walk. The crawl probably
+  also slows `scanFiles` (19-25 s) and `prepare_changes` (16-18 s). Not
+  measured: a second `[SYNC-WATCH] Observing` line follows policy
+  resolution (18:47:21), so the root may be crawled twice.
+- Proposal P4' (needs Hamza's approval, public behavior of the watcher):
+  start the watcher crawl after the full index publishes, or keep it but
+  start the index before it. Step 1 is one screening pair with the watcher
+  disabled to measure the ceiling. Risk: source events during the index
+  must stay covered (the publication source check already rejects changed
+  sources).
+- Loop paused at Hamza's request. Base worktree removed.
 
 ## Overlap design (option 2), 20 October 2026
 

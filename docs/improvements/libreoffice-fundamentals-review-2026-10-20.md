@@ -1,8 +1,13 @@
 # LibreOffice fundamentals review, 20 October 2026
 
-Status: read-only review complete. Performance changes remain unimplemented proposals.
+Status: original and follow-up read-only reviews complete. This reviewer made no product repairs.
 Hamza requested this document to preserve the review across context compaction.
 Update this document as evidence changes. Keep observations separate from estimates.
+
+Latest checkpoint: R5 and R6 are committed. Hamza reports focused tests, typecheck, ESLint, and mutation checks passing.
+The preceding follow-up review at `207496e6` reproduced both findings below.
+Earlier implementation status and priorities describe the initial review, not the current tree.
+See "Follow-up review of implemented changes" for measured progress and two new reproduced safety findings.
 
 ## Task and boundaries
 
@@ -568,13 +573,161 @@ Brief reflection: the stale code graph and abbreviated artifact path caused avoi
 Record exact commits, verified paths, commands, and measured-versus-inferred counts before resuming.
 Patch context also failed twice during documentation edits. Exact hunks succeeded without changing product files.
 
+## Follow-up review of implemented changes
+
+Scope: `d04572f4..207496e6`, plus the author's existing uncommitted Rust-loop notes.
+Hamza requested a code review and explicitly prohibited benchmarks.
+This follow-up ran two isolated correctness fixtures. It ran no benchmark, full index, build, or repository test suite.
+Product files remain unchanged by this reviewer.
+
+The diff covers 75 files, including documentation, fixtures, locks, and the shipped Potion helper.
+The reviewer checked native projection dispatch, the bounded projection stream, pipeline integration, pooling, policy admission, and analysis instrumentation.
+One read-only Claive worker checked publication, mutation ownership, shard staging, and source-scan changes.
+Worker `f210c0a00041` used `gpt-6.1-sol` with `xhigh` reasoning and closed after its report.
+Report: `/home/hamza/.local/state/claive/f210c0a00041/result.txt`.
+The parent checked both findings against source and reproduced their failed invariants independently.
+The code graph still dates from 6 October. Source reads supplied current evidence.
+
+### Progress that changes the earlier recommendations
+
+- The current plan records R1, R2, and the optional-`sourceStat` regression as repaired. The inspected code contains those repairs.
+- `attachResolutionClaims` copies retained evidence and removes old claims for every rebuilt owner.
+- `settleShardBatch` joins every shard writer and chooses the first rejection in input order.
+- The documented `syncfs` change reduces `fsync_tree` from 123.4 s in r12 to 8.0 s in r13. A navigation database rewrite is no longer the first justified time optimization.
+- The documented analysis profiles show mostly idle parser workers and a busy main thread. The old analysis-wait span did not isolate worker cost.
+- Per-chunk identifier memoization, cheaper filesystem calls, fewer lease checks, and native projections target measured owners without changing stored projection versions.
+- The controlled native-projection comparison uses three interleaved runs per variant. Critical-path medians are 375.1 s reference and 337.0 s native.
+- Payload medians are 244.3 s and 211.3 s. Reported anonymous peaks are 4,311-4,352 MiB reference and 4,381-4,408 MiB native.
+- Artifact equality is recorded for the compared pairs. No fresh performance or quality measurement was performed by this reviewer.
+- Native projections remain opt-in. The current source does not replace the C++ semantic provider's whole-session design. The complete 200 s graph-and-search goal remains open.
+
+These facts come from the implementation, the current plan, and
+[the performance findings](libreoffice-performance-findings-2026-10-20.md) and
+[Rust acceleration loop](rust-acceleration-loop-2026-10-20.md).
+The current plan also records Hamza's revised 0.01 MRR tolerance and deferred follow-up gates.
+This review records those decisions without rewriting them.
+
+### R5: recovery can assign a stale receipt to another root
+
+Priority: P1. Checked owners:
+`generation/publication-store.ts:442`, `:542`, and
+`packages/mcp/src/core/vector-backend-maintenance.ts:352`.
+
+Trigger: root A retains a candidate receipt after publication. Its path later becomes a symlink to root B.
+A newer mutation holds B's lease. Receipt enumeration still returns A's receipt.
+Recovery canonicalizes the stored root again, which selects that receipt as B's candidate.
+The publication-reference check searches B's publications, so A's current collection has no protection there.
+The subsequent deletion branch can drop A's collection while holding B's lease.
+
+The moved-root repair skips A in current-publication enumeration but does not exclude its candidate receipt.
+The new moved-root tests contain no candidate receipts.
+
+Independent fixture output:
+
+```json
+{"probe":"moved-receipt","activeRoot":"B","generation":2,"receiptGeneration":1,"eligibleReceipts":1,"publishedCollectionUnprotected":true}
+```
+
+The fixture uses the real PublicationStore and RootMutationRuntime with private temporary state.
+It reserves A's receipt, writes A's current descriptor, replaces A with a symlink to B, and evaluates recovery's guards under B's newer lease.
+The assertion expects zero eligible receipts. It fails with one.
+No vector backend was opened and no actual collection was deleted. Deletion eligibility was reproduced, and the deletion branch was traced in source.
+
+Proposed repair: at the destructive recovery boundary, compare the stored canonical root directly with the active canonical root.
+Do not grant authority by resolving an old stored name to a new root.
+Preserve A's receipt and descriptor. Keep the publication-root-key validation.
+An enumeration-time check alone can race another directory replacement before recovery.
+
+Focused test recipe: extend the moved-root fixture with a receipt for A's current collection.
+Run recovery under B's generation-2 lease with a recording backend.
+Assert zero backend deletions and unchanged A descriptor and receipt bytes.
+
+### R6: the directory-check fast path probes outside the root
+
+Priority: P1. Checked owners:
+`sync/sync-scan.ts:350`, `:361`, `:452`, and `config/index-policy.ts:171`.
+
+Trigger: the scan reads a regular extensionless script through a verified directory descriptor.
+After `lstatSync`, another writer moves that directory and replaces its old pathname with an outside symlink.
+The new fast path constructs `fileReal` from the old pathname and sends it to the policy probe.
+That probe opens and reads the pathname without a containment check.
+The directory check runs afterward. It rejects the observation after outside bytes were already read.
+
+Independent fixture output:
+
+```json
+{"probe":"scan-containment","moved":true,"outsideReads":2,"partialScan":true,"previousHashPreserved":true}
+```
+
+The fixture moves the directory deterministically inside an `lstatSync` hook.
+An `fs.readSync` hook records the descriptor target through `/proc/self/fd`.
+The assertion expects zero outside reads. It fails with two.
+The existing directory-move test uses `.ts` files and deliberately avoids policy probes, so it misses this path.
+
+Proposed repair: feed policy admission a root-checked file descriptor through the observation-based policy port.
+Retain the final directory-identity check. A check after the read cannot enforce source containment.
+
+Focused test recipe: use an extensionless shebang script in the existing directory-move test.
+Replace its directory with an outside symlink after metadata inspection.
+Assert zero outside reads, partial-scan reporting, and preserved previous evidence.
+
+### R5/R6 repair and verification update from Hamza
+
+Status: committed on `exp/napi-projections`: R5 `1bda2f2e`, R6 `63d7e2df`.
+
+- R5 recovery now requires `receipt.canonicalRoot` to equal the active canonical root exactly. It does not resolve the stored name again.
+- Its new A-to-B symlink test asserts zero backend calls and zero cleared receipts.
+- R6 policy probing uses the verified directory descriptor through `openRegularFileAtDirectoryDescriptorSync` in `root-bound-fs.ts`.
+- The helper uses `O_NOFOLLOW` and checks device and inode identity. A symlink swap or changed identity marks the file unreadable and preserves its previous hash.
+- Its extensionless-script regression test asserts zero outside reads, a partial scan, and the preserved hash.
+
+Hamza reports focused checks passing: sync-scan 19, root-bound-fs 18, and vector-backend-maintenance 3.
+Core and MCP typecheck and changed-file ESLint also pass. Full suites were not run.
+Restoring the old R5 filter makes its test attempt deletion of A's collection.
+For R6, either the descriptor read or the identity check independently blocks outside reads. Removing both restores the two-read failure.
+This update records the author's checks. The reviewer did not rerun them.
+R6 adds one `fstat` per probed file. Its full-run timing effect is unmeasured.
+
+### B1 decision and next architecture direction
+
+Commit `a2176eff` records B1 and D results. B1 is dropped and uncommitted.
+Pair 2 critical paths are 354.6 s candidate and 357.9 s base. Pair 1 payload spans are 221.0 s and 221.1 s.
+Artifacts match. The results do not establish a gain beyond the recorded approximately 10 s noise.
+The saved patch stays at `napi-loop/screen-B1/candB1.patch`. No monitor or new benchmark was started by this reviewer.
+
+The selected next direction is option 2: a bounded architecture investigation before B2 binary transport.
+First map dependencies and actual overlap from the existing traces.
+Current `index-generation-workflow.ts:855` already drains payload writes and finalizes the collection concurrently with navigation.
+Its 22-25 s finalization span is not automatically an additional serial tail after 63-70 s of navigation.
+Identify the part that actually delays publication before changing concurrency.
+
+The design must name when definitions become authoritative, the earliest legal navigation start, and a byte-bounded handoff.
+Avoid cloning complete evidence and registry maps into another worker.
+Preserve the 6 GiB whole-process limit, final source validation, joined cancellation, immutable artifacts, and atomic publication.
+No runtime or architecture implementation began during this decision check.
+
+Separate safety follow-up: `buildPublicationCollectionOwnership` still resolves stored receipt roots again.
+The map also feeds `dropZillizCollectionForCreate`, not only collection-limit guidance.
+Review that ownership path independently before treating the alias issue as closed across every deletion route.
+
+### Follow-up verification and checkpoint
+
+The temporary fixture process reported two failed invariants and exited 1 as expected.
+It removed all fixture directories in `finally`. The reviewer then removed the private scripts and prompt.
+No stored benchmark state, model, index, database, or user worktree was deleted.
+
+R5 and R6 are committed with focused and mutation checks reported passing.
+Keep the measured acceleration loop for remaining main-thread work.
+The source review found no additional supported blocker in the inspected native projection and pooling paths.
+Existing tests were read, not rerun. Full failure, quality, performance, and platform coverage remain limited to the recorded evidence.
+
 ## Resume checklist
 
 1. Read Hamza's latest messages, this report, and the revised implementation plan.
 2. Check current Git status and HEAD. Preserve all concurrent edits.
-3. Check the author's four repairs and R1-R4 before assuming any finding remains open.
+3. R1-R3 have repairs. R5/R6 are committed with focused and mutation checks reported passing. R4 remains a separate finding.
 4. Recheck the D8/provider-failure test only when its source or fixture changes.
-5. The next proposed execution is measurement Tasks 1-2, then spill Task 8. Product work still needs the applicable approval.
+5. B1 is dropped. Start option 2 with an existing-trace overlap and dependency map. Preserve the separate Zilliz ownership follow-up.
 6. Use the commands and stopping conditions above. Keep one changed mechanism per measurement.
 
 Temporary reproduction detail is preserved in R1-R4 above.

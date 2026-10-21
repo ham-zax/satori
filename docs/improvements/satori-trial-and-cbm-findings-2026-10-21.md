@@ -13,7 +13,7 @@ Working plan for the remaining Satori dev-trial findings and the gaps found by a
 | 2 | Memory peak 3.6-3.9 GiB on the 1,362-file webharness repo | Fixed: process mode at every budget |
 | 3 | `find_references` stops at 100 of 134 with no continuation | Merged, uncommitted (`nextCursor`, `hints.nextPage`) |
 | 4 | Sync `unverified` / `watcher_event_pending` | Not reproduced, one bounded check left |
-| 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | C++ session exceeds limits, design needed |
+| 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | Fixed: WASM 2 GiB, 2,000,000 call sites |
 | 6 | Unexplained completed sync at generation 3 after create | Fixed: handoff records the sync time |
 
 ### Finding 2 evidence
@@ -41,7 +41,13 @@ whole-project session in two ways. WASM memory reaches the 1 GiB limit and the a
 `abort()`. The 200,000 call-site limit (`SATORI_MAX_CALL_SITES`) fails at 600 files, and also on
 the 1,059 files outside `grammars/`. WASM memory grows about 25 times the source bytes.
 `resolve_cpp_project` now resolves each file in a per-file arena: 476 to 397 MiB at 450 files,
-1,024 to 956 MiB on the 1,059-file set. The limits stay the open cause.
+1,024 to 956 MiB on the 1,059-file set.
+
+Decision: raise `MAXIMUM_MEMORY` to 2 GiB (the host reads pointers as signed `i32`, so 2^31 bytes
+is the safe ceiling) and `SATORI_MAX_CALL_SITES` to 2,000,000. The full set then passes: 1,724 MiB
+WASM memory, 184,581 published calls. Full CBM index with the dev build: boundaries 1 to 15, fanIn
+and fanOut 15, relationships 29,113 to 127,192, `satori-cbm-semantic-cpp` present. Cost: the run
+peaked at 5.4 GB under a 6,000 MB scope and was OOM-killed under 4,500 MB (one run each).
 
 ### Finding 6 evidence
 

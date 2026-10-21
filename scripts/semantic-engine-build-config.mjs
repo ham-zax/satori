@@ -78,7 +78,9 @@ export const COMPILER_FLAGS = [
     '-sENVIRONMENT=node',
     '-sALLOW_MEMORY_GROWTH=1',
     '-sINITIAL_MEMORY=67108864',
-    '-sMAXIMUM_MEMORY=1073741824',
+    // 2 GiB: the CBM repository C/C++ session (1,733 files, 75 MB) peaks at 1.7 GiB.
+    // Stay at or below 2^31 bytes: the host reads pointers with signed getValue('i32').
+    '-sMAXIMUM_MEMORY=2147483648',
     '-sSTACK_SIZE=2097152',
     '-sASSERTIONS=1',
     '-sMODULARIZE=1',

@@ -17,7 +17,7 @@ The Satori Semantic Engine is a self-contained, native C/WASM semantic resolutio
    - Up to 20,000 source files per session (`SATORI_MAX_SOURCES`).
    - Up to 1,000 auxiliary files per session (`SATORI_MAX_AUXILIARIES`).
    - Up to 100 MiB aggregate source bytes and 10 MiB auxiliary bytes (110 MiB total input ceiling).
-   - Strict linear memory ceilings (64 MiB initial, 1 GiB max memory growth).
+   - Strict linear memory ceilings (64 MiB initial, 2 GiB max memory growth).
 3. **Reproducibility & Verification**:
    - `scripts/semantic-engine-build-config.mjs` defines the authoritative build units, include directories, flags, and exports.
    - `scripts/verify-semantic-engine-reproducibility.mjs` verifies SHA-256 digests of all sources, compiled artifacts, descriptors, and logical recipes without requiring Emscripten locally.

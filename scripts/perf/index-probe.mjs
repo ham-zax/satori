@@ -228,7 +228,7 @@ async function main() {
         const search = async () => {
             const started = performance.now();
             const response = await tool('search_codebase', {
-                path: options.repo, query: term, resultMode: 'raw', limit: files.length + 20, debugMode: 'freshness',
+                path: options.repo, query: term, resultMode: 'raw', limit: files.length + 20, debugMode: 'full',
             });
             const hitFiles = new Set((response?.results ?? [])
                 .map((result) => result.target?.file ?? result.file)
@@ -245,6 +245,8 @@ async function main() {
                 warnings: (response?.warnings ?? []).map((warning) => warning?.code ?? warning).join('|') || undefined,
                 slowPhases: Object.fromEntries(Object.entries(response?.hints?.debugSearch?.phaseTimingsMs ?? {})
                     .filter(([, ms]) => ms > 100)),
+                rerankerCandidates: response?.hints?.debugSearch?.providerWork?.rerankerCandidates,
+                rerankerInputBytes: response?.hints?.debugSearch?.providerWork?.rerankerInputBytes,
             };
         };
         for (const file of files) pendingRestores.set(path.join(options.repo, file), fs.readFileSync(path.join(options.repo, file)));
@@ -271,9 +273,13 @@ async function main() {
             }
             await syncDone;
             if (syncError) throw syncError;
+            // Repeated identical searches separate a cold first search from steady state.
+            const repeats = [];
+            if (mode === 'idle') for (let index = 0; index < 3; index++) repeats.push(await search());
             return {
                 first,
                 last,
+                repeats,
                 saveToFullHitMs: fullHitAt === null ? null : Math.round(fullHitAt - saved),
                 syncWallMs: syncResult?.wallMs == null ? null : Math.round(syncResult.wallMs),
             };

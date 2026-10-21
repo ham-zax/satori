@@ -1,7 +1,8 @@
 # Agent-ready edit freshness plan, 22 October 2026
 
-Status: A0 done, results below. The reranker is the largest search cost (D4).
-Decisions D1 to D4 need approval before A1 to A4.
+Status: A0 done, results below. D1, D2 and D3 approved by Hamza on 22 October
+2026, as recommended. The reranker is the largest search cost. D4 is open, and
+a rerank profile comes first.
 
 ## Goal
 
@@ -130,7 +131,9 @@ bound native Python relationship costs"). The hard-link reuse branch
 (`sidecar-writes.ts:655-664`) runs inside the same batch loop of 8. A separate
 limit for links is a B2 idea that needs a measurement.
 
-## Open decisions
+## Decisions
+
+D1, D2 and D3: approved as recommended (22 October 2026). D4: open.
 
 - **D1. Overlay during a sync.** Recommendation: allow the dirty overlay and the
   stale-hit suppression in `served_previous_generation`. Keep the reranker and
@@ -152,10 +155,22 @@ limit for links is a B2 idea that needs a measurement.
   in-memory state and provider calls on the query path. Without D3, an agent
   finds new code only by exact terms.
 - **D4. Reranker cost on the query path.** A0 measured `rerank` at 2.0 to 5.4 s
-  per search (LateOn on CPU). No option is chosen yet. Next step: profile
-  `rerank` (candidate count, document length, model time) before any option.
-  Possible options: a time budget, a skip for exact-term queries, a smaller
-  candidate window.
+  per search (LateOn on CPU). No option is chosen yet. Possible options: a time
+  budget, a skip for exact-term queries, a smaller candidate window.
+
+  Rerank profile (probe with 3 repeated idle searches, `debugMode: "full"`,
+  N=1 and N=16, 2 runs, load 0.1 to 4.3): the cost is steady, not a cold
+  start. Repeats of one query cost the same as the first search: 2,644 to
+  5,662 ms `rerank` for 70 to 74 candidates and 89 to 124 KB of reranker input.
+  The `[RERANKER] ... initialized` log lines (30 in one run) come from the
+  server plus one per sync worker process (29 `sync.worker.bootstrap` spans),
+  not from LateOn restarts. The sizing comment in `lateon-execution-plan.ts`
+  reports 1.23 s for 64 candidates (4 sessions x 2 threads, same CPU). The
+  probe is 2 to 4 times slower. Not yet known: the session layout the probe
+  gets (`planLateOnExecution` sizes sessions from free memory, and the probe
+  runs in a 5 GB cgroup), and the effect of other load on the machine. The
+  probe term (`satoriprobe...`, lowercase) does not take the
+  identifier-intent rerank skip.
 
 ## TDD route
 

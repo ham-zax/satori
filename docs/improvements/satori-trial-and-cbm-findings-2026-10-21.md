@@ -104,13 +104,19 @@ Confirmed in code:
   phase 1 and frees trees of files without eligible calls at once: trufflehog (3,295 files,
   12.7 MiB) 397 to 275 MiB, 4,301/3,896 ms, one run each. Rust and C# are under the budget and
   unchanged. With a 0 budget, Go is 77 MiB and Rust 64 MiB, and all hashes are equal.
-- The 20,000-source limit skips C++ analysis on LibreOffice (above).
+- The 20,000-source limit skips C++ analysis on LibreOffice (above). Measured 22 October, not
+  kept: LibreOffice C/C++ is 22,312 files and 251 MiB. With 40,000 sources and 320 MiB the
+  session stops at 100,000 definitions (66 s, 1.9 GiB RSS). With 400,000 definitions,
+  1,600,000 results and a 256 MiB string table it stops at 2,000,000 call sites (241 s,
+  2.0 GiB RSS). Higher limits only turn a fast skip into a late failure. LibreOffice C++ needs
+  session splitting (an architecture decision), not higher limits.
 - `index-generation-workflow.ts:517` reads each semantic source one at a time.
 - `extract_defs.c:91` has a fixed `BT_STACK = 512`. Children are pushed last to first, so a full
   stack drops the first children. Not applicable to Satori: the stack only fills
   `def->body_tokens`, and `satori_extractor.c` never reads that field.
-- `satori_semantic.c:504` admits `lsp_short_name_unique` as a direct call (Rust free-function
-  fallback, CBM `ec4f0eaa`).
+- Fixed in `5ebfdf76`: `satori_semantic.c:504` admitted `lsp_short_name_unique` as a direct
+  call (Rust free-function fallback, CBM `ec4f0eaa`). rust-analyzer resolved calls 14,606 to
+  12,810 (1,796 wrong bindings removed).
 - Fixed in `873146f0` (Python): every import gets `typeOnly: false` (`tree-sitter-adapter.ts:1213`), and no
   `TYPE_CHECKING` handling exists. `builder.ts` resolves `from . import x` from the module
   specifier only, so the IMPORTS edge targets `__init__.py`. `buildPythonClassBases` keys on the
@@ -120,9 +126,11 @@ Confirmed in code:
 
 Probable, a fixture must prove each:
 
-- C/C++ macro-wrapped definitions (`IMPL_LINK(...)`): `cpp_find_callable_terminal` and
-  `cppCallableTerminal` take the outer declarator name (CBM `2ef6ba71`).
-- Python package re-exports through `__init__.py` (CBM `62191225`, `0ae936f0`).
+- Fixed in `873146f0`: C/C++ macro-wrapped definitions (`IMPL_LINK(...)`):
+  `cpp_find_callable_terminal` and `cppCallableTerminal` took the outer declarator name
+  (CBM `2ef6ba71`).
+- Fixed in `873146f0`: Python package re-exports through `__init__.py` (CBM `62191225`,
+  `0ae936f0`).
 - Missing final newline (CBM `fa258d34`): Java and C# still gate eligibility on
   `ts_node_has_error(root)`. With `cpp-v3` a C++ file with an error becomes partial, not dropped.
 - C# same-name types (`a510646b`), Kotlin typed properties (`67ff40d5`), PHP grouped use
@@ -133,6 +141,9 @@ Results:
 - Rust `f75af00a`: not applicable. The fixture `impl<T> G<T> { self.Help() + Self::Assoc() }`
   already resolves. The upstream gap came from an upstream extractor change that Satori lacks.
 - PHP grouped use `d74579c9`: fixed in `b16320b3` (`php-v2`).
+- Java and C# partial-error recovery: fixed in `013cabdd`. A file with a parse error keeps
+  evidence outside the error regions. guava resolved calls 44,309 to 44,565, Newtonsoft.Json
+  1,108 to 1,915. The C++ hash is unchanged.
 - Missing final newline `fa258d34`: fixed in `8ab9f98d` (`satori_parse_source`). C# lost all
   evidence when a file ended with `#endregion` or `#pragma` and no newline. Java was not affected.
 - C# same-name types `a510646b`: not applicable. Probes with `using`, enclosing namespace,
@@ -174,8 +185,28 @@ Not confirmed:
 - Better option: move the root-bound open, the read and the SHA-256 hash into the analysis
   workers. The descriptor-bound root checks move with them, so the change touches a security
   boundary.
-- Next step: take a new CPU profile at `9a85498b` to rank the main-thread costs before any
-  decision. Stop if the read path is not in the top three.
+- Profile at `5f17c65c` (22 October, one run, `napi-loop/profile-5`, 6 GiB scope, load 0.36 at
+  start): wall 420.6 s, peak anon 4,440 MiB, payload window 243.8 s, main-thread CPU 171.0 s,
+  idle 36.2 s. Inclusive main-thread ranking in the payload window: process-worker `pump`
+  23.2 s, `openInsideRoot` 18.2 s, `analyzeFileForProcessing` 17.5 s, Potion `handleStdout`
+  16.3 s, `readIndexableFileObservationInsideRoot` 16.2 s, `flushVectorWriteBuffer` 15.1 s.
+  Self time: `writeBuffer` 15.6 s (source bytes sent to the analysis processes), SHA-256
+  10.2 s, `fstat` 8.0 s, `realpath` 4.9 s, `lstat` 3.8 s. The shebang `readSync` (21.0 s in
+  `profile-2`) is gone: `read` self is 2.3 s.
+- The read path is in the top three. Moving open, read and hash into the analysis processes
+  removes at most about 16 s of main-thread CPU plus part of `writeBuffer`. The main thread
+  still needs the source for chunks and embedding, so the source then comes back over IPC.
+  Expected gain: at most about 4% of the 420 s wall. The change moves the root-bound checks
+  into the worker processes (a security boundary). Not started: needs a design decision.
+
+## Open gaps for future work
+
+| Gap | Effect | Next action |
+|---|---|---|
+| Session limits (20,000 sources, 100 MiB, 100,000 definitions, 2,000,000 call sites) | A language session over a limit gets no semantic call evidence. LibreOffice C++ is skipped. Search and outline still work. | Session splitting with a merge phase for calls between parts. Architecture decision. Higher limits fail late (see the measurement above). |
+| C/C++ calls nested deeper than 256 levels | Such calls get no evidence. | None. Upstream keeps the same guard. |
+| Retained-tree budget 32 MiB | Sessions over 32 MiB of source parse files again in pass 2, about 23% slower. Output is equal. | Raise the budget only with a higher WASM ceiling. |
+| Producer path | Each file opens twice (`indexing-pipeline.ts:410-469`). Semantic sources are read one at a time (`index-generation-workflow.ts:517`). | See the producer note and its profile result. |
 
 ## Method changes
 

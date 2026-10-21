@@ -405,6 +405,7 @@ export class FileSynchronizer {
                     new Map(nextState.fileStats),
                     false,
                     new Set(nextState.unprocessedPaths),
+                    options.probeRejections,
                 );
                 if (
                     observed.effective.partialScan

@@ -307,6 +307,7 @@ export class PotionEmbedding extends Embedding {
     private child: ChildProcessWithoutNullStreams | null = null;
     private state: WorkerState = 'starting';
     private stdoutBuffer = Buffer.alloc(0);
+    private lastHelperOutputAt = 0;
     private requestSequence = 0;
     private startupPromise: Promise<void> | null = null;
     private closePromise: Promise<void> | null = null;
@@ -504,6 +505,7 @@ export class PotionEmbedding extends Embedding {
 
     private handleStdout(chunk: Buffer): void {
         if (this.state === 'closed' || this.state === 'failed') return;
+        this.lastHelperOutputAt = Date.now();
         this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
         while (true) {
             let leadingWhitespace = 0;
@@ -652,6 +654,32 @@ export class PotionEmbedding extends Embedding {
         if (this.pending.size === 0) this.scheduleIdleShutdown();
     }
 
+    /**
+     * A request times out only when the helper has been silent for the whole
+     * limit. After synchronous work blocks this thread past the limit (the
+     * synchronizer scan runs for about 16 s on LibreOffice), Node runs expired
+     * timers before it reads helper output that is already in the pipe, and one
+     * poll phase reads at most one pipe buffer of a larger reply. The decision
+     * therefore waits for the next poll phase, and any output it delivered
+     * restarts the timer for the rest of the silence window.
+     */
+    private expireRequest(id: string): void {
+        setImmediate(() => {
+            const pending = this.pending.get(id);
+            if (!pending) return;
+            const silentMs = Date.now() - this.lastHelperOutputAt;
+            if (silentMs < this.requestTimeoutMs) {
+                pending.timeout = setTimeout(() => this.expireRequest(id), this.requestTimeoutMs - silentMs);
+                return;
+            }
+            this.failWorker(providerError({
+                code: 'EMBEDDING_PROVIDER_TIMEOUT',
+                retryable: true,
+                message: 'Potion embedding request timed out.',
+            }));
+        });
+    }
+
     private failWorker(error: EmbeddingProviderError): void {
         if (this.state === 'failed' || this.state === 'closed') return;
         this.state = 'failed';
@@ -705,14 +733,7 @@ export class PotionEmbedding extends Embedding {
         this.clearIdleShutdown();
         this.pendingItemsCount += itemCount;
         const response = new Promise<WorkerResponse>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                const timeoutError = providerError({
-                    code: 'EMBEDDING_PROVIDER_TIMEOUT',
-                    retryable: true,
-                    message: 'Potion embedding request timed out.',
-                });
-                this.failWorker(timeoutError);
-            }, this.requestTimeoutMs);
+            const timeout = setTimeout(() => this.expireRequest(id), this.requestTimeoutMs);
             this.pending.set(id, { resolve, reject, timeout, itemCount });
         });
         this.child.stdin.write(frame, (error) => {
@@ -752,14 +773,7 @@ export class PotionEmbedding extends Embedding {
         this.clearIdleShutdown();
         this.pendingItemsCount += itemCount;
         const response = new Promise<WorkerResponse>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                const timeoutError = providerError({
-                    code: 'EMBEDDING_PROVIDER_TIMEOUT',
-                    retryable: true,
-                    message: 'Potion embedding request timed out.',
-                });
-                this.failWorker(timeoutError);
-            }, this.requestTimeoutMs);
+            const timeout = setTimeout(() => this.expireRequest(id), this.requestTimeoutMs);
             this.pending.set(id, { resolve, reject, timeout, itemCount });
         });
         this.child.stdin.write(frame, (error) => {

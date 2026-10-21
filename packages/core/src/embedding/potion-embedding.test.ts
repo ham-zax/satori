@@ -357,6 +357,23 @@ test('Potion provider classifies worker timeout with retryable flag', async (t) 
     );
 });
 
+test('Potion provider accepts a reply that arrived while the event loop was blocked past the timeout', async (t) => {
+    const embedding = await createFakeEmbedding(t, { requestTimeoutMs: 100, maxBatchItems: 64, maxPendingItems: 256 });
+    // The replies together exceed one pipe read, so they arrive over several poll phases.
+    const batches = Array.from({ length: 4 }, (_, b) =>
+        embedding.embedDocuments(Array.from({ length: 64 }, (_, i) => `doc${b}-${i}`)));
+    // Let the request frames reach the helper and their timers start.
+    await new Promise((resolve) => setImmediate(resolve));
+    // Synchronous work on the same thread (a full-index scan) holds the event
+    // loop past the timeout while the helper's replies wait in the pipe.
+    const blockedUntil = Date.now() + 1_000;
+    while (Date.now() < blockedUntil) { /* block the event loop */ }
+
+    const vectors = await Promise.all(batches);
+    assert.deepEqual(vectors.map((batch) => batch.length), [64, 64, 64, 64]);
+    assert.deepEqual(await embedding.embedQuery('after stall'), await embedding.embedQuery('after stall'));
+});
+
 test('Potion provider fails all pending requests when the worker crashes', async (t) => {
     const embedding = await createFakeEmbedding(t, { requestTimeoutMs: 1_000 });
     const pendingWork = embedding.embedQuery('__delay_200ms__');

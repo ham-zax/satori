@@ -24,6 +24,7 @@ import {
 import { readLocalDiagnosticsSummary, type LocalDiagnosticsSummary } from "./local-diagnostics.js";
 import { sanitizeTerminalText } from "./terminal-sanitize.js";
 import { SATORI_CLI_NPX_COMMAND } from "./cli-command.js";
+import { compareStableVersions } from "./upgrade-target.js";
 import { RERANKER_PROVIDERS, type InstallReranker } from "./reranker-providers.js";
 import {
     discoverRuntimeOwnerRegistryPaths,
@@ -576,6 +577,27 @@ export function resolveRuntimeVersionState(
     };
 }
 
+const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+// A CLI whose release target is older than the active runtime is a stale copy, usually an old
+// global `npm i -g` install that `upgrade` (run through npx) never updates.
+function cliIsOlderThanActiveRuntime(releaseMcpVersion: string, activeMcpVersion: string): boolean {
+    return STABLE_VERSION_PATTERN.test(releaseMcpVersion)
+        && STABLE_VERSION_PATTERN.test(activeMcpVersion)
+        && compareStableVersions(releaseMcpVersion, activeMcpVersion) < 0;
+}
+
+function staleCliNextStep(packages: readonly DoctorPackageVersion[], activeMcpVersion: string): string {
+    const cli = packages.find((entry) => entry.name === "@satori-code/cli");
+    const cliLabel = `@satori-code/cli@${cli?.version ?? "unknown"}`;
+    const cliLocation = cli?.source.endsWith("package.json") ? ` at ${path.dirname(cli.source)}` : "";
+    return [
+        `This CLI (${cliLabel}${cliLocation}) is older than the active managed runtime (MCP ${activeMcpVersion}).`,
+        "If `satori` is a global npm install, update it with `npm i -g @satori-code/cli@latest` or remove it with `npm rm -g @satori-code/cli`.",
+        `Otherwise run \`${SATORI_CLI_NPX_COMMAND} doctor\`.`,
+    ].join("\n");
+}
+
 function installedPackageVersion(
     packages: readonly DoctorPackageVersion[],
     packageName: string,
@@ -623,7 +645,9 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
         && (managedRuntime.mcpVersion !== releaseMcpVersion || managedRuntime.coreVersion !== releaseCoreVersion)
     ) {
         nextSteps.push(
-            "The CLI release target differs from the active managed runtime.\nThe active launcher has not been changed.",
+            cliIsOlderThanActiveRuntime(releaseMcpVersion, managedRuntime.mcpVersion)
+                ? staleCliNextStep(packageVersions, managedRuntime.mcpVersion)
+                : "The CLI release target differs from the active managed runtime.\nThe active launcher has not been changed.",
         );
     }
     const runtimeEnv: NodeJS.ProcessEnv = { ...env, ...managedRuntimeEnvironment };

@@ -1495,6 +1495,42 @@ test("doctor guidance neutrally identifies a bundle and active runtime mismatch"
     }
 });
 
+test("doctor names a CLI older than the active runtime and how to update or remove it", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-stale-cli-"));
+    try {
+        const launcherPath = launcherFixtureWithRuntime(tempDir, { mcp: "4.11.17", core: "1.6.12" });
+        fs.writeFileSync(launcherPath, buildLauncherScript({
+            command: process.execPath,
+            args: [path.join(tempDir, ".satori", "mcp-runtime", "@satori-code-mcp@4.11.17", "node_modules", "@satori-code", "mcp", "dist", "index.js")],
+            managedEnv: { SATORI_RUNTIME_PROFILE: "offline" },
+        }));
+        const cliPackageJson = path.join(tempDir, "global", "lib", "node_modules", "@satori-code", "cli", "package.json");
+        const result = await runDoctor(baseDoctorOptions({
+            env: { HOME: tempDir },
+            managedLauncherPath: launcherPath,
+            resolvePackageVersions: () => [
+                { name: "@satori-code/cli", version: "0.4.0", source: cliPackageJson },
+                { name: "@satori-code/mcp", version: "4.9.0", source: `${cliPackageJson}#satoriManagedRuntime` },
+                { name: "@satori-code/core", version: "1.5.0", source: `${cliPackageJson}#satoriManagedRuntime` },
+            ],
+        }));
+        assert.equal(
+            result.nextSteps.includes(
+                `This CLI (@satori-code/cli@0.4.0 at ${path.dirname(cliPackageJson)}) is older than the active managed runtime (MCP 4.11.17).\n`
+                + "If `satori` is a global npm install, update it with `npm i -g @satori-code/cli@latest` or remove it with `npm rm -g @satori-code/cli`.\n"
+                + "Otherwise run `npx -y @satori-code/cli@latest doctor`.",
+            ),
+            true,
+        );
+        assert.equal(
+            result.nextSteps.some((step) => step.startsWith("The CLI release target differs")),
+            false,
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test("doctor resolves active Core from the managed runtime closure", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "satori-doctor-active-core-"));
     try {

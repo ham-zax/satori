@@ -394,10 +394,10 @@ for (const readKind of ['auxiliary', 'source'] as const) {
             fs.writeFileSync(path.join(outside, name), content);
             const hash = crypto.createHash('sha256').update(content).digest('hex');
             const originalRealpath = fsp.realpath;
+            const originalRealpathSyncNative = fs.realpathSync.native;
             let swapped = false;
-            t.mock.method(fsp, 'realpath', async (...args: Parameters<typeof fsp.realpath>) => {
-                const resolved = await originalRealpath(...args);
-                if (!swapped && String(args[0]) === filePath) {
+            const swapAfterResolution = (candidate: unknown): void => {
+                if (!swapped && String(candidate) === filePath) {
                     swapped = true;
                     if (swapKind === 'file') {
                         fs.unlinkSync(filePath);
@@ -407,6 +407,17 @@ for (const readKind of ['auxiliary', 'source'] as const) {
                         fs.symlinkSync(outside, nested, 'dir');
                     }
                 }
+            };
+            // Auxiliary reads resolve through the promise form; semantic source
+            // reads resolve through the synchronous native form.
+            t.mock.method(fsp, 'realpath', async (...args: Parameters<typeof fsp.realpath>) => {
+                const resolved = await originalRealpath(...args);
+                swapAfterResolution(args[0]);
+                return resolved;
+            });
+            t.mock.method(fs.realpathSync, 'native', (...args: Parameters<typeof fs.realpathSync.native>) => {
+                const resolved = originalRealpathSyncNative(...args);
+                swapAfterResolution(args[0]);
                 return resolved;
             });
             let analyzed = false;

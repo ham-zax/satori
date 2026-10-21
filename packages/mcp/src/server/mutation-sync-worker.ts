@@ -62,6 +62,8 @@ function phaseForTiming(phase: string): MutationOperationPhase {
 }
 
 async function main(): Promise<void> {
+    // Time from process start to main(): module loading in a fresh worker process.
+    perfTrace("sync.worker.module_load", performance.now());
     const input = parseInput(process.argv[2]);
     await workerRuntime.started;
     assertNotCancelled();
@@ -75,6 +77,7 @@ async function main(): Promise<void> {
         async () => {
             assertNotCancelled();
             workerRuntime.progress({ phase: "preflight", progress: 0 });
+            const bootstrapStartedAt = performance.now();
             const parsedConfig = createMcpConfig();
             const { config, runtimeFingerprint } = await resolveMcpRuntimeBootstrap(parsedConfig);
             assertNotCancelled();
@@ -96,6 +99,7 @@ async function main(): Promise<void> {
                     throw new Error(toolContext.message);
                 }
                 assertNotCancelled();
+                perfTrace("sync.worker.bootstrap", performance.now() - bootstrapStartedAt);
 
                 let publicProgress = 0;
                 const publishRealProgress = (
@@ -110,6 +114,7 @@ async function main(): Promise<void> {
                     workerRuntime.progress({ phase, progress: publicProgress });
                 };
 
+                const freshnessStartedAt = performance.now();
                 const decision = await toolContext.syncManager.ensureFreshness(input.path, 0, {
                     onSyncProgress: (progress) => {
                         publishRealProgress(
@@ -122,6 +127,7 @@ async function main(): Promise<void> {
                         publishRealProgress(phaseForTiming(phase));
                     },
                 });
+                perfTrace("sync.worker.freshness", performance.now() - freshnessStartedAt);
                 assertNotCancelled();
                 result = {
                     mode: decision.mode,
@@ -144,7 +150,9 @@ async function main(): Promise<void> {
                         return;
                 }
             } finally {
+                const shutdownStartedAt = performance.now();
                 await providerRuntime.shutdown();
+                perfTrace("sync.worker.shutdown", performance.now() - shutdownStartedAt);
             }
         },
         { signal: workerRuntime.signal },

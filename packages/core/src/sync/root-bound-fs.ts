@@ -550,6 +550,80 @@ export async function readFileHandleExactly(
     }
 }
 
+/**
+ * Synchronous form of readFileHandleExactly for a raw descriptor, with the
+ * same exact-length contract: it reads at most one byte beyond the observed
+ * size so growth is detected without an unbounded read-to-EOF allocation.
+ */
+export function readFileDescriptorExactlySync(fd: number, expectedSize: number): Buffer {
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 0) {
+        throw new Error(`Observed file size is invalid: ${expectedSize}`);
+    }
+    const buffer = Buffer.allocUnsafe(expectedSize + 1);
+    let totalBytes = 0;
+    while (totalBytes < buffer.length) {
+        const bytesRead = fsSync.readSync(fd, buffer, totalBytes, buffer.length - totalBytes, totalBytes);
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+    }
+    if (totalBytes > expectedSize) {
+        throw new RootBoundFileError(
+            'source_changed_during_inspection',
+            'File grew beyond the observed size while being read.',
+        );
+    }
+    if (totalBytes !== expectedSize) {
+        throw new RootBoundFileError(
+            'source_changed_during_inspection',
+            `File byte length ${totalBytes} does not match the observed size ${expectedSize}.`,
+        );
+    }
+    return buffer.subarray(0, totalBytes);
+}
+
+/**
+ * Synchronous form of openRegularFileInsideRoot, with the same checks in the
+ * same order. Per-file source reads run once per indexed file, and the async
+ * form costs about seven thread-pool round trips each. The caller closes the
+ * descriptor with fs.closeSync.
+ */
+export function openRegularFileInsideRootSync(filePath: string, rootDir: string): number {
+    let realPath: string;
+    try {
+        realPath = trimTrailingSeparators(path.normalize(fsSync.realpathSync.native(filePath)));
+    } catch {
+        throw new Error(`Path is unreadable: ${filePath}`);
+    }
+    if (!isRealPathInsideRoot(realPath, rootDir)) {
+        throw new RootBoundFileError(
+            'root_binding_invalid',
+            'Resolved path escapes indexed root.',
+        );
+    }
+
+    const preStat = fsSync.lstatSync(realPath);
+    if (preStat.isSymbolicLink() || !preStat.isFile()) {
+        throw new Error(`Attempted to open non-file path: ${filePath}`);
+    }
+
+    const fd = fsSync.openSync(realPath, fsSync.constants.O_RDONLY | requiredOpenFlag('O_NOFOLLOW'));
+    try {
+        const postStat = fsSync.fstatSync(fd);
+        if (!postStat.isFile() || !sameFileIdentity(postStat, preStat)) {
+            throw new Error(`Opened descriptor drifted from verified path: ${filePath}`);
+        }
+        descriptorPathInsideRootSync(fd, rootDir);
+        return fd;
+    } catch (error) {
+        try {
+            fsSync.closeSync(fd);
+        } catch {
+            // The open error is the one to report.
+        }
+        throw error;
+    }
+}
+
 export interface OpenedDirectoryInsideRoot {
     fd: number;
     descriptorPath: string;

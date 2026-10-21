@@ -44,8 +44,8 @@ import type { RelationshipAnalysisEvidence } from '../relationships';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../semantic/descriptor';
 import type { SemanticProjectAnalyzer } from '../semantic';
 import {
-    openRegularFileInsideRoot,
-    readFileHandleExactly,
+    openRegularFileInsideRootSync,
+    readFileDescriptorExactlySync,
 } from '../sync/root-bound-fs';
 import type { SnapshotFileStatSignature } from '../sync/snapshot-codec';
 import type {
@@ -413,9 +413,11 @@ export class IndexingPipeline {
         indexPolicy?: IndexingPolicy,
     ): Promise<{ content: string; sourceHash: string; sourceStat: SnapshotFileStatSignature } | null> {
         const canonicalRoot = this.canonicalizeCodebasePath(codebasePath);
-        const handle = await openRegularFileInsideRoot(filePath, canonicalRoot);
+        // Synchronous root-bound I/O: this runs once per indexed file, and the
+        // promise form costs about fifteen thread-pool round trips per file.
+        const fd = openRegularFileInsideRootSync(filePath, canonicalRoot);
         try {
-            const before = await handle.stat();
+            const before = fs.fstatSync(fd);
             const relativePath = this.normalizeRelativePathForCodebase(
                 canonicalRoot,
                 filePath,
@@ -432,15 +434,15 @@ export class IndexingPipeline {
                     ?? this.getIndexedExtensionsForCodebase(canonicalRoot),
                 async () => {
                     const buffer = Buffer.alloc(Math.min(before.size, 8192));
-                    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+                    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
                     return buffer.subarray(0, bytesRead);
                 },
             );
             if (!indexable) return null;
 
-            const sourceBytes = await readFileHandleExactly(handle, before.size);
+            const sourceBytes = readFileDescriptorExactlySync(fd, before.size);
             const content = sourceBytes.toString('utf8');
-            const after = await handle.stat();
+            const after = fs.fstatSync(fd);
             if (
                 after.dev !== before.dev
                 || after.ino !== before.ino
@@ -450,14 +452,18 @@ export class IndexingPipeline {
             ) {
                 throw new Error(`Indexed source changed while being read: ${filePath}`);
             }
-            const currentPathHandle = await openRegularFileInsideRoot(filePath, canonicalRoot);
+            const currentPathFd = openRegularFileInsideRootSync(filePath, canonicalRoot);
             try {
-                const currentPathStat = await currentPathHandle.stat();
+                const currentPathStat = fs.fstatSync(currentPathFd);
                 if (currentPathStat.dev !== after.dev || currentPathStat.ino !== after.ino) {
                     throw new Error(`Indexed source path was replaced while being read: ${filePath}`);
                 }
             } finally {
-                await currentPathHandle.close().catch(() => undefined);
+                try {
+                    fs.closeSync(currentPathFd);
+                } catch {
+                    // The rebinding result is the one to report.
+                }
             }
             return {
                 content,
@@ -469,7 +475,11 @@ export class IndexingPipeline {
                 },
             };
         } finally {
-            await handle.close().catch(() => undefined);
+            try {
+                fs.closeSync(fd);
+            } catch {
+                // The read result or read error is the one to report.
+            }
         }
     }
 

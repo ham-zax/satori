@@ -18,7 +18,9 @@ import {
     openDirectoryInsideRootSync,
     openRegularFileInsideRoot,
     openRegularFileInsideRootNoFollow,
+    openRegularFileInsideRootSync,
     openRegularFileWithIdentityInsideRoot,
+    readFileDescriptorExactlySync,
     readFileHandleExactly,
     resolveInsideRoot,
     sameRootBoundFileIdentity,
@@ -357,6 +359,82 @@ test('readFileHandleExactly rejects a short descriptor read', async () => {
         );
     } finally {
         await handle.close();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('openRegularFileInsideRootSync rejects intermediate and final-component symlink escapes', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-sync-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-open-sync-out-'));
+    try {
+        const nested = path.join(root, 'nested');
+        fs.mkdirSync(nested);
+        const logicalFile = path.join(nested, 'file.ts');
+        fs.writeFileSync(logicalFile, 'export const inside = true;\n', 'utf8');
+        const outsideFile = path.join(outside, 'file.ts');
+        fs.writeFileSync(outsideFile, 'export const secret = "leaked";\n', 'utf8');
+
+        fs.closeSync(openRegularFileInsideRootSync(logicalFile, root));
+        assert.throws(() => openRegularFileInsideRootSync(nested, root), /non-file/);
+
+        const linkPath = path.join(root, 'linked.ts');
+        if (!createFileSymlinkOrSkip(t, outsideFile, linkPath)) {
+            return;
+        }
+        assert.throws(() => openRegularFileInsideRootSync(linkPath, root), /escapes indexed root/);
+
+        fs.rmSync(nested, { recursive: true, force: true });
+        if (!createDirectorySymlinkOrSkip(t, outside, nested)) {
+            return;
+        }
+        assert.throws(() => openRegularFileInsideRootSync(logicalFile, root), /escapes indexed root/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
+});
+
+test('readFileDescriptorExactlySync returns the same bytes as readFileHandleExactly', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-sync-equivalence-'));
+    try {
+        // Sizes cover empty, one byte, and more than one 64 KiB stream chunk.
+        for (const size of [0, 1, 8192, 200_003]) {
+            const filePath = path.join(root, `source-${size}.ts`);
+            const bytes = Buffer.alloc(size);
+            for (let index = 0; index < size; index += 1) bytes[index] = (index * 31 + 7) % 256;
+            fs.writeFileSync(filePath, bytes);
+
+            const handle = await fsp.open(filePath, fs.constants.O_RDONLY);
+            let expected: Buffer;
+            try {
+                expected = await readFileHandleExactly(handle, size);
+            } finally {
+                await handle.close();
+            }
+            const fd = openRegularFileInsideRootSync(filePath, fs.realpathSync(root));
+            try {
+                assert.deepEqual(readFileDescriptorExactlySync(fd, size), expected);
+            } finally {
+                fs.closeSync(fd);
+            }
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('readFileDescriptorExactlySync rejects growth and a short read', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-fd-sync-exact-'));
+    const filePath = path.join(root, 'source.ts');
+    fs.writeFileSync(filePath, 'abc', 'utf8');
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY);
+    try {
+        assert.throws(() => readFileDescriptorExactlySync(fd, 4), /does not match the observed size/);
+        fs.appendFileSync(filePath, 'def', 'utf8');
+        assert.throws(() => readFileDescriptorExactlySync(fd, 3), /grew beyond the observed size/);
+        assert.throws(() => readFileDescriptorExactlySync(fd, -1), /size is invalid/);
+    } finally {
+        fs.closeSync(fd);
         fs.rmSync(root, { recursive: true, force: true });
     }
 });

@@ -8,6 +8,7 @@ import { IndexingResourcePlanner, type IndexingResourcePlan, type IndexingMemory
  * acquires authority state by reachability through Context.
  */
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import type {
     IndexCodebaseResult,
@@ -75,6 +76,7 @@ import {
 import {
     assertDescriptorBoundIndexingSupported,
     openRegularFileInsideRoot,
+    openRegularFileInsideRootSync,
 } from '../sync/root-bound-fs';
 import { AtomicIncrementalPublicationUnsupportedError } from './errors';
 
@@ -1587,7 +1589,7 @@ export class IndexGenerationWorkflow {
             await measurePublicationPhase(
                 'publication_activation',
                 async () => {
-                    await this.verifyPreparedSyncPublication(
+                    await perfSpan('sync.verify_publication', () => this.verifyPreparedSyncPublication(
                         input.codebasePath,
                         candidateCollectionName,
                         input.preparedChanges.fileHashes,
@@ -1595,8 +1597,8 @@ export class IndexGenerationWorkflow {
                         totalChunks,
                         preparedNavigation,
                         observedTotalChunks,
-                    );
-                    await input.preparedChanges.assertSourceObservationCurrent();
+                    ));
+                    await perfSpan('sync.source_current', () => input.preparedChanges.assertSourceObservationCurrent());
                     if (!await this.ports.isObservedIndexPolicyControlSignatureCurrent(
                         input.sealedPolicy as ObservedResolvedIndexPolicy,
                     )) {
@@ -1796,11 +1798,11 @@ export class IndexGenerationWorkflow {
             resolutionSourceControls,
             packageOwnershipSourceControls,
             publicationSourceControls,
-        } = await collectPublicationSourceControls(
+        } = await perfSpan('sync.source_controls', () => collectPublicationSourceControls(
             canonicalRoot,
             currentSynchronizer.getTrackedRelativePaths(),
             this.ports.resolutionAnalyzer,
-        );
+        ), { initial: true });
         currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
 
         this.ports.registerSynchronizerForPublication(
@@ -1815,7 +1817,7 @@ export class IndexGenerationWorkflow {
         );
 
         progressCallback?.({ phase: 'Checking for file changes...', current: 0, total: 100, percentage: 0 });
-        let preparedChanges = await currentSynchronizer.prepareChanges();
+        let preparedChanges = await perfSpan('sync.prepare_changes', () => currentSynchronizer.prepareChanges());
         const nextResolutionSourcePaths = new Set(currentSynchronizer.getTrackedRelativePaths());
         for (const filePath of preparedChanges.changes.removed) nextResolutionSourcePaths.delete(filePath);
         for (const filePath of preparedChanges.changes.added) nextResolutionSourcePaths.add(filePath);
@@ -1823,17 +1825,17 @@ export class IndexGenerationWorkflow {
             resolutionSourceControls: nextResolutionSourceControls,
             packageOwnershipSourceControls: nextPackageOwnershipSourceControls,
             publicationSourceControls: nextPublicationSourceControls,
-        } = await collectPublicationSourceControls(
+        } = await perfSpan('sync.source_controls', () => collectPublicationSourceControls(
             canonicalRoot,
             [...nextResolutionSourcePaths],
             this.ports.resolutionAnalyzer,
-        );
+        ));
         if (JSON.stringify(nextPublicationSourceControls) !== JSON.stringify(publicationSourceControls)) {
             resolutionSourceControls = nextResolutionSourceControls;
             packageOwnershipSourceControls = nextPackageOwnershipSourceControls;
             publicationSourceControls = nextPublicationSourceControls;
             currentSynchronizer.setAdditionalObservablePaths(publicationSourceControls);
-            preparedChanges = await currentSynchronizer.prepareChanges();
+            preparedChanges = await perfSpan('sync.prepare_changes', () => currentSynchronizer.prepareChanges(), { retry: true });
         }
         const { added, removed, modified } = preparedChanges.changes;
         const totalChanges = added.length + removed.length + modified.length;
@@ -2040,15 +2042,19 @@ export class IndexGenerationWorkflow {
                 for (const lang of affectedSemanticLanguages) {
                     const sourceFiles: SemanticSourceFile[] = [];
                     const langFiles = mergedManifestFiles.filter((f) => f.language === lang);
+                    const readStartedAt = performance.now();
                     for (const f of langFiles) {
                         const fullPath = path.resolve(codebasePath, f.path);
                         let sourceBytes: Buffer;
                         try {
-                            const handle = await openRegularFileInsideRoot(fullPath, codebasePath);
+                            // Synchronous root-bound read: the delta rebuild reads every
+                            // file of an affected language, and the promise form costs
+                            // several thread-pool round trips per file.
+                            const fd = openRegularFileInsideRootSync(fullPath, codebasePath);
                             try {
-                                sourceBytes = await handle.readFile();
+                                sourceBytes = fs.readFileSync(fd);
                             } finally {
-                                await handle.close();
+                                fs.closeSync(fd);
                             }
                         } catch {
                             throw new Error(`Failed to read semantic source file during delta rebuild: ${f.path}`);
@@ -2061,12 +2067,13 @@ export class IndexGenerationWorkflow {
                         }
                         sourceFiles.push({ path: f.path, source, sourceHash });
                     }
-                    const auxiliaryFiles = await this.collectSemanticAuxiliariesForLanguage(
+                    perfTrace('navigation.semantic.read', performance.now() - readStartedAt, { language: lang, files: langFiles.length });
+                    const auxiliaryFiles = await perfSpan('navigation.semantic.auxiliaries', () => this.collectSemanticAuxiliariesForLanguage(
                         codebasePath,
                         lang,
                         semanticRegistry,
                         observedFileHashes,
-                    );
+                    ), { language: lang });
                     const descriptor = semanticRegistry.getDescriptor(lang);
                     if (!descriptor) {
                         throw new Error(`Semantic provider metadata is unavailable for '${lang}'.`);

@@ -57,6 +57,14 @@ terminated (`satori_parse_source` in `satori_semantic.c`). A C# file ending in a
 directive with no final newline no longer loses all call evidence. Revisions:
 `go-v4`, `java-v2`, `csharp-v2`, `rust-v4`, `kotlin-v2`.
 
+Local port: CBM `67ff40d5` resolves Kotlin calls on typed class properties
+(primary-constructor `val`, body property, `this.prop`). The Kotlin driver in
+`satori_semantic.c` walks each file on an own-file overlay registry chained to the
+project registry. The upstream sole-definer hunk in `kotlin_resolve_function_name`
+is not ported because Satori has no such name-guess fallback. Satori admits no
+`lsp_kt_any` strategy, so those calls stay abstained. Revision: `kotlin-v2`
+(unreleased, not bumped again).
+
 When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp):
 
 1. **Pull and inspect changes**:

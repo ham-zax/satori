@@ -2179,9 +2179,17 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             struct CBMHashTable *field_map = NULL;
             cbm_kotlin_register_lsp_defs(&file_arena, &registry, defs.items, (int)defs.count, &field_map);
             cbm_registry_finalize(&registry);
+            /* Own-file overlay (CBM 67ff40d5): the project registry holds this
+             * file's classes from definitions without property types. The walk
+             * re-registers them from the AST with typed fields, so they must
+             * shadow the definition-built entries of the same QN. */
+            CBMTypeRegistry overlay;
+            cbm_registry_init(&overlay, &file_arena);
+            overlay.fallback = &registry;
             KotlinLSPContext ctx;
             kotlin_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
-                            &registry, meta[i].scope_qn, meta[i].scope_qn, "", NULL, &resolved);
+                            &overlay, meta[i].scope_qn, meta[i].scope_qn, "", NULL, &resolved);
+            ctx.overlay_index_arena = &file_arena;
             kotlin_lsp_process_file(&ctx, root);
             cbm_ht_free(field_map);
         } else {

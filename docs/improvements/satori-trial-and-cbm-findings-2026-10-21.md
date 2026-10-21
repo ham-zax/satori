@@ -117,6 +117,11 @@ Results:
 - PHP grouped use `d74579c9`: fixed in `b16320b3` (`php-v2`).
 - Missing final newline `fa258d34`: fixed in `8ab9f98d` (`satori_parse_source`). C# lost all
   evidence when a file ended with `#endregion` or `#pragma` and no newline. Java was not affected.
+- C# same-name types `a510646b`: not applicable. Probes with `using`, enclosing namespace,
+  qualified name, `using` alias and a `partial` member all resolve to the correct file in both
+  directions and in both file orders.
+- Kotlin typed properties `67ff40d5`: fixed. Before the port, calls on primary-constructor `val`
+  and `this.prop` receivers had no evidence. Typed parameters and body properties already worked.
 
 Not confirmed:
 

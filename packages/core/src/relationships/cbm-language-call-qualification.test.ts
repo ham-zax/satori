@@ -803,3 +803,26 @@ test('promoted Kotlin and PHP calls bind CBM extractor symbols without qualifica
         { path: 'src/App/Main.php', source: '<?php\nnamespace App;\n\nuse Demo\\Util;\n\nfunction run(): int {\n    return Util::make();\n}\n' },
     ], [{ path: 'composer.json', role: 'manifest', source: '{}' }]), [['src/App/Main.php#run', 'src/Demo/Util.php#Util.make']]);
 });
+
+test('Kotlin binds calls on typed class properties to the property type', async () => {
+    // Each receiver type declares `inserir`, so a name guess would pick the wrong file.
+    const occurrences = allOccurrences(await analyze('kotlin', [
+        { path: 'src/a/Repo.kt', source: 'package a\n\ninterface Repo {\n    fun inserir(x: String): Long\n}\n' },
+        { path: 'src/b/Audit.kt', source: 'package b\n\nclass Audit {\n    fun inserir(x: String): Long = 0L\n}\n' },
+        { path: 'src/app/Service.kt', source: 'package app\n\nimport a.Repo\nimport b.Audit\n\n'
+            + 'class Service(private val repository: Repo, private val audit: Audit) {\n'
+            + '    fun save(x: String): Long = repository.inserir(x)\n'
+            + '    fun log(x: String): Long = audit.inserir(x)\n}\n\n'
+            + 'class Holder {\n    private val audit: Audit = Audit()\n'
+            + '    fun hold(x: String): Long = this.audit.inserir(x)\n}\n' },
+    ], [{ path: 'build.gradle.kts', role: 'manifest', source: '' }]))
+        .filter((occurrence) => occurrence.targetProvenance?.name === 'inserir');
+    assert.deepEqual(
+        occurrences.map((occurrence) => [occurrence.decision, occurrence.proof.strategy, occurrence.targetProvenance?.file]),
+        [
+            ['resolved', 'type_dispatch', 'src/a/Repo.kt'],
+            ['resolved', 'type_dispatch', 'src/b/Audit.kt'],
+            ['resolved', 'type_dispatch', 'src/b/Audit.kt'],
+        ],
+    );
+});

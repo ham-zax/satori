@@ -110,6 +110,14 @@ Probable, a fixture must prove each:
 - C# same-name types (`a510646b`), Kotlin typed properties (`67ff40d5`), PHP grouped use
   (`d74579c9`), Rust generic impl self type (`f75af00a`).
 
+Results:
+
+- Rust `f75af00a`: not applicable. The fixture `impl<T> G<T> { self.Help() + Self::Assoc() }`
+  already resolves. The upstream gap came from an upstream extractor change that Satori lacks.
+- PHP grouped use `d74579c9`: fixed in `b16320b3` (`php-v2`).
+- Missing final newline `fa258d34`: fixed in `8ab9f98d` (`satori_parse_source`). C# lost all
+  evidence when a file ended with `#endregion` or `#pragma` and no newline. Java was not affected.
+
 Not confirmed:
 
 - `C_EVAL_DEPTH_LIMIT` is not in `third_party/cbm-semantic`. The C memo and depth claims

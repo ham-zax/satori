@@ -347,7 +347,7 @@ export class ManageMaintenanceHandlers {
         }
     }
 
-    public async handleGetIndexingStatus(args: ToolArgs): Promise<ToolTextResponse> {
+    public async handleGetIndexingStatus(args: ToolArgs, rereadAfterTerminal = false): Promise<ToolTextResponse> {
         const codebasePath = typeof args.path === "string" ? args.path : "";
         const requestedDetail = args.detail;
         const detail: ManageIndexStatusDetail = requestedDetail === "capabilities"
@@ -706,6 +706,19 @@ export class ManageMaintenanceHandlers {
             }
 
             const operation = this.host.mutationRuntime.getOperation(envelopePath);
+            // The Publication and freshness above were read before this operation. An
+            // operation that turned terminal during this read may have activated or
+            // covered state after those reads, so read once more instead of pairing
+            // its terminal phase with the older state.
+            if (
+                !rereadAfterTerminal
+                && envelopePath === absolutePath
+                && operation
+                && TERMINAL_OPERATION_PHASES.has(operation.phase)
+                && (operation.id !== latestOperation?.id || operation.phase !== latestOperation.phase)
+            ) {
+                return this.handleGetIndexingStatus(args, true);
+            }
             const pendingSync = activeMutation?.action === "sync"
                 ? pendingSyncProjection(operation, activeMutation)
                 : undefined;

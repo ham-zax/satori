@@ -193,3 +193,53 @@ test("status after a failed create reports the failure instead of telling the ca
     assert.equal(payload.hints?.create, undefined);
     assert.doesNotMatch(JSON.stringify(payload), /is not indexed/);
 });
+
+test("status rereads when the operation turns terminal during the read", async () => {
+    const root = os.tmpdir();
+    const syncOperation = (phase: string) => ({
+        id: "sync-op", action: "sync", canonicalRoot: root, generation: 2,
+        acceptedAt: new Date(0).toISOString(), phase, progress: phase === "completed" ? 100 : 50,
+    });
+    let operation = syncOperation("writing");
+    let indexedFiles = 1;
+    let sourceFreshness = { state: "unverified", reason: "watcher_event_pending" };
+    const builders = new ToolResponseBuilders({} as never);
+    const handler = new ManageMaintenanceHandlers({
+        mutationRuntime: { getActiveMutation: () => undefined, getOperation: () => operation },
+        prepareStatusTrackedRootRead: async () => ({
+            state: "ready", root: { path: root }, navigationStatus: "valid",
+            publication: {
+                id: `published-${indexedFiles}`,
+                publication: {
+                    status: "complete",
+                    createdAt: new Date(0).toISOString(),
+                    vector: { indexedFiles, totalChunks: 2, collectionName: "collection" },
+                    policy: { policyHash: "policy" },
+                },
+            },
+        }),
+        context: { inspectSourceFreshnessCheckpoint: async () => ({ status: "valid" }) },
+        syncManager: {
+            assessReadFreshness: async () => {
+                const observed = sourceFreshness;
+                // The sync activates its Publication, covers the watcher event and
+                // completes after this read observed the older state.
+                if (operation.phase !== "completed") {
+                    indexedFiles = 2;
+                    sourceFreshness = { state: "verified", reason: "watcher_continuity" };
+                    operation = syncOperation("completed");
+                }
+                return { sourceFreshness: observed };
+            },
+        },
+        acquirePublicationLease: () => undefined,
+        buildSyncHint: () => ({ tool: "manage_index", args: { action: "sync", path: root } }),
+        manageResponse: (...args: Parameters<ToolResponseBuilders["buildManageResponseEnvelope"]>) => ({
+            content: [{ type: "text", text: JSON.stringify(builders.buildManageResponseEnvelope(...args)) }],
+        }),
+    } as never);
+    const payload = JSON.parse((await handler.handleGetIndexingStatus({ path: root })).content[0]?.text ?? "{}");
+    assert.equal(payload.operation.phase, "completed");
+    assert.equal(payload.publication.publicationId, "published-2");
+    assert.deepEqual(payload.sourceFreshness, { state: "verified", reason: "watcher_continuity" });
+});

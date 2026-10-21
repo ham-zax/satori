@@ -12,7 +12,7 @@ Working plan for the remaining Satori dev-trial findings and the gaps found by a
 | 1 | C navigation (region exclusion, include-aware targets, partial outline, `cpp-v3`) | Merged, uncommitted |
 | 2 | Memory peak 3.6-3.9 GiB on the 1,362-file webharness repo | Fixed: process mode at every budget |
 | 3 | `find_references` stops at 100 of 134 with no continuation | Merged, uncommitted (`nextCursor`, `hints.nextPage`) |
-| 4 | Sync `unverified` / `watcher_event_pending` | Not reproduced, one bounded check left |
+| 4 | Sync `unverified` / `watcher_event_pending` | Fixed: status rereads when the operation turns terminal during the read |
 | 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | Fixed: WASM 2 GiB, 2,000,000 call sites |
 | 6 | Unexplained completed sync at generation 3 after create | Fixed: handoff records the sync time |
 
@@ -48,6 +48,19 @@ is the safe ceiling) and `SATORI_MAX_CALL_SITES` to 2,000,000. The full set then
 WASM memory, 184,581 published calls. Full CBM index with the dev build: boundaries 1 to 15, fanIn
 and fanOut 15, relationships 29,113 to 127,192, `satori-cbm-semantic-cpp` present. Cost: the run
 peaked at 5.4 GB under a 6,000 MB scope and was OOM-killed under 4,500 MB (one run each).
+
+### Finding 4 evidence
+
+- Reproduced on a webharness clone with back-to-back add syncs: 2 of 5 status reads showed
+  `completed` with the old file count and `watcher_event_pending`. Every sync logged `+1`.
+- Timing logs (`~/repo/bench-bugs/satori-dev-trial-20261021/luna-index/f4-instrumented-server.log`)
+  show the manual sync covered the watcher event 57 ms before that status response. The watcher
+  event arrives 4 ms after the write.
+- Cause: `handleGetIndexingStatus` reads the Publication and freshness, awaits more reads, and
+  reads the operation last. A completion in between gives a mixed response.
+- Not fixed: a sync that starts before the watcher is ready captures no flight epoch, so
+  `watcher_observation_gap` stays until the next sync. After every server start the background
+  pass runs one `threshold_expired` sync because no last-sync time exists.
 
 ### Finding 6 evidence
 

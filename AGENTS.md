@@ -10,7 +10,6 @@ Your global instructions (`~/.claude/CLAUDE.md` for Claude Code, `~/.codex/AGENT
 
 * **Answer the question asked.** Questions, explanations, reviews, audits, and diagnoses are read-only. Answer briefly from what you already know. Look something up only when you cannot answer without it, and leave side topics I did not raise.
 * **Results before new work.** Report the finished run and deliver what is already owed before starting anything new.
-* **Say before you build.** Before changing product code, public behavior, or configuration I have not specifically approved, state the change and wait for my answer. "Improve X" approves exploring X, not a design. Experiments, scratch scripts, and read-only analysis need no approval.
 * **Start from the workflow skill** your global instructions name, and use its fast path for small changes.
 * **I dictate by voice.** Read for intent, state your reading of an unclear phrase in one line, and continue with what is clear.
 
@@ -84,7 +83,7 @@ Satori must be fast on every request and correct under concurrent writers, crash
 ## Repository safety
 
 * Check repository status before editing. Staged, unstaged, and untracked work is mine; never discard it.
-* Commit, stage, amend, rebase, merge, stash, push, reset, clean, or change branches only when explicitly asked.
+* Amend, rebase, merge, stash, reset, clean, or change branches only when explicitly asked.
 * Run no broad formatter, generator, codemod, or fix-all command that may modify unrelated files.
 * Delete no user data, indexes, databases, environments, or irreplaceable generated output without explicit authorization.
 * Start a long-running command once and wait for it rather than polling. Restart an active command only after confirmed failure or timeout. Leave no background processes, temporary files, or generated state behind.

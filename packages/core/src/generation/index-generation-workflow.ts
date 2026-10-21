@@ -45,6 +45,7 @@ import {
 import type { VectorDatabase } from '../vectordb/types';
 import type { IndexProfile } from '../config/defaults';
 import type { ResolvedIndexPolicy, IndexPolicyRuntimeService } from '../policy/index-policy-runtime-service';
+import { IndexPolicyProbeRejections } from '../config/index-policy';
 import type { Embedding, EmbeddingOperationMetricsSnapshot } from '../embedding';
 import { FileSynchronizer } from '../sync/synchronizer';
 import { collectPublicationSourceControls } from './publication-source-controls';
@@ -246,6 +247,7 @@ export interface IndexGenerationWorkflowPorts {
     getCodeFiles(
             codebasePath: string,
             indexPolicy?: ResolvedIndexPolicy,
+            probeRejections?: IndexPolicyProbeRejections,
         ): Promise<string[]>;
     getIndexedExtensionsForCodebase(codebasePath: string): string[];
     getIsHybrid(): boolean;
@@ -803,7 +805,8 @@ export class IndexGenerationWorkflow {
 
         progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 });
         const scanStartedAt = Date.now();
-        const scannedCodeFiles = await this.ports.getCodeFiles(codebasePath, indexPolicy);
+        const probeRejections = new IndexPolicyProbeRejections();
+        const scannedCodeFiles = await this.ports.getCodeFiles(codebasePath, indexPolicy, probeRejections);
         const scannedRelativePaths = scannedCodeFiles.map((filePath) => {
             const relativePath = this.ports.normalizeRelativePathForCodebase(codebasePath, filePath);
             if (!relativePath) {
@@ -912,6 +915,7 @@ export class IndexGenerationWorkflow {
                 const prepareChangesStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                 const preparedChanges = await synchronizer.prepareChanges({
                     capturedFullIndexSource,
+                    probeRejections,
                 });
                 if (prepareChangesStartedAt !== undefined) perfTrace('index.prepare_changes', performance.now() - prepareChangesStartedAt);
                 const navigationStartedAt = Date.now();
@@ -1050,6 +1054,7 @@ export class IndexGenerationWorkflow {
                     const prepareChangesStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;
                     const preparedChanges = await synchronizer.prepareChanges({
                         capturedFullIndexSource,
+                        probeRejections,
                     });
                     if (prepareChangesStartedAt !== undefined) perfTrace('index.prepare_changes', performance.now() - prepareChangesStartedAt);
                     const packageOwnershipStartedAt = isPerfTraceEnabled() ? performance.now() : undefined;

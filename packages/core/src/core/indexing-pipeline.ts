@@ -14,6 +14,7 @@ import {
     isIndexableFileByPolicy,
     isIndexableFileObservationByPolicy,
     MAX_INDEXED_SOURCE_FILE_BYTES,
+    type IndexPolicyProbeRejections,
 } from '../config/index-policy';
 import type {
     CodeChunk,
@@ -317,12 +318,14 @@ export class IndexingPipeline {
     async getCodeFiles(
         codebasePath: string,
         indexPolicy?: IndexingPolicy,
+        probeRejections?: IndexPolicyProbeRejections,
     ): Promise<string[]> {
         const files: string[] = [];
         // Normalize once per scan; policy checks take a Set as already normalized.
         const supportedExtensions: ReadonlySet<string> = new Set(normalizeSupportedExtensions(
             indexPolicy?.supportedExtensions ?? this.getIndexedExtensionsForCodebase(codebasePath),
         ));
+        const rejections = probeRejections?.bind(supportedExtensions) ? probeRejections : undefined;
         const policyMatcher = indexPolicy
             ? createIndexIgnoreMatcher(indexPolicy.effectiveIgnorePatterns)
             : null;
@@ -385,6 +388,8 @@ export class IndexingPipeline {
                                 supportedExtensions,
                             )) {
                                 files.push(fullPath);
+                            } else {
+                                rejections?.record(relativePath, stat);
                             }
                         },
                     });

@@ -12,6 +12,7 @@ import {
     type SynchronizerScanContext,
 } from './sync-scan';
 import type { FileStatSignature } from './sync-scan';
+import { IndexPolicyProbeRejections } from '../config/index-policy';
 
 const SPARSE_ANCHOR_BYTES = 256 * 1024 * 1024;
 
@@ -153,6 +154,29 @@ test('scanSynchronizerState returns complete immutable scan results', async () =
         assert.equal(previousHashes.has('stale.ts'), true);
         // Results are fresh maps, not aliases of the context evidence.
         assert.notEqual(output.fileHashes, previousHashes);
+    });
+});
+
+test('scanSynchronizerState reuses a probe rejection only while the stat witness is unchanged', async () => {
+    await withTempDir(async (rootDir) => {
+        const scriptPath = path.join(rootDir, 'tool');
+        fs.writeFileSync(scriptPath, '#!/usr/bin/env python3\nprint(1)\n', 'utf8');
+        const scan = (probeRejections?: IndexPolicyProbeRejections) => scanSynchronizerState({
+            ...makeContext(rootDir, { forceFullHash: false }),
+            probeRejections,
+        });
+        assert.deepEqual([...(await scan()).fileHashes.keys()], ['tool']);
+
+        // A recorded rejection with the current witness skips the content probe.
+        const rejections = new IndexPolicyProbeRejections();
+        assert.equal(rejections.bind(new Set(['.ts'])), true);
+        rejections.record('tool', fs.statSync(scriptPath));
+        assert.deepEqual([...(await scan(rejections)).fileHashes.keys()], []);
+
+        // Any write changes the witness, so the scan probes the file again.
+        fs.writeFileSync(scriptPath, '#!/usr/bin/env python3\nprint(2)\nprint(3)\n', 'utf8');
+        assert.deepEqual([...(await scan(rejections)).fileHashes.keys()], ['tool']);
+        assert.equal(rejections.bind(new Set(['.ts', '.py'])), false);
     });
 });
 

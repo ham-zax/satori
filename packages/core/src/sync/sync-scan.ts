@@ -7,6 +7,8 @@ import { compareContractStrings } from '../utils/compare-contract-strings';
 import { canonicalizeRepositoryRelativePath, isRepositoryRelativePath } from '../paths/repository-path';
 import {
     isObservableFileObservationByPolicy,
+    isSemanticAuxiliaryFilename,
+    type IndexPolicyProbeRejections,
     type SupportedExtensionsInput,
 } from '../config/index-policy';
 import {
@@ -33,6 +35,7 @@ export interface SynchronizerScanContext {
     /** Normalized once by the synchronizer; see SupportedExtensionsInput. */
     supportedExtensions: SupportedExtensionsInput;
     additionalObservablePaths?: ReadonlySet<string>;
+    probeRejections?: IndexPolicyProbeRejections;
     excludedPaths?: ReadonlySet<string>;
     forceFullHash: boolean;
     hashConcurrency: number;
@@ -155,6 +158,13 @@ async function isSupportedFile(
     stat: fsSync.Stats,
 ): Promise<boolean> {
     if (context.additionalObservablePaths?.has(relativePath)) return true;
+    // Auxiliary files are observable whatever the indexability scan decided.
+    if (
+        !isSemanticAuxiliaryFilename(relativePath)
+        && context.probeRejections?.isRejected(relativePath, stat)
+    ) {
+        return false;
+    }
     // Synchronous by design: scans probe most unrecognized files, and the
     // promise form of open, read and close costs about 15 times as much.
     let descriptor: number | undefined;

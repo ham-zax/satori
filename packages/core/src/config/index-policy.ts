@@ -179,6 +179,49 @@ export async function isIndexableFileByPolicy(
     }
 }
 
+interface ProbeStatWitness {
+    dev: number;
+    ino: number;
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+}
+
+/**
+ * Indexability rejections from one full-index source scan, reused by the
+ * final observation check of the same run. Most rejections need a content
+ * probe, and after indexing those reads miss the page cache (about 19 s on
+ * LibreOffice). A rejection is reused only for the same normalized extension
+ * set and an unchanged stat witness, otherwise the caller probes again.
+ */
+export class IndexPolicyProbeRejections {
+    private extensionsKey: string | undefined;
+    private readonly rejected = new Map<string, ProbeStatWitness>();
+
+    /** Returns false when the caller's extension set differs from the recorded scan's set. */
+    bind(supportedExtensions: ReadonlySet<string>): boolean {
+        const key = [...supportedExtensions].sort().join('\0');
+        this.extensionsKey ??= key;
+        return this.extensionsKey === key;
+    }
+
+    record(relativePath: string, stat: ProbeStatWitness): void {
+        this.rejected.set(relativePath, {
+            dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs,
+        });
+    }
+
+    isRejected(relativePath: string, stat: ProbeStatWitness): boolean {
+        const witness = this.rejected.get(relativePath);
+        return witness !== undefined
+            && witness.dev === stat.dev
+            && witness.ino === stat.ino
+            && witness.size === stat.size
+            && witness.mtimeMs === stat.mtimeMs
+            && witness.ctimeMs === stat.ctimeMs;
+    }
+}
+
 import { DefaultSemanticLanguageRegistry } from '../semantic/descriptor';
 
 let defaultRegistry: DefaultSemanticLanguageRegistry | null = null;

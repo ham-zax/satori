@@ -13,6 +13,7 @@ import { DEFAULT_SUPPORTED_EXTENSIONS } from '../config/defaults';
 import {
     isSemanticAuxiliaryFilename,
     normalizeSupportedExtensions,
+    type IndexPolicyProbeRejections,
 } from '../config/index-policy';
 import {
     normalizeSynchronizerRelPath,
@@ -77,6 +78,8 @@ export interface PrepareFileChangesOptions {
         fileStats: ReadonlyMap<string, SnapshotFileStatSignature>;
         unprocessedPaths?: readonly string[];
     }>;
+    /** Rejections from the same full-index scan; see IndexPolicyProbeRejections. */
+    probeRejections?: IndexPolicyProbeRejections;
 }
 
 export type SourceFreshnessPathComparison =
@@ -275,10 +278,12 @@ export class FileSynchronizer {
         previousStats: ReadonlyMap<string, FileStatSignature>,
         forceFullHash: boolean,
         excludedPaths: ReadonlySet<string> = new Set(),
+        probeRejections?: IndexPolicyProbeRejections,
     ): Promise<{ effective: EffectiveState; hashedCount: number }> {
-        const output = await scanSynchronizerState(
-            this.buildScanContext(forceFullHash, previousHashes, previousStats, excludedPaths),
-        );
+        const output = await scanSynchronizerState({
+            ...this.buildScanContext(forceFullHash, previousHashes, previousStats, excludedPaths),
+            probeRejections: probeRejections?.bind(this.supportedExtensions) ? probeRejections : undefined,
+        });
         return {
             effective: {
                 fileHashes: new Map(output.fileHashes),
@@ -337,6 +342,7 @@ export class FileSynchronizer {
                 capturedFullIndexSource.fileStats,
                 false,
                 excludedPaths,
+                options.probeRejections,
             );
             for (const [relativePath, capturedHash] of capturedFullIndexSource.fileHashes) {
                 if (scanned.effective.fileHashes.get(relativePath) !== capturedHash) {

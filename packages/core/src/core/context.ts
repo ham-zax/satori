@@ -28,6 +28,7 @@ import {
 } from '../config/defaults';
 import {
     normalizeSupportedExtensions,
+    type IndexPolicyProbeRejections,
 } from '../config/index-policy';
 import {
     loadSatoriRepoConfig,
@@ -531,7 +532,7 @@ export class Context {
             embedding: this.embedding,
             getActiveIgnorePatterns: (codebasePath) => this.getActiveIgnorePatterns(codebasePath),
             getActiveIndexedCollectionName: (codebasePath) => this.getActiveIndexedCollectionName(codebasePath),
-            getCodeFiles: (codebasePath, indexPolicy) => this.getCodeFiles(codebasePath, indexPolicy),
+            getCodeFiles: (codebasePath, indexPolicy, probeRejections) => this.getCodeFiles(codebasePath, indexPolicy, probeRejections),
             getIndexedExtensionsForCodebase: (codebasePath) => this.getIndexedExtensionsForCodebase(codebasePath),
             getIsHybrid: () => this.getIsHybrid(),
             getLanguageRouterVersion: () => this.getLanguageRouterVersion(),
@@ -1591,8 +1592,9 @@ export class Context {
     private async getCodeFiles(
         codebasePath: string,
         indexPolicy?: ResolvedIndexPolicy,
+        probeRejections?: IndexPolicyProbeRejections,
     ): Promise<string[]> {
-        return this.indexingPipeline.getCodeFiles(codebasePath, indexPolicy);
+        return this.indexingPipeline.getCodeFiles(codebasePath, indexPolicy, probeRejections);
     }
 
     private async readIndexableFileObservationInsideRoot(

@@ -5,6 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [Satori trial findings and CBM upstream gaps, 21 October 2026](satori-trial-and-cbm-findings-2026-10-21.md) | Working plan; slices in progress | Trial findings status, the memory switch isolation (process mode 3,613 to 1,652 MiB), verdicts on the CBM comparison, the verified producer note, and the parallel work plan. |
 | [LibreOffice critical path after Candidate C, 21 October 2026](libreoffice-critical-path-2026-10-21.md) | Analysis checkpoint; window experiment confirmed | The serial path is scan, producer, `prepare_changes`, navigation, publication. Payload drain and vector writes add no time. `index.analysisWait` is 192 of 212 s of the producer. Window 32 (four runs per variant): producer -26.3 s, critical path -32.2 s, no memory cost, identical output. |
 | [How a third agent found the indexing bottleneck](gemini-argon-analysis-window-article-2026-10-21.md) | Draft article | Gemini 4 Argon traced the producer wait to the 8-file analysis window. Window 32 (four runs per variant): producer -26.3 s, critical path -32.2 s, identical output. |
 | [Full-index architecture and optimizations, 21 October 2026](indexing-architecture-and-optimizations-2026-10-21.md) | Native projections default on linux-x64 (`d434fa96`); multi-repo parity passes | Full-index flow, each kept and dropped optimization with intent and outcome, validation on five repositories, and the ranked plan toward 200 s. |

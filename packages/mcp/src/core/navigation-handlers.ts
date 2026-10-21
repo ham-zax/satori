@@ -2303,6 +2303,9 @@ export class NavigationHandlers {
         if (relationshipGraph.warning) {
             outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
         }
+        if (manifestFile?.structuralStatus === "recovered") {
+            outlineWarnings.push(`OUTLINE_PARTIAL_STRUCTURAL_COVERAGE:${manifestFile.structuralReason ?? "unknown"}`);
+        }
         const continuationArgs = {
             path: effectiveRoot,
             file: normalizedFile,

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { WasmSemanticProjectAnalyzer } from './wasm-analyzer';
+import { WasmSemanticEngine } from './wasm-engine';
 
 const CARGO_MANIFEST = {
     path: 'Cargo.toml',
@@ -140,7 +141,7 @@ test('C++ header with a canonical include guard is analyzed as if the guard were
     assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
 });
 
-test('C++ include guard with an #else branch is reported as degraded unmodeled_source', async () => {
+test('C++ include guard with an #else branch reports excluded regions as partial', async () => {
     const analyzer = new WasmSemanticProjectAnalyzer();
     const source = [
         '#ifndef UTIL_H',
@@ -158,10 +159,102 @@ test('C++ include guard with an #else branch is reported as degraded unmodeled_s
     });
 
     assert.equal([...evidence.occurrencesByFile.values()].flat().length, 0);
-    assert.deepEqual(evidence.skippedFiles, [
-        { path: 'include/util.h', reason: 'unmodeled_source', bytes: Buffer.byteLength(source, 'utf8') },
+    assert.deepEqual(evidence.skippedFiles ?? [], []);
+    assert.deepEqual(evidence.partialFiles, [
+        { path: 'include/util.h', reason: 'excluded_regions', bytes: Buffer.byteLength(source, 'utf8') },
     ]);
     assert.equal(evidence.coverage?.status, 'degraded');
     assert.equal(evidence.coverage?.sourceFileCount, 1);
-    assert.equal(evidence.coverage?.analyzedSourceFileCount, 0);
+    assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
+});
+
+test('C++ parse-error regions leave clean same-file calls resolved and report partial coverage', async () => {
+    const analyzer = new WasmSemanticProjectAnalyzer();
+    const source = [
+        'void* f(size_t n) mi_attr_noexcept { return 0; }',
+        'int h(){return 1;}',
+        'int r(){return h();}',
+    ].join('\n');
+    const evidence = await analyzer.analyze({
+        language: 'cpp', auxiliaryFiles: [],
+        sourceFiles: [{ path: 'src/main.c', source, sourceHash: 'hash-main' }],
+    });
+    const occurrences = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    const call = occurrences.find((occurrence) => occurrence.callSpan.startByte === source.lastIndexOf('h()'));
+    assert.equal(call?.decision, 'resolved');
+    assert.equal(call?.targetProvenance?.name, 'h');
+    assert.deepEqual(evidence.skippedFiles ?? [], []);
+    assert.deepEqual(evidence.partialFiles, [
+        { path: 'src/main.c', reason: 'excluded_regions', bytes: Buffer.byteLength(source, 'utf8') },
+    ]);
+    assert.deepEqual(evidence.coverage?.partialFiles, evidence.partialFiles);
+    assert.equal(evidence.coverage?.status, 'degraded');
+    assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
+});
+
+for (const guarded of [false, true]) {
+    test(`C++ excludes #ifdef calls and keeps clean calls${guarded ? ' inside a canonical guard' : ''}`, async () => {
+        const analyzer = new WasmSemanticProjectAnalyzer();
+        const body = [
+            'int h(){return 1;}',
+            '#ifdef FEATURE',
+            'int conditional(){return h();}',
+            '#endif',
+            'int r(){return h();}',
+        ].join('\n');
+        const source = guarded ? `#ifndef UTIL_H\n#define UTIL_H\n${body}\n#endif` : body;
+        const evidence = await analyzer.analyze({
+            language: 'cpp', auxiliaryFiles: [],
+            sourceFiles: [{ path: 'include/util.h', source, sourceHash: 'hash-util' }],
+        });
+        const occurrences = evidence.occurrencesByFile.get('include/util.h') ?? [];
+        assert.equal(occurrences.length, 1);
+        assert.equal(occurrences[0]?.callSpan.startByte, source.lastIndexOf('h()'));
+        assert.equal(occurrences[0]?.decision, 'resolved');
+        assert.equal(occurrences[0]?.targetProvenance?.name, 'h');
+        assert.deepEqual(evidence.skippedFiles ?? [], []);
+        assert.deepEqual(evidence.partialFiles, [
+            { path: 'include/util.h', reason: 'excluded_regions', bytes: Buffer.byteLength(source, 'utf8') },
+        ]);
+        assert.equal(evidence.coverage?.status, 'degraded');
+        assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
+    });
+}
+
+test('C++ missing punctuation excludes its parent region and its enclosing definition', async () => {
+    const analyzer = new WasmSemanticProjectAnalyzer();
+    const source = 'int broken();\nint broken(){return 0}\nint h(){return 1;}\nint r(){broken(); return h();}';
+    const evidence = await analyzer.analyze({
+        language: 'cpp', auxiliaryFiles: [],
+        sourceFiles: [
+            { path: 'src/main.c', source, sourceHash: 'hash-main' },
+            // Keep the callable known to the resolver. The invalid same-file
+            // definition must not make this cross-file lookup ambiguous.
+            { path: 'src/other.c', source: 'int broken(){return 0;}', sourceHash: 'hash-other' },
+        ],
+    });
+    const occurrences = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(occurrences.find((call) => call.callSpan.startByte === source.lastIndexOf('broken()'))?.decision, 'unresolved');
+    assert.equal(occurrences.find((call) => call.callSpan.startByte === source.lastIndexOf('h()'))?.decision, 'resolved');
+    assert.equal(evidence.partialFiles?.[0]?.reason, 'excluded_regions');
+});
+
+test('C++ excluded regions emit one whole-file PARTIAL_SOURCE diagnostic', async () => {
+    const engine = await WasmSemanticEngine.create();
+    const session = await engine.createSession('cpp');
+    const source = '#ifdef FEATURE\nint h(){return 1;}\n#endif';
+    try {
+        session.addSource('include/util.h', source);
+        await session.resolve();
+        assert.deepEqual(session.diagnostics(), [{
+            message: 'excluded parse-error or conditional preprocessing regions',
+            file: 'include/util.h',
+            spanStartByte: 0,
+            spanEndByte: Buffer.byteLength(source, 'utf8'),
+            severity: 2,
+            code: 2,
+        }]);
+    } finally {
+        session.destroy();
+    }
 });

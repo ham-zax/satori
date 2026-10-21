@@ -84,4 +84,4 @@ To add another CBM-backed language to the compiled semantic engine:
 6. **Qualify Public Calls Conservatively**:
    - Characterize the upstream strategy labels and map only exact, configuration-proven direct bindings to `direct_call`.
    - Keep receiver/dynamic dispatch below the public boundary until `typeReceiverAwareCapability` is independently qualified.
-   - Treat language build context as semantic authority: Go module/build tags, Java Maven/Gradle roots, C# `.csproj` roots, Rust Cargo/`cfg`, and C/C++ preprocessor/translation-unit visibility must fail closed when Satori does not model the relevant configuration.
+   - Treat language build context as semantic authority: Go module/build tags, Java Maven/Gradle roots, C# `.csproj` roots, and Rust Cargo/`cfg` must fail closed when Satori does not model the relevant configuration. C/C++ visibility is modeled by resolved `#include` closure. Conditional regions are excluded, not modeled.

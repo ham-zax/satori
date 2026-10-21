@@ -2,6 +2,7 @@ import { parentPort } from 'node:worker_threads';
 import { WasmSemanticProjectAnalyzer } from './wasm-analyzer';
 import type {
     SemanticProjectInput,
+    SemanticPartialFile,
     SemanticProviderCoverage,
     SemanticResolvedOccurrence,
     SemanticSkippedFile,
@@ -22,6 +23,7 @@ export type WasmWorkerResponse =
             language: string;
             occurrencesEntries: Array<[string, SemanticResolvedOccurrence[]]>;
             skippedFiles?: readonly SemanticSkippedFile[];
+            partialFiles?: readonly SemanticPartialFile[];
             coverage?: SemanticProviderCoverage;
         };
     }
@@ -46,6 +48,7 @@ if (parentPort) {
                     language: evidence.language,
                     occurrencesEntries,
                     ...(evidence.skippedFiles ? { skippedFiles: evidence.skippedFiles } : {}),
+                    ...(evidence.partialFiles ? { partialFiles: evidence.partialFiles } : {}),
                     ...(evidence.coverage ? { coverage: evidence.coverage } : {}),
                 },
             };

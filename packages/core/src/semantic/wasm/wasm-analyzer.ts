@@ -5,6 +5,7 @@ import type {
 } from '../analyzer-port';
 import type {
     SemanticDecision,
+    SemanticPartialFile,
     SemanticProjectEvidence,
     SemanticProjectInput,
     SemanticReceiverBindingKind,
@@ -17,7 +18,7 @@ import type {
 import { Utf8SourceMap } from '../../language-analysis/source-map';
 import { defaultSemanticLanguageRegistry, type SemanticLanguageRegistry } from '../descriptor';
 import { WasmSemanticEngine } from './wasm-engine';
-import { ReceiverBindingKind, SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE, SemanticDecision as WasmSemanticDecision, SemanticStrategy as WasmSemanticStrategy } from './wasm-types';
+import { ReceiverBindingKind, SATORI_SEMANTIC_DIAG_PARTIAL_SOURCE, SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE, SemanticDecision as WasmSemanticDecision, SemanticStrategy as WasmSemanticStrategy } from './wasm-types';
 
 function loadEngineManifestLanguages(): Set<string> {
     const candidatePaths = [
@@ -121,6 +122,7 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
         try {
             const sourceMapByFile = new Map<string, Utf8SourceMap>();
             const skippedFiles: SemanticSkippedFile[] = [];
+            const partialFiles: SemanticPartialFile[] = [];
             const skipOverBudget = (kind: string, filePath: string, source: string): boolean => {
                 const bytes = Buffer.byteLength(source, 'utf8');
                 if (bytes <= this.maxSourceBytes) return false;
@@ -151,10 +153,18 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
                     sourceBytesByPath.set(src.path, Buffer.byteLength(src.source, 'utf8'));
                 }
                 const seenSkipped = new Set(skippedFiles.map((file) => file.path));
+                const seenPartial = new Set<string>();
                 for (const raw of rawDiagnostics) {
-                    if (raw.code !== SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE) continue;
                     const bytes = sourceBytesByPath.get(raw.file);
                     if (bytes === undefined) continue;
+                    if (raw.code === SATORI_SEMANTIC_DIAG_PARTIAL_SOURCE) {
+                        if (!seenPartial.has(raw.file)) {
+                            seenPartial.add(raw.file);
+                            partialFiles.push({ path: raw.file, reason: 'excluded_regions', bytes });
+                        }
+                        continue;
+                    }
+                    if (raw.code !== SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE) continue;
                     if (seenSkipped.has(raw.file)) continue;
                     seenSkipped.add(raw.file);
                     skippedFiles.push({ path: raw.file, reason: 'unmodeled_source', bytes });
@@ -241,19 +251,21 @@ export class WasmSemanticProjectAnalyzer implements SemanticProjectAnalyzer {
                 language: input.language,
                 occurrencesByFile,
                 ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
+                ...(partialFiles.length > 0 ? { partialFiles } : {}),
                 ...(descriptor ? {
                     coverage: {
                         language: input.language,
                         providerId: descriptor.providerId,
                         providerVersion: descriptor.providerVersion,
                         environmentConfigId: descriptor.environmentConfigId,
-                        status: skippedFiles.length > 0 ? 'degraded' : 'complete',
+                        status: skippedFiles.length > 0 || partialFiles.length > 0 ? 'degraded' : 'complete',
                         sourceFileCount: input.sourceFiles.length,
                         analyzedSourceFileCount: Math.max(
                             0,
                             input.sourceFiles.length - skippedSourceFileCount,
                         ),
                         ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
+                        ...(partialFiles.length > 0 ? { partialFiles } : {}),
                     },
                 } : {}),
             };

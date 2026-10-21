@@ -81,6 +81,12 @@ export interface SemanticSkippedFile {
     readonly bytes: number;
 }
 
+export interface SemanticPartialFile {
+    readonly path: string;
+    readonly reason: 'excluded_regions';
+    readonly bytes: number;
+}
+
 export const SEMANTIC_PROVIDER_COVERAGE_STATUSES = [
     'complete',
     'degraded',
@@ -98,6 +104,7 @@ export interface SemanticProviderCoverage {
     readonly sourceFileCount: number;
     readonly analyzedSourceFileCount: number;
     readonly skippedFiles?: readonly SemanticSkippedFile[];
+    readonly partialFiles?: readonly SemanticPartialFile[];
     readonly failureReason?: 'provider_failure' | 'resource_limit';
     readonly failureMessage?: string;
 }
@@ -110,6 +117,7 @@ export interface SemanticProjectEvidence {
      * Absent or empty when nothing was skipped.
      */
     readonly skippedFiles?: readonly SemanticSkippedFile[];
+    readonly partialFiles?: readonly SemanticPartialFile[];
     /** Truthful provider coverage for capability/status projection. */
     readonly coverage?: SemanticProviderCoverage;
 }

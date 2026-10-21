@@ -288,6 +288,17 @@ function isSemanticProviderCoverage(value: unknown): value is SemanticProviderCo
     )) {
         return false;
     }
+    if (value.partialFiles !== undefined && (
+        !Array.isArray(value.partialFiles)
+        || !value.partialFiles.every((file) => (
+            isRecord(file)
+            && isRepositoryRelativePath(file.path)
+            && file.reason === 'excluded_regions'
+            && isNonNegativeInteger(file.bytes)
+        ))
+    )) {
+        return false;
+    }
     return true;
 }
 

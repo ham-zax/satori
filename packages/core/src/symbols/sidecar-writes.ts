@@ -377,6 +377,11 @@ function buildRelationshipManifest(
                         .map((file) => ({ path: file.path, reason: file.reason, bytes: file.bytes }))
                         .sort((left, right) => compareStrings(left.path, right.path)),
                 } : {}),
+                ...(coverage.partialFiles ? {
+                    partialFiles: [...coverage.partialFiles]
+                        .map((file) => ({ path: file.path, reason: file.reason, bytes: file.bytes }))
+                        .sort((left, right) => compareStrings(left.path, right.path)),
+                } : {}),
                 ...(coverage.failureReason ? { failureReason: coverage.failureReason } : {}),
                 ...(coverage.failureMessage
                     ? { failureMessage: coverage.failureMessage.slice(0, 1024) }

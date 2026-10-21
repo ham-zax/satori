@@ -845,3 +845,85 @@ test("call graph discloses semantic provider skips for the root file and same-la
     assert.ok(callers?.warnings?.includes("CALL_GRAPH_INBOUND_UNANALYZED_FILES:2"));
     assert.equal(callers?.warnings?.some((warning) => warning.startsWith("CALL_GRAPH_SOURCE_FILE_UNANALYZED")), false);
 });
+
+test("call graph discloses partial semantic files for the root file and same-language callers", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "cpp",
+        kind: "function",
+        qualifiedName: "depth::search",
+        name: "search",
+        label: "fn search()",
+        span: { startLine: 1, endLine: 3 },
+        parentQualifiedNamePath: [],
+        file: "src/depth.cpp",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([[target.file, [target]]]),
+        symbolsByInstanceId: new Map([[target.symbolInstanceId, target]]),
+    } as unknown as SymbolRegistry;
+    const coverage = (language: string, paths: string[]) => ({
+        language,
+        providerId: "cbm",
+        providerVersion: "v1",
+        status: "degraded" as const,
+        sourceFileCount: 10,
+        analyzedSourceFileCount: 10,
+        partialFiles: paths.map((path) => ({ path, reason: "excluded_regions" as const, bytes: 100 })),
+    });
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [
+            coverage("cpp", ["src/depth.cpp", "src/deadline.cpp"]),
+            coverage("typescript", ["web/app.ts"]),
+        ],
+        files: [],
+    };
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records: [],
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const build = (direction: "callers" | "callees" | "both") => graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction,
+        depth: 1,
+        limit: 20,
+    });
+
+    const callees = await build("callees");
+    assert.ok(callees?.warnings?.includes("CALL_GRAPH_SOURCE_FILE_PARTIAL:excluded_regions"));
+    assert.equal(callees?.warnings?.some((warning) => warning.startsWith("CALL_GRAPH_INBOUND_PARTIAL_FILES")), false);
+
+    const callers = await build("callers");
+    assert.ok(callers?.warnings?.includes("CALL_GRAPH_INBOUND_PARTIAL_FILES:2"));
+    assert.equal(callers?.warnings?.some((warning) => warning.startsWith("CALL_GRAPH_SOURCE_FILE_PARTIAL")), false);
+
+    const both = await build("both");
+    assert.ok(both?.warnings?.includes("CALL_GRAPH_SOURCE_FILE_PARTIAL:excluded_regions"));
+    assert.ok(both?.warnings?.includes("CALL_GRAPH_INBOUND_PARTIAL_FILES:2"));
+});

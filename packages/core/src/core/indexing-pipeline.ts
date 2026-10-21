@@ -595,10 +595,12 @@ export class IndexingPipeline {
             ? withSourceVocabulary(baseSymbols, analyzed.source)
             : baseSymbols;
         const hasDefinitions = symbolRecords.some((symbol) => symbol.kind !== 'file');
-        const definitionStatus = analyzed.structuralStatus !== 'complete'
-            ? 'structural_unavailable'
-            : hasDefinitions
-                ? 'definitions_present'
+        // A recovered parse keeps the declarations outside its error regions;
+        // structuralStatus stays 'recovered' so readers report partial coverage.
+        const definitionStatus = hasDefinitions
+            ? 'definitions_present'
+            : analyzed.structuralStatus !== 'complete'
+                ? 'structural_unavailable'
                 : 'definition_free';
         return {
             symbolRecords,

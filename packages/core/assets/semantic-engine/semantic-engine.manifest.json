@@ -2,10 +2,10 @@
   "abiVersion": 1,
   "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "b275e3f52cdf146437a0ad31ea4303ccd60bdaf26bd6360b54dfc8ba8de4492d",
+  "semanticSourceDigest": "9d620c97497ff7b8fbfc414be4654c81085f9a7382023ed5912aa99e6702d7bb",
   "buildRecipeDigest": "a1d48fca147ea824a72320bf4e4b1a3e3f0554f5ffd22083fd53255fc222bcf3",
   "jsSha256": "88060c0d3d92e71dbd4ebb10723113c452aada9c5e37a8793f7fc9a91373ec64",
-  "wasmSha256": "3377751fb9344199642b167ff36f7a100ca655b4ec89cd0939493ae415c4fba2",
+  "wasmSha256": "af905968477ac552816085e09095a1c74ee9621919a38c5e577df95406b1e4ca",
   "languages": {
     "go": {
       "semanticRevision": "go-v3",
@@ -20,7 +20,7 @@
       "grammar": "tree-sitter-c-sharp"
     },
     "cpp": {
-      "semanticRevision": "cpp-v2",
+      "semanticRevision": "cpp-v3",
       "grammar": "tree-sitter-cpp"
     },
     "rust": {

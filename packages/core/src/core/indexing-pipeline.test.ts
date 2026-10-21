@@ -928,6 +928,38 @@ test('IndexingPipeline publishes the analyzer outcome without losing recovery re
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('IndexingPipeline keeps clean definitions of a recovered C file as definitions_present', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-index-recovered-c-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const languageAnalyzer = createLanguageAnalysisService();
+    t.after(() => languageAnalyzer.dispose?.());
+    const pipeline = new IndexingPipeline({
+        getVectorDatabase: createMockVectorDb, languageAnalyzer,
+        semanticAnalyzer: noopSemanticProjectAnalyzer, getEmbedding: createMockEmbedding,
+        assertEmbeddingIdentityCurrent: () => ({ provider: 'test', model: 'test', dimension: 768,
+            artifactDigest: null, normalizationPolicy: 'none' }),
+        isHybridEnabled: () => false, canonicalizeCodebasePath: p => p,
+        normalizeRelativePathForCodebase: (base, p) => path.relative(base, p) as RepositoryRelativePath,
+        getIndexedExtensionsForCodebase: () => ['.c'], matchesIgnorePattern: () => false,
+        getSymbolExtractorVersion: () => 'extractor-v1',
+    });
+    const file = path.join(root, 'main.c');
+    fs.writeFileSync(file, [
+        'static int helper(int x) { return x + 1; }',
+        'void* mi_malloc(size_t n) mi_attr_noexcept { return 0; }',
+        'int run(int x) { return helper(x); }',
+    ].join('\n'));
+    const analyzed = await pipeline.analyzeIndexedFile(file, root);
+    assert.ok(analyzed);
+    const facts = pipeline.buildAnalyzedFileSymbolFacts(analyzed);
+    assert.equal(facts.manifestFile.structuralStatus, 'recovered');
+    assert.equal(facts.manifestFile.structuralReason, 'syntax_error');
+    assert.equal(facts.manifestFile.definitionStatus, 'definitions_present');
+    const names = facts.symbolRecords.filter((symbol) => symbol.kind !== 'file').map((symbol) => symbol.name);
+    assert.ok(names.includes('helper'));
+    assert.ok(names.includes('run'));
+});
+
 test('IndexingPipeline vocabulary is default-off and preserves legacy symbol bytes', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-index-vocabulary-policy-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

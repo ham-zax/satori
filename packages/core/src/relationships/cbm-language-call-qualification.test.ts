@@ -322,7 +322,148 @@ test('C++ qualification admits same-TU direct calls and rejects unproved cross-T
         path: 'src/config.cpp',
         source: '#if FEATURE\nint Help() { return 1; }\n#endif\nint Run() { return Help(); }',
     }]);
-    assert.equal([...conditionalEvidence.occurrencesByFile.values()].flat().length, 0);
+    assert.equal([...conditionalEvidence.occurrencesByFile.values()].flat()
+        .some((occurrence) => occurrence.decision === 'resolved'), false);
+});
+
+test('C include closure admits a target declared in an included header', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/util.h', source: 'int add(int,int);' },
+        { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: '#include "util.h"\nint main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'resolved');
+    assert.equal(calls[0]?.targetProvenance?.file, 'src/util.c');
+    assert.equal(calls[0]?.targetProvenance?.name, 'add');
+});
+
+test('C transitive include closure admits a declaration through include cycles', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/util.h', source: '#include "a.h"\nint add(int,int);' },
+        { path: 'src/a.h', source: '#include "util.h"' },
+        { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: '#include "a.h"\nint main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'resolved');
+    assert.equal(calls[0]?.targetProvenance?.file, 'src/util.c');
+});
+
+test('C missing include leaves a cross-file target unresolved', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/util.h', source: 'int add(int,int);' },
+        { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: 'int main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'unresolved');
+    assert.equal(calls[0]?.targetProvenance, undefined);
+});
+
+test('C ambiguous system include leaves a cross-file target unresolved', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'a/util.h', source: 'int add(int,int);' },
+        { path: 'b/util.h', source: 'int add(int,int);' },
+        { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: '#include <util.h>\nint main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'unresolved');
+    assert.equal(calls[0]?.targetProvenance, undefined);
+});
+
+for (const fixture of [
+    { name: 'normalizes quoted relative paths', include: '#include "../include/./nested/../util.h"', header: 'include/util.h', decision: 'resolved' },
+    { name: 'uses unique suffixes for quoted paths', include: '#include "util.h"', header: 'include/util.h', decision: 'resolved' },
+    { name: 'uses unique suffixes for system paths', include: '#include <util.h>', header: 'include/util.h', decision: 'resolved' },
+    { name: 'ignores root-escaping paths', include: '#include "../../include/util.h"', header: 'include/util.h', decision: 'unresolved' },
+    { name: 'ignores macro includes', include: '#define HEADER "util.h"\n#include HEADER', header: 'src/util.h', decision: 'unresolved' },
+    { name: 'ignores excluded includes', include: '#ifdef FEATURE\n#include "util.h"\n#endif', header: 'src/util.h', decision: 'unresolved' },
+] as const) {
+    test(`C include resolution ${fixture.name}`, async () => {
+        const evidence = await analyze('cpp', [
+            { path: fixture.header, source: 'int add(int,int);' },
+            { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+            { path: 'src/main.c', source: `${fixture.include}\nint main(){return add(1,2);}` },
+        ]);
+        const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]?.decision, fixture.decision);
+        assert.equal(calls[0]?.targetProvenance?.file, fixture.decision === 'resolved' ? 'src/util.c' : undefined);
+    });
+}
+
+test('C include closure admits a definition in the target header itself', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/util.h', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: '#include "util.h"\nint main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'resolved');
+    assert.equal(calls[0]?.targetProvenance?.file, 'src/util.h');
+});
+
+test('C include closure collects callable declarations inside function bodies', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/util.h', source: 'void declarations(){ int add(int,int); }' },
+        { path: 'src/util.c', source: 'int add(int a,int b){return a+b;}' },
+        { path: 'src/main.c', source: '#include "util.h"\nint main(){return add(1,2);}' },
+    ]);
+    const calls = evidence.occurrencesByFile.get('src/main.c') ?? [];
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.decision, 'resolved');
+    assert.equal(calls[0]?.targetProvenance?.file, 'src/util.c');
+});
+
+for (const fixture of [
+    { name: 'namespace', header: 'namespace N { int add(int,int); }', definition: 'namespace N { int add(int a,int b){return a+b;} }', call: 'N::add(1,2)', decision: 'resolved' },
+    { name: 'class', header: 'struct S { static int add(int,int); };', definition: 'int S::add(int a,int b){return a+b;}', call: 'S::add(1,2)', decision: 'resolved' },
+    { name: 'different namespace', header: 'namespace Other { int add(int,int); }', definition: 'namespace N { int add(int a,int b){return a+b;} }', call: 'N::add(1,2)', decision: 'unresolved' },
+    { name: 'excluded declaration', header: '#ifdef FEATURE\nint add(int,int);\n#endif', definition: 'int add(int a,int b){return a+b;}', call: 'add(1,2)', decision: 'unresolved' },
+] as const) {
+    test(`C++ include declarations preserve ${fixture.name} qualification`, async () => {
+        const evidence = await analyze('cpp', [
+            { path: 'src/util.h', source: fixture.header },
+            { path: 'src/util.cpp', source: fixture.definition },
+            { path: 'src/main.cpp', source: `#include "util.h"\nint main(){return ${fixture.call};}` },
+        ]);
+        const calls = evidence.occurrencesByFile.get('src/main.cpp') ?? [];
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]?.decision, fixture.decision);
+        assert.equal(calls[0]?.targetProvenance?.file, fixture.decision === 'resolved' ? 'src/util.cpp' : undefined);
+    });
+}
+
+test('clean multi-file C++ same-file occurrences retain decisions, targets, and spans', async () => {
+    const evidence = await analyze('cpp', [
+        { path: 'src/a.cpp', source: 'int h() { return 1; }\nint r() { return h(); }' },
+        { path: 'src/b.cpp', source: 'int k() { return 2; }\nint s() { return k(); }' },
+    ]);
+    const occurrences = [...evidence.occurrencesByFile.values()].flat().map((occurrence) => ({
+        source: occurrence.sourceFile,
+        decision: occurrence.decision,
+        callSpan: occurrence.callSpan,
+        target: occurrence.targetProvenance,
+    }));
+    const callSpan = { startLine: 2, endLine: 2, startColumn: 17, endColumn: 20, startByte: 39, endByte: 42 };
+    const targetSpan = { startLine: 1, endLine: 1, startColumn: 0, endColumn: 21, startByte: 0, endByte: 21 };
+    assert.deepEqual(occurrences, [
+        {
+            source: 'src/a.cpp', decision: 'resolved', callSpan,
+            target: { file: 'src/a.cpp', name: 'h', kind: 'function', span: targetSpan, ownerName: undefined },
+        },
+        {
+            source: 'src/b.cpp', decision: 'resolved', callSpan,
+            target: { file: 'src/b.cpp', name: 'k', kind: 'function', span: targetSpan, ownerName: undefined },
+        },
+    ]);
+    assert.equal(evidence.coverage?.status, 'complete');
 });
 
 test('Rust qualification uses Cargo ownership, admits exact direct calls, and models receiver/cfg contexts', async () => {

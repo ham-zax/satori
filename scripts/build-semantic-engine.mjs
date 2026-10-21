@@ -128,7 +128,7 @@ async function build() {
                     grammar: 'tree-sitter-c-sharp',
                 },
                 cpp: {
-                    semanticRevision: 'cpp-v2',
+                    semanticRevision: 'cpp-v3',
                     grammar: 'tree-sitter-cpp',
                 },
                 rust: {

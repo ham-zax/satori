@@ -917,10 +917,21 @@ export class RelationshipBackedCallGraph {
         const unanalyzedInboundFileCount = (input.direction === "callers" || input.direction === "both")
             ? skippedSourceFiles.length
             : 0;
+        const partialSourceFiles = neighbors.manifest.providerCoverage
+            .filter((coverage) => coverage.language === input.resolvedSymbol.language)
+            .flatMap((coverage) => coverage.partialFiles ?? []);
+        const rootSourcePartial = (input.direction === "callees" || input.direction === "both")
+            ? partialSourceFiles.find((file) => file.path === input.resolvedSymbol.file)
+            : undefined;
+        const partialInboundFileCount = (input.direction === "callers" || input.direction === "both")
+            ? partialSourceFiles.length
+            : 0;
         const warnings = [...new Set([
             ...neighbors.warnings,
             ...(rootSourceSkip ? [`CALL_GRAPH_SOURCE_FILE_UNANALYZED:${rootSourceSkip.reason}`] : []),
             ...(unanalyzedInboundFileCount > 0 ? [`CALL_GRAPH_INBOUND_UNANALYZED_FILES:${unanalyzedInboundFileCount}`] : []),
+            ...(rootSourcePartial ? [`CALL_GRAPH_SOURCE_FILE_PARTIAL:${rootSourcePartial.reason}`] : []),
+            ...(partialInboundFileCount > 0 ? [`CALL_GRAPH_INBOUND_PARTIAL_FILES:${partialInboundFileCount}`] : []),
             ...(droppedEdgesOutsideSourceSpan > 0 ? [`CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN:${droppedEdgesOutsideSourceSpan}`] : []),
             ...(addedDynamicCalleeEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLEES:${addedDynamicCalleeEdges.length}`] : []),
             ...(addedDynamicCallerEdges.length > 0 ? [`SOURCE_BACKED_DYNAMIC_CALLERS:${addedDynamicCallerEdges.length}`] : []),

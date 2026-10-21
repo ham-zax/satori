@@ -1441,11 +1441,9 @@ static int java_extract_type_definitions(CBMArena *arena, SatoriLspDefArray *def
     return SATORI_SEMANTIC_OK;
 }
 
-/* Appends one SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE diagnostic for a source
- * file withheld from analysis. At most one per source file. Owned by the
- * session like results; spans the whole source (0..source_len). */
-static int append_unmodeled_source_diagnostic(SatoriSession *s, const SatoriSourceFile *source,
-                                              const char *message) {
+/* At most one source-coverage diagnostic per file, owned by the session. */
+static int append_source_diagnostic(SatoriSession *s, const SatoriSourceFile *source,
+                                    uint8_t code, const char *message) {
     if (!s || !source || !message) return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
     if (s->diagnostic_count >= SATORI_MAX_SOURCES) {
         set_session_error(s, "Resource limit exceeded: max diagnostics exceeded");
@@ -1476,16 +1474,67 @@ static int append_unmodeled_source_diagnostic(SatoriSession *s, const SatoriSour
     dst->span_start_byte = 0;
     dst->span_end_byte = source->source_len;
     dst->severity = 2;
-    dst->code = (uint8_t)SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE;
+    dst->code = code;
     s->diagnostic_count++;
     return SATORI_SEMANTIC_OK;
 }
 
-static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *source,
+static int append_unmodeled_source_diagnostic(SatoriSession *s, const SatoriSourceFile *source,
+                                              const char *message) {
+    return append_source_diagnostic(s, source, SATORI_SEMANTIC_DIAG_UNMODELED_SOURCE, message);
+}
+
+typedef struct {
+    uint32_t start;
+    uint32_t end;
+} SatoriCppExcludedRange;
+
+typedef struct {
+    SatoriCppExcludedRange *excluded;
+    uint32_t excluded_count;
+    uint32_t excluded_cap;
+    uint32_t *includes;
+    uint32_t include_count;
+    uint32_t include_cap;
+    const char **declarations;
+    uint32_t declaration_count;
+    uint32_t declaration_cap;
+    const char *normalized_path;
+} SatoriCppSourceMeta;
+
+typedef struct {
+    const SatoriCppSourceMeta *source;
+    const SatoriCppSourceMeta *files;
+    const uint32_t *closure;
+    uint32_t closure_count;
+} SatoriCppVisibility;
+
+static bool cpp_range_excluded(const SatoriCppSourceMeta *meta, uint32_t start, uint32_t end) {
+    for (uint32_t i = 0; i < meta->excluded_count; i++) {
+        if (start < meta->excluded[i].end && end > meta->excluded[i].start) return true;
+    }
+    return false;
+}
+
+static bool cpp_target_visible(const SatoriSession *s, const SatoriCppVisibility *visibility,
+                                const SatoriDefLoc *target, const char *qualified_name) {
+    for (uint32_t i = 0; i < visibility->closure_count; i++) {
+        uint32_t file = visibility->closure[i];
+        if (strcmp(s->sources[file].path, target->file_path) == 0) return true;
+        const SatoriCppSourceMeta *meta = &visibility->files[file];
+        for (uint32_t j = 0; j < meta->declaration_count; j++) {
+            if (strcmp(meta->declarations[j], qualified_name) == 0) return true;
+        }
+    }
+    return false;
+}
+
+static int append_semantic_results_with_cpp_visibility(SatoriSession *s, const SatoriSourceFile *source,
                                    const char *source_scope_qn,
                                    const char *source_authority_root,
                                    const CBMResolvedCallArray *resolved_calls,
-                                   SatoriDefLocArray *def_locs) {
+                                   SatoriDefLocArray *def_locs,
+                                   const SatoriCppVisibility *cpp_visibility) {
     if (!s || !source || !resolved_calls || !def_locs) return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
     if (resolved_calls->count < 0 ||
         (uint64_t)resolved_calls->count > SATORI_MAX_CALL_SITES) {
@@ -1503,6 +1552,8 @@ static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *sou
 
     for (int r = 0; r < resolved_calls->count; r++) {
         const CBMResolvedCall *rc = &resolved_calls->items[r];
+        if (cpp_visibility && cpp_range_excluded(cpp_visibility->source,
+                                                 rc->site_start_byte, rc->site_end_byte)) continue;
         if (rc->confidence <= 0.0f || !rc->callee_qn ||
             (rc->strategy && strcmp(rc->strategy, "lsp_unresolved") == 0)) {
             continue;
@@ -1536,10 +1587,10 @@ static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *sou
         const SatoriDefLoc *target = NULL;
         SatoriDefLookupState lookup = def_locs_find_unique(def_locs, rc->callee_qn, source_authority_root, &target);
         if (lookup == SATORI_DEF_LOOKUP_UNIQUE && target) {
-            /* Raw C++ cross-file registry lookup does not by itself prove that a
-             * declaration is visible in this translation unit. Until include /
-             * build visibility is modeled, fail closed on cross-TU targets. */
-            if (strcmp(s->language, "cpp") == 0 && strcmp(target->file_path, source->path) != 0) {
+            /* A cross-file registry hit needs a file or declaration witness
+             * in the caller's resolved include closure. */
+            if (strcmp(s->language, "cpp") == 0 && strcmp(target->file_path, source->path) != 0 &&
+                (!cpp_visibility || !cpp_target_visible(s, cpp_visibility, target, rc->callee_qn))) {
                 dst->decision = (uint8_t)SATORI_DECISION_UNRESOLVED;
                 continue;
             }
@@ -1573,6 +1624,14 @@ static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *sou
         }
     }
     return SATORI_SEMANTIC_OK;
+}
+
+static int append_semantic_results(SatoriSession *s, const SatoriSourceFile *source,
+                                   const char *source_scope_qn, const char *source_authority_root,
+                                   const CBMResolvedCallArray *resolved_calls,
+                                   SatoriDefLocArray *def_locs) {
+    return append_semantic_results_with_cpp_visibility(s, source, source_scope_qn,
+        source_authority_root, resolved_calls, def_locs, NULL);
 }
 
 static int resolve_java_project(SatoriSession *s) {
@@ -2367,10 +2426,6 @@ cleanup:
     return status;
 }
 
-typedef struct {
-    bool eligible;
-} SatoriCppSourceMeta;
-
 static bool cpp_is_class_declaration(const char *kind) {
     return kind && (
         strcmp(kind, "class_specifier") == 0 ||
@@ -2441,14 +2496,82 @@ static int cpp_function_param_count(TSNode node) {
     return 0;
 }
 
+/* Metadata uses the existing definition bound for every growable collection. */
+static int cpp_reserve_item(void **items, uint32_t count, uint32_t *cap, size_t item_size) {
+    if (count >= SATORI_MAX_DEFINITIONS) return SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
+    if (count < *cap) return SATORI_SEMANTIC_OK;
+    uint32_t new_cap = *cap ? *cap * 2 : 16;
+    if (new_cap > SATORI_MAX_DEFINITIONS) new_cap = SATORI_MAX_DEFINITIONS;
+    void *next = realloc(*items, (size_t)new_cap * item_size);
+    if (!next) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    *items = next;
+    *cap = new_cap;
+    return SATORI_SEMANTIC_OK;
+}
+
+static int cpp_add_declaration(SatoriCppSourceMeta *meta, const char *qualified_name) {
+    int status = cpp_reserve_item((void **)&meta->declarations, meta->declaration_count,
+                                   &meta->declaration_cap, sizeof(*meta->declarations));
+    if (status != SATORI_SEMANTIC_OK) return status;
+    meta->declarations[meta->declaration_count++] = qualified_name;
+    return SATORI_SEMANTIC_OK;
+}
+
+static bool cpp_node_within_exclusion(const SatoriCppSourceMeta *meta, TSNode node) {
+    uint32_t start = ts_node_start_byte(node), end = ts_node_end_byte(node);
+    for (uint32_t i = 0; i < meta->excluded_count; i++) {
+        if (start >= meta->excluded[i].start && end <= meta->excluded[i].end) return true;
+    }
+    return false;
+}
+
+static int cpp_callable_identity(CBMArena *arena, TSNode declarator, const char *source,
+                                  const char *namespace_qn, const char *owner_qn,
+                                  const char **qualified_name, const char **receiver_type,
+                                  const char **leaf) {
+    *qualified_name = NULL;
+    *receiver_type = NULL;
+    TSNode terminal = cpp_find_callable_terminal(declarator);
+    if (ts_node_is_null(terminal)) return SATORI_SEMANTIC_OK;
+    char *raw_name = cbm_node_text(arena, terminal, source);
+    if (!raw_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    const char *normalized = cpp_normalize_scope_text(arena, raw_name);
+    if (!normalized) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    *leaf = strrchr(normalized, '.');
+    *leaf = *leaf ? *leaf + 1 : normalized;
+    if (!(*leaf)[0]) return SATORI_SEMANTIC_OK;
+    if (strcmp(ts_node_type(terminal), "qualified_identifier") == 0 && strchr(normalized, '.')) {
+        *qualified_name = normalized;
+        const char *last_dot = strrchr(normalized, '.');
+        *receiver_type = cbm_arena_strndup(arena, normalized, (size_t)(last_dot - normalized));
+        if (!*receiver_type) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    } else if (owner_qn && owner_qn[0]) {
+        *receiver_type = owner_qn;
+        *qualified_name = cpp_join_scope(arena, owner_qn, *leaf);
+    } else {
+        *qualified_name = cpp_join_scope(arena, namespace_qn, *leaf);
+    }
+    return *qualified_name ? SATORI_SEMANTIC_OK : SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+}
+
+static bool cpp_declarator_is_callable(TSNode node) {
+    while (!ts_node_is_null(node)) {
+        if (strcmp(ts_node_type(node), "function_declarator") == 0) return true;
+        node = ts_node_child_by_field_name(node, "declarator", 10);
+    }
+    return false;
+}
+
 static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
                                    SatoriDefLocArray *def_locs, TSNode node,
                                    const char *source, const char *namespace_qn,
                                    const char *owner_qn, const char *file_path,
-                                   uint32_t file_path_len) {
+                                   uint32_t file_path_len, SatoriCppSourceMeta *meta, bool collect_defs) {
     if (!arena || !defs || !def_locs || ts_node_is_null(node) || !source || !file_path) {
         return SATORI_SEMANTIC_ERR_INVALID_ARGUMENT;
     }
+    if (cpp_node_within_exclusion(meta, node)) return SATORI_SEMANTIC_OK;
+    bool excluded = cpp_range_excluded(meta, ts_node_start_byte(node), ts_node_end_byte(node));
     const char *kind = ts_node_type(node);
     if (strcmp(kind, "namespace_definition") == 0) {
         TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
@@ -2467,7 +2590,7 @@ static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
                 int status = cpp_collect_definitions(arena, defs, def_locs,
                                                      ts_node_named_child(body, i), source,
                                                      next_namespace, owner_qn,
-                                                     file_path, file_path_len);
+                                                     file_path, file_path_len, meta, collect_defs);
                 if (status != SATORI_SEMANTIC_OK) return status;
             }
         }
@@ -2490,12 +2613,15 @@ static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
         def.label = "Class";
         def.def_module_qn = namespace_qn;
         def.lang = CBM_LANG_CPP;
-        int status = lsp_defs_push(defs, def);
-        if (status != SATORI_SEMANTIC_OK) return status;
-        status = def_locs_add(def_locs, type_qn, file_path, file_path_len,
-                              ts_node_start_byte(node), ts_node_end_byte(node),
-                              namespace_qn ? namespace_qn : "", NULL, SATORI_TARGET_NONE);
-        if (status != SATORI_SEMANTIC_OK) return status;
+        int status = SATORI_SEMANTIC_OK;
+        if (!excluded && collect_defs) {
+            status = lsp_defs_push(defs, def);
+            if (status != SATORI_SEMANTIC_OK) return status;
+            status = def_locs_add(def_locs, type_qn, file_path, file_path_len,
+                                  ts_node_start_byte(node), ts_node_end_byte(node),
+                                  namespace_qn ? namespace_qn : "", NULL, SATORI_TARGET_NONE);
+            if (status != SATORI_SEMANTIC_OK) return status;
+        }
         TSNode body = ts_node_child_by_field_name(node, "body", 4);
         if (!ts_node_is_null(body)) {
             uint32_t count = ts_node_named_child_count(body);
@@ -2503,66 +2629,77 @@ static int cpp_collect_definitions(CBMArena *arena, SatoriLspDefArray *defs,
                 status = cpp_collect_definitions(arena, defs, def_locs,
                                                  ts_node_named_child(body, i), source,
                                                  namespace_qn, type_qn,
-                                                 file_path, file_path_len);
+                                                 file_path, file_path_len, meta, collect_defs);
                 if (status != SATORI_SEMANTIC_OK) return status;
             }
         }
         return SATORI_SEMANTIC_OK;
     }
 
-    if (strcmp(kind, "function_definition") == 0) {
-        TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10);
-        TSNode terminal = cpp_find_callable_terminal(declarator);
-        if (ts_node_is_null(terminal)) return SATORI_SEMANTIC_OK;
-        char *raw_name = cbm_node_text(arena, terminal, source);
-        if (!raw_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
-        const char *normalized = cpp_normalize_scope_text(arena, raw_name);
-        if (!normalized) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
-        const char *leaf = strrchr(normalized, '.');
-        leaf = leaf ? leaf + 1 : normalized;
-        if (!leaf[0]) return SATORI_SEMANTIC_OK;
-
-        const char *qualified_name = NULL;
-        const char *receiver_type = NULL;
-        const char *terminal_kind = ts_node_type(terminal);
-        if (strcmp(terminal_kind, "qualified_identifier") == 0 && strchr(normalized, '.')) {
-            qualified_name = normalized;
-            const char *last_dot = strrchr(normalized, '.');
-            if (last_dot) receiver_type = cbm_arena_strndup(arena, normalized, (size_t)(last_dot - normalized));
-        } else if (owner_qn && owner_qn[0]) {
-            receiver_type = owner_qn;
-            qualified_name = cpp_join_scope(arena, owner_qn, leaf);
-        } else {
-            qualified_name = cpp_join_scope(arena, namespace_qn, leaf);
+    if ((strcmp(kind, "declaration") == 0 || strcmp(kind, "field_declaration") == 0) && !excluded) {
+        uint32_t count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < count; i++) {
+            const char *field = ts_node_field_name_for_child(node, i);
+            if (!field || strcmp(field, "declarator") != 0) continue;
+            TSNode declarator = ts_node_child(node, i);
+            if (!cpp_declarator_is_callable(declarator)) continue;
+            const char *qualified_name, *receiver_type, *leaf;
+            int status = cpp_callable_identity(arena, declarator, source, namespace_qn, owner_qn,
+                                                &qualified_name, &receiver_type, &leaf);
+            if (status != SATORI_SEMANTIC_OK) return status;
+            if (qualified_name) {
+                status = cpp_add_declaration(meta, qualified_name);
+                if (status != SATORI_SEMANTIC_OK) return status;
+            }
         }
-        if (!qualified_name || (receiver_type && !receiver_type[0])) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    }
 
-        int param_count = cpp_function_param_count(declarator);
-        const char **signature_params = unknown_signature_params(arena, param_count);
-        if (param_count > 0 && !signature_params) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
-        CBMLSPDef def;
-        memset(&def, 0, sizeof(def));
-        def.qualified_name = qualified_name;
-        def.short_name = leaf;
-        def.label = receiver_type ? "Method" : "Function";
-        def.receiver_type = receiver_type;
-        def.def_module_qn = namespace_qn;
-        def.signature_param_types = signature_params;
-        def.signature_param_count = param_count;
-        def.lang = CBM_LANG_CPP;
-        int status = lsp_defs_push(defs, def);
-        if (status != SATORI_SEMANTIC_OK) return status;
-        return def_locs_add(def_locs, qualified_name, file_path, file_path_len,
-                            ts_node_start_byte(node), ts_node_end_byte(node),
-                            namespace_qn ? namespace_qn : "", NULL,
-                            receiver_type ? SATORI_TARGET_METHOD : SATORI_TARGET_FUNCTION);
+    if (strcmp(kind, "function_definition") == 0) {
+        if (!excluded) {
+            TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10);
+            const char *qualified_name, *receiver_type, *leaf;
+            int status = cpp_callable_identity(arena, declarator, source, namespace_qn, owner_qn,
+                                                &qualified_name, &receiver_type, &leaf);
+            if (status != SATORI_SEMANTIC_OK || !qualified_name) return status;
+            status = cpp_add_declaration(meta, qualified_name);
+            if (status != SATORI_SEMANTIC_OK) return status;
+
+            if (collect_defs) {
+                int param_count = cpp_function_param_count(declarator);
+                const char **signature_params = unknown_signature_params(arena, param_count);
+                if (param_count > 0 && !signature_params) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+                CBMLSPDef def;
+                memset(&def, 0, sizeof(def));
+                def.qualified_name = qualified_name;
+                def.short_name = leaf;
+                def.label = receiver_type ? "Method" : "Function";
+                def.receiver_type = receiver_type;
+                def.def_module_qn = namespace_qn;
+                def.signature_param_types = signature_params;
+                def.signature_param_count = param_count;
+                def.lang = CBM_LANG_CPP;
+                status = lsp_defs_push(defs, def);
+                if (status != SATORI_SEMANTIC_OK) return status;
+                status = def_locs_add(def_locs, qualified_name, file_path, file_path_len,
+                                    ts_node_start_byte(node), ts_node_end_byte(node),
+                                    namespace_qn ? namespace_qn : "", NULL,
+                                    receiver_type ? SATORI_TARGET_METHOD : SATORI_TARGET_FUNCTION);
+                if (status != SATORI_SEMANTIC_OK) return status;
+            }
+        }
+        /* Local prototypes also witness declared names. Preserve the existing
+         * definition boundary: never register local definitions in the registry. */
+        TSNode body = ts_node_child_by_field_name(node, "body", 4);
+        if (ts_node_is_null(body)) return SATORI_SEMANTIC_OK;
+        return cpp_collect_definitions(arena, defs, def_locs, body, source,
+                                         namespace_qn, owner_qn, file_path, file_path_len, meta, false);
     }
 
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
         int status = cpp_collect_definitions(arena, defs, def_locs,
                                              ts_node_named_child(node, i), source,
-                                             namespace_qn, owner_qn, file_path, file_path_len);
+                                             namespace_qn, owner_qn, file_path, file_path_len, meta, collect_defs);
         if (status != SATORI_SEMANTIC_OK) return status;
     }
     return SATORI_SEMANTIC_OK;
@@ -2593,21 +2730,10 @@ static bool cpp_is_conditional_directive_kind(const char *kind) {
     );
 }
 
-/* True when any conditional preprocessing directive occurs in the subtree. */
-static bool cpp_tree_has_conditional_preprocessor(TSNode node) {
-    if (ts_node_is_null(node)) return false;
-    if (cpp_is_conditional_directive_kind(ts_node_type(node))) return true;
-    uint32_t count = ts_node_named_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        if (cpp_tree_has_conditional_preprocessor(ts_node_named_child(node, i))) return true;
-    }
-    return false;
-}
-
 /* Canonical include guard: ignoring comments and whitespace, the root's only
  * top-level construct is `#ifndef NAME` immediately followed by `#define NAME`
  * (same NAME, no value), closed by the final `#endif`, with no `#else`/`#elif`
- * branch and no other conditional directive anywhere inside. */
+ * branch. Nested conditional blocks remain excluded separately. */
 static bool cpp_is_canonical_include_guard(TSNode root, const char *source) {
     if (ts_node_is_null(root) || !source) return false;
     TSNode guard;
@@ -2652,7 +2778,8 @@ static bool cpp_is_canonical_include_guard(TSNode root, const char *source) {
             saw_define = true;
             continue;
         }
-        if (cpp_tree_has_conditional_preprocessor(child)) return false;
+        if (strcmp(kind, "preproc_else") == 0 || strcmp(kind, "preproc_elif") == 0 ||
+            strcmp(kind, "preproc_elifdef") == 0) return false;
     }
     if (!saw_define) return false;
     uint32_t all_count = ts_node_child_count(guard);
@@ -2664,11 +2791,158 @@ static bool cpp_is_canonical_include_guard(TSNode root, const char *source) {
     return false;
 }
 
+static int cpp_collect_excluded_ranges(SatoriCppSourceMeta *meta, TSNode node, TSNode guard) {
+    bool missing = ts_node_is_missing(node);
+    if (ts_node_is_error(node) || missing ||
+        (cpp_is_conditional_directive_kind(ts_node_type(node)) && !ts_node_eq(node, guard))) {
+        TSNode excluded = missing ? ts_node_parent(node) : node;
+        if (!ts_node_is_null(excluded)) {
+            int status = cpp_reserve_item((void **)&meta->excluded, meta->excluded_count,
+                                           &meta->excluded_cap, sizeof(*meta->excluded));
+            if (status != SATORI_SEMANTIC_OK) return status;
+            meta->excluded[meta->excluded_count++] = (SatoriCppExcludedRange){
+                ts_node_start_byte(excluded), ts_node_end_byte(excluded)
+            };
+        }
+    }
+    /* Missing punctuation can be unnamed, so visit every child. */
+    uint32_t count = ts_node_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        int status = cpp_collect_excluded_ranges(meta, ts_node_child(node, i), guard);
+        if (status != SATORI_SEMANTIC_OK) return status;
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
+/* NULL output means an absolute path or a path that escapes the session root.
+ * Allocation failure remains distinct from an unresolved include. */
+static int cpp_normalize_relative_path(CBMArena *arena, const char *path, const char **out) {
+    *out = NULL;
+    if (path[0] == '/') return SATORI_SEMANTIC_OK;
+    size_t len = strlen(path);
+    char *normalized = cbm_arena_alloc(arena, len + 1);
+    if (!normalized) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    size_t w = 0;
+    for (size_t i = 0; i < len;) {
+        if (path[i] == '/') { i++; continue; }
+        size_t start = i;
+        while (i < len && path[i] != '/') i++;
+        size_t size = i - start;
+        if (size == 1 && path[start] == '.') continue;
+        if (size == 2 && path[start] == '.' && path[start + 1] == '.') {
+            if (w == 0) return SATORI_SEMANTIC_OK;
+            while (w > 0 && normalized[w - 1] != '/') w--;
+            if (w > 0) w--;
+            continue;
+        }
+        if (w > 0) normalized[w++] = '/';
+        memcpy(normalized + w, path + start, size);
+        w += size;
+    }
+    normalized[w] = '\0';
+    *out = normalized;
+    return SATORI_SEMANTIC_OK;
+}
+
+static int cpp_resolve_include(SatoriSession *s, SatoriCppSourceMeta *files, uint32_t caller,
+                                const char *path, bool quoted, uint32_t *out) {
+    *out = UINT32_MAX;
+    if (!path[0] || path[0] == '/') return SATORI_SEMANTIC_OK;
+    if (quoted && files[caller].normalized_path) {
+        const char *dir = go_dirname(&s->arena, files[caller].normalized_path);
+        if (!dir) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        const char *joined = dir[0] ? cbm_arena_sprintf(&s->arena, "%s/%s", dir, path) : path;
+        if (!joined) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        const char *local;
+        int status = cpp_normalize_relative_path(&s->arena, joined, &local);
+        if (status != SATORI_SEMANTIC_OK) return status;
+        if (local) {
+            for (uint32_t i = 0; i < s->source_count; i++) {
+                if (files[i].normalized_path && strcmp(files[i].normalized_path, local) == 0) {
+                    *out = i;
+                    return SATORI_SEMANTIC_OK;
+                }
+            }
+        }
+    }
+    const char *suffix;
+    int status = cpp_normalize_relative_path(&s->arena, path, &suffix);
+    if (status != SATORI_SEMANTIC_OK) return status;
+    if (!suffix || !suffix[0]) return SATORI_SEMANTIC_OK;
+    size_t suffix_len = strlen(suffix);
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        const char *candidate = files[i].normalized_path;
+        if (!candidate) continue;
+        size_t len = strlen(candidate);
+        if (len < suffix_len || strcmp(candidate + len - suffix_len, suffix) != 0 ||
+            (len > suffix_len && candidate[len - suffix_len - 1] != '/')) continue;
+        if (*out != UINT32_MAX) {
+            *out = UINT32_MAX;
+            return SATORI_SEMANTIC_OK;
+        }
+        *out = i;
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
+static int cpp_collect_includes(SatoriSession *s, SatoriCppSourceMeta *files,
+                                 uint32_t caller, TSNode node) {
+    SatoriCppSourceMeta *meta = &files[caller];
+    if (cpp_node_within_exclusion(meta, node)) return SATORI_SEMANTIC_OK;
+    if (strcmp(ts_node_type(node), "preproc_include") == 0 &&
+        !cpp_range_excluded(meta, ts_node_start_byte(node), ts_node_end_byte(node))) {
+        TSNode path_node = ts_node_child_by_field_name(node, "path", 4);
+        const char *kind = ts_node_is_null(path_node) ? "" : ts_node_type(path_node);
+        bool quoted = strcmp(kind, "string_literal") == 0;
+        if (!quoted && strcmp(kind, "system_lib_string") != 0) return SATORI_SEMANTIC_OK;
+        uint32_t start = ts_node_start_byte(path_node), end = ts_node_end_byte(path_node);
+        if (end - start <= 2) return SATORI_SEMANTIC_OK;
+        const char *path = cbm_arena_strndup(&s->arena, s->sources[caller].source + start + 1,
+                                            end - start - 2);
+        if (!path) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        uint32_t included;
+        int status = cpp_resolve_include(s, files, caller, path, quoted, &included);
+        if (status != SATORI_SEMANTIC_OK || included == UINT32_MAX) return status;
+        status = cpp_reserve_item((void **)&meta->includes, meta->include_count,
+                                   &meta->include_cap, sizeof(*meta->includes));
+        if (status != SATORI_SEMANTIC_OK) return status;
+        meta->includes[meta->include_count++] = included;
+        return SATORI_SEMANTIC_OK;
+    }
+    uint32_t count = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        int status = cpp_collect_includes(s, files, caller, ts_node_named_child(node, i));
+        if (status != SATORI_SEMANTIC_OK) return status;
+    }
+    return SATORI_SEMANTIC_OK;
+}
+
+static uint32_t cpp_include_closure(const SatoriCppSourceMeta *files, uint32_t caller,
+                                    uint32_t source_count, bool *visited, uint32_t *closure) {
+    memset(visited, 0, source_count * sizeof(*visited));
+    uint32_t count = 0;
+    /* The queue contains each source at most once, including cycles to caller. */
+    const SatoriCppSourceMeta *current = &files[caller];
+    for (uint32_t next = 0;;) {
+        for (uint32_t i = 0; i < current->include_count; i++) {
+            uint32_t included = current->includes[i];
+            if (visited[included]) continue;
+            visited[included] = true;
+            closure[count++] = included;
+        }
+        if (next == count) break;
+        current = &files[closure[next++]];
+    }
+    return count;
+}
+
 static int resolve_cpp_project(SatoriSession *s) {
     int status = SATORI_SEMANTIC_OK;
     TSParser *parser = NULL;
     TSTree **trees = NULL;
     SatoriCppSourceMeta *meta = NULL;
+    bool *visited = NULL;
+    uint32_t *closure = NULL;
     SatoriLspDefArray defs;
     SatoriDefLocArray def_locs;
     memset(&defs, 0, sizeof(defs));
@@ -2682,7 +2956,9 @@ static int resolve_cpp_project(SatoriSession *s) {
     }
     trees = (TSTree **)calloc(s->source_count, sizeof(TSTree *));
     meta = (SatoriCppSourceMeta *)calloc(s->source_count, sizeof(SatoriCppSourceMeta));
-    if (!trees || !meta) {
+    visited = (bool *)calloc(s->source_count, sizeof(*visited));
+    closure = (uint32_t *)calloc(s->source_count, sizeof(*closure));
+    if (!trees || !meta || !visited || !closure) {
         set_session_error(s, "Out of memory allocating C++ semantic project state");
         status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
         goto cleanup;
@@ -2697,24 +2973,36 @@ static int resolve_cpp_project(SatoriSession *s) {
             goto cleanup;
         }
         TSNode root = ts_tree_root_node(trees[i]);
-        bool has_error = ts_node_has_error(root);
-        bool is_guard = !has_error && cpp_is_canonical_include_guard(root, sf->source);
-        bool has_conditional = !is_guard && cpp_tree_has_conditional_preprocessor(root);
-        meta[i].eligible = !has_error && !has_conditional;
-        if (!meta[i].eligible) {
-            status = append_unmodeled_source_diagnostic(
-                s, sf, has_error ? "parse error" : "unmodeled conditional preprocessing");
+        TSNode guard = {0};
+        if (cpp_is_canonical_include_guard(root, sf->source)) {
+            uint32_t count = ts_node_named_child_count(root);
+            for (uint32_t j = 0; j < count; j++) {
+                TSNode child = ts_node_named_child(root, j);
+                if (!cpp_is_comment_kind(ts_node_type(child))) { guard = child; break; }
+            }
+        }
+        status = cpp_collect_excluded_ranges(&meta[i], root, guard);
+        if (status != SATORI_SEMANTIC_OK) goto cleanup;
+        status = cpp_normalize_relative_path(&s->arena, sf->path, &meta[i].normalized_path);
+        if (status != SATORI_SEMANTIC_OK) goto cleanup;
+        if (meta[i].excluded_count > 0) {
+            status = append_source_diagnostic(s, sf, SATORI_SEMANTIC_DIAG_PARTIAL_SOURCE,
+                "excluded parse-error or conditional preprocessing regions");
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
-            continue;
         }
         status = cpp_collect_definitions(&s->arena, &defs, &def_locs, root, sf->source,
-                                         "", NULL, sf->path, sf->path_len);
+                                         "", NULL, sf->path, sf->path_len, &meta[i], true);
         if (status != SATORI_SEMANTIC_OK) {
             set_session_error(s, status == SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED
                 ? "Resource limit exceeded while extracting C++ definitions"
                 : "Out of memory extracting C++ definitions");
             goto cleanup;
         }
+    }
+
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        status = cpp_collect_includes(s, meta, i, ts_tree_root_node(trees[i]));
+        if (status != SATORI_SEMANTIC_OK) goto cleanup;
     }
 
     {
@@ -2726,7 +3014,6 @@ static int resolve_cpp_project(SatoriSession *s) {
         }
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
-            if (!meta[i].eligible) continue;
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
             cbm_run_c_lsp_cross_with_registry(&s->arena, s->sources[i].source,
@@ -2740,7 +3027,12 @@ static int resolve_cpp_project(SatoriSession *s) {
                 goto cleanup;
             }
             total_call_sites += (uint64_t)resolved.count;
-            status = append_semantic_results(s, &s->sources[i], "", NULL, &resolved, &def_locs);
+            SatoriCppVisibility visibility = {
+                &meta[i], meta, closure,
+                cpp_include_closure(meta, i, s->source_count, visited, closure)
+            };
+            status = append_semantic_results_with_cpp_visibility(s, &s->sources[i], "", NULL,
+                                                                  &resolved, &def_locs, &visibility);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
     }
@@ -2752,7 +3044,16 @@ cleanup:
         }
     }
     free(trees);
+    if (meta) {
+        for (uint32_t i = 0; i < s->source_count; i++) {
+            free(meta[i].excluded);
+            free(meta[i].includes);
+            free(meta[i].declarations);
+        }
+    }
     free(meta);
+    free(visited);
+    free(closure);
     free(defs.items);
     free(def_locs.items);
     if (parser) ts_parser_delete(parser);

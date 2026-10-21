@@ -167,6 +167,7 @@ export class ThreadedWasmSemanticProjectAnalyzer implements SemanticProjectAnaly
                         language: response.evidence.language,
                         occurrencesByFile,
                         ...(response.evidence.skippedFiles ? { skippedFiles: response.evidence.skippedFiles } : {}),
+                        ...(response.evidence.partialFiles ? { partialFiles: response.evidence.partialFiles } : {}),
                         ...(response.evidence.coverage ? { coverage: response.evidence.coverage } : {}),
                     });
                 } else {

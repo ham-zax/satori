@@ -1,9 +1,10 @@
-import type {
-    Reranker,
-    RerankExecutionDiagnostics,
-    RerankerFailureKind,
-    SemanticSearchExecutionResult,
-    SemanticSearchResult,
+import {
+    compareContractStrings,
+    type Reranker,
+    type RerankExecutionDiagnostics,
+    type RerankerFailureKind,
+    type SemanticSearchExecutionResult,
+    type SemanticSearchResult,
 } from "@satori-code/core";
 import {
     type PathCategory,
@@ -310,6 +311,8 @@ export type SearchExecutionOutcome =
         filterSummary: SearchFilterSummary;
         freshnessSummary: SearchFreshnessSummary;
         dirtyFilesNotFreshened: boolean;
+        // Dirty paths whose indexed evidence the working-tree overlay replaced.
+        overlaidPaths: string[];
         trackedLexicalDebug?: TrackedLexicalSearchDebug;
         candidateLimit: number;
         diagnosticCandidateLimit?: number;
@@ -546,7 +549,11 @@ export async function runSearchExecution(
     const operatorSummary = host.searchQuerySupport.buildOperatorSummary(input.parsedOperators);
     let filterSummary = buildEmptyFilterSummary();
     const observedChangedFilesState = input.observedChangedFilesState;
-    const changedFilesState = input.rankingMode === "auto_changed_first"
+    // A stale read serves the previous publication. Only the dirty overlay and
+    // its stale-hit suppression may use the working tree; other live evidence
+    // (changed-first boost, live path supplement, tracked lexical) stays off.
+    const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";
+    const changedFilesState = input.rankingMode === "auto_changed_first" && !publicationOnlyStaleRead
         ? observedChangedFilesState
         : { available: observedChangedFilesState.available, files: new Set<string>() };
     const debugChangedFilesState = input.debugMode === "freshness" || input.debugMode === "full"
@@ -566,10 +573,8 @@ export async function runSearchExecution(
         changedFilesBoostApplied: false,
         changedFilesBoostSkippedForLargeChangeSet,
     };
-    const publicationOnlyStaleRead = input.freshnessMode === "served_previous_generation";
-    const allowLiveWorkingTreeEvidence = !publicationOnlyStaleRead;
-    const dirtyFilesNotFreshened = allowLiveWorkingTreeEvidence && input.dirtyFilesNotFreshened;
-    const canSupplementLivePathEvidence = allowLiveWorkingTreeEvidence
+    const dirtyFilesNotFreshened = input.dirtyFilesNotFreshened;
+    const canSupplementLivePathEvidence = !publicationOnlyStaleRead
         && input.parsedOperators.path.length > 0;
 
     let boostedCandidates = 0;
@@ -1370,6 +1375,9 @@ export async function runSearchExecution(
         filterSummary,
         freshnessSummary,
         dirtyFilesNotFreshened,
+        overlaidPaths: dirtyFilesNotFreshened
+            ? [...rereadDirtyPaths].sort(compareContractStrings)
+            : [],
         trackedLexicalDebug,
         candidateLimit,
         ...(retrievalPolicy.diagnosticCandidateLimit !== undefined

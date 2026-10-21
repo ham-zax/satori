@@ -1259,10 +1259,10 @@ export class SearchRequestCoordinator {
                 };
                 const initialOperatorSummary = this.searchQuerySupport.buildOperatorSummary(parsedOperators);
                 const staleWhileSync = freshnessDecision.mode === "served_previous_generation";
-                const initialObservedChangedFilesState = staleWhileSync
-                    ? { available: false, files: new Set<string>() }
-                    : observedChangedFilesForSearch
-                        ?? this.readiness.getChangedFilesForCodebase(effectiveRoot);
+                // The working tree is read in stale mode too, so the dirty overlay
+                // can answer for files saved after the served publication.
+                const initialObservedChangedFilesState = observedChangedFilesForSearch
+                    ?? this.readiness.getChangedFilesForCodebase(effectiveRoot);
                 const initialChangedFilesState = initialObservedChangedFilesState;
                 const initialDebugChangedFilesState = debugMode === 'freshness' || debugMode === 'full'
                     ? initialObservedChangedFilesState

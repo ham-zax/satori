@@ -812,14 +812,16 @@ const scenarios: Scenario[] = [
         dirtyFilesNotFreshened: true,
         semantic: backend(implPool.slice(0, 3)),
         reranker: { provider: "voyage" },
-        dirty: [row("src/live_must_not_appear.ts", 0.99)],
+        dirty: [row("src/dirty.ts", 0.99)],
         tracked: [row("src/live_must_not_appear.ts", 0.99)],
         live: [row("src/live_must_not_appear.ts", 0.99)],
         expect: (rec) => {
-            assert.deepEqual(rec.stubCalls, { dirtyOverlayCalls: 0, trackedLexicalCalls: 0, livePathCalls: 0 });
+            // The dirty overlay runs during a sync; tracked and live evidence stay off.
+            assert.deepEqual(rec.stubCalls, { dirtyOverlayCalls: 1, trackedLexicalCalls: 0, livePathCalls: 0 });
             assert.deepEqual(rec.rerankerCalls, []);
             assert.equal(outcomeOf(rec).orderAuthority, "retrieval_order");
             assert.equal(outcomeOf(rec).rerankerAttempted, false);
+            assert.ok(resultsOf(rec).some((r) => r.relativePath === "src/dirty.ts"));
             assert.ok(!resultsOf(rec).some((r) => r.relativePath === "src/live_must_not_appear.ts"));
         },
     },

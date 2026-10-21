@@ -652,3 +652,30 @@ test('normal raw and grouped search envelopes serialize published parser degrada
         buildGroupedSearchEnvelope({ ...common, results: [makeGroup(0)] }),
     ]) assert.deepEqual(JSON.parse(JSON.stringify(envelope)).structuralAnalysis, structuralAnalysis);
 });
+
+test('stale raw and grouped search envelopes report the paths the dirty overlay answered', () => {
+    const common = {
+        codebaseRoot: ROOT, absolutePath: ROOT, query: 'saved', scope: 'mixed' as const,
+        groupBy: 'symbol' as const, limit: 1, debugMode: 'none' as const,
+        freshnessDecision: {
+            mode: "served_previous_generation" as const,
+            checkedAt: "2026-01-01T00:00:00.000Z",
+            thresholdMs: 180000,
+            servedGeneration: 15,
+        },
+        freshnessSummary: { ...FRESHNESS_SUMMARY, syncMode: "served_previous_generation" as const },
+        warnings: [],
+    };
+    for (const overlaidPaths of [["src/a.ts", "src/b.ts"], []]) {
+        for (const envelope of [
+            buildRawSearchEnvelope({ ...common, overlaidPaths, results: [] }),
+            buildGroupedSearchEnvelope({ ...common, overlaidPaths, results: [makeGroup(0)] }),
+        ]) {
+            assert.deepEqual(envelope.freshness, {
+                state: "sync_in_progress",
+                servedGeneration: 15,
+                ...(overlaidPaths.length > 0 ? { overlaidPaths } : {}),
+            });
+        }
+    }
+});

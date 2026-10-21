@@ -37,6 +37,7 @@ export type SearchResponseCommonInput = {
     debugMode: SearchDebugMode;
     freshnessDecision: FreshnessDecision;
     freshnessSummary: SearchFreshnessSummary;
+    overlaidPaths?: string[];
     warnings: string[];
     structuralAnalysis?: SearchResponseEnvelope["structuralAnalysis"];
     debugSummary?: NonNullable<NonNullable<SearchResponseEnvelope["hints"]>["debugSummary"]>;
@@ -228,6 +229,7 @@ export function buildGroupedSearchEnvelope(input: SearchResponseCommonInput & {
                 ...(input.freshnessDecision.servedPublicationId ? { servedPublicationId: input.freshnessDecision.servedPublicationId } : {}),
                 ...(input.freshnessDecision.servedGeneration ? { servedGeneration: input.freshnessDecision.servedGeneration } : {}),
                 ...(input.freshnessDecision.pendingOperation ? { pendingOperation: input.freshnessDecision.pendingOperation } : {}),
+                ...(input.overlaidPaths && input.overlaidPaths.length > 0 ? { overlaidPaths: input.overlaidPaths } : {}),
             },
         } : {}),
         ...(exposeFreshnessEvidence ? {
@@ -267,6 +269,7 @@ export function buildRawSearchEnvelope(input: SearchResponseCommonInput & {
                 ...(input.freshnessDecision.servedPublicationId ? { servedPublicationId: input.freshnessDecision.servedPublicationId } : {}),
                 ...(input.freshnessDecision.servedGeneration ? { servedGeneration: input.freshnessDecision.servedGeneration } : {}),
                 ...(input.freshnessDecision.pendingOperation ? { pendingOperation: input.freshnessDecision.pendingOperation } : {}),
+                ...(input.overlaidPaths && input.overlaidPaths.length > 0 ? { overlaidPaths: input.overlaidPaths } : {}),
             },
         } : {}),
         ...(exposeFreshnessEvidence ? {

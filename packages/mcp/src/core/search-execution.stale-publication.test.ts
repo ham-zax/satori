@@ -70,7 +70,7 @@ function buildInput(): SearchExecutionInput {
     };
 }
 
-test("served_previous_generation uses only publication-bound execution evidence", async () => {
+test("served_previous_generation overlays dirty files and keeps other live evidence off", async () => {
     const calls = {
         dirtyOverlay: 0,
         trackedLexical: 0,
@@ -91,7 +91,15 @@ test("served_previous_generation uses only publication-bound execution evidence"
         }),
         buildDirtyFileSearchResults: async () => {
             calls.dirtyOverlay += 1;
-            return { results: [], unreadPaths: new Set<string>() };
+            return {
+                results: [{
+                    ...candidate("src/dirty.ts", 0.6),
+                    startLine: 10,
+                    endLine: 12,
+                    content: "export function savedAfterPublication() { return true; }",
+                }],
+                unreadPaths: new Set<string>(),
+            };
         },
         buildTrackedLexicalSearchResults: async () => {
             calls.trackedLexical += 1;
@@ -135,6 +143,7 @@ test("served_previous_generation uses only publication-bound execution evidence"
     const host: SearchExecutionHost = {
         searchQuerySupport: support,
         semanticSearch: async () => [
+            candidate("src/dirty.ts", 0.95),
             candidate("a.ts", 0.9),
             candidate("b.ts", 0.8),
             candidate("c.ts", 0.7),
@@ -155,14 +164,23 @@ test("served_previous_generation uses only publication-bound execution evidence"
     assert.equal(outcome.kind, "ok");
     if (outcome.kind !== "ok") return;
 
-    assert.equal(calls.dirtyOverlay, 0, "stale publication reads must not scan dirty working-tree files");
+    assert.equal(calls.dirtyOverlay, 1, "stale publication reads must overlay dirty working-tree files once");
     assert.equal(calls.trackedLexical, 0, "stale publication reads must not scan tracked files from current disk");
     assert.equal(calls.livePath, 0, "stale publication reads must not inject live path evidence");
     assert.equal(calls.reranker, 0, "stale publication reads must not use current-source-dependent reranking");
+    const dirtyEntries = outcome.scored.filter((entry) => entry.result.relativePath === "src/dirty.ts");
     assert.deepEqual(
-        outcome.scored.map((entry) => entry.result.relativePath),
+        dirtyEntries.map((entry) => entry.result.content),
+        ["export function savedAfterPublication() { return true; }"],
+        "the stale indexed hit for a dirty file must be replaced by its overlay result",
+    );
+    assert.deepEqual(
+        outcome.scored
+            .filter((entry) => entry.result.relativePath !== "src/dirty.ts")
+            .map((entry) => entry.result.relativePath),
         ["a.ts", "b.ts", "c.ts"],
     );
+    assert.deepEqual(outcome.overlaidPaths, ["src/dirty.ts"]);
     assert.equal(outcome.orderAuthority, "retrieval_order");
     assert.equal(outcome.rerankerAttempted, false);
     assert.equal(outcome.freshnessSummary.syncMode, "served_previous_generation");

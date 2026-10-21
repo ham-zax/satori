@@ -1,8 +1,8 @@
 # Agent-ready edit freshness plan, 22 October 2026
 
-Status: A0 done, results below. D1, D2 and D3 approved by Hamza on 22 October
-2026, as recommended. The reranker is the largest search cost. D4 is open, and
-a rerank profile comes first.
+Status: A0 and A1 done, results below. D1, D2 and D3 approved by Hamza on 22
+October 2026, as recommended. The reranker is the largest search cost. D4 is
+open. A3 is next.
 
 ## Goal
 
@@ -130,6 +130,29 @@ documented contract, not an accident.
 bound native Python relationship costs"). The hard-link reuse branch
 (`sidecar-writes.ts:655-664`) runs inside the same batch loop of 8. A separate
 limit for links is a B2 idea that needs a measurement.
+
+## A1 results (22 October 2026)
+
+A1 keeps the dirty overlay and the stale-hit suppression on in
+`served_previous_generation`. The reranker, tracked lexical search, the
+changed-first boost, the live path supplement and the exact source preview stay
+off. A dirty exact target or a dirty relationship peer now makes the exact fast
+path defer to full search, so the overlay answers for it. The
+`freshness` block adds `overlaidPaths` (sorted dirty paths answered from the
+working tree, absent when empty).
+
+Same probe as A0 (trufflehog, `.go`, 3 runs, 5 GB cgroup), first search after
+the save, during a running sync:
+
+| N edited | A0 hits | A1 hits | A1 first search | A1 save to all hits |
+| --- | --- | --- | --- | --- |
+| 1 | 0/1 | 1/1 (3 runs) | 169-219 ms | 1.7-2.1 s |
+| 16 | 0/16 | 16/16 (3 runs) | 216-230 ms | 1.8-2.0 s |
+| 50 | 0/50 | 16-18/50 | 222-255 ms | 18.3-20.0 s |
+
+At N = 50, the 16-file overlay cap limits hits until the sync publishes. A3
+owns that cap. Idle searches (no sync) are unchanged at 4.0-7.3 s, and rerank
+takes 3.1-6.5 s of that (D4).
 
 ## Decisions
 

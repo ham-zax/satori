@@ -99,7 +99,7 @@ function buildInput(): SearchExactFastPathInput {
     };
 }
 
-test("runExactRegistryFastPath uses publication-only symbols without reading current source during served_previous_generation", async () => {
+test("runExactRegistryFastPath serves clean targets from the publication and defers dirty targets to the overlay during served_previous_generation", async () => {
     const mockRegistry: SymbolRegistry = {
         manifest: { builtAt: "2026-08-15T00:00:00Z" } as any,
         symbols: [testSymbol],
@@ -154,7 +154,16 @@ test("runExactRegistryFastPath uses publication-only symbols without reading cur
         now: () => Date.now(),
     };
 
-    const outcome = await runExactRegistryFastPath(buildInput(), host);
+    // A dirty target cannot be answered from the served publication. The fast
+    // path defers to full search, whose dirty overlay reads the saved source.
+    const dirtyTargetOutcome = await runExactRegistryFastPath(buildInput(), host);
+    assert.equal(dirtyTargetOutcome.kind, "continue");
+
+    const outcome = await runExactRegistryFastPath({
+        ...buildInput(),
+        changedFilesState: { available: true, files: new Set(["src/other.ts"]) },
+        observedChangedFilesState: { available: true, files: new Set(["src/other.ts"]) },
+    }, host);
 
     assert.equal(outcome.kind, "handled");
     if (outcome.kind === "handled") {
@@ -172,7 +181,7 @@ test("runExactRegistryFastPath uses publication-only symbols without reading cur
     }
 });
 
-test("runExactRegistryFastPath preserves dirty relationship peers without reading disk during served_previous_generation", async () => {
+test("runExactRegistryFastPath defers relationships with dirty peers to the overlay during served_previous_generation", async () => {
     const peerSymbol: SymbolRecord = {
         symbolKey: "src/caller.ts:5:15:function:CallerFunction",
         symbolInstanceId: "sym-peer-1",
@@ -287,18 +296,11 @@ test("runExactRegistryFastPath preserves dirty relationship peers without readin
 
     const outcome = await runExactRegistryFastPath(input, host);
 
-    assert.equal(outcome.kind, "handled");
-    if (outcome.kind === "handled") {
-        assert.equal(outcome.finalized.kind, "ok");
-        if (outcome.finalized.kind === "ok") {
-            const envelope = outcome.finalized.envelope;
-            // Both peer and target returned, despite peer belonging to dirty file
-            assert.equal(envelope.results.length, 2);
-            const peerResult = envelope.results[0] as import("./search-types.js").SearchGroupedResultV2;
-            assert.equal(peerResult.target.file, "src/caller.ts");
-            assert.equal(peerResult.target.symbolId, "sym-peer-1");
-            assert.equal(peerResult.preview, "");
-        }
+    // The peer's file changed after the served publication, so its indexed
+    // span is stale. Full search answers with the dirty overlay instead.
+    assert.equal(outcome.kind, "continue");
+    if (outcome.kind === "continue") {
+        assert.equal(outcome.exactRegistryFallbackForTrackedLexical, true);
     }
 });
 

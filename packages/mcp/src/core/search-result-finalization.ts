@@ -515,6 +515,7 @@ export async function finalizeSearchResults(
             debugMode: input.debugMode,
             freshnessDecision: input.freshnessDecision,
             freshnessSummary,
+            overlaidPaths: input.execution.overlaidPaths,
             warnings,
             ...buildDebugProjection(),
             proofDebugHint: input.proofDebugHint,
@@ -741,6 +742,7 @@ export async function finalizeSearchResults(
                 debugMode: input.debugMode,
                 freshnessDecision: input.freshnessDecision,
                 freshnessSummary,
+                overlaidPaths: input.execution.overlaidPaths,
                 warnings: resultCounts.remainingGroupCount > 0
                     ? [
                         ...finalizedSearchWarnings,

@@ -241,6 +241,7 @@ async function main() {
                 status: response?.status,
                 freshness: response?.freshness?.state ?? 'none',
                 freshnessMode: response?.freshnessDecision?.mode,
+                overlaidPaths: response?.freshness?.overlaidPaths?.length,
                 changedFiles: response?.freshnessSummary?.changedFileCount,
                 warnings: (response?.warnings ?? []).map((warning) => warning?.code ?? warning).join('|') || undefined,
                 slowPhases: Object.fromEntries(Object.entries(response?.hints?.debugSearch?.phaseTimingsMs ?? {})

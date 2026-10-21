@@ -295,7 +295,7 @@ export async function runExactRegistryFastPath(
             matchReason: exactRegistryMatch.matchReason,
             routeKind: input.queryPlan.route.kind,
             limit: frozenResultLimit,
-            dirtyFiles: !publicationOnlyStaleRead && input.dirtyFilesNotFreshened
+            dirtyFiles: input.dirtyFilesNotFreshened
                 ? input.observedChangedFilesState.files
                 : undefined,
         })
@@ -316,7 +316,6 @@ export async function runExactRegistryFastPath(
         : ambiguousDeclarations![0];
     const normalizedExactPath = exactRegistrySymbol.file.replace(/\\/g, "/").replace(/^\/+/, "");
     const exactTargetWasDirty = !ambiguousDeclarations
-        && !publicationOnlyStaleRead
         && input.dirtyFilesNotFreshened
         && input.observedChangedFilesState.files.has(normalizedExactPath);
     let currentSourceEvidence;
@@ -413,8 +412,7 @@ export async function runExactRegistryFastPath(
             const symbol = registryState.registry.symbolsByInstanceId.get(node.symbolId);
             return symbol && filterSymbol(symbol) ? [symbol] : [];
         });
-        const relationshipTouchesDirtySource = !publicationOnlyStaleRead
-            && input.dirtyFilesNotFreshened
+        const relationshipTouchesDirtySource = input.dirtyFilesNotFreshened
             && peerSymbols.some((symbol) => input.observedChangedFilesState.files.has(
                 symbol.file.replace(/\\/g, "/").replace(/^\/+/, ""),
             ));

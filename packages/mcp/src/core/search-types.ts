@@ -841,6 +841,8 @@ interface SearchBaseResponseEnvelope {
             action: string;
             generation: number;
         };
+        // Sorted dirty paths answered from the working tree, not the served publication.
+        overlaidPaths?: string[];
     };
     warnings?: SearchWarningDetail[];
     recommendedNextAction?: SearchRecommendedNextAction;

@@ -323,3 +323,72 @@ test("periodic freshness skips a root whose full-index handoff just completed", 
 
     assert.equal(syncs, 0);
 });
+
+test("periodic freshness skips a root that a read just proved unchanged with a full source comparison", async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "satori-full-compare-fresh-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    const context = {
+        listCurrentPublications: () => [publication],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareAllSourceToFreshnessCheckpoint: async () => ({ status: "matches" }),
+    };
+    const mutationRuntime = {
+        assertCurrent: () => {},
+        getCurrentOperation: () => undefined,
+        updateCurrentOperation: () => { throw new Error("not used"); },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: mutationRuntime as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, {
+            observedEventEpoch: number;
+            comparedThroughEventEpoch: number;
+            latestEpochByReason: Map<string, number>;
+            coverage: string;
+            coverageGapSinceEpoch?: number;
+        }>;
+        syncCodebase: () => Promise<never>;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    // A server restart leaves the startup coverage gap open.
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 0,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map(),
+        coverage: "ready",
+        coverageGapSinceEpoch: 0,
+    });
+    let syncs = 0;
+    internal.syncCodebase = async () => {
+        syncs += 1;
+        throw new Error("periodic pass must not sync a root a read just proved unchanged");
+    };
+
+    await manager.assessReadFreshness(root, 60_000, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+    });
+    assert.equal(manager.getWatcherObservation(root).coverageGapSinceEpoch, undefined);
+    await manager.handleSyncIndex();
+
+    assert.equal(syncs, 0);
+});

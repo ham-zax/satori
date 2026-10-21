@@ -1060,6 +1060,9 @@ export class SyncManager {
                 }
                 fullMatched = true;
                 this.coverWatcherObservation(codebasePath, flightEpoch);
+                // A whole-tree match proves what a no-op sync would; without this
+                // the first periodic pass after a restart republishes unchanged source.
+                this.lastSyncTimes.set(codebasePath, checkedAtMs);
             } catch (error) {
                 return withReadMetadata({
                     mode: 'read_only',
@@ -1268,6 +1271,8 @@ export class SyncManager {
                 );
                 if (comparison.status === 'matches') {
                     this.coverWatcherObservation(codebasePath, flightEpoch);
+                    // A whole-tree match proves what a no-op sync would.
+                    this.lastSyncTimes.set(codebasePath, checkedAtMs);
                     return {
                         mode: 'skipped_source_unchanged',
                         checkedAt,

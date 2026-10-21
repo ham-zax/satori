@@ -58,9 +58,13 @@ peaked at 5.4 GB under a 6,000 MB scope and was OOM-killed under 4,500 MB (one r
   event arrives 4 ms after the write.
 - Cause: `handleGetIndexingStatus` reads the Publication and freshness, awaits more reads, and
   reads the operation last. A completion in between gives a mixed response.
-- Not fixed: a sync that starts before the watcher is ready captures no flight epoch, so
-  `watcher_observation_gap` stays until the next sync. After every server start the background
-  pass runs one `threshold_expired` sync because no last-sync time exists.
+- Correct by design: a sync that starts before the watcher registers captures no flight epoch,
+  so `watcher_observation_gap` stays. That sync can read source before the watcher observes it.
+  A pending gap sets the threshold to 0, so the next background pass (5 s) closes the gap with
+  a `watcher_pending` sync (log lines 224, 333).
+- Fixed: after a server start, a read's full source comparison closed the startup gap but
+  recorded no sync time. The background pass then ran one `threshold_expired` sync (log lines
+  808, 968). Both full-comparison match paths in `SyncManager` now record the sync time.
 
 ### Finding 6 evidence
 

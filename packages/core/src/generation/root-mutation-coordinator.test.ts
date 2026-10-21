@@ -338,3 +338,37 @@ for (const phase of ['release', 'stale', 'write-failure'] as const) {
         assert.equal(fs.readFileSync(lockPath, 'utf8'), replacement);
     });
 }
+
+test('the starting trigger is stored on the lease and kept on the terminal receipt', async (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const runtime = new RootMutationRuntime({ stateDir });
+    await runtime.run(root, 'reindex', (execution) => {
+        assert.equal(runtime.getActiveMutation(root)?.trigger, 'automatic');
+        assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).lease.trigger, 'automatic');
+        execution.update('completed');
+    }, { trigger: 'automatic' });
+    assert.equal(new RootMutationRuntime({ stateDir }).getOperation(root)?.trigger, 'automatic');
+
+    await runtime.run(root, 'reindex', (execution) => {
+        assert.equal('trigger' in (runtime.getActiveMutation(root) ?? {}), false);
+        assert.equal('trigger' in JSON.parse(fs.readFileSync(statePath, 'utf8')).lease, false);
+        execution.update('completed');
+    });
+    assert.equal('trigger' in (new RootMutationRuntime({ stateDir }).getOperation(root) ?? {}), false);
+});
+
+test('lease files without a trigger still load and an unknown trigger is rejected', (t) => {
+    const { root, stateDir, statePath } = fixture(t);
+    const coordinator = new MutationLeaseCoordinator({ stateDir });
+    const acquired = coordinator.acquire(root, 'reindex', 'manage_index');
+    assert.ok(acquired.acquired);
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+
+    const legacyLease = { ...state.lease };
+    delete legacyLease.trigger;
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, lease: legacyLease }));
+    assert.deepEqual(new MutationLeaseCoordinator({ stateDir }).getActiveLease(root), legacyLease);
+
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, lease: { ...state.lease, trigger: 'cron' } }));
+    assert.throws(() => new MutationLeaseCoordinator({ stateDir }).getActiveLease(root));
+});

@@ -24,6 +24,7 @@ import {
     RootMutationRuntime,
     formatRootMutationBlockedMessage,
     type MutationOperationPhase,
+    type MutationTrigger,
     type RootMutationExecution,
     type RootMutationOperation,
     type RootMutationStart,
@@ -362,13 +363,14 @@ export class ManageIndexingHandlers {
     }
 
     public async handleIndexCodebase(args: IndexCodebaseArgs): Promise<ToolTextResponse> {
-        return this.handleIndexCodebaseInternal(args);
+        return this.handleIndexCodebaseInternal(args, undefined, undefined, "manage_index");
     }
 
     private async handleIndexCodebaseInternal(
         args: IndexCodebaseArgs,
-        preparedCanonicalRoot?: string,
-        onMutationStarted?: (mutation: RootMutationStart<ToolTextResponse>) => void,
+        preparedCanonicalRoot: string | undefined,
+        onMutationStarted: ((mutation: RootMutationStart<ToolTextResponse>) => void) | undefined,
+        trigger: MutationTrigger,
     ): Promise<ToolTextResponse> {
         const { path: codebasePath, force, customExtensions, ignorePatterns, zillizDropCollection } = args;
         const forceReindex = force || false;
@@ -639,7 +641,7 @@ export class ManageIndexingHandlers {
                         { ...preflightOptions, ...(operation ? { operation } : {}) },
                     );
                 }
-            });
+            }, { trigger });
 
             onMutationStarted?.(mutation);
             this.host.ownDetachedMutationCompletion(mutation.completion);
@@ -719,6 +721,7 @@ export class ManageIndexingHandlers {
             (mutation) => {
                 mutationStart = mutation;
             },
+            "automatic",
         );
         let accepted: boolean;
         try {
@@ -805,7 +808,7 @@ export class ManageIndexingHandlers {
             ignorePatterns,
             zillizDropCollection,
             __reindexPreflight: forwardedPreflight,
-        }, absolutePath);
+        }, absolutePath, undefined, "manage_index");
     }
 
 

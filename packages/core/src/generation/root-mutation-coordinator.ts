@@ -6,6 +6,9 @@ import * as path from 'path';
 import { resolveSatoriStateRoot } from '../config/runtime-state-root';
 
 export type MutationLeaseAction = 'create' | 'reindex' | 'sync' | 'clear' | 'gc';
+/** Who started a mutation: an explicit manage_index request or Satori's own background maintenance. */
+export type MutationTrigger = 'manage_index' | 'automatic';
+const MUTATION_TRIGGERS: ReadonlySet<string> = new Set<MutationTrigger>(['manage_index', 'automatic']);
 export type MutationOperationPhase = 'accepted' | 'preflight' | 'scanning' | 'writing' | 'proving' | 'publishing' | 'cancelling' | 'cancelled' | 'completed' | 'failed' | 'blocked';
 
 export function isTerminalMutationOperationPhase(phase: MutationOperationPhase): boolean {
@@ -15,6 +18,7 @@ export function isTerminalMutationOperationPhase(phase: MutationOperationPhase):
 export interface RootMutationOperation {
     id: string;
     action: MutationLeaseAction;
+    trigger?: MutationTrigger;
     canonicalRoot: string;
     generation: number;
     acceptedAt: string;
@@ -43,6 +47,7 @@ export interface RootMutationLease {
     generation: number;
     operationId: string;
     action: MutationLeaseAction;
+    trigger?: MutationTrigger;
     ownerId: string;
     pid: number;
     processStartTime?: string;
@@ -209,7 +214,7 @@ export class MutationLeaseCoordinator {
         this.lockRetryMs = options.lockRetryMs ?? LOCK_RETRY_MS;
     }
 
-    public acquire(root: string, action: MutationLeaseAction): MutationLeaseAcquireResult {
+    public acquire(root: string, action: MutationLeaseAction, trigger?: MutationTrigger): MutationLeaseAcquireResult {
         const canonicalRoot = canonicalizeRoot(root);
         return this.withRootLock(canonicalRoot, () => {
             const state = this.readState(canonicalRoot);
@@ -226,6 +231,7 @@ export class MutationLeaseCoordinator {
                 generation: state.generation + 1,
                 operationId: crypto.randomUUID(),
                 action,
+                ...(trigger ? { trigger } : {}),
                 ownerId: this.ownerId,
                 pid: this.currentProcess.pid,
                 processStartTime: this.currentProcess.processStartTime,
@@ -240,6 +246,7 @@ export class MutationLeaseCoordinator {
             this.operationsByRoot.set(canonicalRoot, {
                 id: lease.operationId,
                 action: lease.action,
+                ...(lease.trigger ? { trigger: lease.trigger } : {}),
                 canonicalRoot,
                 generation: lease.generation,
                 acceptedAt: lease.acquiredAt,
@@ -434,6 +441,7 @@ export class MutationLeaseCoordinator {
             this.operationsByRoot.set(canonicalRoot, {
                 id: lease.operationId,
                 action: lease.action,
+                ...(lease.trigger ? { trigger: lease.trigger } : {}),
                 canonicalRoot,
                 generation: lease.generation,
                 acceptedAt: lease.acquiredAt,
@@ -654,6 +662,7 @@ export class MutationLeaseCoordinator {
             && typeof value.id === 'string'
             && ['create', 'reindex', 'sync', 'clear', 'gc'].includes(String(value.action))
             && ['completed', 'failed', 'blocked', 'cancelled'].includes(String(value.phase))
+            && (value.trigger === undefined || MUTATION_TRIGGERS.has(String(value.trigger)))
             && typeof value.acceptedAt === 'string'
             && typeof value.updatedAt === 'string'
             && ['heartbeatAt', 'progressAt', 'error', 'cancelRequestedAt', 'cancelReason']
@@ -675,6 +684,7 @@ export class MutationLeaseCoordinator {
             && value.generation > 0
             && typeof value.operationId === 'string'
             && ['create', 'reindex', 'sync', 'clear', 'gc'].includes(String(value.action))
+            && (value.trigger === undefined || MUTATION_TRIGGERS.has(String(value.trigger)))
             && typeof value.ownerId === 'string'
             && typeof value.pid === 'number'
             && Number.isSafeInteger(value.pid)

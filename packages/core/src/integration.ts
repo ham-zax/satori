@@ -26,6 +26,7 @@ export {
 } from './generation/root-mutation-coordinator';
 export type {
     MutationOperationPhase,
+    MutationTrigger,
     RootMutationOperation,
 } from './generation/root-mutation-coordinator';
 export type {

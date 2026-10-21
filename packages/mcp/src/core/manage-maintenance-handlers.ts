@@ -198,7 +198,8 @@ function formatActiveMutationStatusLine(activity: RootMutationActivity): string 
     const executor = activity.executorPid !== undefined
         ? ` executorPid=${activity.executorPid}${activity.executorProcessGroupId !== undefined ? ` executorProcessGroupId=${activity.executorProcessGroupId}` : ""}`
         : "";
-    return `Active mutation: ${activity.action} operation=${activity.id} generation=${activity.generation} pid=${activity.pid}${executor} acquiredAt=${activity.acceptedAt}`;
+    const trigger = activity.trigger ? ` trigger=${activity.trigger}` : "";
+    return `Active mutation: ${activity.action}${trigger} operation=${activity.id} generation=${activity.generation} pid=${activity.pid}${executor} acquiredAt=${activity.acceptedAt}`;
 }
 
 // Sync emits real progress per changed file and after measured Publication phases.

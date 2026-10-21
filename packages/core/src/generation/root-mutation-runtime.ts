@@ -5,6 +5,7 @@ import {
     isTerminalMutationOperationPhase,
     type MutationLeaseAction,
     type MutationOperationPhase,
+    type MutationTrigger,
     type RootMutationLease,
     type RootMutationOperation,
 } from './root-mutation-coordinator';
@@ -14,6 +15,7 @@ export type RootMutationAction = MutationLeaseAction;
 export type RootMutationActivity = Readonly<{
     id: string;
     action: RootMutationAction;
+    trigger?: MutationTrigger;
     canonicalRoot: string;
     generation: number;
     acceptedAt: string;
@@ -35,6 +37,8 @@ export type RootMutationContinuation<T> = Readonly<{
 
 export type RootMutationExecutionOptions = Readonly<{
     signal?: AbortSignal;
+    /** Recorded on the lease only when this call acquires it. */
+    trigger?: MutationTrigger;
 }>;
 
 export type RootMutationExecutor = Readonly<{
@@ -108,6 +112,7 @@ function activityFromLease(lease: RootMutationLease): RootMutationActivity {
         generation: lease.generation,
         acceptedAt: lease.acquiredAt,
         pid: lease.pid,
+        ...(lease.trigger ? { trigger: lease.trigger } : {}),
         ...(lease.executorPid !== undefined ? { executorPid: lease.executorPid } : {}),
         ...(lease.executorProcessGroupId !== undefined
             ? { executorProcessGroupId: lease.executorProcessGroupId }
@@ -168,7 +173,7 @@ export class RootMutationRuntime {
             }
             break;
         }
-        const acquired = coordinator.acquire(root, action);
+        const acquired = coordinator.acquire(root, action, options.trigger);
         if (!acquired.acquired) {
             throw new RootMutationInProgressError(activityFromLease(acquired.activeLease));
         }

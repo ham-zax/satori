@@ -1,5 +1,5 @@
 import ignore from 'ignore';
-import { DEFAULT_IGNORE_PATTERNS } from '../config/defaults';
+import { HARD_IGNORE_PATTERNS } from '../config/defaults';
 
 /**
  * The only matcher surface index-policy consumers rely on. Every matcher built
@@ -10,7 +10,7 @@ export type IndexIgnoreMatcher = Readonly<{
     ignores(relativePath: string): boolean;
 }>;
 
-const hardDenylist = ignore().add([...DEFAULT_IGNORE_PATTERNS]);
+const hardDenylist = ignore().add([...HARD_IGNORE_PATTERNS]);
 
 /**
  * Build a matcher for an effective ignore list (base + custom + file-based).

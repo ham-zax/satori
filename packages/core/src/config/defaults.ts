@@ -23,7 +23,7 @@ export const SCRIPT_SUPPORTED_EXTENSIONS = [
 ] as const;
 
 export const INFRA_QUERY_SUPPORTED_EXTENSIONS = [
-    '.sql', '.graphql', '.gql', '.tf', '.tfvars',
+    '.sql', '.graphql', '.gql', '.tf',
 ] as const;
 
 // Recognized by the language registry but not indexed by default: bulk data,
@@ -114,7 +114,8 @@ export function getSupportedExtensionsForIndexProfile(profile: IndexProfile = 'd
     return [...DEFAULT_SUPPORTED_EXTENSIONS];
 }
 
-export const DEFAULT_IGNORE_PATTERNS = [
+/** Always excluded: user ignore files cannot re-include these (see `ignore-matcher.ts`). */
+export const HARD_IGNORE_PATTERNS = [
     // Common build output and dependency directories
     'node_modules/**',
     'dist/**',
@@ -163,6 +164,16 @@ export const DEFAULT_IGNORE_PATTERNS = [
     'poetry.lock',
     'Pipfile.lock',
     'uv.lock',
+    'go.sum',
+    'flake.lock',
+    'Podfile.lock',
+    'pubspec.lock',
+    'mix.lock',
+    'packages.lock.json',
+    'gradle.lockfile',
+    'deno.lock',
+    '.pnp.cjs',
+    '.pnp.loader.mjs',
 
     // Private keys, certs, and local credential material
     '*.pem',
@@ -171,6 +182,21 @@ export const DEFAULT_IGNORE_PATTERNS = [
     '*.cer',
     '*.p12',
     '*.pfx',
+    '*.jks',
+    '*.keystore',
+    'id_rsa*',
+    'id_ed25519*',
+    '.npmrc',
+    '.pypirc',
+    '.netrc',
+    'credentials.json',
+    'service-account*.json',
+    '*-key.json',
+
+    // Terraform state and variable files often hold secrets
+    '*.tfstate',
+    '*.tfstate.*',
+    '*.tfvars',
 
     // Minified and bundled files
     '*.min.js',
@@ -197,3 +223,48 @@ export const DEFAULT_IGNORE_PATTERNS = [
     'target', '.vscode', '.idea', '__pycache__', '.pytest_cache',
     'coverage', '.nyc_output', 'logs', 'tmp', 'temp'
 ];
+
+/**
+ * Excluded by default, but a `!` rule in `.gitignore` or `.satoriignore` can
+ * re-include them: some repositories commit `vendor/` or `deps/` on purpose.
+ * Bare names match at any depth.
+ */
+export const OVERRIDABLE_DEFAULT_IGNORE_PATTERNS = [
+    // Python environments, caches, and packaging output
+    '.venv', 'venv', '.tox', '.nox', '.mypy_cache', '.ruff_cache', '.pytype',
+    '.hypothesis', '.ipynb_checkpoints', '.eggs', '*.egg-info', '__pypackages__',
+    'site-packages', 'htmlcov',
+    // JavaScript framework output, tool caches, and package stores
+    '.next', '.nuxt', '.output', '.svelte-kit', '.turbo', '.parcel-cache',
+    '.angular', '.docusaurus', '.expo', '.vercel', '.netlify', '.wrangler',
+    '.serverless', '.nx', '.yarn', '.pnpm-store', 'bower_components',
+    'jspm_packages', 'storybook-static', '*.tsbuildinfo', '.eslintcache',
+    // Vendored dependencies
+    'vendor', 'deps', '.bundle',
+    // JVM, .NET, Apple, Dart, Elixir, Haskell, Zig, CMake, Bazel, Terraform
+    '.gradle', '.m2', 'obj', 'Pods', 'DerivedData', '.build', '.swiftpm',
+    '.dart_tool', '.pub-cache', '_build', '.stack-work', 'dist-newstyle',
+    'zig-cache', '.zig-cache', 'zig-out', 'CMakeFiles', 'cmake-build-*',
+    'bazel-*', '.terraform',
+    // Other caches and local tool state
+    '.cache', '.sass-cache', '.direnv', '.devenv', '.history',
+    '.vs', '.fleet', '.godot', '.pio', 'elm-stuff', '.cabal-sandbox',
+    '**/.mvn/wrapper', '**/.dvc/cache', '.ccache', '.bsp', '.metals', '.bloop',
+    // Coding-agent state and in-repo worktrees: worktrees duplicate the repository
+    '.worktrees', '**/.claude/worktrees', '**/.claude/projects', '.codex', '.jj',
+    '.aider*', '.cursor', '.continue', '.windsurf',
+    // Test, coverage, and CI reports
+    'test-results', 'playwright-report', 'blob-report', '**/cypress/videos',
+    '**/cypress/screenshots', 'lcov-report', '.coverage', 'coverage.xml',
+    'junit*.xml', 'reports',
+    // Generated documentation sites
+    'site', '_site', '**/.vitepress/cache', 'api-docs', 'typedoc',
+    // Protobuf and Dart codegen output. Other generated paths stay indexed:
+    // search classifies them as `generated` and ranks them down.
+    '*.pb.go', '*_pb2.py', '*_pb2_grpc.py', '*.g.dart', '*.freezed.dart',
+    // Bundled third-party source trees
+    'third_party', 'third-party', '3rdparty', 'external',
+];
+
+/** Base ignore set: hard exclusions first, then the overridable defaults. */
+export const DEFAULT_IGNORE_PATTERNS = [...HARD_IGNORE_PATTERNS, ...OVERRIDABLE_DEFAULT_IGNORE_PATTERNS];

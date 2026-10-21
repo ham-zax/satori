@@ -4,6 +4,13 @@
 // and prints Satori's own timing records (SATORI_PERF_TRACE) plus wall time.
 //
 //   node scripts/perf/index-probe.mjs <repo> [--edit <relative file>] [--log <file>] [--cpu-prof <dir>]
+//       [--save-search <N,N,...> --ext <.go> [--runs 3]] [--wait-timeout <ms>]
+//
+// --save-search measures save-to-search freshness: for each N it appends a unique
+// comment term to N tracked files with extension --ext, then searches for the
+// term with no sync ("idle") and right after a sync starts ("sync"). It reports
+// the first search's time, hits and freshness state, and the time from save until
+// every edited file is a hit. Each trial restores the files and syncs back.
 //
 // Run memory-capped, e.g.
 //   systemd-run --user --scope -q -p MemoryMax=7G -p MemorySwapMax=0 node scripts/perf/index-probe.mjs ../some-repo
@@ -18,19 +25,29 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function parseArgs(argv) {
-    const options = { repo: null, edit: null, log: null, cpuProf: null };
+    const options = { repo: null, edit: null, log: null, cpuProf: null, saveSearch: null, ext: null, runs: 3, waitTimeoutMs: 600_000 };
+    const positiveInt = (value, flag) => {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number <= 0) fail(`${flag} needs a positive integer, got ${value}`);
+        return number;
+    };
     for (let i = 0; i < argv.length; i++) {
         const next = () => argv[++i] ?? fail(`${argv[i - 1]} needs a value`);
         switch (argv[i]) {
             case '--edit': options.edit = next(); break;
             case '--log': options.log = path.resolve(next()); break;
             case '--cpu-prof': options.cpuProf = path.resolve(next()); break;
+            case '--save-search': options.saveSearch = next().split(',').map((value) => positiveInt(value, '--save-search')); break;
+            case '--ext': options.ext = next(); break;
+            case '--runs': options.runs = positiveInt(next(), '--runs'); break;
+            case '--wait-timeout': options.waitTimeoutMs = positiveInt(next(), '--wait-timeout'); break;
             default:
                 if (options.repo) fail(`unexpected argument ${argv[i]}`);
                 options.repo = path.resolve(argv[i]);
         }
     }
-    if (!options.repo) fail('usage: index-probe.mjs <repo> [--edit <file>] [--log <file>] [--cpu-prof <dir>]');
+    if (!options.repo) fail('usage: index-probe.mjs <repo> [--edit <file>] [--log <file>] [--cpu-prof <dir>] [--save-search <N,...> --ext <.ext> [--runs 3]] [--wait-timeout <ms>]');
+    if (options.saveSearch && !options.ext?.startsWith('.')) fail('--save-search needs --ext <.extension>');
     return options;
 }
 
@@ -58,6 +75,15 @@ function treeRssMb(rootPid) {
         for (const [child, info] of table) if (info.ppid === pid) stack.push(child);
     }
     return totalKb / 1024;
+}
+
+// Original bytes of files a save-search trial has edited, restored on a signal too.
+const pendingRestores = new Map();
+for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => {
+        for (const [file, original] of pendingRestores) fs.writeFileSync(file, original);
+        process.exit(130);
+    });
 }
 
 function fail(message) {
@@ -138,24 +164,123 @@ async function main() {
         }
     });
 
-    const request = (method, params) => new Promise((resolve) => {
+    const request = (method, params) => new Promise((resolve, reject) => {
         const id = nextId++;
-        pending.set(id, resolve);
+        const timer = setTimeout(() => {
+            pending.delete(id);
+            reject(new Error(`${method} got no response in ${options.waitTimeoutMs} ms`));
+        }, options.waitTimeoutMs);
+        pending.set(id, (result) => { clearTimeout(timer); resolve(result); });
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     });
     const tool = async (name, args) => {
         const result = await request('tools/call', { name, arguments: args });
         const text = (result?.content ?? []).map((item) => item.text).join('');
-        try { return JSON.parse(text); } catch { return null; }
+        log.write(`[probe] ${name} ${args.action ?? args.query ?? ''} -> ${text.slice(0, 2000)}\n`);
+        try { return JSON.parse(text); } catch { return { status: 'unparsed', text }; }
     };
+    const requireAccepted = (action, response) => {
+        if (response?.status !== 'ok') throw new Error(`${action} not accepted: ${JSON.stringify(response).slice(0, 500)}`);
+    };
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const currentOperation = async () => (await tool('manage_index', { action: 'status', path: options.repo }))?.operation;
     const waitForGeneration = async (previousGeneration) => {
-        for (;;) {
-            const operation = (await tool('manage_index', { action: 'status', path: options.repo }))?.operation;
+        const deadline = performance.now() + options.waitTimeoutMs;
+        while (performance.now() < deadline) {
+            const operation = await currentOperation();
             if (operation && (previousGeneration === undefined || operation.generation > previousGeneration)) {
                 if (operation.phase === 'completed') return operation;
                 if (operation.phase === 'failed') throw new Error(`operation failed: ${JSON.stringify(operation).slice(0, 300)}`);
             }
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            await sleep(100);
+        }
+        throw new Error(`no completed generation after ${previousGeneration ?? 'none'} in ${options.waitTimeoutMs} ms`);
+    };
+    const startSync = async () => {
+        const before = await currentOperation();
+        const started = performance.now();
+        requireAccepted('sync', await tool('manage_index', { action: 'sync', path: options.repo }));
+        return { before, started };
+    };
+    // Waits for the sync's operation to end. A sync that starts no new operation
+    // within noOpMs counts as a no-op (the working tree matches the index).
+    const waitSync = async ({ before, started }, noOpMs = 3000) => {
+        const deadline = started + options.waitTimeoutMs;
+        while (performance.now() < deadline) {
+            const operation = await currentOperation();
+            if (operation && operation.id !== before?.id) {
+                if (operation.phase === 'completed') return { operation, wallMs: performance.now() - started };
+                if (['failed', 'blocked', 'cancelled'].includes(operation.phase)) {
+                    throw new Error(`sync ${operation.phase}: ${JSON.stringify(operation).slice(0, 300)}`);
+                }
+            } else if (performance.now() - started > noOpMs) {
+                return { operation: before, wallMs: null };
+            }
+            await sleep(100);
+        }
+        throw new Error(`sync did not end in ${options.waitTimeoutMs} ms`);
+    };
+    const syncAndWait = async () => waitSync(await startSync());
+
+    const saveSearchTrial = async (files, mode, comment) => {
+        const term = `satoriprobe${Array.from({ length: 8 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
+        const edited = new Set(files);
+        const search = async () => {
+            const started = performance.now();
+            const response = await tool('search_codebase', {
+                path: options.repo, query: term, resultMode: 'raw', limit: files.length + 20, debugMode: 'freshness',
+            });
+            const hitFiles = new Set((response?.results ?? [])
+                .map((result) => result.target?.file ?? result.file)
+                .filter(Boolean)
+                .map((file) => (path.isAbsolute(file) ? path.relative(options.repo, file) : file))
+                .filter((file) => edited.has(file)));
+            return {
+                ms: Math.round(performance.now() - started),
+                hits: hitFiles.size,
+                status: response?.status,
+                freshness: response?.freshness?.state ?? 'none',
+                freshnessMode: response?.freshnessDecision?.mode,
+                changedFiles: response?.freshnessSummary?.changedFileCount,
+                warnings: (response?.warnings ?? []).map((warning) => warning?.code ?? warning).join('|') || undefined,
+                slowPhases: Object.fromEntries(Object.entries(response?.hints?.debugSearch?.phaseTimingsMs ?? {})
+                    .filter(([, ms]) => ms > 100)),
+            };
+        };
+        for (const file of files) pendingRestores.set(path.join(options.repo, file), fs.readFileSync(path.join(options.repo, file)));
+        try {
+            for (const [file, original] of pendingRestores) fs.writeFileSync(file, Buffer.concat([original, Buffer.from(`\n${comment} ${term}\n`)]));
+            const saved = performance.now();
+            const syncHandle = mode === 'sync' ? await startSync() : null;
+            const first = await search();
+            let fullHitAt = first.hits === files.length ? performance.now() : null;
+            let syncResult = null;
+            let syncError = null;
+            const syncDone = syncHandle
+                ? waitSync(syncHandle).then((result) => { syncResult = result; }, (error) => { syncError = error; })
+                : null;
+            // Idle trials have no sync to wait for: the overlay is the only path to a hit.
+            const pollUntil = saved + (mode === 'sync' ? options.waitTimeoutMs : 10_000);
+            let last = first;
+            while (fullHitAt === null && performance.now() < pollUntil && syncError === null) {
+                const syncEnded = syncResult !== null;
+                await sleep(250);
+                last = await search();
+                if (last.hits === files.length) fullHitAt = performance.now();
+                else if (syncEnded) break;
+            }
+            await syncDone;
+            if (syncError) throw syncError;
+            return {
+                first,
+                last,
+                saveToFullHitMs: fullHitAt === null ? null : Math.round(fullHitAt - saved),
+                syncWallMs: syncResult?.wallMs == null ? null : Math.round(syncResult.wallMs),
+            };
+        } finally {
+            for (const [file, original] of pendingRestores) fs.writeFileSync(file, original);
+            pendingRestores.clear();
+            await syncAndWait();
         }
     };
 
@@ -167,7 +292,7 @@ async function main() {
         let peakRssMb = 0;
         rssTimer = setInterval(() => { peakRssMb = Math.max(peakRssMb, treeRssMb(child.pid)); }, 200);
         const indexStarted = performance.now();
-        await tool('manage_index', { action: 'create', path: options.repo });
+        requireAccepted('create', await tool('manage_index', { action: 'create', path: options.repo }));
         const operation = await waitForGeneration();
         clearInterval(rssTimer);
         console.log(`index wall ${Math.round(performance.now() - indexStarted)} ms, peak tree RSS ${Math.round(peakRssMb)} MB`);
@@ -183,6 +308,27 @@ async function main() {
                 console.log(`sync wall ${Math.round(performance.now() - syncStarted)} ms`);
             } finally {
                 fs.writeFileSync(file, original);
+            }
+        }
+
+        if (options.saveSearch) {
+            await syncAndWait();
+            const tracked = await new Promise((resolve, reject) => {
+                const git = spawn('git', ['-C', options.repo, 'ls-files', '-z', `*${options.ext}`], { stdio: ['ignore', 'pipe', 'inherit'] });
+                let out = '';
+                git.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk; });
+                git.once('close', (code) => (code === 0 ? resolve(out.split('\0').filter(Boolean).sort()) : reject(new Error(`git ls-files exit ${code}`))));
+            });
+            const comment = options.ext === '.py' ? '#' : '//';
+            for (const count of options.saveSearch) {
+                if (count > tracked.length) fail(`--save-search ${count} exceeds ${tracked.length} tracked ${options.ext} files`);
+                // Even stride over the sorted list spreads the edits across directories.
+                const files = Array.from({ length: count }, (_, index) => tracked[Math.floor(index * tracked.length / count)]);
+                for (const mode of ['idle', 'sync']) {
+                    for (let run = 1; run <= options.runs; run++) {
+                        console.log(`save-search N=${count} mode=${mode} run=${run} ${JSON.stringify(await saveSearchTrial(files, mode, comment))}`);
+                    }
+                }
             }
         }
     } finally {

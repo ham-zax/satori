@@ -589,6 +589,30 @@ test('Rust admits bare calls through use imports as exact direct calls', async (
     assert.equal(calls(records).length, 1);
 });
 
+test('Rust type-qualified calls never bind to a same-named free function (CBM ec4f0eaa)', async () => {
+    const cargo = [{
+        path: 'Cargo.toml',
+        role: 'manifest',
+        source: '[package]\nname = "demo"\nversion = "0.1.0"\n',
+    }];
+    const libSource = [
+        'use fsx::Opts;',
+        'pub fn write() -> i32 { 1 }',
+        'pub fn run() { Opts::write(true); }',
+        'pub fn bare() -> i32 { write() }',
+    ].join('\n');
+    const evidence = await analyze('rust', [{ path: 'src/lib.rs', source: libSource }], cargo);
+    const resolved = (evidence.occurrencesByFile.get('src/lib.rs') ?? [])
+        .filter((occurrence) => occurrence.decision === 'resolved');
+    const qualifiedCall = libSource.indexOf('Opts::write');
+    assert.deepEqual(
+        resolved.filter((occurrence) => occurrence.callSpan.startByte === qualifiedCall),
+        [],
+        '`Opts::write` is an associated function of an external type',
+    );
+    assert.equal(resolved.length, 1, 'the bare `write()` call still resolves');
+});
+
 test('Rust test-only direct calls remain unadmitted while ordinary direct calls resolve', async () => {
     const cargo = [{
         path: 'Cargo.toml',

@@ -65,6 +65,11 @@ is not ported because Satori has no such name-guess fallback. Satori admits no
 `lsp_kt_any` strategy, so those calls stay abstained. Revision: `kotlin-v2`
 (unreleased, not bumped again).
 
+Local port: CBM `ec4f0eaa` stops a type-qualified Rust call (`Opts::write`, `Self::f`,
+`<T as Tr>::f`) from taking the free-function fallbacks (`lsp_cross_crate`,
+`lsp_short_name_unique`). Satori admits `lsp_short_name_unique` as a direct call, so the
+call bound to a same-named free function. Revision: `rust-v4` (unreleased, not bumped again).
+
 When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp):
 
 1. **Pull and inspect changes**:

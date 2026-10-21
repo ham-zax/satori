@@ -4272,6 +4272,32 @@ static bool rust_qn_has_suffix(const char *qualified_name, const char *suffix) {
            (qn_len == suffix_len || qualified_name[qn_len - suffix_len - 1U] == '.');
 }
 
+/* True when the segment that qualifies a call path's tail names a TYPE:
+ * `Store::new`, `Self::helper`, `T::default`, `<T as Tr>::f` (turbofish is
+ * already stripped, so a `>` before the last `::` closes a qualified path).
+ * Such a call is an associated function, never a free function, so the
+ * free-function short-name fallbacks must not bind it: with a project-wide
+ * unique free `new`/`write`, `Store::new()` landed on that function and the
+ * LSP row pre-empted the registry's correct `Store.new`. Module segments are
+ * snake_case, so an ASCII-uppercase initial is a type. `tail` must point just
+ * past the path's last `::`, or equal `path` when there is none. */
+static bool rust_path_qualifier_is_type(const char *path, const char *tail) {
+    if (!path || !tail || tail - path < 3) {
+        return false;
+    }
+    const char *seg_end = tail - 2; /* the last "::" */
+    if (seg_end[-1] == '>') {
+        return true;
+    }
+    const char *seg = path;
+    for (const char *p = path; p + 1 < seg_end; p++) {
+        if (p[0] == ':' && p[1] == ':') {
+            seg = p + 2;
+        }
+    }
+    return seg < seg_end && seg[0] >= 'A' && seg[0] <= 'Z';
+}
+
 /* Resolve only an exact identifier/scoped-path value. No branch, closure, or
  * other composite expression enters this helper. A suffix fallback is admitted
  * only for a qualified import path and only when it identifies one free func. */
@@ -4663,6 +4689,9 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
         } else {
             tail = path;
         }
+        /* `Type::f` is an associated function: the two free-function
+         * fallbacks below never bind it (see rust_path_qualifier_is_type). */
+        const bool assoc_call = rust_path_qualifier_is_type(path, tail);
 
         /* Cross-crate workspace-member resolution (#56): when the call
          * path's head is a declared Cargo workspace member (e.g.
@@ -4673,7 +4702,7 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
          * MEMBER crate by matching the registered QN's `.<member>.`
          * path segment plus the call tail. Requires a parsed manifest
          * (threaded through pass_lsp_cross.c); NULL manifest skips this. */
-        if (ctx->cargo_manifest && tail && *tail) {
+        if (!assoc_call && ctx->cargo_manifest && tail && *tail) {
             const char *head_sep = strstr(path, "::");
             if (head_sep && head_sep > path) {
                 char *head = cbm_arena_strndup(ctx->arena, path, (size_t)(head_sep - path));
@@ -4717,7 +4746,7 @@ static void rust_resolve_call_expression_inner(RustLSPContext *ctx, TSNode node)
          * foo; use foo::bar; bar()` a chance to resolve when the
          * intermediate module wasn't tracked through an explicit
          * use-map entry. */
-        if (tail && *tail && ctx->module_qn) {
+        if (!assoc_call && tail && *tail && ctx->module_qn) {
             /* Crate prefix is the first dotted segment of module_qn after
              * the project name, but for simplicity we just match on
              * "starts with first dot-segment". */

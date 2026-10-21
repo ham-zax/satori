@@ -125,8 +125,14 @@ Results:
 
 Not confirmed:
 
-- `C_EVAL_DEPTH_LIMIT` is not in `third_party/cbm-semantic`. The C memo and depth claims
-  (`c3c97a99`, `e9e72d09`) need a direct check.
+- C memo and depth (`c3c97a99`, `e9e72d09`): not applicable. The earlier note was wrong:
+  `C_EVAL_DEPTH_LIMIT` (256) and `C_EVAL_MAX_STEPS_PER_FILE` (10,000) are in
+  `languages/cpp/c_lsp.c:1477`. The Satori guard is not sticky: it makes only the deep
+  subexpression unknown. Direct calls do not use the type evaluator, and Satori publishes no C++
+  receiver evidence. Probes: 10,000 call statements in one function resolve all 10,001 calls
+  (355 ms). A 300-term sum and a 200-link fluent chain keep the later call. 40 nested ternaries
+  resolve. Only calls nested deeper than 256 levels are dropped (256 of 301), and upstream keeps
+  that guard for genuine nesting.
 - No measurement supports the 10-20x WASM memory gain or the read-path gain.
 
 ## Producer bottleneck note (verified)

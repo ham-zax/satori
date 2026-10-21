@@ -52,6 +52,7 @@ for (const scenario of [
         assert.ok(Object.isFrozen(plan.memoryBudget));
         assert.equal(plan.analysisWorkerMode, plan.budgetBytes <= 4 * GIB && plan.analysisWorkers > 0 ? 'process' : 'thread');
         assert.equal(plan.analysisProcessMaxFiles, 128);
+        assert.equal(plan.analysisWindowFiles, Math.max(1, plan.analysisWorkers) * (plan.budgetBytes > 4 * GIB ? 8 : 1));
         assert.equal(plan.analysisWindowSourceBytes, Math.min(64 * MIB, Math.max(
             8 * MIB,
             Math.floor(Math.max(0, plan.budgetBytes - plan.burstReserveBytes - GIB) / 32),

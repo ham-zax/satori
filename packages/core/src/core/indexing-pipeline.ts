@@ -830,10 +830,10 @@ export class IndexingPipeline {
             await payloadChain;
         };
 
-        // Files are read and analyzed ahead of consumption, up to twice the
-        // analyzer's concurrency, and consumed in path order: output is the same
-        // as analyzing one file at a time.
-        const analysisWindow = Math.min(Math.max(1, languageAnalyzer.concurrency ?? 1) * 2, input.resourcePlan?.analysisWindowFiles ?? Infinity);
+        // Files are read and analyzed ahead of consumption, up to the resource
+        // plan's window (twice the analyzer's concurrency without a plan), and
+        // consumed in path order: output is the same as analyzing one file at a time.
+        const analysisWindow = input.resourcePlan?.analysisWindowFiles ?? Math.max(1, languageAnalyzer.concurrency ?? 1) * 2;
         const analysisWindowSourceBytes = input.resourcePlan?.analysisWindowSourceBytes ?? 64 * 1024 * 1024;
         const pendingAnalyses = new Map<number, Promise<ProcessingAnalysisFile | null>>();
         const analysisReservations = new Map<number, number>();

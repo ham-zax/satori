@@ -15,6 +15,13 @@ const ANALYSIS_JOB_BYTES = 512 * MIB;
 const SHARED_WORKING_SET_BYTES = GIB;
 const BURST_RESERVE_FRACTION = 0.20;
 const FALLBACK_AVAILABLE_BYTES = 2 * GIB;
+// Files read and analyzed ahead per analysis worker on budgets above 4 GiB.
+// The producer is latency-bound by this window, not by worker CPU: on the
+// LibreOffice full index, 8 per worker cut `payload.producer` by 26 s against
+// 2 per worker with no peak-memory change (docs/improvements/
+// libreoffice-critical-path-2026-10-21.md, section 5.1). Memory in flight stays
+// bounded by `analysisWindowSourceBytes`.
+export const ANALYSIS_WINDOW_FILES_PER_WORKER = 8;
 
 export interface IndexingMemoryStatus {
     readonly budgetMb: number;
@@ -199,7 +206,7 @@ export class IndexingResourcePlanner {
         const typescriptProjectConcurrency = Math.max(1, Math.min(cpuTypescript, Math.floor(jobBytes / TYPESCRIPT_JOB_BYTES)));
         const derivedAnalysis = Math.min(cpuAnalysis, Math.max(1, Math.floor(jobBytes / ANALYSIS_JOB_BYTES)));
         const analysisWorkers = overrides.analysisWorkers ?? derivedAnalysis;
-        const analysisWindowFiles = Math.max(1, analysisWorkers) * (budgetBytes > 4 * GIB ? 2 : 1);
+        const analysisWindowFiles = Math.max(1, analysisWorkers) * (budgetBytes > 4 * GIB ? ANALYSIS_WINDOW_FILES_PER_WORKER : 1);
         const analysisWindowSourceBytes = Math.min(64 * MIB, Math.max(8 * MIB, Math.floor(workingBytes / 32)));
         // Turn 4 attribution: optimizing a generated C++ lexer used 2.30 GiB
         // of V8 native compiler allocations. Baseline WASM reduced it to 5 MiB.

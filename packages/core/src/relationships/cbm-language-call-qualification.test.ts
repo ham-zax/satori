@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 
 import { WasmSemanticProjectAnalyzer } from '../semantic/wasm/wasm-analyzer';
@@ -324,6 +326,29 @@ test('C++ qualification admits same-TU direct calls and rejects unproved cross-T
     }]);
     assert.equal([...conditionalEvidence.occurrencesByFile.values()].flat()
         .some((occurrence) => occurrence.decision === 'resolved'), false);
+});
+
+test('C++ macro-wrapped callers keep their own outbound calls', async () => {
+    const source = fs.readFileSync(path.join(__dirname, '../language-analysis/__fixtures__/cpp-macro-definitions.cpp'), 'utf8');
+    const file = 'src/macros.cpp';
+    const analysis = await createLanguageAnalysisService().analyze({ content: source, relativePath: file, language: 'cpp' });
+    const symbols = buildSymbolRecordsForFile({
+        relativePath: file, content: source, language: 'cpp', fileHash: 'hash-macros',
+        extractorVersion: 'cbm-language-qualification', chunks: [...analysis.chunks], extractedSymbols: analysis.symbols,
+    });
+    const { records } = await qualify('cpp', [{ path: file, source }], symbols);
+    const names = new Map(symbols.map((entry) => [entry.symbolKey, entry.qualifiedName]));
+    const edges = records.filter((entry) => entry.type === 'CALLS')
+        .map((entry) => [names.get(entry.sourceKey), entry.targetKey && names.get(entry.targetKey)]);
+    assert.deepEqual(edges.filter(([caller]) => ['first_caller', 'later_function', 'Cls.Reload', 'ordinary'].includes(caller ?? '')).sort(), [
+        ['first_caller', 'first_sink'],
+        ['later_function', 'second_sink'],
+        ['Cls.Reload', 'first_sink'],
+        ['ordinary', 'second_sink'],
+        ['ordinary', 'first_caller'],
+        ['ordinary', 'later_function'],
+        ['ordinary', 'Cls.Reload'],
+    ].sort());
 });
 
 test('C include closure admits a target declared in an included header', async () => {

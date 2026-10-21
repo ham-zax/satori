@@ -1505,6 +1505,35 @@ test('buildRelationshipsForRegistry creates conservative IMPORTS and EXPORTS fil
     ]);
 });
 
+test('buildRelationshipsForRegistry targets named submodules in dot-only Python imports', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/__init__.py': 'value = 1\n',
+        'pkg/foo.py': 'def helper(): pass\n',
+        'pkg/child/__init__.py': '',
+        'pkg/child/foo.py': 'def helper(): pass\n',
+        'pkg/child/nested/__init__.py': '',
+        'pkg/child/client.py': [
+            'from . import foo',
+            'from . import nested as alias',
+            'from .. import foo as parent_foo',
+            'from .. import value',
+            'from .foo import helper',
+        ].join('\n'),
+    });
+    const records = buildRelationshipsForRegistry({ registry, analysisByFile });
+
+    assert.deepEqual(records.filter((record) => record.type === 'IMPORTS').map((record) => [
+        record.span?.startLine,
+        record.targetPath,
+    ]), [
+        [1, 'pkg/child/foo.py'],
+        [2, 'pkg/child/nested/__init__.py'],
+        [3, 'pkg/foo.py'],
+        [4, 'pkg/__init__.py'],
+        [5, 'pkg/child/foo.py'],
+    ]);
+});
+
 test('buildRelationshipsForRegistry creates Python IMPORTS and top-level EXPORTS for relative module calls', async () => {
     const telemetryContent = [
         'def build_entry_telemetry():',

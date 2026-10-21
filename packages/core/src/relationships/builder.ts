@@ -356,7 +356,13 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
         for (const binding of evidence.moduleBindings) {
             if (binding.kind === 'import' || binding.kind === 'reexport') {
                 const specifier = binding.moduleSpecifier;
-                const targetPath = specifier
+                const submodulePath = source.language === 'python' && specifier
+                    && /^\.+$/.test(specifier) && binding.importedName
+                    ? resolvePythonModulePath(
+                        source.file, `${specifier}${binding.importedName}`, input.registry, availableFiles,
+                    )
+                    : undefined;
+                const targetPath = submodulePath ?? (specifier
                     ? source.language === 'python'
                         ? resolvePythonModulePath(source.file, specifier, input.registry, availableFiles)
                         : resolveRelativeModulePath(
@@ -366,7 +372,7 @@ function buildImportExportRelationshipsForRegistry(input: BuildRelationshipsForR
                             source.language,
                             availableFiles,
                         )
-                    : undefined;
+                    : undefined);
                 const target = targetPath ? fileOwners.get(targetPath) : undefined;
                 if (!target) continue;
                 const record: RelationshipRecord = {

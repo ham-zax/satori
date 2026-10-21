@@ -22,6 +22,50 @@ async function extractedPythonSymbol(
     return symbol;
 }
 
+test('Python imports distinguish TYPE_CHECKING consequences from runtime alternatives', async () => {
+    const result = await createLanguageAnalysisService().analyze({
+        language: 'python',
+        relativePath: 'pkg/app.py',
+        content: [
+            'from typing import TYPE_CHECKING',
+            'import typing as t',
+            'if TYPE_CHECKING:',
+            '    from .models import Widget',
+            '    if enabled:',
+            '        import pkg.helpers as helpers',
+            'else:',
+            '    from .runtime import Widget',
+            'if t.TYPE_CHECKING:',
+            '    import pkg.models',
+            'elif enabled:',
+            '    import pkg.fallback',
+            'else:',
+            '    import pkg.runtime',
+            'def run():',
+            '    if typing.TYPE_CHECKING:',
+            '        from .helpers import helper',
+            '    else:',
+            '        import pkg.live',
+        ].join('\n'),
+    });
+
+    assert.deepEqual(result.moduleBindings.filter((binding) => binding.kind === 'import').map((binding) => [
+        binding.moduleSpecifier,
+        binding.typeOnly,
+    ]).sort(([left], [right]) => String(left).localeCompare(String(right))), [
+        ['.helpers', true],
+        ['.models', true],
+        ['.runtime', false],
+        ['pkg.fallback', false],
+        ['pkg.helpers', true],
+        ['pkg.live', false],
+        ['pkg.models', true],
+        ['pkg.runtime', false],
+        ['typing', false],
+        ['typing', false],
+    ]);
+});
+
 test('Python structural v1 reports deterministic callable syntax and complexity', async () => {
     const content = [
         '@trace',

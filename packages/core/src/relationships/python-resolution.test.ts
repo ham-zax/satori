@@ -114,6 +114,55 @@ const engineSource = [
     '    build_services(engine=engine)',
 ].join('\n');
 
+test('resolvePythonRelationships uses TYPE_CHECKING imports only for annotations', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/models.py': 'class Widget:\n    def method(self): pass\n',
+        'pkg/helpers.py': 'def helper(): pass\n',
+        'pkg/app.py': [
+            'from typing import TYPE_CHECKING',
+            'import typing',
+            'if TYPE_CHECKING:',
+            '    from .models import Widget',
+            '    from .helpers import helper',
+            '    from . import helpers as submodule',
+            'if typing.TYPE_CHECKING:',
+            '    import pkg.helpers as helpers',
+            '    import pkg.models',
+            'def run(value: "Widget"):',
+            '    helper()',
+            '    Widget()',
+            '    Widget.method()',
+            '    helpers.helper()',
+            '    pkg.models.Widget()',
+            '    submodule.helper()',
+            '    instance = Widget()',
+            '    instance.method()',
+            '    callback = helper',
+            '    callback()',
+            '    value.method()',
+        ].join('\n'),
+        'pkg/compat.py': [
+            'from typing import TYPE_CHECKING',
+            'if TYPE_CHECKING:',
+            '    from .helpers import helper',
+            'else:',
+            '    from .helpers import helper',
+            'def run():',
+            '    helper()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+
+    assert.deepEqual(result.records.map((record) => [
+        record.file,
+        record.span?.startLine,
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.qualifiedName,
+    ]), [
+        ['pkg/app.py', 21, 'Widget.method'],
+        ['pkg/compat.py', 7, 'helper'],
+    ]);
+});
+
 test('resolvePythonRelationships resolves direct imported calls with exact binding proof', async () => {
     const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
         'src/util.py': 'def helper(): return 1\n',
@@ -155,6 +204,72 @@ test('resolvePythonRelationships resolves direct imported calls with exact bindi
     assert.equal(admitted[0].sourceInstanceId, claim.sourceInstanceId);
     assert.equal(admitted[0].targetInstanceId, claim.targetInstanceId);
     assert.equal(admitted[0].resolutionAuthority, 'direct_binding');
+});
+
+test('resolvePythonRelationships follows named package re-exports to exact definitions', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/__init__.py': 'from .bridge import Widget, helper as work\n',
+        'pkg/bridge.py': 'from .models import Widget\nfrom .helpers import helper\n',
+        'pkg/models.py': 'class Widget:\n    def method(self): pass\n',
+        'pkg/helpers.py': 'def helper(): pass\n',
+        'app.py': [
+            'from pkg import Widget as Alias, work',
+            'import pkg',
+            'def run(value: Alias):',
+            '    Alias()',
+            '    pkg.Widget()',
+            '    work()',
+            '    callback = work',
+            '    callback()',
+            '    value.method()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+    const rows = (records: typeof result.records) => records.map((record) => [
+        record.span?.startLine,
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.file,
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.qualifiedName,
+    ]);
+    assert.deepEqual(rows(result.records), [
+        [4, 'pkg/models.py', 'Widget'],
+        [5, 'pkg/models.py', 'Widget'],
+        [6, 'pkg/helpers.py', 'helper'],
+        [8, 'pkg/helpers.py', 'helper'],
+        [9, 'pkg/models.py', 'Widget.method'],
+    ]);
+    const scoped = resolvePythonRelationships({ registry, analysisByFile, settings: { sourceFiles: new Set(['app.py']) } });
+    assert.deepEqual(rows(scoped.records), rows(result.records));
+});
+
+test('resolvePythonRelationships rejects ambiguous, cyclic, and unproven package re-exports', async (t) => {
+    const scenarios = [
+        { name: 'conflicting imports', init: 'from .models import Widget\nfrom .other import Widget\n' },
+        { name: 'unresolved competing import', init: 'from .models import Widget\nfrom .missing import Widget\n' },
+        { name: 'definition conflicts with import', init: 'from .models import Widget\nclass Widget: pass\n' },
+        { name: 'conditional import', init: 'if enabled:\n    from .models import Widget\n' },
+        { name: 'function-local import', init: 'def load():\n    from .models import Widget\n' },
+        { name: 'annotation-only import', init: 'if TYPE_CHECKING:\n    from .models import Widget\n' },
+        { name: 'rebound name', init: 'from .models import Widget\nWidget = unknown\n' },
+        { name: 'cycle', init: 'from .loop import Widget\n' },
+        { name: 'hop limit', init: 'from .hop0 import Widget\n' },
+    ];
+    for (const scenario of scenarios) {
+        await t.test(scenario.name, async () => {
+            const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+                'pkg/__init__.py': scenario.init,
+                'pkg/models.py': 'class Widget: pass\n',
+                'pkg/other.py': 'class Widget: pass\n',
+                'pkg/loop.py': 'from . import Widget\n',
+                ...Object.fromEntries(Array.from({ length: 17 }, (_, index) => [
+                    `pkg/hop${index}.py`,
+                    index === 16 ? 'from .models import Widget\n' : `from .hop${index + 1} import Widget\n`,
+                ])),
+                'app.py': 'from pkg import Widget\nimport pkg\ndef run():\n    Widget()\n    pkg.Widget()\n',
+            });
+            const result = resolvePythonRelationships({ registry, analysisByFile });
+            assert.deepEqual(result.records.filter((record) => record.file === 'app.py'), []);
+        });
+    }
 });
 
 test('resolvePythonRelationships resolves calls through from-imported submodules', async () => {
@@ -627,6 +742,80 @@ test('resolvePythonRelationships resolves string annotations, typed aliases, inh
     assert.equal(targetByCaller.get('typed'), 'Service.run');
     assert.equal(targetByCaller.get('inherited'), 'Base.ping');
     assert.equal(targetByCaller.get('overridden'), 'Child.run');
+});
+
+test('resolvePythonRelationships retains exact class identities through inherited method lookup', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/first.py': [
+            'class Base:',
+            '    def method(self): pass',
+            'class Child(Base):',
+            '    def run(self):',
+            '        self.method()',
+            '    def run_class(cls):',
+            '        cls.method()',
+        ].join('\n'),
+        'pkg/second.py': [
+            'class Base:',
+            '    def method(self): pass',
+            'class Child(Base):',
+            '    def run(self):',
+            '        self.method()',
+        ].join('\n'),
+        'app.py': [
+            'from pkg.first import Child as First',
+            'from pkg.second import Child as Second',
+            'def typed(first: First, second: Second):',
+            '    first.method()',
+            '    second.method()',
+            'def allocated():',
+            '    first = First()',
+            '    first.method()',
+            '    second = Second()',
+            '    second.method()',
+            'def class_receiver():',
+            '    First.method()',
+            '    Second.method()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+
+    assert.deepEqual(result.records.filter((record) => (
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.name === 'method'
+    )).map((record) => [
+        record.file,
+        record.span?.startLine,
+        registry.symbolsByInstanceId.get(record.targetInstanceId || '')?.file,
+    ]), [
+        ['app.py', 4, 'pkg/first.py'],
+        ['app.py', 5, 'pkg/second.py'],
+        ['app.py', 8, 'pkg/first.py'],
+        ['app.py', 10, 'pkg/second.py'],
+        ['app.py', 12, 'pkg/first.py'],
+        ['app.py', 13, 'pkg/second.py'],
+        ['pkg/first.py', 5, 'pkg/first.py'],
+        ['pkg/first.py', 7, 'pkg/first.py'],
+        ['pkg/second.py', 5, 'pkg/second.py'],
+    ]);
+});
+
+test('resolvePythonRelationships rejects ambiguous bases and cyclic inheritance with duplicate class names', async () => {
+    const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
+        'pkg/first.py': 'class Base:\n    def method(self): pass\n',
+        'pkg/second.py': 'class Base:\n    def method(self): pass\n',
+        'pkg/unknown.py': 'class Child(Base):\n    def run(self):\n        self.method()\n',
+        'pkg/conflict.py': [
+            'from .first import Base',
+            'from .second import Base',
+            'class Child(Base):',
+            '    def run(self):',
+            '        self.method()',
+        ].join('\n'),
+        'pkg/cycle.py': 'class Child(Loop):\n    def run(self):\n        self.method()\nclass Loop(Child): pass\n',
+    });
+    const result = resolvePythonRelationships({ registry, analysisByFile });
+
+    assert.deepEqual(result.records, []);
 });
 
 test('resolvePythonRelationships propagates exact callbacks and callable-object origins', async () => {

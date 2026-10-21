@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { WasmSemanticProjectAnalyzer } from './wasm-analyzer';
 import { WasmSemanticEngine } from './wasm-engine';
 
@@ -112,6 +114,30 @@ test('Rust configuration-gated code is modeled: calls resolve in and around cfg 
     assert.equal(evidence.skippedFiles, undefined);
     assert.equal(evidence.coverage?.status, 'complete');
     assert.equal(evidence.coverage?.analyzedSourceFileCount, 1);
+});
+
+test('C++ macro-wrapped definitions resolve under their argument names', async () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../language-analysis/__fixtures__/cpp-macro-definitions.cpp'), 'utf8')
+        + '\nvoid controls() { ordinary(); pick(1); PAIR(); WRAP(); }\n';
+    const evidence = await new WasmSemanticProjectAnalyzer().analyze({
+        language: 'cpp', auxiliaryFiles: [],
+        sourceFiles: [{ path: 'src/macros.cpp', source, sourceHash: 'hash-macros' }],
+    });
+    const occurrences = evidence.occurrencesByFile.get('src/macros.cpp') ?? [];
+    for (const [call, name, line] of [
+        ['first_caller();', 'first_caller', 5],
+        ['later_function();', 'later_function', 6],
+        ['Cls::Reload(0)', 'Reload', 7],
+        ['ordinary();', 'ordinary', 8],
+        ['pick(1)', 'pick', 9],
+        ['PAIR();', 'PAIR', 10],
+        ['WRAP();', 'WRAP', 11],
+    ] as const) {
+        const occurrence = occurrences.find((entry) => entry.callSpan.startByte === source.indexOf(call));
+        assert.equal(occurrence?.decision, 'resolved', call);
+        assert.equal(occurrence?.targetProvenance?.name, name, call);
+        assert.equal(occurrence?.targetProvenance?.span.startLine, line, call);
+    }
 });
 
 test('C++ header with a canonical include guard is analyzed as if the guard were absent', async () => {

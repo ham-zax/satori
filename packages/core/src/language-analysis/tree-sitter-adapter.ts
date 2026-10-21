@@ -240,9 +240,27 @@ function scalaBindingName(node: Node): string | undefined {
     return pattern?.type === 'identifier' ? pattern.text.trim() || undefined : undefined;
 }
 
-function cppCallableTerminal(node: Node): { name: string; parents?: string[] } | undefined {
+function cppCallableTerminal(node: Node, allowMacroWrapper = false): { name: string; parents?: string[] } | undefined {
     const terminal = node.childForFieldName('declarator');
     if (!terminal) return undefined;
+    // CBM 2ef6ba71: direct nesting spells a macro, while pointer returns have
+    // an intervening parenthesized declarator. Only one bare name is unambiguous.
+    if (allowMacroWrapper && node.type === 'function_declarator' && terminal.type === 'function_declarator') {
+        const macroName = terminal.childForFieldName('declarator');
+        const args = terminal.childForFieldName('parameters');
+        const arg = args?.namedChild(0);
+        const name = arg?.childForFieldName('type');
+        if (
+            (macroName?.type === 'identifier' || macroName?.type === 'qualified_identifier')
+            && args?.namedChildCount === 1
+            && arg?.type === 'parameter_declaration'
+            && arg.namedChildCount === 1
+            && (name?.type === 'type_identifier' || name?.type === 'identifier')
+        ) {
+            const callable = cppCallableTerminal(terminal);
+            return callable ? { ...callable, name: name.text.trim() } : undefined;
+        }
+    }
     if (terminal.type === 'identifier' || terminal.type === 'field_identifier') {
         const name = terminal.text.trim();
         return name ? { name } : undefined;
@@ -280,10 +298,12 @@ function cppCallableDeclaration(
     };
 }
 
-function cppQualifiedCallable(node: Node): { name: string; parents: string[] } | undefined {
+function cppCallableDefinition(node: Node): { name: string; parents?: string[] } | undefined {
     if (node.type !== 'function_definition') return undefined;
-    const qualified = node
-        .childForFieldName('declarator')
+    const declarator = node.childForFieldName('declarator');
+    const callable = declarator ? cppCallableTerminal(declarator, true) : undefined;
+    if (callable) return callable;
+    const qualified = declarator
         ?.descendantsOfType('qualified_identifier')
         .at(0);
     if (!qualified) return undefined;
@@ -449,11 +469,11 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         const csharpNamespace = language === 'csharp' ? csharpNamespaceIdentity(node) : undefined;
         const scalaPackage = language === 'scala' ? scalaPackageIdentity(node) : undefined;
         const scalaBinding = language === 'scala' ? scalaBindingName(node) : undefined;
-        const cppQualified = language === 'cpp' ? cppQualifiedCallable(node) : undefined;
+        const cppDefinition = language === 'cpp' ? cppCallableDefinition(node) : undefined;
         if (
             language === 'cpp'
             && node.type === 'function_definition'
-            && (semanticContainer === 'class' || cppQualified)
+            && (semanticContainer === 'class' || cppDefinition?.parents)
         ) {
             kind = 'method';
         }
@@ -464,7 +484,7 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 ?? scalaPackage?.name
                 ?? scalaBinding
                 ?? cppDeclaration?.name
-                ?? cppQualified?.name
+                ?? cppDefinition?.name
                 ?? nameForNode(node)
             : undefined;
         const implOwner = language === 'rust' ? rustImplOwner(node) : undefined;
@@ -477,8 +497,8 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
                 ? [...parents, ...scalaPackage.parentSegments]
             : cppDeclaration?.explicitParents
                 ? [...parents, ...cppDeclaration.explicitParents]
-                : cppQualified?.parents
-                    ? [...parents, ...cppQualified.parents]
+                : cppDefinition?.parents
+                    ? [...parents, ...cppDefinition.parents]
                     : receiverOwner
                         ? [...parents, receiverOwner]
                         : parents;
@@ -1168,6 +1188,20 @@ function extractCallSites(root: Node, sourceMap: Utf8SourceMap, language: string
     return calls;
 }
 
+function isPythonTypeCheckingImport(node: Node): boolean {
+    let child = node;
+    for (let parent = node.parent; parent; child = parent, parent = parent.parent) {
+        if (parent.type !== 'if_statement'
+            || parent.childForFieldName('consequence')?.id !== child.id) continue;
+        const condition = parent.childForFieldName('condition');
+        const name = condition?.type === 'attribute'
+            ? condition.childForFieldName('attribute')
+            : condition;
+        if (name?.type === 'identifier' && name.text === 'TYPE_CHECKING') return true;
+    }
+    return false;
+}
+
 function extractPythonModuleBindings(
     root: Node,
     symbols: readonly ExtractedSymbol[],
@@ -1210,7 +1244,7 @@ function extractPythonModuleBindings(
                     moduleSpecifier: moduleName,
                     importedName,
                     localName,
-                    typeOnly: false,
+                    typeOnly: isPythonTypeCheckingImport(node),
                     span: nodeSpan(node, sourceMap),
                 });
             }
@@ -1226,7 +1260,7 @@ function extractPythonModuleBindings(
                     kind: 'import',
                     moduleSpecifier: moduleName,
                     localName: alias,
-                    typeOnly: false,
+                    typeOnly: isPythonTypeCheckingImport(node),
                     span: nodeSpan(node, sourceMap),
                 });
                 continue;
@@ -1237,7 +1271,7 @@ function extractPythonModuleBindings(
             bindings.push({
                 kind: 'import',
                 moduleSpecifier,
-                typeOnly: false,
+                typeOnly: isPythonTypeCheckingImport(node),
                 span: nodeSpan(node, sourceMap),
             });
         }

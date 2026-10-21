@@ -10,6 +10,7 @@ export const LANGUAGE_PARSER_VERSION = [
     `cbm-extractor-${CBM_LANGUAGE_MAP_COMMIT.slice(0, 12)}-emscripten-3.1.64`,
     cbmExtendedPackIdentity(),
 ].join('+');
-// Flow recovery, JSX/assigned-function/callback extraction, and Python module and class lambda bindings change persisted symbols.
-export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v20+${LANGUAGE_PARSER_VERSION}`;
-export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v19+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1';
+// Flow recovery, JSX/assigned-function/callback extraction, Python module and class lambda bindings,
+// Python TYPE_CHECKING import flags, C/C++ macro-wrapped definition names, and definitionStatus change persisted symbols.
+export const SYMBOL_EXTRACTOR_VERSION = `language-analysis-v21+${LANGUAGE_PARSER_VERSION}`;
+export const RELATIONSHIP_BUILDER_VERSION = 'relationship-v19+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1+python-reexports-exact-mro-v1';

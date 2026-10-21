@@ -2458,7 +2458,7 @@ static const char *cpp_normalize_scope_text(CBMArena *arena, const char *text) {
     return out;
 }
 
-static TSNode cpp_find_callable_terminal(TSNode node) {
+static TSNode cpp_find_callable_terminal(TSNode node, TSNode *macro_arg) {
     if (ts_node_is_null(node)) return node;
     const char *kind = ts_node_type(node);
     if (strcmp(kind, "identifier") == 0 || strcmp(kind, "field_identifier") == 0 ||
@@ -2467,13 +2467,35 @@ static TSNode cpp_find_callable_terminal(TSNode node) {
         return node;
     }
     TSNode declarator = ts_node_child_by_field_name(node, "declarator", 10);
+    /* CBM 2ef6ba71: directly nested function declarators spell a macro wrapper.
+     * Pointer-returning functions have a parenthesized declarator between them.
+     * Only one bare-name argument identifies a function without guessing. */
+    if (strcmp(kind, "function_declarator") == 0 && !ts_node_is_null(declarator) &&
+        strcmp(ts_node_type(declarator), "function_declarator") == 0) {
+        TSNode name = ts_node_child_by_field_name(declarator, "declarator", 10);
+        TSNode args = ts_node_child_by_field_name(declarator, "parameters", 10);
+        if (!ts_node_is_null(name) &&
+            (strcmp(ts_node_type(name), "identifier") == 0 ||
+             strcmp(ts_node_type(name), "qualified_identifier") == 0) &&
+            !ts_node_is_null(args) && ts_node_named_child_count(args) == 1) {
+            TSNode arg = ts_node_named_child(args, 0);
+            TSNode type = ts_node_child_by_field_name(arg, "type", 4);
+            if (strcmp(ts_node_type(arg), "parameter_declaration") == 0 &&
+                ts_node_named_child_count(arg) == 1 && !ts_node_is_null(type) &&
+                (strcmp(ts_node_type(type), "type_identifier") == 0 ||
+                 strcmp(ts_node_type(type), "identifier") == 0)) {
+                *macro_arg = type;
+                return name;
+            }
+        }
+    }
     if (!ts_node_is_null(declarator)) {
-        TSNode found = cpp_find_callable_terminal(declarator);
+        TSNode found = cpp_find_callable_terminal(declarator, macro_arg);
         if (!ts_node_is_null(found)) return found;
     }
     uint32_t count = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
-        TSNode found = cpp_find_callable_terminal(ts_node_named_child(node, i));
+        TSNode found = cpp_find_callable_terminal(ts_node_named_child(node, i), macro_arg);
         if (!ts_node_is_null(found)) return found;
     }
     TSNode null_node = {0};
@@ -2531,12 +2553,22 @@ static int cpp_callable_identity(CBMArena *arena, TSNode declarator, const char 
                                   const char **leaf) {
     *qualified_name = NULL;
     *receiver_type = NULL;
-    TSNode terminal = cpp_find_callable_terminal(declarator);
+    TSNode macro_arg = {0};
+    TSNode terminal = cpp_find_callable_terminal(declarator, &macro_arg);
     if (ts_node_is_null(terminal)) return SATORI_SEMANTIC_OK;
     char *raw_name = cbm_node_text(arena, terminal, source);
     if (!raw_name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
     const char *normalized = cpp_normalize_scope_text(arena, raw_name);
     if (!normalized) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    if (!ts_node_is_null(macro_arg)) {
+        const char *name = cbm_node_text(arena, macro_arg, source);
+        if (!name) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+        const char *last_dot = strrchr(normalized, '.');
+        normalized = last_dot
+            ? cbm_arena_sprintf(arena, "%.*s.%s", (int)(last_dot - normalized), normalized, name)
+            : name;
+        if (!normalized) return SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
+    }
     *leaf = strrchr(normalized, '.');
     *leaf = *leaf ? *leaf + 1 : normalized;
     if (!(*leaf)[0]) return SATORI_SEMANTIC_OK;

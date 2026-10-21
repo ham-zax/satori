@@ -914,6 +914,29 @@ test('C++ qualified out-of-class definitions retain method ownership', async () 
     )));
 });
 
+test('C++ macro-wrapped definitions retain distinct names and class ownership', async () => {
+    const content = fs.readFileSync(path.join(__dirname, '__fixtures__/cpp-macro-definitions.cpp'), 'utf8');
+    const result = await createLanguageAnalysisService().analyze({
+        content, language: 'cpp', relativePath: 'src/macros.cpp',
+    });
+    const definitions = result.symbols.filter((symbol) => symbol.kind === 'function' || symbol.kind === 'method');
+    assert.deepEqual(
+        definitions.filter((symbol) => [5, 6, 7].includes(symbol.span.startLine))
+            .map((symbol) => [symbol.name, symbol.qualifiedName, symbol.kind]),
+        [
+            ['first_caller', 'first_caller', 'function'],
+            ['later_function', 'later_function', 'function'],
+            ['Reload', 'Cls.Reload', 'method'],
+        ],
+    );
+    for (const name of ['ordinary', 'pick', 'PAIR', 'WRAP']) {
+        assert.ok(definitions.some((symbol) => symbol.name === name), name);
+    }
+    for (const name of ['FNAME', '__API_HOOK', 'alpha', 'beta', 'Name', 'proto_only', 'k']) {
+        assert.ok(!definitions.some((symbol) => symbol.name === name), name);
+    }
+});
+
 test('C++ emits bounded declarations, typedefs, and unions without callable-local noise', async () => {
     const analyzer = createLanguageAnalysisService();
     const source = [

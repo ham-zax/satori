@@ -435,7 +435,9 @@ function pythonImportBindingVisibleToSource(input: {
     source: SymbolRecord;
     registry: SymbolRegistry;
     atSpan: SourceSpan;
+    includeTypeOnly?: boolean;
 }): boolean {
+    if (input.binding.typeOnly && !input.includeTypeOnly) return false;
     const bindingOwner = ownerForCall(
         input.registry.symbolsByFile.get(input.source.file) ?? [],
         { span: input.binding.span },
@@ -453,6 +455,8 @@ function resolvePythonClassReference(input: {
     classesByName: ReadonlyMap<string, readonly SymbolRecord[]>;
     availableFiles: ReadonlySet<string>;
     atSpan: SourceSpan;
+    includeTypeOnly?: boolean;
+    context: PythonFlowContext;
 }): SymbolRecord | undefined {
     const classCandidatesById = new Map<string, SymbolRecord>();
     for (const candidate of input.classesByName.get(input.classReference) ?? []) {
@@ -471,6 +475,7 @@ function resolvePythonClassReference(input: {
                 source: input.source,
                 registry: input.registry,
                 atSpan: input.atSpan,
+                includeTypeOnly: input.includeTypeOnly,
             })
         ) {
             continue;
@@ -482,14 +487,62 @@ function resolvePythonClassReference(input: {
             input.availableFiles,
         );
         if (!importedFile) continue;
-        for (const candidate of input.classesByName.get(binding.importedName) ?? []) {
-            if (candidate.file === importedFile) {
-                classCandidatesById.set(candidate.symbolInstanceId, candidate);
-            }
+        const candidate = resolvePythonModuleMember(
+            input.context, importedFile, binding.importedName, input.includeTypeOnly,
+        );
+        if (candidate?.kind === 'class') {
+            classCandidatesById.set(candidate.symbolInstanceId, candidate);
         }
     }
     const classCandidates = [...classCandidatesById.values()];
     return classCandidates.length === 1 ? classCandidates[0] : undefined;
+}
+
+const MAX_PYTHON_REEXPORT_HOPS = 16;
+
+function resolvePythonModuleMember(
+    context: PythonFlowContext,
+    file: string,
+    name: string,
+    includeTypeOnly = false,
+): SymbolRecord | undefined {
+    const visited = new Set<string>();
+    for (let hops = 0; hops <= MAX_PYTHON_REEXPORT_HOPS; hops += 1) {
+        const key = `${file}\0${name}`;
+        if (visited.has(key)) return undefined;
+        visited.add(key);
+        const fileSymbols = context.registry.symbolsByFile.get(file) ?? [];
+        const evidence = getEvidence(context.analysisByFile, file);
+        const definitions = fileSymbols.filter((candidate) => (
+            candidate.kind !== 'file' && candidate.name === name
+            && candidate.parentQualifiedNamePath.length === 0
+        ));
+        const bindings = (evidence?.moduleBindings ?? []).filter((binding) => (
+            (binding.kind === 'import' || binding.kind === 'reexport')
+            && (!binding.typeOnly || includeTypeOnly)
+            && (binding.localName ?? binding.importedName ?? binding.moduleSpecifier?.split('.')[0]) === name
+            && !fileSymbols.some((symbol) => symbol.kind !== 'file'
+                && spanContainsSpan(symbol.span as SourceSpan, binding.span))
+        ));
+        // Re-exports require one unconditional module binding. Never select one
+        // branch, a competing definition, or a name that an assignment rebinds.
+        if (bindings.some((binding) => binding.span.startColumn !== 0)
+            || (evidence?.pythonFlowFacts ?? []).some((fact) => fact.kind === 'assignment_origin'
+                && fact.targetText === name
+                && !fileSymbols.some((symbol) => symbol.kind !== 'file'
+                    && spanContainsSpan(symbol.span as SourceSpan, fact.span)))) return undefined;
+        if (definitions.length > 0) {
+            return definitions.length === 1 && bindings.length === 0 ? definitions[0] : undefined;
+        }
+        if (bindings.length !== 1 || hops === MAX_PYTHON_REEXPORT_HOPS) return undefined;
+        const [binding] = bindings;
+        if (!binding.moduleSpecifier || !binding.importedName) return undefined;
+        const importedFile = resolvePythonModulePath(file, binding.moduleSpecifier, context.registry, context.availableFiles);
+        if (!importedFile) return undefined;
+        file = importedFile;
+        name = binding.importedName;
+    }
+    return undefined;
 }
 
 function sameModulePythonConstructorShadowed(input: {
@@ -600,17 +653,11 @@ function resolvePythonDirectTarget(input: {
                 input.availableFiles,
             );
             if (!importedFile) continue;
-            for (const candidate of input.registry.symbolsByFile.get(importedFile) ?? []) {
-                if (
-                    candidate.name !== binding.importedName
-                    || (isCallableSymbolKind(candidate.kind) && isDecoratedPythonCallable(input.context, candidate))
-                    || (!isEligibleCallTarget(input.call, candidate)
-                        && !(input.call.kind === 'direct' && candidate.kind === 'class'))
-                ) {
-                    continue;
-                }
-                importedTargets.set(candidate.symbolInstanceId, candidate);
-            }
+            const candidate = resolvePythonModuleMember(input.context, importedFile, binding.importedName!);
+            if (!candidate || (isCallableSymbolKind(candidate.kind) && isDecoratedPythonCallable(input.context, candidate))
+                || (!isEligibleCallTarget(input.call, candidate)
+                    && !(input.call.kind === 'direct' && candidate.kind === 'class'))) continue;
+            importedTargets.set(candidate.symbolInstanceId, candidate);
         }
         const targets = [...importedTargets.values()];
         return targets.length === 1 ? targets[0] : undefined;
@@ -689,7 +736,7 @@ function resolvePythonModuleQualifiedTarget(input: {
                 ? getEvidence(input.context.analysisByFile, packageFile)
                 : undefined;
             const packageImportsImportedName = (packageEvidence?.moduleBindings ?? []).some((packageBinding) => {
-                if (packageBinding.kind !== 'import') return false;
+                if (packageBinding.kind !== 'import' || packageBinding.typeOnly) return false;
                 const boundName = packageBinding.localName
                     ?? packageBinding.importedName
                     ?? packageBinding.moduleSpecifier?.split('.')[0];
@@ -729,12 +776,10 @@ function resolvePythonModuleQualifiedTarget(input: {
     if (!importedFile) {
         return undefined;
     }
-    const targets = (input.registry.symbolsByFile.get(importedFile) ?? []).filter((candidate) => (
-        candidate.name === input.call.calleeName
-        && (candidate.kind === 'class' || isCallableSymbolKind(candidate.kind))
-        && !(isCallableSymbolKind(candidate.kind) && isDecoratedPythonCallable(input.context, candidate))
-    ));
-    return targets.length === 1 ? targets[0] : undefined;
+    const target = resolvePythonModuleMember(input.context, importedFile, input.call.calleeName);
+    return target && (target.kind === 'class' || isCallableSymbolKind(target.kind))
+        && !(isCallableSymbolKind(target.kind) && isDecoratedPythonCallable(input.context, target))
+        ? target : undefined;
 }
 
 function resolvePythonMemberTarget(input: {
@@ -762,6 +807,7 @@ function resolvePythonMemberTarget(input: {
     }
 
     let targetClass: SymbolRecord | undefined;
+    let includeTypeOnly = false;
     const moduleQualifiedTarget = resolvePythonModuleQualifiedTarget({
         call: input.call,
         source: input.source,
@@ -790,6 +836,7 @@ function resolvePythonMemberTarget(input: {
                     .filter((binding) => binding.kind === 'parameter_annotation')
                     .map((binding) => binding.typeName),
             );
+            includeTypeOnly = annotatedTypes.size === 1;
             const localBindings = scopedBindings.filter((binding) => binding.kind === 'local_constructor');
             const localTypes = new Set(localBindings.map((binding) => binding.typeName));
             if (annotatedTypes.size + localTypes.size > 1) return undefined;
@@ -848,6 +895,8 @@ function resolvePythonMemberTarget(input: {
             classesByName: input.classesByName,
             availableFiles: input.availableFiles,
             atSpan: input.call.span,
+            includeTypeOnly,
+            context: input.context,
         });
     }
     if (!targetClass || isProtocolLikeTypeName(targetClass.name, input.context.classBasesByName)) {
@@ -865,6 +914,7 @@ interface PythonFlowContext {
     readonly classesByFile: ReadonlyMap<string, readonly SymbolRecord[]>;
     readonly classesByName: ReadonlyMap<string, readonly SymbolRecord[]>;
     readonly availableFiles: ReadonlySet<string>;
+    readonly classBasesById: ReadonlyMap<string, readonly string[]>;
     readonly classBasesByName: ReadonlyMap<string, readonly string[]>;
     readonly classClosureByName: Map<string, ReadonlySet<string>>;
     readonly runtimeTypesByClassName: ReadonlyMap<string, readonly string[]>;
@@ -892,6 +942,7 @@ interface PythonValueOrigin {
     readonly kind: 'instance' | 'callable';
     readonly typeNames: readonly string[];
     readonly targetIds: readonly string[];
+    readonly classInstanceIds?: readonly string[];
     readonly flowHops: number;
     readonly proofSteps: readonly ResolutionProofStep[];
     readonly dependencyKeys: readonly string[];
@@ -1002,6 +1053,7 @@ function originIdentity(origin: PythonValueOrigin): string {
         origin.kind,
         [...origin.typeNames].sort(),
         [...origin.targetIds].sort(),
+        [...(origin.classInstanceIds ?? [])].sort(),
     ]);
 }
 
@@ -1068,28 +1120,43 @@ function isProtocolLikeTypeName(
     return false;
 }
 
-function pythonMroNames(
+function pythonMroClasses(
     context: PythonFlowContext,
-    className: string,
+    classTarget: SymbolRecord,
     stack: ReadonlySet<string> = new Set(),
-): readonly string[] | undefined {
-    if (stack.has(className)) return undefined;
-    const classCandidates = context.classesByName.get(className) ?? [];
-    if (classCandidates.length > 1) return undefined;
-    const bases = (context.classBasesByName.get(className) ?? []).map(pythonBaseName);
-    if (bases.length === 0) return [className];
+): readonly SymbolRecord[] | undefined {
+    if (stack.has(classTarget.symbolInstanceId)) return undefined;
+    const baseReferences = context.classBasesById.get(classTarget.symbolInstanceId) ?? [];
+    if (baseReferences.length === 0) return [classTarget];
+    const evidence = getEvidence(context.analysisByFile, classTarget.file);
+    if (!evidence) return undefined;
+    const bases: SymbolRecord[] = [];
+    for (const classReference of baseReferences) {
+        const base = resolvePythonClassReference({
+            classReference,
+            source: classTarget,
+            evidence,
+            registry: context.registry,
+            classesByName: context.classesByName,
+            availableFiles: context.availableFiles,
+            atSpan: classTarget.span as SourceSpan,
+            context,
+        });
+        if (!base) return undefined;
+        bases.push(base);
+    }
 
     const nextStack = new Set(stack);
-    nextStack.add(className);
-    const sequences: string[][] = [];
-    for (const baseName of bases) {
-        const baseMro = pythonMroNames(context, baseName, nextStack);
+    nextStack.add(classTarget.symbolInstanceId);
+    const sequences: SymbolRecord[][] = [];
+    for (const base of bases) {
+        const baseMro = pythonMroClasses(context, base, nextStack);
         if (!baseMro) return undefined;
         sequences.push([...baseMro]);
     }
     sequences.push([...bases]);
 
-    const merged: string[] = [];
+    const merged: SymbolRecord[] = [];
     while (sequences.some((sequence) => sequence.length > 0)) {
         const candidate = sequences
             .filter((sequence) => sequence.length > 0)
@@ -1101,25 +1168,44 @@ function pythonMroNames(
             if (sequence[0] === candidate) sequence.shift();
         }
     }
-    return [className, ...merged];
+    return [classTarget, ...merged];
 }
 
 function exactPythonMethodTarget(
     context: PythonFlowContext,
     runtimeTypeName: string,
     memberName: string,
+    classInstanceIds?: readonly string[],
 ): SymbolRecord | undefined {
-    const mro = pythonMroNames(context, runtimeTypeName);
+    const classCandidates = classInstanceIds
+        ? classInstanceIds.map((id) => context.registry.symbolsByInstanceId.get(id))
+            .filter((candidate): candidate is SymbolRecord => candidate?.kind === 'class' && candidate.name === runtimeTypeName)
+        : context.classesByName.get(runtimeTypeName) ?? [];
+    return classCandidates.length === 1
+        ? exactPythonMethodTargetForClass(context, classCandidates[0], memberName)
+        : undefined;
+}
+
+function exactPythonMethodTargetForClass(
+    context: PythonFlowContext,
+    classTarget: SymbolRecord,
+    memberName: string,
+): SymbolRecord | undefined {
+    const ownMembers = (context.targetIndex.get(memberName) ?? []).filter((candidate) => (
+        candidate.kind === 'method'
+        && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId === classTarget.symbolInstanceId
+    ));
+    if (ownMembers.length > 1) return undefined;
+    if (ownMembers.length === 1) {
+        return isDecoratedPythonCallable(context, ownMembers[0]) ? undefined : ownMembers[0];
+    }
+    const mro = pythonMroClasses(context, classTarget);
     if (!mro) return undefined;
-    for (const className of mro) {
-        const classCandidates = context.classesByName.get(className) ?? [];
-        if (classCandidates.length > 1) return undefined;
-        const classTarget = classCandidates[0];
-        if (!classTarget) continue;
+    for (const base of mro.slice(1)) {
         const declaredMembers = (context.targetIndex.get(memberName) ?? []).filter((candidate) => (
             candidate.kind === 'method'
             && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId
-                === classTarget.symbolInstanceId
+                === base.symbolInstanceId
         ));
         if (declaredMembers.length > 1) return undefined;
         if (declaredMembers.length === 1) {
@@ -1129,36 +1215,18 @@ function exactPythonMethodTarget(
     return undefined;
 }
 
-function exactPythonMethodTargetForClass(
-    context: PythonFlowContext,
-    classTarget: SymbolRecord,
-    memberName: string,
-): SymbolRecord | undefined {
-    const declaredMembers = (context.targetIndex.get(memberName) ?? []).filter((candidate) => (
-        candidate.kind === 'method'
-        && enclosingClassForSymbol(candidate, context.classesByFile)?.symbolInstanceId
-            === classTarget.symbolInstanceId
-    ));
-    if (declaredMembers.length > 1) return undefined;
-    if (declaredMembers.length === 1) {
-        return isDecoratedPythonCallable(context, declaredMembers[0]) ? undefined : declaredMembers[0];
-    }
-    const sameNameClasses = context.classesByName.get(classTarget.name) ?? [];
-    if (sameNameClasses.length !== 1) return undefined;
-    return exactPythonMethodTarget(context, classTarget.name, memberName);
-}
-
 function pythonMethodTargetsForRuntimeTypes(
     context: PythonFlowContext,
     typeNames: readonly string[],
     memberName: string,
+    classInstanceIds?: readonly string[],
 ): { targets: SymbolRecord[]; proofSteps: ResolutionProofStep[] } {
     const targets = new Map<string, SymbolRecord>();
     const proofSteps: ResolutionProofStep[] = [];
 
     for (const typeName of typeNames) {
         if (isProtocolLikeTypeName(typeName, context.classBasesByName)) continue;
-        const resolved = exactPythonMethodTarget(context, typeName, memberName);
+        const resolved = exactPythonMethodTarget(context, typeName, memberName, classInstanceIds);
         if (!resolved) continue;
         targets.set(resolved.symbolInstanceId, resolved);
         const targetClass = enclosingClassForSymbol(resolved, context.classesByFile);
@@ -1300,15 +1368,10 @@ function exactPythonCallableTargets(
                 context.availableFiles,
             );
             if (!importedFile) continue;
-            for (const candidate of context.targetIndex.get(binding.importedName!) ?? []) {
-                if (
-                    candidate.file === importedFile
-                    && candidate.name === binding.importedName
-                    && (candidate.kind === 'function' || candidate.kind === 'class')
-                    && !isDecoratedPythonCallable(context, candidate)
-                ) {
-                    importedTargets.set(candidate.symbolInstanceId, candidate);
-                }
+            const candidate = resolvePythonModuleMember(context, importedFile, binding.importedName!);
+            if (candidate && (candidate.kind === 'function' || candidate.kind === 'class')
+                && !isDecoratedPythonCallable(context, candidate)) {
+                importedTargets.set(candidate.symbolInstanceId, candidate);
             }
         }
         return importedTargets.size === 1 ? [...importedTargets.values()] : [];
@@ -1351,7 +1414,9 @@ function invocationMatchesParameterOwner(
     if (target.kind !== 'method' || target.name !== '__init__') return false;
     return calledTargets.some((candidate) => {
         if (candidate.kind !== 'class') return false;
-        const constructorTargets = pythonMethodTargetsForRuntimeTypes(context, [candidate.name], '__init__').targets;
+        const constructorTargets = pythonMethodTargetsForRuntimeTypes(
+            context, [candidate.name], '__init__', [candidate.symbolInstanceId],
+        ).targets;
         return constructorTargets.length === 1
             && constructorTargets[0].symbolInstanceId === target.symbolInstanceId;
     });
@@ -1552,12 +1617,15 @@ function pythonTypedParameterOrigin(
         classesByName: context.classesByName,
         availableFiles: context.availableFiles,
         atSpan: binding.span,
+        includeTypeOnly: true,
+        context,
     });
     if (!targetClass) return undefined;
     return {
         kind: 'instance',
         typeNames: [targetClass.name],
         targetIds: [],
+        classInstanceIds: [targetClass.symbolInstanceId],
         flowHops: 0,
         proofSteps: [{
             kind: 'parameter_annotation',
@@ -1638,12 +1706,14 @@ function resolvePythonExpressionOrigins(
             classesByName: context.classesByName,
             availableFiles: context.availableFiles,
             atSpan,
+            context,
         });
         if (!constructorTarget) return [];
         return [{
             kind: 'instance',
             typeNames: [constructorTarget.name],
             targetIds: [],
+            classInstanceIds: [constructorTarget.symbolInstanceId],
             flowHops: 0,
             proofSteps: [{
                 kind: 'constructor_origin',
@@ -1746,6 +1816,7 @@ function resolvePythonExpressionOrigins(
             context,
             receiverOrigin.typeNames,
             member.member,
+            receiverOrigin.classInstanceIds,
         );
         if (methodResolution.targets.length > 0) {
             origins.push({
@@ -1865,6 +1936,8 @@ function resolvePythonServiceMemberTarget(input: {
         classesByName: input.context.classesByName,
         availableFiles: input.context.availableFiles,
         atSpan: input.call.span,
+        includeTypeOnly: true,
+        context: input.context,
     });
     if (!serviceClass || isProtocolLikeTypeName(serviceClass.name, input.context.classBasesByName)) {
         return undefined;
@@ -1873,6 +1946,7 @@ function resolvePythonServiceMemberTarget(input: {
         input.context,
         [serviceClass.name],
         '__init__',
+        [serviceClass.symbolInstanceId],
     ).targets;
     const initializer = initializerTargets.length === 1 ? initializerTargets[0] : undefined;
     const allocationFacts = initializer
@@ -1947,7 +2021,7 @@ function resolvePythonServiceMemberTarget(input: {
         }
         for (const typeName of origin.typeNames) {
             if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
-            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName);
+            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName, origin.classInstanceIds);
             if (!resolved) continue;
             targets.set(resolved.symbolInstanceId, resolved);
             const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
@@ -2030,7 +2104,7 @@ function resolvePythonOriginDirectTarget(input: {
         }
         for (const typeName of origin.typeNames) {
             if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
-            const resolved = exactPythonMethodTarget(input.context, typeName, '__call__');
+            const resolved = exactPythonMethodTarget(input.context, typeName, '__call__', origin.classInstanceIds);
             if (!resolved) continue;
             targets.set(resolved.symbolInstanceId, resolved);
             const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
@@ -2135,7 +2209,7 @@ function resolvePythonOriginMemberTarget(input: {
         if (origin.kind !== 'instance') continue;
         for (const typeName of origin.typeNames) {
             if (isProtocolLikeTypeName(typeName, input.context.classBasesByName)) continue;
-            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName);
+            const resolved = exactPythonMethodTarget(input.context, typeName, input.call.calleeName, origin.classInstanceIds);
             if (!resolved || resolved.symbolInstanceId === input.source.symbolInstanceId) continue;
             targets.set(resolved.symbolInstanceId, resolved);
             const targetClass = enclosingClassForSymbol(resolved, input.context.classesByFile);
@@ -2183,27 +2257,18 @@ function resolvePythonOriginMemberTarget(input: {
 
 function buildPythonClassBases(
     analysisByFile: ReadonlyMap<string, PythonResolutionAnalysisInput> | Record<string, PythonResolutionAnalysisInput>,
+    classesByFile: ReadonlyMap<string, readonly SymbolRecord[]>,
 ): Map<string, string[]> {
-    const byClass = new Map<string, Map<string, string[]>>();
+    const bases = new Map<string, string[]>();
     for (const [file, evidence] of getEvidenceEntries(analysisByFile)) {
         for (const fact of evidence.pythonFlowFacts ?? []) {
             if (fact.kind !== 'class_bases') continue;
-            const byFile = byClass.get(fact.className) ?? new Map<string, string[]>();
-            const existing = byFile.get(file) ?? [];
-            for (const baseName of fact.baseNames) {
-                if (!existing.includes(baseName)) existing.push(baseName);
-            }
-            byFile.set(file, existing);
-            byClass.set(fact.className, byFile);
+            const classTarget = (classesByFile.get(file) ?? [])
+                .filter((candidate) => candidate.name === fact.className
+                    && spanContainsSpan(candidate.span as SourceSpan, fact.span))
+                .sort(compareContainingClasses)[0];
+            if (classTarget) bases.set(classTarget.symbolInstanceId, [...fact.baseNames]);
         }
-    }
-    const bases = new Map<string, string[]>();
-    for (const [className, byFile] of byClass) {
-        // A type-only origin cannot safely select between same-named classes
-        // from different modules. Retain inheritance only when its definition
-        // is unique in the indexed snapshot. Base order is semantic for Python MRO.
-        if (byFile.size !== 1) continue;
-        bases.set(className, [...(byFile.values().next().value as string[])]);
     }
     return bases;
 }
@@ -2488,7 +2553,12 @@ export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInp
     const resolveOwner = input.ownership?.ownerForCall ?? ownerForCall;
     const pythonEvidenceEntries = getEvidenceEntries(input.analysisByFile)
         .filter(([, evidence]) => (evidence.pythonFlowFacts?.length ?? 0) > 0);
-    const classBasesByName = buildPythonClassBases(input.analysisByFile);
+    const classBasesById = buildPythonClassBases(input.analysisByFile, classes.byFile);
+    // Name-only flow indexes remain conservative. Exact receiver lookup uses
+    // the authoritative per-symbol base facts instead of dropping its identity.
+    const classBasesByName = new Map([...classes.byName].flatMap(([name, candidates]) => (
+        candidates.length === 1 ? [[name, classBasesById.get(candidates[0].symbolInstanceId) ?? []] as const] : []
+    )));
     const classClosureByName = new Map<string, ReadonlySet<string>>();
     const callableSignaturesById = buildPythonCallableSignatureIndex(pythonEvidenceEntries, input.registry);
     const flowContext: PythonFlowContext = {
@@ -2498,6 +2568,7 @@ export function* resolvePythonRelationshipsWork(input: PythonResolutionEngineInp
         classesByFile: classes.byFile,
         classesByName: classes.byName,
         availableFiles,
+        classBasesById,
         classBasesByName,
         classClosureByName,
         runtimeTypesByClassName: buildRuntimeTypesByClassName(

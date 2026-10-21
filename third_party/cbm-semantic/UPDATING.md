@@ -43,6 +43,11 @@ source ./emsdk_env.sh
 
 ## 3. Upstream Synchronization Steps
 
+Local port: CBM `2ef6ba7101b9b0897cbd48c53254599b8bf43068` names directly nested
+C/C++ macro-wrapped definitions after their single bare-name argument. The Satori
+bridge and TypeScript structural extractor preserve qualified owners and reject
+ambiguous wrappers. This port keeps the unreleased semantic revision `cpp-v3`.
+
 When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp):
 
 1. **Pull and inspect changes**:

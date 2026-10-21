@@ -57,6 +57,8 @@ export type ExactReferenceSearchResult = Readonly<{
     }>;
     references: ExactSourceReference[];
     coverage: ExactReferenceSearchCoverage;
+    /** Offset of the first occurrence after this page, when more occurrences matched. */
+    nextOffset?: number;
 }>;
 
 export type ExactReferenceSourceRead =
@@ -131,11 +133,15 @@ export async function findExactPublishedSourceReferences(input: {
     target: SymbolRecord;
     scope?: PublishedPathScope;
     limit?: number;
+    /** Occurrences to skip in deterministic source order before the returned page. */
+    offset?: number;
     signal?: AbortSignal;
     readPublishedSource(file: string): Promise<ExactReferenceSourceRead>;
 }): Promise<ExactReferenceSearchResult> {
     input.signal?.throwIfAborted();
     const limit = Math.max(1, Math.floor(input.limit ?? 100));
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const windowEnd = offset + limit;
     const publishedEntries = input.registry.manifest.files
         .map((entry) => ({
             path: entry.path.replace(/\\/g, "/"),
@@ -253,10 +259,12 @@ export async function findExactPublishedSourceReferences(input: {
                 matcher.lastIndex = 0;
                 let match: RegExpExecArray | null;
                 while ((match = matcher.exec(lineText)) !== null) {
+                    const occurrenceIndex = matchedOccurrenceCount;
                     matchedOccurrenceCount += 1;
                     // Files, lines, and matches are consumed in source order, so
-                    // only this prefix can appear in the limited response.
-                    if (references.length >= limit) continue;
+                    // only this prefix can appear in the limited response. Matches
+                    // before the page are still classified: declarationSeen depends on them.
+                    if (occurrenceIndex >= windowEnd) continue;
                     const leading = match[1] ?? "";
                     const startIndex = match.index + leading.length;
                     const line = lineIndex + 1;
@@ -271,6 +279,7 @@ export async function findExactPublishedSourceReferences(input: {
                     if (occurrenceKind === "declaration") {
                         declarationSeen = true;
                     }
+                    if (occurrenceIndex < offset) continue;
                     const owner = findOwningSymbol(input.registry, file, line);
                     references.push({
                         file,
@@ -308,10 +317,13 @@ export async function findExactPublishedSourceReferences(input: {
     }
 
     const sorted = references.sort(compareReferences);
-    if (matchedOccurrenceCount > limit) {
+    const hasMore = matchedOccurrenceCount > windowEnd;
+    if (hasMore) {
         reasons.push({
             code: "result_limit",
-            detail: "Matched " + matchedOccurrenceCount + " occurrences; returned first " + limit + " in deterministic source order.",
+            detail: offset === 0
+                ? "Matched " + matchedOccurrenceCount + " occurrences; returned first " + limit + " in deterministic source order."
+                : "Matched " + matchedOccurrenceCount + " occurrences; returned " + (offset + 1) + "-" + windowEnd + " in deterministic source order.",
         });
     }
     const returned = sorted.slice(0, limit);
@@ -338,5 +350,6 @@ export async function findExactPublishedSourceReferences(input: {
             returnedOccurrenceCount: returned.length,
             reasons,
         },
+        ...(hasMore ? { nextOffset: windowEnd } : {}),
     };
 }

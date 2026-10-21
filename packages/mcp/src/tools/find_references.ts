@@ -33,6 +33,9 @@ export const findReferencesInputSchema = z.object({
     limit: z.number().int().min(1).max(500).optional().meta({ default: 100 }).describe(
         "Maximum returned occurrences. All eligible published files are still inspected before this output limit is applied; truncation makes coverage partial.",
     ),
+    cursor: z.string().min(1).max(1024).optional().describe(
+        "Continuation returned as nextCursor by a previous find_references page. Bound to the serving Publication, symbol, and path scope.",
+    ),
 }).strict();
 
 function formatWorkspaceAuthorizationError(
@@ -60,7 +63,7 @@ function formatWorkspaceAuthorizationError(
 export const findReferencesTool: McpTool = {
     name: "find_references",
     description: () =>
-        "Find exact textual occurrences of one canonical published symbol across the validated Publication source universe. This is a ranking-independent observational floor: it scans eligible published files directly and does not use semantic retrieval, lexical top-N candidate selection, reranking, or must: budgets. Results include exact file/span, owning symbol when mechanically available, occurrence kind, matched member/text, and evidenceClass=published_source_text. Textual matches are observational only and never become authoritative CALLS without normal relationship proof. coverage=complete means every eligible source file was inspected, its current bytes matched the Publication content hash, and every match was returned; unreadable/oversized/replaced/changed/unverified source or output truncation yields coverage=partial with concrete reasons. Freshness metadata is also surfaced when available. Use subtree/includePaths/excludePaths for deterministic source scope.",
+        "Find exact textual occurrences of one canonical published symbol across the validated Publication source universe. This is a ranking-independent observational floor: it scans eligible published files directly and does not use semantic retrieval, lexical top-N candidate selection, reranking, or must: budgets. Results include exact file/span, owning symbol when mechanically available, occurrence kind, matched member/text, and evidenceClass=published_source_text. Textual matches are observational only and never become authoritative CALLS without normal relationship proof. coverage=complete means every eligible source file was inspected, its current bytes matched the Publication content hash, and every match was returned; unreadable/oversized/replaced/changed/unverified source or output truncation yields coverage=partial with concrete reasons. Freshness metadata is also surfaced when available. Use subtree/includePaths/excludePaths for deterministic source scope. When output is truncated, pass nextCursor as cursor (hints.nextPage) to read the next page in the same deterministic source order.",
     inputSchemaZod: () => findReferencesInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = findReferencesInputSchema.safeParse(args || {});

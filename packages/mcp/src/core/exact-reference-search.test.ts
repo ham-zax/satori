@@ -157,6 +157,33 @@ test("bounded exact references equal the unlimited source-order prefix", async (
     }
 });
 
+test("offset pages concatenate to the unlimited source-order references", async () => {
+    const nav = registry();
+    // A recursive call on the declaration line is an identifier even on a later page.
+    const pagedSources = new Map([...sources, ["src/target.ts", "export function request() { return request(); }\n"]]);
+    const input = {
+        registry: nav,
+        target: nav.symbolsByInstanceId.get("target")!,
+        readPublishedSource: async (file: string) => ({ status: "ok" as const, text: pagedSources.get(file)! }),
+    };
+    const unlimited = await findExactPublishedSourceReferences({ ...input, limit: 100 });
+    assert.ok(unlimited.references.length >= 3);
+    assert.ok(unlimited.references.some((reference) => reference.file === "src/target.ts" && reference.occurrenceKind === "identifier"));
+    for (const limit of [1, 2]) {
+        const pages = [];
+        let offset: number | undefined = 0;
+        while (offset !== undefined) {
+            const page = await findExactPublishedSourceReferences({ ...input, limit, offset });
+            assert.equal(page.coverage.matchedOccurrenceCount, unlimited.coverage.matchedOccurrenceCount);
+            pages.push(...page.references);
+            offset = page.nextOffset;
+        }
+        // Classification (declaration vs reference) must not depend on the page window.
+        assert.deepEqual(pages, unlimited.references);
+    }
+    assert.equal(unlimited.nextOffset, undefined);
+});
+
 function sha256(value: string): string {
     return crypto.createHash("sha256").update(value).digest("hex");
 }

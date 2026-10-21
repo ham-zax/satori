@@ -136,3 +136,73 @@ test("find_references dispatches through the authorized root without provider re
         limit: 25,
     });
 });
+
+test("find_references pages through every occurrence with a scope-bound cursor", async (t) => {
+    const root = fs.mkdtempSync(path.resolve("satori-find-references-test-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const files = ["a.ts", "b.ts", "c.ts"];
+    for (const file of files) fs.writeFileSync(path.join(root, file), "request();\nrequest();\n");
+    const target = {
+        symbolInstanceId: "target", name: "request", file: files[0]!, language: "typescript",
+        kind: "function", label: "request", qualifiedName: "request", parentQualifiedNamePath: [],
+        span: { startLine: 1, endLine: 1 },
+        symbolKey: "target", fileHash: "fixture", extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: files.map((file) => ({ path: file })) },
+        symbolsByFile: new Map([[target.file, [target]]]),
+    } as unknown as SymbolRegistry;
+    const lease = {
+        id: "publication-1", publication: { id: "publication-1", canonicalRoot: root },
+        release: () => {},
+    } as PublicationLease;
+    const policy = createSessionWorkspacePolicy({ roots: [root], homeDirectory: path.dirname(root), stateRoot: path.join(root, "state") });
+    const navigationHandlers = new NavigationHandlers({
+        prepareNavigationRead: async () => ({ state: "ready", root: { path: root }, publication: lease }),
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: () => true,
+        getPublicationNavigationStatus: async () => "valid",
+        loadPreparedNavigationManifest: async () => ({ status: "ok", registry }),
+        normalizeRelativeFilePath: (file: string) => file,
+        touchWatchedCodebase: async () => {},
+        stringifyToolJson: JSON.stringify,
+        readFileMaxBytes: 1024 * 1024,
+    } as unknown as ConstructorParameters<typeof NavigationHandlers>[0]);
+    const ctx = {
+        toolHandlers: {
+            navigationHandlers,
+            handleFindReferences: ToolHandlers.prototype.handleFindReferences,
+        } as unknown as ToolHandlers,
+        workspacePolicy: policy,
+    } as unknown as ToolContext;
+    const call = async (args: Record<string, unknown>) => {
+        const response = await findReferencesTool.execute({
+            path: root, symbolRef: { file: target.file, symbolId: "target" }, ...args,
+        }, ctx);
+        return { isError: response.isError, payload: JSON.parse(response.content[0]!.text as string) };
+    };
+
+    const unpaged = await call({});
+    assert.equal(unpaged.payload.references.length, 6);
+    assert.equal(unpaged.payload.nextCursor, undefined);
+    const occurrences = [];
+    let args: Record<string, unknown> = { limit: 4 };
+    for (;;) {
+        const page = await call(args);
+        assert.equal(page.payload.status, "ok");
+        assert.equal(page.payload.nextOffset, undefined);
+        occurrences.push(...page.payload.references);
+        if (!page.payload.nextCursor) break;
+        assert.equal(page.payload.hints.nextPage.args.cursor, page.payload.nextCursor);
+        args = page.payload.hints.nextPage.args;
+        delete args.path;
+        delete args.symbolRef;
+    }
+    assert.deepEqual(occurrences, unpaged.payload.references);
+
+    const first = await call({ limit: 4 });
+    const crossScope = await call({ limit: 4, excludePaths: ["c.ts"], cursor: first.payload.nextCursor });
+    assert.equal(crossScope.isError, true);
+    assert.equal(crossScope.payload.status, "not_found");
+    assert.equal(crossScope.payload.reason, "invalid_continuation");
+});

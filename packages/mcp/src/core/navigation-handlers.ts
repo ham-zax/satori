@@ -40,6 +40,13 @@ import {
     type ExactReferenceSourceRead,
 } from "./exact-reference-search.js";
 import {
+    findReferencesScopeIdentity,
+    InvalidFindReferencesContinuationError,
+    parseFindReferencesCursor,
+    serializeFindReferencesCursor,
+    type FindReferencesCursorIdentity,
+} from "./find-references-continuation.js";
+import {
     WorkspaceAuthorizationError,
     type SessionWorkspacePolicy,
 } from "./session-workspace-policy.js";
@@ -966,6 +973,33 @@ export class NavigationHandlers {
                 };
             }
 
+            const cursorIdentity: FindReferencesCursorIdentity = {
+                publicationId: lease.id,
+                symbolId: exactSymbols[0]!.symbolInstanceId,
+                scopeIdentity: findReferencesScopeIdentity(scope),
+            };
+            let offset = 0;
+            if (typeof args.cursor === "string") {
+                try {
+                    offset = parseFindReferencesCursor(args.cursor, cursorIdentity);
+                } catch (error) {
+                    if (!(error instanceof InvalidFindReferencesContinuationError)) throw error;
+                    return {
+                        content: [{
+                            type: "text",
+                            text: this.host.stringifyToolJson({
+                                status: "not_found",
+                                reason: "invalid_continuation",
+                                path: leasedRootState.root.path,
+                                symbolRef: rawSymbolRef,
+                                message: error.message,
+                            }),
+                        }],
+                        isError: true,
+                    };
+                }
+            }
+
             const publishedRelativePaths = new Set(
                 manifest.registry.manifest.files.map((file) => file.path),
             );
@@ -1014,9 +1048,14 @@ export class NavigationHandlers {
                 target: exactSymbols[0]!,
                 scope,
                 limit,
+                offset,
                 readPublishedSource,
                 signal,
             });
+            const { nextOffset, ...page } = result;
+            const nextCursor = nextOffset === undefined
+                ? undefined
+                : serializeFindReferencesCursor(cursorIdentity, nextOffset);
             await this.host.touchWatchedCodebase(leasedRootState.root.path);
             signal?.throwIfAborted();
             const freshnessDecision = leasedRootState.freshnessDecision;
@@ -1036,7 +1075,22 @@ export class NavigationHandlers {
                             includePaths: Array.isArray(args.includePaths) ? args.includePaths : [],
                             excludePaths: Array.isArray(args.excludePaths) ? args.excludePaths : [],
                         },
-                        ...result,
+                        ...page,
+                        ...(nextCursor ? {
+                            nextCursor,
+                            hints: {
+                                nextPage: {
+                                    tool: "find_references",
+                                    args: {
+                                        path: requestedRoot,
+                                        symbolRef: rawSymbolRef,
+                                        ...scope,
+                                        limit,
+                                        cursor: nextCursor,
+                                    },
+                                },
+                            },
+                        } : {}),
                         ...(freshnessDecision ? { freshnessDecision } : {}),
                         ...(warnings.length > 0 ? { warnings } : {}),
                     }),

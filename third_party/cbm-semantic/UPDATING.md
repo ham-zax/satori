@@ -43,6 +43,10 @@ source ./emsdk_env.sh
 
 ## 3. Upstream Synchronization Steps
 
+Local change (`java-v2`, `csharp-v2`, unreleased, not bumped again): a Java or C# file with
+parse errors is no longer dropped. Definitions and calls outside ERROR regions (and parents of
+MISSING nodes) publish, and the file reports one PARTIAL_SOURCE diagnostic, as for C++.
+
 Local port: CBM `2ef6ba7101b9b0897cbd48c53254599b8bf43068` names directly nested
 C/C++ macro-wrapped definitions after their single bare-name argument. The Satori
 bridge and TypeScript structural extractor preserve qualified owners and reject

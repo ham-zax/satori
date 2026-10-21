@@ -265,6 +265,74 @@ test('C++ missing punctuation excludes its parent region and its enclosing defin
     assert.equal(evidence.partialFiles?.[0]?.reason, 'excluded_regions');
 });
 
+for (const [language, label, extension] of [
+    ['java', 'Java', 'java'],
+    ['csharp', 'C#', 'cs'],
+] as const) {
+    test(`${label} parse-error regions preserve clean cross-file calls and report partial coverage`, async () => {
+        const mainPath = `src/Main.${extension}`;
+        const helperPath = `src/Helper.${extension}`;
+        const source = [
+            'package demo;',
+            'class Main {',
+            '    public static void Broken() { Helper.Help() }',
+            '    public static void Run() { Helper.Help(); }',
+            '}',
+        ].map((line) => language === 'csharp' && line === 'package demo;' ? 'namespace demo;' : line).join('\n');
+        const helper = [
+            language === 'java' ? 'package demo;' : 'namespace demo;',
+            'class Helper {',
+            '    public static void Help() {}',
+            '    public static void Probe() { Main.Run(); Main.Broken(); }',
+            '}',
+        ].join('\n');
+        const evidence = await new WasmSemanticProjectAnalyzer().analyze({
+            language, auxiliaryFiles: [],
+            sourceFiles: [
+                { path: mainPath, source, sourceHash: 'hash-main' },
+                { path: helperPath, source: helper, sourceHash: 'hash-helper' },
+            ],
+        });
+        const occurrences = evidence.occurrencesByFile.get(mainPath) ?? [];
+        assert.equal(occurrences.length, 1, 'only the clean method call is published');
+        assert.equal(occurrences[0]?.callSpan.startByte, source.lastIndexOf('Helper.Help()'));
+        assert.equal(occurrences[0]?.decision, 'resolved');
+        assert.equal(occurrences[0]?.targetProvenance?.file, helperPath);
+        assert.equal(occurrences[0]?.targetProvenance?.name, 'Help');
+        const probes = evidence.occurrencesByFile.get(helperPath) ?? [];
+        assert.equal(probes.find((call) => call.callSpan.startByte === helper.indexOf('Main.Run()'))?.decision, 'resolved');
+        assert.ok(!probes.some((call) => call.decision === 'resolved' && call.targetProvenance?.name === 'Broken'),
+            'the broken method definition must not enter the registry');
+        assert.deepEqual(evidence.skippedFiles ?? [], []);
+        assert.deepEqual(evidence.partialFiles, [
+            { path: mainPath, reason: 'excluded_regions', bytes: Buffer.byteLength(source, 'utf8') },
+        ]);
+        assert.deepEqual(evidence.coverage?.partialFiles, evidence.partialFiles);
+        assert.equal(evidence.coverage?.status, 'degraded');
+        assert.equal(evidence.coverage?.analyzedSourceFileCount, 2);
+
+        const session = await (await WasmSemanticEngine.create()).createSession(language);
+        try {
+            session.addSource(mainPath, source);
+            session.addSource(helperPath, helper);
+            const results = await session.resolve();
+            assert.ok(!results.some((call) => call.sourceFile === mainPath
+                && call.callStartByte < source.indexOf('public static void Run')),
+            'the engine must suppress calls inside the excluded region');
+            assert.deepEqual(session.diagnostics(), [{
+                message: 'excluded parse-error regions',
+                file: mainPath,
+                spanStartByte: 0,
+                spanEndByte: Buffer.byteLength(source, 'utf8'),
+                severity: 2,
+                code: 2,
+            }]);
+        } finally {
+            session.destroy();
+        }
+    });
+}
+
 test('C++ excluded regions emit one whole-file PARTIAL_SOURCE diagnostic', async () => {
     const engine = await WasmSemanticEngine.create();
     const session = await engine.createSession('cpp');

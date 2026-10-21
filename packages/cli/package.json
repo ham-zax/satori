@@ -1,6 +1,6 @@
 {
   "name": "@satori-code/cli",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Install, configure, diagnose, and upgrade Satori's local-first MCP runtime for Claude Code, Codex, and OpenCode.",
   "keywords": [
     "satori",

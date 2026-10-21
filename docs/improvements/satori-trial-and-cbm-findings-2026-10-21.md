@@ -87,6 +87,15 @@ Confirmed in code:
 - The Java, C#, C++ and Rust resolvers keep every `TSTree` until the end of the batch
   (`satori_semantic.c:1659`, `2338`, `2957`, `3390`). Their second pass uses the session arena
   `&s->arena`. Only Kotlin and PHP use a per-file `file_arena` (`satori_semantic.c:2109`).
+  Fixed for pass 2: Java, C# and Rust now resolve each file in a per-file arena, and Java, C#,
+  Rust and C++ delete each tree after its resolve call. WASM memory, old to new (deterministic,
+  3 runs each, output hash equal): C# Newtonsoft.Json 951 files 275 to 229 MiB, Rust
+  rust-analyzer 1,495 files 476 to 397 MiB, Java guava 3,275 files 763 to 673 MiB, C++ CBM C set
+  1,733 files 1,724 to 1,628 MiB. Median wall: C# 2,491/2,402 ms, Rust 4,081/3,862 ms, Java
+  31,794/32,114 ms, C++ 27,292/27,568 ms (load 1.5). Harness: node --import tsx wasm-mem.mts
+  <language> <root> <assetsDir> (session scratchpad, repos in ~/repo/bench-bugs/wasm-mem-20261021).
+  Not done: every tree is still alive at the end of pass 1, which probably sets the peak. Go not
+  checked.
 - The 20,000-source limit skips C++ analysis on LibreOffice (above).
 - `index-generation-workflow.ts:517` reads each semantic source one at a time.
 - `extract_defs.c:91` has a fixed `BT_STACK = 512`. Children are pushed last to first, so a full

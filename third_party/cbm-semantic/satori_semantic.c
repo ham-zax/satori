@@ -1791,14 +1791,21 @@ static int resolve_java_project(SatoriSession *s) {
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
             if (!meta[i].calls_eligible) continue;
+            /* The walk reads the registry through a const pointer, so per-file
+             * resolver state and the parse tree can go with the file. */
+            CBMArena file_arena;
+            cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
             JavaLSPContext ctx;
-            java_lsp_init(&ctx, &s->arena, s->sources[i].source, (int)s->sources[i].source_len,
+            java_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
                           &registry, meta[i].package_name, meta[i].module_qn, &resolved);
             java_lsp_process_file(&ctx, ts_tree_root_node(trees[i]));
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
             if (resolved.count < 0 ||
                 (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
+                cbm_arena_destroy(&file_arena);
                 set_session_error(s, "Resource limit exceeded: max Java call sites exceeded");
                 status = SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
                 goto cleanup;
@@ -1806,6 +1813,7 @@ static int resolve_java_project(SatoriSession *s) {
             total_call_sites += (uint64_t)resolved.count;
             status = append_semantic_results(s, &s->sources[i], meta[i].module_qn,
                                              meta[i].authority_root, &resolved, &def_locs);
+            cbm_arena_destroy(&file_arena);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
     }
@@ -2462,14 +2470,21 @@ static int resolve_csharp_project(SatoriSession *s) {
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
             if (!meta[i].eligible) continue;
+            /* The walk reads the registry through a const pointer, so per-file
+             * resolver state and the parse tree can go with the file. */
+            CBMArena file_arena;
+            cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
-            cbm_run_cs_lsp_cross_with_registry(&s->arena, s->sources[i].source,
+            cbm_run_cs_lsp_cross_with_registry(&file_arena, s->sources[i].source,
                                                (int)s->sources[i].source_len,
                                                meta[i].module_qn, registry,
                                                NULL, 0, trees[i], &resolved);
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
             if (resolved.count < 0 ||
                 (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
+                cbm_arena_destroy(&file_arena);
                 set_session_error(s, "Resource limit exceeded: max C# call sites exceeded");
                 status = SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
                 goto cleanup;
@@ -2477,6 +2492,7 @@ static int resolve_csharp_project(SatoriSession *s) {
             total_call_sites += (uint64_t)resolved.count;
             status = append_semantic_results(s, &s->sources[i], meta[i].module_qn,
                                              meta[i].authority_root, &resolved, &def_locs);
+            cbm_arena_destroy(&file_arena);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
     }
@@ -3125,6 +3141,8 @@ static int resolve_cpp_project(SatoriSession *s) {
                                               (int)s->sources[i].source_len,
                                               "", true, registry, NULL, NULL, 0,
                                               trees[i], &resolved);
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
             if (resolved.count < 0 ||
                 (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
                 cbm_arena_destroy(&file_arena);
@@ -3554,16 +3572,23 @@ static int resolve_rust_project(SatoriSession *s) {
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
             if (!meta[i].eligible) continue;
+            /* The registry is const here, so per-file resolver state and the
+             * parse tree can go with the file. */
+            CBMArena file_arena;
+            cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
-            cbm_run_rust_lsp_cross_with_registry(&s->arena, s->sources[i].source,
+            cbm_run_rust_lsp_cross_with_registry(&file_arena, s->sources[i].source,
                                                  (int)s->sources[i].source_len,
                                                  meta[i].module_qn, registry,
                                                  NULL, NULL, 0, trees[i],
                                                  meta[i].crate ? &meta[i].crate->manifest : NULL,
                                                  &resolved, NULL);
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
             if (resolved.count < 0 ||
                 (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
+                cbm_arena_destroy(&file_arena);
                 set_session_error(s, "Resource limit exceeded: max Rust call sites exceeded");
                 status = SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
                 goto cleanup;
@@ -3571,6 +3596,7 @@ static int resolve_rust_project(SatoriSession *s) {
             total_call_sites += (uint64_t)resolved.count;
             status = append_semantic_results(s, &s->sources[i], meta[i].module_qn,
                                              NULL, &resolved, &def_locs);
+            cbm_arena_destroy(&file_arena);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
     }

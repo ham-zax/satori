@@ -998,41 +998,27 @@
       }
     </style>
     <link rel="stylesheet" href="site.css?v=2026-09-29d" />
-    <link rel="stylesheet" href="brand.css?v=2026-09-29d" />
+    <link rel="stylesheet" href="brand.css?v=2026-10-21a" />
+    <script>document.documentElement.classList.add("js");</script>
   </head>
   <body class="page-architecture">
-  <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top" tabindex="-1">&uarr;</button>
-
-  <svg class="bg-accents" viewBox="0 0 100 100" preserveAspectRatio="none">
-    <defs>
-      <pattern id="grid" width="8" height="8" patternUnits="userSpaceOnUse">
-        <path d="M 8 0 L 0 0 0 8" fill="none" stroke="rgba(237, 234, 227, 0.03)" stroke-width="0.1"/>
-      </pattern>
-      <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="rgba(0,0,0,0)" />
-        <stop offset="50%" stop-color="rgba(0,0,0,0.8)" />
-        <stop offset="100%" stop-color="rgba(0,0,0,1)" />
-      </linearGradient>
-    </defs>
-    <rect width="100" height="100" fill="url(#grid)" />
-    <rect width="100" height="100" fill="url(#fade)" />
-  </svg>
-  <div class="ambient-energy">
-    <div class="ambient-wisp"></div>
-    <div class="ambient-wisp"></div>
-  </div>
+  <button class="back-to-top" id="backToTop" aria-label="Back to top" title="Back to top" tabindex="-1">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
 
     <div class="container">
       <a class="skip-link" href="#main">Skip to content</a>
       <nav aria-label="Primary">
         <a class="nav-brand" href="index.html" aria-label="Satori home">
-          <img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29d" alt="" aria-hidden="true" width="35" height="36" />
+          <img class="nav-brand-logo" src="logo-mark.svg?v=2026-09-29d" alt="" aria-hidden="true" width="34" height="34" />
           <span>Satori</span>
         </a>
         <div class="nav-links">
-          <a href="index.html#product">Product</a>
-          <a href="index.html#use-cases">Use Cases</a>
-          <a href="docs/">Docs</a>
+          <a href="index.html#how-it-works">Product</a>
+          <a href="index.html#ranking">Ranking</a>
+          <a href="index.html#use-cases">Use cases</a>
+          <a href="docs/index.html">Docs</a>
+          <a href="architecture.html" aria-current="page">Architecture</a>
           <a href="https://github.com/ham-zax/satori" target="_blank" rel="noopener noreferrer" class="cta-contact">GitHub</a>
         </div>
       </nav>
@@ -1791,48 +1777,17 @@
         <div class="footer-col">
           <div class="footer-heading">Contact</div>
           <a href="mailto:ahmed@hamza.my.id">ahmed@hamza.my.id</a>
-          <a href="index.html#contact">Contact form</a>
-          <p style="margin-top:0.5rem;">AGPL-3.0-only open source. Built by Hamza.</p>
+          <a href="index.html#contact">Send feedback</a>
+          <a href="https://github.com/ham-zax/satori/releases" target="_blank" rel="noopener noreferrer">Release notes</a>
+          <p>AGPL-3.0-only open source. Built by Hamza.</p>
         </div>
         <div class="footer-bottom">
           <span>&copy; 2026 Satori. AGPL-3.0-only.</span>
-          <span>Atomic Publications · local-first default · read-only source access.</span>
+          <span>Atomic Publications. Local-first by default. Read-only source access.</span>
         </div>
       </footer>
     </div>
 
-  <script>
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const backToTop = document.getElementById("backToTop");
-    let scrollTicking = false;
-
-    function updateScrollUI() {
-      const scrollTop = window.scrollY;
-      if (backToTop) {
-        if (scrollTop > 600) {
-          backToTop.classList.add("visible");
-          backToTop.tabIndex = 0;
-        } else {
-          backToTop.classList.remove("visible");
-          backToTop.tabIndex = -1;
-        }
-      }
-      scrollTicking = false;
-    }
-
-    window.addEventListener("scroll", () => {
-      if (!scrollTicking) {
-        requestAnimationFrame(updateScrollUI);
-        scrollTicking = true;
-      }
-    }, { passive: true });
-
-    if (backToTop) {
-      backToTop.addEventListener("click", () => {
-        window.scrollTo({ top: 0, behavior: prefersReducedMotion ? "auto" : "smooth" });
-      });
-    }
-
-  </script>
+  <script src="brand.js?v=2026-10-21a" defer></script>
   </body>
 </html>

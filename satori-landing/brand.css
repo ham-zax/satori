@@ -536,22 +536,108 @@ nav[aria-label="Primary"] {
 }
 
 /* ---------- Reveal (shared) ----------
-   Only panels and cards reveal on scroll, and only by a short fade-rise.
-   Headings and body text are never animated on scroll. */
+   Subtle, quiet reveal without scattered slide-up animations. */
 @media (prefers-reduced-motion: no-preference) {
   .js [data-reveal] {
     opacity: 0;
-    transform: translateY(8px);
-    transition:
-      opacity 520ms var(--ease-out),
-      transform 520ms var(--ease-out);
-    transition-delay: calc(var(--i, 0) * 50ms);
+    transition: opacity 280ms var(--ease-out);
   }
 
   .js [data-reveal].is-in {
     opacity: 1;
-    transform: none;
   }
+}
+
+/* ---------- Inner-page editorial overrides (Architecture & Docs) ---------- */
+.page-architecture,
+.page-docs {
+  background-color: var(--ink-0);
+}
+
+.page-architecture .hero,
+.page-docs .hero {
+  margin-top: 1.5rem;
+  padding: clamp(2.75rem, 5vw, 4.5rem) clamp(1.5rem, 4vw, 3.25rem);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(90% 80% at 100% 0%, rgba(229, 85, 59, 0.08), transparent 58%),
+    linear-gradient(180deg, rgba(23, 23, 26, 0.9), rgba(14, 14, 16, 0.92));
+  box-shadow: var(--shadow-soft);
+  text-align: left;
+  align-items: flex-start;
+}
+
+.page-architecture .hero h1,
+.page-docs .hero h1 {
+  font-family: var(--display);
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  font-weight: 650;
+  font-stretch: 88%;
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  color: var(--paper);
+  -webkit-text-fill-color: currentColor;
+  background: none;
+}
+
+.page-architecture .hero-eyebrow,
+.page-docs .eyebrow,
+.page-architecture .section-kicker,
+.page-docs .section-kicker {
+  color: var(--shu-hi);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.page-architecture .hero-eyebrow::before,
+.page-docs .eyebrow::before {
+  display: none;
+}
+
+.page-architecture .section,
+.page-docs .section {
+  margin-top: 1.25rem;
+  padding: clamp(2.5rem, 5vw, 4rem) clamp(1.5rem, 3.5vw, 2.75rem);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: rgba(237, 234, 227, 0.018);
+  backdrop-filter: none;
+}
+
+.page-architecture .section:hover,
+.page-docs .section:hover {
+  border-color: var(--line-strong);
+  border-left-color: var(--line-strong);
+}
+
+.page-architecture .section > h2,
+.page-docs .section > h2 {
+  font-family: var(--display);
+  font-size: clamp(1.85rem, 3.5vw, 2.75rem);
+  font-weight: 600;
+  font-stretch: 90%;
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+
+.page-architecture :is(.card, .panel, .tool-card, .config-card, .contact-card, .runtime-card, details, .table-wrap, .diagram-wrap),
+.page-docs :is(.card, .panel, .tool-card, .config-card, .contact-card, .runtime-card, details, .table-wrap, .diagram-wrap, .step, .callout) {
+  border-radius: var(--radius-lg);
+}
+
+.page-architecture :is(.card h3, .card h4, .panel h3, .tool-card h3, .tool-group-title, .install-title, .step strong, .flow-step strong, summary, th, .trust-chip),
+.page-docs :is(.card h3, .card h4, .panel h3, .tool-card h3, .tool-group-title, .install-title, .step strong, .flow-step strong, summary, th, .quick-links a) {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.page-architecture .trust-chip,
+.page-docs .quick-links a {
+  border-radius: 999px;
 }
 
 @media (max-width: 860px) {

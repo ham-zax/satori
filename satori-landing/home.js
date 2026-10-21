@@ -118,20 +118,4 @@
   document.querySelectorAll("[data-configurable-form]").forEach((form) => {
     if (form.getAttribute("action").includes("REPLACE_WITH")) form.hidden = true;
   });
-
-  // Tiles catch a soft light under the pointer (fine pointers only).
-  if (!reduceMotion && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
-    document.querySelectorAll(".tile").forEach((tile) => {
-      let frame = 0;
-      tile.addEventListener("pointermove", (event) => {
-        if (frame) return;
-        frame = requestAnimationFrame(() => {
-          const rect = tile.getBoundingClientRect();
-          tile.style.setProperty("--mx", `${event.clientX - rect.left}px`);
-          tile.style.setProperty("--my", `${event.clientY - rect.top}px`);
-          frame = 0;
-        });
-      });
-    });
-  }
 })();

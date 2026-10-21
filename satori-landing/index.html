@@ -129,8 +129,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="brand.css?v=2026-09-29d" />
-  <link rel="stylesheet" href="home.css?v=2026-10-15b" />
+  <link rel="stylesheet" href="brand.css?v=2026-10-21a" />
+  <link rel="stylesheet" href="home.css?v=2026-10-21a" />
   <script>document.documentElement.classList.add("js");</script>
 </head>
 
@@ -149,7 +149,7 @@
         <span>Satori</span>
       </a>
       <div class="nav-links">
-        <a href="#how-it-works">Product</a>
+        <a href="#how-it-works" aria-current="page">Product</a>
         <a href="#ranking">Ranking</a>
         <a href="#use-cases">Use cases</a>
         <a href="docs/index.html">Docs</a>
@@ -261,33 +261,9 @@
             </ul>
           </article>
         </div>
-        <p class="plain-analogy" data-reveal>
+        <p class="plain-analogy">
           Think of a smart new colleague on day one who does not yet know where anything is. Satori is the colleague who has read the whole project and says: &ldquo;That lives here. These places use it. Read this first.&rdquo;
         </p>
-
-        <h3 class="minor plain-subtitle">How it fits into your agent</h3>
-        <ol class="plain-steps">
-          <li data-reveal style="--i:0"><b>Install once</b><span>One command adds Satori to Claude Code, Codex, OpenCode, or any MCP client. MCP is the standard plug that lets AI agents use outside tools.</span></li>
-          <li data-reveal style="--i:1"><b>Index the project</b><span>Satori reads the code on your machine and builds a search index and a map of which code calls which. It updates when files change.</span></li>
-          <li data-reveal style="--i:2"><b>The agent asks</b><span>When the agent needs to find code, it calls Satori tools such as <code>search_codebase</code>, <code>file_outline</code>, <code>call_graph</code>, and <code>read_file</code>. You use your agent as before.</span></li>
-          <li data-reveal style="--i:3"><b>The agent edits with the full picture</b><span>It changes the right place with the context it needs. Satori only reads. It never changes your files.</span></li>
-        </ol>
-
-        <h3 class="minor plain-subtitle">Who it helps</h3>
-        <div class="plain-audience">
-          <article class="plain-card" data-reveal style="--i:0">
-            <h3>Developers</h3>
-            <p>Less time watching the agent search. Fewer edits in the wrong file. Exact source and call paths you can check yourself. Free, local, and one command to try.</p>
-          </article>
-          <article class="plain-card" data-reveal style="--i:1">
-            <h3>Team leads and stakeholders</h3>
-            <p>Agents find the right place sooner and spend their context on the change, not on the search. On the default setup, code stays on the machine. There is no account, no subscription, and no usage bill.</p>
-          </article>
-          <article class="plain-card" data-reveal style="--i:2">
-            <h3>Small and fast models</h3>
-            <p>Cheap, fast models read less. They often skim a function and edit without the part they skipped. Satori gives them the whole owning function and its callers, so a small model sees what a large one would have searched for.</p>
-          </article>
-        </div>
       </section>
 
       <section class="section strata-section" id="how-it-works">
@@ -356,38 +332,6 @@
           </figcaption>
         </figure>
 
-        <div class="journey" data-journey>
-          <blockquote class="journey-q">
-            <p>&ldquo;Find the code that keeps a detached background mutation alive after the client disconnects.&rdquo;</p>
-          </blockquote>
-          <ol class="journey-path">
-            <li class="journey-step" style="--s:0">
-              <span class="journey-kind">Search</span>
-              <strong>shared runtime, lifecycle, detached mutation</strong>
-              <small>semantic + lexical evidence</small>
-            </li>
-            <li class="journey-step is-key" style="--s:1">
-              <span class="journey-kind">Owner <span class="hanko hanko-sm" aria-hidden="true">悟</span></span>
-              <strong class="journey-symbol">SharedRuntimeHost.<wbr>ownDetachedMutationCompletion</strong>
-              <small>symbol-owned result</small>
-            </li>
-            <li class="journey-step" style="--s:2">
-              <span class="journey-kind">Trace</span>
-              <strong>host activity &rarr; shutdown drain</strong>
-              <small>supported relationship context</small>
-            </li>
-            <li class="journey-step" style="--s:3">
-              <span class="journey-kind">Source</span>
-              <strong>exact method + bounded neighbors</strong>
-              <small>read only what you need</small>
-            </li>
-          </ol>
-          <div class="journey-foot">
-            <span><i class="fresh-dot" aria-hidden="true"></i>Freshness: current</span>
-            <span>Publication-bound evidence</span>
-            <span>Source remains read-only</span>
-          </div>
-        </div>
         <a class="text-link" href="docs/index.html#workflow">See semantic code search in an agent <span aria-hidden="true">&rarr;</span></a>
       </section>
 
@@ -668,6 +612,11 @@ npx -y @satori-code/cli@latest doctor</code></pre>
           <div><dt>Task</dt><dd>bug hunt, refactor, onboarding, or evaluation</dd></div>
         </dl>
 
+        <div class="contact-direct" id="updates">
+          <a class="text-link" href="https://github.com/ham-zax/satori/issues/new?template=search-miss.yml" target="_blank" rel="noopener noreferrer">Search missed the code? Report the case on GitHub <span aria-hidden="true">&rarr;</span></a>
+          <a class="text-link" href="https://github.com/ham-zax/satori/releases" target="_blank" rel="noopener noreferrer">Read release notes on GitHub <span aria-hidden="true">&rarr;</span></a>
+        </div>
+
         <!-- Plain HTML forms, no third-party scripts. home.js hides a form whose action still holds a REPLACE_WITH placeholder. -->
         <div class="contact-forms">
           <form class="contact-form" action="https://formspree.io/f/REPLACE_WITH_FORMSPREE_FORM_ID" method="POST" data-configurable-form>
@@ -701,7 +650,7 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             <button class="btn primary" type="submit">Send feedback</button>
           </form>
 
-          <form class="contact-form" id="updates" action="https://buttondown.com/api/emails/embed-subscribe/REPLACE_WITH_BUTTONDOWN_USERNAME" method="post" data-configurable-form>
+          <form class="contact-form" action="https://buttondown.com/api/emails/embed-subscribe/REPLACE_WITH_BUTTONDOWN_USERNAME" method="post" data-configurable-form>
             <h3>Release notes, every two weeks.</h3>
             <p>What shipped, what broke, and what real users found. No spam; unsubscribe in one click.</p>
             <label>Email
@@ -709,7 +658,6 @@ npx -y @satori-code/cli@latest doctor</code></pre>
             </label>
             <input type="hidden" name="tag" value="website" />
             <button class="btn" type="submit">Get release notes</button>
-            <a class="text-link" href="https://github.com/ham-zax/satori/issues/new?template=search-miss.yml" target="_blank" rel="noopener noreferrer">Search missed the code? Report the case <span aria-hidden="true">&rarr;</span></a>
           </form>
         </div>
       </section>
@@ -744,8 +692,8 @@ npx -y @satori-code/cli@latest doctor</code></pre>
     </footer>
   </div>
 
-  <script src="brand.js?v=2026-09-29d" defer></script>
-  <script src="home.js?v=2026-09-30a" defer></script>
+  <script src="brand.js?v=2026-10-21a" defer></script>
+  <script src="home.js?v=2026-10-21a" defer></script>
 </body>
 
 </html>

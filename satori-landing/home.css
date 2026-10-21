@@ -204,24 +204,21 @@ h3.minor {
 @media (prefers-reduced-motion: no-preference) {
   .js .hero-title .word {
     opacity: 0;
-    filter: blur(3px);
-    transform: translateY(0.06em);
+    transform: translateY(0.04em);
     transition:
-      opacity 560ms var(--ease-out),
-      filter 560ms var(--ease-out),
-      transform 560ms var(--ease-out);
-    transition-delay: calc(80ms + var(--w, 0) * 45ms);
+      opacity 420ms var(--ease-out),
+      transform 420ms var(--ease-out);
+    transition-delay: calc(60ms + var(--w, 0) * 35ms);
   }
 
   .js .hero-title.is-in .word {
     opacity: 1;
-    filter: blur(0);
     transform: none;
   }
 
   .js .hero-title .seal-dot { opacity: 0; }
   .js .hero-title.is-in .seal-dot {
-    animation: stamp 420ms var(--ease-stamp) 0.62s both;
+    animation: stamp 420ms var(--ease-stamp) 0.52s both;
   }
 }
 
@@ -526,17 +523,15 @@ h3.minor {
   .ask.is-armed.step-3 [data-stage="2"]::after,
   .ask.is-armed.step-4 [data-stage="3"]::after { transform: scaleX(1); }
 
-  /* Search: candidates surface out of the blur. */
+  /* Search: candidates surface cleanly. */
   .ask.is-armed .ask-candidates li {
     opacity: 0;
-    filter: blur(3px);
-    transform: translateY(6px);
+    transform: translateY(4px);
     border-color: transparent;
     background: transparent;
   }
   .ask.is-armed.step-1 .ask-candidates li {
     opacity: 1;
-    filter: blur(0);
     transform: none;
   }
   .ask.is-armed.step-1 .ask-candidates li:nth-child(2) { transition-delay: 90ms; }
@@ -552,12 +547,10 @@ h3.minor {
 
   .ask.is-armed .ask-result {
     opacity: 0;
-    filter: blur(4px);
-    transform: scale(0.97);
+    transform: translateY(4px);
   }
   .ask.is-armed.step-2 .ask-result {
     opacity: 1;
-    filter: blur(0);
     transform: none;
   }
 
@@ -865,8 +858,6 @@ h3.minor {
 }
 
 .tile {
-  --mx: 50%;
-  --my: -20%;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -877,24 +868,14 @@ h3.minor {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: rgba(237, 234, 227, 0.022);
-  transition: border-color 260ms var(--ease-out);
-}
-
-.tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: radial-gradient(360px circle at var(--mx) var(--my), rgba(237, 234, 227, 0.06), transparent 60%);
-  opacity: 0;
-  transition: opacity 300ms var(--ease-out);
+  transition: border-color 200ms var(--ease-out), background-color 200ms var(--ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
-.tile:hover { border-color: var(--line-strong); }
+.tile:hover {
+  border-color: var(--line-strong);
+  background: rgba(237, 234, 227, 0.032);
 }
-@media (hover: hover) and (pointer: fine) {
-.tile:hover::after { opacity: 1; }
 }
 
 .tile p {
@@ -1415,14 +1396,28 @@ h3.minor {
 .contact-context div { display: flex; gap: 0.5rem; }
 .contact-context dt { color: var(--paper); font-weight: 500; }
 
+.contact-direct {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 2rem;
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
 /* ---------- Feedback and release-notes forms ---------- */
 .contact-forms {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: 1.25rem;
   width: min(100%, 980px);
-  margin-top: 3rem;
+  margin-top: 2rem;
   text-align: left;
+}
+
+.contact-forms:not(:has(.contact-form:not([hidden]))) {
+  display: none;
 }
 
 .contact-form {

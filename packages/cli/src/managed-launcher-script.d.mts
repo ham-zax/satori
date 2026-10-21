@@ -20,3 +20,8 @@ export declare function buildLauncherScript(options: {
     managedLauncherPath?: string;
     shutdownGraceMs?: number;
 }): string;
+
+export declare const MANAGED_SESSION_HOOK_FILE: string;
+export declare const MANAGED_SESSION_HOOK_MARKER: string;
+
+export declare function buildSessionHookShimScript(): string;

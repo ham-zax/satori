@@ -483,3 +483,35 @@ export function buildLauncherScript(options) {
     "",
   ].join("\n");
 }
+
+export const MANAGED_SESSION_HOOK_FILE = "satori-hook.js";
+export const MANAGED_SESSION_HOOK_MARKER = "satori-managed-session-hook";
+
+/**
+ * Static SessionStart hook shim written next to the managed launcher. It reads
+ * the current runtime entry from the launcher's baseArgs line at run time, so
+ * runtime upgrades need no hook rewrite. Fail-open: every error exits 0 silently.
+ *
+ * @returns {string}
+ */
+export function buildSessionHookShimScript() {
+  return `#!/usr/bin/env node
+// ${MANAGED_SESSION_HOOK_MARKER}: installed by satori-cli; edits are replaced on reinstall.
+const fs = require("node:fs");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+
+try {
+  const launcher = fs.readFileSync(path.join(__dirname, "satori-mcp.js"), "utf8");
+  const line = launcher.split(/\\r?\\n/).find((candidate) => candidate.startsWith(${JSON.stringify(ARGS_PREFIX)}));
+  const runtimeEntry = JSON.parse(line.slice(${ARGS_PREFIX.length}, -1))[0];
+  const hookModule = path.join(path.dirname(runtimeEntry), "session-hook.js");
+  import(pathToFileURL(hookModule).href)
+    .then((hook) => hook.runSessionStartHook({ stdin: process.stdin, stdout: process.stdout, cwd: process.cwd() }))
+    .catch(() => {})
+    .finally(() => process.exit(0));
+} catch {
+  process.exit(0);
+}
+`;
+}

@@ -226,11 +226,13 @@ export interface ClientTarget {
  * Satori guidance reaches agents through the MCP server's session-start
  * `instructions` and one canonical skill. `skill` is the shared copy that
  * agents load natively; `skill-link` adapts an agent that only reads its own
- * skills directory.
+ * skills directory. `session-hook` is a Claude Code SessionStart entry in the
+ * settings file at `path` that reports the session directory's index state.
  */
 export type CompanionTarget =
     | { kind: "skill"; path: string }
-    | { kind: "skill-link"; path: string; target: string };
+    | { kind: "skill-link"; path: string; target: string }
+    | { kind: "session-hook"; path: string };
 
 export interface ManagedClientConfigProof {
     client: ClientName;

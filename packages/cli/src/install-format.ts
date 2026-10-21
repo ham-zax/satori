@@ -67,6 +67,7 @@ function plannedChangeLabel(change: PlannedChange): string {
         case "client-config": return `${client} configuration`;
         case "skill": return "Shared skill";
         case "skill-link": return `${client} skill link`;
+        case "session-hook": return `${client} session-start hook`;
     }
 }
 

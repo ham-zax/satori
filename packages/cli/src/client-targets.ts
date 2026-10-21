@@ -63,6 +63,7 @@ export function resolveClientTargets(homeDir: string, env: NodeJS.ProcessEnv = p
                     path: path.join(claudeConfigDir, "skills", SATORI_SKILL_NAME),
                     target: canonicalSkillPath,
                 },
+                { kind: "session-hook", path: path.join(claudeConfigDir, "settings.json") },
             ],
         },
         {

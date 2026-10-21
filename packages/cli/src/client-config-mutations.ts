@@ -5,6 +5,11 @@ import { applyEdits, modify, parse as parseJsonc, type ParseError } from "jsonc-
 import { CliError } from "./errors.js";
 import { updateCodexConfig } from "./codex-config.js";
 import { isManagedCommandParts } from "./managed-runtime-paths.js";
+import {
+    MANAGED_SESSION_HOOK_FILE,
+    MANAGED_SESSION_HOOK_MARKER,
+    buildSessionHookShimScript,
+} from "./managed-launcher-script.mjs";
 import type { InstallProfile } from "./args.js";
 import type {
     ClientTarget,
@@ -637,10 +642,114 @@ export function prepareSkillLinkRemoval(linkPath: string, target: string): FileM
     return unchangedMutation();
 }
 
+function resolveSessionHookShimPath(runtimeCommand: ManagedRuntimeCommand): string {
+    return path.join(path.dirname(runtimeCommand.args[0]), MANAGED_SESSION_HOOK_FILE);
+}
+
+function sessionStartEntries(filePath: string, settings: Record<string, unknown>): unknown[] {
+    const hooks = settings.hooks;
+    if (hooks === undefined) return [];
+    if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) {
+        throw new CliError("E_USAGE", `Expected "hooks" to be an object in ${filePath}.`, 2);
+    }
+    const sessionStart = (hooks as Record<string, unknown>).SessionStart;
+    if (sessionStart === undefined) return [];
+    if (!Array.isArray(sessionStart)) {
+        throw new CliError("E_USAGE", `Expected "hooks.SessionStart" to be an array in ${filePath}.`, 2);
+    }
+    return sessionStart;
+}
+
+/** Drops only hook commands that run this install's shim; other hooks and entries stay intact. */
+function withoutSatoriSessionHooks(entries: readonly unknown[], shimPath: string): unknown[] {
+    const result: unknown[] = [];
+    for (const entry of entries) {
+        const hooks = objectValue(entry)?.hooks;
+        if (!Array.isArray(hooks)) {
+            result.push(entry);
+            continue;
+        }
+        const kept = hooks.filter((hook) => {
+            const hookCommand = objectValue(hook)?.command;
+            return !(typeof hookCommand === "string" && hookCommand.includes(shimPath));
+        });
+        if (kept.length === hooks.length) result.push(entry);
+        else if (kept.length > 0) result.push({ ...(entry as Record<string, unknown>), hooks: kept });
+    }
+    return result;
+}
+
+function assertShimOwned(shimPath: string, current: string | null): void {
+    if (current !== null && !current.includes(MANAGED_SESSION_HOOK_MARKER)) {
+        throw new CliError(
+            "E_USAGE",
+            `Refusing to replace ${shimPath}: it is not managed by Satori. Remove it manually and rerun install.`,
+            2,
+        );
+    }
+}
+
+export function prepareSessionHookInstall(settingsPath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const shimPath = resolveSessionHookShimPath(runtimeCommand);
+    const currentShim = readTextIfExists(shimPath);
+    assertShimOwned(shimPath, currentShim);
+    const shim = buildSessionHookShimScript();
+    const current = readTextIfExists(settingsPath);
+    const settings = current ? parseJsoncObject(settingsPath, current) : {};
+    const entries = sessionStartEntries(settingsPath, settings);
+    // No matcher: the hook runs for startup, resume, clear, and compact sessions.
+    const next = [
+        ...withoutSatoriSessionHooks(entries, shimPath),
+        { hooks: [{ type: "command", command: `${JSON.stringify(runtimeCommand.command)} ${JSON.stringify(shimPath)}`, timeout: 5 }] },
+    ];
+    const settingsMutation = mutateJsonc(settingsPath, current ?? "{}\n", ["hooks", "SessionStart"], next);
+    const shimChanged = currentShim !== shim;
+    return guardFileMutation(settingsPath, current, {
+        changed: shimChanged || settingsMutation.changed || current === null,
+        apply: () => {
+            assertFileContentUnchanged(shimPath, currentShim);
+            if (shimChanged) writeTextFileAtomic(shimPath, shim, 0o755);
+            settingsMutation.apply();
+        },
+    });
+}
+
+export function prepareSessionHookRemoval(settingsPath: string, runtimeCommand: ManagedRuntimeCommand): FileMutation {
+    const shimPath = resolveSessionHookShimPath(runtimeCommand);
+    const currentShim = readTextIfExists(shimPath);
+    const removeShim = currentShim !== null && currentShim.includes(MANAGED_SESSION_HOOK_MARKER);
+    const current = readTextIfExists(settingsPath);
+    let settingsMutation: FileMutation = unchangedMutation();
+    if (current) {
+        const settings = parseJsoncObject(settingsPath, current);
+        const entries = sessionStartEntries(settingsPath, settings);
+        const kept = withoutSatoriSessionHooks(entries, shimPath);
+        if (kept.length !== entries.length || kept.some((entry, index) => entry !== entries[index])) {
+            const hooks = settings.hooks as Record<string, unknown>;
+            settingsMutation = kept.length > 0
+                ? mutateJsonc(settingsPath, current, ["hooks", "SessionStart"], kept)
+                : Object.keys(hooks).length > 1
+                    ? mutateJsonc(settingsPath, current, ["hooks", "SessionStart"], undefined)
+                    : mutateJsonc(settingsPath, current, ["hooks"], undefined);
+        }
+    }
+    return guardFileMutation(settingsPath, current, {
+        changed: removeShim || settingsMutation.changed,
+        apply: () => {
+            settingsMutation.apply();
+            if (removeShim) {
+                assertFileContentUnchanged(shimPath, currentShim);
+                fs.rmSync(shimPath, { force: true });
+            }
+        },
+    });
+}
+
 export function prepareCompanionMutation(
     companion: CompanionTarget,
     command: InstallCommandInput,
     removeSharedSkill: boolean,
+    runtimeCommand: ManagedRuntimeCommand,
 ): CompanionMutation {
     const install = command.kind === "install";
     let mutation: FileMutation;
@@ -654,6 +763,11 @@ export function prepareCompanionMutation(
             mutation = install
                 ? prepareSkillLinkInstall(companion.path, companion.target)
                 : prepareSkillLinkRemoval(companion.path, companion.target);
+            break;
+        case "session-hook":
+            mutation = install
+                ? prepareSessionHookInstall(companion.path, runtimeCommand)
+                : prepareSessionHookRemoval(companion.path, runtimeCommand);
             break;
     }
     return {
@@ -695,7 +809,7 @@ export function prepareMutation(
 ): PreparedMutation {
     const configMutation = prepareConfigMutation(target, command, runtimeCommand);
     const companionMutations = target.companions.map((companion) => (
-        prepareCompanionMutation(companion, command, command.client === "all")
+        prepareCompanionMutation(companion, command, command.client === "all", runtimeCommand)
     ));
 
     return {

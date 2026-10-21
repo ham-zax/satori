@@ -128,7 +128,7 @@ Satori combines embeddings with BM25 and exact matches, maps hits to the symbols
 
 - Free and open source under AGPL-3.0. No account and no telemetry upload.
 - The default stack runs offline after install: Potion embeddings, BM25, LateOn reranking, and LanceDB.
-- Satori never edits your source and adds nothing to `AGENTS.md` or hooks.
+- Satori never edits your source and adds nothing to `AGENTS.md`. For Claude Code, install adds one read-only `SessionStart` hook that reports index state and never indexes.
 - `satori uninstall` removes client config; `--purge` also deletes `~/.satori`.
 - Connected Voyage and Milvus/Zilliz are optional. See the [reference](docs/REFERENCE.md#runtime-choices).
 

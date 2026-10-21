@@ -35,6 +35,8 @@ ownership, behavior location, or related implementation is not yet known.
 ## Relationships and impact
 
 - `architecture_overview`: repository areas, cross-area boundaries, hotspots.
+- `file_outline`: indexed symbols of one published file, with `call_graph`
+  jump handles when available.
 - `call_graph`: only when a grouped result has `navigation.graph="ready"`; pass
   its `target` as `symbolRef` and `codebaseRoot` as `path`.
 - `trace_path`: one bounded path between two known symbol IDs.
@@ -45,8 +47,15 @@ These are navigation evidence, not proof of complete blast radius. Empty or
 short results do not prove there are no callers; confirm important inbound
 impact with `find_references`, tests, or direct reads.
 
+Parse-error and conditional-preprocessing regions are excluded from structure
+and calls. `CALL_GRAPH_INBOUND_PARTIAL_FILES:n` and
+`OUTLINE_PARTIAL_STRUCTURAL_COVERAGE:<reason>` mark such partial files; read
+those files directly before relying on missing symbols or callers.
+
 ## Index lifecycle
 
+- In Claude Code, a `[satori]` session-start note reports whether the
+  session directory is indexed. Treat it as a hint and confirm with `status`.
 - Unknown readiness: `list_codebases`, then `manage_index` with
   `action="status"`.
 - `not_indexed`: report it and get the user's approval before

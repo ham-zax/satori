@@ -121,6 +121,52 @@ export function resolvePublicationNavigationRoot(
     return path.join(resolvePublicationGenerationRoot(canonicalRoot, id, stateRoot), 'navigation');
 }
 
+export type PublicationPathProbe =
+    | { kind: 'current'; canonicalRoot: string; publicationId: PublicationId }
+    | { kind: 'incompatible'; canonicalRoot: string; publicationId: PublicationId }
+    | { kind: 'missing' };
+
+/**
+ * Read-only lookup of the nearest root at or above `requestedPath` with a current
+ * Publication pointer. Unlike PublicationStore it never prunes, leases, or writes,
+ * so short-lived processes such as session hooks can call it. Advisory only: the
+ * serving runtime still decides readiness through getCurrentState.
+ */
+export function probeCurrentPublicationForPath(
+    requestedPath: string,
+    options: { stateRoot?: string } = {},
+): PublicationPathProbe {
+    const publicationsRoot = path.join(resolveStateRoot(options.stateRoot), 'publications');
+    let candidate = canonicalizeRoot(requestedPath);
+    for (;;) {
+        const publicationRoot = path.join(publicationsRoot, publicationRootKey(candidate));
+        const pointerPath = path.join(publicationRoot, 'current.json');
+        let pointer: CurrentPublicationPointer | null = null;
+        try {
+            pointer = parseCurrentPointer(JSON.parse(fs.readFileSync(pointerPath, 'utf8')), pointerPath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        if (pointer) {
+            const descriptorPath = path.join(publicationRoot, 'generations', pointer.publicationId, 'publication.json');
+            try {
+                const publication = parsePublication(JSON.parse(fs.readFileSync(descriptorPath, 'utf8')), descriptorPath);
+                if (publication.canonicalRoot === candidate) {
+                    return { kind: 'current', canonicalRoot: candidate, publicationId: pointer.publicationId };
+                }
+            } catch (error) {
+                if (error instanceof IndexFormatIncompatibleError) {
+                    return { kind: 'incompatible', canonicalRoot: candidate, publicationId: pointer.publicationId };
+                }
+                throw error;
+            }
+        }
+        const parent = path.dirname(candidate);
+        if (parent === candidate) return { kind: 'missing' };
+        candidate = parent;
+    }
+}
+
 type PublicationActivationDurability = 'visible_unconfirmed' | 'durable';
 
 export class PublicationActivationError extends Error {

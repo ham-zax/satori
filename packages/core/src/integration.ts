@@ -4,8 +4,10 @@ export {
 } from './config/runtime-state-root';
 export {
     createSharedPublicationRuntime,
+    probeCurrentPublicationForPath,
 } from './generation/publication-store';
 export type {
+    PublicationPathProbe,
     SharedPublicationRuntime,
 } from './generation/publication-store';
 export {

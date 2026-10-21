@@ -181,7 +181,15 @@ tool call:
   and OpenCode load it directly; Claude Code gets a link to it at
   `~/.claude/skills/satori`.
 
-Install adds nothing to `AGENTS.md` or hook files, and it never removes or
+For Claude Code, install also adds one `SessionStart` hook to
+`~/.claude/settings.json` that runs `~/.satori/bin/satori-hook.js`. The hook
+reads Publication state on disk, starts no server, and never indexes. When the
+session folder is indexed, it tells the agent so. When the folder is an
+unindexed git repository, it shows a one-line note with the approval-first
+`manage_index action="create"` step. Otherwise it prints nothing. Uninstall
+removes only that hook entry and keeps your own hooks.
+
+Install adds nothing to `AGENTS.md`, and it never removes or
 overwrites files it did not write: a real directory at a skill-link path is
 refused with instructions to remove it yourself. `satori uninstall` removes the shared skill only when it targets
 all clients (the default).

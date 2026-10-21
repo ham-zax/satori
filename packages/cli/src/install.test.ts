@@ -2311,6 +2311,60 @@ test("install links the Claude skill directory to the canonical skill", async ()
     });
 });
 
+test("Claude install adds one SessionStart hook beside user hooks and uninstall removes only it", async () => {
+    await withTempHome(async (homeDir) => {
+        const settingsPath = path.join(homeDir, ".claude", "settings.json");
+        const userEntry = { matcher: "startup", hooks: [{ type: "command", command: "/usr/local/bin/my-hook", timeout: 5 }] };
+        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+        fs.writeFileSync(settingsPath, `${JSON.stringify({ model: "opus", hooks: { SessionStart: [userEntry], Stop: [] } }, null, 2)}\n`);
+        const shimPath = path.join(path.dirname(fakeClientCommand(homeDir).args[0]), "satori-hook.js");
+        const install = { kind: "install", client: "claude", runtime: "voyage", dryRun: false } as const;
+
+        await executeInstallCommand(install, installOptions(homeDir));
+        const installed = JSON.parse(readFile(settingsPath));
+        assert.equal(installed.model, "opus");
+        assert.deepEqual(installed.hooks.Stop, []);
+        assert.deepEqual(installed.hooks.SessionStart[0], userEntry);
+        assert.equal(installed.hooks.SessionStart.length, 2);
+        assert.equal(installed.hooks.SessionStart[1].matcher, undefined);
+        assert.deepEqual(installed.hooks.SessionStart[1].hooks, [{
+            type: "command",
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(shimPath)}`,
+            timeout: 5,
+        }]);
+        assert.equal(readFile(shimPath).includes("satori-managed-session-hook"), true);
+        assert.equal(fs.statSync(shimPath).mode & 0o111, 0o111);
+
+        const settingsAfterFirstInstall = readFile(settingsPath);
+        await executeInstallCommand(install, installOptions(homeDir));
+        assert.equal(readFile(settingsPath), settingsAfterFirstInstall);
+
+        await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
+        const removed = JSON.parse(readFile(settingsPath));
+        assert.deepEqual(removed, { model: "opus", hooks: { SessionStart: [userEntry], Stop: [] } });
+        assert.equal(fs.existsSync(shimPath), false);
+    });
+});
+
+test("Claude uninstall drops an emptied hooks object and install refuses an unmanaged shim", async () => {
+    await withTempHome(async (homeDir) => {
+        const settingsPath = path.join(homeDir, ".claude", "settings.json");
+        const shimPath = path.join(path.dirname(fakeClientCommand(homeDir).args[0]), "satori-hook.js");
+        await executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
+        assert.deepEqual(JSON.parse(readFile(settingsPath)), {});
+
+        fs.mkdirSync(path.dirname(shimPath), { recursive: true });
+        fs.writeFileSync(shimPath, "// my own hook\n");
+        await assert.rejects(
+            executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+            /satori-hook\.js: it is not managed by Satori/,
+        );
+        await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
+        assert.equal(readFile(shimPath), "// my own hook\n");
+    });
+});
+
 // A copy from a release that predates the ownership marker, exactly as that installer wrote it.
 test("a real directory at a skill link path is unmanaged: install refuses and uninstall leaves it", async () => {
     await withTempHome(async (homeDir) => {

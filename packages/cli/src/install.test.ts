@@ -492,6 +492,7 @@ test("install writes managed Codex config and the canonical Satori skill without
 
         const result = await executeInstallCommand({
             kind: "install",
+            skill: true,
             client: "codex",
             runtime: "voyage",
             dryRun: false,
@@ -531,6 +532,36 @@ test("install writes managed Codex config and the canonical Satori skill without
         const skill = readFile(path.join(homeDir, ".agents", "skills", "satori", "SKILL.md"));
         assert.equal(skill.startsWith("---\nname: satori\n"), true);
         assert.equal(skill.includes("satori-managed-skill"), true);
+    });
+});
+
+test("install without --skill creates no skill or link but refreshes a skill Satori already wrote", async () => {
+    await withTempHome(async (homeDir) => {
+        const canonicalSkill = path.join(homeDir, ".agents", "skills", "satori", "SKILL.md");
+        const claudeLink = path.join(homeDir, ".claude", "skills", "satori");
+        fs.mkdirSync(path.join(homeDir, ".claude"), { recursive: true });
+
+        const fresh = await executeInstallCommand({
+            kind: "install",
+            client: "claude",
+            runtime: "voyage",
+            dryRun: false,
+        }, installOptions(homeDir));
+        assert.equal(fresh.results[0]?.skillChanged, false);
+        assert.equal(fs.existsSync(canonicalSkill), false);
+        assert.equal(fs.existsSync(claudeLink), false);
+
+        fs.mkdirSync(path.dirname(canonicalSkill), { recursive: true });
+        fs.writeFileSync(canonicalSkill, "---\nname: satori\n---\n<!-- satori-managed-skill -->\nold text\n", "utf8");
+        const refreshed = await executeInstallCommand({
+            kind: "install",
+            client: "claude",
+            runtime: "voyage",
+            dryRun: false,
+        }, installOptions(homeDir));
+        assert.equal(refreshed.results[0]?.skillChanged, true);
+        assert.equal(readFile(canonicalSkill).includes("old text"), false);
+        assert.equal(fs.lstatSync(claudeLink).isSymbolicLink(), true);
     });
 });
 
@@ -2274,6 +2305,7 @@ test("install links the Claude skill directory to the canonical skill", async ()
 
         await executeInstallCommand({
             kind: "install",
+            skill: true,
             client: "claude",
             runtime: "voyage",
             dryRun: false,
@@ -2374,7 +2406,7 @@ test("a real directory at a skill link path is unmanaged: install refuses and un
         fs.writeFileSync(skillFile, readFile(path.join(PACKAGE_ROOT, "assets", "skills", "satori", "SKILL.md")), "utf8");
 
         await assert.rejects(
-            executeInstallCommand({ kind: "install", client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+            executeInstallCommand({ kind: "install", skill: true, client: "claude", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
             /not managed by Satori\. Remove it manually/,
         );
         await executeInstallCommand({ kind: "uninstall", client: "claude", dryRun: false }, { homeDir });
@@ -2389,13 +2421,13 @@ test("canonical skill is never overwritten unless Satori owns it and is removed 
         fs.writeFileSync(skillFile, "# my own satori notes\n", "utf8");
 
         await assert.rejects(
-            executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+            executeInstallCommand({ kind: "install", skill: true, client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir)),
             /Refusing to overwrite unmanaged skill/,
         );
         assert.equal(readFile(skillFile), "# my own satori notes\n");
 
         fs.rmSync(skillFile);
-        await executeInstallCommand({ kind: "install", client: "all", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        await executeInstallCommand({ kind: "install", skill: true, client: "all", runtime: "voyage", dryRun: false }, installOptions(homeDir));
         assert.equal(readFile(skillFile).includes("satori-managed-skill"), true);
 
         await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: false }, { homeDir });
@@ -2460,7 +2492,7 @@ test("a linked canonical skill without the marker, a dangling link, or a linked 
             arrange(homeDir, canonical);
             let preflightCalls = 0;
             await assert.rejects(
-                executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, {
+                executeInstallCommand({ kind: "install", skill: true, client: "codex", runtime: "voyage", dryRun: false }, {
                     ...installOptions(homeDir),
                     preflightRunner: async () => {
                         preflightCalls += 1;
@@ -2642,6 +2674,7 @@ test("install writes OpenCode JSONC config and the canonical skill", async () =>
 
         const result = await executeInstallCommand({
             kind: "install",
+            skill: true,
             client: "opencode",
             runtime: "voyage",
             dryRun: false,
@@ -2679,7 +2712,7 @@ test("install --client agy writes the managed entry, preserves other servers, an
         fs.mkdirSync(path.dirname(desktopConfigPath), { recursive: true });
         fs.writeFileSync(desktopConfigPath, "{}\n", "utf8");
 
-        const command = { kind: "install", client: "agy", runtime: "voyage", dryRun: false } as const;
+        const command = { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: false } as const;
         const first = await executeInstallCommand(command, installOptions(homeDir));
         assert.equal(first.results.length, 1);
         assert.equal(first.results[0]?.client, "agy");
@@ -2719,7 +2752,7 @@ test("agy install accepts the hand-made managed entry and keeps ~/.gemini/skills
         fs.mkdirSync(canonicalRoot, { recursive: true });
         fs.symlinkSync(canonicalRoot, path.join(homeDir, ".gemini", "skills"));
 
-        const command = { kind: "install", client: "agy", runtime: "voyage", dryRun: false } as const;
+        const command = { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: false } as const;
         await executeInstallCommand(command, installOptions(homeDir));
         const canonicalSkill = path.join(canonicalRoot, "satori");
         assert.equal(fs.lstatSync(canonicalSkill).isDirectory(), true);
@@ -2743,7 +2776,7 @@ test("uninstall --client agy removes only the Satori entry and a Satori-owned sk
         const other = { command: "other-server", args: [] };
         fs.writeFileSync(configPath, JSON.stringify({ keep: 1, mcpServers: { other } }), "utf8");
         await executeInstallCommand(
-            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: false },
             installOptions(homeDir),
         );
         const linkPath = path.join(homeDir, ".gemini", "skills", "satori");
@@ -2786,7 +2819,7 @@ test("agy dry-run lists its config path and skill link for install and uninstall
     await withTempHome(async (homeDir) => {
         const configPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
         const preview = await executeInstallCommand(
-            { kind: "install", client: "agy", runtime: "voyage", dryRun: true },
+            { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: true },
             installOptions(homeDir),
         );
         assert.deepEqual(preview.plannedChanges, [
@@ -2798,7 +2831,7 @@ test("agy dry-run lists its config path and skill link for install and uninstall
         assert.deepEqual(snapshotTree(homeDir), []);
 
         await executeInstallCommand(
-            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: false },
             installOptions(homeDir),
         );
         const removal = await executeInstallCommand(
@@ -2828,7 +2861,7 @@ test("skill-link handling never replaces or removes a real directory it did not 
 
             await assert.rejects(
                 executeInstallCommand(
-                    { kind: "install", client, runtime: "voyage", dryRun: false },
+                    { kind: "install", skill: true, client, runtime: "voyage", dryRun: false },
                     installOptions(homeDir),
                 ),
                 /not managed by Satori/,
@@ -2862,7 +2895,7 @@ test("skill-link handling leaves a user-authored SKILL.md, or a marked copy with
                 const label = `${client}: ${name}`;
 
                 await assert.rejects(
-                    executeInstallCommand({ kind: "install", client, runtime: "voyage", dryRun: false }, installOptions(homeDir)),
+                    executeInstallCommand({ kind: "install", skill: true, client, runtime: "voyage", dryRun: false }, installOptions(homeDir)),
                     /not managed by Satori/,
                     label,
                 );
@@ -2970,7 +3003,7 @@ test("agy install treats a symlink chain to a missing canonical skills dir like 
         fs.symlinkSync(path.join(gemini, "skills-hop"), path.join(gemini, "skills"));
 
         const result = await executeInstallCommand(
-            { kind: "install", client: "agy", runtime: "voyage", dryRun: false },
+            { kind: "install", skill: true, client: "agy", runtime: "voyage", dryRun: false },
             installOptions(homeDir),
         );
         assert.equal(result.results[0]?.status, "updated");
@@ -3043,6 +3076,7 @@ test("install all smoke writes launcher-backed config for every supported client
     await withTempHome(async (homeDir) => {
         const result = await executeInstallCommand({
             kind: "install",
+            skill: true,
             client: "all",
             runtime: "voyage",
             dryRun: false,
@@ -3685,6 +3719,7 @@ test("application failure reports completed and unattempted mutation paths", asy
         await assert.rejects(
             executeInstallCommand({
                 kind: "install",
+                skill: true,
                 client: "codex",
                 runtime: "voyage",
                 dryRun: false,
@@ -3720,7 +3755,7 @@ function snapshotTree(root: string): string[] {
 
 test("install --dry-run lists the same paths a real install writes and changes nothing", async () => {
     await withTempHome(async (homeDir) => {
-        const command = { kind: "install", client: "codex", runtime: "voyage" } as const;
+        const command = { kind: "install", skill: true, client: "codex", runtime: "voyage" } as const;
         const preview = await executeInstallCommand({ ...command, dryRun: true }, installOptions(homeDir));
         assert.deepEqual(snapshotTree(homeDir), []);
 
@@ -3791,7 +3826,7 @@ test("install --dry-run omits the runtime and launcher steps a real install woul
 
 test("uninstall --dry-run says it would remove or modify the paths it lists", async () => {
     await withTempHome(async (homeDir) => {
-        await executeInstallCommand({ kind: "install", client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir));
+        await executeInstallCommand({ kind: "install", skill: true, client: "codex", runtime: "voyage", dryRun: false }, installOptions(homeDir));
         const before = snapshotTree(homeDir);
 
         const preview = await executeInstallCommand({ kind: "uninstall", client: "all", dryRun: true }, { homeDir });

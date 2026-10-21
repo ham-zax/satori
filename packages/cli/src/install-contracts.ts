@@ -86,6 +86,8 @@ type InstallCommandBase = {
     profile?: InstallProfile;
     /** Skip the small Voyage reranker request during preflight. */
     noVerify?: boolean;
+    /** Create the optional satori skill. Without it, install only refreshes a skill Satori already wrote. */
+    skill?: boolean;
 };
 
 export type InstallCommandInput =

@@ -44,6 +44,7 @@ export type ParsedCommand =
         reranker?: Exclude<InstallReranker, "lateon">;
         rerankerModel?: string;
         noVerify?: boolean;
+        skill?: boolean;
     }
     | {
         kind: "install";
@@ -55,6 +56,7 @@ export type ParsedCommand =
         reranker?: InstallReranker;
         rerankerModel?: string;
         noVerify?: boolean;
+        skill?: boolean;
     }
     | { kind: "uninstall"; client: InstallClient; dryRun: boolean; purge: boolean }
     | { kind: "tools-list" }
@@ -104,6 +106,7 @@ export const COMMAND_OPTION_SPECS: Readonly<Record<HelpTopic, readonly CommandOp
         { flag: "--reranker-model", value: "model", description: "Select a Voyage reranker model (requires --reranker voyage)" },
         { flag: "--no-verify", description: "Skip the Voyage reranker test call (requires --reranker voyage)" },
         { flag: "--profile", value: "default|minimal|all-text", description: "Repository index profile" },
+        { flag: "--skill", description: "Also install the optional satori agent skill" },
         { flag: "--dry-run", description: "Show what would change without changing anything" },
     ],
     uninstall: [
@@ -338,6 +341,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
     let reranker: InstallReranker | undefined;
     let rerankerModel: string | undefined;
     let noVerify = false;
+    let skill = false;
 
     for (let i = 0; i < args.length; i += 1) {
         const token = args[i];
@@ -407,6 +411,10 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             noVerify = true;
             continue;
         }
+        if (kind === "install" && token === "--skill") {
+            skill = true;
+            continue;
+        }
         throw new CliError("E_USAGE", `Unknown arguments for ${kind}: ${args.slice(i).join(" ")}`, 2);
     }
 
@@ -442,6 +450,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
             ...(reranker ? { reranker } : {}),
             ...(rerankerModel ? { rerankerModel } : {}),
             ...(noVerify ? { noVerify: true } : {}),
+            ...(skill ? { skill: true } : {}),
         };
     }
     return {
@@ -454,6 +463,7 @@ function parseInstallCommand(kind: "install" | "uninstall", args: string[]): Par
         ...(reranker && reranker !== "lateon" ? { reranker } : {}),
         ...(rerankerModel ? { rerankerModel } : {}),
         ...(noVerify ? { noVerify: true } : {}),
+        ...(skill ? { skill: true } : {}),
     };
 }
 

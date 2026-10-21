@@ -236,6 +236,16 @@ test("parseCliArgs scopes --no-verify to Voyage reranker use and install", () =>
     assert.throws(() => parseCliArgs(["doctor", "--no-verify"]), /Unknown argument for doctor/);
 });
 
+test("parseCliArgs makes the skill opt-in for install only", () => {
+    const plain = parseCliArgs(["install"]).command;
+    if (plain.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal("skill" in plain, false);
+    const withSkill = parseCliArgs(["install", "--runtime", "voyage", "--skill"]).command;
+    if (withSkill.kind !== "install") assert.fail("Expected install command parsing");
+    assert.equal(withSkill.skill, true);
+    assert.throws(() => parseCliArgs(["uninstall", "--skill"]), /Unknown arguments for uninstall/);
+});
+
 test("parseCliArgs accepts an explicit connected Milvus backend", () => {
     const parsed = parseCliArgs(["install", "--runtime", "voyage", "--vector-store", "milvus"]);
     assert.equal(parsed.command.kind, "install");

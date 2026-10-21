@@ -133,14 +133,16 @@ after a successful switch. `--format json` keeps stdout as structured output;
 prompt and progress messages go to stderr, and cancellation reports
 `status: "cancelled"`.
 
-Agents receive Satori guidance in two native ways, with nothing injected per
-tool call:
+Agents receive Satori guidance natively, with nothing injected per tool call:
 
 - the Satori MCP server sends short tool guidance once per session through the
-  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively;
-- one canonical `satori` skill is installed at `~/.agents/skills/satori`. Codex
-  and OpenCode load it directly; Claude Code gets a link to it at
-  `~/.claude/skills/satori`.
+  MCP `instructions` field, which Codex, Claude Code, and OpenCode load natively.
+  It includes the approval rule for `manage_index` create and reindex;
+- the `satori` skill with the full workflow is optional. `satori install --skill`
+  installs one canonical copy at `~/.agents/skills/satori`. Codex and OpenCode
+  load it directly; Claude Code gets a link to it at `~/.claude/skills/satori`.
+  Without `--skill`, install never creates the skill, but it keeps a skill it
+  already wrote up to date.
 
 Install adds nothing to `AGENTS.md` or hook files, and it never removes or
 overwrites files it did not write: a real directory at a skill-link path is

@@ -549,6 +549,10 @@ export function prepareSkillInstall(linkedSkillDir: string, source: string = rea
     };
 }
 
+function isSatoriManagedSkill(skillDir: string): boolean {
+    return readTextIfExists(path.join(skillDir, "SKILL.md"))?.includes(SATORI_SKILL_OWNERSHIP_MARKER) === true;
+}
+
 /** Removes only a real directory; a linked skill stays with the tool that owns the link. */
 export function prepareSkillRemoval(skillDir: string): FileMutation {
     const skillFile = path.join(skillDir, "SKILL.md");
@@ -752,16 +756,23 @@ export function prepareCompanionMutation(
     runtimeCommand: ManagedRuntimeCommand,
 ): CompanionMutation {
     const install = command.kind === "install";
+    // The skill is opt-in (--skill). Without the flag, install keeps an existing
+    // Satori-written skill current and linked, and never creates one.
+    const skillRequested = command.kind === "install" && command.skill === true;
     let mutation: FileMutation;
     switch (companion.kind) {
         case "skill":
             mutation = install
-                ? prepareSkillInstall(companion.path)
+                ? (skillRequested || isSatoriManagedSkill(companion.path)
+                    ? prepareSkillInstall(companion.path)
+                    : unchangedMutation())
                 : removeSharedSkill ? prepareSkillRemoval(companion.path) : unchangedMutation();
             break;
         case "skill-link":
             mutation = install
-                ? prepareSkillLinkInstall(companion.path, companion.target)
+                ? (skillRequested || isSatoriManagedSkill(companion.target)
+                    ? prepareSkillLinkInstall(companion.path, companion.target)
+                    : unchangedMutation())
                 : prepareSkillLinkRemoval(companion.path, companion.target);
             break;
         case "session-hook":

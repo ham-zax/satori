@@ -2144,6 +2144,7 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
     TSParser *parser = NULL;
     TSTree **trees = NULL;
     SatoriScopedSourceMeta *meta = NULL;
+    uint64_t retained_bytes = 0;
     SatoriLspDefArray defs;
     SatoriDefLocArray def_locs;
     memset(&defs, 0, sizeof(defs));
@@ -2189,7 +2190,11 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
             status = SATORI_SEMANTIC_ERR_OUT_OF_MEMORY;
             goto cleanup;
         }
-        if (!meta[i].eligible) continue;
+        if (!meta[i].eligible) {
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
+            continue;
+        }
         SatoriScopedDefSink sink = {
             .arena = &s->arena, .defs = &defs, .def_locs = &def_locs, .source = sf->source,
             .file = sf, .meta = &meta[i], .lang = kotlin ? CBM_LANG_KOTLIN : CBM_LANG_PHP,
@@ -2201,6 +2206,7 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
                 : "Out of memory extracting definitions");
             goto cleanup;
         }
+        satori_retain_or_free_tree(&trees[i], sf->source_len, &retained_bytes);
     }
 
     {
@@ -2213,6 +2219,12 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
         cbm_registry_init(&registry, &file_arena);
         CBMResolvedCallArray resolved;
         memset(&resolved, 0, sizeof(resolved));
+        if (!satori_retained_or_parsed_tree(parser, &trees[i], &s->sources[i])) {
+            cbm_arena_destroy(&file_arena);
+            set_session_error(s, "Tree-sitter parser failed to parse source file");
+            status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+            goto cleanup;
+        }
         TSNode root = ts_tree_root_node(trees[i]);
         if (kotlin) {
             cbm_kotlin_stdlib_register(&registry, &file_arena);
@@ -2241,6 +2253,8 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
                          &registry, meta[i].scope_qn, &resolved);
             php_lsp_process_file(&ctx, root);
         }
+        ts_tree_delete(trees[i]);
+        trees[i] = NULL;
         if (resolved.count < 0 || (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
             cbm_arena_destroy(&file_arena);
             set_session_error(s, "Resource limit exceeded: max call sites exceeded");
@@ -3535,6 +3549,7 @@ static int resolve_rust_project(SatoriSession *s) {
     TSParser *parser = NULL;
     TSTree **trees = NULL;
     SatoriRustSourceMeta *meta = NULL;
+    uint64_t retained_bytes = 0;
     SatoriRustCrateTable crates;
     SatoriLspDefArray defs;
     SatoriDefLocArray def_locs;
@@ -3589,6 +3604,8 @@ static int resolve_rust_project(SatoriSession *s) {
          * name. Exact cfg(test) sites are suppressed in rust_lsp.c. */
         meta[i].eligible = has_crate && !has_error;
         if (!meta[i].eligible) {
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
             const char *reason = !has_crate ? "no owning crate" : "parse error";
             status = append_unmodeled_source_diagnostic(s, sf, reason);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
@@ -3603,6 +3620,7 @@ static int resolve_rust_project(SatoriSession *s) {
                 : "Out of memory extracting Rust definitions");
             goto cleanup;
         }
+        satori_retain_or_free_tree(&trees[i], sf->source_len, &retained_bytes);
     }
 
     {
@@ -3621,6 +3639,12 @@ static int resolve_rust_project(SatoriSession *s) {
             cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
+            if (!satori_retained_or_parsed_tree(parser, &trees[i], &s->sources[i])) {
+                cbm_arena_destroy(&file_arena);
+                set_session_error(s, "Rust Tree-sitter parser failed to parse source file");
+                status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+                goto cleanup;
+            }
             cbm_run_rust_lsp_cross_with_registry(&file_arena, s->sources[i].source,
                                                  (int)s->sources[i].source_len,
                                                  meta[i].module_qn, registry,
@@ -3708,6 +3732,7 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
     TSTree **trees = NULL;
     TSParser *parser = NULL;
     SatoriGoSourceMeta *source_meta = NULL;
+    uint64_t retained_bytes = 0;
     SatoriGoModuleTable modules;
     SatoriGoPackageTable packages;
     SatoriDefLocArray def_locs;
@@ -3801,6 +3826,29 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
         meta->test_source = is_test_file;
         meta->definitions_eligible = build_context_eligible && !is_test_file;
         meta->calls_eligible = build_context_eligible;
+        if (!meta->calls_eligible) {
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
+            continue;
+        }
+
+        // Production definitions use only this file's phase-1 identity (the
+        // test-package pass below changes test files only), so they register
+        // here and a tree past the retention budget can go before phase 3.
+        if (meta->definitions_eligible) {
+            status = extract_ast_definitions(&s->arena, &reg, &def_locs, root, sf->source,
+                                             meta->package_qn, meta->import_path,
+                                             sf->path, sf->path_len);
+            if (status != SATORI_SEMANTIC_OK) {
+                if (status == SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED) {
+                    set_session_error(s, "Resource limit exceeded: max definitions exceeded");
+                } else {
+                    set_session_error(s, "Out of memory recording AST definitions");
+                }
+                goto cleanup;
+            }
+        }
+        satori_retain_or_free_tree(&trees[i], sf->source_len, &retained_bytes);
     }
 
     status = go_build_package_table(source_meta, s->source_count, &packages, source_meta);
@@ -3833,36 +3881,22 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
         }
     }
 
-    // Phase 2: Register production definitions only from files whose build/package identity is authoritative.
-    for (uint32_t i = 0; i < s->source_count; i++) {
-        if (!source_meta[i].definitions_eligible) continue;
-        SatoriSourceFile *sf = &s->sources[i];
-        TSNode root = ts_tree_root_node(trees[i]);
-        status = extract_ast_definitions(&s->arena, &reg, &def_locs, root, sf->source,
-                                         source_meta[i].package_qn, source_meta[i].import_path,
-                                         sf->path, sf->path_len);
-        if (status != SATORI_SEMANTIC_OK) {
-            if (status == SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED) {
-                set_session_error(s, "Resource limit exceeded: max definitions exceeded");
-            } else {
-                set_session_error(s, "Out of memory recording AST definitions");
-            }
-            goto cleanup;
-        }
-    }
-
     cbm_registry_finalize(&reg);
 
     // Phase 3: Resolve calls only from authoritative files against the authoritative registry.
     for (uint32_t i = 0; i < s->source_count; i++) {
-        if (!trees[i]) continue;
         if (!source_meta[i].calls_eligible) {
-            ts_tree_delete(trees[i]);
+            if (trees[i]) ts_tree_delete(trees[i]);
             trees[i] = NULL;
             continue;
         }
 
         SatoriSourceFile *sf = &s->sources[i];
+        if (!satori_retained_or_parsed_tree(parser, &trees[i], sf)) {
+            set_session_error(s, "Tree-sitter parser failed to parse source file");
+            status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+            goto cleanup;
+        }
         TSNode root = ts_tree_root_node(trees[i]);
         CBMResolvedCallArray resolved_calls;
         memset(&resolved_calls, 0, sizeof(resolved_calls));

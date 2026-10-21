@@ -2,10 +2,10 @@
   "abiVersion": 1,
   "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "db5daf663e179632de980b8113235ec38a83393f0d989f4353ee023587e1a69d",
+  "semanticSourceDigest": "fde30ec86a72fe720a049d03bbaa630ccbdbeaaba8d1b5d9b64cd3efd76aff6b",
   "buildRecipeDigest": "8c316336622764ba3ccb03f7869d92fb8a9e0c0ffd06d06ccb2cc3b781ec8d01",
   "jsSha256": "8e08e6b4b8d9a526adf7bc0731ba11c761a92abca9f97ffcfd232dca9a33ce96",
-  "wasmSha256": "f36806dcc717fc4c4928a9d119eff59ffd04af51f81930c96fcbf33777959450",
+  "wasmSha256": "9618dc35aad448b5f5ba702441d03dde895a9cb7bcd95f1da24cb31eef1c69da",
   "languages": {
     "go": {
       "semanticRevision": "go-v4",

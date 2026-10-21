@@ -100,9 +100,10 @@ Confirmed in code:
   the 2 GiB ceiling. C++ CBM C set (72 MiB source), budget all/32/16/0 MiB: 1,628/859/571/159 MiB,
   median wall 27,425/33,679/36,543/39,076 ms. Java guava (under the budget): 671 MiB,
   31,668 ms. With a 0 budget, Java is 111 MiB and 33,312 ms. All hashes are equal (load 1.3-1.6).
-  C#, Rust, Kotlin/PHP and Go do not use the budget yet.
-  Not done: every tree is still alive at the end of pass 1, which probably sets the peak. Go not
-  checked.
+  Rust, Kotlin/PHP and Go use the same budget. Go also registers production definitions in
+  phase 1 and frees trees of files without eligible calls at once: trufflehog (3,295 files,
+  12.7 MiB) 397 to 275 MiB, 4,301/3,896 ms, one run each. Rust and C# are under the budget and
+  unchanged. With a 0 budget, Go is 77 MiB and Rust 64 MiB, and all hashes are equal.
 - The 20,000-source limit skips C++ analysis on LibreOffice (above).
 - `index-generation-workflow.ts:517` reads each semantic source one at a time.
 - `extract_defs.c:91` has a fixed `BT_STACK = 512`. Children are pushed last to first, so a full
@@ -110,7 +111,7 @@ Confirmed in code:
   `def->body_tokens`, and `satori_extractor.c` never reads that field.
 - `satori_semantic.c:504` admits `lsp_short_name_unique` as a direct call (Rust free-function
   fallback, CBM `ec4f0eaa`).
-- Python: every import gets `typeOnly: false` (`tree-sitter-adapter.ts:1213`), and no
+- Fixed in `873146f0` (Python): every import gets `typeOnly: false` (`tree-sitter-adapter.ts:1213`), and no
   `TYPE_CHECKING` handling exists. `builder.ts` resolves `from . import x` from the module
   specifier only, so the IMPORTS edge targets `__init__.py`. `buildPythonClassBases` keys on the
   short class name and drops bases when two files share it. `pythonMroNames` returns nothing when

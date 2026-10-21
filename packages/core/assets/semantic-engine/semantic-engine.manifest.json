@@ -2,21 +2,21 @@
   "abiVersion": 1,
   "upstreamCommit": "11b662f9f7fba92012b872dd4fcaef7ee0c1300d",
   "emscriptenVersion": "3.1.64",
-  "semanticSourceDigest": "79f7e1949dddf818e339ac7525b53a4671939119e56d15b218e9f762404ffd8d",
+  "semanticSourceDigest": "647e2e4334cecd3f15c32c2b529f21af296ae46e64bc4ae50bf6083e12d7f4a2",
   "buildRecipeDigest": "8c316336622764ba3ccb03f7869d92fb8a9e0c0ffd06d06ccb2cc3b781ec8d01",
   "jsSha256": "8e08e6b4b8d9a526adf7bc0731ba11c761a92abca9f97ffcfd232dca9a33ce96",
-  "wasmSha256": "a52d7e20c8736c46a427765cbd19db538bbbb4ec3818d9e0d0b440a16b573bee",
+  "wasmSha256": "b3b571ebda5f3b329544a97f4c0030d9bd1614610302189f0b7e6d38f85eb6a3",
   "languages": {
     "go": {
-      "semanticRevision": "go-v3",
+      "semanticRevision": "go-v4",
       "grammar": "tree-sitter-go"
     },
     "java": {
-      "semanticRevision": "java-v1",
+      "semanticRevision": "java-v2",
       "grammar": "tree-sitter-java"
     },
     "csharp": {
-      "semanticRevision": "csharp-v1",
+      "semanticRevision": "csharp-v2",
       "grammar": "tree-sitter-c-sharp"
     },
     "cpp": {
@@ -24,11 +24,11 @@
       "grammar": "tree-sitter-cpp"
     },
     "rust": {
-      "semanticRevision": "rust-v3",
+      "semanticRevision": "rust-v4",
       "grammar": "tree-sitter-rust"
     },
     "kotlin": {
-      "semanticRevision": "kotlin-v1",
+      "semanticRevision": "kotlin-v2",
       "grammar": "tree-sitter-kotlin"
     },
     "php": {

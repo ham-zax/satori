@@ -17,11 +17,11 @@ test('defaultSemanticLanguageRegistry loads from packaged assets and supports Go
     assert.ok(desc);
     assert.equal(desc.language, 'go');
     assert.equal(desc.strategy, 'cbm_semantic');
-    assert.equal(desc.semanticRevision, 'go-v3');
+    assert.equal(desc.semanticRevision, 'go-v4');
     assert.equal(desc.grammar, 'tree-sitter-go');
     assert.equal(desc.providerId, 'satori-cbm-semantic-go');
-    assert.equal(desc.providerVersion, 'cbm-11b662f9+satori-go-semantic-v3');
-    assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v3');
+    assert.equal(desc.providerVersion, 'cbm-11b662f9+satori-go-semantic-v4');
+    assert.equal(desc.environmentConfigId, 'cbm-go-semantic-v4');
     assert.equal(
         RELATIONSHIP_BUILDER_VERSION,
         'relationship-v19+cbm-multilang-v1+python-cross-module-constructors+python-native-resolution-v2+scala-syntactic-calls-v1+js-this-member-calls-v1+typescript-compiler-resolution-v8+relationship-evidence-v1+provider-coverage-v1+resource-budgets-v1+cbm-gated-unresolved-claims-v1+python-reexports-exact-mro-v1',

@@ -52,6 +52,11 @@ Local port: CBM `d74579c9` resolves grouped PHP use declarations
 (`use A\{C as D}`, per-clause `function`/`const`) under the group namespace.
 The semantic revision is `php-v2`.
 
+Local port: CBM `fa258d34` parses every semantic source as if its last line were
+terminated (`satori_parse_source` in `satori_semantic.c`). A C# file ending in a
+directive with no final newline no longer loses all call evidence. Revisions:
+`go-v4`, `java-v2`, `csharp-v2`, `rust-v4`, `kotlin-v2`.
+
 When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp):
 
 1. **Pull and inspect changes**:

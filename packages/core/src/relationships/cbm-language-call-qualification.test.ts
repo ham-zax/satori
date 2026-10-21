@@ -288,6 +288,16 @@ for (const fixture of [
     });
 }
 
+test('C# keeps call evidence when the file ends in a directive without a final newline', async () => {
+    const source = 'class S { int Help() { return 1; } int Run() { return Help(); } }\n#region x\n#endregion';
+    const evidence = await analyze('csharp', [{ path: 'src/S.cs', source }], [
+        { path: 'Demo.csproj', role: 'manifest', source: '<Project />' },
+    ]);
+    const occurrences = [...evidence.occurrencesByFile.values()].flat();
+    assert.equal(occurrences.length, 1);
+    assert.equal(occurrences[0]?.proof.strategy, 'type_dispatch');
+});
+
 test('C++ qualification admits same-TU direct calls and rejects unproved cross-TU visibility and receiver dispatch', async () => {
     const source = 'int Help() { return 1; } int Run() { return Help(); }';
     const sources = [{ path: 'src/main.cpp', source }];

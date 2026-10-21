@@ -97,6 +97,67 @@ static SatoriSession s_sessions[SATORI_MAX_HANDLES];
 static uint32_t s_next_handle_id = 1;
 static char s_global_last_error[512] = "";
 
+/* Port of CBM fa258d34 (#2078): parse every file as if its last line were
+ * terminated. A grammar that ends a construct at the line terminator (a C#
+ * preprocessor directive) leaves it unterminated at EOF, and the resulting
+ * error drops the whole file from semantic eligibility. The parser reads one
+ * virtual "\n" past EOF; one tree edit then deletes it again, so every node
+ * is clamped back to the real bytes and points. The caller's buffer is never
+ * copied or written. Empty files and files ending in "\n" parse unchanged. */
+typedef struct {
+    const char *string;
+    uint32_t length;
+    bool virtual_newline;
+} SatoriStringInput;
+
+static const char *satori_string_read(void *payload, uint32_t byte, TSPoint point,
+                                      uint32_t *bytes_read) {
+    (void)point;
+    SatoriStringInput *self = (SatoriStringInput *)payload;
+    if (byte >= self->length) {
+        if (self->virtual_newline && byte == self->length) {
+            *bytes_read = 1;
+            return "\n";
+        }
+        *bytes_read = 0;
+        return "";
+    }
+    *bytes_read = self->length - byte;
+    return self->string + byte;
+}
+
+static TSPoint satori_source_end_point(const char *source, uint32_t len) {
+    TSPoint end = {0, 0};
+    const char *p = source;
+    const char *stop = source + len;
+    const char *nl;
+    while (p < stop && (nl = memchr(p, '\n', (size_t)(stop - p))) != NULL) {
+        end.row++;
+        p = nl + 1;
+    }
+    end.column = (uint32_t)(stop - p);
+    return end;
+}
+
+static TSTree *satori_parse_source(TSParser *parser, const char *source, uint32_t source_len) {
+    SatoriStringInput input = {source, source_len, source_len > 0 && source[source_len - 1] != '\n'};
+    TSInput ts_input = {&input, satori_string_read, TSInputEncodingUTF8};
+    TSTree *tree = ts_parser_parse(parser, NULL, ts_input);
+    if (tree && input.virtual_newline) {
+        TSPoint end = satori_source_end_point(source, source_len);
+        TSInputEdit drop_virtual_newline = {
+            .start_byte = source_len,
+            .old_end_byte = source_len + 1,
+            .new_end_byte = source_len,
+            .start_point = end,
+            .old_end_point = {end.row + 1, 0},
+            .new_end_point = end,
+        };
+        ts_tree_edit(tree, &drop_virtual_newline);
+    }
+    return tree;
+}
+
 static void set_global_error(const char *msg) {
     if (!msg) {
         s_global_last_error[0] = '\0';
@@ -1666,7 +1727,7 @@ static int resolve_java_project(SatoriSession *s) {
 
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "Java Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
@@ -2065,7 +2126,7 @@ static int resolve_scoped_project(SatoriSession *s, SatoriScopedLanguage languag
 
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
@@ -2345,7 +2406,7 @@ static int resolve_csharp_project(SatoriSession *s) {
 
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "C# Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
@@ -2998,7 +3059,7 @@ static int resolve_cpp_project(SatoriSession *s) {
 
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "C++ Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
@@ -3435,7 +3496,7 @@ static int resolve_rust_project(SatoriSession *s) {
 
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "Rust Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
@@ -3611,7 +3672,7 @@ int satori_semantic_resolve(SatoriSemanticHandle handle) {
     // Phase 1: Parse sources and establish deterministic module/package/build identity.
     for (uint32_t i = 0; i < s->source_count; i++) {
         SatoriSourceFile *sf = &s->sources[i];
-        trees[i] = ts_parser_parse_string(parser, NULL, sf->source, sf->source_len);
+        trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
         if (!trees[i]) {
             set_session_error(s, "Tree-sitter parser failed to parse source file");
             status = SATORI_SEMANTIC_ERR_PARSE_FAILED;

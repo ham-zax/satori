@@ -158,6 +158,26 @@ static TSTree *satori_parse_source(TSParser *parser, const char *source, uint32_
     return tree;
 }
 
+/* Keeps a pass-1 tree for pass 2 while the retained source stays within
+ * SATORI_MAX_RETAINED_TREE_SOURCE_BYTES; otherwise frees it now. */
+static void satori_retain_or_free_tree(TSTree **tree, uint32_t source_len,
+                                       uint64_t *retained_bytes) {
+    if (source_len > SATORI_MAX_RETAINED_TREE_SOURCE_BYTES - *retained_bytes) {
+        ts_tree_delete(*tree);
+        *tree = NULL;
+    } else {
+        *retained_bytes += source_len;
+    }
+}
+
+/* Parses a source again when pass 1 freed its tree. Parsing is deterministic,
+ * so the second parse equals the pass-1 tree. */
+static TSTree *satori_retained_or_parsed_tree(TSParser *parser, TSTree **tree,
+                                              const SatoriSourceFile *sf) {
+    if (!*tree) *tree = satori_parse_source(parser, sf->source, sf->source_len);
+    return *tree;
+}
+
 static void set_global_error(const char *msg) {
     if (!msg) {
         s_global_last_error[0] = '\0';
@@ -1700,6 +1720,7 @@ static int resolve_java_project(SatoriSession *s) {
     TSParser *parser = NULL;
     TSTree **trees = NULL;
     SatoriJavaSourceMeta *meta = NULL;
+    uint64_t retained_bytes = 0;
     SatoriLspDefArray defs;
     SatoriDefLocArray def_locs;
     memset(&defs, 0, sizeof(defs));
@@ -1763,7 +1784,11 @@ static int resolve_java_project(SatoriSession *s) {
         }
         meta[i].definitions_eligible = !ts_node_has_error(root);
         meta[i].calls_eligible = meta[i].definitions_eligible;
-        if (!meta[i].definitions_eligible) continue;
+        if (!meta[i].definitions_eligible) {
+            ts_tree_delete(trees[i]);
+            trees[i] = NULL;
+            continue;
+        }
 
         uint32_t count = ts_node_named_child_count(root);
         for (uint32_t j = 0; j < count; j++) {
@@ -1779,6 +1804,7 @@ static int resolve_java_project(SatoriSession *s) {
                 goto cleanup;
             }
         }
+        satori_retain_or_free_tree(&trees[i], sf->source_len, &retained_bytes);
     }
 
     {
@@ -1797,6 +1823,12 @@ static int resolve_java_project(SatoriSession *s) {
             cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
+            if (!satori_retained_or_parsed_tree(parser, &trees[i], &s->sources[i])) {
+                cbm_arena_destroy(&file_arena);
+                set_session_error(s, "Java Tree-sitter parser failed to parse source file");
+                status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+                goto cleanup;
+            }
             JavaLSPContext ctx;
             java_lsp_init(&ctx, &file_arena, s->sources[i].source, (int)s->sources[i].source_len,
                           &registry, meta[i].package_name, meta[i].module_qn, &resolved);
@@ -3060,6 +3092,7 @@ static int resolve_cpp_project(SatoriSession *s) {
     SatoriCppSourceMeta *meta = NULL;
     bool *visited = NULL;
     uint32_t *closure = NULL;
+    uint64_t retained_bytes = 0;
     SatoriLspDefArray defs;
     SatoriDefLocArray def_locs;
     memset(&defs, 0, sizeof(defs));
@@ -3081,6 +3114,14 @@ static int resolve_cpp_project(SatoriSession *s) {
         goto cleanup;
     }
 
+    /* Include resolution reads every normalized path, so derive them first;
+     * then a tree past the retention budget can go after its includes. */
+    for (uint32_t i = 0; i < s->source_count; i++) {
+        status = cpp_normalize_relative_path(&s->arena, s->sources[i].path,
+                                             &meta[i].normalized_path);
+        if (status != SATORI_SEMANTIC_OK) goto cleanup;
+    }
+
     for (uint32_t i = 0; i < s->source_count; i++) {
         const SatoriSourceFile *sf = &s->sources[i];
         trees[i] = satori_parse_source(parser, sf->source, sf->source_len);
@@ -3100,8 +3141,6 @@ static int resolve_cpp_project(SatoriSession *s) {
         }
         status = cpp_collect_excluded_ranges(&meta[i], root, guard);
         if (status != SATORI_SEMANTIC_OK) goto cleanup;
-        status = cpp_normalize_relative_path(&s->arena, sf->path, &meta[i].normalized_path);
-        if (status != SATORI_SEMANTIC_OK) goto cleanup;
         if (meta[i].excluded_count > 0) {
             status = append_source_diagnostic(s, sf, SATORI_SEMANTIC_DIAG_PARTIAL_SOURCE,
                 "excluded parse-error or conditional preprocessing regions");
@@ -3115,11 +3154,9 @@ static int resolve_cpp_project(SatoriSession *s) {
                 : "Out of memory extracting C++ definitions");
             goto cleanup;
         }
-    }
-
-    for (uint32_t i = 0; i < s->source_count; i++) {
-        status = cpp_collect_includes(s, meta, i, ts_tree_root_node(trees[i]));
+        status = cpp_collect_includes(s, meta, i, root);
         if (status != SATORI_SEMANTIC_OK) goto cleanup;
+        satori_retain_or_free_tree(&trees[i], sf->source_len, &retained_bytes);
     }
 
     {
@@ -3137,6 +3174,12 @@ static int resolve_cpp_project(SatoriSession *s) {
             cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
+            if (!satori_retained_or_parsed_tree(parser, &trees[i], &s->sources[i])) {
+                cbm_arena_destroy(&file_arena);
+                set_session_error(s, "C++ Tree-sitter parser failed to parse source file");
+                status = SATORI_SEMANTIC_ERR_PARSE_FAILED;
+                goto cleanup;
+            }
             cbm_run_c_lsp_cross_with_registry(&file_arena, s->sources[i].source,
                                               (int)s->sources[i].source_len,
                                               "", true, registry, NULL, NULL, 0,

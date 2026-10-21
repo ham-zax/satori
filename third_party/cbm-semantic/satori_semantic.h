@@ -32,6 +32,10 @@
 #define SATORI_MAX_TOTAL_INPUT_BYTES (SATORI_MAX_AGGREGATE_SOURCE_BYTES + SATORI_MAX_AGGREGATE_AUXILIARY_BYTES)
 #define SATORI_MAX_TOTAL_SOURCE_BYTES SATORI_MAX_AGGREGATE_SOURCE_BYTES
 #define SATORI_MAX_DEFINITIONS 100000
+/* Source bytes whose parse trees a resolver keeps from pass 1 to pass 2.
+ * Trees take about 26-38x their source bytes; files past this budget are
+ * parsed again in pass 2 so large sessions stay under the WASM memory ceiling. */
+#define SATORI_MAX_RETAINED_TREE_SOURCE_BYTES (32ULL * 1024ULL * 1024ULL)
 /* Raw resolved call sites per session, counted before visibility filtering.
  * The CBM repository C/C++ session exceeds 200,000. */
 #define SATORI_MAX_CALL_SITES 2000000

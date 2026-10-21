@@ -94,6 +94,13 @@ Confirmed in code:
   1,733 files 1,724 to 1,628 MiB. Median wall: C# 2,491/2,402 ms, Rust 4,081/3,862 ms, Java
   31,794/32,114 ms, C++ 27,292/27,568 ms (load 1.5). Harness: node --import tsx wasm-mem.mts
   <language> <root> <assetsDir> (session scratchpad, repos in ~/repo/bench-bugs/wasm-mem-20261021).
+  Fixed for pass 1: C++ and Java keep pass-1 trees only up to
+  `SATORI_MAX_RETAINED_TREE_SOURCE_BYTES` (32 MiB of source) and parse the other files again in
+  pass 2. Without the budget, a 100 MB session (the source limit) needs about 2.4 GiB and passes
+  the 2 GiB ceiling. C++ CBM C set (72 MiB source), budget all/32/16/0 MiB: 1,628/859/571/159 MiB,
+  median wall 27,425/33,679/36,543/39,076 ms. Java guava (under the budget): 671 MiB,
+  31,668 ms. With a 0 budget, Java is 111 MiB and 33,312 ms. All hashes are equal (load 1.3-1.6).
+  C#, Rust, Kotlin/PHP and Go do not use the budget yet.
   Not done: every tree is still alive at the end of pass 1, which probably sets the peak. Go not
   checked.
 - The 20,000-source limit skips C++ analysis on LibreOffice (above).

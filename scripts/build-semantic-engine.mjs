@@ -140,7 +140,7 @@ async function build() {
                     grammar: 'tree-sitter-kotlin',
                 },
                 php: {
-                    semanticRevision: 'php-v1',
+                    semanticRevision: 'php-v2',
                     grammar: 'tree-sitter-php',
                 },
             },

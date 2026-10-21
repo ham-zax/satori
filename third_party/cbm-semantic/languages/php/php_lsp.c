@@ -2755,8 +2755,10 @@ static void process_class_decl(PHPLSPContext *ctx, TSNode node) {
  * a `namespace_aliasing_clause` child wrapping the alias, or as a bare
  * sequence: qualified_name + literal `as` token + name. We accept both
  * shapes by treating the *second* name-like child as the alias when no
- * aliasing clause is present. */
-static void collect_use_clause(PHPLSPContext *ctx, TSNode use_clause, int kind) {
+ * aliasing clause is present. A grouped clause (`use A\B\{C as D}`) names
+ * its target relative to the group's namespace `prefix`. */
+static void collect_use_clause(PHPLSPContext *ctx, TSNode use_clause, int kind,
+                               const char *prefix) {
     TSNode name_node;
     memset(&name_node, 0, sizeof(name_node));
     TSNode alias_node;
@@ -2793,6 +2795,11 @@ static void collect_use_clause(PHPLSPContext *ctx, TSNode use_clause, int kind) 
     char *full = php_node_text(ctx, name_node);
     if (!full)
         return;
+    if (prefix && prefix[0]) {
+        full = cbm_arena_sprintf(ctx->arena, "%s\\%s", prefix, full);
+        if (!full)
+            return;
+    }
     char *dotted = php_ns_to_dot(ctx->arena, full);
     const char *local = NULL;
     if (!ts_node_is_null(alias_node)) {
@@ -2805,36 +2812,56 @@ static void collect_use_clause(PHPLSPContext *ctx, TSNode use_clause, int kind) 
     php_lsp_add_use(ctx, local, dotted, kind);
 }
 
-static void collect_use_declaration(PHPLSPContext *ctx, TSNode use_decl) {
-    /* Determine kind: function / const / class (default). */
-    int kind = CBM_PHP_USE_CLASS;
-    uint32_t nc = ts_node_child_count(use_decl);
-    /* tree-sitter-php emits `function` or `const` keyword children. */
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(use_decl, i);
-        if (ts_node_is_null(c))
+/* The `function` / `const` keyword of a use: an anonymous direct child of the
+ * declaration (flat form) or of one clause (grouped form
+ * `use A\{function f, const C, K}`). `fallback` when neither is present.
+ * Mirrors the extractor's php_use_kind (extract_imports.c). */
+static int php_use_keyword_kind(TSNode node, int fallback) {
+    uint32_t n = ts_node_child_count(node);
+    for (uint32_t i = 0; i < n; i++) {
+        TSNode c = ts_node_child(node, i);
+        if (ts_node_is_null(c) || ts_node_is_named(c))
             continue;
         const char *k = ts_node_type(c);
         if (strcmp(k, "function") == 0)
-            kind = CBM_PHP_USE_FUNCTION;
+            return CBM_PHP_USE_FUNCTION;
         if (strcmp(k, "const") == 0)
-            kind = CBM_PHP_USE_CONST;
+            return CBM_PHP_USE_CONST;
     }
+    return fallback;
+}
+
+static void collect_use_declaration(PHPLSPContext *ctx, TSNode use_decl) {
+    /* Determine kind: function / const / class (default). */
+    int kind = php_use_keyword_kind(use_decl, CBM_PHP_USE_CLASS);
+    uint32_t nc = ts_node_child_count(use_decl);
+    const char *prefix = NULL;
     for (uint32_t i = 0; i < nc; i++) {
         TSNode c = ts_node_child(use_decl, i);
         if (ts_node_is_null(c) || !ts_node_is_named(c))
             continue;
         const char *k = ts_node_type(c);
         if (strcmp(k, "namespace_use_clause") == 0) {
-            collect_use_clause(ctx, c, kind);
+            collect_use_clause(ctx, c, kind, NULL);
+        } else if (strcmp(k, "namespace_name") == 0 || strcmp(k, "qualified_name") == 0 ||
+                   strcmp(k, "name") == 0) {
+            /* use App\{Foo}; — the group's namespace precedes the group. */
+            prefix = php_node_text(ctx, c);
         } else if (strcmp(k, "namespace_use_group") == 0) {
-            /* use App\\{Foo, Bar as B}; — recurse into clauses inside. */
+            /* use App\{Foo, Bar as B}; — recurse into clauses inside. Each
+             * clause names its target under the prefix, and carries its own
+             * `function` / `const` keyword when the declaration has none. */
             uint32_t gc = ts_node_child_count(c);
             for (uint32_t j = 0; j < gc; j++) {
                 TSNode gch = ts_node_child(c, j);
-                if (!ts_node_is_null(gch) && ts_node_is_named(gch) &&
-                    strcmp(ts_node_type(gch), "namespace_use_clause") == 0) {
-                    collect_use_clause(ctx, gch, kind);
+                if (ts_node_is_null(gch) || !ts_node_is_named(gch))
+                    continue;
+                const char *gk = ts_node_type(gch);
+                if (strcmp(gk, "namespace_use_clause") == 0 ||
+                    strcmp(gk, "namespace_use_group_clause") == 0) {
+                    int clause_kind =
+                        kind == CBM_PHP_USE_CLASS ? php_use_keyword_kind(gch, kind) : kind;
+                    collect_use_clause(ctx, gch, clause_kind, prefix);
                 }
             }
         }

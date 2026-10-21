@@ -156,7 +156,7 @@
         ".php"
       ],
       "strategy": "cbm_semantic",
-      "semanticRevision": "php-v1",
+      "semanticRevision": "php-v2",
       "grammar": "tree-sitter-php",
       "auxiliaryFiles": [
         {
@@ -165,8 +165,8 @@
         }
       ],
       "providerId": "satori-cbm-semantic-php",
-      "providerVersion": "cbm-11b662f9+satori-php-semantic-v1",
-      "environmentConfigId": "cbm-php-semantic-v1"
+      "providerVersion": "cbm-11b662f9+satori-php-semantic-v2",
+      "environmentConfigId": "cbm-php-semantic-v2"
     }
   ]
 }

@@ -696,6 +696,15 @@ test('PHP qualification admits namespace, use-imported static, and global calls 
     assert.equal(staticCall[0]?.targetProvenance?.file, 'src/Demo/Util.php');
     assert.equal(staticCall[0]?.targetProvenance?.name, 'make');
 
+    // A grouped clause names its target relative to the group namespace.
+    const groupedCall = allOccurrences(await analyze('php', [
+        { path: 'src/Demo/Util.php', source: '<?php\nnamespace Demo;\n\nclass Util {\n    public static function make(): int {\n        return 1;\n    }\n}\n' },
+        { path: 'src/App/Main.php', source: '<?php\nnamespace App;\n\nuse Demo\\{Util as U};\n\nfunction run(): int {\n    return U::make();\n}\n' },
+    ], composer));
+    assert.equal(groupedCall.length, 1);
+    assert.equal(groupedCall[0]?.proof.strategy, 'direct_call');
+    assert.equal(groupedCall[0]?.targetProvenance?.file, 'src/Demo/Util.php');
+
     // Without the import, `Util` means App\Util, which does not exist; CBM's
     // short-name class fallback must not turn Demo\Util into direct proof.
     const unimportedClass = allOccurrences(await analyze('php', [

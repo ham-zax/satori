@@ -48,6 +48,10 @@ C/C++ macro-wrapped definitions after their single bare-name argument. The Sator
 bridge and TypeScript structural extractor preserve qualified owners and reject
 ambiguous wrappers. This port keeps the unreleased semantic revision `cpp-v3`.
 
+Local port: CBM `d74579c9` resolves grouped PHP use declarations
+(`use A\{C as D}`, per-clause `function`/`const`) under the group namespace.
+The semantic revision is `php-v2`.
+
 When updating upstream CBM code from [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp):
 
 1. **Pull and inspect changes**:

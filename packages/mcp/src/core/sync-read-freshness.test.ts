@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { SyncManager } from "./sync.js";
@@ -276,4 +279,47 @@ test("read freshness reports an index snapshot, not unverified, until live track
     assert.deepEqual(buildFreshnessWarningCodes(inactive), [
         WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED,
     ]);
+});
+
+test("periodic freshness skips a root whose full-index handoff just completed", async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "satori-handoff-fresh-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    const context = {
+        listCurrentPublications: () => [publication],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+    };
+    const mutationRuntime = {
+        assertCurrent: () => {},
+        getCurrentOperation: () => undefined,
+        updateCurrentOperation: () => { throw new Error("not used"); },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: false,
+        mutationRuntime: mutationRuntime as never,
+    });
+    const internal = manager as unknown as {
+        sourceObservationState: { completeHandoff: () => Promise<boolean> };
+        syncCodebase: () => Promise<never>;
+    };
+    internal.sourceObservationState.completeHandoff = async () => true;
+    let syncs = 0;
+    internal.syncCodebase = async () => {
+        syncs += 1;
+        throw new Error("periodic pass must not sync a just-published root");
+    };
+
+    assert.equal(await manager.completeFullIndexSourceHandoff(root, {} as never), true);
+    await manager.handleSyncIndex();
+
+    assert.equal(syncs, 0);
 });

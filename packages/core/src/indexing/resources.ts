@@ -210,10 +210,12 @@ export class IndexingResourcePlanner {
         const analysisWindowSourceBytes = Math.min(64 * MIB, Math.max(8 * MIB, Math.floor(workingBytes / 32)));
         // Turn 4 attribution: optimizing a generated C++ lexer used 2.30 GiB
         // of V8 native compiler allocations. Baseline WASM reduced it to 5 MiB.
-        // Small plans isolate that policy and release parser/allocator capacity
-        // at process exit; large plans retain the established threaded fast path.
+        // Process workers isolate that policy and release parser/allocator
+        // capacity at process exit at every budget: on a 6.5 GiB plan, threads
+        // peaked at 3,613 MiB against 1,652 MiB for processes on the webharness
+        // full index (docs/improvements/satori-trial-and-cbm-findings-2026-10-21.md).
         const smallBudget = budgetBytes <= 4 * GIB;
-        const analysisWorkerMode = smallBudget && analysisWorkers > 0 ? 'process' : 'thread';
+        const analysisWorkerMode = analysisWorkers > 0 ? 'process' : 'thread';
         const analysisProcessMaxSourceBytes = Math.max(256 * 1024, Math.min(8 * MIB, Math.floor(jobBytes / 16)));
         const lowered = typescriptProjectConcurrency < cpuTypescript || (overrides.analysisWorkers === undefined && analysisWorkers < cpuAnalysis);
         const reason = typescriptProjectConcurrency < cpuTypescript

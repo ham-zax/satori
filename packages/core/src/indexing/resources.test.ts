@@ -50,7 +50,7 @@ for (const scenario of [
         if (row.warning) assert.match(warnings[0], row.missing ? /Cgroup.*conservative/ : /positive integer.*derived memory budget/);
         assert.ok(Object.isFrozen(plan));
         assert.ok(Object.isFrozen(plan.memoryBudget));
-        assert.equal(plan.analysisWorkerMode, plan.budgetBytes <= 4 * GIB && plan.analysisWorkers > 0 ? 'process' : 'thread');
+        assert.equal(plan.analysisWorkerMode, plan.analysisWorkers > 0 ? 'process' : 'thread');
         assert.equal(plan.analysisProcessMaxFiles, 128);
         assert.equal(plan.analysisWindowFiles, Math.max(1, plan.analysisWorkers) * (plan.budgetBytes > 4 * GIB ? 8 : 1));
         assert.equal(plan.analysisWindowSourceBytes, Math.min(64 * MIB, Math.max(

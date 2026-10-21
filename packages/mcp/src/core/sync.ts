@@ -664,7 +664,11 @@ export class SyncManager {
         input: FullIndexSourceHandoffInput,
     ): Promise<boolean> {
         const root = this.canonicalWatcherRoot(codebasePath);
-        return this.sourceObservationState.completeHandoff(root, input);
+        const completed = await this.sourceObservationState.completeHandoff(root, input);
+        // A proven full-index Publication is as fresh as a committed sync; without
+        // this the first periodic pass sees no sync time and republishes unchanged source.
+        if (completed) this.lastSyncTimes.set(root, this.now());
+        return completed;
     }
 
     private hasPendingWatcherObservation(codebasePath: string): boolean {

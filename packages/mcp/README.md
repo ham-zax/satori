@@ -100,13 +100,12 @@ payload queues, and reaches up to 3 compiler projects and 8 parser workers on
 large machines. `SATORI_ANALYSIS_WORKERS` retains precedence, including zero for
 in-process parsing. Progress and `manage_index status` expose the last run's
 `operation.memoryBudget` (`budgetMb`, `hint`), explaining reduced concurrency.
-Plans at or below 4 GiB use baseline-only WASM parser child processes, recycled
+Plans with analysis workers use baseline-only WASM parser child processes, recycled
 at the plan's file/byte bounds; large files use a fresh process. Linux full-index
 mutation workers use `MALLOC_ARENA_MAX=2` under those plans, without changing the
 server or shell environment. Idle semantic WASM workers exit before compiler
 resolution. The plan is computed before mutation-worker startup and passed
-unchanged into Core. Larger plans retain threaded parsing and the default
-allocator policy. Setting `SATORI_ANALYSIS_WORKERS=0` bypasses parser isolation.
+unchanged into Core. Setting `SATORI_ANALYSIS_WORKERS=0` bypasses parser isolation.
 This is planning guidance; a single large project or native stage can still OOM.
 
 Semantic relationship analysis is resource-bounded independently from search.

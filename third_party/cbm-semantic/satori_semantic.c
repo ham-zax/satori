@@ -3046,14 +3046,19 @@ static int resolve_cpp_project(SatoriSession *s) {
         }
         uint64_t total_call_sites = 0;
         for (uint32_t i = 0; i < s->source_count; i++) {
+            /* The registry is read-only here, so per-file resolver state can
+             * go with the file instead of growing the session arena. */
+            CBMArena file_arena;
+            cbm_arena_init(&file_arena);
             CBMResolvedCallArray resolved;
             memset(&resolved, 0, sizeof(resolved));
-            cbm_run_c_lsp_cross_with_registry(&s->arena, s->sources[i].source,
+            cbm_run_c_lsp_cross_with_registry(&file_arena, s->sources[i].source,
                                               (int)s->sources[i].source_len,
                                               "", true, registry, NULL, NULL, 0,
                                               trees[i], &resolved);
             if (resolved.count < 0 ||
                 (uint64_t)resolved.count > SATORI_MAX_CALL_SITES - total_call_sites) {
+                cbm_arena_destroy(&file_arena);
                 set_session_error(s, "Resource limit exceeded: max C++ call sites exceeded");
                 status = SATORI_SEMANTIC_ERR_RESOURCE_LIMIT_EXCEEDED;
                 goto cleanup;
@@ -3065,6 +3070,7 @@ static int resolve_cpp_project(SatoriSession *s) {
             };
             status = append_semantic_results_with_cpp_visibility(s, &s->sources[i], "", NULL,
                                                                   &resolved, &def_locs, &visibility);
+            cbm_arena_destroy(&file_arena);
             if (status != SATORI_SEMANTIC_OK) goto cleanup;
         }
     }

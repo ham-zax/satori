@@ -10,11 +10,11 @@ Working plan for the remaining Satori dev-trial findings and the gaps found by a
 | # | Finding | Status |
 |---|---|---|
 | 1 | C navigation (region exclusion, include-aware targets, partial outline, `cpp-v3`) | Merged, uncommitted |
-| 2 | Memory peak 3.6-3.9 GiB on the 1,362-file webharness repo | Cause isolated, fix needs a decision |
+| 2 | Memory peak 3.6-3.9 GiB on the 1,362-file webharness repo | Fixed: process mode at every budget |
 | 3 | `find_references` stops at 100 of 134 with no continuation | Merged, uncommitted (`nextCursor`, `hints.nextPage`) |
 | 4 | Sync `unverified` / `watcher_event_pending` | Not reproduced, one bounded check left |
-| 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | Check again with `cpp-v3` |
-| 6 | Unexplained completed sync at generation 3 after create | One bounded check left |
+| 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | C++ session exceeds limits, design needed |
+| 6 | Unexplained completed sync at generation 3 after create | Fixed: handoff records the sync time |
 
 ### Finding 2 evidence
 
@@ -29,9 +29,25 @@ variables (patch removed). Peak is the highest PSS of the process tree.
 | `analysisWorkerMode` `process` | 1,652 MiB | 14.9 s |
 | all three | 1,644 MiB | 17.0 s |
 
-Process mode alone gives the drop. `packages/core/src/indexing/resources.ts` selects process mode
-only when the budget is 4 GiB or less. Decision open: process mode at every budget, or a choice by
-workload size. Each choice needs three runs on webharness and on LibreOffice.
+Process mode alone gives the drop. Decision: process mode at every budget with analysis workers
+(`packages/core/src/indexing/resources.ts`). Three runs after the change, budget 5.3-5.5 GiB:
+peak 1,614 / 1,613 / 1,567 MiB (median 1,613), wall 16.1 / 15.9 / 16.0 s (median 16.0).
+LibreOffice runs are not done.
+
+### Finding 5 evidence
+
+The CBM repo C/C++ set (1,733 files, 75 MB, `~/repo/bench-bugs/arch-20261021/cabort/`) fails one
+whole-project session in two ways. WASM memory reaches the 1 GiB limit and the allocator calls
+`abort()`. The 200,000 call-site limit (`SATORI_MAX_CALL_SITES`) fails at 600 files, and also on
+the 1,059 files outside `grammars/`. WASM memory grows about 25 times the source bytes.
+`resolve_cpp_project` now resolves each file in a per-file arena: 476 to 397 MiB at 450 files,
+1,024 to 956 MiB on the 1,059-file set. The limits stay the open cause.
+
+### Finding 6 evidence
+
+The first periodic pass (`handleSyncIndex`) read no sync time for a just-created root and ran a
+`threshold_expired` sync. `SyncManager.completeFullIndexSourceHandoff` now records the sync time
+when the handoff is proven.
 
 ### Correction: LibreOffice does not measure C++ analysis
 

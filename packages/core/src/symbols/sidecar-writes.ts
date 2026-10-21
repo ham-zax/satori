@@ -131,14 +131,13 @@ async function writeJson(filePath: string, value: unknown, timing?: SidecarWrite
     }
 }
 
+/**
+ * Every caller writes into a build directory that its writer created before
+ * the shard loop, so this per-shard path skips a recursive mkdir (one
+ * thread-pool round trip for each of about 35,000 LibreOffice shards).
+ */
 async function writeSerializedJson(filePath: string, serialized: string, timing?: SidecarWriteTiming): Promise<void> {
-    let startedAt = timing ? performance.now() : 0;
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    if (timing) {
-        timing.mkdirMs += performance.now() - startedAt;
-        timing.mkdirCount++;
-        startedAt = performance.now();
-    }
+    const startedAt = timing ? performance.now() : 0;
     await fs.promises.writeFile(filePath, serialized, 'utf8');
     if (timing) {
         timing.writeMs += performance.now() - startedAt;

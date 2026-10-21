@@ -9,9 +9,9 @@ Working plan for the remaining Satori dev-trial findings and the gaps found by a
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | C navigation (region exclusion, include-aware targets, partial outline, `cpp-v3`) | Merged, uncommitted |
+| 1 | C navigation (region exclusion, include-aware targets, partial outline, `cpp-v3`) | Fixed: `e4623a21` |
 | 2 | Memory peak 3.6-3.9 GiB on the 1,362-file webharness repo | Fixed: process mode at every budget |
-| 3 | `find_references` stops at 100 of 134 with no continuation | Merged, uncommitted (`nextCursor`, `hints.nextPage`) |
+| 3 | `find_references` stops at 100 of 134 with no continuation | Fixed: `6e8420b2` (`nextCursor`, `hints.nextPage`) |
 | 4 | Sync `unverified` / `watcher_event_pending` | Fixed: status rereads when the operation turns terminal during the read |
 | 5 | `architecture_overview` boundaries, fanIn, fanOut empty on the CBM repo | Fixed: WASM 2 GiB, 2,000,000 call sites |
 | 6 | Unexplained completed sync at generation 3 after create | Fixed: handoff records the sync time |
@@ -90,7 +90,8 @@ Confirmed in code:
 - The 20,000-source limit skips C++ analysis on LibreOffice (above).
 - `index-generation-workflow.ts:517` reads each semantic source one at a time.
 - `extract_defs.c:91` has a fixed `BT_STACK = 512`. Children are pushed last to first, so a full
-  stack drops the first children.
+  stack drops the first children. Not applicable to Satori: the stack only fills
+  `def->body_tokens`, and `satori_extractor.c` never reads that field.
 - `satori_semantic.c:504` admits `lsp_short_name_unique` as a direct call (Rust free-function
   fallback, CBM `ec4f0eaa`).
 - Python: every import gets `typeOnly: false` (`tree-sitter-adapter.ts:1213`), and no

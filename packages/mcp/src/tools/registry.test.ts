@@ -93,7 +93,7 @@ test('call_graph description is capability-based and calibrates conservative CAL
     assert.match(callGraphTool!.description, /exclude receiver\/type-aware dispatch/i);
     assert.match(callGraphTool!.description, /Java and C#.*same detected build root/i);
     assert.match(callGraphTool!.description, /Maven\/Gradle.*\.csproj/i);
-    assert.match(callGraphTool!.description, /C\+\+.*cross-translation-unit/i);
+    assert.match(callGraphTool!.description, /C and C\+\+ admit a cross-file target only when the caller's include closure contains/i);
     assert.match(callGraphTool!.description, /Rust.*Cargo ownership/i);
     assert.match(callGraphTool!.description, /Python and Go.*testReferences/i);
     assert.match(callGraphTool!.description, /bounded/i);

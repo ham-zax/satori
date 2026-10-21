@@ -307,6 +307,12 @@ export class PotionEmbedding extends Embedding {
     private child: ChildProcessWithoutNullStreams | null = null;
     private state: WorkerState = 'starting';
     private stdoutBuffer = Buffer.alloc(0);
+    /**
+     * Scan state of the frame at the start of stdoutBuffer. A reply larger than
+     * one pipe read arrives in several chunks, and each chunk resumes the scan
+     * instead of rescanning the frame from its first byte.
+     */
+    private frameScan = { index: 0, depth: 0, inString: false, escaped: false };
     private lastHelperOutputAt = 0;
     private requestSequence = 0;
     private startupPromise: Promise<void> | null = null;
@@ -369,6 +375,7 @@ export class PotionEmbedding extends Embedding {
         this.child = null;
         this.state = 'idle';
         this.stdoutBuffer = Buffer.alloc(0);
+        this.frameScan = { index: 0, depth: 0, inString: false, escaped: false };
         this.idleRelease = this.stopChild(child, true).finally(() => {
             this.idleRelease = null;
         });
@@ -508,31 +515,33 @@ export class PotionEmbedding extends Embedding {
         this.lastHelperOutputAt = Date.now();
         this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
         while (true) {
-            let leadingWhitespace = 0;
-            while (
-                leadingWhitespace < this.stdoutBuffer.length
-                && this.stdoutBuffer[leadingWhitespace] <= 0x20
-            ) {
-                leadingWhitespace += 1;
-            }
-            if (leadingWhitespace > 0) {
-                this.stdoutBuffer = this.stdoutBuffer.subarray(leadingWhitespace);
-            }
-            if (this.stdoutBuffer.length === 0) return;
-            if (this.stdoutBuffer[0] !== 0x7b) {
-                this.failWorker(providerError({
-                    code: 'EMBEDDING_PROVIDER_ERROR',
-                    retryable: false,
-                    message: 'Potion worker returned an invalid frame.',
-                }));
-                return;
+            const scan = this.frameScan;
+            if (scan.index === 0) {
+                let leadingWhitespace = 0;
+                while (
+                    leadingWhitespace < this.stdoutBuffer.length
+                    && this.stdoutBuffer[leadingWhitespace] <= 0x20
+                ) {
+                    leadingWhitespace += 1;
+                }
+                if (leadingWhitespace > 0) {
+                    this.stdoutBuffer = this.stdoutBuffer.subarray(leadingWhitespace);
+                }
+                if (this.stdoutBuffer.length === 0) return;
+                if (this.stdoutBuffer[0] !== 0x7b) {
+                    this.failWorker(providerError({
+                        code: 'EMBEDDING_PROVIDER_ERROR',
+                        retryable: false,
+                        message: 'Potion worker returned an invalid frame.',
+                    }));
+                    return;
+                }
             }
 
-            let depth = 0;
-            let inString = false;
-            let escaped = false;
+            let { depth, inString, escaped } = scan;
             let frameEnd = -1;
-            for (let index = 0; index < this.stdoutBuffer.length; index += 1) {
+            let index = scan.index;
+            for (; index < this.stdoutBuffer.length; index += 1) {
                 const byte = this.stdoutBuffer[index];
                 if (inString) {
                     if (escaped) {
@@ -558,6 +567,7 @@ export class PotionEmbedding extends Embedding {
                 }
             }
             if (frameEnd < 0) {
+                this.frameScan = { index, depth, inString, escaped };
                 if (this.stdoutBuffer.length > MAX_WORKER_FRAME_BYTES) {
                     this.failWorker(providerError({
                         code: 'EMBEDDING_PROVIDER_ERROR',
@@ -569,6 +579,7 @@ export class PotionEmbedding extends Embedding {
             }
             const frame = this.stdoutBuffer.subarray(0, frameEnd);
             this.stdoutBuffer = this.stdoutBuffer.subarray(frameEnd);
+            this.frameScan = { index: 0, depth: 0, inString: false, escaped: false };
             if (frame.length > MAX_WORKER_FRAME_BYTES) {
                 this.failWorker(providerError({
                     code: 'EMBEDDING_PROVIDER_ERROR',
@@ -699,6 +710,7 @@ export class PotionEmbedding extends Embedding {
         this.state = 'closed';
         this.child = null;
         this.stdoutBuffer = Buffer.alloc(0);
+        this.frameScan = { index: 0, depth: 0, inString: false, escaped: false };
         this.pendingItemsCount = 0;
     }
 

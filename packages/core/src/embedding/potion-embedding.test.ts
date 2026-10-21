@@ -89,6 +89,16 @@ lines.on('line', (line) => {
         }
         items.push({ retainedTokenCount: res.retainedTokenCount, vector: res.vector });
       }
+      if (request.texts.includes('__dribble__')) {
+        // Seven-byte writes split the frame inside strings, escapes, and nesting.
+        const frame = JSON.stringify({ id: request.id, note: 'a"}]{[\\"', ok: true, items }) + '\n';
+        const writePiece = (offset) => {
+          if (offset >= frame.length) return;
+          process.stdout.write(frame.slice(offset, offset + 7), () => setTimeout(() => writePiece(offset + 7), 1));
+        };
+        writePiece(0);
+        return;
+      }
       process.stdout.write(JSON.stringify({
         id: request.id,
         ok: true,
@@ -372,6 +382,14 @@ test('Potion provider accepts a reply that arrived while the event loop was bloc
     const vectors = await Promise.all(batches);
     assert.deepEqual(vectors.map((batch) => batch.length), [64, 64, 64, 64]);
     assert.deepEqual(await embedding.embedQuery('after stall'), await embedding.embedQuery('after stall'));
+});
+
+test('Potion provider parses a reply frame that arrives in many small chunks', async (t) => {
+    const embedding = await createFakeEmbedding(t, { requestTimeoutMs: 5_000 });
+    const dribbled = await embedding.embedDocuments(['__dribble__', 'doc2']);
+    // The fake vector depends only on byte length, so an 11-byte text without
+    // the dribble marker gives the same vectors in one write.
+    assert.deepEqual(dribbled, await embedding.embedDocuments(['xxxxxxxxxxx', 'doc2']));
 });
 
 test('Potion provider fails all pending requests when the worker crashes', async (t) => {

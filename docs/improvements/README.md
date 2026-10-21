@@ -5,6 +5,8 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [LibreOffice critical path after Candidate C, 21 October 2026](libreoffice-critical-path-2026-10-21.md) | Analysis checkpoint; window experiment confirmed | The serial path is scan, producer, `prepare_changes`, navigation, publication. Payload drain and vector writes add no time. `index.analysisWait` is 192 of 212 s of the producer. Window 32 (four runs per variant): producer -26.3 s, critical path -32.2 s, no memory cost, identical output. |
+| [How a third agent found the indexing bottleneck](gemini-argon-analysis-window-article-2026-10-21.md) | Draft article | Gemini 4 Argon traced the producer wait to the 8-file analysis window. Window 32 (four runs per variant): producer -26.3 s, critical path -32.2 s, identical output. |
 | [Full-index architecture and optimizations, 21 October 2026](indexing-architecture-and-optimizations-2026-10-21.md) | Native projections default on linux-x64 (`d434fa96`); multi-repo parity passes | Full-index flow, each kept and dropped optimization with intent and outcome, validation on five repositories, and the ranked plan toward 200 s. |
 | [Rust acceleration loop, 20 October 2026](rust-acceleration-loop-2026-10-20.md) | Approved working plan; resume point | Six-step loop per candidate (profile, cheap check, slice, screening pair, three-run validation, record), candidate queue, roles, fixed facts and current state. |
 | [Rust projection implementation, 20 October 2026](napi-rs-implementation-2026-10-20.md) | First experimental slice in progress | Isolated batched ASCII projection addon, TypeScript fallback, cancellation, differential tests, and measurement tools. Production adoption gates remain open. |

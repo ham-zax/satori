@@ -4,6 +4,7 @@ import {
     RemoteCollectionDeletePendingError,
     computeSymbolQualitySummaryFromSidecarRead,
     formatSymbolQualityMarker,
+    perfSpan,
     readSymbolRegistrySidecar,
     resolveLanguageCapabilityEvidence,
     unknownSymbolQualitySummary,
@@ -603,11 +604,11 @@ export class ManageMaintenanceHandlers {
                     : null;
                 try {
                     const registryRead = navigation
-                        ? await readSymbolRegistrySidecar({
+                        ? await perfSpan("status.symbol_registry_read", () => readSymbolRegistrySidecar({
                             normalizedRootPath: envelopePath,
                             publicationId: navigation.publicationId,
                             navigationRoot: navigation.navigationRoot,
-                        })
+                        }))
                         : undefined;
                     const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
                         trackedRootState.state === 'ready'
@@ -872,11 +873,11 @@ export class ManageMaintenanceHandlers {
                                 const { terminalPhase, terminalProgress } = await worker.completion;
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
 
-                                await this.host.collectPublicationGarbageAfterSync(absolutePath);
+                                await perfSpan("sync.parent.garbage_collect", () => this.host.collectPublicationGarbageAfterSync(absolutePath));
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
 
                                 if (terminalPhase === "completed") {
-                                    await syncFlight.complete();
+                                    await perfSpan("sync.parent.flight_complete", () => syncFlight.complete());
                                     if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
                                 }
 

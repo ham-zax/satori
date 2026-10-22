@@ -22,6 +22,7 @@ import {
     type SemanticSearchExecutionResult,
 } from '../types';
 import { envManager } from '../utils/env-manager';
+import { perfSpan } from '../utils/perf-trace';
 import {
     DEFAULT_IGNORE_PATTERNS,
     IndexProfile,
@@ -1192,18 +1193,18 @@ export class Context {
         if (!publication.publication.navigation) return 'not_bound';
         const navigation = this.getPublicationNavigationAddress(publication);
         if (!navigation) return 'missing';
-        const registry = await this.navigationStore.getManifest({
+        const registry = await perfSpan('status.navigation_manifest', () => this.navigationStore.getManifest({
             normalizedRootPath: publication.publication.canonicalRoot,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
-        });
+        }));
         if (registry.status !== 'ok') return registry.sourceStatus ?? registry.status;
-        const relationships = await this.navigationStore.getRelationships({
+        const relationships = await perfSpan('status.navigation_relationships', () => this.navigationStore.getRelationships({
             normalizedRootPath: publication.publication.canonicalRoot,
             expectedSymbolRegistryManifestHash: registry.manifestHash,
             publicationId: navigation.publicationId,
             navigationRoot: navigation.navigationRoot,
-        });
+        }));
         return relationships.status === 'ok' ? 'valid' : relationships.sourceStatus ?? relationships.status;
     }
 

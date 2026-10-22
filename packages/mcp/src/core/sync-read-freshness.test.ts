@@ -392,3 +392,91 @@ test("periodic freshness skips a root that a read just proved unchanged with a f
 
     assert.equal(syncs, 0);
 });
+
+function createDifferingComparisonManager() {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    let checkpointPublicationId = "publication-1";
+    let comparisonCalls = 0;
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: checkpointPublicationId,
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareSourceObservationToFreshnessCheckpoint: async () => {
+            comparisonCalls += 1;
+            return { status: "differs" };
+        },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: true,
+        mutationRuntime: {
+            assertCurrent: () => {},
+            getCurrentOperation: () => undefined,
+            updateCurrentOperation: () => { throw new Error("not used"); },
+        } as never,
+    });
+    const internal = manager as unknown as {
+        watcherModeStarted: boolean;
+        watchedCodebases: Set<string>;
+        watchers: Map<string, unknown>;
+        watcherLifecycleStates: Map<string, string>;
+        watcherObservations: Map<string, unknown>;
+        setWatcherCoverage(root: string, coverage: string): void;
+    };
+    internal.watcherModeStarted = true;
+    internal.watchedCodebases.add(root);
+    internal.watchers.set(root, {});
+    internal.watcherLifecycleStates.set(root, "ready");
+    internal.watcherObservations.set(root, {
+        observedEventEpoch: 1,
+        comparedThroughEventEpoch: 0,
+        latestEpochByReason: new Map([["source_changed", 1]]),
+        coverage: "ready",
+    });
+    return {
+        root,
+        manager,
+        internal,
+        assess: () => manager.assessReadFreshness(root, 60_000, { preparedPublication: publication as never }),
+        comparisonCalls: () => comparisonCalls,
+        setCheckpointPublication: (id: string) => { checkpointPublicationId = id; },
+    };
+}
+
+test("read freshness reuses a differing source comparison until a watcher event arrives", async () => {
+    const harness = createDifferingComparisonManager();
+    const first = await harness.assess();
+    await harness.assess();
+    const third = await harness.assess();
+    assert.equal(harness.comparisonCalls(), 1);
+    assert.deepEqual(third.sourceFreshness, first.sourceFreshness, "reuse keeps the same decision");
+    assert.equal(harness.manager.getWatcherObservation(harness.root).pending, true);
+
+    harness.manager.recordWatcherEvent(harness.root, "source_changed");
+    await harness.assess();
+    assert.equal(harness.comparisonCalls(), 2);
+});
+
+test("read freshness compares again after a watcher restart or a new checkpoint", async () => {
+    const restarted = createDifferingComparisonManager();
+    await restarted.assess();
+    // Events between a restart and `ready` are unobserved and bump no epoch.
+    restarted.internal.setWatcherCoverage(restarted.root, "starting");
+    restarted.internal.setWatcherCoverage(restarted.root, "ready");
+    await restarted.assess();
+    assert.equal(restarted.comparisonCalls(), 2);
+
+    const republished = createDifferingComparisonManager();
+    await republished.assess();
+    republished.setCheckpointPublication("publication-2");
+    await republished.assess();
+    assert.equal(republished.comparisonCalls(), 2);
+});

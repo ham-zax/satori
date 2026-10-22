@@ -317,6 +317,9 @@ interface RootWatcherObservation {
     coverage: WatcherObservationCoverage;
     coverageGapSinceEpoch?: number;
     lastWatcherError?: string;
+    // A complete source comparison found differences against this checkpoint at
+    // this event epoch. Valid only while coverage stays ready: a restart can miss events.
+    differingComparison?: { publicationId: string; comparedEventEpoch: number };
 }
 
 interface EnsureFreshnessOptions {
@@ -524,6 +527,7 @@ export class SyncManager {
         if (coverage === 'starting' || coverage === 'failed' || coverage === 'stopped' || coverage === 'disabled') {
             observation.coverageGapSinceEpoch ??= observation.observedEventEpoch;
         }
+        if (coverage !== 'ready') delete observation.differingComparison;
         if (error) {
             observation.lastWatcherError = error;
         } else if (coverage === 'starting' || coverage === 'ready') {
@@ -949,7 +953,19 @@ export class SyncManager {
             });
         }
 
-        if (flightEpoch !== undefined && this.hasPendingWatcherObservation(codebasePath)) {
+        const comparedPublicationId = checkpointValidation.checkpoint?.publicationId;
+        const observation = this.watcherObservations.get(codebasePath);
+        // With no watcher event since a comparison that found differences, the same
+        // comparison would find them again and cover nothing, so skip the whole-tree rescan.
+        const differingComparisonCurrent = observation?.coverage === 'ready'
+            && comparedPublicationId !== undefined
+            && observation.differingComparison?.publicationId === comparedPublicationId
+            && observation.differingComparison.comparedEventEpoch === flightEpoch;
+        if (
+            flightEpoch !== undefined
+            && !differingComparisonCurrent
+            && this.hasPendingWatcherObservation(codebasePath)
+        ) {
             const compareSourceObservation = this.context.compareSourceObservationToFreshnessCheckpoint;
             if (typeof compareSourceObservation === 'function') {
                 try {
@@ -967,6 +983,20 @@ export class SyncManager {
                         // Cover only watcher events captured before this complete source
                         // observation. Later events remain pending and still invalidate reads.
                         this.coverWatcherObservation(codebasePath, flightEpoch);
+                    }
+                    // Record only when no watcher event arrived during the comparison.
+                    if (
+                        comparison.status === 'differs'
+                        && observation !== undefined
+                        && this.watcherObservations.get(codebasePath) === observation
+                        && observation.coverage === 'ready'
+                        && observation.observedEventEpoch === flightEpoch
+                        && comparedPublicationId !== undefined
+                    ) {
+                        observation.differingComparison = {
+                            publicationId: comparedPublicationId,
+                            comparedEventEpoch: flightEpoch,
+                        };
                     }
                 } catch {
                     // Preserve the existing fail-closed watcher_event_pending result.

@@ -2,7 +2,7 @@
 
 Status: A0 and A1 done, results below. D1, D2 and D3 approved by Hamza on 22
 October 2026, as recommended. The reranker is the largest search cost. D4 is
-open. A3 done (limits 32). A2 is next.
+open. A3 done (limits 32). A2 done as the claim-4 fix only (see "A2 results").
 
 ## Goal
 
@@ -165,6 +165,23 @@ files 590-1,460 ms. During a sync, the first search took 233-338 ms (16 files),
 the file limit and the result limit to 32 (about 100 ms) and keeps both byte
 limits. At 64 and 200 edited files, search showed only 42-43 and 150-164 hits
 even with every file overlaid. A different limit causes that, not yet found.
+
+## A2 results (22 October 2026)
+
+D2 is REPLACED. A watcher-based dirty set was built and measured: the first
+search after a save found 0 edited files and 0 hits in 3 of 3 runs (N=1) and
+in 1 of 3 runs (N=16, N=32), because the watcher event arrives after the
+search. Only `git status` reads the disk at search time, so search keeps it.
+Hamza chose to keep only the claim-4 fix: `SyncManager.assessReadFreshness`
+skips the whole-tree source comparison when an earlier comparison found
+differences against the same checkpoint and no watcher event arrived since
+(`RootWatcherObservation.differingComparison`, dropped when coverage leaves
+`ready`). Probe (trufflehog, `.go`, `--save-search 1,16,32 --runs 3`, idle):
+first searches found every edited file (1/1, 16/16). The second and later
+repeat searches no longer pay `freshnessExactPathComparison` (A1: 297-583 ms
+on every repeat). The first repeat can still pay about 300 ms when the watcher
+event arrives after the first search. The probe stopped at N=32 in both runs
+with "Mutation 'sync' is already in progress"; cause not found.
 
 ## Decisions
 

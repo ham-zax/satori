@@ -56,6 +56,10 @@ import {
     fitFileOutlineResponseBudget,
     findExactRegistrySymbols,
 } from "./registry-file-outline.js";
+import {
+    buildCurrentSourceEvidenceFromBytes,
+    mapPublishedSymbolsToCurrentSpans,
+} from "./current-source-symbols.js";
 import { prepareRelationshipTraversals } from "./prepared-relationship-traversal.js";
 import { PreparedPublicationReadSession } from "./prepared-publication-read-session.js";
 import {
@@ -2407,11 +2411,26 @@ export class NavigationHandlers {
             ...(symbolLabelExact !== undefined ? { symbolLabelExact } : {}),
             ...(windowEnd !== undefined ? { end_line: windowEnd } : {}),
         };
+        // A drifted file keeps the published span as the registry view. The
+        // current span is a separate projection proven against the current
+        // bytes, so an edited file can show where the declaration is now.
+        const currentSpans = fileFreshness.status === "stale"
+            ? (await mapPublishedSymbolsToCurrentSpans({
+                codebaseRoot: effectiveRoot,
+                symbols: registrySymbols,
+                evidence: buildCurrentSourceEvidenceFromBytes({
+                    canonicalRoot: effectiveRoot,
+                    relativeFile: normalizedFile,
+                    sourceBytes,
+                }),
+            })).mappings
+            : undefined;
         const payload = await buildRegistryFileOutlinePayload({
             codebaseRoot: effectiveRoot,
             file: normalizedFile,
             symbols: registrySymbols,
             publishedSpans,
+            currentSpans,
             limitSymbols,
             resolveMode,
             symbolIdExact,

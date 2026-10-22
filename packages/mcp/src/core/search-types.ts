@@ -1006,6 +1006,22 @@ export interface CanonicalSymbolIdentity {
 
 export interface FileOutlineSymbolResult extends CanonicalSymbolIdentity {
     callGraphHint: CallGraphHint;
+    /**
+     * Current source span of this published symbol, proven by an exact
+     * registry rebuild match against the current bytes. Absent when the
+     * current declaration is missing, ambiguous, or unverifiable. The
+     * published span above keeps its own meaning and value.
+     */
+    currentSpan?: {
+        startLine: number;
+        endLine: number;
+        startByte?: number;
+        endByte?: number;
+        startColumn?: number;
+        endColumn?: number;
+        currentSourceHash: string;
+        resolution: "current_symbol_validated";
+    };
     analysis?: import("@satori-code/core").SymbolStructuralAnalysis;
     relationships?: {
         directCallerCount: number | null;

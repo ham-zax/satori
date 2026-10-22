@@ -106,7 +106,7 @@ Satori combines embeddings with BM25 and exact matches, maps hits to the symbols
 | `search_codebase` | Find behavior by meaning and exact evidence. Start here. |
 | `architecture_overview` | Summarize areas, boundaries, and hotspots. |
 | `continue_search` | Page through a result set without searching again. |
-| `file_outline` | List the symbols and spans in one file. |
+| `file_outline` | List the symbols and spans in one file, with the current span next to the published span when it was proven. |
 | `call_graph` | Callers, callees, imports, and exports where supported. |
 | `trace_path` | Shortest relationship path between two symbols. |
 | `find_references` | Exact textual occurrences of one symbol. |

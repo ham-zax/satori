@@ -5,7 +5,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { buildSymbolRegistry, type PublicationLease, type RelationshipRecord, type SymbolRecord } from "@satori-code/core";
+import {
+    buildSymbolRecordsForFile,
+    buildSymbolRegistry,
+    createLanguageAnalysisService,
+    type PublicationLease,
+    type RelationshipRecord,
+    type SymbolRecord,
+} from "@satori-code/core";
 import { ToolHandlers } from "./handlers.js";
 import { NavigationHandlers, type NavigationSourceOptions } from "./navigation-handlers.js";
 import { RelationshipBackedCallGraph, type RelationshipBackedCallGraphInput } from "./relationship-backed-call-graph.js";
@@ -19,7 +26,7 @@ import type { CallGraphResponseEnvelope, FileOutlineInput, FileOutlineResponseEn
 const published = Buffer.from("def target():\n    return other()\n\ndef other():\n    return 2\n");
 const callerSource = "def caller():\n    target()\n";
 
-function fixture(t: { after: (cleanup: () => void) => void }, options: { seedHash?: string } = {}) {
+function fixture(t: { after: (cleanup: () => void) => void }, options: { seedHash?: string; seedSymbols?: SymbolRecord[] } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "navigation-drift-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     fs.writeFileSync(path.join(root, "seed.py"), published);
@@ -34,7 +41,7 @@ function fixture(t: { after: (cleanup: () => void) => void }, options: { seedHas
     const other = record("other", "seed.py", 4, 5, published);
     const caller = record("caller", "caller.py", 1, 2, callerSource);
     const manifest = { files: [{ path: "seed.py" }, { path: "caller.py" }], builtAt: "2026-10-20" };
-    const registry = buildSymbolRegistry({ manifest: manifest as never, symbols: [target, other, caller] });
+    const registry = buildSymbolRegistry({ manifest: manifest as never, symbols: [...(options.seedSymbols ?? [target, other]), caller] });
     const relationships: RelationshipRecord[] = [{ sourceKey: "caller", sourceInstanceId: "caller", targetKey: "target", targetInstanceId: "target",
         type: "CALLS", confidence: "high", resolutionAuthority: "direct_binding", strategy: "rule", file: "caller.py", span: { startLine: 2, endLine: 2 } },
         { sourceKey: "target", sourceInstanceId: "target", targetKey: "other", targetInstanceId: "other", type: "CALLS",
@@ -81,6 +88,24 @@ function fixture(t: { after: (cleanup: () => void) => void }, options: { seedHas
         releases: () => releases };
 }
 
+/**
+ * Registry records built with the real extractor, so the current-source
+ * matcher can prove the correspondence instead of matching a synthetic key.
+ */
+async function realSeedSymbols(): Promise<SymbolRecord[]> {
+    const source = published.toString();
+    const analysis = await createLanguageAnalysisService().analyze({ content: source, language: "python", relativePath: "seed.py" });
+    return buildSymbolRecordsForFile({
+        relativePath: "seed.py",
+        language: "python",
+        content: source,
+        fileHash: createHash("sha256").update(published).digest("hex"),
+        extractorVersion: "test-extractor",
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+}
+
 test("public outline retains published coordinates on readable drift while strict consumers refuse", async t => {
     const f = fixture(t);
     const before = await f.outline();
@@ -103,6 +128,33 @@ test("public outline retains published coordinates on readable drift while stric
     assert.deepEqual(witnessed.outline?.symbols.map(symbol => symbol.span), [f.target.span, f.other.span]);
     fs.unlinkSync(path.join(f.root, "seed.py"));
     assert.equal((await f.outline({ publishedSource: published })).status, "not_found");
+});
+
+test("a drifted outline reports the current span next to the published span", async t => {
+    const seedSymbols = await realSeedSymbols();
+    const f = fixture(t, { seedSymbols });
+    const publishedTarget = seedSymbols.find(symbol => symbol.name === "target");
+    assert.ok(publishedTarget);
+
+    const before = await f.outline();
+    assert.equal(before.status, "ok");
+    assert.equal(before.outline?.symbols.find(symbol => symbol.symbolId === publishedTarget.symbolInstanceId)?.currentSpan, undefined);
+
+    f.drift();
+    const after = await f.outline();
+    assert.equal(after.status, "ok");
+    const drifted = after.outline?.symbols.find(symbol => symbol.symbolId === publishedTarget.symbolInstanceId);
+    assert.ok(drifted);
+    // The published span keeps its published meaning and value.
+    assert.deepEqual(drifted.span, publishedTarget.span);
+    assert.equal(drifted.currentSpan?.startLine, publishedTarget.span.startLine + 10);
+    assert.equal(drifted.currentSpan?.resolution, "current_symbol_validated");
+    assert.equal(
+        drifted.currentSpan?.currentSourceHash,
+        createHash("sha256").update(fs.readFileSync(path.join(f.root, "seed.py"))).digest("hex"),
+    );
+    assert.ok(after.warnings?.includes("NAVIGATION_SOURCE_DRIFT_DETECTED"));
+    assert.ok(after.warnings?.includes("OUTLINE_PUBLISHED_SPANS"));
 });
 
 test("stale call graph preserves published seed, edges, authority, and actual freshness", async t => {

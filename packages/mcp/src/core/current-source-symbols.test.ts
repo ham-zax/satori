@@ -12,6 +12,7 @@ import {
     type SymbolRecord,
 } from "@satori-code/core";
 import {
+    mapPublishedSymbolsToCurrentSpans,
     readHashMatchedCurrentSourceSymbolContent,
     readCurrentSourceEvidence,
     sliceHashMatchedCurrentSourceSymbolContent,
@@ -33,6 +34,31 @@ function testSymbol(file = "src/runtime.ts"): SymbolRecord {
         fileHash: "test-file-hash",
         extractorVersion: "test-extractor-v1",
     };
+}
+
+async function buildRegistryRecords(input: {
+    relativeFile: string;
+    language: string;
+    content: string;
+    extractorVersion?: string;
+}): Promise<SymbolRecord[]> {
+    const analysis = await createLanguageAnalysisService({
+        chunkSize: Number.MAX_SAFE_INTEGER,
+        chunkOverlap: 0,
+    }).analyze({ content: input.content, language: input.language, relativePath: input.relativeFile });
+    return buildSymbolRecordsForFile({
+        relativePath: input.relativeFile,
+        language: input.language,
+        content: input.content,
+        fileHash: crypto.createHash("sha256").update(Buffer.from(input.content, "utf8")).digest("hex"),
+        extractorVersion: input.extractorVersion ?? "test-extractor-v1",
+        chunks: [...analysis.chunks],
+        extractedSymbols: analysis.symbols,
+    });
+}
+
+function rawBytesHash(content: string): string {
+    return crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
 }
 
 test("current-source validation fails closed when the file cannot be opened", async () => {
@@ -376,6 +402,148 @@ test("current-source validation matches symbols from a CBM-extracted language", 
         assert.deepEqual(persisted.map((symbol) => symbol.qualifiedName), ["Registry", "Registry.add", "total"]);
         const results = await validateCurrentSourceSymbolSpans({ codebaseRoot: root, symbols: persisted });
         assert.deepEqual(results.map((result) => result.match), ["matched", "matched", "matched"]);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("current-span mapping publishes a span only for a matched declaration", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-span-match-"));
+    const relativeFile = "src/runtime.py";
+    const source = "def target():\n    return 1\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+    try {
+        const persisted = (await buildRegistryRecords({ relativeFile, language: "python", content: source }))
+            .filter((symbol) => symbol.kind !== "file");
+        const target = persisted.find((symbol) => symbol.name === "target");
+        assert.ok(target);
+
+        const matched = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(matched.mappings.size, 1);
+        const mapping = matched.mappings.get(target.symbolInstanceId);
+        assert.ok(mapping);
+        assert.deepEqual(mapping.span, target.span);
+        assert.equal(mapping.currentSourceHash, rawBytesHash(source));
+        assert.equal(matched.currentSourceHash, mapping.currentSourceHash);
+        assert.equal(mapping.resolutionEvidence.resolutionDerivation, "exact_registry_rebuild_match");
+
+        // A renamed declaration has no current counterpart.
+        fs.writeFileSync(path.join(root, relativeFile), "def renamed():\n    return 1\n");
+        const missing = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(missing.mappings.size, 0);
+
+        // A second same-key declaration leaves the correspondence ambiguous.
+        fs.writeFileSync(path.join(root, relativeFile), "def target():\n    return 1\n\n\ndef target():\n    return 2\n");
+        const ambiguous = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(ambiguous.mappings.size, 0);
+
+        // A syntax error leaves the current declaration unverified.
+        fs.writeFileSync(path.join(root, relativeFile), "def target(:\n    return 1\n");
+        const unavailable = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(unavailable.mappings.size, 0);
+
+        // A language without a structural strategy has no current declaration.
+        const textFile = "src/notes.txt";
+        fs.writeFileSync(path.join(root, textFile), "plain text\n");
+        const notApplicable = await mapPublishedSymbolsToCurrentSpans({
+            codebaseRoot: root,
+            symbols: [{
+                ...target,
+                symbolKey: "text_key",
+                symbolInstanceId: "text_instance",
+                language: "text",
+                file: textFile,
+            }],
+        });
+        assert.equal(notApplicable.mappings.size, 0);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a second edit invalidates the current-span mapping", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-span-second-edit-"));
+    const relativeFile = "src/runtime.py";
+    const publishedSource = "def target():\n    return 1\n";
+    const firstEdit = "# first edit\n" + publishedSource;
+    const secondEdit = "# first edit\n# second edit\n" + publishedSource;
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), publishedSource);
+    try {
+        const persisted = (await buildRegistryRecords({ relativeFile, language: "python", content: publishedSource }))
+            .filter((symbol) => symbol.kind !== "file");
+        const target = persisted.find((symbol) => symbol.name === "target");
+        assert.ok(target);
+
+        fs.writeFileSync(path.join(root, relativeFile), firstEdit);
+        const first = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        const firstMapping = first.mappings.get(target.symbolInstanceId);
+        assert.ok(firstMapping);
+        assert.equal(firstMapping.span.startLine, 2);
+        assert.equal(firstMapping.currentSourceHash, rawBytesHash(firstEdit));
+
+        fs.writeFileSync(path.join(root, relativeFile), secondEdit);
+        const second = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        const secondMapping = second.mappings.get(target.symbolInstanceId);
+        assert.ok(secondMapping);
+        assert.notEqual(secondMapping.currentSourceHash, firstMapping.currentSourceHash);
+        assert.equal(secondMapping.currentSourceHash, rawBytesHash(secondEdit));
+        assert.equal(secondMapping.span.startLine, 3);
+        assert.notDeepEqual(secondMapping.span, firstMapping.span);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a renamed or deleted declaration yields no current span", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-span-renamed-"));
+    const relativeFile = "src/runtime.py";
+    const source = "def target():\n    return 1\n\ndef other():\n    return 2\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), source);
+    try {
+        const persisted = (await buildRegistryRecords({ relativeFile, language: "python", content: source }))
+            .filter((symbol) => symbol.kind !== "file");
+        const target = persisted.find((symbol) => symbol.name === "target");
+        assert.ok(target);
+
+        fs.writeFileSync(path.join(root, relativeFile), source.replace("target", "renamed"));
+        const renamed = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(renamed.mappings.size, 0);
+        assert.equal(renamed.mappings.has(target.symbolInstanceId), false);
+
+        fs.writeFileSync(path.join(root, relativeFile), "def other():\n    return 2\n");
+        const deleted = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(deleted.mappings.size, 0);
+        assert.equal(deleted.mappings.has(target.symbolInstanceId), false);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("current-span mapping proves a TypeScript declaration in the current bytes", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "satori-current-span-typescript-"));
+    const relativeFile = "src/runtime.ts";
+    const publishedSource = "export function target() {\n  return 1;\n}\n";
+    const currentSource = "// inserted\nexport function target() {\n  return 2;\n}\n";
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, relativeFile), currentSource);
+    try {
+        const persisted = (await buildRegistryRecords({ relativeFile, language: "typescript", content: publishedSource }))
+            .filter((symbol) => symbol.kind !== "file");
+        const target = persisted.find((symbol) => symbol.name === "target");
+        assert.ok(target);
+        assert.equal(target.span.startLine, 1);
+
+        const mapping = await mapPublishedSymbolsToCurrentSpans({ codebaseRoot: root, symbols: [target] });
+        assert.equal(mapping.mappings.size, 1);
+        const current = mapping.mappings.get(target.symbolInstanceId);
+        assert.ok(current);
+        assert.equal(current.span.startLine, 2);
+        assert.equal(current.currentSourceHash, rawBytesHash(currentSource));
+        assert.equal(current.span.endLine, 4);
+        assert.notEqual(current.span.startByte, target.span.startByte);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

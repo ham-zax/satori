@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { buildSymbolRecordsForFile, createLanguageAnalysisService } from "@satori-code/core";
 import { buildRegistryFileOutlinePayload, fitFileOutlineResponseBudget } from "./registry-file-outline.js";
+import { mapPublishedSymbolsToCurrentSpans } from "./current-source-symbols.js";
 import type { FileOutlineResponseEnvelope, FileOutlineSymbolResult } from "./search-types.js";
 
 function outlinePayload(symbolCount: number): FileOutlineResponseEnvelope {
@@ -198,6 +199,93 @@ test("published outline coordinates survive inserted, renamed, and deleted Pytho
             buildCallGraphHint: () => ({ supported: false, reason: "missing_symbol" }), buildOutlineSpanWarningCodes: () => [],
             readSourceLines: async () => { throw new Error("published projection cannot read source"); } });
         assert.equal(missing.status, "not_found");
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test("the outline attaches a current span only where a current declaration was proven", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "outline-current-span-"));
+    try {
+        const publishedSource = "def target():\n    return 1\n\ndef other():\n    return 2\n";
+        const currentSource = "# inserted\ndef target():\n    return 1\n\ndef renamed():\n    return 2\n";
+        const analysis = await createLanguageAnalysisService().analyze({ content: publishedSource, language: "python", relativePath: "seed.py" });
+        const records = buildSymbolRecordsForFile({ relativePath: "seed.py", language: "python", content: publishedSource,
+            fileHash: createHash("sha256").update(publishedSource).digest("hex"), extractorVersion: "test",
+            chunks: [...analysis.chunks], extractedSymbols: analysis.symbols });
+        const target = records.find(symbol => symbol.name === "target")!;
+        await writeFile(path.join(root, "seed.py"), currentSource);
+
+        const { mappings } = await mapPublishedSymbolsToCurrentSpans({
+            codebaseRoot: root,
+            symbols: records.filter(symbol => symbol.kind !== "file"),
+        });
+        assert.equal(mappings.size, 1);
+        const current = mappings.get(target.symbolInstanceId);
+        assert.ok(current);
+        assert.equal(current.span.startLine, 2);
+        assert.equal(current.currentSourceHash, createHash("sha256").update(currentSource).digest("hex"));
+
+        const payload = await buildRegistryFileOutlinePayload({ codebaseRoot: root, file: "seed.py", symbols: records,
+            publishedSpans: true, currentSpans: mappings, resolveMode: "outline", limitSymbols: 500,
+            buildCallGraphHint: symbol => ({ supported: true, symbolRef: { file: symbol.file, symbolId: symbol.symbolInstanceId },
+                validated: true, validatedAt: "2026-10-20", relationshipBuiltAt: "2026-10-20" }),
+            buildOutlineSpanWarningCodes: () => [],
+            readSourceLines: async () => { throw new Error("published projection cannot read source"); } });
+
+        assert.equal(payload.status, "ok");
+        const projected = payload.outline!.symbols;
+        const projectedTarget = projected.find(symbol => symbol.symbolId === target.symbolInstanceId);
+        assert.ok(projectedTarget);
+        // The published span keeps its published meaning and value.
+        assert.deepEqual(projectedTarget.span, target.span);
+        assert.deepEqual(projectedTarget.currentSpan, {
+            startLine: 2,
+            endLine: current.span.endLine,
+            startByte: current.span.startByte,
+            endByte: current.span.endByte,
+            startColumn: current.span.startColumn,
+            endColumn: current.span.endColumn,
+            currentSourceHash: current.currentSourceHash,
+            resolution: "current_symbol_validated",
+        });
+        // A declaration without a proven current counterpart carries no current span.
+        const renamed = projected.find(symbol => symbol.name === "other");
+        assert.ok(renamed);
+        assert.equal(renamed.currentSpan, undefined);
+        assert.deepEqual(renamed.span, records.find(symbol => symbol.name === "other")!.span);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test("a current span does not change the window filter or the page walk", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "outline-current-span-window-"));
+    try {
+        const publishedSource = "def first():\n    return 1\n\ndef second():\n    return 2\n";
+        const analysis = await createLanguageAnalysisService().analyze({ content: publishedSource, language: "python", relativePath: "seed.py" });
+        const records = buildSymbolRecordsForFile({ relativePath: "seed.py", language: "python", content: publishedSource,
+            fileHash: createHash("sha256").update(publishedSource).digest("hex"), extractorVersion: "test",
+            chunks: [...analysis.chunks], extractedSymbols: analysis.symbols });
+        await writeFile(path.join(root, "seed.py"), publishedSource);
+        const { mappings } = await mapPublishedSymbolsToCurrentSpans({
+            codebaseRoot: root,
+            symbols: records.filter(symbol => symbol.kind !== "file"),
+        });
+        assert.equal(mappings.size, 2);
+
+        const page = await buildRegistryFileOutlinePayload({ codebaseRoot: root, file: "seed.py", symbols: records,
+            publishedSpans: true, currentSpans: mappings, resolveMode: "outline", limitSymbols: 1, windowStart: 4,
+            continuationArgs: { path: "/repo", file: "seed.py", limitSymbols: 1 },
+            buildCallGraphHint: () => ({ supported: false, reason: "test" }) as never,
+            buildOutlineSpanWarningCodes: () => [],
+            readSourceLines: async () => undefined });
+
+        assert.deepEqual(page.outline?.symbols.map(symbol => symbol.name), ["second"]);
+        assert.ok(page.outline?.symbols[0]?.currentSpan);
+        assert.equal(page.outline?.symbols[0]?.currentSpan?.startLine, 4);
+        assert.equal(page.hasMore, false);
+        assert.equal(page.hints, undefined);
     } finally {
         await rm(root, { recursive: true, force: true });
     }

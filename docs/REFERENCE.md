@@ -440,7 +440,7 @@ Restart OpenCode after restoring the published runtime.
 | `search_codebase` | Search the repository-intelligence Publication with semantic, lexical, and exact evidence and return owner-oriented results. Start here for behavior, ownership, configuration, or path discovery. |
 | `architecture_overview` | Summarize bounded Publication architecture evidence as logical areas, cross-area boundaries, and hotspots. |
 | `continue_search` | Reveal more of one frozen result set without rerunning retrieval. Use it when the initial disclosure is relevant but incomplete. |
-| `file_outline` | List the indexed symbols and spans in one file. Use it to choose an exact owner before reading implementation. |
+| `file_outline` | List the indexed symbols and spans in one file. A symbol whose current declaration was proven against the current bytes also carries the current span next to the published span. Use it to choose an exact owner before reading implementation. |
 | `call_graph` | Inspect advisory callers, callees, imports, and exports when supported. Verify inbound leads before blast-radius changes. |
 | `trace_path` | Find one bounded shortest path between exact published symbols over selected persisted relationships, with scope and truncation evidence. |
 | `find_references` | Scan validated published source for ranking-independent exact textual occurrences of one canonical symbol, with exact spans and coverage evidence. |

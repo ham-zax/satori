@@ -5,7 +5,7 @@ import {
     repairSourceBackedPythonSpans,
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
-import { validateCurrentSourceSymbolSpans } from "./current-source-symbols.js";
+import { validateCurrentSourceSymbolSpans, type CurrentSourceSpanMapping } from "./current-source-symbols.js";
 import {
     buildCanonicalSymbolRegistryView,
     projectCanonicalSymbolIdentity,
@@ -45,6 +45,24 @@ function sortRegistrySymbols(symbols: SymbolRecord[]): SymbolRecord[] {
         if (labelCmp !== 0) return labelCmp;
         return compareNullableStringsAsc(a.symbolInstanceId, b.symbolInstanceId);
     });
+}
+
+/**
+ * Project one proven current span. The witness travels with the span so a
+ * consumer can tell which current bytes the coordinates describe.
+ */
+function projectCurrentSpan(mapping: CurrentSourceSpanMapping): NonNullable<FileOutlineSymbolResult["currentSpan"]> {
+    const span = mapping.span;
+    return {
+        startLine: span.startLine,
+        endLine: span.endLine,
+        ...(span.startByte !== undefined ? { startByte: span.startByte } : {}),
+        ...(span.endByte !== undefined ? { endByte: span.endByte } : {}),
+        ...(span.startColumn !== undefined ? { startColumn: span.startColumn } : {}),
+        ...(span.endColumn !== undefined ? { endColumn: span.endColumn } : {}),
+        currentSourceHash: mapping.currentSourceHash,
+        resolution: "current_symbol_validated",
+    };
 }
 
 function buildVisibleRegistrySymbolState(input: {
@@ -102,6 +120,12 @@ export async function buildRegistryFileOutlinePayload(input: {
     resolveMode: "outline" | "exact";
     /** Project persisted coordinates without current-source validation or repair. */
     publishedSpans?: boolean;
+    /**
+     * Proven current source spans, keyed by published symbol identifier.
+     * Absent or missing entries leave the projected symbol without a current
+     * span; the published span is never replaced by a current one.
+     */
+    currentSpans?: ReadonlyMap<string, CurrentSourceSpanMapping>;
     symbolIdExact?: string;
     symbolLabelExact?: string;
     windowStart?: number;
@@ -115,9 +139,13 @@ export async function buildRegistryFileOutlinePayload(input: {
     // Symbol keys bind the repo-relative file, so this complete file-scoped
     // registry view contains every possible parent-key candidate.
     const registry = buildCanonicalSymbolRegistryView(input.symbols);
-    const mapSymbol = (symbol: SymbolRecord): Omit<FileOutlineSymbolResult, "callGraphHint"> => (
-        projectCanonicalSymbolIdentity({ symbol, registry })
-    );
+    const mapSymbol = (symbol: SymbolRecord): Omit<FileOutlineSymbolResult, "callGraphHint"> => {
+        const currentSpan = input.currentSpans?.get(symbol.symbolInstanceId);
+        return {
+            ...projectCanonicalSymbolIdentity({ symbol, registry }),
+            ...(currentSpan ? { currentSpan: projectCurrentSpan(currentSpan) } : {}),
+        };
+    };
 
     if (input.resolveMode === "exact") {
         const persistedExactMatches = findExactRegistrySymbols({

@@ -394,7 +394,7 @@ Satori also supports connected configurations: Voyage embeddings with LanceDB or
 | `search_codebase` | Find behavior, ownership, identifiers, configuration, and relevant code evidence. |
 | `architecture_overview` | Summarize bounded Publication architecture evidence as logical areas, cross-area boundaries, and hotspots. |
 | `continue_search` | Reveal more of the same frozen grouped result set without rerunning retrieval. |
-| `file_outline` | Inspect indexed owners and structural spans in one file. |
+| `file_outline` | Inspect indexed owners and structural spans in one file. A symbol whose current declaration was proven against the current bytes also carries the current span next to the published span. |
 | `call_graph` | Follow supported callers, callees, imports, and exports as conservative navigation evidence. |
 | `trace_path` | Find one bounded deterministic path between two exact published symbol IDs over selected persisted relationships. |
 | `find_references` | Find ranking-independent exact textual occurrences of one canonical symbol across validated published source. |

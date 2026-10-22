@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import {
     buildSymbolRecordsForFile,
@@ -5,6 +6,7 @@ import {
     normalizeLanguageId,
     recordSourceProcessing,
     type SymbolRecord,
+    type SymbolSpan,
     type LanguageAnalysisPort,
     type SourceMeasurementObservation,
     type SourceProcessingOutcome,
@@ -54,6 +56,19 @@ export type CurrentSourceEvidence = {
     source: string;
     observedHash: string;
     measurementObservation?: SourceMeasurementObservation;
+};
+
+/**
+ * The current source span of one published symbol, proven by the matcher.
+ * The published identifier and the published span stay unchanged; this is a
+ * separate, witness-bound view of where the declaration sits in the current
+ * bytes.
+ */
+export type CurrentSourceSpanMapping = {
+    symbolInstanceId: string;
+    span: SymbolSpan;
+    currentSourceHash: string;
+    resolutionEvidence: CurrentSourceSpanResolutionEvidence;
 };
 
 export async function readCurrentSourceEvidence(
@@ -446,4 +461,69 @@ export async function validateCurrentSourceSymbolSpansFromEvidence(input: {
     } catch {
         return { validations: input.symbols.map((symbol) => unchangedValidation(symbol, "unavailable")), evidence };
     }
+}
+
+/**
+ * Build current-source evidence from bytes a caller already read, so no
+ * second pathname read is needed. The witness hashes the raw bytes, which is
+ * the registry file hash convention.
+ */
+export function buildCurrentSourceEvidenceFromBytes(input: {
+    canonicalRoot: string;
+    relativeFile: string;
+    sourceBytes: Buffer;
+}): CurrentSourceEvidence {
+    return {
+        canonicalRoot: input.canonicalRoot,
+        relativeFile: input.relativeFile.replace(/\\/g, "/"),
+        sourceBytes: input.sourceBytes,
+        source: input.sourceBytes.toString("utf8"),
+        observedHash: crypto.createHash("sha256").update(input.sourceBytes).digest("hex"),
+    };
+}
+
+/**
+ * Project the current source span of every published symbol whose
+ * correspondence the matcher already proved. Only a matched declaration
+ * yields a mapping: missing, ambiguous, unavailable, and not applicable are
+ * not proof that a current declaration exists. The witness is the observed
+ * hash of the current bytes, so a later edit invalidates every mapping built
+ * from this evidence.
+ */
+export async function mapPublishedSymbolsToCurrentSpans(input: {
+    codebaseRoot: string;
+    symbols: SymbolRecord[];
+    evidence?: CurrentSourceEvidence;
+}): Promise<{ mappings: Map<string, CurrentSourceSpanMapping>; currentSourceHash?: string }> {
+    if (input.symbols.length === 0) {
+        return { mappings: new Map() };
+    }
+    const evidence = input.evidence
+        ?? await readCurrentSourceEvidence(input.codebaseRoot, input.symbols[0].file);
+    if (!evidence) {
+        return { mappings: new Map() };
+    }
+    if (evidence.sourceBytes.byteLength > CURRENT_SOURCE_MAX_BYTES) {
+        // The matcher rebuilds every symbol of the file, so the inspection
+        // bound that the matcher's own read applies holds for supplied
+        // evidence too. A larger file yields no current span.
+        return { mappings: new Map() };
+    }
+    const { validations } = await validateCurrentSourceSymbolSpansFromEvidence({
+        symbols: input.symbols,
+        evidence,
+    });
+    const mappings = new Map<string, CurrentSourceSpanMapping>();
+    for (const validation of validations) {
+        if (validation.match !== "matched") {
+            continue;
+        }
+        mappings.set(validation.symbol.symbolInstanceId, {
+            symbolInstanceId: validation.symbol.symbolInstanceId,
+            span: validation.symbol.span,
+            currentSourceHash: evidence.observedHash,
+            resolutionEvidence: validation.resolutionEvidence,
+        });
+    }
+    return { mappings, currentSourceHash: evidence.observedHash };
 }

@@ -14,6 +14,7 @@ import {
     uniqueInboundCallerSiteFile,
 } from "./relationship-backed-call-graph.js";
 import { projectCallGraphEvidence } from "./call-graph-evidence-projection.js";
+import type { PythonSourceBackedSpanRepair } from "./python-call-fallback.js";
 import type { CallGraphNoteResult as CallGraphNote } from "./search-types.js";
 
 test("uniqueInboundCallerSiteFile returns sole suppressed caller site, else undefined", () => {
@@ -926,4 +927,135 @@ test("call graph discloses partial semantic files for the root file and same-lan
     const both = await build("both");
     assert.ok(both?.warnings?.includes("CALL_GRAPH_SOURCE_FILE_PARTIAL:excluded_regions"));
     assert.ok(both?.warnings?.includes("CALL_GRAPH_INBOUND_PARTIAL_FILES:2"));
+});
+
+test("a shifted current span never removes a published call site", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "python",
+        kind: "function",
+        qualifiedName: "target",
+        name: "target",
+        label: "function target()",
+        span: { startLine: 1, endLine: 2 },
+        parentQualifiedNamePath: [],
+        file: "src/target.py",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const caller = {
+        ...target,
+        symbolKey: "caller-key",
+        symbolInstanceId: "caller-id",
+        qualifiedName: "caller",
+        name: "caller",
+        label: "function caller()",
+        file: "src/caller.py",
+    } as SymbolRecord;
+    const callee = {
+        ...target,
+        symbolKey: "callee-key",
+        symbolInstanceId: "callee-id",
+        qualifiedName: "callee",
+        name: "callee",
+        label: "function callee()",
+    } as SymbolRecord;
+    const registry = {
+        manifest: { files: [] },
+        symbolsByFile: new Map([
+            [target.file, [target, callee]],
+            [caller.file, [caller]],
+        ]),
+        symbolsByInstanceId: new Map([
+            [target.symbolInstanceId, target],
+            [caller.symbolInstanceId, caller],
+            [callee.symbolInstanceId, callee],
+        ]),
+    } as unknown as SymbolRegistry;
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
+        files: [],
+    };
+    const records: RelationshipRecord[] = [{
+        sourceKey: caller.symbolKey,
+        sourceInstanceId: caller.symbolInstanceId,
+        targetKey: target.symbolKey,
+        targetInstanceId: target.symbolInstanceId,
+        type: "CALLS",
+        confidence: "high",
+        resolutionAuthority: "direct_binding",
+        strategy: "rule",
+        file: caller.file,
+        span: { startLine: 2, endLine: 2 },
+    }, {
+        sourceKey: target.symbolKey,
+        sourceInstanceId: target.symbolInstanceId,
+        targetKey: callee.symbolKey,
+        targetInstanceId: callee.symbolInstanceId,
+        type: "CALLS",
+        confidence: "high",
+        resolutionAuthority: "direct_binding",
+        strategy: "rule",
+        file: target.file,
+        span: { startLine: 2, endLine: 2 },
+    }];
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            records,
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const build = (sourceSpanRepair?: PythonSourceBackedSpanRepair) => graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        ...(sourceSpanRepair ? { sourceSpanRepair } : {}),
+        direction: "both",
+        depth: 1,
+        limit: 20,
+    });
+
+    const published = await build();
+    assert.ok(published);
+    assert.equal(published.edges.length, 2);
+    assert.deepEqual(published.edges.map(edge => [edge.srcSymbolId, edge.dstSymbolId, edge.site.file, edge.site.startLine]), [
+        [caller.symbolInstanceId, target.symbolInstanceId, caller.file, 2],
+        [target.symbolInstanceId, callee.symbolInstanceId, target.file, 2],
+    ]);
+
+    // The declaration moved down in the current file. The published call site
+    // is judged against the published span, so no published edge is dropped.
+    const shifted = await build({
+        symbol: { ...target, span: { startLine: 11, endLine: 12 } },
+        attempted: true,
+        validated: true,
+        repaired: true,
+        startBeforeDefinition: false,
+        endTruncated: false,
+    });
+    assert.ok(shifted);
+    assert.deepEqual(shifted.edges, published.edges);
+    assert.equal(
+        (shifted.warnings ?? []).some((warning) => warning.startsWith("CALL_GRAPH_EDGE_OUTSIDE_SOURCE_SPAN")),
+        false,
+    );
 });

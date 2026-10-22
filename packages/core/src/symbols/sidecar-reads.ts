@@ -80,6 +80,30 @@ export interface ReadRelationshipSidecarInput {
      * Query-side readers use it to keep only compact projections resident.
      */
     visitAnalysisEvidence?: (filePath: string, evidence: RelationshipAnalysisEvidence) => void;
+    /** Reuses shards that an earlier read already validated. See `RelationshipShardReuse`. */
+    shardReuse?: RelationshipShardReuse;
+}
+
+/**
+ * Per-shard reuse across Publications. Publications hardlink unchanged shards,
+ * so an unchanged shard keeps its reuse key. The key covers every parse input:
+ * the manifest contribution schema, the manifest file entry, and the shard
+ * file's stat witness (device, inode, size, mtime). ctime is excluded because
+ * each new hardlink changes it.
+ */
+export interface RelationshipShardReuse {
+    /**
+     * Returns the records validated under `key`, or undefined to read and
+     * parse the shard. Must have no side effects: it runs before earlier shards
+     * are visited.
+     */
+    lookup(key: string): readonly RelationshipRecord[] | undefined;
+    /**
+     * Called for every shard in manifest order, after `visitAnalysisEvidence`
+     * for that file. A reused shard was not read, so `visitAnalysisEvidence`
+     * did not run for it.
+     */
+    visitShard(filePath: string, key: string, records: readonly RelationshipRecord[], reused: boolean): void;
 }
 
 export interface ReadRelationshipAnalysisEvidenceInput {
@@ -220,36 +244,50 @@ export async function readJson(filePath: string): Promise<unknown> {
     return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
 
-type ShardBatchVisitor<T> = (item: T, serialized: string) => ReadShardVisitResult;
+type ShardBatchVisitor<T> = (item: T, serialized: string, stats: fs.BigIntStats) => ReadShardVisitResult;
 type ReadShardVisitResult = { status: 'ok' } | { status: 'incompatible'; reason: string };
+type ShardReadSkip<T, R> = {
+    /** Pure lookup; a defined result skips the read of that shard. */
+    lookup: (item: T, stats: fs.BigIntStats) => R | undefined;
+    visit: (item: T, reused: R, stats: fs.BigIntStats) => ReadShardVisitResult;
+};
 
 /**
  * Reads shards in order, in batches bounded by file count and total bytes, and
  * hands each serialized shard to `visit` before the next batch is read. Stops at
- * the first rejected shard.
+ * the first rejected shard. Shards that `skip.lookup` resolves are not read and
+ * go to `skip.visit` at their position in the order.
  */
-async function visitShardsInByteBudget<T>(
+async function visitShardsInByteBudget<T, R = never>(
     readableRoot: string,
     items: readonly T[],
     shardPathOf: (item: T) => string,
     visit: ShardBatchVisitor<T>,
+    skip?: ShardReadSkip<T, R>,
 ): Promise<ReadShardVisitResult> {
     let offset = 0;
     while (offset < items.length) {
-        const batch: { item: T; filePath: string }[] = [];
+        const batch: { item: T; filePath: string; stats: fs.BigIntStats; reused: R | undefined }[] = [];
         let batchBytes = 0;
         while (offset < items.length && batch.length < SHARD_READ_MAX_FILES_PER_BATCH) {
             const item = items[offset]!;
             const filePath = path.join(readableRoot, shardPathOf(item));
-            const { size } = await fs.promises.stat(filePath);
+            const stats = await fs.promises.stat(filePath, { bigint: true });
+            const reused = skip?.lookup(item, stats);
+            const size = reused === undefined ? Number(stats.size) : 0;
             if (batch.length > 0 && batchBytes + size > SHARD_READ_MAX_BYTES_PER_BATCH) break;
-            batch.push({ item, filePath });
+            batch.push({ item, filePath, stats, reused });
             batchBytes += size;
             offset += 1;
         }
-        const serializedShards = await Promise.all(batch.map((entry) => fs.promises.readFile(entry.filePath, 'utf8')));
+        const serializedShards = await Promise.all(batch.map((entry) => (
+            entry.reused === undefined ? fs.promises.readFile(entry.filePath, 'utf8') : undefined
+        )));
         for (let index = 0; index < batch.length; index += 1) {
-            const result = visit(batch[index]!.item, serializedShards[index]!);
+            const entry = batch[index]!;
+            const result = entry.reused === undefined
+                ? visit(entry.item, serializedShards[index]!, entry.stats)
+                : skip!.visit(entry.item, entry.reused, entry.stats);
             if (result.status !== 'ok') return result;
         }
     }
@@ -510,11 +548,12 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                 reason: 'relationship shard set does not exactly match the relationship manifest',
             };
         }
+        const shardReuse = input.shardReuse;
         const shardResult = await visitShardsInByteBudget(
             readableRoot,
             manifest.files,
             (file) => file.shardPath,
-            (file, serializedShard) => {
+            (file, serializedShard, stats) => {
                 const parsed = parseRelationshipShard(
                     manifest,
                     file,
@@ -529,8 +568,19 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
                         analysisByFile.set(file.path, parsed.analysisEvidence);
                     }
                 }
+                shardReuse?.visitShard(file.path, relationshipShardReuseKey(manifest, file, stats), parsed.records, false);
                 return { status: 'ok' };
             },
+            shardReuse
+                ? {
+                    lookup: (file, stats) => shardReuse.lookup(relationshipShardReuseKey(manifest, file, stats)),
+                    visit: (file, reusedRecords, stats) => {
+                        for (const record of reusedRecords) records.push(record);
+                        shardReuse.visitShard(file.path, relationshipShardReuseKey(manifest, file, stats), reusedRecords, true);
+                        return { status: 'ok' };
+                    },
+                }
+                : undefined,
         );
         if (shardResult.status !== 'ok') {
             return { status: 'incompatible', rootPath, reason: shardResult.reason };
@@ -552,6 +602,25 @@ export async function readRelationshipSidecar(input: ReadRelationshipSidecarInpu
         analysisByFile,
         warnings: [...new Set(warnings)].sort(compareStrings),
     };
+}
+
+function relationshipShardReuseKey(
+    manifest: RelationshipManifest,
+    file: RelationshipManifest['files'][number],
+    stats: fs.BigIntStats,
+): string {
+    return JSON.stringify([
+        manifest.fileContributionSchemaVersion ?? null,
+        file.path,
+        file.hash,
+        file.shardPath,
+        file.relationshipCount,
+        file.analysisEvidencePresent,
+        String(stats.dev),
+        String(stats.ino),
+        String(stats.size),
+        String(stats.mtimeNs),
+    ]);
 }
 
 type ParsedRelationshipShard =

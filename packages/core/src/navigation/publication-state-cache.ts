@@ -52,6 +52,11 @@ export class PublicationStateCache<T> {
         return entry.value;
     }
 
+    /** The resident state of `root` for any identity, without touching it. */
+    public peek(root: string): Promise<T> | undefined {
+        return this.entries.get(root)?.value;
+    }
+
     public has(root: string, identity: string): boolean {
         return this.entries.get(root)?.identity === identity;
     }

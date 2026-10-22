@@ -325,28 +325,54 @@ function matchResolutionClaim(
  */
 type LoadedRelationshipState =
     | NavigationStoreFailure
-    | (NavigationStoreRelationshipsOk & { claimFilesByKey: Map<string, string[]> });
+    | (NavigationStoreRelationshipsOk & {
+        claimFilesByKey: Map<string, string[]>;
+        /** Per-shard projection by reuse key, so the next Publication skips unchanged shards. */
+        shardsByReuseKey: Map<string, RelationshipShardProjection>;
+    });
+
+type RelationshipShardProjection = {
+    records: readonly RelationshipRecord[];
+    claimKeys: readonly string[];
+};
 
 async function readRelationshipState(
     input: NavigationStoreInput & { expectedSymbolRegistryManifestHash: string },
+    previousShards?: ReadonlyMap<string, RelationshipShardProjection>,
 ): Promise<LoadedRelationshipState> {
     const claimFilesByKey = new Map<string, string[]>();
+    const shardsByReuseKey = new Map<string, RelationshipShardProjection>();
+    const parsedClaimKeysByFile = new Map<string, string[]>();
     const result = await readRelationshipSidecar({
         normalizedRootPath: input.normalizedRootPath,
         expectedSymbolRegistryManifestHash: input.expectedSymbolRegistryManifestHash,
         publicationId: input.publicationId,
         navigationRoot: input.navigationRoot,
         visitAnalysisEvidence: (filePath, evidence) => {
+            const keys = new Set<string>();
             for (const claim of evidence.resolutionClaims ?? []) {
-                for (const key of resolutionClaimKeys(claim)) {
-                    const files = claimFilesByKey.get(key);
+                for (const key of resolutionClaimKeys(claim)) keys.add(key);
+            }
+            parsedClaimKeysByFile.set(filePath, [...keys]);
+        },
+        shardReuse: {
+            lookup: (key) => previousShards?.get(key)?.records,
+            // Runs in manifest order, so each key lists its files in manifest order.
+            visitShard: (filePath, key, records, reused) => {
+                const claimKeys = reused
+                    ? previousShards!.get(key)!.claimKeys
+                    : parsedClaimKeysByFile.get(filePath) ?? [];
+                parsedClaimKeysByFile.delete(filePath);
+                shardsByReuseKey.set(key, { records, claimKeys });
+                for (const claimKey of claimKeys) {
+                    const files = claimFilesByKey.get(claimKey);
                     if (!files) {
-                        claimFilesByKey.set(key, [filePath]);
-                    } else if (files[files.length - 1] !== filePath) {
+                        claimFilesByKey.set(claimKey, [filePath]);
+                    } else {
                         files.push(filePath);
                     }
                 }
-            }
+            },
         },
     });
     if (result.status !== 'ok') {
@@ -365,6 +391,7 @@ async function readRelationshipState(
         records: result.records.sort(compareRelationshipRecords),
         warnings: result.warnings,
         claimFilesByKey,
+        shardsByReuseKey,
     };
 }
 
@@ -711,10 +738,19 @@ export class JsonNavigationStore {
             navigationRoot: input.navigationRoot,
             expectedSymbolRegistryManifestHash,
         };
+        // The superseded state of this root seeds shard reuse; it is released
+        // from the cache below and only its shared projections survive the load.
+        const previous = this.relationships.peek(input.normalizedRootPath);
         return this.relationships.get(
             input.normalizedRootPath,
             relationshipIdentity(relationshipInput),
-            () => readRelationshipState(relationshipInput),
+            async () => {
+                const previousState = await previous?.catch(() => undefined);
+                return readRelationshipState(
+                    relationshipInput,
+                    previousState?.status === 'ok' ? previousState.shardsByReuseKey : undefined,
+                );
+            },
             (state) => state.status === 'ok',
         );
     }

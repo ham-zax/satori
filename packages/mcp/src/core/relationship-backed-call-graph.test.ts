@@ -769,6 +769,107 @@ test("call graph path scope filters textual fallback references returned by the 
     assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCount, 1);
 });
 
+test("call graph keeps published source references and drops current_source_text hits", async () => {
+    const target = {
+        symbolKey: "target-key",
+        symbolInstanceId: "target-id",
+        language: "typescript",
+        kind: "function",
+        qualifiedName: "target",
+        name: "target",
+        label: "function target()",
+        span: { startLine: 1, endLine: 1 },
+        parentQualifiedNamePath: [],
+        file: "src/target.ts",
+        fileHash: "target-hash",
+        extractorVersion: "fixture",
+    } as SymbolRecord;
+    const registry = buildSymbolRegistry({
+        manifest: { files: [] } as never,
+        symbols: [target],
+    });
+    const relationshipManifest = {
+        schemaVersion: "relationship_v3",
+        symbolRegistryManifestHash: "registry-hash",
+        relationshipVersion: "fixture",
+        builtAt: "2026-09-22T00:00:00.000Z",
+        providerCoverage: [],
+        files: [],
+    };
+    const navigationStore = {
+        getRelationships: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            records: [],
+            warnings: [],
+        }),
+        getResolutionEvidence: async () => ({
+            status: "ok",
+            rootPath: "/repo",
+            manifestHash: "relationship-hash",
+            manifest: relationshipManifest,
+            matches: [],
+            warnings: [],
+        }),
+    };
+    const graph = new RelationshipBackedCallGraph({ navigationStore: navigationStore as never });
+    const result = await graph.build({
+        codebaseRoot: "/repo",
+        publicationId: "publication-1",
+        navigationRoot: "/state/publication-1/navigation",
+        registry,
+        registryManifestHash: "registry-hash",
+        resolvedSymbol: target,
+        direction: "callers",
+        depth: 1,
+        limit: 20,
+        findExactSourceReferences: async () => ({
+            target: {
+                symbolId: target.symbolInstanceId,
+                symbolLabel: target.label,
+                name: target.name,
+                qualifiedName: target.qualifiedName,
+                file: target.file,
+                span: target.span,
+            },
+            references: [
+                {
+                    file: "src/edited.ts",
+                    span: { startLine: 2, endLine: 2, startColumn: 0, endColumn: 6 },
+                    occurrenceKind: "identifier",
+                    matchedText: "target",
+                    evidenceClass: "current_source_text",
+                },
+                {
+                    file: "src/published.ts",
+                    span: { startLine: 3, endLine: 3, startColumn: 0, endColumn: 6 },
+                    occurrenceKind: "identifier",
+                    matchedText: "target",
+                    evidenceClass: "published_source_text",
+                },
+            ],
+            coverage: {
+                status: "partial",
+                publishedFileCount: 2,
+                eligibleFileCount: 2,
+                inspectedFileCount: 2,
+                skippedFileCount: 0,
+                matchedOccurrenceCount: 2,
+                returnedOccurrenceCount: 2,
+                reasons: [{ code: "source_changed", file: "src/edited.ts", detail: "fixture edit" }],
+            },
+        }),
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result!.sourceReferences?.map((reference) => [reference.site.file, reference.evidenceClass]), [
+        ["src/published.ts", "published_source_text"],
+    ]);
+    assert.equal(result!.inboundCoverageEvidence?.sourceReferenceCount, 1);
+});
+
 test("call graph discloses semantic provider skips for the root file and same-language callers", async () => {
     const target = {
         symbolKey: "target-key",

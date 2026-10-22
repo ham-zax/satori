@@ -707,11 +707,14 @@ The design must answer these points before any edit:
 
 - P3: golden outputs updated in `abd6ccef`. In `alt_terms_*` the
   tie-break ranks `src/effects.ts` first, so the reranker does not receive
-  it and `orderAuthority` becomes `reranker_order`. Still needed: a unit
-  test for the tie-break (equal `fusionScore`, one candidate with
-  `exactLexicalMatch`).
-- P4: an edited file yields `current_source_text` hits with no owner and
-  `partial` coverage. `call_graph` excludes those hits.
+  it and `orderAuthority` becomes `reranker_order`. Done: "equal fusion
+  scores prefer an exact lexical match before path order" in
+  `search-retrieval-order.test.ts`.
+- P4 (done): an edited file yields `current_source_text` hits with no owner
+  and `partial` coverage (`exact-reference-search.test.ts`). `call_graph`
+  excludes those hits ("call graph keeps published source references and
+  drops current_source_text hits" in `relationship-backed-call-graph.test.ts`).
+  Each test fails when its guard is removed.
 - Shard reuse: a differential test (reused load equals a cold load for
   records, `claimFilesByKey` order and manifest), a rewritten-shard case
   (new mtime or inode gives a miss), and a mutation check (drop the stat

@@ -44,6 +44,16 @@ test("applies must and exact controls before fusion order", () => {
     assert.equal(result.exactMatchPinningApplied, true);
 });
 
+test("equal fusion scores prefer an exact lexical match before path order", () => {
+    const candidates = [
+        candidate({ path: "src/a.ts", score: 0.5 }),
+        candidate({ path: "src/z.ts", score: 0.5, exact: true }),
+    ];
+    const result = sortNativeRetrievalCandidates(candidates, { exactMatchFirst: false, mustMatchesFirst: false });
+    assert.deepEqual(candidates.map((item) => item.result.relativePath), ["src/z.ts", "src/a.ts"]);
+    assert.equal(result.exactMatchPinningApplied, false);
+});
+
 test("uses ordinal path, line, label, and identifier tie breakers", () => {
     const candidates = [
         candidate({ path: "src/b.ts", label: "z", id: "2" }),

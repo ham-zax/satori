@@ -35,6 +35,11 @@ function compareNativeRetrievalCandidates<T extends NativeRetrievalCandidateLike
         return a.exactLexicalMatch ? -1 : 1;
     }
     if (b.fusionScore !== a.fusionScore) return b.fusionScore - a.fusionScore;
+    // Equal RRF ranks tie often (a lexical-only overlay hit vs a dense hit
+    // without the term). Lexical evidence decides before path order does.
+    if (a.exactLexicalMatch !== b.exactLexicalMatch) {
+        return a.exactLexicalMatch ? -1 : 1;
+    }
     const pathOrder = compareOrdinal(a.result.relativePath, b.result.relativePath);
     if (pathOrder !== 0) return pathOrder;
     const lineOrder = compareNullableNumbers(a.result.startLine, b.result.startLine);

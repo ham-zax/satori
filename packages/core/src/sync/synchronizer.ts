@@ -84,7 +84,8 @@ export interface PrepareFileChangesOptions {
 
 export type SourceFreshnessPathComparison =
     | { readonly status: 'matches' }
-    | { readonly status: 'differs' }
+    // changedPaths: sorted added, modified, and removed paths, when the comparison enumerates them.
+    | { readonly status: 'differs'; readonly changedPaths?: readonly string[] }
     | { readonly status: 'unavailable' };
 
 export type ProvenSourceFreshnessCheckpointEvidence =
@@ -506,10 +507,13 @@ export class FileSynchronizer {
         if (checkpointVersionBefore < 1) return { status: 'unavailable' };
         try {
             const prepared = await this.prepareChanges({ forceFullHash });
-            const hasDiffs = prepared.changes.added.length > 0
-                || prepared.changes.removed.length > 0
-                || prepared.changes.modified.length > 0;
-            if (hasDiffs) return { status: 'differs' };
+            const { added, removed, modified } = prepared.changes;
+            if (added.length > 0 || removed.length > 0 || modified.length > 0) {
+                return {
+                    status: 'differs',
+                    changedPaths: [...new Set([...added, ...removed, ...modified])].sort(compareContractStrings),
+                };
+            }
             await prepared.assertSourceObservationCurrent();
         } catch {
             return { status: 'unavailable' };

@@ -393,6 +393,48 @@ test("periodic freshness skips a root that a read just proved unchanged with a f
     assert.equal(syncs, 0);
 });
 
+test("a differing full source comparison reports its changed paths to the read", async () => {
+    const root = "/repo";
+    const publication = {
+        publicationId: "publication-1",
+        publication: { status: "complete", canonicalRoot: root, policy: {} },
+    };
+    const context = {
+        listCurrentPublications: () => [],
+        getCurrentPublication: () => publication,
+        inspectSourceFreshnessCheckpoint: async () => ({
+            status: "valid",
+            observationToken: "checkpoint-observation",
+            publicationId: "publication-1",
+        }),
+        getCurrentPublicationSourceObservation: () => "checkpoint-observation",
+        compareAllSourceToFreshnessCheckpoint: async () => ({
+            status: "differs",
+            changedPaths: ["src/committed.ts", "src/removed.ts"],
+        }),
+    };
+    const mutationRuntime = {
+        assertCurrent: () => {},
+        getCurrentOperation: () => undefined,
+        updateCurrentOperation: () => { throw new Error("not used"); },
+    };
+    const manager = new SyncManager(context as never, {
+        watchEnabled: false,
+        mutationRuntime: mutationRuntime as never,
+    });
+    const reported: string[][] = [];
+
+    const decision = await manager.assessReadFreshness(root, 0, {
+        preparedPublication: publication as never,
+        fullSourceComparison: true,
+        onSourceChangedPaths: (paths) => reported.push([...paths]),
+    });
+
+    assert.equal(decision.mode, "read_only");
+    assert.deepEqual(decision.sourceFreshness, { state: "changed", reason: "full_source_comparison" });
+    assert.deepEqual(reported, [["src/committed.ts", "src/removed.ts"]]);
+});
+
 function createDifferingComparisonManager() {
     const root = "/repo";
     const publication = {

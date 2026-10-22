@@ -265,6 +265,44 @@ This probe does not record peak memory. The N=16 trial failed with
 N=16 has no after numbers. Go semantic analysis (`navigation.semantic go`,
 about 3,960 ms) is now the largest sync cost.
 
+## Commit gap (gap 1) design (22 October 2026)
+
+Evidence: a throwaway 6-file TypeScript repository (temporary HOME, build
+`1e59127f`). An uncommitted edit is found through the overlay. Right after
+`git commit`, two searches miss it: `git status` is empty, so the overlay has
+no paths, and search serves the old publication with `SOURCE_CHANGES_PENDING`.
+An automatic sync (`Trigger: watcher_pending`) closes the gap within 3 s on
+this repository. On trufflehog one sync takes about 12.6 s.
+
+Mechanism: with the watcher observation still pending, every search runs the
+full source comparison (`compareAllSourceToFreshnessCheckpoint`). The
+synchronizer computes `prepared.changes` (added, modified, removed) and
+returns only `differs`.
+
+Design:
+
+- `SourceFreshnessPathComparison` `differs` carries optional sorted
+  `changedPaths` from `compareSourceToOwnedCheckpoint`
+  (`core/src/sync/synchronizer.ts`). The synchronizer stays the owner of
+  "which paths differ from the publication".
+- `assessReadFreshness` (`mcp/src/core/sync.ts`) reports them through a new
+  `onSourceChangedPaths` option, like `onPhaseTiming`. `FreshnessDecision`
+  and the response shape do not change.
+- The search coordinator adds the reported paths to a copy of the
+  `git status` set before the overlay reads it. If `git status` is not
+  available, the overlay stays off, as before.
+- The fix is language-agnostic. Existing overlay limits (32 files) apply.
+
+Checks: a `sync-read-freshness.test.ts` case for the callback, a synchronizer
+case for `changedPaths`, and the commit-gap probe (the search after the commit
+must find the edit).
+
+Gap 1 results: `sync-read-freshness.test.ts` 9 pass (the new case fails with
+the callback off), `synchronizer-registry.test.ts` 14 pass. Commit-gap probe:
+step B (search at once after `git commit`, no sync) now returns
+`src/mod2.ts` with `overlaidPaths: ["src/mod2.ts"]`. Before the fix it
+returned no files.
+
 ## Remaining work (22 October 2026, after D4 and B1)
 
 In this order:

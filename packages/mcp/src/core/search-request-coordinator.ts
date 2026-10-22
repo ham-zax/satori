@@ -1060,6 +1060,7 @@ export class SearchRequestCoordinator {
                             && exactSourceComparisonRequired
                             ? Array.from(changedFilesState.files).sort()
                             : undefined;
+                        let sourceChangedPaths: readonly string[] | undefined;
                         const decision = await this.readiness.assessReadFreshness(
                             effectiveRoot,
                             exactSourceComparisonRequired || fullSourceComparisonRequired
@@ -1073,7 +1074,12 @@ export class SearchRequestCoordinator {
                                     ? { exactSourceComparisonPaths }
                                     : {}),
                                 ...(fullSourceComparisonRequired
-                                    ? { fullSourceComparison: true }
+                                    ? {
+                                        fullSourceComparison: true,
+                                        onSourceChangedPaths: (paths: readonly string[]) => {
+                                            sourceChangedPaths = paths;
+                                        },
+                                    }
                                     : {}),
                                 ...(debugMode === 'freshness' || debugMode === 'full'
                                     ? {
@@ -1125,6 +1131,14 @@ export class SearchRequestCoordinator {
                                     : {}),
                             },
                         );
+                        // A commit empties `git status` while the publication still lacks the
+                        // committed edits; the full comparison names them, so the overlay serves them.
+                        if (sourceChangedPaths && changedFilesState.available) {
+                            observedChangedFilesForSearch = {
+                                available: true,
+                                files: new Set([...changedFilesState.files, ...sourceChangedPaths]),
+                            };
+                        }
                         return decision;
                     },
                 ),

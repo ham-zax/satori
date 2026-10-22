@@ -40,6 +40,11 @@ async function results(comparison: PublicationSourceComparison) {
         comparison.compareSourceObservationToOwnedCheckpoint(),
     ]);
 }
+const sourceDiffers = [
+    { status: 'differs' },
+    { status: 'differs', changedPaths: ['source.ts'] },
+    { status: 'differs', changedPaths: ['source.ts'] },
+];
 
 test('frozen identity reuses construction while comparisons observe real changes and deletion', async () => {
     await fixture(async (root, checkpoint) => {
@@ -52,7 +57,7 @@ test('frozen identity reuses construction while comparisons observe real changes
         assert.deepEqual(await results(cached), Array(3).fill({ status: 'matches' }));
         fs.writeFileSync(path.join(root, 'source.ts'), 'export const changed = 200;\n');
         assert.deepEqual(await results(cached), await results(uncached()));
-        assert.deepEqual(await results(cached), Array(3).fill({ status: 'differs' }));
+        assert.deepEqual(await results(cached), sourceDiffers);
         fs.unlinkSync(path.join(root, 'source.ts'));
         assert.deepEqual(await results(cached), await results(uncached()));
     });
@@ -71,7 +76,7 @@ test('reload and pinned/current checkpoint generations remain independent and ro
         assert.notEqual(current, pinned);
         assert.deepEqual(await results(current), await results(new FileSynchronizer(root, [], ['.ts'], { sourceCheckpoint: next })));
         assert.deepEqual(await results(current), Array(3).fill({ status: 'matches' }));
-        assert.deepEqual(await results(pinned), Array(3).fill({ status: 'differs' }));
+        assert.deepEqual(await results(pinned), sourceDiffers);
         assert.equal(owner.getPublicationSourceComparison(root, checkpoint, [], ['.ts']), pinned);
         assert.throws(() => owner.getPublicationSourceComparison(path.join(root, 'other'), checkpoint, [], ['.ts']), /root does not match/);
     });
@@ -87,7 +92,7 @@ test('ignore and extension policy changes rebuild and match uncached results', a
             assert.notEqual(changed, previous);
             assert.equal(owner.getPublicationSourceComparison(root, checkpoint, [...ignores], [...extensions]), changed);
             assert.deepEqual(await results(changed), await results(new FileSynchronizer(root, [...ignores], [...extensions], { sourceCheckpoint: checkpoint })));
-            assert.deepEqual(await results(changed), Array(3).fill({ status: 'differs' }));
+            assert.deepEqual(await results(changed), sourceDiffers);
             previous = changed;
         }
     });
@@ -109,12 +114,13 @@ test('comparison observes publication controls outside the extension and ignore 
         for (const control of controls) {
             fs.writeFileSync(path.join(root, control), '{"changed":true}\n');
             assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint([control]), { status: 'differs' });
-            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
-            assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), { status: 'differs' });
+            const changed = { status: 'differs', changedPaths: [control] };
+            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), changed);
+            assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), changed);
             fs.writeFileSync(path.join(root, control), '{}\n');
             fs.unlinkSync(path.join(root, control));
             assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint([control]), { status: 'differs' });
-            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
+            assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), changed);
             fs.writeFileSync(path.join(root, control), '{}\n');
         }
     });
@@ -130,8 +136,9 @@ test('new control paths invalidate cached comparison policy and detect additions
         assert.notEqual(comparison, previous);
         assert.equal(owner.getPublicationSourceComparison(root, checkpoint, [], ['.ts'], ['package.json']), comparison);
         assert.deepEqual(await comparison.comparePathsToOwnedCheckpoint(['package.json']), { status: 'differs' });
-        assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), { status: 'differs' });
-        assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), { status: 'differs' });
+        const changed = { status: 'differs', changedPaths: ['package.json'] };
+        assert.deepEqual(await comparison.compareAllSourceToOwnedCheckpoint(), changed);
+        assert.deepEqual(await comparison.compareSourceObservationToOwnedCheckpoint(), changed);
     });
 });
 

@@ -358,7 +358,10 @@ interface EnsureFreshnessOptions {
 export type ReadFreshnessOptions = Pick<
     EnsureFreshnessOptions,
     'preparedPublication' | 'exactSourceComparisonPaths' | 'fullSourceComparison' | 'onPhaseTiming'
->;
+> & {
+    // Receives the paths a full source comparison found different from the publication.
+    onSourceChangedPaths?: (paths: readonly string[]) => void;
+};
 
 type SyncExecutionRequest = Pick<
     EnsureFreshnessOptions,
@@ -1071,6 +1074,7 @@ export class SyncManager {
                     Math.max(0, Date.now() - fullComparisonStartedAt),
                 );
                 if (comparison.status === 'differs') {
+                    if (comparison.changedPaths) options.onSourceChangedPaths?.(comparison.changedPaths);
                     return withReadMetadata({
                         mode: 'read_only',
                         sourceFreshness: {

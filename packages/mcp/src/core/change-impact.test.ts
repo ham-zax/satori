@@ -136,6 +136,8 @@ test("detect_changes distinguishes seed/direct/transitive impact and retains cau
         assert.ok(result.completeness.reasons.includes("depth_bound"));
         assert.ok(result.completeness.reasons.includes("uncertain_references"));
         assert.equal(result.completeness.exhaustive, false);
+        assert.ok(result.warnings.includes("IMPACT_CURRENT_SYMBOLS_ONLY"));
+        assert.equal(result.warnings.includes("IMPACT_PUBLISHED_SPANS"), false);
     } finally {
         fs.rmSync(repo, { recursive: true, force: true });
     }

@@ -92,6 +92,11 @@ import type {
 } from "./search-types.js";
 import { requireAbsoluteFilesystemPath, requireRepoRelativeFilePath, trackCodebasePath } from "../utils.js";
 
+export type NavigationSourceOptions = {
+    publishedSource?: Buffer;
+    requireCurrentSource?: boolean;
+};
+
 type ToolArgs = Record<string, unknown>;
 
 type ToolTextResponse = {
@@ -1121,6 +1126,7 @@ export class NavigationHandlers {
     public async handleFileOutline(
         args: FileOutlineInput,
         workspacePolicy: SessionWorkspacePolicy,
+        sourceOptions?: NavigationSourceOptions,
     ): Promise<ToolTextResponse> {
         const limitSymbols = Number.isFinite(args?.limitSymbols)
             ? Math.max(1, Number(args.limitSymbols))
@@ -1418,6 +1424,7 @@ export class NavigationHandlers {
                     lease,
                     workspacePolicy,
                     publishedRelativePaths,
+                    sourceOptions,
                 });
             }
 
@@ -1484,6 +1491,7 @@ export class NavigationHandlers {
         args: ToolArgs,
         workspacePolicy: SessionWorkspacePolicy,
         signal?: AbortSignal,
+        sourceOptions?: NavigationSourceOptions,
     ): Promise<ToolTextResponse> {
         signal?.throwIfAborted();
         const rawDirection = args?.direction;
@@ -1861,7 +1869,14 @@ export class NavigationHandlers {
                         publishedRelativePaths,
                         maxBytes: this.host.readFileMaxBytes,
                     });
-                    return sourceRead.bytes.toString("utf8").split(/\r?\n/);
+                    const bytes = relativeFilePath === normalizedSymbolFile && sourceOptions?.publishedSource !== undefined
+                        ? sourceOptions.publishedSource : sourceRead.bytes;
+                    const freshness = this.host.getRegistryFileFreshness({
+                        symbols: registryState.registry.symbolsByFile.get(relativeFilePath) ?? [],
+                        absoluteFile: path.resolve(codebaseRoot, relativeFilePath),
+                        sourceBytes: bytes,
+                    });
+                    return freshness.status === "fresh" ? bytes.toString("utf8").split(/\r?\n/) : undefined;
                 } catch (error) {
                     if (error instanceof PublishedFileAuthorizationError
                         || error instanceof WorkspaceAuthorizationError
@@ -1940,39 +1955,29 @@ export class NavigationHandlers {
                 }
             }
 
-            const resolvedSymbolRepair = repairSourceBackedPythonSpan({
-                codebaseRoot: effectiveRoot,
-                symbol: exactRegistrySymbols[0],
-                // Always supply source lines (empty when unauthorized) so the
-                // single-symbol repair can never fall back to a pathname read.
-                sourceLines: symbolSourceBytes !== undefined
-                    ? symbolSourceBytes.toString("utf8").split(/\r?\n/)
-                    : [],
-            });
-            const resolvedSymbol = resolvedSymbolRepair.symbol;
+            let seedSourceState: "fresh" | "stale" | "unknown" | "inconsistent";
             if (symbolSourceBytes === undefined) {
-                if (exactRegistrySymbols.some((symbol) => this.host.isSha256HexHash(symbol.fileHash))) {
-                    const payload = this.host.withProofDebugHint(this.host.buildStaleSymbolRefCallGraphPayload({
-                        codebaseRoot: effectiveRoot,
-                        context: {
-                            path: absolutePath,
-                            symbolRef,
-                            direction,
-                            depth,
-                            limit,
-                        },
-                        message: `Symbol reference points at '${normalizedSymbolFile}', but the current file is unavailable or not authorized. Refresh the index before using exact call graph navigation.`,
-                    }), proofDebugHint);
-                    return {
-                        content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
-                    };
-                }
+                const payload = this.host.withProofDebugHint(this.host.buildStaleSymbolRefCallGraphPayload({
+                    codebaseRoot: effectiveRoot,
+                    context: {
+                        path: absolutePath,
+                        symbolRef,
+                        direction,
+                        depth,
+                        limit,
+                    },
+                    message: `Symbol reference points at '${normalizedSymbolFile}', but the current file is unavailable or not authorized. Refresh the index before using exact call graph navigation.`,
+                }), proofDebugHint);
+                return {
+                    content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
+                };
             } else {
                 const fileFreshness = this.host.getRegistryFileFreshness({
                     symbols: exactRegistrySymbols,
                     absoluteFile: absoluteSymbolFile,
                     sourceBytes: symbolSourceBytes,
                 });
+                seedSourceState = fileFreshness.status;
                 if (fileFreshness.status === "inconsistent") {
                     const payload = this.host.withProofDebugHint(this.host.toolResponseBuilders.buildRequiresReindexCallGraphPayload(
                         effectiveRoot,
@@ -1990,7 +1995,14 @@ export class NavigationHandlers {
                         content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
                     };
                 }
-                if (fileFreshness.status === "stale") {
+                const witnessFreshness = sourceOptions?.publishedSource !== undefined
+                    ? this.host.getRegistryFileFreshness({
+                        symbols: exactRegistrySymbols,
+                        absoluteFile: absoluteSymbolFile,
+                        sourceBytes: sourceOptions.publishedSource,
+                    }).status : undefined;
+                if ((witnessFreshness !== undefined && witnessFreshness !== "fresh")
+                    || (sourceOptions?.requireCurrentSource && fileFreshness.status === "stale" && witnessFreshness !== "fresh")) {
                     const payload = this.host.withProofDebugHint(this.host.buildStaleSymbolRefCallGraphPayload({
                         codebaseRoot: effectiveRoot,
                         context: {
@@ -2007,6 +2019,13 @@ export class NavigationHandlers {
                     };
                 }
             }
+
+            // Repair only hash-matched bytes. Dirty bytes cannot change published identity or spans.
+            const resolvedSymbolRepair = seedSourceState === "fresh" ? repairSourceBackedPythonSpan({
+                codebaseRoot: effectiveRoot, symbol: exactRegistrySymbols[0],
+                sourceLines: symbolSourceBytes!.toString("utf8").split(/\r?\n/),
+            }) : undefined;
+            const resolvedSymbol = resolvedSymbolRepair?.symbol ?? exactRegistrySymbols[0];
 
             if (!this.host.isCallGraphLanguageSupported(resolvedSymbol.language, resolvedSymbol.file)) {
                 const payload = this.host.withProofDebugHint({
@@ -2132,6 +2151,10 @@ export class NavigationHandlers {
             if ([...fileFreshnessByPath.values()].some(value => value.sourceState !== "fresh")) {
                 relationshipBackedGraph.warnings = [...(relationshipBackedGraph.warnings ?? []), "CALL_GRAPH_SOURCE_FRESHNESS_PARTIAL"];
             }
+            if ([...fileFreshnessByPath.values()].some(value => value.sourceState === "stale")) {
+                relationshipBackedGraph.warnings = [...(relationshipBackedGraph.warnings ?? []),
+                    "NAVIGATION_SOURCE_DRIFT_DETECTED", "CALL_GRAPH_PUBLISHED_SPANS"];
+            }
             signal?.throwIfAborted();
             await this.host.touchWatchedCodebase(effectiveRoot);
             signal?.throwIfAborted();
@@ -2248,6 +2271,7 @@ export class NavigationHandlers {
         lease: PublicationLease;
         workspacePolicy: SessionWorkspacePolicy;
         publishedRelativePaths: ReadonlySet<string>;
+        sourceOptions?: NavigationSourceOptions;
     }): Promise<ToolTextResponse> {
         const {
             args,
@@ -2285,7 +2309,14 @@ export class NavigationHandlers {
                 content: [{ type: "text", text: this.host.stringifyToolJson(payload) }],
             };
         }
-        if (fileFreshness.status === "stale") {
+        const witnessFreshness = input.sourceOptions?.publishedSource !== undefined
+            ? this.host.getRegistryFileFreshness({
+                symbols: registrySymbols, absoluteFile, sourceBytes: input.sourceOptions.publishedSource,
+            }).status : undefined;
+        const publishedSpans = fileFreshness.status === "stale" || witnessFreshness === "fresh";
+        if ((witnessFreshness !== undefined && witnessFreshness !== "fresh")
+            || (fileFreshness.status === "stale" && (detail === "analysis"
+                || (input.sourceOptions?.requireCurrentSource && witnessFreshness !== "fresh")))) {
             const payload = this.host.withProofDebugHint(this.host.buildStaleSymbolRefFileOutlinePayload(effectiveRoot, {
                 ...args,
                 file: normalizedFile,
@@ -2358,7 +2389,8 @@ export class NavigationHandlers {
             registryManifestHash: registryState.manifestHash,
             preparedRead: trackedRootState,
         });
-        const outlineWarnings: string[] = [];
+        const outlineWarnings: string[] = fileFreshness.status === "stale"
+            ? ["NAVIGATION_SOURCE_DRIFT_DETECTED", "OUTLINE_PUBLISHED_SPANS"] : [];
         if (relationshipGraph.warning) {
             outlineWarnings.push(`OUTLINE_${relationshipGraph.warning}`);
         }
@@ -2379,6 +2411,7 @@ export class NavigationHandlers {
             codebaseRoot: effectiveRoot,
             file: normalizedFile,
             symbols: registrySymbols,
+            publishedSpans,
             limitSymbols,
             resolveMode,
             symbolIdExact,

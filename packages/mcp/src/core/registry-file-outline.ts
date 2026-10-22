@@ -100,6 +100,8 @@ export async function buildRegistryFileOutlinePayload(input: {
     symbols: SymbolRecord[];
     limitSymbols: number;
     resolveMode: "outline" | "exact";
+    /** Project persisted coordinates without current-source validation or repair. */
+    publishedSpans?: boolean;
     symbolIdExact?: string;
     symbolLabelExact?: string;
     windowStart?: number;
@@ -126,14 +128,14 @@ export async function buildRegistryFileOutlinePayload(input: {
         const exactSymbolIds = new Set(persistedExactMatches.map((symbol) => symbol.symbolInstanceId));
         const exactSymbolKeys = new Set(persistedExactMatches.map((symbol) => symbol.symbolKey));
         const validationCohort = input.symbols.filter((symbol) => exactSymbolKeys.has(symbol.symbolKey));
-        const cohortValidations = await validateCurrentSourceSymbolSpans({
+        const cohortValidations = input.publishedSpans ? [] : await validateCurrentSourceSymbolSpans({
             codebaseRoot: input.codebaseRoot,
             symbols: validationCohort,
         });
         const validations = cohortValidations.filter((validation) => exactSymbolIds.has(validation.symbol.symbolInstanceId));
-        const validatedExactMatches = validations
+        const validatedExactMatches = (input.publishedSpans ? persistedExactMatches : validations
             .filter((validation) => validation.match === "matched" || validation.match === "not_applicable")
-            .map((validation) => validation.symbol)
+            .map((validation) => validation.symbol))
             .filter((symbol) => {
                 const startsBeforeWindowEnd = input.windowEnd === undefined || symbol.span.startLine <= input.windowEnd;
                 const endsAfterWindowStart = input.windowStart === undefined || symbol.span.endLine >= input.windowStart;
@@ -212,12 +214,12 @@ export async function buildRegistryFileOutlinePayload(input: {
         };
     }
 
-    const repairs = await repairSourceBackedPythonSpans({
+    const repairs = input.publishedSpans ? [] : await repairSourceBackedPythonSpans({
         codebaseRoot: input.codebaseRoot,
         symbols: input.symbols,
         readSourceLines: input.readSourceLines,
     });
-    const repairedSymbols = repairs.map((repair) => repair.symbol);
+    const repairedSymbols = input.publishedSpans ? input.symbols : repairs.map((repair) => repair.symbol);
     const repairBySymbolId = new Map(repairs.map((repair) => [repair.symbol.symbolInstanceId, repair]));
     const visibleState = buildVisibleRegistrySymbolState({
         symbols: repairedSymbols,

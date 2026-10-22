@@ -870,11 +870,11 @@ export class ManageMaintenanceHandlers {
                                 const { terminalPhase, terminalProgress } = await worker.completion;
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
 
-                                await perfSpan("sync.parent.garbage_collect", () => this.host.collectPublicationGarbageAfterSync(absolutePath));
+                                await perfSpan("sync.parent.garbage_collect", () => this.host.collectPublicationGarbageAfterSync(absolutePath), { operationId: execution.id });
                                 if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
 
                                 if (terminalPhase === "completed") {
-                                    await perfSpan("sync.parent.flight_complete", () => syncFlight.complete());
+                                    await perfSpan("sync.parent.flight_complete", () => syncFlight.complete(), { operationId: execution.id });
                                     if (!this.host.mutationRuntime.isCurrent(absolutePath)) return;
                                 }
 

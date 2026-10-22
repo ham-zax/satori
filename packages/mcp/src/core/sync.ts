@@ -21,6 +21,8 @@ import {
     BACKGROUND_FRESHNESS_THRESHOLD_MS,
     BACKGROUND_SYNC_INITIAL_DELAY_MS,
     BACKGROUND_SYNC_INTERVAL_MS,
+    WATCHER_SYNC_QUIET_DELAY_MS,
+    WATCHER_SYNC_MAX_DELAY_MS,
 } from "../config.js";
 import {
     SourceObservationState,
@@ -419,6 +421,7 @@ export class SyncManager {
     private backgroundSyncTimer: NodeJS.Timeout | null = null;
     private backgroundSyncEnabled = false;
     private backgroundSyncFlight: Promise<void> | null = null;
+    private backgroundPendingFirstEventAt: number | null = null;
     private watcherModeStarted = false;
     private watchEnabled: boolean;
     private watchedCodebases: Set<string> = new Set();
@@ -556,6 +559,12 @@ export class SyncManager {
         observation.latestEpochByReason.set(reason, observation.observedEventEpoch);
         observation.lastEventAt = this.now();
         this.bumpFreshnessEpoch(root);
+        if (this.backgroundSyncEnabled) {
+            this.backgroundPendingFirstEventAt ??= observation.lastEventAt;
+            if (!this.backgroundSyncFlight) {
+                this.scheduleBackgroundSync(this.pendingWatcherSyncDelay() ?? BACKGROUND_SYNC_INTERVAL_MS);
+            }
+        }
         return observation.observedEventEpoch;
     }
 
@@ -1201,9 +1210,9 @@ export class SyncManager {
 
         // Join a live mutation before inspecting its checkpoint. The owner may be
         // between Publication activation and checkpoint publication.
-        if (this.activeSyncs.has(codebasePath)) {
+        const coalescedDecision = async (flight: Promise<SyncExecutionOutcome>): Promise<FreshnessDecision> => {
             console.log(`[SYNC] 🛡️ Request Coalesced: Attaching to active sync for '${codebasePath}'`);
-            const outcome = await this.activeSyncs.get(codebasePath);
+            const outcome = await flight;
             const lastSync = this.lastSyncTimes.get(codebasePath);
             return {
                 mode: 'coalesced',
@@ -1219,7 +1228,9 @@ export class SyncManager {
                 activeMutation: outcome?.activeMutation,
                 operation: outcome?.operation,
             };
-        }
+        };
+        const activeSync = this.activeSyncs.get(codebasePath);
+        if (activeSync) return coalescedDecision(activeSync);
 
         // Source-freshness ownership is a precondition for every incremental path,
         // including ignore reconciliation. The identity comes from the current
@@ -1341,10 +1352,13 @@ export class SyncManager {
         });
         console.log(`[SYNC] 🔄 Triggering Sync for '${codebasePath}'. Trigger: ${triggerReason} (Threshold: ${thresholdMs}ms)`);
 
+        // Preparation awaits can race. Check again without yielding before ownership is installed.
+        const preparedSync = this.activeSyncs.get(codebasePath);
+        if (preparedSync) return coalescedDecision(preparedSync);
         this.bumpFreshnessEpoch(codebasePath);
-        const syncPromise = (async () => {
+        const syncPromise = Promise.resolve().then(async () => {
             try {
-                return await this.syncCodebase(
+                const outcome = await this.syncCodebase(
                     codebasePath,
                     currentIgnoreControlSignature,
                     {
@@ -1354,24 +1368,27 @@ export class SyncManager {
                     },
                     sourcePublication,
                 );
+                await this.recordCommittedSync(
+                    codebasePath,
+                    outcome.mode === 'synced' && !outcome.errorMessage,
+                    flightEpoch,
+                    options.onPhaseTiming,
+                );
+                return outcome;
             } catch (e) {
                 // Log and rethrow to allow callers to handle/see failure
                 console.error(`[SYNC] Error syncing '${codebasePath}':`, e);
                 throw e;
             } finally {
-                this.activeSyncs.delete(codebasePath);
-                this.bumpFreshnessEpoch(codebasePath);
+                if (this.activeSyncs.get(codebasePath) === syncPromise) {
+                    this.activeSyncs.delete(codebasePath);
+                    this.bumpFreshnessEpoch(codebasePath);
+                }
             }
-        })();
+        });
 
         this.activeSyncs.set(codebasePath, syncPromise);
         const outcome = await syncPromise;
-        await this.recordCommittedSync(
-            codebasePath,
-            outcome.mode === 'synced' && !outcome.errorMessage,
-            flightEpoch,
-            options.onPhaseTiming,
-        );
         const lastSyncedAt = this.lastSyncTimes.get(codebasePath);
         const decision: FreshnessDecision = {
             mode: outcome.mode,
@@ -1878,6 +1895,7 @@ export class SyncManager {
         // warm prepared-read observations mid multi-sample search sessions.
         // Recent search-driven syncs therefore skip; idle roots still recheck every interval.
         for (const codebasePath of indexedCodebases) {
+            if (this.backgroundSyncFlight && !this.backgroundSyncEnabled) return;
             try {
                 await this.ensureFreshness(codebasePath, BACKGROUND_FRESHNESS_THRESHOLD_MS);
             } catch (e) {
@@ -1898,20 +1916,50 @@ export class SyncManager {
 
     private scheduleBackgroundSync(delayMs: number): void {
         if (!this.backgroundSyncEnabled) return;
+        if (this.backgroundSyncTimer) clearTimeout(this.backgroundSyncTimer);
         this.backgroundSyncTimer = setTimeout(() => {
             this.backgroundSyncTimer = null;
             void this.runBackgroundSync();
         }, delayMs);
     }
 
+    private pendingWatcherSyncDelay(): number | undefined {
+        let lastEventAt: number | undefined;
+        if (this.watcherModeStarted) {
+            for (const [root, observation] of this.watcherObservations) {
+                if (
+                    this.watchedCodebases.has(root)
+                    && observation.observedEventEpoch > observation.comparedThroughEventEpoch
+                    && observation.lastEventAt !== undefined
+                ) {
+                    lastEventAt = Math.max(lastEventAt ?? observation.lastEventAt, observation.lastEventAt);
+                }
+            }
+        }
+        if (lastEventAt === undefined) {
+            this.backgroundPendingFirstEventAt = null;
+            return undefined;
+        }
+        this.backgroundPendingFirstEventAt ??= this.now();
+        return Math.max(0, Math.min(
+            lastEventAt + WATCHER_SYNC_QUIET_DELAY_MS,
+            this.backgroundPendingFirstEventAt + WATCHER_SYNC_MAX_DELAY_MS,
+        ) - this.now());
+    }
+
     private runBackgroundSync(): Promise<void> {
-        const flight = (async () => {
+        if (this.backgroundSyncFlight) return this.backgroundSyncFlight;
+        if (!this.backgroundSyncEnabled) return Promise.resolve();
+        this.backgroundPendingFirstEventAt = null;
+        // Install the lifecycle owner before any preparation or worker can start.
+        const flight = Promise.resolve().then(async () => {
+            if (!this.backgroundSyncEnabled) return;
             try {
                 await this.handleSyncIndex();
             } catch (error) {
                 console.error('[SYNC] Periodic synchronization pass failed:', error);
             }
-        })();
+        });
         this.backgroundSyncFlight = flight;
         this.onLifecycleActivityChanged?.();
         void flight.finally(() => {
@@ -1919,13 +1967,18 @@ export class SyncManager {
                 this.backgroundSyncFlight = null;
                 this.onLifecycleActivityChanged?.();
             }
-            this.scheduleBackgroundSync(BACKGROUND_SYNC_INTERVAL_MS);
+            if (!this.backgroundSyncEnabled) return;
+            const pendingDelay = this.pendingWatcherSyncDelay();
+            this.scheduleBackgroundSync(pendingDelay === undefined
+                ? BACKGROUND_SYNC_INTERVAL_MS
+                : Math.max(WATCHER_SYNC_QUIET_DELAY_MS, pendingDelay));
         });
         return flight;
     }
 
     public stopBackgroundSync(): void {
         this.backgroundSyncEnabled = false;
+        this.backgroundPendingFirstEventAt = null;
         if (this.backgroundSyncTimer) {
             clearTimeout(this.backgroundSyncTimer);
             this.backgroundSyncTimer = null;
@@ -2141,6 +2194,9 @@ export class SyncManager {
     public async unwatchCodebase(codebasePath: string): Promise<void> {
         codebasePath = this.canonicalWatcherRoot(codebasePath);
         this.watchedCodebases.delete(codebasePath);
+        if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
+            this.scheduleBackgroundSync(this.pendingWatcherSyncDelay() ?? BACKGROUND_SYNC_INTERVAL_MS);
+        }
         await this.unregisterCodebaseWatcher(codebasePath);
         this.lastSyncTimes.delete(codebasePath);
         this.ignoreRulesVersions.delete(codebasePath);
@@ -2389,6 +2445,10 @@ export class SyncManager {
 
     public async stopWatcherMode(): Promise<void> {
         this.watcherModeStarted = false;
+        if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
+            this.backgroundPendingFirstEventAt = null;
+            this.scheduleBackgroundSync(BACKGROUND_SYNC_INTERVAL_MS);
+        }
         const registrations = Array.from(this.pendingWatcherRegistrations.values());
         for (const registration of registrations) {
             registration.cancelled = true;

@@ -95,7 +95,7 @@ import {
     type TrackedRootFailedIndexOperation,
     type TrackedRootReadinessState,
 } from "./tracked-root-readiness.js";
-import { NavigationHandlers } from "./navigation-handlers.js";
+import { NavigationHandlers, type NavigationSourceOptions } from "./navigation-handlers.js";
 import {
     composeSymbolContext as composePreparedSymbolContext,
     type ComposeSymbolContextInput,
@@ -2066,12 +2066,12 @@ export class ToolHandlers {
         return this.navigationHandlers.handleFindReferences(args, workspacePolicy, signal);
     }
 
-    public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy) {
-        return this.navigationHandlers.handleFileOutline(args, workspacePolicy);
+    public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy, sourceOptions?: NavigationSourceOptions) {
+        return this.navigationHandlers.handleFileOutline(args, workspacePolicy, sourceOptions);
     }
 
-    public async handleCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal) {
-        return this.navigationHandlers.handleCallGraph(args, workspacePolicy, signal);
+    public async handleCallGraph(args: ToolArgs, workspacePolicy: SessionWorkspacePolicy, signal?: AbortSignal, sourceOptions?: NavigationSourceOptions) {
+        return this.navigationHandlers.handleCallGraph(args, workspacePolicy, signal, sourceOptions);
     }
 
     public async handleTracePath(args: ToolArgs) {

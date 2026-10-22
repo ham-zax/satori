@@ -3,12 +3,69 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-import { withSourceMeasurementOperation } from '@satori-code/core';
+import { buildSymbolRegistry, SYMBOL_REGISTRY_SCHEMA_VERSION, withSourceMeasurementOperation } from '@satori-code/core';
 import type { CapabilityResolver } from './capabilities.js';
 import { SearchQuerySupport } from './search-query-support.js';
 import type { SearchQuerySupportHost } from './search-query-support.js';
 import { buildSearchQueryPlan, parseSearchOperators } from './search-query-planning.js';
+import { projectPublicationBoundSearchRerankDocument, searchRerankCandidateId } from './search-rerank-projection.js';
+
+for (const producer of ['live_path', 'tracked_exact', 'tracked_general'] as const) {
+    test(`${producer} candidates retain live source authority through rerank projection`, async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-live-rerank-'));
+        const relativePath = 'src/a.ts';
+        const published = 'export const TARGET_CODE = "previous policy";\n';
+        const current = 'export const TARGET_CODE = "authorization policy";\n';
+        try {
+            fs.mkdirSync(path.join(root, 'src'));
+            fs.writeFileSync(path.join(root, relativePath), current);
+            const registry = buildSymbolRegistry({
+                manifest: {
+                    schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                    normalizedRootPath: root,
+                    rootFingerprint: 'test',
+                    indexPolicyHash: 'test',
+                    languageRouterVersion: 'test',
+                    extractorVersion: 'test',
+                    relationshipVersion: 'test',
+                    builtAt: '2026-10-22T00:00:00.000Z',
+                    files: [{ path: relativePath, language: 'typescript', symbolCount: 0, definitionStatus: 'structural_unavailable',
+                        hash: crypto.createHash('sha256').update(published).digest('hex') }],
+                },
+                symbols: [],
+            });
+            const support = buildTrackedLexicalSupport([relativePath]);
+            const query = producer === 'tracked_general'
+                ? 'where does authorization policy begin'
+                : `path:${relativePath} TARGET_CODE`;
+            const parsedOperators = parseSearchOperators(query);
+            const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
+            const results = producer === 'live_path'
+                ? await support.buildLivePathScopedSearchResults({ effectiveRoot: root, parsedOperators, queryPlan,
+                    changedFiles: new Set([relativePath]) })
+                : (await support.buildTrackedLexicalSearchResults({ effectiveRoot: root, parsedOperators, queryPlan,
+                    scope: 'runtime', limit: 8, exactRegistryFallback: true })).results;
+            assert.equal(results.length, 1);
+            const candidate = results[0]!;
+            const candidateId = searchRerankCandidateId(candidate);
+            const project = (result = candidate) => projectPublicationBoundSearchRerankDocument({
+                candidateId, codebaseRoot: root, semanticQuery: parsedOperators.semanticQuery, result, registry,
+            });
+            const accepted = await project();
+            assert.equal(accepted.ok, true, JSON.stringify(accepted));
+            if (accepted.ok) assert.match(accepted.document, /authorization policy/);
+            assert.deepEqual(await project({ ...candidate, dirtyOverlaySourceHash: undefined }), {
+                ok: false, candidateId, reason: 'source_hash_mismatch',
+            });
+            fs.writeFileSync(path.join(root, relativePath), `${current}// second edit\n`);
+            assert.deepEqual(await project(), { ok: false, candidateId, reason: 'source_hash_mismatch' });
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+}
 
 function buildTrackedLexicalSupport(trackedPaths: string[]): SearchQuerySupport {
     return new SearchQuerySupport({

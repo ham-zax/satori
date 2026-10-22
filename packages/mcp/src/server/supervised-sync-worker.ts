@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { perfTrace } from "@satori-code/core";
 import type {
     MutationOperationPhase,
     RootMutationActivity,
@@ -50,6 +51,8 @@ export async function startSupervisedSyncWorker(input: Readonly<{
     mutationRuntime: RootMutationRuntime;
 }>): Promise<StartedSyncWorker> {
     const { codebasePath, execution, mutationRuntime } = input;
+    const startedAt = performance.now();
+    let terminalAt: number | undefined;
     let terminalPhase: SyncWorkerResult["terminalPhase"];
     let terminalProgress: number | undefined;
     let completedResult: Readonly<Record<string, unknown>> | undefined;
@@ -91,6 +94,7 @@ export async function startSupervisedSyncWorker(input: Readonly<{
             mutationRuntime.requestCancellation(execution.id, "sync_no_progress_timeout");
         },
         onCompleted: (result) => {
+            terminalAt = performance.now();
             completedResult = result;
         },
     });
@@ -102,6 +106,7 @@ export async function startSupervisedSyncWorker(input: Readonly<{
             throw execution.signal.reason ?? new Error("Sync cancelled before executor binding.");
         }
         boundActivity = execution.bindExecutor(worker.executor);
+        perfTrace("sync.parent.worker_ready", performance.now() - startedAt, { operationId: execution.id });
         worker.start();
     } catch (error) {
         worker.requestCancellation("sync_startup_failed");
@@ -116,6 +121,12 @@ export async function startSupervisedSyncWorker(input: Readonly<{
             ...(terminalProgress !== undefined ? { terminalProgress } : {}),
             ...(typeof completedResult?.mode === "string" ? { mode: completedResult.mode } : {}),
             ...(parseStats(completedResult?.stats) ? { stats: parseStats(completedResult?.stats) } : {}),
-        })),
+        })).finally(() => {
+            const completedAt = performance.now();
+            perfTrace("sync.parent.worker_round_trip", completedAt - startedAt, { operationId: execution.id });
+            if (terminalAt !== undefined) {
+                perfTrace("sync.parent.worker_quiescence", completedAt - terminalAt, { operationId: execution.id });
+            }
+        }),
     };
 }

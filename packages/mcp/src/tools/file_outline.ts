@@ -88,7 +88,7 @@ function formatWorkspaceAuthorizationError(
 
 export const fileOutlineTool: McpTool = {
     name: 'file_outline',
-    description: () => 'Return indexed symbols for one published file, with call_graph jump handles when available. If the file is published but structural extraction was unavailable, returns status="not_ready" with reason="structural_evidence_unavailable" plus read_file and structural-coverage hints. Use detail="summary" for structure, detail="analysis" for Python or Go structural metrics, detail="relationships" for direct metadata on one exact symbol, or detail="relationship_coverage" for file-wide observed call-construct calibration from persisted ResolutionClaims. analysis/relationships require an exact canonical symbol; relationship_coverage does not.',
+    description: () => 'Return indexed symbols for one published file, with call_graph jump handles when available. Readable edited files retain published IDs and coordinates with source-drift warnings; analysis refuses stale source. If the file is published but structural extraction was unavailable, returns status="not_ready" with reason="structural_evidence_unavailable" plus read_file and structural-coverage hints. Use detail="summary" for structure, detail="analysis" for Python or Go structural metrics, detail="relationships" for direct metadata on one exact symbol, or detail="relationship_coverage" for file-wide observed call-construct calibration from persisted ResolutionClaims. analysis/relationships require an exact canonical symbol; relationship_coverage does not.',
     inputSchemaZod: () => fileOutlineInputSchema,
     execute: async (args: unknown, ctx: ToolContext) => {
         const parsed = fileOutlineInputSchema.safeParse(args || {});

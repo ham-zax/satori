@@ -45,6 +45,8 @@ export type ResolvedVectorStoreConfig =
  */
 export const BACKGROUND_SYNC_INITIAL_DELAY_MS = 5_000;
 export const BACKGROUND_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+export const WATCHER_SYNC_QUIET_DELAY_MS = 2_000;
+export const WATCHER_SYNC_MAX_DELAY_MS = 10_000;
 export const SEARCH_FRESHNESS_THRESHOLD_MS = 3 * 60 * 1000;
 export const BACKGROUND_FRESHNESS_THRESHOLD_MS = 3 * 60 * 1000;
 export const DEFAULT_MANAGE_RETRY_AFTER_MS = 2000;

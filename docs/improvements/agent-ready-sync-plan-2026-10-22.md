@@ -313,12 +313,15 @@ Load 0.2-2.5, peak RSS 1,191 MB for the probe process tree measured by
 
 - `sync.publication_navigation_delta` about 7,000 ms, of which
   `navigation.semantic` about 3,850 ms (Go), `sync.publication_relationship_load`
-  about 1,320 ms, `sync.publication_source_navigation_load` about 1,090 ms,
-  `sync.publication_relationship_delta` about 640 ms,
+  about 1,320 ms, `sync.publication_relationship_delta` about 640 ms,
   `navigation.stage.relationships` about 450 ms, `navigation.stage.symbols`
   about 355 ms.
+- `sync.publication_source_navigation_load` about 1,090 ms reads the symbol
+  registry before the navigation-delta span. It is distinct from the
+  relationship load inside that span.
 - `sync.publication_sidecar_stage` about 960 ms.
-- `sync.prepare_changes` about 475 ms (10 samples, 2 per sync),
+- `sync.prepare_changes` about 475 ms (10 samples, one per worker invocation,
+  including restoration syncs),
   `sync.worker.bootstrap` about 435 ms, `sync.worker.module_load` about 320 ms,
   `sync.publication_activation` about 325 ms.
 - `sync.worker.freshness` is 9,500-10,200 ms, so about 2,500-3,000 ms of the
@@ -335,35 +338,41 @@ staging, 0.96 s. The semantic stage stays the largest single span.
 An external review listed navigation defects. Each claim was checked against
 the code at `5d3b7736`.
 
-1. **`detect_changes` seeds nothing for edited files (confirmed).**
+1. **`detect_changes` seeds nothing for edited files (fixed).**
    `detectChangeImpact` (`change-impact.ts:91-94`) gets each changed file's
    outline from `handleFileOutline`, which returns `stale_symbol_ref` when the
    file hash differs from the registry (`navigation-handlers.ts:2283`). The file
    goes to `unavailableFiles`. The usual agent flow (edit, then
    `detect_changes` before the commit) therefore gets no seeds and no callers
-   until a sync completes. Open decision: (A) a faster sync plus automatic sync,
-   or (B) map each changed line of the current file to the published file
-   through a diff, then to the published symbols (same symbol IDs as the graph,
-   language-agnostic). Decide after the shared-cost profile.
+   until a sync completes. Fixed with Option B: base bytes must match the
+   published registry hash before old-side hunk coordinates seed published
+   symbols. The caller traversal uses those graph IDs. Wrong bytes remain
+   unavailable. The old-side mutation check fails when it selects new lines.
 2. **`file_outline` and the `call_graph` seed fail on an edited file
-   (confirmed).** `navigation-handlers.ts:2283` and `:1988` compare the hash of
+   (fixed).** `navigation-handlers.ts:2283` and `:1988` compare the hash of
    the whole file, so a comment-only edit also fails. In `call_graph`, other
    nodes report `sourceState` (`:2105-2125`); only the seed file fails. A
    tree-sitter re-parse of the dirty file gives symbols that are not in the
    published graph, and a name and kind match would be a second identity rule.
+   Public reads now retain published IDs and spans with explicit stale-source
+   warnings. They do not infer a current symbol identity. Current structural
+   analysis and annotated text consumers retain their source guards.
 3. **`trace_path` reports no freshness (confirmed).** `handleTracePath`
    (`navigation-handlers.ts:490-593`) reads through `prepareNavigationRead` but
    its `ok` payload has no `freshnessDecision` and no freshness warnings, unlike
    the handlers that use `withNavigationFreshness` (`:333`). Fixed: the `ok`
    payload carries `freshnessDecision` and its warning codes, as in
    `find_references` (test in `navigation-handlers.trace-path.test.ts`).
-4. **`find_references` needs a fresh file (not confirmed).** Its `stale`
-   outcome (`:1101`) means that publication authority changed during the read.
-   No file-hash check was found in the code read.
-5. **`read_file` `open_symbol` on an edited file (not confirmed).**
-   `read_file.ts:774` maps a `stale` symbol context to
-   `NAVIGATION_UNAVAILABLE`. Whether an edited file reaches that case is not
-   proved.
+4. **`find_references` needs a fresh file (partly confirmed).** It resolves
+   a published symbol in an edited file, but exact-reference search skips
+   edited files with coverage reason `source_changed`. Its outer `stale`
+   outcome means publication authority changed during the read. Published
+   symbol resolution does not establish complete current reference coverage.
+5. **`read_file` `open_symbol` on an edited file (blanket claim refuted).**
+   The current-source matcher re-analyzes the file and returns current spans
+   with `spanResolution: current_symbol_validated`. Annotated mode returns
+   current text without an outline when the source hash differs. Keep that
+   distinction when public outline responses gain published spans.
 6. **"B2 makes sync take 1-2 s" (wrong).** B2 is committed (`1e59127f`); the
    sync median after B2 is 12.6 s on trufflehog. B3 runs the sync
    automatically but does not make it faster.
@@ -390,7 +399,7 @@ In this order:
 4. **B2 (done, see "B2 results").** Narrow relationship rewrites.
 5. **A4.** Dense overlay scores; the embedding-cache design goes to the user
    first.
-6. **B3.** Debounced automatic sync, only after B1 and B2.
+6. **B3 (implemented below).** Debounced automatic sync after B1 and B2.
 
 Reported, not scheduled:
 
@@ -403,6 +412,127 @@ Reported, not scheduled:
   "shell: exit 1" flag; the flag also shows red test runs before a fix.
 
 ## Decisions
+
+### Active implementation: immediate reads and background catch-up
+
+User authorization: 22 October 2026, following checkpoint `63354d84`.
+Implement the combined navigation repairs, focused evidence from the handoff,
+live-candidate rerank repair, and debounced automatic catch-up. Investigate
+shared sync costs before removing work. No Go-only semantic delta, ranking
+change, dense overlay cache, dependency, or additional persistence owner.
+
+Task start: `master`, HEAD `63354d84`, clean index and working tree. Existing
+partial change-impact mapping is committed, with handler wiring unfinished.
+This section is the implementation plan and continuation checkpoint.
+
+Baseline read set: `change-impact.ts`, `navigation-handlers.ts`,
+`registry-file-outline.ts`, `relationship-backed-call-graph.ts`,
+`current-source-symbols.ts`, `tools/detect_changes.ts`, `tools/read_file.ts`,
+`search-query-support.ts`, `search-rerank-projection.ts`, `core/sync.ts`,
+`generation/index-generation-workflow.ts`, and their focused tests.
+
+Change necessity: code-change. The navigation owner refuses readable edited
+files, two live search producers discard an existing byte hash, and watcher
+events do not schedule prompt catch-up. Documentation alone cannot change
+those behaviors. Context remains a delegating composition root.
+
+TDD route: off, no strict TDD request. Add focused regressions for changed
+mechanisms. Concurrency repairs need deterministic failure injection before
+the fix. Witness paths need a mutation check. Heavy checks run serially.
+
+1. Navigation and impact. The published registry and relationship snapshot
+   remain authoritative for IDs, spans, and edges. Public summary and exact
+   outline reads may return published spans when source bytes drift. Mark
+   them with stale file freshness and `OUTLINE_PUBLISHED_SPANS`, plus
+   `NAVIGATION_SOURCE_DRIFT_DETECTED`. Call graphs mark stale nodes and
+   published spans explicitly. Never repair published spans with dirty bytes
+   or infer current edges from mismatched source. Structural analysis that
+   needs current bytes remains unavailable on drift.
+   Internal source options carry optional base bytes or require current
+   coordinates. They are not MCP inputs. Both handlers authorize the real
+   file before accepting supplied bytes. Supplied bytes must match the
+   registry hash. Impact outline pages require that check and use old-side
+   diff coordinates only with a successful witness. Annotated `read_file`
+   requires current coordinates and retains its current refusal on drift.
+   Keep authorization, missing files, inconsistent hashes, publication
+   fencing, unsupported languages, cancellation, and graph evidence limits.
+2. Live rerank evidence. Carry the existing live-byte hash from path-scoped
+   and tracked lexical candidate construction through projection. Broaden
+   the existing internal witness contract rather than add another field.
+   Do not attach a live witness to a published candidate during fusion.
+   A second edit must still fail projection. Published candidates retain
+   their existing hash check. Retrieval order on projection failure stays.
+3. Sync concurrency. Reproduce the gap between the initial active-flight
+   check and installation after awaited preparation. Coalesce at the actual
+   execution boundary and remove only the owning map entry. Keep durable
+   mutation leases and worker quiescence. The profile's reported race is
+   not yet attributed to this mechanism.
+4. Automatic catch-up. Use SyncManager's existing provider-owned background
+   lifecycle, accepted watcher events, and epochs. Quiet debounce is 2 s,
+   maximum delay is 10 s, and periodic fallback remains enabled. An event
+   during a sync stays pending and causes a later pass. Start no second
+   writer, busy loop, provider, or background owner. Shutdown cancels queued
+   work and joins preparation and active mutation. Disabled watchers retain
+   periodic sync. Ignore-control changes retain reconciliation behavior.
+5. Shared cost evidence. Source inspection disproves the proposed duplicate
+   navigation reads: one reads symbols and the other relationships. Existing
+   cache reuse already checks root, publication, navigation root, and an
+   observation token. The second preparation only runs when observable
+   controls change. Preserve both mechanisms. Correlate timing records and
+   measure status/polling overhead before claiming avoidable duplicate work.
+6. Delivery. Run focused impact, outline, graph, annotated-source, rerank,
+   watcher, concurrency, and lifecycle checks. Run `pnpm run check`. Perform
+   mutation checks, retain existing assertions, inspect the scoped diff,
+   update this plan and its README row, and commit verified work. Report
+   concrete uncovered limits. No latency promise precedes measurement.
+
+Acceptance: reads never await sync solely because a readable source file
+changed. Published results identify their stale coordinates and incomplete
+current coverage. Impact seeds and callers use the hash-matched base. New
+symbols and new relationships are not invented before analysis. Automatic
+catch-up preserves edits arriving during work and drains on shutdown.
+
+Result: both worker slices are integrated. Independent spec and code reviews
+pass. The navigation review found contradictory impact warnings, and the
+implementation now removes `IMPACT_CURRENT_SYMBOLS_ONLY` on published seeds.
+
+Integrated checks: 137 navigation, graph, impact, rerank, maintenance, tool,
+and supervisor tests pass across 13 files. Another run passes 51 tests across
+the four sync files and the repeated 18 producer tests. The union is 170
+distinct tests. Coalesced failure rejects all waiters, releases its promise
+owner, and permits a successful retry. Scheduler tests cover 2 s quiet time,
+10 s maximum delay, events during work, busy retries, sequential roots, reads
+during work, watcher failures, ignore controls, stop, and preparation drain.
+
+Mutation evidence: witnessed new-side impact selection chooses the wrong
+symbol and fails. Restored old-side selection passes. Removing the live-path
+hash fails one producer test. Removing the tracked mapping hash fails two.
+Restoring both passes. Before the concurrency repair, its deterministic
+barrier test dispatches two executions and fails. After the repair it dispatches
+one and passes.
+
+`pnpm run check` passes lint, all three package typechecks, version freshness,
+and scope checks. Existing lint warnings remain. The combined check caught an
+unused initializer and a missing required field in a new fixture. Both are
+corrected. `node --check scripts/perf/index-probe.mjs` passes.
+
+Timing diagnostics now correlate worker phases by operation ID, measure
+parent ready/round-trip/quiescence, and separate probe status calls, sleeps,
+and completion-observation lag. No fresh latency measurement was performed.
+The earlier profile does not prove a permanent sync floor or duplicate loads.
+No sync speedup or sub-150 ms navigation claim follows from these checks.
+
+Limits: published spans can differ from current source. New symbols and new
+relationships need analysis. Exact references still skip edited source files
+with partial coverage. Annotated read_file retains current-coordinate guards.
+The deterministic concurrency fix does not attribute the historical profile
+failure to a proved lease-release ordering bug.
+
+Brief retrospective proposals: worker return checks can include the existing
+lint/typecheck commands, which catch fixture and initialization errors that
+runtime tests miss. Profile summaries can label restoration operations before
+counting scans. An idle agent needs a follow-up task, not only a message, to
+start another turn. No new hook, CI gate, or global instruction was added.
 
 D1, D2 and D3: approved as recommended (22 October 2026). D4: approved
 (22 October 2026): skip the reranker for a single bare lowercase word, and

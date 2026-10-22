@@ -168,3 +168,37 @@ test("exact mode returns every duplicate-label match so each symbolId can be use
         await rm(root, { recursive: true, force: true });
     }
 });
+
+
+test("published outline coordinates survive inserted, renamed, and deleted Python source", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "outline-published-"));
+    try {
+        const source = "def target():\n    return 1\n\ndef other():\n    return 2\n";
+        const analysis = await createLanguageAnalysisService().analyze({ content: source, language: "python", relativePath: "seed.py" });
+        const records = buildSymbolRecordsForFile({ relativePath: "seed.py", language: "python", content: source,
+            fileHash: createHash("sha256").update(source).digest("hex"), extractorVersion: "test",
+            chunks: [...analysis.chunks], extractedSymbols: analysis.symbols });
+        const target = records.find(symbol => symbol.name === "target")!;
+        for (const edited of ["# inserted\n".repeat(20) + source, source.replace("target", "renamed"), ""]) {
+            await writeFile(path.join(root, "seed.py"), edited);
+            for (const resolveMode of ["outline", "exact"] as const) {
+                const payload = await buildRegistryFileOutlinePayload({ codebaseRoot: root, file: "seed.py", symbols: records,
+                    publishedSpans: true, resolveMode, symbolIdExact: resolveMode === "exact" ? target.symbolInstanceId : undefined,
+                    limitSymbols: 500, buildCallGraphHint: symbol => ({ supported: true, symbolRef: { file: symbol.file, symbolId: symbol.symbolInstanceId },
+                        validated: true, validatedAt: "2026-10-20", relationshipBuiltAt: "2026-10-20" }),
+                    buildOutlineSpanWarningCodes: () => [],
+                    readSourceLines: async () => { throw new Error("published projection cannot read source"); } });
+                assert.equal(payload.status, "ok");
+                assert.deepEqual(payload.outline?.symbols.map(symbol => [symbol.symbolId, symbol.span]),
+                    (resolveMode === "exact" ? [target] : records.filter(symbol => symbol.kind !== "file")).map(symbol => [symbol.symbolInstanceId, symbol.span]));
+            }
+        }
+        const missing = await buildRegistryFileOutlinePayload({ codebaseRoot: root, file: "seed.py", symbols: records,
+            publishedSpans: true, resolveMode: "exact", symbolIdExact: "missing", limitSymbols: 500,
+            buildCallGraphHint: () => ({ supported: false, reason: "missing_symbol" }), buildOutlineSpanWarningCodes: () => [],
+            readSourceLines: async () => { throw new Error("published projection cannot read source"); } });
+        assert.equal(missing.status, "not_found");
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});

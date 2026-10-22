@@ -63,7 +63,7 @@ function phaseForTiming(phase: string): MutationOperationPhase {
 
 async function main(): Promise<void> {
     // Time from process start to main(): module loading in a fresh worker process.
-    perfTrace("sync.worker.module_load", performance.now());
+    perfTrace("sync.worker.module_load", performance.now(), { operationId: workerRuntime.operationId });
     const input = parseInput(process.argv[2]);
     await workerRuntime.started;
     assertNotCancelled();
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
                     throw new Error(toolContext.message);
                 }
                 assertNotCancelled();
-                perfTrace("sync.worker.bootstrap", performance.now() - bootstrapStartedAt);
+                perfTrace("sync.worker.bootstrap", performance.now() - bootstrapStartedAt, { operationId: workerRuntime.operationId });
 
                 let publicProgress = 0;
                 const publishRealProgress = (
@@ -123,11 +123,11 @@ async function main(): Promise<void> {
                         );
                     },
                     onPhaseTiming: (phase, durationMs) => {
-                        perfTrace(`sync.${phase}`, durationMs);
+                        perfTrace(`sync.${phase}`, durationMs, { operationId: workerRuntime.operationId });
                         publishRealProgress(phaseForTiming(phase));
                     },
                 });
-                perfTrace("sync.worker.freshness", performance.now() - freshnessStartedAt);
+                perfTrace("sync.worker.freshness", performance.now() - freshnessStartedAt, { operationId: workerRuntime.operationId });
                 assertNotCancelled();
                 result = {
                     mode: decision.mode,
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
             } finally {
                 const shutdownStartedAt = performance.now();
                 await providerRuntime.shutdown();
-                perfTrace("sync.worker.shutdown", performance.now() - shutdownStartedAt);
+                perfTrace("sync.worker.shutdown", performance.now() - shutdownStartedAt, { operationId: workerRuntime.operationId });
             }
         },
         { signal: workerRuntime.signal },

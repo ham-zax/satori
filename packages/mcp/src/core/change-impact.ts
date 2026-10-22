@@ -111,6 +111,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 outline = published;
                 publishedSource = baseBytes;
                 publishedSourceByFile.set(file, baseBytes);
+                warnings.delete("IMPACT_CURRENT_SYMBOLS_ONLY");
                 warnings.add("IMPACT_PUBLISHED_SPANS");
             }
         }

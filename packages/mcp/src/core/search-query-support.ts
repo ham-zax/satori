@@ -365,13 +365,14 @@ export class SearchQuerySupport {
             let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
             let content: string;
+            let sourceHash: string;
             try {
                 handle = await openRegularFileInsideRoot(absolutePath, input.effectiveRoot);
                 stat = await handle.stat();
                 if (!stat.isFile() || stat.size > SEARCH_LIVE_PATH_SUPPLEMENT_MAX_BYTES) {
                     continue;
                 }
-                ({ content } = await readMeasuredSearchSource(handle, stat, absolutePath));
+                ({ content, sourceHash } = await readMeasuredSearchSource(handle, stat, absolutePath));
             } catch {
                 continue;
             } finally {
@@ -408,6 +409,7 @@ export class SearchQuerySupport {
             results.push({
                 content: windowContent,
                 relativePath: normalized,
+                dirtyOverlaySourceHash: sourceHash,
                 startLine,
                 endLine,
                 language,
@@ -808,6 +810,7 @@ export class SearchQuerySupport {
 
         const candidates: Array<{
             relativePath: string;
+            sourceHash: string;
             exactLexicalMatch: boolean;
             contentLexicalEvidence: boolean;
             firstMatchLineIndex: number;
@@ -858,6 +861,7 @@ export class SearchQuerySupport {
             let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
             let content: string;
+            let sourceHash: string;
             try {
                 handle = await openRegularFileInsideRoot(absolutePath, input.effectiveRoot);
                 stat = await handle.stat();
@@ -867,7 +871,7 @@ export class SearchQuerySupport {
                     }
                     continue;
                 }
-                ({ content } = await readMeasuredSearchSource(handle, stat, absolutePath));
+                ({ content, sourceHash } = await readMeasuredSearchSource(handle, stat, absolutePath));
             } catch {
                 continue;
             } finally {
@@ -896,6 +900,7 @@ export class SearchQuerySupport {
             if (exactWindowMatch) {
                 candidates.push({
                     relativePath,
+                    sourceHash,
                     exactLexicalMatch: exactWindowMatch.lineEvidence.exactLexicalMatch,
                     // The fast path only returns after finding a whole-term or
                     // quoted match in source content, so this window has
@@ -952,6 +957,7 @@ export class SearchQuerySupport {
 
             candidates.push({
                 relativePath,
+                sourceHash,
                 exactLexicalMatch: pathEvidence.exactLexicalMatch || bestExactLexicalMatch,
                 contentLexicalEvidence: hasContentLexicalEvidence,
                 firstMatchLineIndex: bestLineIndex,
@@ -982,6 +988,7 @@ export class SearchQuerySupport {
         const results = candidates.slice(0, Math.min(input.limit, SEARCH_TRACKED_LEXICAL_MAX_RESULTS)).map((candidate) => ({
             content: candidate.content,
             relativePath: candidate.relativePath,
+            dirtyOverlaySourceHash: candidate.sourceHash,
             startLine: candidate.startLine,
             endLine: candidate.endLine,
             language: candidate.language,

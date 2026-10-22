@@ -200,23 +200,34 @@ async function main() {
         const before = await currentOperation();
         const started = performance.now();
         requireAccepted('sync', await tool('manage_index', { action: 'sync', path: options.repo }));
-        return { before, started };
+        return { before, started, requestMs: performance.now() - started };
     };
     // Waits for the sync's operation to end. A sync that starts no new operation
     // within noOpMs counts as a no-op (the working tree matches the index).
-    const waitSync = async ({ before, started }, noOpMs = 3000) => {
+    const waitSync = async ({ before, started, requestMs }, noOpMs = 3000) => {
         const deadline = started + options.waitTimeoutMs;
+        // Status calls overlap worker execution. Their sum is observation work,
+        // not an additive component of the worker's critical path.
+        const timing = { requestMs: Math.round(requestMs), beforePollingMs: Math.round(performance.now() - started),
+            statusCalls: 0, statusMs: 0, pollSleepMs: 0 };
         while (performance.now() < deadline) {
+            const statusStarted = performance.now();
             const operation = await currentOperation();
+            timing.statusCalls += 1;
+            timing.statusMs += Math.round(performance.now() - statusStarted);
             if (operation && operation.id !== before?.id) {
-                if (operation.phase === 'completed') return { operation, wallMs: performance.now() - started };
+                if (operation.phase === 'completed') return { operation, wallMs: performance.now() - started,
+                    timing: { ...timing, operationId: operation.id,
+                        completedToObservationMs: Math.max(0, Date.now() - Date.parse(operation.updatedAt)) } };
                 if (['failed', 'blocked', 'cancelled'].includes(operation.phase)) {
                     throw new Error(`sync ${operation.phase}: ${JSON.stringify(operation).slice(0, 300)}`);
                 }
             } else if (performance.now() - started > noOpMs) {
-                return { operation: before, wallMs: null };
+                return { operation: before, wallMs: null, timing };
             }
+            const sleepStarted = performance.now();
             await sleep(100);
+            timing.pollSleepMs += Math.round(performance.now() - sleepStarted);
         }
         throw new Error(`sync did not end in ${options.waitTimeoutMs} ms`);
     };
@@ -288,6 +299,7 @@ async function main() {
                 repeats,
                 saveToFullHitMs: fullHitAt === null ? null : Math.round(fullHitAt - saved),
                 syncWallMs: syncResult?.wallMs == null ? null : Math.round(syncResult.wallMs),
+                ...(syncResult ? { syncTiming: syncResult.timing } : {}),
             };
         } finally {
             for (const [file, original] of pendingRestores) fs.writeFileSync(file, original);

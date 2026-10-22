@@ -27,7 +27,7 @@ import {
     buildSourceBackedPythonCallerFallback,
     type PythonSourceBackedSpanRepair,
 } from "./python-call-fallback.js";
-import type { ExactReferenceSearchResult } from "./exact-reference-search.js";
+import { EXACT_REFERENCE_EVIDENCE_CLASS, type ExactReferenceSearchResult } from "./exact-reference-search.js";
 import {
     matchesPublishedPathScope,
     type PublishedPathScope,
@@ -853,6 +853,8 @@ export class RelationshipBackedCallGraph {
         const sourceReferences: CallGraphSourceReference[] = (exactSourceResult?.references ?? [])
             .filter((reference) => (
                 reference.occurrenceKind !== "declaration"
+                // call_graph stays on published coordinates; current-byte hits are find_references only.
+                && reference.evidenceClass === EXACT_REFERENCE_EVIDENCE_CLASS
                 && (!hasPublishedPathScope(input.pathScope)
                     || (
                         matchesPublishedPathScope(reference.file, input.pathScope)
@@ -864,7 +866,7 @@ export class RelationshipBackedCallGraph {
             ))
             .map((reference) => ({
                 relationship: "caller" as const,
-                evidenceClass: reference.evidenceClass,
+                evidenceClass: EXACT_REFERENCE_EVIDENCE_CLASS,
                 occurrenceKind: reference.occurrenceKind as "member" | "identifier",
                 ...(reference.owningSymbol?.symbolId
                     ? { sourceSymbolId: reference.owningSymbol.symbolId }

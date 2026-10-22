@@ -5,6 +5,8 @@ import {
 } from "./navigation-path-scope.js";
 
 export const EXACT_REFERENCE_EVIDENCE_CLASS = "published_source_text" as const;
+// Occurrences scanned from edited bytes whose hash differs from the Publication.
+export const EXACT_REFERENCE_CURRENT_EVIDENCE_CLASS = "current_source_text" as const;
 const EXACT_REFERENCE_READ_CONCURRENCY = 16;
 
 export type ExactReferenceOccurrenceKind = "declaration" | "member" | "identifier";
@@ -32,7 +34,7 @@ export type ExactSourceReference = Readonly<{
     occurrenceKind: ExactReferenceOccurrenceKind;
     matchedText: string;
     member?: string;
-    evidenceClass: typeof EXACT_REFERENCE_EVIDENCE_CLASS;
+    evidenceClass: typeof EXACT_REFERENCE_EVIDENCE_CLASS | typeof EXACT_REFERENCE_CURRENT_EVIDENCE_CLASS;
 }>;
 
 export type ExactReferenceSearchCoverage = Readonly<{
@@ -225,6 +227,7 @@ export async function findExactPublishedSourceReferences(input: {
                 continue;
             }
             const expectedSourceHash = entry.hash?.trim().toLowerCase();
+            let currentSource = false;
             if (expectedSourceHash) {
                 if (!/^[a-f0-9]{64}$/.test(expectedSourceHash)) {
                     reasons.push({
@@ -244,12 +247,15 @@ export async function findExactPublishedSourceReferences(input: {
                     continue;
                 }
                 if (observedSha256 !== expectedSourceHash) {
+                    // Edited files are scanned, not skipped. Their occurrences are
+                    // labeled current_source_text and carry no published owner,
+                    // because published owner spans do not apply to edited lines.
                     reasons.push({
                         code: "source_changed",
                         file,
-                        detail: "Current source bytes differ from the Publication content hash.",
+                        detail: "Current source bytes differ from the Publication content hash; occurrences come from current bytes (evidenceClass=current_source_text).",
                     });
-                    continue;
+                    currentSource = true;
                 }
             }
             inspectedFileCount += 1;
@@ -280,7 +286,7 @@ export async function findExactPublishedSourceReferences(input: {
                         declarationSeen = true;
                     }
                     if (occurrenceIndex < offset) continue;
-                    const owner = findOwningSymbol(input.registry, file, line);
+                    const owner = currentSource ? undefined : findOwningSymbol(input.registry, file, line);
                     references.push({
                         file,
                         span: {
@@ -303,7 +309,7 @@ export async function findExactPublishedSourceReferences(input: {
                         occurrenceKind,
                         matchedText: identifier,
                         ...(occurrenceKind === "member" ? { member: identifier } : {}),
-                        evidenceClass: EXACT_REFERENCE_EVIDENCE_CLASS,
+                        evidenceClass: currentSource ? EXACT_REFERENCE_CURRENT_EVIDENCE_CLASS : EXACT_REFERENCE_EVIDENCE_CLASS,
                     });
                     if (match[0].length === 0) {
                         matcher.lastIndex += 1;

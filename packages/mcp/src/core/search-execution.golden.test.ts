@@ -707,7 +707,9 @@ const scenarios: Scenario[] = [
             assert.ok(hasTracePass(rec, "attempt:1/symbol_metadata_bm25_alt"));
             assert.deepEqual(rec.metadataQueries, [null, "commitHookEffectListUnmount destroy"]);
             assert.equal((outcomeOf(rec).semanticExpansion as Rec).reason, "caller_alt_terms");
-            assert.equal(outcomeOf(rec).orderAuthority, "definition_fusion_order");
+            // The exact-lexical fusion tie-break ranks the recovered definition
+            // first, ahead of the reranker slice, so definition fusion has no work.
+            assert.equal(outcomeOf(rec).orderAuthority, "reranker_order");
             assert.equal(resultsOf(rec)[0]?.relativePath, "src/effects.ts");
             assert.match(String(rec.rerankQuery), /commitHookEffectListUnmount/);
         },

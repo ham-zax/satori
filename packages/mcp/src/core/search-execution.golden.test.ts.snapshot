@@ -422,19 +422,19 @@ exports[`golden: alt_terms_on_defaults 1`] = `
     {"n":2,"pass":"expanded","query":"commitHookEffectListUnmount destroy","topK":32,"retrievalMode":"hybrid","lexicalFallbackTerms":["commithookeffectlistunmount","destroy","unmount","commit","effect","hook","list"],"hasFilter":false}
   ],
   "rerankerCalls": [
-    {"query":"Question:\\nstale cleanup effects (commitHookEffectListUnmount, destroy)\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/effects.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
+    {"query":"Question:\\nstale cleanup effects (commitHookEffectListUnmount, destroy)\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
   ],
   "metadataQueries": [null,"commitHookEffectListUnmount destroy"],
   "stubCalls": {"dirtyOverlayCalls":0,"trackedLexicalCalls":1,"livePathCalls":0},
   "outcome": {
     "kind": "ok",
     "results": [
-      {"rank":1,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["symbol_metadata_bm25_alt"]},
+      {"rank":1,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"retrievalPasses":["symbol_metadata_bm25_alt"]},
       {"rank":2,"relativePath":"src/dispose_helper.ts","symbolLabel":"function disposeHelper()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.8,"rerankerRank":1,"rerankerScore":0.5,"retrievalPasses":["expanded"]},
-      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]},
-      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":4,"rerankerScore":0.47,"retrievalPasses":["primary"]}
+      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["primary"]},
+      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]}
     ],
-    "orderAuthority": "definition_fusion_order",
+    "orderAuthority": "reranker_order",
     "attemptsUsed": 1,
     "candidateLimit": 32,
     "passesUsed": ["expanded","primary","symbol_metadata_bm25"],
@@ -446,9 +446,9 @@ exports[`golden: alt_terms_on_defaults 1`] = `
     "rerankerAttempted": true,
     "rerankerApplied": true,
     "rerankerCandidatesIn": 4,
-    "rerankerCandidatesReranked": 4,
-    "rerankerCandidatePoolCount": 4,
-    "rerankerCandidateBudget": 4,
+    "rerankerCandidatesReranked": 3,
+    "rerankerCandidatePoolCount": 3,
+    "rerankerCandidateBudget": 3,
     "rerankerBudgetReason": "complete_family_pool",
     "rankingProvenance": {"semanticPassesUsed":["expanded","primary"],"lexicalPassesUsed":["symbol_metadata_bm25"],"livePathSupplementUsed":false,"lexicalFileScanUsed":false,"rerankApplied":true,"exactMatchPinningApplied":false,"registryRepairGroupCount":0},
     "providerWork": {
@@ -459,8 +459,8 @@ exports[`golden: alt_terms_on_defaults 1`] = `
       "denseQueriesByCurrentContract": 2,
       "sparseQueriesByCurrentContract": 2,
       "rerankerCalls": 1,
-      "rerankerCandidates": 4,
-      "rerankerInputBytes": 419,
+      "rerankerCandidates": 3,
+      "rerankerInputBytes": 307,
       "rerankerFailures": 0,
       "rerankerRetries": 0,
       "rerankerTimeouts": 0,
@@ -551,20 +551,20 @@ exports[`golden: alt_terms_on_defaults 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -576,20 +576,20 @@ exports[`golden: alt_terms_on_defaults 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -602,11 +602,11 @@ exports[`golden: alt_terms_on_defaults 1`] = `
           "omittedOccurrences": 0,
           "candidates": [
             {
-              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
-              "relativePath": "src/dispose_helper.ts",
+              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
+              "relativePath": "src/effects.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -615,11 +615,11 @@ exports[`golden: alt_terms_on_defaults 1`] = `
               "passId": "attempt:1/replay:1"
             },
             {
-              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
-              "relativePath": "src/effects.ts",
+              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
+              "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -657,50 +657,46 @@ exports[`golden: alt_terms_on_defaults 1`] = `
         },
         {
           "stage": "reranker_input",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
           "stage": "reranker_provider_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_fusion_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.49},
-            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.5},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
@@ -738,8 +734,8 @@ exports[`golden: alt_terms_on_defaults 1`] = `
     "denseQueriesByCurrentContract": 2,
     "sparseQueriesByCurrentContract": 2,
     "rerankerCalls": 1,
-    "rerankerCandidates": 4,
-    "rerankerInputBytes": 419,
+    "rerankerCandidates": 3,
+    "rerankerInputBytes": 307,
     "rerankerFailures": 0,
     "rerankerRetries": 0,
     "rerankerTimeouts": 0,
@@ -1074,19 +1070,19 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
     {"n":2,"pass":"expanded","query":"commitHookEffectListUnmount destroy","topK":32,"retrievalMode":"hybrid","lexicalFallbackTerms":["commithookeffectlistunmount","destroy","unmount","commit","effect","hook","list"],"hasFilter":false}
   ],
   "rerankerCalls": [
-    {"query":"Question:\\nstale cleanup effects\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/effects.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
+    {"query":"Question:\\nstale cleanup effects\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
   ],
   "metadataQueries": [null,"commitHookEffectListUnmount destroy"],
   "stubCalls": {"dirtyOverlayCalls":0,"trackedLexicalCalls":1,"livePathCalls":0},
   "outcome": {
     "kind": "ok",
     "results": [
-      {"rank":1,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["symbol_metadata_bm25_alt"]},
+      {"rank":1,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"retrievalPasses":["symbol_metadata_bm25_alt"]},
       {"rank":2,"relativePath":"src/dispose_helper.ts","symbolLabel":"function disposeHelper()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.8,"rerankerRank":1,"rerankerScore":0.5,"retrievalPasses":["expanded"]},
-      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]},
-      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":4,"rerankerScore":0.47,"retrievalPasses":["primary"]}
+      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["primary"]},
+      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]}
     ],
-    "orderAuthority": "definition_fusion_order",
+    "orderAuthority": "reranker_order",
     "attemptsUsed": 1,
     "candidateLimit": 32,
     "passesUsed": ["expanded","primary","symbol_metadata_bm25"],
@@ -1098,9 +1094,9 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
     "rerankerAttempted": true,
     "rerankerApplied": true,
     "rerankerCandidatesIn": 4,
-    "rerankerCandidatesReranked": 4,
-    "rerankerCandidatePoolCount": 4,
-    "rerankerCandidateBudget": 4,
+    "rerankerCandidatesReranked": 3,
+    "rerankerCandidatePoolCount": 3,
+    "rerankerCandidateBudget": 3,
     "rerankerBudgetReason": "complete_family_pool",
     "rankingProvenance": {"semanticPassesUsed":["expanded","primary"],"lexicalPassesUsed":["symbol_metadata_bm25"],"livePathSupplementUsed":false,"lexicalFileScanUsed":false,"rerankApplied":true,"exactMatchPinningApplied":false,"registryRepairGroupCount":0},
     "providerWork": {
@@ -1111,8 +1107,8 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
       "denseQueriesByCurrentContract": 2,
       "sparseQueriesByCurrentContract": 2,
       "rerankerCalls": 1,
-      "rerankerCandidates": 4,
-      "rerankerInputBytes": 419,
+      "rerankerCandidates": 3,
+      "rerankerInputBytes": 307,
       "rerankerFailures": 0,
       "rerankerRetries": 0,
       "rerankerTimeouts": 0,
@@ -1203,20 +1199,20 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -1228,20 +1224,20 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -1254,11 +1250,11 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
           "omittedOccurrences": 0,
           "candidates": [
             {
-              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
-              "relativePath": "src/dispose_helper.ts",
+              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
+              "relativePath": "src/effects.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -1267,11 +1263,11 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
               "passId": "attempt:1/replay:1"
             },
             {
-              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
-              "relativePath": "src/effects.ts",
+              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
+              "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -1309,50 +1305,46 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
         },
         {
           "stage": "reranker_input",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
           "stage": "reranker_provider_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_fusion_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.49},
-            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.5},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
@@ -1390,8 +1382,8 @@ exports[`golden: alt_terms_on_rerank_alt_terms_false 1`] = `
     "denseQueriesByCurrentContract": 2,
     "sparseQueriesByCurrentContract": 2,
     "rerankerCalls": 1,
-    "rerankerCandidates": 4,
-    "rerankerInputBytes": 419,
+    "rerankerCandidates": 3,
+    "rerankerInputBytes": 307,
     "rerankerFailures": 0,
     "rerankerRetries": 0,
     "rerankerTimeouts": 0,
@@ -1422,17 +1414,17 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
     {"n":2,"pass":"expanded","query":"commitHookEffectListUnmount destroy teardown dispose","topK":32,"retrievalMode":"hybrid","lexicalFallbackTerms":["commithookeffectlistunmount","teardown","destroy","dispose","unmount","commit","effect","tear"],"hasFilter":false}
   ],
   "rerankerCalls": [
-    {"query":"Question:\\nstale cleanup effects (commitHookEffectListUnmount, destroy, teardown, dispose)\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/effects.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
+    {"query":"Question:\\nstale cleanup effects (commitHookEffectListUnmount, destroy, teardown, dispose)\\n\\nRequested answer type:\\nthe most direct answer to the question","documents":["src/dispose_helper.ts","src/noise.ts","src/format.ts"],"signalProvided":false}
   ],
   "metadataQueries": [null,"commitHookEffectListUnmount destroy teardown dispose"],
   "stubCalls": {"dirtyOverlayCalls":0,"trackedLexicalCalls":1,"livePathCalls":0},
   "outcome": {
     "kind": "ok",
     "results": [
-      {"rank":1,"relativePath":"src/dispose_helper.ts","symbolLabel":"function disposeHelper()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.8,"rerankerRank":1,"rerankerScore":0.5,"retrievalPasses":["expanded"]},
-      {"rank":2,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["symbol_metadata_bm25_alt"]},
-      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]},
-      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":4,"rerankerScore":0.47,"retrievalPasses":["primary"]}
+      {"rank":1,"relativePath":"src/effects.ts","symbolLabel":"function commitHookEffectListUnmount","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.1,"retrievalPasses":["symbol_metadata_bm25_alt"]},
+      {"rank":2,"relativePath":"src/dispose_helper.ts","symbolLabel":"function disposeHelper()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.8,"rerankerRank":1,"rerankerScore":0.5,"retrievalPasses":["expanded"]},
+      {"rank":3,"relativePath":"src/noise.ts","symbolLabel":"function src_noise_ts()","startLine":1,"endLine":4,"score":0.01639344262295082,"fusionScore":0.01639344262295082,"backendScore":0.95,"rerankerRank":2,"rerankerScore":0.49,"retrievalPasses":["primary"]},
+      {"rank":4,"relativePath":"src/format.ts","symbolLabel":"function src_format_ts()","startLine":1,"endLine":4,"score":0.016129032258064516,"fusionScore":0.016129032258064516,"backendScore":0.9,"rerankerRank":3,"rerankerScore":0.48,"retrievalPasses":["primary"]}
     ],
     "orderAuthority": "definition_fusion_order",
     "attemptsUsed": 1,
@@ -1446,9 +1438,9 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
     "rerankerAttempted": true,
     "rerankerApplied": true,
     "rerankerCandidatesIn": 4,
-    "rerankerCandidatesReranked": 4,
-    "rerankerCandidatePoolCount": 4,
-    "rerankerCandidateBudget": 4,
+    "rerankerCandidatesReranked": 3,
+    "rerankerCandidatePoolCount": 3,
+    "rerankerCandidateBudget": 3,
     "rerankerBudgetReason": "complete_family_pool",
     "rankingProvenance": {"semanticPassesUsed":["expanded","primary"],"lexicalPassesUsed":["symbol_metadata_bm25"],"livePathSupplementUsed":false,"lexicalFileScanUsed":false,"rerankApplied":true,"exactMatchPinningApplied":false,"registryRepairGroupCount":0},
     "providerWork": {
@@ -1459,8 +1451,8 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
       "denseQueriesByCurrentContract": 2,
       "sparseQueriesByCurrentContract": 2,
       "rerankerCalls": 1,
-      "rerankerCandidates": 4,
-      "rerankerInputBytes": 419,
+      "rerankerCandidates": 3,
+      "rerankerInputBytes": 307,
       "rerankerFailures": 0,
       "rerankerRetries": 0,
       "rerankerTimeouts": 0,
@@ -1551,20 +1543,20 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_fusion\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -1576,20 +1568,20 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082,"passId":"attempt:1"},
             {
               "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
               "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",1]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]",
               "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
-              "rank": 1,
+              "rank": 2,
               "score": 0.01639344262295082,
               "passId": "attempt:1"
             },
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082,"passId":"attempt:1"},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_filtered\\",\\"attempt:1\\",4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516,"passId":"attempt:1"}
           ]
@@ -1602,11 +1594,11 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
           "omittedOccurrences": 0,
           "candidates": [
             {
-              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
-              "relativePath": "src/dispose_helper.ts",
+              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",1]",
+              "relativePath": "src/effects.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -1615,11 +1607,11 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
               "passId": "attempt:1/replay:1"
             },
             {
-              "candidateId": "derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]",
+              "candidateId": "derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]",
               "candidateIdKind": "derived",
-              "ownerId": "[\\"file\\",\\"src/effects.ts\\"]",
-              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
-              "relativePath": "src/effects.ts",
+              "ownerId": "[\\"file\\",\\"src/dispose_helper.ts\\"]",
+              "evidenceOccurrenceId": "[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_replay_signals\\",\\"attempt:1/replay:1\\",2]",
+              "relativePath": "src/dispose_helper.ts",
               "startLine": 1,
               "endLine": 4,
               "language": "typescript",
@@ -1657,50 +1649,46 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
         },
         {
           "stage": "reranker_input",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_input\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
           "stage": "reranker_provider_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_provider_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_fusion_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.5},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.47}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.49},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_fusion_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.48}
           ]
         },
         {
           "stage": "reranker_output",
-          "totalOccurrences": 4,
-          "uniqueCandidates": 4,
+          "totalOccurrences": 3,
+          "uniqueCandidates": 3,
           "omittedOccurrences": 0,
           "candidates": [
             {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
+            {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,2]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"reranker_output\\",null,3]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.016129032258064516}
           ]
         },
         {
@@ -1709,8 +1697,8 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
           "uniqueCandidates": 4,
           "omittedOccurrences": 0,
           "candidates": [
-            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,1]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
-            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,2]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/effects.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/effects.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/effects.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,1]","relativePath":"src/effects.ts","startLine":1,"endLine":4,"language":"typescript","rank":1,"score":0.01639344262295082},
+            {"candidateId":"derived:[\\"src/dispose_helper.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/dispose_helper.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/dispose_helper.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,2]","relativePath":"src/dispose_helper.ts","startLine":1,"endLine":4,"language":"typescript","rank":2,"score":0.01639344262295082},
             {"candidateId":"derived:[\\"src/noise.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/noise.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/noise.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,3]","relativePath":"src/noise.ts","startLine":1,"endLine":4,"language":"typescript","rank":3,"score":0.01639344262295082},
             {"candidateId":"derived:[\\"src/format.ts\\",1,4,\\"typescript\\"]","candidateIdKind":"derived","ownerId":"[\\"file\\",\\"src/format.ts\\"]","evidenceOccurrenceId":"[\\"derived:[\\\\\\"src/format.ts\\\\\\",1,4,\\\\\\"typescript\\\\\\"]\\",\\"mcp_ranked\\",null,4]","relativePath":"src/format.ts","startLine":1,"endLine":4,"language":"typescript","rank":4,"score":0.016129032258064516}
           ]
@@ -1738,8 +1726,8 @@ exports[`golden: alt_terms_over_cap_dropped_terms_traced 1`] = `
     "denseQueriesByCurrentContract": 2,
     "sparseQueriesByCurrentContract": 2,
     "rerankerCalls": 1,
-    "rerankerCandidates": 4,
-    "rerankerInputBytes": 419,
+    "rerankerCandidates": 3,
+    "rerankerInputBytes": 307,
     "rerankerFailures": 0,
     "rerankerRetries": 0,
     "rerankerTimeouts": 0,

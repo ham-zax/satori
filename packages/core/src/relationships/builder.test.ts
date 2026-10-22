@@ -1976,6 +1976,35 @@ test('buildRelationshipDelta invalidates absolute Python import dependents when 
     assert.equal(delta.records.filter((record) => record.type === 'IMPORTS').length, 1);
 });
 
+test('buildRelationshipDelta rewrites an affected file whose stored evidence differs, even when its records match', async () => {
+    const callerPath = 'src/caller.py';
+    const targetPath = 'src/target.py';
+    const sources = {
+        [callerPath]: 'from src.target import Target\n',
+        [targetPath]: 'class Target:\n    pass\n',
+    };
+    const before = await buildAnalyzedPythonRegistry(sources);
+    const after = await buildAnalyzedPythonRegistry(sources);
+    const previousRecords = buildRelationshipsForRegistry(before);
+    const storedCallerEvidence = before.analysisByFile.get(callerPath);
+    assert.ok(storedCallerEvidence);
+    // The stored shard evidence lacks the import binding that the current evidence has. Bytes and records still match.
+    const previousAnalysisByFile = new Map(before.analysisByFile);
+    previousAnalysisByFile.set(callerPath, { ...storedCallerEvidence, moduleBindings: [] });
+    const delta = buildRelationshipDelta({
+        previousRegistry: before.registry,
+        registry: after.registry,
+        existingRecords: previousRecords,
+        analysisByFile: after.analysisByFile,
+        previousAnalysisByFile,
+        changedFiles: new Set([targetPath]),
+    });
+
+    assert.deepEqual(delta.records, buildRelationshipsForRegistry(after));
+    assert.ok(delta.affectedFiles.includes(callerPath));
+    assert.ok(delta.filesToRewrite.includes(callerPath));
+});
+
 test('buildRelationshipDelta revisits an unresolved relative import when its target file appears', async () => {
     const callerPath = 'src/caller.ts';
     const targetPath = 'src/target.ts';
@@ -2708,6 +2737,7 @@ test('buildRelationshipDelta incrementally rebuilds CBM language relationships w
         registry: nextRegistry,
         existingRecords: delta.records,
         analysisByFile,
+        previousAnalysisByFile: new Map(analysisByFile),
         changedFiles: new Set(),
         mode: { kind: 'qualification', enabledUnpromotedCallLanguages: new Set(['go']) },
         semanticEvidenceByLanguage: new Map([['go', freshEvidence]]),

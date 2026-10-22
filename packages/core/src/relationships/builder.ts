@@ -568,7 +568,7 @@ function* buildRelationshipDeltaWork(input: BuildRelationshipDeltaInput): Relati
     const existingEvidenceByFile = new Map<string, string>();
     for (const file of affectedFiles) {
         if (!input.changedFiles.has(file)) {
-            existingEvidenceByFile.set(file, relationshipJson(getEvidence(input.analysisByFile, file)));
+            existingEvidenceByFile.set(file, relationshipJson(getEvidence(input.previousAnalysisByFile, file)));
         }
     }
     const rebuilt = yield* buildRelationshipsForRegistryWork({
@@ -590,8 +590,10 @@ function* buildRelationshipDeltaWork(input: BuildRelationshipDeltaInput): Relati
     const finalRecordsByFile = relationshipRecordsJsonByFile(records);
     const existingRecordsByFile = relationshipRecordsJsonByFile(input.existingRecords);
     // A relationship shard is a function of its file path, file hash, records, and analysis evidence.
-    // Outside changedFiles, the hash stays unchanged, and records and evidence are compared here,
-    // so only an identical shard is linked. Any difference, including order or representation, requires a rewrite.
+    // Outside changedFiles, the hash stays unchanged. Records are compared with the stored shard (existingRecords),
+    // and evidence with the stored evidence (previousAnalysisByFile), so only an identical shard is linked.
+    // Any difference, including order or representation, requires a rewrite. Without previousAnalysisByFile,
+    // every affected unchanged file with evidence is rewritten.
     const filesToRewrite = [...affectedFiles].filter((file) => (
         input.changedFiles.has(file)
         || (finalRecordsByFile.get(file) ?? '[]') !== (existingRecordsByFile.get(file) ?? '[]')

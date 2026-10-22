@@ -3,7 +3,7 @@ import type {
     SemanticSearchRequest,
     SemanticSearchResult,
 } from "@satori-code/core";
-import { LexicalRetrievalModeUnsupportedError } from "@satori-code/core";
+import { LexicalRetrievalModeUnsupportedError, perfSpan } from "@satori-code/core";
 import type { SearchScope } from "./search-constants.js";
 import type {
     SearchQueryPlan,
@@ -129,11 +129,11 @@ export function runDirtyOverlayPass(input: {
     const host = input.host;
     return host.measureSearchPhase(
         "trackedLexical",
-        () => host.searchQuerySupport.buildDirtyFileSearchResults({
+        () => perfSpan("search.dirty_overlay", () => host.searchQuerySupport.buildDirtyFileSearchResults({
             effectiveRoot: input.effectiveRoot,
             queryPlan: input.queryPlan,
             changedFiles: input.changedFiles,
-        }),
+        }), { changedFiles: input.changedFiles.size }),
     );
 }
 

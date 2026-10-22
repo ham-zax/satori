@@ -2,7 +2,7 @@
 
 Status: A0 and A1 done, results below. D1, D2 and D3 approved by Hamza on 22
 October 2026, as recommended. The reranker is the largest search cost. D4 is
-open. A3 is next.
+open. A3 done (limits 32). A2 is next.
 
 ## Goal
 
@@ -153,6 +153,18 @@ the save, during a running sync:
 At N = 50, the 16-file overlay cap limits hits until the sync publishes. A3
 owns that cap. Idle searches (no sync) are unchanged at 4.0-7.3 s, and rerank
 takes 3.1-6.5 s of that (D4).
+
+## A3 results (22 October 2026)
+
+A `search.dirty_overlay` perf span measured the overlay with the limits raised
+for one run (trufflehog, `.go`, 3 runs, idle and during a sync). The cost is
+linear at about 3.2 ms per file: 16 files 48-91 ms, 64 files 201-723 ms, 200
+files 590-1,460 ms. During a sync, the first search took 233-338 ms (16 files),
+403-416 ms (64) and 844-916 ms (200). Until A2, the dirty set comes from
+`git status`, so every search with uncommitted files pays this cost. A3 sets
+the file limit and the result limit to 32 (about 100 ms) and keeps both byte
+limits. At 64 and 200 edited files, search showed only 42-43 and 150-164 hits
+even with every file overlaid. A different limit causes that, not yet found.
 
 ## Decisions
 

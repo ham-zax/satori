@@ -573,7 +573,7 @@ test('dirty overlay ranks matches across chunks before capping and reports files
         fs.mkdirSync(path.join(root, 'src'), { recursive: true });
         // Twenty weak matches precede the one chunk naming both query terms.
         const weak = Array.from(
-            { length: 20 },
+            { length: 40 },
             (_, index) => `export function weak${index}() {\n    return invoiceTotal(${index});\n}\n`,
         );
         const strong = 'export function strongest() {\n    return invoiceTotal(taxRate);\n}\n';
@@ -597,7 +597,7 @@ test('dirty overlay ranks matches across chunks before capping and reports files
             changedFiles: new Set(['src/billing.ts', 'src/huge.ts', 'src/deleted.ts', 'src/locked.ts']),
         });
 
-        assert.equal(overlay.results.length, 16);
+        assert.equal(overlay.results.length, 32);
         assert.match(overlay.results[0]?.content ?? '', /strongest/);
         assert.equal(overlay.results[0]?.symbolKind, 'function');
         assert.ok(overlay.results.every((result) => result.relativePath === 'src/billing.ts'));

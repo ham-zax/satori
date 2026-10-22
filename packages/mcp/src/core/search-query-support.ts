@@ -50,8 +50,11 @@ const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_FILES = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_MAX_RESULTS = 8;
 const SEARCH_LIVE_PATH_SUPPLEMENT_CONTEXT_LINES = 2;
 const SEARCH_DIRTY_OVERLAY_MAX_BYTES = 256 * 1024;
-const SEARCH_DIRTY_OVERLAY_MAX_FILES = 16;
-const SEARCH_DIRTY_OVERLAY_MAX_RESULTS = 16;
+// The overlay costs about 3 ms per file (trufflehog probe, 22 October 2026), so
+// 32 files keep it near 100 ms per search. Every search pays it while the dirty
+// set comes from `git status`.
+const SEARCH_DIRTY_OVERLAY_MAX_FILES = 32;
+const SEARCH_DIRTY_OVERLAY_MAX_RESULTS = 32;
 const SEARCH_DIRTY_OVERLAY_TOTAL_BYTES = 2 * 1024 * 1024;
 const SEARCH_TRACKED_LEXICAL_MAX_BYTES = 192 * 1024;
 const SEARCH_TRACKED_LEXICAL_MAX_FILES = 128;

@@ -5,12 +5,12 @@ import {
     computeSymbolQualitySummaryFromSidecarRead,
     formatSymbolQualityMarker,
     perfSpan,
-    readSymbolRegistrySidecar,
     resolveLanguageCapabilityEvidence,
     unknownSymbolQualitySummary,
     type Context,
     type PublicationLease,
     type PublicationRef,
+    type ReadSymbolRegistrySidecarResult,
     type LanguageCapabilityEvidenceSummary,
     type SymbolQualitySummary,
 } from "@satori-code/core";
@@ -79,6 +79,7 @@ type ManageMaintenanceHandlersHost = {
         publicationId: string;
         navigationRoot: string;
     } | null;
+    readPublicationSymbolRegistry(publication: PublicationRef): Promise<ReadSymbolRegistrySidecarResult | undefined>;
     buildRuntimeOwnerConflictResponseIfBlocked(
         action: Extract<RuntimeOwnerMutationAction, "clear" | "sync">,
         codebasePath: string,
@@ -604,11 +605,7 @@ export class ManageMaintenanceHandlers {
                     : null;
                 try {
                     const registryRead = navigation
-                        ? await perfSpan("status.symbol_registry_read", () => readSymbolRegistrySidecar({
-                            normalizedRootPath: envelopePath,
-                            publicationId: navigation.publicationId,
-                            navigationRoot: navigation.navigationRoot,
-                        }))
+                        ? await perfSpan("status.symbol_registry_read", () => this.host.readPublicationSymbolRegistry(lease!))
                         : undefined;
                     const evidenceAvailability: SymbolQualitySummary['evidenceAvailability'] =
                         trackedRootState.state === 'ready'

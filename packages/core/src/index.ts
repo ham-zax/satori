@@ -219,6 +219,9 @@ export type {
 export {
     readSymbolRegistrySidecar,
 } from './symbols/sidecar-reads';
+export type {
+    ReadSymbolRegistrySidecarResult,
+} from './symbols/sidecar-reads';
 export {
     computeSymbolQualitySummaryFromSidecarRead,
     computeSymbolQualitySummaryFromRegistry,

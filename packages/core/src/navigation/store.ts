@@ -8,6 +8,7 @@ import { PublicationStateCache } from './publication-state-cache';
 import type { RelationshipAnalysisEvidence } from '../relationships';
 import type { ResolutionClaim } from '../relationships/resolution';
 import type {
+    ReadSymbolRegistrySidecarResult,
     RelationshipManifest,
     RelationshipRecord,
     RelationshipType,
@@ -448,6 +449,27 @@ export class JsonNavigationStore {
 
     public async getManifest(input: NavigationStoreInput): Promise<NavigationRegistryState> {
         return this.readRegistry(input);
+    }
+
+    public async getSymbolRegistrySidecarRead(input: NavigationStoreInput): Promise<ReadSymbolRegistrySidecarResult> {
+        // Publication navigation directories are immutable, so the cache entry
+        // for a publication identity is the sidecar read.
+        const state = await this.readRegistry(input);
+        if (state.status !== 'ok') {
+            return {
+                status: state.sourceStatus === 'corrupt' ? 'corrupt' : state.status,
+                rootPath: state.rootPath,
+                reason: state.reason,
+            };
+        }
+        return {
+            status: 'ok',
+            publicationId: input.publicationId,
+            rootPath: state.rootPath,
+            manifestHash: state.manifestHash,
+            registry: state.registry,
+            warnings: state.warnings,
+        };
     }
 
     public async getSymbolsByFile(input: NavigationSymbolsByFileInput): Promise<NavigationSymbolsByFileResult> {

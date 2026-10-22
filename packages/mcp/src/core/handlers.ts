@@ -548,6 +548,7 @@ export class ToolHandlers {
             isPublicationAdmitted: (publication) => this.context.isPublicationReadAdmitted(publication),
             getPublicationNavigationAddress: (publication) => this.context.getPublicationNavigationAddress(publication),
             buildRuntimeOwnerConflictResponseIfBlocked: this.buildRuntimeOwnerConflictResponseIfBlocked.bind(this),
+            readPublicationSymbolRegistry: (publication) => this.context.readPublicationSymbolRegistry(publication),
             manageResponse: this.toolResponseBuilders.manageResponse.bind(this.toolResponseBuilders),
             buildCreateHint: this.buildCreateHint.bind(this),
             buildManageActionBlockedMessage: this.buildManageActionBlockedMessage.bind(this),

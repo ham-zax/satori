@@ -4,8 +4,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ResolutionClaim } from '../relationships/resolution';
-import { fileShardName } from '../symbols/sidecar-reads';
-import { writeRelationshipSidecar } from '../symbols/sidecar-writes';
+import { SYMBOL_REGISTRY_SCHEMA_VERSION } from '../symbols/contracts';
+import { buildSymbolRegistry } from '../symbols/registry';
+import { fileShardName, readSymbolRegistrySidecar } from '../symbols/sidecar-reads';
+import { writeRelationshipSidecar, writeSymbolRegistrySidecar } from '../symbols/sidecar-writes';
 import { JsonNavigationStore } from './store';
 
 const symbolRegistryManifestHash = 'fixture-symbol-hash';
@@ -61,6 +63,70 @@ async function writePublication(root: string, publicationId: string) {
     });
     return { normalizedRootPath: root, publicationId, navigationRoot, expectedSymbolRegistryManifestHash: symbolRegistryManifestHash };
 }
+
+async function writeRegistryPublication(root: string, publicationId: string) {
+    const input = await writePublication(root, publicationId);
+    await writeSymbolRegistrySidecar({
+        navigationRoot: input.navigationRoot,
+        registry: buildSymbolRegistry({
+            manifest: {
+                schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION,
+                normalizedRootPath: root,
+                rootFingerprint: 'root-fingerprint',
+                indexPolicyHash: 'policy-hash',
+                languageRouterVersion: 'router-v1',
+                extractorVersion: 'extractor-v1',
+                relationshipVersion: 'fixture-version',
+                builtAt: new Date(0).toISOString(),
+                files: [],
+            },
+            symbols: [],
+        }),
+    });
+    return input;
+}
+
+for (const status of ['ok', 'missing', 'corrupt', 'incompatible'] as const) {
+    test(`symbol registry sidecar read matches the direct reader for ${status}`, async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
+        try {
+            const input = status === 'missing'
+                ? { normalizedRootPath: root, publicationId: 'publication-a', navigationRoot: path.join(root, 'publication-a', 'navigation') }
+                : await writeRegistryPublication(root, 'publication-a');
+            if (status === 'corrupt' || status === 'incompatible') {
+                fs.writeFileSync(
+                    path.join(input.navigationRoot, 'manifest.json'),
+                    JSON.stringify(status === 'corrupt' ? {} : { schemaVersion: 'unsupported' }),
+                );
+            }
+            const direct = await readSymbolRegistrySidecar(input);
+            assert.equal(direct.status, status);
+            assert.deepEqual(await new JsonNavigationStore().getSymbolRegistrySidecarRead(input), direct);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+}
+
+test('symbol registry sidecar read shares registry identity only within a publication', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
+    try {
+        const firstInput = await writeRegistryPublication(root, 'publication-a');
+        const secondInput = await writeRegistryPublication(root, 'publication-b');
+        const store = new JsonNavigationStore();
+        const first = await store.getSymbolRegistrySidecarRead(firstInput);
+        const repeated = await store.getSymbolRegistrySidecarRead(firstInput);
+        const second = await store.getSymbolRegistrySidecarRead(secondInput);
+        assert.equal(first.status, 'ok');
+        assert.equal(repeated.status, 'ok');
+        assert.equal(second.status, 'ok');
+        if (first.status !== 'ok' || repeated.status !== 'ok' || second.status !== 'ok') return;
+        assert.strictEqual(repeated.registry, first.registry);
+        assert.notStrictEqual(second.registry, first.registry);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
 
 test('resident relationship state excludes analysis evidence and evidence queries read only matching shards', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));

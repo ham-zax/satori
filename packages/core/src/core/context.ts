@@ -40,6 +40,7 @@ import { JsonNavigationStore } from '../navigation/store';
 import { RepositoryVocabularyService } from '../vocabulary/service';
 import type { RepositoryVocabularyResult, RepositoryVocabularyFilter } from '../vocabulary/contracts';
 import type {
+    ReadSymbolRegistrySidecarResult,
     SymbolRecord,
     SymbolRegistryManifestFile,
 } from '../symbols';
@@ -1187,6 +1188,16 @@ export class Context {
         return navigation
             ? { publicationId: navigation.ref.id, navigationRoot: navigation.rootPath }
             : null;
+    }
+
+    public async readPublicationSymbolRegistry(publication: PublicationRef): Promise<ReadSymbolRegistrySidecarResult | undefined> {
+        const navigation = this.getPublicationNavigationAddress(publication);
+        if (!navigation) return undefined;
+        return this.navigationStore.getSymbolRegistrySidecarRead({
+            normalizedRootPath: publication.publication.canonicalRoot,
+            publicationId: navigation.publicationId,
+            navigationRoot: navigation.navigationRoot,
+        });
     }
 
     public async getPublicationNavigationStatus(publication: PublicationRef): Promise<PublicationNavigationStatus> {

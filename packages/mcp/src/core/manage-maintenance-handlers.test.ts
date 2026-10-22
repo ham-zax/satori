@@ -47,6 +47,7 @@ test("status distinguishes readable indexes from source parity while sync remain
             context: { inspectSourceFreshnessCheckpoint: async () => ({ status: "valid" }) },
             syncManager: { assessReadFreshness: async () => ({ sourceFreshness }) },
             acquirePublicationLease: () => undefined,
+            readPublicationSymbolRegistry: async () => undefined,
             buildSyncHint: () => ({ tool: "manage_index", args: { action: "sync", path: root } }),
             manageResponse: (...args: Parameters<ToolResponseBuilders["buildManageResponseEnvelope"]>) => ({
                 content: [{ type: "text", text: JSON.stringify(builders.buildManageResponseEnvelope(...args)) }],
@@ -233,6 +234,7 @@ test("status rereads when the operation turns terminal during the read", async (
             },
         },
         acquirePublicationLease: () => undefined,
+        readPublicationSymbolRegistry: async () => undefined,
         buildSyncHint: () => ({ tool: "manage_index", args: { action: "sync", path: root } }),
         manageResponse: (...args: Parameters<ToolResponseBuilders["buildManageResponseEnvelope"]>) => ({
             content: [{ type: "text", text: JSON.stringify(builders.buildManageResponseEnvelope(...args)) }],

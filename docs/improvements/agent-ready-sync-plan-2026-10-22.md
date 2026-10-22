@@ -215,6 +215,17 @@ completion have medians under 1 ms. The parent-side cost is the status path
 rereading the symbol registry sidecar, multiplied by the probe's 100 ms status
 polling.
 
+## Status registry read results (22 October 2026)
+
+Status reads the symbol registry through `JsonNavigationStore`
+(`getSymbolRegistrySidecarRead`); a publication's navigation directory is
+immutable, so the publication identity is the witness. `Context` only
+delegates (`readPublicationSymbolRegistry`). Probe (trufflehog, `.go`,
+`--save-search 1,16 --runs 3`, load 6.2 falling to 2.6, index peak tree RSS
+1,940 MB): `status.symbol_registry_read` median 0.1 ms (0.1-0.5 ms, 1,210
+calls) against 935 ms (853-1,523 ms, 263 calls). Every N=1 and N=16 search
+hits every edited file.
+
 ## Remaining work (22 October 2026, after D4 and B1)
 
 In this order:
@@ -222,7 +233,7 @@ In this order:
 1. **Probe misses.** `scripts/perf/index-probe.mjs` records `resultCount`,
    `missedCount` and up to 10 sorted `missed` paths for each search, so a
    partial hit count names the lost files.
-2. **Status registry read.** `status.symbol_registry_read`
+2. **Status registry read (done, see "Status registry read results").** `status.symbol_registry_read`
    (`manage-maintenance-handlers.ts`) rereads the whole symbol registry
    sidecar on every status call, median 935 ms. Cache it behind a witness for
    the publication, with a differential test and a mutation check.

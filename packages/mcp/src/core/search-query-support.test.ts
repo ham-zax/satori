@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
-import { buildSymbolRegistry, SYMBOL_REGISTRY_SCHEMA_VERSION, withSourceMeasurementOperation } from '@satori-code/core';
+import { buildSymbolRegistry, SYMBOL_REGISTRY_SCHEMA_VERSION, withSourceMeasurementOperation, type SymbolRecord } from '@satori-code/core';
 import type { CapabilityResolver } from './capabilities.js';
 import { SearchQuerySupport } from './search-query-support.js';
 import type { SearchQuerySupportHost } from './search-query-support.js';
@@ -61,6 +61,59 @@ for (const producer of ['live_path', 'tracked_exact', 'tracked_general'] as cons
             });
             fs.writeFileSync(path.join(root, relativePath), `${current}// second edit\n`);
             assert.deepEqual(await project(), { ok: false, candidateId, reason: 'source_hash_mismatch' });
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+}
+
+for (const producer of ['live_path', 'tracked_exact', 'tracked_general'] as const) {
+    test(`${producer} file windows stay distinct from canonical owners in populated registries`, async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-live-rerank-owner-'));
+        const relativePath = 'src/a.ts';
+        const source = 'export function owner() {\n  const TARGET_CODE = "authorization policy";\n}\n\nexport function other() {\n  return 2;\n}\n';
+        const fileHash = crypto.createHash('sha256').update(source).digest('hex');
+        const owner: SymbolRecord = {
+            symbolKey: 'owner', symbolInstanceId: 'owner', name: 'owner', qualifiedName: 'owner', label: 'owner',
+            language: 'typescript', kind: 'function', file: relativePath, span: { startLine: 1, endLine: 3 },
+            fileHash, parentQualifiedNamePath: [], extractorVersion: 'test',
+        };
+        const other: SymbolRecord = { ...owner, symbolKey: 'other', symbolInstanceId: 'other', name: 'other',
+            qualifiedName: 'other', label: 'other', span: { startLine: 5, endLine: 7 } };
+        const registry = buildSymbolRegistry({ manifest: {
+            schemaVersion: SYMBOL_REGISTRY_SCHEMA_VERSION, normalizedRootPath: root,
+            rootFingerprint: 'test', indexPolicyHash: 'test', languageRouterVersion: 'test',
+            extractorVersion: 'test', relationshipVersion: 'test', builtAt: '2026-10-22T00:00:00.000Z',
+            files: [{ path: relativePath, language: 'typescript', hash: fileHash, symbolCount: 2,
+                definitionStatus: 'definitions_present' }],
+        }, symbols: [owner, other] });
+        try {
+            fs.mkdirSync(path.join(root, 'src'));
+            const support = buildTrackedLexicalSupport([relativePath]);
+            for (const prefix of ['', '// current edit\n']) {
+                fs.writeFileSync(path.join(root, relativePath), prefix + source);
+                const parsedOperators = parseSearchOperators(producer === 'tracked_general'
+                    ? 'where does authorization policy begin' : `path:${relativePath} TARGET_CODE`);
+                const queryPlan = buildSearchQueryPlan(parsedOperators.semanticQuery, true, parsedOperators);
+                const results = producer === 'live_path'
+                    ? await support.buildLivePathScopedSearchResults({ effectiveRoot: root, parsedOperators, queryPlan,
+                        changedFiles: new Set([relativePath]) })
+                    : (await support.buildTrackedLexicalSearchResults({ effectiveRoot: root, parsedOperators, queryPlan,
+                        scope: 'runtime', limit: 8, exactRegistryFallback: true })).results;
+                assert.equal(results.length, 1);
+                const candidate = results[0]!;
+                assert.equal(candidate.ownerSymbolInstanceId, undefined);
+                assert.equal(candidate.ownerSymbolKey, undefined);
+                assert.ok(candidate.endLine! > owner.span.endLine, 'file windows can extend outside a declaration');
+                const candidateId = searchRerankCandidateId(candidate);
+                const outcome = await projectPublicationBoundSearchRerankDocument({ candidateId,
+                    codebaseRoot: root, semanticQuery: parsedOperators.semanticQuery, result: candidate, registry });
+                assert.equal(outcome.ok, true, JSON.stringify(outcome));
+                assert.deepEqual(await projectPublicationBoundSearchRerankDocument({ candidateId,
+                    codebaseRoot: root, semanticQuery: parsedOperators.semanticQuery, registry,
+                    result: { ...candidate, dirtyOverlaySourceHash: undefined, ownerSymbolInstanceId: owner.symbolInstanceId },
+                }), { ok: false, candidateId, reason: 'candidate_span_invalid' });
+            }
         } finally {
             fs.rmSync(root, { recursive: true, force: true });
         }

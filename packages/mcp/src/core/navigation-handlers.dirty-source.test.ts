@@ -19,7 +19,7 @@ import type { CallGraphResponseEnvelope, FileOutlineInput, FileOutlineResponseEn
 const published = Buffer.from("def target():\n    return other()\n\ndef other():\n    return 2\n");
 const callerSource = "def caller():\n    target()\n";
 
-function fixture(t: { after: (cleanup: () => void) => void }) {
+function fixture(t: { after: (cleanup: () => void) => void }, options: { seedHash?: string } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "navigation-drift-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     fs.writeFileSync(path.join(root, "seed.py"), published);
@@ -27,7 +27,8 @@ function fixture(t: { after: (cleanup: () => void) => void }) {
     const record = (name: string, file: string, startLine: number, endLine: number, bytes: Buffer | string): SymbolRecord => ({
         symbolKey: name, symbolInstanceId: name, name, qualifiedName: name, label: `function ${name}`,
         language: "python", kind: "function", file, span: { startLine, endLine, startColumn: 1, endColumn: 1 },
-        parentQualifiedNamePath: [], fileHash: createHash("sha256").update(bytes).digest("hex"), extractorVersion: "fixture",
+        parentQualifiedNamePath: [], fileHash: file === "seed.py" && options.seedHash !== undefined
+            ? options.seedHash : createHash("sha256").update(bytes).digest("hex"), extractorVersion: "fixture",
     });
     const target = record("target", "seed.py", 1, 2, published);
     const other = record("other", "seed.py", 4, 5, published);
@@ -143,9 +144,11 @@ test("published impact selects old-side symbols after leading insertions and kee
         },
     });
     assert.deepEqual(result.seeds.map(seed => seed.symbolId), ["target"]);
+    assert.equal(result.seeds[0]?.spanBasis, "published");
     assert.deepEqual(result.impacted.map(node => node.symbolId), ["caller"]);
     assert.ok(result.warnings.includes("IMPACT_PUBLISHED_SPANS"));
     assert.equal(result.warnings.includes("IMPACT_CURRENT_SYMBOLS_ONLY"), false);
+    assert.equal(result.warnings.includes("IMPACT_MIXED_SYMBOL_SPANS"), false);
     assert.equal(result.impacted[0]?.causalPath[0]?.resolutionAuthority, "direct_binding");
 });
 
@@ -163,6 +166,9 @@ test("published impact keeps insertion boundaries and rejects an unpublished bas
     const rejected = await detectChangeImpact({ path: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, ports);
     assert.deepEqual(rejected.seeds, []);
     assert.deepEqual(rejected.unavailableFiles, [{ file: "seed.py", reason: "stale_symbol_ref" }]);
+    for (const warning of ["IMPACT_CURRENT_SYMBOLS_ONLY", "IMPACT_PUBLISHED_SPANS", "IMPACT_MIXED_SYMBOL_SPANS"]) {
+        assert.equal(rejected.warnings.includes(warning), false, "empty results have no span-basis claim");
+    }
 });
 
 test("detect_changes passes strict options and identical witness bytes on every outline page", async t => {
@@ -238,6 +244,27 @@ test("Python graph readers admit only published hashes for every file and never 
     assert.deepEqual(seedRead, published.toString().split(/\r?\n/));
     assert.deepEqual(witnessed.edges, stale.edges);
     assert.ok(witnessed.nodes.every(node => node.freshness?.sourceState === "stale"));
+});
+
+for (const seedHash of [undefined, "legacy-hash"]) {
+    test(`unreadable seed source refuses navigation with ${seedHash ?? "SHA-256"} registry hashes`, async t => {
+        const f = fixture(t, { seedHash });
+        fs.unlinkSync(path.join(f.root, "seed.py"));
+        assert.equal((await f.callGraph()).reason, "stale_symbol_ref");
+        assert.equal((await f.callGraph({ publishedSource: published })).reason, "stale_symbol_ref");
+        assert.equal(f.releases(), 2, "both unavailable-source reads release their publication lease");
+    });
+}
+
+test("unknown legacy freshness does not repair Python spans from unverified current bytes", async t => {
+    const f = fixture(t, { seedHash: "legacy-hash" });
+    f.drift();
+    const result = await f.callGraph();
+    assert.equal(result.status, "ok");
+    const seed = result.nodes.find(node => node.symbolId === "target");
+    assert.deepEqual(seed?.span, { startLine: 1, endLine: 2 });
+    assert.equal(seed?.freshness?.sourceState, "unknown");
+    assert.equal(f.releases(), 1);
 });
 
 test("a supplied wrong witness refuses even fresh source and cannot bypass workspace authorization", async t => {

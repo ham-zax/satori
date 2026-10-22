@@ -493,8 +493,9 @@ symbols and new relationships are not invented before analysis. Automatic
 catch-up preserves edits arriving during work and drains on shutdown.
 
 Result: both worker slices are integrated. Independent spec and code reviews
-pass. The navigation review found contradictory impact warnings, and the
-implementation now removes `IMPACT_CURRENT_SYMBOLS_ONLY` on published seeds.
+pass. The follow-up review repair below makes each retained seed declare its
+span basis. Response rendering derives current-only, published, and mixed
+warnings from those retained seeds. Empty seed results have no span warning.
 
 Integrated checks: 137 navigation, graph, impact, rerank, maintenance, tool,
 and supervisor tests pass across 13 files. Another run passes 51 tests across
@@ -533,6 +534,52 @@ lint/typecheck commands, which catch fixture and initialization errors that
 runtime tests miss. Profile summaries can label restoration operations before
 counting scans. An idle agent needs a follow-up task, not only a message, to
 start another turn. No new hook, CI gate, or global instruction was added.
+
+### Review repairs after `a2e275ce`
+
+The initial review repairs start from a clean `a2e275ce`. They do not implement
+the five deferred capabilities. Source changes stay in SyncManager and the
+change-impact response owner. No dependency or persistent component is added.
+
+1. Confirmed failure retry defect. Thrown errors and reported sync errors both
+   reproduced 31 attempts in 60 seconds. SyncManager now keeps an in-memory
+   retry deadline per failed root, using `BACKGROUND_SYNC_INTERVAL_MS` (3 min).
+   New events preserve pending epochs without bypassing that deadline. Other
+   roots retain prompt catch-up. A successful sync clears its root's deadline.
+   Stop and unwatch clear scheduler state. Busy skips retain the existing
+   2-second retry behavior. Tests cover failure, recovery, edits during cooldown,
+   healthy roots, and successful explicit sync. A pass that fails after stop
+   cannot recreate cooldown state. Restart regressions cover both failure forms.
+2. Confirmed mixed-coordinate disclosure gap. Every returned seed now declares
+   `spanBasis: current | published`. Rendering derives global span warnings from
+   the retained seeds, including after response-budget trimming. Mixed results
+   carry `IMPACT_MIXED_SYMBOL_SPANS` and `IMPACT_PUBLISHED_SPANS`, without the
+   contradictory global `IMPACT_CURRENT_SYMBOLS_ONLY` claim. Both mixed file
+   orders failed before the repair and pass afterward. Current-only and
+   published-only regression assertions remain intact. No span-basis warning
+   applies when no seed is returned. Unavailable-file and partial-coverage
+   disclosures remain separate.
+3. Deliberate unavailable-source policy. An unreadable seed refuses call-graph
+   navigation even for a non-SHA registry hash and even with supplied bytes.
+   An unknown hash does not authorize current Python span repair. New tests
+   establish both behaviors and publication-lease release. No claim is made
+   about whether real legacy registries remain in use.
+4. Hashing remains unchanged. Source-backed enrichment and final node freshness
+   use separate authorized source observations. The search/sync probe does not
+   measure call-graph hashing cost. No cache or removed check is justified by
+   the current performance evidence.
+5. Deliberate live-window contract. Path-scoped and tracked lexical producers
+   return file windows without claiming canonical ownership. Their live hashes
+   authorize current bytes, including clean files. New producer-to-projection
+   tests use a populated two-symbol registry and both clean and edited source.
+   Live windows may extend outside a declaration. Published symbol-owned
+   candidates still fail when their span escapes that owner.
+
+The cooldown changes only failed or blocked outcomes. Indexing remains a
+transient busy state. Missing paths already unwatch their root. A shared
+background pass can inspect a healthy root before its quiet interval ends
+when another root becomes due. The quiet delay is a coalescing delay, not a
+minimum source-age requirement.
 
 D1, D2 and D3: approved as recommended (22 October 2026). D4: approved
 (22 October 2026): skip the reranker for a single bare lowercase word, and

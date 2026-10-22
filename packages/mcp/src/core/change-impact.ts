@@ -89,7 +89,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     const seeds: Array<CallGraphNodeResult & { codebaseRoot: string }> = [];
     const seedOmittedFiles: Array<{ file: string; omittedSeedCount: number }> = [];
     const unavailableFiles: Array<{ file: string; reason: string }> = [];
-    const warnings = new Set<string>(["IMPACT_GRAPH_ADVISORY", "IMPACT_CURRENT_SYMBOLS_ONLY", "IMPACT_SNAPSHOT_NOT_ATOMIC"]);
+    const warnings = new Set<string>(["IMPACT_GRAPH_ADVISORY", "IMPACT_SNAPSHOT_NOT_ATOMIC"]);
     let truncated = changedFiles.length > 50;
     let seedsDroppedByBudget = false;
     const candidatesByFile: Array<{ file: string; candidates: Array<CallGraphNodeResult & { codebaseRoot: string }> }> = [];
@@ -111,8 +111,6 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 outline = published;
                 publishedSource = baseBytes;
                 publishedSourceByFile.set(file, baseBytes);
-                warnings.delete("IMPACT_CURRENT_SYMBOLS_ONLY");
-                warnings.add("IMPACT_PUBLISHED_SPANS");
             }
         }
         if (outline.status !== "ok" || !outline.outline) {
@@ -425,6 +423,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         || compareContractStrings(a.sourceSymbolId ?? "", b.sourceSymbolId ?? ""));
     const seedValues = seeds.map((seed) => ({
         ...seed,
+        spanBasis: publishedSourceByFile.has(seed.file) ? "published" as const : "current" as const,
         impactClass: "seed" as const,
         distance: 0,
     }));
@@ -498,6 +497,13 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
             seeds: seedBudgetOmittedCount + (seedValues.length - visibleSeedCount),
         };
         const finalWarnings = new Set(warnings);
+        const visibleSeeds = seedValues.slice(0, visibleSeedCount);
+        const hasPublishedSpans = visibleSeeds.some(seed => seed.spanBasis === "published");
+        const hasCurrentSpans = visibleSeeds.some(seed => seed.spanBasis === "current");
+        // Global caveats describe retained seeds. Each seed identifies its own coordinates.
+        if (hasPublishedSpans) finalWarnings.add("IMPACT_PUBLISHED_SPANS");
+        if (hasCurrentSpans && !hasPublishedSpans) finalWarnings.add("IMPACT_CURRENT_SYMBOLS_ONLY");
+        if (hasCurrentSpans && hasPublishedSpans) finalWarnings.add("IMPACT_MIXED_SYMBOL_SPANS");
         let finalTruncated = truncated;
         const byteBudgetTrimmed = changedFiles.length - visibleChangedFileCount > 0
             || impactedValues.length - visibleImpactedCount > 0
@@ -537,7 +543,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
                 heuristicImpactCount,
             },
             changedFiles: changedFiles.slice(0, visibleChangedFileCount),
-            seeds: seedValues.slice(0, visibleSeedCount),
+            seeds: visibleSeeds,
             impacted: impactedValues.slice(0, visibleImpactedCount),
             areaImpact,
             uncertainCallReferences: uncertainValues.slice(0, visibleUncertainCount),

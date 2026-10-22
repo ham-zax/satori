@@ -22,6 +22,44 @@ function node(symbolId: string, file: string): CallGraphNodeResult {
     };
 }
 
+for (const publishedFile of ["a.ts", "b.ts"]) {
+    test(`detect_changes identifies mixed span bases when ${publishedFile} uses published symbols`, async (t) => {
+        const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-mixed-"));
+        t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+        const base = "export function seed() {\n  return 1;\n}\n";
+        execFileSync("git", ["init", "-q"], { cwd: repo });
+        for (const file of ["a.ts", "b.ts"]) fs.writeFileSync(path.join(repo, file), base);
+        execFileSync("git", ["add", "."], { cwd: repo });
+        execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base"], { cwd: repo });
+        for (const file of ["a.ts", "b.ts"]) fs.writeFileSync(path.join(repo, file), base.replace("return 1", "return 2"));
+        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+            outline: async (file, bytes) => {
+                if (file === publishedFile && bytes === undefined) return {
+                    status: "requires_reindex", reason: "stale_symbol_ref", path: repo, file, outline: null, hasMore: false,
+                };
+                if (file === publishedFile) assert.deepEqual(bytes, Buffer.from(base));
+                else assert.equal(bytes, undefined);
+                return {
+                    status: "ok", path: repo, file, outline: { symbols: [{ ...node(file, file), kind: "function" }] }, hasMore: false,
+                } as FileOutlineResponseEnvelope;
+            },
+            callers: async (_root, seed, bytes) => {
+                assert.deepEqual(bytes, seed.file === publishedFile ? Buffer.from(base) : undefined);
+                return { status: "ok", path: repo, symbolRef: { file: seed.file, symbolId: seed.symbolId },
+                    supported: true, nodes: [seed], edges: [], notes: [], exactReferences: [],
+                } as unknown as CallGraphResponseEnvelope;
+            },
+        });
+        assert.deepEqual(result.seeds.map(seed => ({ file: seed.file, spanBasis: seed.spanBasis })), [
+            { file: "a.ts", spanBasis: publishedFile === "a.ts" ? "published" : "current" },
+            { file: "b.ts", spanBasis: publishedFile === "b.ts" ? "published" : "current" },
+        ]);
+        assert.ok(result.warnings.includes("IMPACT_MIXED_SYMBOL_SPANS"));
+        assert.ok(result.warnings.includes("IMPACT_PUBLISHED_SPANS"));
+        assert.equal(result.warnings.includes("IMPACT_CURRENT_SYMBOLS_ONLY"), false);
+    });
+}
+
 test("detect_changes distinguishes seed/direct/transitive impact and retains causal paths", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-f2-"));
     try {
@@ -137,6 +175,7 @@ test("detect_changes distinguishes seed/direct/transitive impact and retains cau
         assert.ok(result.completeness.reasons.includes("uncertain_references"));
         assert.equal(result.completeness.exhaustive, false);
         assert.ok(result.warnings.includes("IMPACT_CURRENT_SYMBOLS_ONLY"));
+        assert.ok(result.seeds.every(seed => seed.spanBasis === "current"));
         assert.equal(result.warnings.includes("IMPACT_PUBLISHED_SPANS"), false);
     } finally {
         fs.rmSync(repo, { recursive: true, force: true });

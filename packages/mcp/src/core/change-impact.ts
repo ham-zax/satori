@@ -24,8 +24,14 @@ export type ChangeImpactInput = {
 };
 
 export type ChangeImpactPorts = {
-    outline(file: string): Promise<FileOutlineResponseEnvelope>;
-    callers(root: string, symbol: CallGraphNodeResult): Promise<CallGraphResponseEnvelope>;
+    /**
+     * `publishedSource` is the base revision's bytes of `file`. The navigation
+     * reads use them in place of the edited working-tree bytes and still apply
+     * the registry hash check, so they succeed only when those bytes are the
+     * published source.
+     */
+    outline(file: string, publishedSource?: Buffer): Promise<FileOutlineResponseEnvelope>;
+    callers(root: string, symbol: CallGraphNodeResult, publishedSource?: Buffer): Promise<CallGraphResponseEnvelope>;
 };
 
 type ImpactPathEdge = Readonly<{
@@ -87,18 +93,36 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     let truncated = changedFiles.length > 50;
     let seedsDroppedByBudget = false;
     const candidatesByFile: Array<{ file: string; candidates: Array<CallGraphNodeResult & { codebaseRoot: string }> }> = [];
+    const publishedSourceByFile = new Map<string, Buffer>();
     for (const file of changedFiles.slice(0, 50)) {
-        const outline = await ports.outline(file);
+        const source = renamedFrom.get(file);
+        let outline = await ports.outline(file);
+        // An edited file's outline is stale until a sync publishes it. When the
+        // base revision's bytes are the published bytes (the outline's registry
+        // hash check decides), the old side of the diff is in published
+        // coordinates and maps to published symbol spans.
+        let publishedSource: Buffer | undefined;
+        if (outline.status !== "ok" && outline.reason === "stale_symbol_ref" && !source) {
+            const baseBytes = await execFileAsync("git", ["-C", input.path, "show", `${baseCommit}:./${file}`], {
+                encoding: "buffer", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+            }).then(result => result.stdout, () => undefined);
+            const published = baseBytes && await ports.outline(file, baseBytes);
+            if (published && published.status === "ok" && published.outline) {
+                outline = published;
+                publishedSource = baseBytes;
+                publishedSourceByFile.set(file, baseBytes);
+                warnings.add("IMPACT_PUBLISHED_SPANS");
+            }
+        }
         if (outline.status !== "ok" || !outline.outline) {
             unavailableFiles.push({ file, reason: outline.reason ?? outline.status });
             continue;
         }
-        const source = renamedFrom.get(file);
         const diff = await git(["diff", "--no-ext-diff", "--no-textconv", source ? "--find-renames" : "--no-renames",
             "--relative", "--unified=0", baseCommit, "--", ...(source ? [`:(literal)${source}`] : []), `:(literal)${file}`]);
-        const ranges = [...diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map(match => ({
-            start: Number(match[1]), count: match[2] === undefined ? 1 : Number(match[2]),
-        }));
+        const ranges = [...diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map(match => publishedSource
+            ? { start: Number(match[1]), count: match[2] === undefined ? 1 : Number(match[2]) }
+            : { start: Number(match[3]), count: match[4] === undefined ? 1 : Number(match[4]) });
         // Hunk-precise seeds: every added or changed line seeds the innermost
         // current symbol containing it, so an edit to a class's own lines seeds
         // the class while an edit inside a member seeds only the member. A pure
@@ -129,7 +153,8 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         // seed the whole enclosing class. Such leading trivia belongs to the
         // declaration it precedes when that declaration starts right after it.
         const sourceLines = ranges.some(range => range.count > 0)
-            ? (await readFile(path.join(input.path, file), "utf8").catch(() => "")).split(/\r?\n/)
+            ? (publishedSource?.toString("utf8")
+                ?? await readFile(path.join(input.path, file), "utf8").catch(() => "")).split(/\r?\n/)
             : [];
         const isLeadingTrivia = (line: number) => {
             const text = sourceLines[line - 1]?.trim();
@@ -221,7 +246,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     const unavailableSeeds: Array<{ symbolId: string; reason: string }> = [];
     const warningCounts = new Map<string, number>();
     for (const seed of seeds) {
-        const graph = await ports.callers(seed.codebaseRoot, seed);
+        const graph = await ports.callers(seed.codebaseRoot, seed, publishedSourceByFile.get(seed.file));
         if (graph.status !== "ok") {
             unavailableSeeds.push({ symbolId: seed.symbolId, reason: graph.reason ?? graph.status });
             continue;

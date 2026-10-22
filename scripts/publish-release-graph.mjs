@@ -364,11 +364,10 @@ export async function publishReleaseGraph(options = {}) {
     for (const key of toPublish) {
       const packageName = RELEASE_PACKAGES[key].name;
       const version = localVersions[key];
-      const entry = { key, name: packageName, version };
       log(`Publishing ${packageName}@${version}...`);
       try {
         publishImpl(packageName, version, report.tarballs?.[key]);
-        publishCommandSucceeded.push(entry);
+        publishCommandSucceeded.push({ key, name: packageName, version });
       } catch (error) {
         const detail = errorMessage(error);
         throw new Error(
@@ -379,6 +378,12 @@ export async function publishReleaseGraph(options = {}) {
           + detail
         );
       }
+    }
+    // Publish commands run back to back. Registry visibility is awaited after all
+    // of them, in dependency order, so a dependent can be published before its
+    // dependency is confirmed visible.
+    for (const entry of publishCommandSucceeded) {
+      const { key, name: packageName, version } = entry;
       try {
         await verifyPublished(key, version, localVersions, {
           viewVersionImpl,

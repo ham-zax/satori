@@ -337,18 +337,18 @@ test('explicit emergency override rejects stale or diverged history', async () =
   assert.deepEqual(options.records.publishCalls, []);
 });
 
-test('Core registry verification failure prevents MCP publish', async () => {
+test('Core registry verification failure is reported after all publishes', async () => {
   const options = runnerOptions({
     viewVersionImpl: () => {
       throw { status: 1, stderr: 'npm error code E404\nversion not found' };
     },
   });
   await assert.rejects(publishReleaseGraph(options), /not visible on the registry/);
-  assert.deepEqual(options.records.publishCalls, ['@satori-code/core']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
   assert.equal(options.records.sleepCalls.length, 180);
 });
 
-test('MCP dependency mismatch prevents CLI publish', async () => {
+test('MCP dependency mismatch is reported after all publishes', async () => {
   const options = runnerOptions({
     viewDependenciesImpl: (packageName) => {
       if (packageName === '@satori-code/mcp') {
@@ -358,7 +358,7 @@ test('MCP dependency mismatch prevents CLI publish', async () => {
     },
   });
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
-  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
 });
 
 test('CLI managed-runtime verification succeeds', async () => {
@@ -516,7 +516,7 @@ test('EOTP failure reports no verified publication and runs no verification', as
   assert.deepEqual(options.records.sleepCalls, []);
 });
 
-test('EOTP failure on a later package keeps verified names and stops verification', async () => {
+test('EOTP failure on a later package keeps succeeded names and runs no verification', async () => {
   const publishAttempts = [];
   const options = runnerOptions({
     publishImpl: (packageName) => {
@@ -531,13 +531,13 @@ test('EOTP failure on a later package keeps verified names and stops verificatio
   });
   await assert.rejects(
     publishReleaseGraph(options),
-    /The publish command for @satori-code\/mcp@6\.8\.0 failed\.[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
+    /The publish command for @satori-code\/mcp@6\.8\.0 failed\.[\s\S]*Publish commands that succeeded:\n- @satori-code\/core@3\.6\.0\n/,
   );
   assert.deepEqual(publishAttempts, ['@satori-code/core', '@satori-code/mcp']);
   const coreVerifications = options.records.viewCalls.filter(
     (call) => call.startsWith('version:') && call.includes('@satori-code/core')
   );
-  assert.equal(coreVerifications.length, 1);
+  assert.equal(coreVerifications.length, 0);
   assert.equal(options.records.viewCalls.filter((call) => call.includes('@satori-code/mcp')).length, 0);
 });
 
@@ -679,7 +679,7 @@ test('a successful publish with failed registry verification is reported without
     publishReleaseGraph(options),
     /The publish command succeeded for @satori-code\/mcp@6\.8\.0,[\s\S]*registry verification failed[\s\S]*Publish commands that succeeded:[\s\S]*@satori-code\/core@3\.6\.0[\s\S]*@satori-code\/mcp@6\.8\.0[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
   );
-  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
+  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp, NAMES.cli]);
   assert.equal(options.records.viewCalls.filter((call) => call.startsWith('version:') && call.includes(NAMES.cli)).length, 0);
 });
 
@@ -714,7 +714,7 @@ test('incorrect dependency pins remain bounded and fail after all verification a
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
   assert.equal(dependencyCalls, 181);
   assert.equal(options.records.sleepCalls.length, 180);
-  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
+  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp, NAMES.cli]);
 });
 
 test('a malformed report is rejected and its foreign temp path is never deleted', async () => {

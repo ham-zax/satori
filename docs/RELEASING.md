@@ -243,8 +243,8 @@ The coordinated publication path for all three packages. It runs:
 
 1. the same complete qualification owned by `release:check`;
 2. publication of only the retained, already-verified tarballs in Core -> MCP
-   -> CLI order;
-3. exact-version verification plus dependency or managed-runtime target verification after each package;
+   -> CLI order, with no registry wait between publish commands;
+3. exact-version verification plus dependency or managed-runtime target verification for each package, in the same order, after all publish commands finish;
 4. final verification that all exact versions and all three `latest` tags form
    the expected local Core -> MCP -> CLI closure.
 
@@ -260,13 +260,15 @@ from locally-ahead commits requires the explicit `--allow-unpushed-head`
 override; canonical release master must still be an ancestor of `HEAD`, so
 stale or diverged history is rejected.
 
-After publishing Core, `release:all` polls until `@satori-code/core@<version>`
-is visible on npm, then publishes MCP, then verifies that the published MCP pins
-the exact Core version, then publishes CLI and verifies its exact
-`satoriManagedRuntime` Core and MCP targets. A publish
-command is never retried automatically. If verification fails after a
-successful publish, the run stops and reports exactly which packages were
-already published.
+`release:all` publishes Core, MCP, and CLI back to back. It does not wait for a
+package to become visible between publishes. Then it polls in the same order:
+`@satori-code/core@<version>` must be visible, the published MCP must pin the
+exact Core version, and the published CLI must verify its exact
+`satoriManagedRuntime` Core and MCP targets. Because the publishes do not wait,
+a dependent package can be on npm before its dependency is visible, so an
+install that needs both can fail until the final check passes. A publish
+command is never retried automatically. If a publish or verification fails, the
+run stops and reports exactly which packages were already published.
 
 Registry reads normalize and validate both npm 11 and npm 12 `npm view --json`
 shapes. Final propagation checks retry transient network, not-found, and

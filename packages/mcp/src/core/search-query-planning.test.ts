@@ -125,6 +125,19 @@ test('explicit reference questions retain reference routing and direction', () =
     }
 });
 
+test('a single bare lowercase word pins whole-term matches', () => {
+    const cases = [
+        ['uncertain', true],
+        ['satoriprobeznwkinly', true],
+        ['the', false],
+        ['uncertain words', false],
+    ] as const;
+    for (const [query, pinned] of cases) {
+        const plan = buildSearchQueryPlan(query, true);
+        assert.equal(plan.exactMatchPinningEnabled, pinned, query);
+    }
+});
+
 test('writer-seeking pin needs an identifier-shaped token, not a capitalised word', () => {
     const cases = [
         ['in the Go builder where is the vtable written', false],

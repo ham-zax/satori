@@ -749,7 +749,10 @@ export function buildSearchQueryPlan(
             ? (sparseOnlyRoute ? "lexical" : "hybrid")
             : "dense",
         scorePolicyKind: "topk_only",
+        // A single bare word is a lookup: hits that contain the whole word
+        // rank above dense neighbours that do not, so fusion cannot tie them.
         exactMatchPinningEnabled: intent === "identifier"
+            || singleBareLookup
             || quotedLiteralSeeking
             || (writerSeeking && exactPinEligible),
         rerankAllowed: !sparseOnlyRoute && intent !== "identifier" && !quotedLiteralSeeking && !singleBareLookup,

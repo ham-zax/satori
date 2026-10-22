@@ -243,8 +243,8 @@ The coordinated publication path for all three packages. It runs:
 
 1. the same complete qualification owned by `release:check`;
 2. publication of only the retained, already-verified tarballs in Core -> MCP
-   -> CLI order, with no registry wait between publish commands;
-3. exact-version verification plus dependency or managed-runtime target verification for each package, in the same order, after all publish commands finish;
+   -> CLI order;
+3. exact-version verification plus dependency or managed-runtime target verification after each package, before publishing the next;
 4. final verification that all exact versions and all three `latest` tags form
    the expected local Core -> MCP -> CLI closure.
 
@@ -260,15 +260,24 @@ from locally-ahead commits requires the explicit `--allow-unpushed-head`
 override; canonical release master must still be an ancestor of `HEAD`, so
 stale or diverged history is rejected.
 
-`release:all` publishes Core, MCP, and CLI back to back. It does not wait for a
-package to become visible between publishes. Then it polls in the same order:
-`@satori-code/core@<version>` must be visible, the published MCP must pin the
-exact Core version, and the published CLI must verify its exact
-`satoriManagedRuntime` Core and MCP targets. Because the publishes do not wait,
-a dependent package can be on npm before its dependency is visible, so an
-install that needs both can fail until the final check passes. A publish
-command is never retried automatically. If a publish or verification fails, the
-run stops and reports exactly which packages were already published.
+`release:all` waits for the exact Core version to become visible before
+publishing MCP. It checks that MCP pins the exact Core version before
+publishing CLI. It then checks the CLI's exact `satoriManagedRuntime` targets.
+The final check covers all selected exact versions, metadata, and `latest` tags.
+Success output lists each selected package and version, including skipped packages.
+
+npm does not publish multiple packages atomically. A failure can leave a partial
+release. The publisher stops before publishing further dependent packages when
+a package check fails. It never retries a publish command automatically.
+Failure reports distinguish successful publish commands, checked exact versions
+and metadata, packages skipped as already published, and packages not attempted.
+A failed publish command leaves that package's registry state unknown.
+A final-check failure includes package status and does not claim that `latest`
+tags form a complete release. Check exact versions, metadata, and `latest` tags
+before retrying. A later run skips versions that qualification finds identical.
+
+The GitHub tag workflow uses the same publisher. It requires the tagged commit
+to equal canonical `master` and serializes release jobs. It retains npm provenance.
 
 Registry reads normalize and validate both npm 11 and npm 12 `npm view --json`
 shapes. Final propagation checks retry transient network, not-found, and

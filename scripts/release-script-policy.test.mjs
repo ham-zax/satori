@@ -32,6 +32,18 @@ test('public release commands delegate to their authoritative owners', () => {
   assert.equal(packageJson.scripts['release:verify'], 'node scripts/release-registry.mjs');
 });
 
+test('tag releases use the graph publisher and guard the tagged source', () => {
+  const workflow = fs.readFileSync(path.resolve(process.cwd(), '.github/workflows/release.yml'), 'utf8');
+  assert.match(workflow, /run: pnpm run release:all/);
+  assert.doesNotMatch(workflow, /run:.*\b(?:npm|pnpm)\b.*\bpublish\b/);
+  assert.match(workflow, /ref: master/);
+  assert.match(workflow, /fetch-depth: 0/);
+  assert.match(workflow, /git rev-parse HEAD/);
+  assert.match(workflow, /git rev-parse "\$GITHUB_SHA\^\{commit\}"/);
+  assert.match(workflow, /group: npm-release\n  cancel-in-progress: false/);
+  assert.match(workflow, /NPM_CONFIG_PROVENANCE: 'true'/);
+});
+
 test('release qualification owns the complete production gate', () => {
   const commands = RELEASE_QUALIFICATION_COMMANDS.map((entry) => `${entry.command} ${entry.args.join(' ')}`);
   for (const expected of [

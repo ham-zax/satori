@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -16,6 +20,16 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
+      with:
+        ref: master
+        fetch-depth: 0
+
+    - name: Require tag to match master
+      run: |
+        if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$GITHUB_SHA^{commit}")" ]; then
+          echo "::error::Release tag does not match master; nothing was published."
+          exit 1
+        fi
 
     - name: Install pnpm
       uses: pnpm/action-setup@v6
@@ -39,32 +53,8 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
 
-    - name: Build packages
-      run: pnpm build
-
-    - name: Verify MCP docs are in sync
-      run: pnpm -C packages/mcp docs:check
-
-    - name: Verify server manifest is in sync
-      run: pnpm -C packages/mcp manifest:check
-
-    - name: Run MCP release smoke
-      run: pnpm run release:smoke:mcp
-
-    - name: Run CLI release smoke
-      run: pnpm run release:smoke:cli
-
-    - name: Publish core package to npm
-      run: pnpm --filter @satori-code/core publish --access public --no-git-checks --provenance
+    - name: Qualify, publish, and verify release graph
+      run: pnpm run release:all
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-    - name: Publish mcp package to npm
-      run: pnpm --filter @satori-code/mcp publish --access public --no-git-checks --provenance
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-    - name: Publish cli package to npm
-      run: pnpm --filter @satori-code/cli publish --access public --no-git-checks --provenance
-      env:
-        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        NPM_CONFIG_PROVENANCE: 'true'

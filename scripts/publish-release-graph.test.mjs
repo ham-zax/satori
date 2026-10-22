@@ -161,6 +161,97 @@ test('all-unpublished graph publishes Core, MCP, CLI in order', async () => {
   assert.deepEqual(result.skipped, []);
 });
 
+test('publication waits for dependency visibility and metadata before each dependent', async () => {
+  const events = [];
+  let coreReads = 0;
+  const options = runnerOptions({
+    publishImpl: (name) => events.push(`publish:${name}`),
+    viewVersionImpl: (name, version) => {
+      events.push(`version:${name}`);
+      if (name === NAMES.core && ++coreReads === 1) {
+        throw { status: 1, stderr: 'npm error code E404\nversion not found' };
+      }
+      return version;
+    },
+    viewDependenciesImpl: (name) => {
+      events.push(`metadata:${name}`);
+      return { [NAMES.core]: VERSIONS.core };
+    },
+    viewManagedRuntimeImpl: (name) => {
+      events.push(`metadata:${name}`);
+      return { core: VERSIONS.core, mcp: VERSIONS.mcp };
+    },
+  });
+  await publishReleaseGraph(options);
+  assert.deepEqual(events, [
+    `publish:${NAMES.core}`, `version:${NAMES.core}`, `version:${NAMES.core}`,
+    `publish:${NAMES.mcp}`, `version:${NAMES.mcp}`, `metadata:${NAMES.mcp}`,
+    `publish:${NAMES.cli}`, `version:${NAMES.cli}`, `metadata:${NAMES.cli}`,
+  ]);
+  assert.equal(options.records.sleepCalls.length, 1);
+});
+
+test('final verification failure reports successful commands without claiming latest closure', async () => {
+  const logs = [];
+  const options = runnerOptions({
+    log: (line) => logs.push(line),
+    verifyReleaseImpl: async () => { throw new Error('CLI latest is stale'); },
+  });
+  await assert.rejects(publishReleaseGraph(options), (error) => {
+    assert.match(error.message, /Final release verification failed\.\nCLI latest is stale/);
+    assert.match(error.message, /latest closure is not confirmed/);
+    for (const key of ['core', 'mcp', 'cli']) {
+      assert.ok(error.message.includes(`${NAMES[key]}@${VERSIONS[key]}: exact version and metadata verified`));
+    }
+    assert.match(error.message, /Check exact versions, dependency metadata, and latest tags before retrying/);
+    return true;
+  });
+  assert.equal(logs.some((line) => line.startsWith('Release verified:')), false);
+});
+
+test('final verification reports skipped packages and all-published retries', async () => {
+  for (const alreadyPublished of [false, true]) {
+    const options = runnerOptions({
+      checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'published-identical', cli: 'published-identical' }),
+      verifyReleaseImpl: () => { throw new Error('latest is stale'); },
+    });
+    if (alreadyPublished) options.alreadyPublishedImpl = () => VERSIONS;
+    await assert.rejects(publishReleaseGraph(options), (error) => {
+      assert.match(error.message, /Final release verification failed/);
+      for (const key of ['core', 'mcp', 'cli']) {
+        assert.ok(error.message.includes(`${NAMES[key]}@${VERSIONS[key]}: already published; skipped`));
+      }
+      return true;
+    });
+    assert.deepEqual(options.records.publishCalls, []);
+  }
+});
+
+test('success output lists each package including packages skipped as identical', async () => {
+  const logs = [];
+  const options = runnerOptions({
+    log: (line) => logs.push(line),
+    checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'unpublished', cli: 'unpublished' }),
+  });
+  await publishReleaseGraph(options);
+  for (const key of ['core', 'mcp', 'cli']) {
+    assert.ok(logs.includes(`Release verified: ${NAMES[key]}@${VERSIONS[key]} (exact version, metadata, latest).`));
+  }
+});
+
+test('partial release reports skipped, uncertain, and unattempted packages separately', async () => {
+  const options = runnerOptions({
+    checkGraphImpl: retainedReport({ core: 'published-identical', mcp: 'unpublished', cli: 'unpublished' }),
+    publishImpl: () => { throw new Error('Connection lost after upload'); },
+  });
+  await assert.rejects(publishReleaseGraph(options), (error) => {
+    assert.ok(error.message.includes(`${NAMES.core}@${VERSIONS.core}: already published; skipped`));
+    assert.ok(error.message.includes(`${NAMES.mcp}@${VERSIONS.mcp}: publish command failed; registry state unknown`));
+    assert.ok(error.message.includes(`${NAMES.cli}@${VERSIONS.cli}: publish not attempted`));
+    return true;
+  });
+});
+
 test('a package release publishes only its selected package', async () => {
   for (const packageKey of ['core', 'mcp', 'cli']) {
     const options = runnerOptions();
@@ -337,18 +428,18 @@ test('explicit emergency override rejects stale or diverged history', async () =
   assert.deepEqual(options.records.publishCalls, []);
 });
 
-test('Core registry verification failure is reported after all publishes', async () => {
+test('Core registry verification failure prevents downstream publication', async () => {
   const options = runnerOptions({
     viewVersionImpl: () => {
       throw { status: 1, stderr: 'npm error code E404\nversion not found' };
     },
   });
   await assert.rejects(publishReleaseGraph(options), /not visible on the registry/);
-  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core']);
   assert.equal(options.records.sleepCalls.length, 180);
 });
 
-test('MCP dependency mismatch is reported after all publishes', async () => {
+test('MCP dependency mismatch prevents CLI publication', async () => {
   const options = runnerOptions({
     viewDependenciesImpl: (packageName) => {
       if (packageName === '@satori-code/mcp') {
@@ -358,7 +449,7 @@ test('MCP dependency mismatch is reported after all publishes', async () => {
     },
   });
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
-  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp', '@satori-code/cli']);
+  assert.deepEqual(options.records.publishCalls, ['@satori-code/core', '@satori-code/mcp']);
 });
 
 test('CLI managed-runtime verification succeeds', async () => {
@@ -516,7 +607,7 @@ test('EOTP failure reports no verified publication and runs no verification', as
   assert.deepEqual(options.records.sleepCalls, []);
 });
 
-test('EOTP failure on a later package keeps succeeded names and runs no verification', async () => {
+test('EOTP failure on a later package retains prior registry verification', async () => {
   const publishAttempts = [];
   const options = runnerOptions({
     publishImpl: (packageName) => {
@@ -537,7 +628,7 @@ test('EOTP failure on a later package keeps succeeded names and runs no verifica
   const coreVerifications = options.records.viewCalls.filter(
     (call) => call.startsWith('version:') && call.includes('@satori-code/core')
   );
-  assert.equal(coreVerifications.length, 0);
+  assert.equal(coreVerifications.length, 1);
   assert.equal(options.records.viewCalls.filter((call) => call.includes('@satori-code/mcp')).length, 0);
 });
 
@@ -679,7 +770,7 @@ test('a successful publish with failed registry verification is reported without
     publishReleaseGraph(options),
     /The publish command succeeded for @satori-code\/mcp@6\.8\.0,[\s\S]*registry verification failed[\s\S]*Publish commands that succeeded:[\s\S]*@satori-code\/core@3\.6\.0[\s\S]*@satori-code\/mcp@6\.8\.0[\s\S]*Registry-verified packages:[\s\S]*@satori-code\/core@3\.6\.0/,
   );
-  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp, NAMES.cli]);
+  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
   assert.equal(options.records.viewCalls.filter((call) => call.startsWith('version:') && call.includes(NAMES.cli)).length, 0);
 });
 
@@ -714,7 +805,7 @@ test('incorrect dependency pins remain bounded and fail after all verification a
   await assert.rejects(publishReleaseGraph(options), /expected 3\.6\.0/);
   assert.equal(dependencyCalls, 181);
   assert.equal(options.records.sleepCalls.length, 180);
-  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp, NAMES.cli]);
+  assert.deepEqual(options.records.publishCalls, [NAMES.core, NAMES.mcp]);
 });
 
 test('a malformed report is rejected and its foreign temp path is never deleted', async () => {

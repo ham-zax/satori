@@ -319,7 +319,7 @@ export async function publishReleaseGraph(options = {}) {
   if (publishedVersions) {
     verifyPrerequisites(publishedVersions);
     log('All local versions are already published; skipping qualification and verifying the registry.');
-    await verifyReleaseImpl(publishedVersions);
+    await verifyFinal(publishedVersions, [], [], packageKeys);
     log('Release graph verified.');
     return {
       published: Object.freeze([]),
@@ -364,10 +364,11 @@ export async function publishReleaseGraph(options = {}) {
     for (const key of toPublish) {
       const packageName = RELEASE_PACKAGES[key].name;
       const version = localVersions[key];
+      const entry = { key, name: packageName, version };
       log(`Publishing ${packageName}@${version}...`);
       try {
         publishImpl(packageName, version, report.tarballs?.[key]);
-        publishCommandSucceeded.push({ key, name: packageName, version });
+        publishCommandSucceeded.push(entry);
       } catch (error) {
         const detail = errorMessage(error);
         throw new Error(
@@ -375,15 +376,11 @@ export async function publishReleaseGraph(options = {}) {
           + `The registry state of ${packageName}@${version} may be unknown. Query the exact version before retrying.\n`
           + `Registry-verified packages:\n- ${formatEntries(registryVerified).replace(/, /g, '\n- ')}\n`
           + `Publish commands that succeeded:\n- ${formatEntries(publishCommandSucceeded).replace(/, /g, '\n- ')}\n`
+          + `${releaseStatus(localVersions, publishCommandSucceeded, registryVerified, toSkip, key)}\n`
           + detail
         );
       }
-    }
-    // Publish commands run back to back. Registry visibility is awaited after all
-    // of them, in dependency order, so a dependent can be published before its
-    // dependency is confirmed visible.
-    for (const entry of publishCommandSucceeded) {
-      const { key, name: packageName, version } = entry;
+      // A dependent must not become latest before its prerequisites are visible.
       try {
         await verifyPublished(key, version, localVersions, {
           viewVersionImpl,
@@ -398,12 +395,14 @@ export async function publishReleaseGraph(options = {}) {
           + `${errorMessage(error)}\n`
           + 'The package may already be published. Do not retry publication until npm registry state is checked.\n'
           + `Publish commands that succeeded:\n- ${formatEntries(publishCommandSucceeded).replace(/, /g, '\n- ')}\n`
-          + `Registry-verified packages:\n- ${formatEntries(registryVerified).replace(/, /g, '\n- ')}`
+          + `Registry-verified packages:\n- ${formatEntries(registryVerified).replace(/, /g, '\n- ')}\n`
+          + releaseStatus(localVersions, publishCommandSucceeded, registryVerified, toSkip)
         );
       }
       registryVerified.push(entry);
+      log(`Registry verified: ${packageName}@${version}.`);
     }
-    await verifyReleaseImpl(localVersions);
+    await verifyFinal(localVersions, publishCommandSucceeded, registryVerified, toSkip);
     log(toPublish.length === 0 ? 'Release graph verified.' : 'Release graph published and verified.');
     return {
       published: Object.freeze(registryVerified),
@@ -413,6 +412,32 @@ export async function publishReleaseGraph(options = {}) {
     };
   } finally {
     fs.rmSync(publisherTempRoot, { recursive: true, force: true });
+  }
+
+  function releaseStatus(localVersions, succeeded, verified, skipped, failedKey) {
+    return 'Release status (latest closure is not confirmed):\n' + packageKeys.map((key) => {
+      const state = key === failedKey ? 'publish command failed; registry state unknown'
+        : verified.some((entry) => entry.key === key) ? 'exact version and metadata verified'
+          : succeeded.some((entry) => entry.key === key) ? 'publish command succeeded; registry verification incomplete'
+            : skipped.includes(key) ? 'already published; skipped'
+              : 'publish not attempted';
+      return `- ${RELEASE_PACKAGES[key].name}@${localVersions[key]}: ${state}`;
+    }).join('\n');
+  }
+
+  async function verifyFinal(localVersions, succeeded, verified, skipped) {
+    try {
+      await verifyReleaseImpl(localVersions);
+    } catch (error) {
+      throw new Error(
+        `Final release verification failed.\n${errorMessage(error)}\n`
+        + `${releaseStatus(localVersions, succeeded, verified, skipped)}\n`
+        + 'Check exact versions, dependency metadata, and latest tags before retrying. Publication is never retried automatically.',
+      );
+    }
+    for (const key of packageKeys) {
+      log(`Release verified: ${RELEASE_PACKAGES[key].name}@${localVersions[key]} (exact version, metadata, latest).`);
+    }
   }
 
   function verifyPrerequisites(localVersions) {

@@ -752,6 +752,6 @@ export function buildSearchQueryPlan(
         exactMatchPinningEnabled: intent === "identifier"
             || quotedLiteralSeeking
             || (writerSeeking && exactPinEligible),
-        rerankAllowed: !sparseOnlyRoute && intent !== "identifier" && !quotedLiteralSeeking,
+        rerankAllowed: !sparseOnlyRoute && intent !== "identifier" && !quotedLiteralSeeking && !singleBareLookup,
     };
 }

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 import ignore from "ignore";
@@ -96,7 +97,7 @@ async function readMeasuredSearchSource(
     handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>>,
     stat: fs.Stats,
     absolutePath: string,
-): Promise<{ content: string; observation?: SourceMeasurementObservation }> {
+): Promise<{ content: string; sourceHash: string; observation?: SourceMeasurementObservation }> {
     const observation = beginSourceMeasurementObservation({
         owner: sourceIoOwnerForCurrentOperation("search_evidence"),
         filePath: absolutePath,
@@ -126,8 +127,10 @@ async function readMeasuredSearchSource(
     const processingStartedAt = performance.now();
     let processingOutcome: "success" | "failed" = "failed";
     let content: string;
+    let sourceHash: string;
     try {
         content = sourceBytes.toString("utf8");
+        sourceHash = crypto.createHash("sha256").update(sourceBytes).digest("hex");
         processingOutcome = "success";
     } finally {
         recordSourceProcessing({
@@ -141,6 +144,7 @@ async function readMeasuredSearchSource(
     }
     return {
         content,
+        sourceHash,
         ...(observation ? { observation } : {}),
     };
 }
@@ -464,6 +468,7 @@ export class SearchQuerySupport {
             let handle: Awaited<ReturnType<typeof openRegularFileInsideRoot>> | undefined;
             let stat: fs.Stats;
             let content: string;
+            let sourceHash: string;
             let sourceObservation: SourceMeasurementObservation | undefined;
             try {
                 handle = await openRegularFileInsideRoot(logicalPath, canonicalRoot);
@@ -475,7 +480,7 @@ export class SearchQuerySupport {
                     unreadPaths.add(relativePath);
                     continue;
                 }
-                ({ content, observation: sourceObservation } = await readMeasuredSearchSource(
+                ({ content, sourceHash, observation: sourceObservation } = await readMeasuredSearchSource(
                     handle,
                     stat,
                     logicalPath,
@@ -525,6 +530,7 @@ export class SearchQuerySupport {
                 const candidate: SearchResultLike = {
                     content: chunk.content,
                     relativePath,
+                    dirtyOverlaySourceHash: sourceHash,
                     startLine: chunk.metadata.startLine,
                     endLine: chunk.metadata.endLine,
                     language,
@@ -554,6 +560,7 @@ export class SearchQuerySupport {
                 results.push({
                     content: exactWindow.windowContent,
                     relativePath,
+                    dirtyOverlaySourceHash: sourceHash,
                     startLine: exactWindow.startLine,
                     endLine: exactWindow.endLine,
                     language,
@@ -573,6 +580,7 @@ export class SearchQuerySupport {
             results.push({
                 content: lines.slice(startLine - 1, endLine).join("\n"),
                 relativePath,
+                dirtyOverlaySourceHash: sourceHash,
                 startLine,
                 endLine,
                 language,

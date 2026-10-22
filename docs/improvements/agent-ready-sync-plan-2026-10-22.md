@@ -183,9 +183,43 @@ on every repeat). The first repeat can still pay about 300 ms when the watcher
 event arrives after the first search. The probe stopped at N=32 in both runs
 with "Mutation 'sync' is already in progress"; cause not found.
 
+## D4 and B1 results (22 October 2026)
+
+D4: `rerankAllowed` is false for a single bare lowercase word
+(`search-query-planning.ts`). Dirty overlay candidates carry
+`dirtyOverlaySourceHash`, the SHA-256 of the bytes the overlay read, and
+rerank projection checks the live file against that hash instead of the
+publication hash (`search-rerank-projection.ts`). B1: perf spans
+`sync.parent.garbage_collect`, `sync.parent.flight_complete`,
+`status.symbol_registry_read`, `status.navigation_manifest`,
+`status.navigation_relationships`.
+
+Probe (trufflehog, `.go`, `--runs 3`, load 1.2-2.4). N=32 idle, 8459fa0e
+(A3) against D4: first search 4,006-7,276 ms (median 5,373, `rerank`
+2,848-5,644 ms, 62-76 candidates) against 837-1,205 ms (median 891, no
+rerank); repeats 3,366-6,140 ms against 448-461 ms. N=1 and N=16 idle first
+searches 494-1,084 ms and 604-957 ms, every file a hit. Searches during a sync
+are unchanged (299-311 ms at N=32). Neither run hit the "sync already in
+progress" failure, so that failure is intermittent, not caused by A2.
+
+N=32 finds 26 of 32 files in every run, on 8459fa0e too. Leading cause, not
+proven: the overlay keeps 32 results (`SEARCH_DIRTY_OVERLAY_MAX_RESULTS`) and
+some files give more than one matching chunk. A read-only trace also found
+that raw `debugMode: "full"` responses are trimmed to a 2 MiB budget without a
+removal record, which may explain the 64/200 counts in "A3 results".
+
+B1 spans, same run: `status.symbol_registry_read` costs 853-1,523 ms (median
+935, 263 calls) on every status call; `status.navigation_relationships` is
+0 ms except a few cold reads up to 1,371 ms; garbage collection and flight
+completion have medians under 1 ms. The parent-side cost is the status path
+rereading the symbol registry sidecar, multiplied by the probe's 100 ms status
+polling.
+
 ## Decisions
 
-D1, D2 and D3: approved as recommended (22 October 2026). D4: open.
+D1, D2 and D3: approved as recommended (22 October 2026). D4: approved
+(22 October 2026): skip the reranker for a single bare lowercase word, and
+project dirty overlay candidates from the live bytes they were read from.
 
 - **D1. Overlay during a sync.** Recommendation: allow the dirty overlay and the
   stale-hit suppression in `served_previous_generation`. Keep the reranker and

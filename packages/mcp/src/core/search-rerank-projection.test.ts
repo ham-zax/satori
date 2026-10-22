@@ -115,6 +115,40 @@ function evidence(overrides: Partial<CurrentSourceEvidence> = {}): CurrentSource
     };
 }
 
+test("dirty overlay projection uses live bytes without publication hash or owner bounds", async () => {
+    const current = `${source}\n// dirty overlay`;
+    const sourceBytes = Buffer.from(current, "utf8");
+    const dirtyOverlaySourceHash = crypto.createHash("sha256").update(sourceBytes).digest("hex");
+    for (const relativePath of [owner.file, "src/dirty-new.ts"]) {
+        const result = ownedResult({ relativePath, endLine: 5, dirtyOverlaySourceHash });
+        const outcome = await projectPublicationBoundSearchRerankDocument({
+            candidateId: searchRerankCandidateId(result),
+            codebaseRoot: "/repo",
+            semanticQuery: "owner",
+            result,
+            registry: registry(),
+            readSourceEvidence: async (_root, relativeFile) => {
+                assert.equal(relativeFile, relativePath);
+                return evidence({ relativeFile, source: current, sourceBytes, observedHash: dirtyOverlaySourceHash });
+            },
+        });
+        assert.equal(outcome.ok, true, JSON.stringify(outcome));
+        if (outcome.ok) assert.match(outcome.document, /dirty overlay/);
+    }
+});
+
+test("dirty overlay projection rejects source changed after the overlay read", async () => {
+    const dirtyOverlaySourceHash = crypto.createHash("sha256").update(`${source}\n// dirty overlay`).digest("hex");
+    assert.deepEqual(await projectPublicationBoundSearchRerankDocument({
+        candidateId,
+        codebaseRoot: "/repo",
+        semanticQuery: "owner",
+        result: ownedResult({ dirtyOverlaySourceHash }),
+        registry: registry(),
+        readSourceEvidence: async () => evidence(),
+    }), { ok: false, candidateId, reason: "source_hash_mismatch" });
+});
+
 test("canonical projection admits ownerless candidates bound by the publication manifest", async () => {
     for (const result of [
         ownedResult({ ownerSymbolInstanceId: undefined }),

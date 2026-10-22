@@ -50,6 +50,19 @@ test('query plans do not carry a numeric lexical relevance weight', () => {
     assert.equal('lexicalWeight' in plan, false);
 });
 
+test('single bare lowercase words skip reranking without changing intent', () => {
+    const plan = buildSearchQueryPlan('satoriprobe', true);
+
+    assert.equal(plan.rerankAllowed, false);
+    assert.equal(plan.intent, 'uncertain');
+});
+
+test('two-word lowercase queries keep reranking enabled', () => {
+    const plan = buildSearchQueryPlan('freshness checkpoint', true);
+
+    assert.equal(plan.rerankAllowed, true);
+});
+
 test('query plans flag documentation-seeking queries', () => {
     assert.equal(buildSearchQueryPlan('where is trade veto documented', true).documentationSeeking, true);
     assert.equal(buildSearchQueryPlan('readme for the reranker contract', true).documentationSeeking, true);

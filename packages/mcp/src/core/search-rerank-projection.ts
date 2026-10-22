@@ -91,12 +91,13 @@ async function resolvePublicationBoundEvidence(input: {
     | { ok: true; evidence: PublicationBoundSourceEvidence }
     | { ok: false; reason: SearchRerankProjectionFailureReason }
 > {
-    const owner = resolveCanonicalOwner(input.result, input.registry);
-    const manifestFile = input.registry.manifest.files.find(
+    const dirtyOverlaySourceHash = input.result.dirtyOverlaySourceHash;
+    const owner = dirtyOverlaySourceHash ? undefined : resolveCanonicalOwner(input.result, input.registry);
+    const manifestFile = dirtyOverlaySourceHash ? undefined : input.registry.manifest.files.find(
         (file) => file.path === input.result.relativePath,
     );
-    const expectedFile = owner?.file ?? manifestFile?.path;
-    const expectedHash = owner?.fileHash ?? manifestFile?.hash;
+    const expectedFile = dirtyOverlaySourceHash ? input.result.relativePath : owner?.file ?? manifestFile?.path;
+    const expectedHash = dirtyOverlaySourceHash ?? owner?.fileHash ?? manifestFile?.hash;
     const startLine = input.result.startLine;
     const endLine = input.result.endLine;
     if (

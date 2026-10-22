@@ -99,6 +99,8 @@ export type SearchLexicalEvidence = SearchExactLexicalEvidence & Readonly<{
 
 export type SearchResultLike = Partial<SemanticSearchResult> & {
     relativePath: string;
+    // Set only by the dirty overlay: SHA-256 of the live bytes used to build the candidate.
+    dirtyOverlaySourceHash?: string;
     startLine?: number;
     endLine?: number;
     startByte?: unknown;

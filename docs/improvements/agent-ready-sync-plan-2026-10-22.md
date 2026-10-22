@@ -510,18 +510,58 @@ Load 3.7 to 2.6, peak RSS 1,128 MB. `syncWallMs` 13,401 / 12,880 / 12,638.
 
 - "Mutation 'sync' is already in progress" at N=32: cause not known.
 - Reranker `source_hash_mismatch` on edited hits: `a2e275ce` probably fixes
-  it. Not verified.
-- `detect_changes` across roots: `publishedSourceByFile` is keyed by relative
-  path (`change-impact.ts:96`, `:248`). Not checked.
-- `pnpm run check` is not verified for `e301c604` and `7e849823`.
+  it. Not verified. The check needs a live reranker and an edited file.
+- `detect_changes` keys: checked. `publishedSourceByFile`
+  (`change-impact.ts:96`) uses the `git --relative` path, and `:248`/`:426`
+  read it with the outline's `symbol.file`. `file_outline` resolves `file`
+  against the matched root (`navigation-handlers.ts:1326-1327`), so the
+  keys agree when `path` is the root. Open question: whether `path` can be
+  a subdirectory of an indexed root. If it can, the outlines already
+  resolve the wrong files, and the key mismatch is only one symptom.
+- `e301c604` and `7e849823`: `pnpm run check` exit 0 at `abd6ccef`. Their
+  test files (`sync-background-scheduling`, `change-impact`,
+  `navigation-handlers.dirty-source`, `search-query-support`) pass, 68 tests.
+
+### Shared sync cost (b): warm sync worker (approved, not built)
+
+The user approved Option 1 on 22 October 2026: one long-lived sync worker
+per root keeps the previous Publication's registry and relationships in
+memory. Expected saving: about 3.2 s of the 12.3 s trufflehog sync
+(`publication_relationship_load` ~1,330 ms, `publication_source_navigation_load`
+~1,100 ms, `module_load`+bootstrap ~770 ms). Option 2 (compact persisted
+indexes, an on-disk format change) is not chosen.
+
+A partial load does not work. `buildRelationshipDeltaWork`
+(`packages/core/src/relationships/builder.ts:468-565`) reads the claims,
+call sites and module bindings of every file, and it marks every file of a
+semantic language as affected.
+
+The design must answer these points before any edit:
+
+- Cancellation: the supervisor cancels a sync by killing the worker's
+  process group (`packages/mcp/src/server/mutation-worker-supervisor.ts`).
+  A warm worker needs a cancel that stops one sync and keeps the process,
+  or a kill that drops the warm state and falls back to a cold load.
+- Witness: the warm state is valid only for the Publication it came from.
+  The worker must compare the active Publication identity before each sync
+  and load cold when they differ.
+- Memory bound: the trufflehog worker loads about 167 MB of shards (150 MB
+  analysis evidence). Peak RSS is 1,145 MB today. The design needs an idle
+  exit and a cap on warm roots.
+- Crash containment: a worker crash must not publish partial state. The
+  next sync starts a cold worker.
+- Tests: a differential test (warm sync equals cold sync), a stale-witness
+  case, and a cancellation case with fault injection.
 
 ### Deferred tests
 
-- P3: update the `alt_terms_*` golden outputs. Add a unit test for the
-  tie-break: equal `fusionScore`, one candidate with `exactLexicalMatch`.
+- P3: golden outputs updated in `abd6ccef`. In `alt_terms_*` the
+  tie-break ranks `src/effects.ts` first, so the reranker does not receive
+  it and `orderAuthority` becomes `reranker_order`. Still needed: a unit
+  test for the tie-break (equal `fusionScore`, one candidate with
+  `exactLexicalMatch`).
 - P4: an edited file yields `current_source_text` hits with no owner and
   `partial` coverage. `call_graph` excludes those hits.
-- `e301c604`, `7e849823`: run their tests and `pnpm run check`.
 - Shard reuse: a differential test (reused load equals a cold load for
   records, `claimFilesByKey` order and manifest), a rewritten-shard case
   (new mtime or inode gives a miss), and a mutation check (drop the stat

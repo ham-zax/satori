@@ -411,6 +411,110 @@ Reported, not scheduled:
 - Retro proposal: read a worker's report before judging a `claive list`
   "shell: exit 1" flag; the flag also shows red test runs before a fix.
 
+## Fixes and open issues (22 October 2026, session 7e06e7f4)
+
+The user approved this order: P1, P3, P4, shared sync cost (a), then P2 and
+P5 after their open questions are answered. The user deferred all tests. The
+section "Deferred tests" lists them.
+
+### Fixes in the working tree
+
+- **P3. Multi-word fusion ties.** `compareNativeRetrievalCandidates`
+  (`packages/mcp/src/core/search-retrieval-order.ts`) now orders an equal
+  `fusionScore` by `exactLexicalMatch` before path order. Equal RRF ranks
+  paired a lexical-only overlay hit with a dense hit without the term. The
+  rule uses the existing candidate field. `lexicalScore` is always 0 there,
+  so it cannot decide the tie. Three golden outputs (`alt_terms_*` in
+  `search-execution.golden.test.ts.snapshot`) change and are not updated.
+- **P4. `find_references` on edited files.** `findExactPublishedSourceReferences`
+  (`exact-reference-search.ts`) scans a file whose bytes differ from the
+  Publication hash instead of skipping it. Its hits carry
+  `evidenceClass: "current_source_text"` and no `owningSymbol`. The
+  `source_changed` coverage reason stays, so coverage stays `partial`.
+  `RelationshipBackedCallGraph` keeps only `published_source_text` hits, so
+  `call_graph` stays on published coordinates. The tool description,
+  `generate-docs.ts` and `packages/mcp/README.md` describe the new class.
+  Limit: `classifyOccurrence` uses the published target span, so a
+  declaration in an edited target file can be classified `identifier`. The
+  owner on current bytes waits for the P1 span matcher.
+- Check: `npx tsc --noEmit -p .` in `packages/mcp` reports no errors.
+
+### Shared sync cost (a): the unattributed 2.5-3 s
+
+Command: `node scripts/perf/index-probe.mjs ../trufflehog --save-search 1 --ext .go --runs 3`.
+Load 3.7 to 2.6, peak RSS 1,128 MB. `syncWallMs` 13,401 / 12,880 / 12,638.
+
+- `requestMs` 359-530. Worker round trip 11,177 ms: module load 338,
+  bootstrap 437, freshness 10,250, shutdown 25. Parent GC 130 ms.
+- `completedToObservationMs` 2,028-2,058 ms. Most of it is the first `status`
+  call after the new Publication: `status.navigation_relationships` takes
+  1,159 ms for a cold relationship load (`getPublicationNavigationStatus`,
+  `packages/core/src/core/context.ts:1213`).
+- The worker loads the same relationship data too:
+  `sync.publication_relationship_load` 1,334 ms and
+  `sync.publication_source_navigation_load` 1,109 ms. Relationship-sidecar
+  loading is therefore the shared hot spot of costs (a) and (b).
+- CPU profile: worker `visitShardsInByteBudget` about 965 ms inclusive,
+  `parseRelationshipShard` about 340 ms, the rest per-shard system calls over
+  about 3,288 shards. Parent `visitShardsInByteBudget` 2,199 ms inclusive.
+- Failed idea: a parent pre-warm after sync does not help. The first status
+  call waits for the same 1.16 s load.
+- Fix (working tree): `readRelationshipSidecar`
+  (`packages/core/src/symbols/sidecar-reads.ts`) accepts `shardReuse`. Its
+  reuse key covers every parse input: the manifest contribution schema, the
+  manifest file entry, and the shard stat witness (device, inode, size,
+  mtime). ctime is excluded, because each new hardlink changes it. The shard
+  name is not a witness, because a rewritten shard keeps its name. A key miss
+  reads and parses the shard. `JsonNavigationStore` (`navigation/store.ts`)
+  keeps a per-shard projection (records and claim keys, no evidence) in the
+  resident state and seeds the next load from the superseded state through
+  `PublicationStateCache.peek`. The projection is released with the state.
+  The worker starts a new process for each sync, so it gains nothing.
+- Hardlink check: 200 of 200 sampled shards share an inode across two
+  generations of the satori index.
+- Scratch equivalence check (satori index, 1,253 shards, 3 runs): the reused
+  load gives the same records, claim index and manifest as a cold load. 1,252
+  shards were reused. Load median 1,926 ms cold, 645 ms reused. Peak RSS
+  about 440 MB, load 3.4.
+- Probe after the fix (same command, load 2.4 to 3.3, peak RSS 1,145 MB):
+  `syncWallMs` 12,319 / 12,344 / 11,820. The first `status` after a sync
+  spends 432-461 ms in `status.navigation_relationships` (before: 1,098-1,221
+  ms). `completedToObservationMs` median 1,349 ms (before: 2,037 ms).
+
+### Outside proposals waiting for the user
+
+- **P1. `file_outline` `currentSpan`.** 14 staged files (+596 lines) add
+  `currentSpan`, `currentSpans` and `CurrentSourceSpanMapping`. The peer
+  session `satori-f7` probably owns them. Ownership is not confirmed, so this
+  session did not edit them.
+- **P2. `call_graph` overlay of current edges** (`current-relationship-overlay.ts`,
+  about 9 files, Go analysis about 3,850 ms in a background job). Open: do
+  current edges count as proof-backed in `detect_changes`? Do test edges
+  belong in the overlay?
+- **P5. Dense scores for edited-file hits** from a new embedding cache (A4).
+  The cache is a persistent component, so the design needs user approval.
+
+### Unresolved leads
+
+- "Mutation 'sync' is already in progress" at N=32: cause not known.
+- Reranker `source_hash_mismatch` on edited hits: `a2e275ce` probably fixes
+  it. Not verified.
+- `detect_changes` across roots: `publishedSourceByFile` is keyed by relative
+  path (`change-impact.ts:96`, `:248`). Not checked.
+- `pnpm run check` is not verified for `e301c604` and `7e849823`.
+
+### Deferred tests
+
+- P3: update the `alt_terms_*` golden outputs. Add a unit test for the
+  tie-break: equal `fusionScore`, one candidate with `exactLexicalMatch`.
+- P4: an edited file yields `current_source_text` hits with no owner and
+  `partial` coverage. `call_graph` excludes those hits.
+- `e301c604`, `7e849823`: run their tests and `pnpm run check`.
+- Shard reuse: a differential test (reused load equals a cold load for
+  records, `claimFilesByKey` order and manifest), a rewritten-shard case
+  (new mtime or inode gives a miss), and a mutation check (drop the stat
+  fields from the key, confirm the rewritten-shard test fails, restore).
+
 ## Decisions
 
 ### Active implementation: immediate reads and background catch-up

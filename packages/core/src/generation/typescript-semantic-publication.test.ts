@@ -101,10 +101,14 @@ for (const initialConfig of [false, true]) {
                 await fixture.context.compareSourcePathsToFreshnessCheckpoint(fixture.root, ['tsconfig.json']),
                 { status: 'differs' },
             );
-            assert.deepEqual(await fixture.context.compareAllSourceToFreshnessCheckpoint(fixture.root), { status: 'differs' });
-            assert.deepEqual(await fixture.context.compareSourceObservationToFreshnessCheckpoint(fixture.root), { status: 'differs' });
+            assert.deepEqual(await fixture.context.compareAllSourceToFreshnessCheckpoint(fixture.root), { status: 'differs', changedPaths: ['tsconfig.json'] });
+            assert.deepEqual(await fixture.context.compareSourceObservationToFreshnessCheckpoint(fixture.root), { status: 'differs', changedPaths: ['tsconfig.json'] });
             fs.writeFileSync(path.join(fixture.root, 'package.json'), '{"name":"changed-fixture"}\n');
-            assert.deepEqual(await comparisons(), Array(3).fill({ status: 'differs' }));
+            assert.deepEqual(await comparisons(), [
+                { status: 'differs' },
+                { status: 'differs', changedPaths: ['package.json', 'tsconfig.json'] },
+                { status: 'differs', changedPaths: ['package.json', 'tsconfig.json'] },
+            ]);
         } finally {
             await fixture.close();
         }

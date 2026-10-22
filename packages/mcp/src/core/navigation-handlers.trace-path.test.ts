@@ -104,6 +104,50 @@ test('trace_path binds scope and both navigation reads to the exact admitted lea
     ]);
 });
 
+test('trace_path reports the freshness decision of a read served during a sync', async () => {
+    const lease = {
+        id: 'leased-publication',
+        publication: { id: 'leased-publication', canonicalRoot: '/repo' },
+        release: () => {},
+    } as PublicationLease;
+    const freshnessDecision = {
+        mode: 'served_previous_generation',
+        checkedAt: '2026-10-22T00:00:00.000Z',
+        thresholdMs: 0,
+        servedCollection: 'collection',
+        servedPublicationId: 'leased-publication',
+        pendingOperation: { action: 'sync', generation: 2 },
+    };
+    const handler = new NavigationHandlers({
+        prepareNavigationRead: async () => ({
+            state: 'ready',
+            root: { path: '/repo', info: { status: 'indexed' } },
+            publication: { id: 'leased-publication' },
+            navigationStatus: 'valid',
+            freshnessDecision,
+        }) as Awaited<ReturnType<Host['prepareNavigationRead']>>,
+        acquirePublicationLease: () => lease,
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationAddress: () => ({ publicationId: lease.id, navigationRoot: '/snap/navigation' }),
+        tracePath: async () => ({
+            status: 'ok',
+            path: null,
+            coverage: { visitedNodes: 1, traversedEdges: 0, truncated: false, truncatedBy: [] },
+            warnings: [],
+        }),
+        stringifyToolJson: JSON.stringify,
+    } as unknown as Host);
+
+    const response = await handler.handleTracePath({
+        path: '/repo', sourceSymbolId: 'source-id', targetSymbolId: 'target-id',
+        relationshipKinds: ['CALLS'], maxDepth: 3, maxVisitedNodes: 100, maxTraversedEdges: 500,
+    });
+    const payload = JSON.parse(response.content[0]!.text);
+    assert.equal(payload.status, 'ok');
+    assert.deepEqual(payload.freshnessDecision, freshnessDecision);
+    assert.deepEqual(payload.warnings, ['SOURCE_CHANGES_PENDING']);
+});
+
 test('trace_path does not read navigation when the Publication lease is not admitted', async () => {
     let read = false;
     let released = false;

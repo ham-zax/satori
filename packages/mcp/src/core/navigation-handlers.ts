@@ -546,6 +546,10 @@ export class NavigationHandlers {
                     path: requestedPath, publicationId: lease.id, message: result.reason,
                 });
             }
+            const freshnessDecision = prepared.freshnessDecision;
+            const warnings = freshnessDecision
+                ? Array.from(new Set([...result.warnings, ...buildFreshnessWarningCodes(freshnessDecision)])).sort()
+                : result.warnings;
             return respond({
                 status: "ok",
                 path: requestedPath,
@@ -581,7 +585,8 @@ export class NavigationHandlers {
                     })),
                 },
                 coverage: result.coverage,
-                warnings: result.warnings,
+                warnings,
+                ...(freshnessDecision ? { freshnessDecision } : {}),
                 message: result.path
                     ? "One shortest path found in the selected Publication and relationship scope."
                     : "No path found within this Publication, path scope, relationship kinds, and traversal budgets.",

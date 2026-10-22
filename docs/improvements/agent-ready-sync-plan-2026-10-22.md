@@ -303,6 +303,71 @@ step B (search at once after `git commit`, no sync) now returns
 `src/mod2.ts` with `overlaidPaths: ["src/mod2.ts"]`. Before the fix it
 returned no files.
 
+## Shared sync cost profile (22 October 2026, at `5d3b7736`)
+
+Command: `index-probe.mjs ../trufflehog --save-search 1 --ext .go --runs 3`.
+Load 0.2-2.5, peak RSS 1,191 MB for the probe process tree measured by
+`/usr/bin/time` (the probe reports 1,998 MB tree RSS for the first index).
+`syncWallMs` 12,601 / 12,498 / 12,957 (median 12,601 ms). Per-sync spans,
+6 samples, typical value:
+
+- `sync.publication_navigation_delta` about 7,000 ms, of which
+  `navigation.semantic` about 3,850 ms (Go), `sync.publication_relationship_load`
+  about 1,320 ms, `sync.publication_source_navigation_load` about 1,090 ms,
+  `sync.publication_relationship_delta` about 640 ms,
+  `navigation.stage.relationships` about 450 ms, `navigation.stage.symbols`
+  about 355 ms.
+- `sync.publication_sidecar_stage` about 960 ms.
+- `sync.prepare_changes` about 475 ms (10 samples, 2 per sync),
+  `sync.worker.bootstrap` about 435 ms, `sync.worker.module_load` about 320 ms,
+  `sync.publication_activation` about 325 ms.
+- `sync.worker.freshness` is 9,500-10,200 ms, so about 2,500-3,000 ms of the
+  sync wall time is outside the worker spans and is not yet attributed.
+- Outside sync, `status.navigation_relationships` takes about 1,100-1,280 ms
+  once per run.
+
+Ranking of the shared costs: (1) the unattributed 2.5-3 s, (2) the two
+previous-navigation loads in the sync worker, 2.4 s together, (3) sidecar
+staging, 0.96 s. The semantic stage stays the largest single span.
+
+## Navigation tools on edited files (review, 22 October 2026)
+
+An external review listed navigation defects. Each claim was checked against
+the code at `5d3b7736`.
+
+1. **`detect_changes` seeds nothing for edited files (confirmed).**
+   `detectChangeImpact` (`change-impact.ts:91-94`) gets each changed file's
+   outline from `handleFileOutline`, which returns `stale_symbol_ref` when the
+   file hash differs from the registry (`navigation-handlers.ts:2283`). The file
+   goes to `unavailableFiles`. The usual agent flow (edit, then
+   `detect_changes` before the commit) therefore gets no seeds and no callers
+   until a sync completes. Open decision: (A) a faster sync plus automatic sync,
+   or (B) map each changed line of the current file to the published file
+   through a diff, then to the published symbols (same symbol IDs as the graph,
+   language-agnostic). Decide after the shared-cost profile.
+2. **`file_outline` and the `call_graph` seed fail on an edited file
+   (confirmed).** `navigation-handlers.ts:2283` and `:1988` compare the hash of
+   the whole file, so a comment-only edit also fails. In `call_graph`, other
+   nodes report `sourceState` (`:2105-2125`); only the seed file fails. A
+   tree-sitter re-parse of the dirty file gives symbols that are not in the
+   published graph, and a name and kind match would be a second identity rule.
+3. **`trace_path` reports no freshness (confirmed).** `handleTracePath`
+   (`navigation-handlers.ts:490-593`) reads through `prepareNavigationRead` but
+   its `ok` payload has no `freshnessDecision` and no freshness warnings, unlike
+   the handlers that use `withNavigationFreshness` (`:333`). Fixed: the `ok`
+   payload carries `freshnessDecision` and its warning codes, as in
+   `find_references` (test in `navigation-handlers.trace-path.test.ts`).
+4. **`find_references` needs a fresh file (not confirmed).** Its `stale`
+   outcome (`:1101`) means that publication authority changed during the read.
+   No file-hash check was found in the code read.
+5. **`read_file` `open_symbol` on an edited file (not confirmed).**
+   `read_file.ts:774` maps a `stale` symbol context to
+   `NAVIGATION_UNAVAILABLE`. Whether an edited file reaches that case is not
+   proved.
+6. **"B2 makes sync take 1-2 s" (wrong).** B2 is committed (`1e59127f`); the
+   sync median after B2 is 12.6 s on trufflehog. B3 runs the sync
+   automatically but does not make it faster.
+
 ## Remaining work (22 October 2026, after D4 and B1)
 
 In this order:

@@ -174,6 +174,98 @@ test('all resolution claims stream across shards', async () => {
     }
 });
 
+// Writes a Publication whose `targets` give each file's one claim and record
+// target. Files in `linkedFrom` get a hardlink to that Publication's shard, as
+// staging links an unchanged shard.
+async function writeShardPublication(
+    root: string,
+    publicationId: string,
+    targets: Record<string, string>,
+    linkedFrom?: { navigationRoot: string; files: string[] },
+) {
+    const navigationRoot = path.join(root, publicationId, 'navigation');
+    const files = Object.keys(targets).sort();
+    await writeRelationshipSidecar({
+        normalizedRootPath: root,
+        navigationRoot,
+        symbolRegistryManifestHash,
+        relationshipVersion: 'fixture-version',
+        builtAt: new Date(0).toISOString(),
+        records: files.map((file) => ({
+            sourceKey: `${file}#caller`, targetKey: targets[file]!, type: 'CALLS' as const, file, confidence: 'high' as const,
+        })),
+        analysisByFile: new Map(files.map((file) => [file, evidence([resolvedClaim(file, `caller-${file}`, targets[file]!)])])),
+    });
+    for (const file of linkedFrom?.files ?? []) {
+        const shard = path.join('relationships', 'by-file', fileShardName(file, symbolRegistryManifestHash));
+        fs.rmSync(path.join(navigationRoot, shard));
+        fs.linkSync(path.join(linkedFrom!.navigationRoot, shard), path.join(navigationRoot, shard));
+    }
+    return { normalizedRootPath: root, publicationId, navigationRoot, expectedSymbolRegistryManifestHash: symbolRegistryManifestHash };
+}
+
+async function relationshipView(store: JsonNavigationStore, input: Awaited<ReturnType<typeof writeShardPublication>>) {
+    const relationships = await store.getRelationships(input);
+    assert.equal(relationships.status, 'ok');
+    if (relationships.status !== 'ok') throw new Error('unreachable');
+    const sourcesOf = async (symbolInstanceId: string) => {
+        const evidence = await store.getResolutionEvidence({ ...input, symbolInstanceId });
+        assert.equal(evidence.status, 'ok');
+        return evidence.status === 'ok' ? evidence.matches.map((match) => match.claim.sourceFile) : [];
+    };
+    return {
+        records: relationships.records,
+        warnings: relationships.warnings,
+        target: await sourcesOf('target'),
+        moved1: await sourcesOf('moved1'),
+    };
+}
+
+test('relationship shard reuse equals a cold load and reads only shards that changed', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const first = await writeShardPublication(root, 'publication-a', { 'a.ts': 'target', 'b.ts': 'target', 'c.ts': 'moved1' });
+    const second = await writeShardPublication(
+        root, 'publication-b', { 'a.ts': 'target', 'b.ts': 'moved1', 'c.ts': 'moved1' },
+        { navigationRoot: first.navigationRoot, files: ['a.ts', 'c.ts'] },
+    );
+    const warm = new JsonNavigationStore();
+    assert.equal((await warm.getRelationships(first)).status, 'ok');
+    const readFile = t.mock.method(fs.promises, 'readFile');
+    assert.equal((await warm.getRelationships(second)).status, 'ok');
+    const shardReads = readFile.mock.calls
+        .map((call) => String(call.arguments[0]))
+        .filter((file) => file.includes(`${path.sep}by-file${path.sep}`))
+        .map((file) => path.basename(file));
+    readFile.mock.restore();
+    assert.deepEqual(shardReads, [fileShardName('b.ts', symbolRegistryManifestHash)]);
+
+    const warmView = await relationshipView(warm, second);
+    const coldView = await relationshipView(new JsonNavigationStore(), second);
+    assert.deepEqual(warmView, coldView);
+    assert.deepEqual([warmView.target, warmView.moved1], [['a.ts'], ['b.ts', 'c.ts']]);
+});
+
+test('a rewritten shard under an unchanged manifest entry is not reused', async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    // a.ts keeps its manifest entry (same hash, shard path and counts) and its
+    // shard size; only the stat witness shows that the shard was rewritten.
+    const first = await writeShardPublication(root, 'publication-a', { 'a.ts': 'target', 'b.ts': 'target' });
+    const second = await writeShardPublication(
+        root, 'publication-b', { 'a.ts': 'moved1', 'b.ts': 'target' },
+        { navigationRoot: first.navigationRoot, files: ['b.ts'] },
+    );
+    const shard = path.join('relationships', 'by-file', fileShardName('a.ts', symbolRegistryManifestHash));
+    assert.equal(fs.statSync(path.join(first.navigationRoot, shard)).size, fs.statSync(path.join(second.navigationRoot, shard)).size);
+
+    const warm = new JsonNavigationStore();
+    assert.equal((await warm.getRelationships(first)).status, 'ok');
+    const warmView = await relationshipView(warm, second);
+    assert.deepEqual(warmView, await relationshipView(new JsonNavigationStore(), second));
+    assert.deepEqual([warmView.target, warmView.moved1], [['b.ts'], ['a.ts']]);
+});
+
 test('a newer Publication releases the previous Publication state for the root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-navigation-store-'));
     try {

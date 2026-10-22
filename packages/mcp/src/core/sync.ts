@@ -422,6 +422,7 @@ export class SyncManager {
     private backgroundSyncEnabled = false;
     private backgroundSyncFlight: Promise<void> | null = null;
     private backgroundPendingFirstEventAt: number | null = null;
+    private backgroundSyncRetryAfter = new Map<string, number>();
     private watcherModeStarted = false;
     private watchEnabled: boolean;
     private watchedCodebases: Set<string> = new Set();
@@ -1438,6 +1439,7 @@ export class SyncManager {
             }
         }
         if (synced) {
+            this.backgroundSyncRetryAfter.delete(codebasePath);
             this.coverWatcherObservation(codebasePath, flightEpoch);
             if (committedCheckpoint?.status === 'valid') {
                 this.supersedeFullIndexSourceHandoffAfterSync(
@@ -1896,10 +1898,22 @@ export class SyncManager {
         // Recent search-driven syncs therefore skip; idle roots still recheck every interval.
         for (const codebasePath of indexedCodebases) {
             if (this.backgroundSyncFlight && !this.backgroundSyncEnabled) return;
+            if ((this.backgroundSyncRetryAfter.get(codebasePath) ?? 0) > this.now()) continue;
             try {
-                await this.ensureFreshness(codebasePath, BACKGROUND_FRESHNESS_THRESHOLD_MS);
+                const decision = await this.ensureFreshness(codebasePath, BACKGROUND_FRESHNESS_THRESHOLD_MS);
+                if (this.backgroundSyncEnabled && (decision.errorMessage
+                    || decision.mode === 'skipped_requires_reindex'
+                    || decision.mode === 'skipped_source_checkpoint_unavailable'
+                    || decision.mode === 'ignore_reload_failed')) {
+                    this.backgroundSyncRetryAfter.set(codebasePath, this.now() + BACKGROUND_SYNC_INTERVAL_MS);
+                } else {
+                    this.backgroundSyncRetryAfter.delete(codebasePath);
+                }
             } catch (e) {
                 // Individual codebase failure shouldn't stop the loop
+                if (this.backgroundSyncEnabled) {
+                    this.backgroundSyncRetryAfter.set(codebasePath, this.now() + BACKGROUND_SYNC_INTERVAL_MS);
+                }
                 console.error(`[SYNC] Periodic sync failed for '${codebasePath}':`, e);
             }
         }
@@ -1925,6 +1939,8 @@ export class SyncManager {
 
     private pendingWatcherSyncDelay(): number | undefined {
         let lastEventAt: number | undefined;
+        let nextRetryAt: number | undefined;
+        const now = this.now();
         if (this.watcherModeStarted) {
             for (const [root, observation] of this.watcherObservations) {
                 if (
@@ -1932,19 +1948,25 @@ export class SyncManager {
                     && observation.observedEventEpoch > observation.comparedThroughEventEpoch
                     && observation.lastEventAt !== undefined
                 ) {
+                    const retryAt = this.backgroundSyncRetryAfter.get(root);
+                    if (retryAt !== undefined && retryAt > now) {
+                        nextRetryAt = Math.min(nextRetryAt ?? retryAt, retryAt);
+                        continue;
+                    }
                     lastEventAt = Math.max(lastEventAt ?? observation.lastEventAt, observation.lastEventAt);
                 }
             }
         }
         if (lastEventAt === undefined) {
             this.backgroundPendingFirstEventAt = null;
-            return undefined;
+            return nextRetryAt === undefined ? undefined : nextRetryAt - now;
         }
-        this.backgroundPendingFirstEventAt ??= this.now();
+        this.backgroundPendingFirstEventAt ??= now;
         return Math.max(0, Math.min(
             lastEventAt + WATCHER_SYNC_QUIET_DELAY_MS,
             this.backgroundPendingFirstEventAt + WATCHER_SYNC_MAX_DELAY_MS,
-        ) - this.now());
+            nextRetryAt ?? Number.POSITIVE_INFINITY,
+        ) - now);
     }
 
     private runBackgroundSync(): Promise<void> {
@@ -1979,6 +2001,7 @@ export class SyncManager {
     public stopBackgroundSync(): void {
         this.backgroundSyncEnabled = false;
         this.backgroundPendingFirstEventAt = null;
+        this.backgroundSyncRetryAfter.clear();
         if (this.backgroundSyncTimer) {
             clearTimeout(this.backgroundSyncTimer);
             this.backgroundSyncTimer = null;
@@ -2194,6 +2217,7 @@ export class SyncManager {
     public async unwatchCodebase(codebasePath: string): Promise<void> {
         codebasePath = this.canonicalWatcherRoot(codebasePath);
         this.watchedCodebases.delete(codebasePath);
+        this.backgroundSyncRetryAfter.delete(codebasePath);
         if (this.backgroundPendingFirstEventAt !== null && !this.backgroundSyncFlight) {
             this.scheduleBackgroundSync(this.pendingWatcherSyncDelay() ?? BACKGROUND_SYNC_INTERVAL_MS);
         }

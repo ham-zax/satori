@@ -25,7 +25,7 @@ async function createFixture(t: TestContext, options: {
     roots?: string[];
     watchEnabled?: boolean;
     prepare?: () => Promise<void>;
-    execute?: (root: string, call: number) => Promise<{ mode: string }>;
+    execute?: (root: string, call: number) => Promise<{ mode: string; errorMessage?: string }>;
 } = {}) {
     t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
     const roots = options.roots ?? ["/repo"];
@@ -224,6 +224,77 @@ test("stop joins the admitted root and prevents later roots in that automatic pa
     assert.deepEqual(calls, ["/repo-a"]);
 });
 
+for (const failure of ["throw", "reported"] as const) {
+    test(`${failure} sync failures retain pending edits without a two-second retry loop`, async (t) => {
+        let failing = true;
+        const { calls, change, advance, manager } = await createFixture(t, {
+            execute: async () => {
+                if (!failing) return { mode: "synced" };
+                if (failure === "throw") throw new Error("injected persistent failure");
+                return { mode: "synced", errorMessage: "injected persistent failure" };
+            },
+        });
+        change();
+        await advance(2_000);
+        assert.equal(calls.length, 1);
+        for (let step = 0; step < 30; step += 1) {
+            change();
+            await advance(2_000);
+        }
+        assert.equal(calls.length, 1, "later edits do not bypass a failed root's retry delay");
+        assert.equal(manager.getWatcherObservation("/repo").pending, true);
+        await advance(119_999);
+        assert.equal(calls.length, 1);
+        failing = false;
+        await advance(1);
+        assert.equal(calls.length, 2, "the periodic retry recovers the failed root");
+        assert.equal(manager.getWatcherObservation("/repo").pending, false);
+        change();
+        await advance(2_000);
+        assert.equal(calls.length, 3, "successful recovery restores prompt catch-up");
+    });
+}
+
+test("a failing root does not slow healthy roots or retry when their watcher events arrive", async (t) => {
+    const { calls, change, advance, manager } = await createFixture(t, {
+        roots: ["/repo-a", "/repo-b"],
+        execute: async (root) => {
+            if (root === "/repo-a") throw new Error("injected root failure");
+            return { mode: "synced" };
+        },
+    });
+    change("/repo-a");
+    change("/repo-b");
+    await advance(2_000);
+    assert.deepEqual(calls, ["/repo-a", "/repo-b"]);
+    for (let edit = 0; edit < 3; edit += 1) {
+        change("/repo-b");
+        await advance(2_000);
+    }
+    assert.equal(calls.filter(root => root === "/repo-a").length, 1);
+    assert.equal(calls.filter(root => root === "/repo-b").length, 4);
+    assert.equal(manager.getWatcherObservation("/repo-a").pending, true);
+    assert.equal(manager.getWatcherObservation("/repo-b").pending, false);
+});
+
+test("a successful explicit sync clears automatic failure cooldown", async (t) => {
+    let failing = true;
+    const { calls, change, advance, manager } = await createFixture(t, {
+        execute: async () => {
+            if (failing) throw new Error("injected root failure");
+            return { mode: "synced" };
+        },
+    });
+    change();
+    await advance(2_000);
+    failing = false;
+    assert.equal((await manager.ensureFreshness("/repo", 0, { skipIgnoreControlCheck: true })).mode, "synced");
+    change();
+    await advance(2_000);
+    assert.equal(calls.length, 3);
+    assert.equal(manager.getWatcherObservation("/repo").pending, false);
+});
+
 test("a busy root keeps its event pending and retries no sooner than two seconds", async (t) => {
     const { calls, change, advance, manager } = await createFixture(t, {
         execute: async (_root, call) => ({ mode: call === 1 ? "skipped_mutation_in_progress" : "synced" }),
@@ -238,6 +309,34 @@ test("a busy root keeps its event pending and retries no sooner than two seconds
     assert.equal(calls.length, 2);
     assert.equal(manager.getWatcherObservation("/repo").pending, false);
 });
+
+for (const failure of ["throw", "reported"] as const) {
+    test(`${failure} failure after stop does not restore cooldown on restart`, async (t) => {
+        const completion = deferred();
+        const { manager, calls, change, advance, watchers } = await createFixture(t, {
+            execute: async (_root, call) => {
+                if (call !== 1) return { mode: "synced" };
+                await completion.promise;
+                if (failure === "throw") throw new Error("injected shutdown failure");
+                return { mode: "synced", errorMessage: "injected shutdown failure" };
+            },
+        });
+        change();
+        await advance(2_000);
+        assert.equal(calls.length, 1);
+        const stopping = manager.stopAndDrainLifecycle();
+        await settle();
+        completion.resolve();
+        await stopping;
+        await manager.startWatcherMode();
+        for (const watcher of watchers.values()) watcher.emit("ready");
+        manager.startBackgroundSync();
+        change();
+        await advance(2_000);
+        assert.equal(calls.length, 2, "an admitted failure cannot recreate stopped scheduler state");
+        assert.equal(manager.getWatcherObservation("/repo").pending, false);
+    });
+}
 
 test("stopping background sync clears queued watcher timers", async (t) => {
     const { calls, change, advance, manager } = await createFixture(t);

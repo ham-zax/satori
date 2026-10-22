@@ -481,18 +481,30 @@ Load 3.7 to 2.6, peak RSS 1,128 MB. `syncWallMs` 13,401 / 12,880 / 12,638.
   spends 432-461 ms in `status.navigation_relationships` (before: 1,098-1,221
   ms). `completedToObservationMs` median 1,349 ms (before: 2,037 ms).
 
-### Outside proposals waiting for the user
+### Outside proposals: decisions
 
-- **P1. `file_outline` `currentSpan`.** 14 staged files (+596 lines) add
-  `currentSpan`, `currentSpans` and `CurrentSourceSpanMapping`. The peer
-  session `satori-f7` probably owns them. Ownership is not confirmed, so this
-  session did not edit them.
-- **P2. `call_graph` overlay of current edges** (`current-relationship-overlay.ts`,
-  about 9 files, Go analysis about 3,850 ms in a background job). Open: do
-  current edges count as proof-backed in `detect_changes`? Do test edges
-  belong in the overlay?
-- **P5. Dense scores for edited-file hits** from a new embedding cache (A4).
-  The cache is a persistent component, so the design needs user approval.
+- **P1. `file_outline` `currentSpan` (committed, `ff8a458e`).** The staged
+  work of the ended session `satori-f7` was adopted unchanged after review.
+  Focused tests: `current-source-symbols`, `navigation-handlers.dirty-source`,
+  `registry-file-outline`, `relationship-backed-call-graph` and
+  `exact-reference-search` test files, 57 passed.
+- **P2. `call_graph` overlay of current edges: not built.** The user
+  delegated the decision. The overlay would serve current edges only between
+  an edit and the automatic sync: 2 s quiet time
+  (`WATCHER_SYNC_QUIET_DELAY_MS`) plus a sync of about 12.3 s on trufflehog.
+  It would rerun the project-wide semantic analysis (about 3,850 ms for Go)
+  that the sync worker already runs, and it touches about 9 files. Inside
+  that window, `find_references` returns `current_source_text` hits and
+  `file_outline` returns proven `currentSpan` values. Answers for a later
+  build: current edges are not proof-backed in `detect_changes`, and test
+  edges stay out of the overlay. Revisit if a profile shows sync times far
+  above the window.
+- **P5. Dense scores for edited-file hits: not built.** The user approved a
+  build only for a large gain. The gain has the same window as P2, and P3
+  plus exact-match pinning already rank edited files with the query terms.
+  The cache would add a persistent component and a second query embedding.
+  Revisit with a search-quality evaluation of natural-language queries on
+  edited files.
 
 ### Unresolved leads
 

@@ -111,9 +111,12 @@ function classifyOccurrence(input: {
     startIndex: number;
     target: SymbolRecord;
     declarationSeen: boolean;
+    currentSource: boolean;
 }): ExactReferenceOccurrenceKind {
+    // The published declaration line does not apply to edited bytes.
     if (
-        !input.declarationSeen
+        !input.currentSource
+        && !input.declarationSeen
         && input.file === input.target.file
         && input.line === input.target.span.startLine
     ) {
@@ -281,6 +284,7 @@ export async function findExactPublishedSourceReferences(input: {
                         startIndex,
                         target: input.target,
                         declarationSeen,
+                        currentSource,
                     });
                     if (occurrenceKind === "declaration") {
                         declarationSeen = true;

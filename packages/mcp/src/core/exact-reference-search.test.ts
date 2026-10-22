@@ -283,6 +283,29 @@ test("Publication hash without bound source bytes is source_unverified and never
     )));
 });
 
+test("edited target file never labels a current line by the published declaration line", async () => {
+    const nav = withPublishedHashes(registry());
+    const target = nav.symbolsByInstanceId.get("target")!;
+    // A line added above the declaration takes the published declaration line 1.
+    const edited = "request();\nexport function request() {}\n";
+    const result = await findExactPublishedSourceReferences({
+        registry: nav,
+        target,
+        scope: { includePaths: ["src/target.ts"] },
+        readPublishedSource: async () => ({ status: "ok", text: edited, sourceSha256: sha256(edited) }),
+    });
+
+    assert.deepEqual(result.references.map((reference) => [
+        reference.span.startLine,
+        reference.occurrenceKind,
+        reference.evidenceClass,
+    ]), [
+        [1, "identifier", "current_source_text"],
+        [2, "identifier", "current_source_text"],
+    ]);
+    assert.equal(result.coverage.status, "partial");
+});
+
 test("Unicode identifier continuations do not create false exact references", async () => {
     const target = symbol({
         symbolInstanceId: "foo-target",

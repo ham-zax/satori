@@ -577,9 +577,12 @@ section "Deferred tests" lists them.
   `RelationshipBackedCallGraph` keeps only `published_source_text` hits, so
   `call_graph` stays on published coordinates. The tool description,
   `generate-docs.ts` and `packages/mcp/README.md` describe the new class.
-  Limit: `classifyOccurrence` uses the published target span, so a
-  declaration in an edited target file can be classified `identifier`. The
-  owner on current bytes waits for the P1 span matcher.
+  Limit: `classifyOccurrence` used the published target span, so a line
+  added above the declaration in an edited target file was labelled
+  `declaration`. Fixed: edited files never yield `declaration`, and every hit
+  there is `identifier` or `member` (test "edited target file never labels a
+  current line by the published declaration line"). The owner on current
+  bytes waits for the P1 span matcher.
 - Check: `npx tsc --noEmit -p .` in `packages/mcp` reports no errors.
 
 ### Shared sync cost (a): the unattributed 2.5-3 s

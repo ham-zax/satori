@@ -34,7 +34,7 @@ export async function readCompleteFileOutline(
 }
 
 const inputSchema = z.object({
-    path: absoluteFilesystemPathSchema("Absolute indexed repository root."),
+    path: absoluteFilesystemPathSchema("Absolute indexed repository root, or a directory inside it to limit the diff to that directory."),
     baseRef: z.string().trim().min(1).max(256).default("HEAD").describe("Git commit/ref compared with the tracked working tree, e.g. HEAD~5. Includes staged and unstaged tracked changes; excludes untracked files."),
     depth: z.number().int().min(1).max(3).default(3).describe("Maximum transitive caller depth."),
     limit: z.number().int().min(1).max(200).default(100).describe("Maximum returned impacted symbols. At most 50 files and 50 seeds are inspected."),
@@ -52,7 +52,9 @@ export const detectChangesTool: McpTool = {
             const resolved = await resolveVectorBackedToolContext(ctx, { tool: "detect_changes", path: authorized.canonicalPath });
             if (!resolved.ok) return resolved.response;
             const handlers = resolved.context.toolHandlers;
-            const input = { ...parsed.data, path: authorized.canonicalPath };
+            // An unindexed path keeps itself as the root; its outlines then report not_indexed.
+            const input = { ...parsed.data, path: authorized.canonicalPath,
+                codebaseRoot: handlers.resolveIndexedRoot(authorized.canonicalPath) ?? authorized.canonicalPath };
             const result = await detectChangeImpact(input, {
                 outline: (file, publishedSource) => readCompleteFileOutline(async startLine => {
                     const response = await handlers.handleFileOutline({ path: input.path, file, limitSymbols: 500,

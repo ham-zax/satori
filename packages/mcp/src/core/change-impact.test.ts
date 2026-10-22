@@ -32,7 +32,7 @@ for (const publishedFile of ["a.ts", "b.ts"]) {
         execFileSync("git", ["add", "."], { cwd: repo });
         execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base"], { cwd: repo });
         for (const file of ["a.ts", "b.ts"]) fs.writeFileSync(path.join(repo, file), base.replace("return 1", "return 2"));
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async (file, bytes) => {
                 if (file === publishedFile && bytes === undefined) return {
                     status: "requires_reindex", reason: "stale_symbol_ref", path: repo, file, outline: null, hasMore: false,
@@ -60,6 +60,46 @@ for (const publishedFile of ["a.ts", "b.ts"]) {
     });
 }
 
+test("detect_changes on a subdirectory keys files by the indexed root and limits the diff to it", async (t) => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-subdir-"));
+    t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+    const base = "export function seed() {\n  return 1;\n}\n";
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    fs.mkdirSync(path.join(repo, "pkg"));
+    for (const file of ["pkg/a.ts", "other.ts"]) fs.writeFileSync(path.join(repo, file), base);
+    execFileSync("git", ["add", "."], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base"], { cwd: repo });
+    for (const file of ["pkg/a.ts", "other.ts"]) fs.writeFileSync(path.join(repo, file), base.replace("return 1", "return 2"));
+
+    const outlined: string[] = [];
+    const result = await detectChangeImpact({ path: path.join(repo, "pkg"), codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        // Like file_outline: `file` is relative to the indexed root, and only
+        // the published (base) bytes match the registry.
+        outline: async (file, bytes) => {
+            outlined.push(file);
+            if (file !== "pkg/a.ts") return { status: "not_found", path: repo, file, outline: null, hasMore: false } as FileOutlineResponseEnvelope;
+            if (bytes === undefined) return {
+                status: "requires_reindex", reason: "stale_symbol_ref", path: repo, file, outline: null, hasMore: false,
+            };
+            assert.deepEqual(bytes, Buffer.from(base));
+            return {
+                status: "ok", path: repo, file, outline: { symbols: [{ ...node("seed", file), kind: "function" }] }, hasMore: false,
+            } as FileOutlineResponseEnvelope;
+        },
+        callers: async (_root, seed, bytes) => {
+            assert.deepEqual(bytes, Buffer.from(base));
+            return { status: "ok", path: repo, symbolRef: { file: seed.file, symbolId: seed.symbolId },
+                supported: true, nodes: [seed], edges: [], notes: [], exactReferences: [],
+            } as unknown as CallGraphResponseEnvelope;
+        },
+    });
+    assert.deepEqual([...new Set(outlined)], ["pkg/a.ts"]);
+    assert.deepEqual(result.unavailableFiles, []);
+    assert.deepEqual(result.seeds.map(seed => ({ file: seed.file, spanBasis: seed.spanBasis })), [
+        { file: "pkg/a.ts", spanBasis: "published" },
+    ]);
+});
+
 test("detect_changes distinguishes seed/direct/transitive impact and retains causal paths", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "satori-impact-f2-"));
     try {
@@ -77,6 +117,7 @@ test("detect_changes distinguishes seed/direct/transitive impact and retains cau
         const transitive = node("transitive", "packages/app/src/transitive.ts");
         const result = await detectChangeImpact({
             path: repo,
+            codebaseRoot: repo,
             baseRef: "HEAD",
             depth: 3,
             limit: 20,
@@ -257,6 +298,7 @@ test("detect_changes separates proof-backed and heuristic impact and determinist
         }];
         const runImpact = async (graphEdges: CallGraphEdgeResult[]) => detectChangeImpact({
             path: repo,
+            codebaseRoot: repo,
             baseRef: "HEAD",
             depth: 3,
             limit: 20,
@@ -381,7 +423,7 @@ test("detect_changes sums per-seed count warnings into one entry per code", asyn
             { ...node("b", "seed.ts"), span: { startLine: 4, endLine: 6 } },
         ];
         const counts: Record<string, number> = { a: 3, b: 4 };
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async () => ({
                 status: "ok",
                 path: repo,
@@ -442,7 +484,7 @@ test("detect_changes seeds only the innermost edited member and ignores an impor
             { symbolId: "b", symbolLabel: "method b()", kind: "method", language: "typescript", file: "seed.ts", span: { startLine: 6, endLine: 8 } },
             { symbolId: "other", symbolLabel: "function other()", kind: "function", language: "typescript", file: "seed.ts", span: { startLine: 10, endLine: 12 } },
         ];
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async () => ({
                 status: "ok", path: repo, file: "seed.ts", outline: { symbols }, hasMore: false,
             } as FileOutlineResponseEnvelope),
@@ -478,7 +520,7 @@ test("detect_changes seeds a pure-deletion hunk with only the containing functio
             { symbolId: "keep", symbolLabel: "function keep()", kind: "function", language: "typescript", file: "seed.ts", span: { startLine: 1, endLine: 3 } },
             { symbolId: "target", symbolLabel: "function target()", kind: "function", language: "typescript", file: "seed.ts", span: { startLine: 4, endLine: 8 } },
         ];
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async () => ({
                 status: "ok",
                 path: repo,
@@ -544,7 +586,7 @@ test("detect_changes allocates seeds fairly across files and reports omitted see
             file: "b.ts",
             span: { startLine: 1, endLine: 3 },
         };
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async (file: string) => ({
                 status: "ok",
                 path: repo,
@@ -602,7 +644,7 @@ test("detect_changes trims impacted output to fit the response byte budget", asy
             `caller-${index}-with-a-long-suffix-to-inflate-the-response-payload-0123456789`,
             `packages/big/src/caller-${index}.ts`,
         ));
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 5000 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 5000 }, {
             outline: async () => ({
                 status: "ok",
                 path: repo,
@@ -670,7 +712,7 @@ async function seedFixture(base: string, edited: string, symbols: SeedFixtureSym
             symbolId: symbol.symbolId, symbolLabel: symbol.symbolId, kind: symbol.kind, language: "typescript",
             file: editedFile, span: { startLine: symbol.startLine, endLine: symbol.endLine },
         }));
-        return await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        return await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async () => ({
                 status: "ok", path: repo, file: editedFile, outline: { symbols: outlineSymbols }, hasMore: false,
             } as FileOutlineResponseEnvelope),
@@ -759,7 +801,7 @@ test("detect_changes trims changedFiles before seeds so a huge diff still fits t
         execFileSync("git", ["add", "."], { cwd: repo });
         execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
         for (let index = 0; index < fileCount; index += 1) fs.writeFileSync(path.join(repo, fileName(index)), "export const v = 2;\n");
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async (file) => ({
                 status: "ok", path: repo, file,
                 outline: { symbols: [{ symbolId: `v-${file}`, symbolLabel: "const v", kind: "variable", language: "typescript",

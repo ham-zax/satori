@@ -184,7 +184,7 @@ test("published impact selects old-side symbols after leading insertions and kee
     f.commit();
     f.drift();
     let accepted: Buffer | undefined;
-    const result = await detectChangeImpact({ path: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, {
+    const result = await detectChangeImpact({ path: f.root, codebaseRoot: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, {
         outline: async (_file, bytes) => {
             if (bytes) { assert.deepEqual(bytes, published); accepted = bytes; }
             return f.outline({ requireCurrentSource: true, ...(bytes ? { publishedSource: bytes } : {}) });
@@ -210,12 +210,12 @@ test("published impact keeps insertion boundaries and rejects an unpublished bas
     fs.writeFileSync(path.join(f.root, "seed.py"), published.toString().replace("    return other()", "    x = 3\n    return other()"));
     const ports = { outline: async (_file: string, bytes?: Buffer) => f.outline({ requireCurrentSource: true, publishedSource: bytes }),
         callers: async () => f.callGraph({ publishedSource: published }) };
-    const inserted = await detectChangeImpact({ path: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, ports);
+    const inserted = await detectChangeImpact({ path: f.root, codebaseRoot: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, ports);
     assert.deepEqual(inserted.seeds.map(seed => seed.symbolId), ["target"]);
     f.git("add", ".");
     f.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "unpublished");
     fs.appendFileSync(path.join(f.root, "seed.py"), "# change\n");
-    const rejected = await detectChangeImpact({ path: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, ports);
+    const rejected = await detectChangeImpact({ path: f.root, codebaseRoot: f.root, baseRef: "HEAD", depth: 1, limit: 20 }, ports);
     assert.deepEqual(rejected.seeds, []);
     assert.deepEqual(rejected.unavailableFiles, [{ file: "seed.py", reason: "stale_symbol_ref" }]);
     for (const warning of ["IMPACT_CURRENT_SYMBOLS_ONLY", "IMPACT_PUBLISHED_SPANS", "IMPACT_MIXED_SYMBOL_SPANS"]) {
@@ -230,6 +230,7 @@ test("detect_changes passes strict options and identical witness bytes on every 
     const seen: Array<{ start?: number; options?: NavigationSourceOptions }> = [];
     let witness: Buffer | undefined;
     const ctx = { workspacePolicy: f.policy, toolHandlers: {
+        resolveIndexedRoot: () => f.root,
         handleFileOutline: async (args: FileOutlineInput, _policy: unknown, options?: NavigationSourceOptions) => {
             seen.push({ start: args.start_line, options });
             assert.equal(options?.requireCurrentSource, true);

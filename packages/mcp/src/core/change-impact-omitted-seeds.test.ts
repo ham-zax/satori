@@ -42,7 +42,7 @@ test("detect_changes omitted.seeds counts seeds dropped by the seed budget", asy
             file: "b.ts",
             span: { startLine: 1, endLine: 3 },
         };
-        const result = await detectChangeImpact({ path: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
+        const result = await detectChangeImpact({ path: repo, codebaseRoot: repo, baseRef: "HEAD", depth: 1, limit: 20 }, {
             outline: async (file: string) => ({
                 status: "ok",
                 path: repo,

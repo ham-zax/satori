@@ -2066,6 +2066,11 @@ export class ToolHandlers {
         return this.navigationHandlers.handleFindReferences(args, workspacePolicy, signal);
     }
 
+    /** The longest indexed root that contains `absolutePath`, as navigation reads resolve it. */
+    public resolveIndexedRoot(absolutePath: string): string | null {
+        return this.trackedRootReadiness.resolveTrackedRoot(absolutePath, ['indexed'])?.path ?? null;
+    }
+
     public async handleFileOutline(args: FileOutlineInput, workspacePolicy: SessionWorkspacePolicy, sourceOptions?: NavigationSourceOptions) {
         return this.navigationHandlers.handleFileOutline(args, workspacePolicy, sourceOptions);
     }

@@ -17,7 +17,10 @@ const execFileAsync = promisify(execFile);
 export const DETECT_CHANGES_RESPONSE_MAX_UTF8_BYTES = 48 * 1024;
 
 export type ChangeImpactInput = {
+    /** Scope of the diff: the root or a directory inside it. */
     path: string;
+    /** The indexed root that contains `path`. Every file key is relative to it. */
+    codebaseRoot: string;
     baseRef: string;
     depth: number;
     limit: number;
@@ -61,7 +64,12 @@ function isProofBackedImpactEdge(edge: ImpactPathEdge): boolean {
 
 /** Read-only diff -> current-file symbol seeds -> bounded transitive callers. */
 export async function detectChangeImpact(input: ChangeImpactInput, ports: ChangeImpactPorts) {
-    const git = async (args: string[]) => (await execFileAsync("git", ["-C", input.path, ...args], {
+    // Navigation reads resolve `file` against the indexed root, so git runs
+    // there too and `path` only narrows the diff. One coordinate system keeps
+    // diff paths, outline files and publishedSourceByFile keys equal.
+    const scope = path.relative(input.codebaseRoot, input.path);
+    const scopePathspec = scope === "" ? "." : `:(literal)${scope.split(path.sep).join("/")}`;
+    const git = async (args: string[]) => (await execFileAsync("git", ["-C", input.codebaseRoot, ...args], {
         encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
     })).stdout;
     // Resolve the revision separately: revision strings never become options
@@ -71,7 +79,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
     // its per-file diff below runs against the source path, so a pure move
     // produces no hunks and seeds nothing.
     const nameStatus = (await git(["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z",
-        "--find-renames", "--relative", baseCommit, "--", "."])).split("\0").filter(Boolean);
+        "--find-renames", "--relative", baseCommit, "--", scopePathspec])).split("\0").filter(Boolean);
     const renamedFrom = new Map<string, string>();
     const changedFiles: string[] = [];
     for (let index = 0; index < nameStatus.length;) {
@@ -103,7 +111,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         // coordinates and maps to published symbol spans.
         let publishedSource: Buffer | undefined;
         if (outline.status !== "ok" && outline.reason === "stale_symbol_ref" && !source) {
-            const baseBytes = await execFileAsync("git", ["-C", input.path, "show", `${baseCommit}:./${file}`], {
+            const baseBytes = await execFileAsync("git", ["-C", input.codebaseRoot, "show", `${baseCommit}:./${file}`], {
                 encoding: "buffer", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
             }).then(result => result.stdout, () => undefined);
             const published = baseBytes && await ports.outline(file, baseBytes);
@@ -153,7 +161,7 @@ export async function detectChangeImpact(input: ChangeImpactInput, ports: Change
         // declaration it precedes when that declaration starts right after it.
         const sourceLines = ranges.some(range => range.count > 0)
             ? (publishedSource?.toString("utf8")
-                ?? await readFile(path.join(input.path, file), "utf8").catch(() => "")).split(/\r?\n/)
+                ?? await readFile(path.join(input.codebaseRoot, file), "utf8").catch(() => "")).split(/\r?\n/)
             : [];
         const isLeadingTrivia = (line: number) => {
             const text = sourceLines[line - 1]?.trim();

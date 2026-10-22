@@ -511,13 +511,17 @@ Load 3.7 to 2.6, peak RSS 1,128 MB. `syncWallMs` 13,401 / 12,880 / 12,638.
 - "Mutation 'sync' is already in progress" at N=32: cause not known.
 - Reranker `source_hash_mismatch` on edited hits: `a2e275ce` probably fixes
   it. Not verified. The check needs a live reranker and an edited file.
-- `detect_changes` keys: checked. `publishedSourceByFile`
-  (`change-impact.ts:96`) uses the `git --relative` path, and `:248`/`:426`
-  read it with the outline's `symbol.file`. `file_outline` resolves `file`
-  against the matched root (`navigation-handlers.ts:1326-1327`), so the
-  keys agree when `path` is the root. Open question: whether `path` can be
-  a subdirectory of an indexed root. If it can, the outlines already
-  resolve the wrong files, and the key mismatch is only one symptom.
+- `detect_changes` on a subdirectory: fixed. `resolveTrackedRoot`
+  (`tracked-root-readiness.ts:174-186`) accepts any path inside an indexed
+  root. Git ran in `path` with `--relative`, but `file_outline` resolves
+  `file` against the root (`navigation-handlers.ts:1326-1327`). For
+  `path=/r/pkg` the outlines read the wrong files, and the
+  `publishedSourceByFile` keys did not match `symbol.file`. Now every file
+  key is relative to the indexed root: the tool passes `codebaseRoot` from
+  `ToolHandlers.resolveIndexedRoot`, git runs there, and `path` becomes a
+  `:(literal)` pathspec that limits the diff. Test: "detect_changes on a
+  subdirectory keys files by the indexed root" in `change-impact.test.ts`.
+  It fails on the old code.
 - `e301c604` and `7e849823`: `pnpm run check` exit 0 at `abd6ccef`. Their
   test files (`sync-background-scheduling`, `change-impact`,
   `navigation-handlers.dirty-source`, `search-query-support`) pass, 68 tests.

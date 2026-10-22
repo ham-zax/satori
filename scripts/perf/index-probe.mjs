@@ -230,14 +230,19 @@ async function main() {
             const response = await tool('search_codebase', {
                 path: options.repo, query: term, resultMode: 'raw', limit: files.length + 20, debugMode: 'full',
             });
-            const hitFiles = new Set((response?.results ?? [])
+            const editedResultFiles = (response?.results ?? [])
                 .map((result) => result.target?.file ?? result.file)
                 .filter(Boolean)
                 .map((file) => (path.isAbsolute(file) ? path.relative(options.repo, file) : file))
-                .filter((file) => edited.has(file)));
+                .filter((file) => edited.has(file));
+            const hitFiles = new Set(editedResultFiles);
+            const missed = [...edited].filter((file) => !hitFiles.has(file)).sort();
             return {
                 ms: Math.round(performance.now() - started),
                 hits: hitFiles.size,
+                resultCount: response?.results?.length ?? 0,
+                editedResultCount: editedResultFiles.length,
+                ...(missed.length > 0 ? { missedCount: missed.length, missed: missed.slice(0, 10) } : {}),
                 status: response?.status,
                 freshness: response?.freshness?.state ?? 'none',
                 freshnessMode: response?.freshnessDecision?.mode,

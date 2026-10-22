@@ -215,6 +215,40 @@ completion have medians under 1 ms. The parent-side cost is the status path
 rereading the symbol registry sidecar, multiplied by the probe's 100 ms status
 polling.
 
+## Remaining work (22 October 2026, after D4 and B1)
+
+In this order:
+
+1. **Probe misses.** `scripts/perf/index-probe.mjs` records `resultCount`,
+   `missedCount` and up to 10 sorted `missed` paths for each search, so a
+   partial hit count names the lost files.
+2. **Status registry read.** `status.symbol_registry_read`
+   (`manage-maintenance-handlers.ts`) rereads the whole symbol registry
+   sidecar on every status call, median 935 ms. Cache it behind a witness for
+   the publication, with a differential test and a mutation check.
+3. **Fusion ties for exact matches (needs a user decision).** N=32 finds 26
+   of 32 files. The probe shows `resultCount` 52 (the request limit) and
+   `editedResultCount` 26, so the overlay cap is not the cause. In one dumped
+   response, results alternate between an overlay hit (content has the term,
+   `baseScore` 1) and a dense `primary` hit without the term (`lexicalScore`
+   0) at the same RRF score (`rrfK` 60, equal ranks tie), so the request
+   limit keeps 26 of each. `exactMatchPinningEnabled` is false for this
+   single-word "uncertain" query. A fix changes search ranking.
+4. **B2.** Narrow relationship rewrites; the equivalence-test brief comes first.
+5. **A4.** Dense overlay scores; the embedding-cache design goes to the user
+   first.
+6. **B3.** Debounced automatic sync, only after B1 and B2.
+
+Reported, not scheduled:
+
+- "Mutation 'sync' is already in progress" at N=32 is intermittent; cause not
+  known.
+- Raw `debugMode: "full"` responses are trimmed to 2 MiB without a removal
+  record (`search-result-finalization.ts:491-542`).
+- D4 has no search-quality evaluation yet; the golden tests are unchanged.
+- Retro proposal: read a worker's report before judging a `claive list`
+  "shell: exit 1" flag; the flag also shows red test runs before a fix.
+
 ## Decisions
 
 D1, D2 and D3: approved as recommended (22 October 2026). D4: approved

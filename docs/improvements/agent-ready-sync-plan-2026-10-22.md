@@ -3,8 +3,119 @@
 Status: A0 and A1 done, results below. D1, D2 and D3 approved by Hamza on 22
 October 2026, as recommended. The reranker is the largest search cost. D4 is
 open. A3 done (limits 32). A2 done as the claim-4 fix only (see "A2 results").
+The 22 October continuation probe passes 18 baseline and 6 follow-up trials, and
+the expired background mutation scope is repaired; 19 runtime, 22 scheduler and
+7 probe tests pass. The 12 s median target remains unmet.
 
 ## Goal
+
+Continuation, 22 October 2026: Hamza requests a fresh N=1,16,32 probe
+(`--runs 3`), fixes for remaining demonstrated defects, and measured sync
+time below the earlier approximately 12,000 ms (median of three runs). Task
+start is HEAD `50a0ce40`.
+The probe cleanup repair, seven tests, and its documentation are uncommitted
+and must remain intact. No commit or push is requested.
+
+Saved evidence directory: `~/.satori/diagnostics/sync-perf-cNBxcH` (originally
+`/tmp/satori-sync-perf-cNBxcH`). Core and MCP runtime builds pass. The baseline
+runs serially with a 5 GiB memory cap and no swap.
+The command uses `systemd-run --user --scope -q -p MemoryMax=5G
+-p MemorySwapMax=0 /usr/bin/time -v node scripts/perf/index-probe.mjs
+../trufflehog --save-search 1,16,32 --ext .go --runs 3 --log <baseline.log>`.
+The first launch failed before Node started because the session lacked the
+user-bus environment. The running launch supplies `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` for `/run/user/1000`.
+
+Hamza then requests wrap-up and documentation updates. Finish the already
+running N=1 check and final checks, record the results, and stop. No
+performance optimization is implemented in this continuation. Warm worker
+design remains unresolved. No dense overlay cache or current-edge overlay
+is implied. The sub-12,000 ms target is not established.
+
+Baseline finished: 18/18 trials find every edited file on the first search.
+Sync medians for N=1,16,32 are 13,805 / 12,785 / 15,288 ms. Index peak tree
+RSS is 1,945 MB. `/usr/bin/time -v` reports maximum process RSS 1,160,404 KiB.
+Load rose from 0.25 to 4.90 during the baseline, observed on the host because
+the logs record no load figure. The trufflehog working tree is clean afterward.
+The logs contain 46 `MutationLeaseLostError` lines from background catch-up.
+
+Repair slice: a timer scheduled during the initial create mutation inherits
+its `AsyncLocalStorage` lease. Later background runs reuse that expired scope.
+A deterministic scheduler regression reproduces the error. Mock timers need
+`AsyncResource.bind` to retain the scope inheritance of real Node timers.
+Decision: code-change. Core's `RootMutationRuntime` owns scope detachment.
+SyncManager owns its independent background lifecycle and requests detachment
+only when scheduling its timer. Durable leases, stale-callback refusal,
+publication boundaries and ordinary nested mutations remain unchanged.
+The minimum boundary is the runtime method, scheduler call site, and focused
+runtime/scheduler regressions. Architecture review requires no new owner or
+persistence. No missing lease check or downstream retry can repair this scope.
+
+Repair result: `RootMutationRuntime.runOutsideMutationScope` uses
+`AsyncLocalStorage.exit` when SyncManager schedules a background timer. The
+new scheduler regression fails on the old implementation and passes after
+the repair. All 19 mutation runtime/coordinator tests and all 22 background
+scheduler tests pass. The runtime regression also checks that scope removal
+does not bypass an active writer's lease, that the caller's scope returns
+after success or failure, and that ordinary expired callbacks still fail.
+Core and MCP compile successfully.
+
+The full baseline command passes all 18 trials. Median first-search times
+for N=1,16,32 are 133 / 646 / 971 ms while idle and 175 / 246 / 366 ms during
+sync. Every first search finds all edited files. Sync samples by N:
+
+| N | Three sync wall times (ms) | Median (ms) |
+| --- | --- | --- |
+| 1 | 13,805 / 13,671 / 15,692 | 13,805 |
+| 16 | 13,083 / 12,785 / 12,621 | 12,785 |
+| 32 | 14,087 / 18,456 / 15,288 | 15,288 |
+
+Current baseline phase medians: Go semantic analysis 4,156 ms, relationship
+load 1,440 ms, symbol load 1,172 ms, and sidecar staging 1,155 ms. An isolated
+CPU profile of existing Satori navigation identifies relationship JSON parsing
+and validation as the largest read cost. Sequential stat calls also contribute.
+No faster reader, cache, or warm worker follows from that observation alone.
+
+A live trufflehog profiling run with `--cpu-prof` fails before save-search
+trials: `Potion worker readiness timed out`. The worker fails during startup,
+so this run supplies no after timings. The subsequent N=1 run omits CPU
+profiling. No timeout change or provider workaround is implemented.
+
+Final N=1 rerun, same 5 GiB cap and `--runs 3`: all six idle/sync trials pass,
+and every first search finds the edited file. Sync times are 12,835 / 14,202 /
+13,005 ms, median 13,005 ms. The run handles one real blocked cleanup request
+and records zero `MutationLeaseLostError` lines. Idle first searches take
+1,080 / 128 / 122 ms. Searches during sync take 118 / 262 / 158 ms. Index
+peak tree RSS is 1,970 MB, and maximum process RSS is 1,017,780 KiB. Load read
+4.90 after the baseline and 2.30 after the rerun, observed on the host because
+the logs record no load figure. These load observations do not establish a
+controlled speedup. The earlier probe's sync median was 12,319 ms, so this
+rerun sits 686 ms higher across different sessions and host load, and nothing
+here isolates the cause. The 12,000 ms median target remains unmet.
+Trufflehog is clean after both successful runs.
+
+Final checks: 19 runtime/coordinator tests, 22 scheduler tests, and the seven
+probe cleanup tests pass. `pnpm run check` passes lint, all three package
+typechecks, version freshness and scope checks. `git diff HEAD --check`
+passes. No commit or push is made. The read-only worker session is closed.
+
+Old defect leads are not all current. Raw response trimming now emits
+`SEARCH_RAW_RESULTS_TRIMMED_TO_BYTE_BUDGET` and has a regression in
+`search-result-finalization.test.ts`. Shard reuse has differential and
+rewritten-shard tests in `navigation/store.test.ts`. The exact tie-break
+regression, live edited-file reranker check, and any remaining reference
+coverage checks are not completed in this continuation. A read-only Pi worker
+times out after 600 seconds, then returns a bounded summary on follow-up.
+The summary confirms missing tie-break and edited-reference regressions. It
+does not run tests, finish all five comparisons, or prove new defects.
+
+Retrospective proposals only: compare the existing tests before delegating
+another broad inventory, and request an early partial summary to avoid the
+600-second timeout. Mock-timer regressions for async context can bind callbacks
+explicitly, because fake timers omit Node's scope inheritance. A future probe
+diagnostic can report the complete operation error separately from truncated
+operation JSON, which hid the Potion startup error here. No new hook, global
+rule, timeout, or diagnostic implementation is added.
 
 An AI agent saves one or many files, then searches. The next `search_codebase`
 call must return results from the saved content, with ignore policies applied,
@@ -182,6 +293,38 @@ repeat searches no longer pay `freshnessExactPathComparison` (A1: 297-583 ms
 on every repeat). The first repeat can still pay about 300 ms when the watcher
 event arrives after the first search. The probe stopped at N=32 in both runs
 with "Mutation 'sync' is already in progress"; cause not found.
+
+### Probe cleanup conflict (22 October 2026)
+
+The saved session `7d04c42b-b239-446a-88ea-885ad49d4581` stopped at clean
+HEAD `50a0ce40`. Its checkpoint incorrectly excluded background sync because
+the background freshness threshold is 3 minutes. `SyncManager.ensureFreshness`
+sets that threshold to 0 when watcher events remain pending. The source path
+is `recordWatcherEvent` → `scheduleBackgroundSync` → `runBackgroundSync` →
+`handleSyncIndex` → `ensureFreshness` → `syncCodebase`. The calls at
+`sync.ts:1615` and `:1648` belong to ignore reconciliation. A 0 ms threshold
+does not identify those calls as the starter.
+
+The old B2 run log (not retained; the evidence directory holds only the
+baseline and rerun logs) shows `sync.parent.flight_complete`, then a new
+`watcher_pending` sync, then cleanup receives `status: "blocked"`,
+`reason: "mutation_in_progress"`, with an active sync in the server process.
+Watcher catch-up can therefore acquire the lease before cleanup requests it.
+The log has no caller stack for the successful acquisition. The precise
+historical timer invocation and the apparent N=32 association remain unproven.
+The B2 run also failed at N=16, so the failure is not exclusive to N=32.
+
+The probe now waits for the identified sync to end, then requests its own
+sync for the restored bytes. Only save-search cleanup enables this behavior.
+Measured sync starts still reject blocked responses immediately. Other refusal
+reasons and mutation actions still fail. Repeated conflicts share one
+`--wait-timeout` deadline.
+
+Check: `node --test scripts/index-probe-sync.test.mjs`, 7 tests pass. Cases
+cover active and terminal syncs, delayed lease release, another sync winning
+the lease, unrelated refusals, and timeout across repeated conflicts. The
+probe also passes `node --check scripts/perf/index-probe.mjs`. These are
+deterministic protocol checks. No new trufflehog probe ran for this repair.
 
 ## D4 and B1 results (22 October 2026)
 

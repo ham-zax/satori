@@ -654,9 +654,22 @@ Load 3.7 to 2.6, peak RSS 1,128 MB. `syncWallMs` 13,401 / 12,880 / 12,638.
 
 ### Unresolved leads
 
-- "Mutation 'sync' is already in progress" at N=32: cause not known.
-- Reranker `source_hash_mismatch` on edited hits: `a2e275ce` probably fixes
-  it. Not verified. The check needs a live reranker and an edited file.
+- "Mutation 'sync' is already in progress" at N=32: closed. The cause is
+  watcher catch-up winning the lease before probe cleanup ("Probe cleanup
+  conflict"). It is not specific to N=32. In the post-fix run
+  (`~/.satori/diagnostics/sync-perf-cNBxcH/scope-fixed.log`) the message
+  appears twice with one blocked cleanup request, and the cleanup retry
+  handles it. The run passes. The exact historical timer call stays
+  unproven, and no further evidence would change an action.
+- Reranker `source_hash_mismatch` on edited hits: closed without a live
+  reranker. The decision is made before the model, in
+  `projectPublicationBoundSearchRerankDocument`
+  (`search-rerank-projection.ts:94-100`, `:186-190`): an overlay result uses
+  its `dirtyOverlaySourceHash` as the expected hash. Since `a2e275ce`,
+  `search-query-support.test.ts` covers an edited file for `live_path`,
+  `tracked_exact` and `tracked_general`: the projection accepts the current
+  bytes, rejects a result without the hash, and rejects a second edit (21
+  tests pass). No live end-to-end search with the reranker ran.
 - `detect_changes` on a subdirectory: fixed. `resolveTrackedRoot`
   (`tracked-root-readiness.ts:174-186`) accepts any path inside an indexed
   root. Git ran in `path` with `--relative`, but `file_outline` resolves

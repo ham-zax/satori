@@ -237,6 +237,34 @@ load 2.6-3.3, index peak tree RSS 2,002 MB): 32 of 32 edited files in every
 run, against 26 of 32. First searches: idle 842-1,342 ms (median 850, against
 891 for D4), during a sync 199-301 ms.
 
+## B2 results (22 October 2026)
+
+`buildRelationshipDelta` (`relationships/builder.ts`) returns
+`filesToRewrite`: the affected files whose records or analysis evidence differ
+from the previous shard, plus every changed file. Evidence is snapshotted
+before the rebuild because `attachResolutionClaims` replaces it. The
+publication links all other relationship shards. The comparison is
+language-agnostic. Semantic evidence still marks every file of its language as
+affected, and only the shard rewrite is narrowed. A first version with
+key-sorted canonical JSON added 1,700 ms to `relationship_delta`. Plain
+`JSON.stringify` replaced it: a representation-only difference rewrites the
+shard, which is safe.
+
+Probe (trufflehog, `.go`, `index-probe.mjs ../trufflehog --save-search 1 --ext
+.go --runs 3`, load 1.6-4.3), one N=1 sync, before → after:
+
+- Shards rewritten: 3,289 → 149 (`rewriting 148` of 3,288 owners).
+- `navigation.stage.write relationships`: 4,197 ms → about 155 ms.
+- `navigation.stage.fsync_tree`: 610 → about 125 ms.
+- `sync.publication_sidecar_stage`: 1,870 → 940-1,041 ms.
+- `sync.publication_relationship_delta`: 289-297 → 624-672 ms.
+- `syncWallMs` median: 13,906 → 12,569 ms.
+
+This probe does not record peak memory. The N=16 trial failed with
+"Mutation 'sync' is already in progress", the known intermittent failure, so
+N=16 has no after numbers. Go semantic analysis (`navigation.semantic go`,
+about 3,960 ms) is now the largest sync cost.
+
 ## Remaining work (22 October 2026, after D4 and B1)
 
 In this order:
@@ -256,7 +284,7 @@ In this order:
    0) at the same RRF score (`rrfK` 60, equal ranks tie), so the request
    limit keeps 26 of each. `exactMatchPinningEnabled` is false for this
    single-word "uncertain" query. A fix changes search ranking.
-4. **B2.** Narrow relationship rewrites; the equivalence-test brief comes first.
+4. **B2 (done, see "B2 results").** Narrow relationship rewrites.
 5. **A4.** Dense overlay scores; the embedding-cache design goes to the user
    first.
 6. **B3.** Debounced automatic sync, only after B1 and B2.

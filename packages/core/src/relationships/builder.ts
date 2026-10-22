@@ -62,6 +62,25 @@ export interface BuildRelationshipDeltaInput extends BuildRelationshipsForRegist
 export interface BuildRelationshipDeltaResult {
     records: RelationshipRecord[];
     affectedFiles: string[];
+    filesToRewrite: string[];
+}
+
+function relationshipJson(value: unknown): string {
+    // Key order is not normalized: a representation-only difference reports "changed" and rewrites the shard.
+    return JSON.stringify(value) ?? 'undefined';
+}
+
+function relationshipRecordsJsonByFile(records: readonly RelationshipRecord[]): Map<string, string> {
+    const recordsByFile = new Map<string, RelationshipRecord[]>();
+    for (const record of records) {
+        const fileRecords = recordsByFile.get(record.file) ?? [];
+        fileRecords.push(record);
+        recordsByFile.set(record.file, fileRecords);
+    }
+    return new Map([...recordsByFile].map(([file, fileRecords]) => [
+        file,
+        relationshipJson(fileRecords.sort(compareRelationshipRecords)),
+    ]));
 }
 
 function getFileOwners(symbols: readonly SymbolRecord[]): Map<string, SymbolRecord> {
@@ -546,6 +565,12 @@ function* buildRelationshipDeltaWork(input: BuildRelationshipDeltaInput): Relati
     }
 
     const retained = input.existingRecords.filter((record) => !affectedFiles.has(record.file));
+    const existingEvidenceByFile = new Map<string, string>();
+    for (const file of affectedFiles) {
+        if (!input.changedFiles.has(file)) {
+            existingEvidenceByFile.set(file, relationshipJson(getEvidence(input.analysisByFile, file)));
+        }
+    }
     const rebuilt = yield* buildRelationshipsForRegistryWork({
         registry: input.registry,
         analysisByFile: input.analysisByFile,
@@ -561,8 +586,20 @@ function* buildRelationshipDeltaWork(input: BuildRelationshipDeltaInput): Relati
     for (const record of [...retained, ...rebuilt]) {
         recordsByKey.set(relationshipKey(record), record);
     }
+    const records = [...recordsByKey.values()].sort(compareRelationshipRecords);
+    const finalRecordsByFile = relationshipRecordsJsonByFile(records);
+    const existingRecordsByFile = relationshipRecordsJsonByFile(input.existingRecords);
+    // A relationship shard is a function of its file path, file hash, records, and analysis evidence.
+    // Outside changedFiles, the hash stays unchanged, and records and evidence are compared here,
+    // so only an identical shard is linked. Any difference, including order or representation, requires a rewrite.
+    const filesToRewrite = [...affectedFiles].filter((file) => (
+        input.changedFiles.has(file)
+        || (finalRecordsByFile.get(file) ?? '[]') !== (existingRecordsByFile.get(file) ?? '[]')
+        || relationshipJson(getEvidence(input.analysisByFile, file)) !== existingEvidenceByFile.get(file)
+    )).sort(compareStrings);
     return {
-        records: [...recordsByKey.values()].sort(compareRelationshipRecords),
+        records,
         affectedFiles: [...affectedFiles].sort(compareStrings),
+        filesToRewrite,
     };
 }

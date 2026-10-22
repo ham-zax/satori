@@ -2210,13 +2210,13 @@ export class IndexGenerationWorkflow {
                         basePublicationId: sourcePublicationId,
                         baseNavigationRoot: sourceNavigationRoot,
                         symbolFilesToRewrite: [...replacedPaths],
-                        relationshipFilesToRewrite: relationshipDelta.affectedFiles,
+                        relationshipFilesToRewrite: relationshipDelta.filesToRewrite,
                     },
                 }),
             );
             console.log(
                 `[Context] 🧭 Staged Publication '${publicationId}' navigation delta affecting `
-                + `${relationshipDelta.affectedFiles.length} relationship owner(s); `
+                + `${relationshipDelta.affectedFiles.length} relationship owner(s), rewriting ${relationshipDelta.filesToRewrite.length}; `
                 + `shared ${candidate.physical.sharedFiles} file(s) and wrote `
                 + `${candidate.physical.physicallyWrittenBytes} physical byte(s).`,
             );

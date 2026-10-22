@@ -2699,6 +2699,22 @@ test('buildRelationshipDelta incrementally rebuilds CBM language relationships w
     assert.equal(delta.records[0].targetInstanceId, 'inst-service-2');
     assert.ok(delta.affectedFiles.includes('main.go'));
     assert.ok(delta.affectedFiles.includes('service.go'));
+    // main.go is unchanged, but its retargeted record changes its shard.
+    assert.deepEqual(delta.filesToRewrite, ['main.go', 'service.go']);
+
+    // Semantic evidence still marks every Go file affected; identical shards are not rewritten.
+    const repeatDelta = buildRelationshipDelta({
+        previousRegistry: nextRegistry,
+        registry: nextRegistry,
+        existingRecords: delta.records,
+        analysisByFile,
+        changedFiles: new Set(),
+        mode: { kind: 'qualification', enabledUnpromotedCallLanguages: new Set(['go']) },
+        semanticEvidenceByLanguage: new Map([['go', freshEvidence]]),
+    });
+    assert.deepEqual(repeatDelta.records, delta.records);
+    assert.deepEqual(repeatDelta.affectedFiles, ['main.go', 'service.go']);
+    assert.deepEqual(repeatDelta.filesToRewrite, []);
 });
 
 

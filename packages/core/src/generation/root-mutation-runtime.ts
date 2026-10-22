@@ -145,6 +145,16 @@ export class RootMutationRuntime {
         pendingReleases.set(this, new Map());
     }
 
+    /**
+     * Detaches work from the caller's mutation lease; work that must outlive
+     * the current mutation schedules its own. `work` must stay synchronous and
+     * non-re-entrant: Node 22's `exit` re-enables the outer scope inside a
+     * nested `run`, so a callback created there would inherit the lease again.
+     */
+    runOutsideMutationScope<T>(work: () => T): T {
+        return requireOperationScopes(this).exit(work);
+    }
+
     async run<T>(
         root: string,
         action: RootMutationAction,

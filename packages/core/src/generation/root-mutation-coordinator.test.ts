@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { AsyncResource } from 'node:async_hooks';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -34,6 +35,25 @@ function fixture(t: TestContext): { root: string; stateDir: string; statePath: s
         statePath: path.join(stateDir, `${crypto.createHash('sha256').update(canonicalRoot).digest('hex')}.json`),
     };
 }
+
+test('independent scope preserves the writer fence and restores its caller scope', async (t) => {
+    const { root, stateDir } = fixture(t);
+    const runtime = new RootMutationRuntime({ stateDir });
+    let staleWork!: () => Promise<void>;
+    await runtime.run(root, 'create', async (execution) => {
+        staleWork = AsyncResource.bind(() => runtime.run(root, 'sync', () => undefined));
+        await runtime.runOutsideMutationScope(async () => {
+            assert.equal(runtime.getCurrentOperation(root), undefined);
+            assert.equal(runtime.getActiveMutation(root)?.id, execution.id);
+            await assert.rejects(runtime.run(root, 'sync', () => assert.fail('must retain the writer fence')), /already in progress/);
+        });
+        assert.equal(runtime.getCurrentOperation(root)?.id, execution.id);
+        assert.throws(() => runtime.runOutsideMutationScope(() => { throw new Error('outside failure'); }), /outside failure/);
+        runtime.assertCurrent(root);
+        runtime.updateCurrentOperation(root, 'completed');
+    });
+    await assert.rejects(staleWork(), /no longer current/);
+});
 
 test('runtime preserves the work error when lease release also fails', async (t) => {
     const { root, stateDir } = fixture(t);

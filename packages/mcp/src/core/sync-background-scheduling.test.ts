@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { AsyncResource } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 
 import chokidar from "chokidar";
+import { RootMutationRuntime } from "@satori-code/core/integration";
 
 import { SyncManager } from "./sync.js";
 
@@ -26,6 +30,7 @@ async function createFixture(t: TestContext, options: {
     watchEnabled?: boolean;
     prepare?: () => Promise<void>;
     execute?: (root: string, call: number) => Promise<{ mode: string; errorMessage?: string }>;
+    mutationRuntime?: RootMutationRuntime;
 } = {}) {
     t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
     const roots = options.roots ?? ["/repo"];
@@ -47,8 +52,9 @@ async function createFixture(t: TestContext, options: {
     };
     const manager = new SyncManager(context as never, {
         watchEnabled: options.watchEnabled !== false,
-        mutationRuntime: {
+        mutationRuntime: options.mutationRuntime ?? {
             assertCurrent: () => {},
+            runOutsideMutationScope: <T>(work: () => T) => work(),
             getCurrentOperation: () => undefined,
             getActiveMutation: () => undefined,
         } as never,
@@ -98,6 +104,43 @@ test("watcher events debounce one global pass after two quiet seconds", async (t
     assert.equal(manager.getWatcherObservation("/repo").pending, false);
     await advance(10_000);
     assert.equal(calls.length, 1);
+});
+
+test("watcher catch-up starts a new mutation after its scheduling mutation ends", async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "satori-background-scope-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const root = path.join(directory, "repo");
+    fs.mkdirSync(root);
+    const runtime = new RootMutationRuntime({ stateDir: path.join(directory, "leases") });
+    const completed: string[] = [];
+    const { manager, change, advance, internal } = await createFixture(t, {
+        roots: [root],
+        mutationRuntime: runtime,
+        execute: async () => runtime.run(root, "sync", (execution) => {
+            runtime.updateCurrentOperation(root, "completed");
+            completed.push(execution.id);
+            return { mode: "synced" };
+        }),
+    });
+    manager.stopBackgroundSync();
+    // Mock timers omit Node's async-scope inheritance. Bind callbacks so this
+    // deterministic timer reproduces the scope a real scheduled timer carries.
+    const scheduleTimer = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (...[callback, ...args]: Parameters<typeof setTimeout>) => (
+        scheduleTimer(AsyncResource.bind(callback), ...args)
+    ));
+    let originalId = "";
+    await runtime.run(root, "create", (execution) => {
+        originalId = execution.id;
+        manager.startBackgroundSync();
+        change();
+        runtime.updateCurrentOperation(root, "completed");
+    });
+    await advance(2_000);
+    await internal.backgroundSyncFlight;
+    assert.equal(completed.length, 1, "catch-up must acquire a fresh lease instead of reusing the expired create scope");
+    assert.notEqual(completed[0], originalId);
+    assert.equal(runtime.getOperation(root)?.action, "sync");
 });
 
 test("continuous watcher events force a pass at ten seconds", async (t) => {

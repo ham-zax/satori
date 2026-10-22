@@ -1931,10 +1931,12 @@ export class SyncManager {
     private scheduleBackgroundSync(delayMs: number): void {
         if (!this.backgroundSyncEnabled) return;
         if (this.backgroundSyncTimer) clearTimeout(this.backgroundSyncTimer);
-        this.backgroundSyncTimer = setTimeout(() => {
-            this.backgroundSyncTimer = null;
-            void this.runBackgroundSync();
-        }, delayMs);
+        this.mutationRuntime.runOutsideMutationScope(() => {
+            this.backgroundSyncTimer = setTimeout(() => {
+                this.backgroundSyncTimer = null;
+                void this.runBackgroundSync();
+            }, delayMs);
+        });
     }
 
     private pendingWatcherSyncDelay(): number | undefined {

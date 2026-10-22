@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requestCleanupSync } from './index-probe-sync.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -196,11 +197,17 @@ async function main() {
         }
         throw new Error(`no completed generation after ${previousGeneration ?? 'none'} in ${options.waitTimeoutMs} ms`);
     };
-    const startSync = async () => {
+    const startSync = async ({ waitForActiveSync = false } = {}) => {
         const before = await currentOperation();
-        const started = performance.now();
-        requireAccepted('sync', await tool('manage_index', { action: 'sync', path: options.repo }));
-        return { before, started, requestMs: performance.now() - started };
+        const requestedAt = performance.now();
+        const requestSync = () => tool('manage_index', { action: 'sync', path: options.repo });
+        const response = waitForActiveSync
+            ? await requestCleanupSync({ requestSync, currentOperation, waitTimeoutMs: options.waitTimeoutMs })
+            : await requestSync();
+        requireAccepted('sync', response);
+        const acceptedAt = performance.now();
+        // A cleanup retry can spend most of the wait budget, so acceptance starts its wait.
+        return { before, started: waitForActiveSync ? acceptedAt : requestedAt, requestMs: acceptedAt - requestedAt };
     };
     // Waits for the sync's operation to end. A sync that starts no new operation
     // within noOpMs counts as a no-op (the working tree matches the index).
@@ -231,7 +238,7 @@ async function main() {
         }
         throw new Error(`sync did not end in ${options.waitTimeoutMs} ms`);
     };
-    const syncAndWait = async () => waitSync(await startSync());
+    const syncAndWait = async (startOptions) => waitSync(await startSync(startOptions));
 
     const saveSearchTrial = async (files, mode, comment) => {
         const term = `satoriprobe${Array.from({ length: 8 }, () => String.fromCharCode(97 + Math.floor(Math.random() * 26))).join('')}`;
@@ -304,7 +311,7 @@ async function main() {
         } finally {
             for (const [file, original] of pendingRestores) fs.writeFileSync(file, original);
             pendingRestores.clear();
-            await syncAndWait();
+            await syncAndWait({ waitForActiveSync: true });
         }
     };
 

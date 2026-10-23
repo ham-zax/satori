@@ -339,17 +339,16 @@ function buildPartialProjectionBehaviorFixture() {
             ownerSymbolInstanceId: `owner-${index + 1}`,
         },
     }));
-    const admissionSelection = (count: number, providerMaximumDocuments?: number, requestedLimit = 2) => (
+    const admissionSelection = (count: number, providerMaximumDocuments?: number) => (
         selectRerankCandidates({
             candidates: buildAdmissionCandidates(count),
-            requestedLimit,
             ...(providerMaximumDocuments === undefined ? {} : { providerMaximumDocuments }),
         })
     );
     const providerCapacityAdmission = admissionSelection(16, 32);
     const legacyAdmission = admissionSelection(16);
     const providerBoundAdmission = admissionSelection(40, 32);
-    const globalBoundAdmission = admissionSelection(150, 160, 64);
+    const globalBoundAdmission = admissionSelection(150, 160);
     const invalidCapacityAdmission = admissionSelection(30, 0);
     return {
         providerCallByProjectedCandidateCount: {

@@ -170,24 +170,24 @@ const primaryOnlyPaths = (scored: Parameters<typeof isPrimarySearchCandidate>[0]
         .map((entry) => entry.result.relativePath)
         .filter((p) => p.startsWith("src/primary_"));
 
-test("default and cap55 admit the same bounded small-budget pool", async () => {
+test("default and cap55 admit the same reservation pool", async () => {
     const def = await runWithPolicy(undefined);
     const cap55 = await runWithPolicy("cap55");
-    assert.equal(def.length, 32);
-    assert.equal(primaryOnlyPaths(def).length, 22);
-    assert.equal(primaryOnlyPaths(cap55).length, 22);
+    assert.equal(def.length, 80);
+    assert.equal(primaryOnlyPaths(def).length, 55);
+    assert.equal(primaryOnlyPaths(cap55).length, 55);
     assert.deepEqual(def.map((e) => e.result.relativePath), cap55.map((e) => e.result.relativePath));
 });
 
 test("cap64 preserves its wider primary share without excluding all expansion hits", async () => {
     const scored = await runWithPolicy("cap64");
-    assert.equal(scored.length, 32);
-    assert.equal(primaryOnlyPaths(scored).length, 25);
-    assert.equal(scored.filter((c) => !isPrimarySearchCandidate(c)).length, 7);
+    assert.equal(scored.length, 80);
+    assert.equal(primaryOnlyPaths(scored).length, 60);
+    assert.equal(scored.filter((c) => !isPrimarySearchCandidate(c)).length, 20);
 });
 
 test("off disables reservation while preserving the same total budget", async () => {
     const scored = await runWithPolicy("off");
-    assert.equal(scored.length, 32);
+    assert.equal(scored.length, 80);
     assert.ok(scored.some((c) => !isPrimarySearchCandidate(c)));
 });

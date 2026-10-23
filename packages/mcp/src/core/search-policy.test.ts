@@ -21,12 +21,12 @@ test('search policy separates an unbounded logical total from the frozen candida
     });
 });
 
-test('resolveSearchPolicy preserves the bounded 32-to-80 candidate formula', () => {
+test('resolveSearchPolicy spends the whole candidate budget regardless of the requested output count', () => {
     assert.deepEqual(
-        [1, 4, 5, 10, 100].map((resultLimit) => (
+        [1, 4, 5, 10, 20, 100].map((resultLimit) => (
             resolveSearchPolicy({ resultLimit, hasMustOperators: false }).candidateLimit
         )),
-        [32, 32, 40, 80, 80],
+        [80, 80, 80, 80, 80, 80],
     );
 });
 
@@ -50,7 +50,7 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
             retrievalResultLimit: 3,
             rerankerResultLimit: 3,
             disclosureResultLimit: 3,
-            candidateLimit: 32,
+            candidateLimit: 80,
             maxCandidateLimit: 80,
             maxAttempts: 3,
             diagnosticCandidateLimit: 160,
@@ -64,7 +64,7 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
         retrievalResultLimit: 3,
         rerankerResultLimit: 3,
         disclosureResultLimit: 3,
-        candidateLimit: 32,
+        candidateLimit: 80,
         maxCandidateLimit: 80,
         maxAttempts: 1,
         diagnosticCandidateLimit: 160,
@@ -77,7 +77,7 @@ test('resolveSearchPolicy isolates an explicit diagnostic candidate depth from t
     assert.equal(resolveSearchPolicy({
         resultLimit: 3,
         hasMustOperators: false,
-    }).candidateLimit, 32);
+    }).candidateLimit, 80);
 });
 
 test('resolveSearchPolicy separates retrieval, reranker, and disclosure budgets', () => {
@@ -93,7 +93,7 @@ test('resolveSearchPolicy separates retrieval, reranker, and disclosure budgets'
             retrievalResultLimit: 8,
             rerankerResultLimit: 6,
             disclosureResultLimit: 3,
-            candidateLimit: 64,
+            candidateLimit: 80,
             maxCandidateLimit: 80,
             maxAttempts: 1,
         },

@@ -652,9 +652,6 @@ export interface SearchDebugHint {
         docMaxChars: number;
         requestedResultLimit: number;
         selectionPolicy: {
-            minAmbiguousCandidates: number;
-            ambiguousCandidatesPerResult: number;
-            boundedCandidatesPerResult: number;
             maxSupplementalChunksPerFamily: number;
         };
     };

@@ -1,11 +1,6 @@
 import type { SemanticSearchResult } from "@satori-code/core";
 import {
-    SEARCH_DEFAULT_DISCLOSURE_LIMIT,
-    SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
-    SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
-    SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH,
     SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
-    SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_TOP_K,
 } from "./search-constants.js";
 
@@ -17,7 +12,6 @@ export function shouldCallRerankerForProjectedCandidateCount(count: number): boo
 
 export type RerankBudgetReason =
     | "complete_family_pool"
-    | "family_ambiguity"
     | "provider_limit"
     | "global_limit";
 
@@ -113,7 +107,6 @@ export function buildRerankCandidatePool<T extends RerankCandidateLike>(
 
 export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
     candidates: readonly T[];
-    requestedLimit: number;
     providerMaximumDocuments?: number;
     preferredCandidates?: readonly T[];
 }): RerankCandidateSelection<T> {
@@ -128,42 +121,19 @@ export function selectRerankCandidates<T extends RerankCandidateLike>(input: {
         && (input.providerMaximumDocuments as number) > 0
         ? input.providerMaximumDocuments as number
         : undefined;
-    let budget: number;
+    // Admission spends the whole window on every request. The requested output
+    // count only shapes the response, so SEARCH_RERANK_TOP_K and the provider's
+    // document limit alone decide how much of the available pool the reranker
+    // reads.
+    const capacity = providerMaximumDocuments === undefined
+        ? SEARCH_RERANK_TOP_K
+        : Math.min(SEARCH_RERANK_TOP_K, providerMaximumDocuments);
+    const budget = Math.min(capacity, candidatePool.length);
     let budgetReason: RerankBudgetReason;
-    if (providerMaximumDocuments !== undefined) {
-        const capacity = Math.min(SEARCH_RERANK_TOP_K, providerMaximumDocuments);
-        const requestedDepth = Math.max(
-            SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH,
-            Math.ceil(Math.max(1, Math.floor(input.requestedLimit))
-                * SEARCH_RERANK_DEFAULT_CANDIDATE_DEPTH / SEARCH_DEFAULT_DISCLOSURE_LIMIT),
-        );
-        budget = Math.min(candidatePool.length, capacity, requestedDepth);
-        if (candidatePool.length <= budget) {
-            budgetReason = "complete_family_pool";
-        } else if (capacity <= requestedDepth) {
-            budgetReason = providerMaximumDocuments < SEARCH_RERANK_TOP_K
-                ? "provider_limit"
-                : "global_limit";
-        } else {
-            budgetReason = "family_ambiguity";
-        }
+    if (candidatePool.length <= budget) {
+        budgetReason = "complete_family_pool";
     } else {
-        const requestedLimit = Math.max(1, Math.floor(input.requestedLimit));
-        const ambiguous = pool.familyCount > requestedLimit;
-        const adaptiveBudget = ambiguous
-            ? Math.max(
-                SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
-                requestedLimit * SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
-            )
-            : requestedLimit * SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT;
-        budget = Math.min(SEARCH_RERANK_TOP_K, candidatePool.length, adaptiveBudget);
-        if (candidatePool.length <= budget) {
-            budgetReason = "complete_family_pool";
-        } else {
-            budgetReason = SEARCH_RERANK_TOP_K < adaptiveBudget
-                ? "global_limit"
-                : "family_ambiguity";
-        }
+        budgetReason = capacity < SEARCH_RERANK_TOP_K ? "provider_limit" : "global_limit";
     }
 
     let selected = candidatePool.slice(0, budget);

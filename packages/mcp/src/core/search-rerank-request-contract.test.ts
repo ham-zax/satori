@@ -126,9 +126,9 @@ test("request contract fixtures bind focus, query, role, and document projection
         reason: "global_limit",
     });
     assert.deepEqual(fixtures.partialProjectionBehavior.candidateAdmission.invalidProviderCapacity, {
-        selectedCandidateIds: Array.from({ length: 12 }, (_, index) => `candidate-${index + 1}`),
-        budget: 12,
-        reason: "family_ambiguity",
+        selectedCandidateIds: Array.from({ length: 30 }, (_, index) => `candidate-${index + 1}`),
+        budget: 30,
+        reason: "complete_family_pool",
     });
 });
 

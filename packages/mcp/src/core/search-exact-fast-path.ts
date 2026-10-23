@@ -3,13 +3,10 @@ import {
     SEARCH_CHANGED_FIRST_MAX_CHANGED_FILES,
     SEARCH_GROUPED_DEBUG_RESPONSE_MAX_UTF8_BYTES,
     SEARCH_GROUPED_RESPONSE_MAX_UTF8_BYTES,
-    SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
-    SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
     SEARCH_RERANK_DOC_MAX_CHARS,
     SEARCH_RERANK_DOC_MAX_LINES,
     SEARCH_RERANK_INPUT_MAX_UTF8_BYTES,
     SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
-    SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
     SEARCH_RERANK_TOP_K,
     SEARCH_RRF_K,
     type SearchGroupBy,
@@ -492,9 +489,6 @@ export async function runExactRegistryFastPath(
             byteBudgetOmittedCandidates: 0,
             requestedResultLimit: input.limit,
             selectionPolicy: {
-                minAmbiguousCandidates: SEARCH_RERANK_MIN_AMBIGUOUS_CANDIDATES,
-                ambiguousCandidatesPerResult: SEARCH_RERANK_AMBIGUOUS_CANDIDATES_PER_RESULT,
-                boundedCandidatesPerResult: SEARCH_RERANK_BOUNDED_CANDIDATES_PER_RESULT,
                 maxSupplementalChunksPerFamily: SEARCH_RERANK_MAX_SUPPLEMENTAL_CHUNKS_PER_FAMILY,
             },
         }

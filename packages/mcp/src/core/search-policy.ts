@@ -8,9 +8,6 @@ import {
     SEARCH_MUST_RETRY_ROUNDS,
 } from './search-constants.js';
 
-const SEARCH_MIN_CANDIDATES = 32;
-const SEARCH_CANDIDATE_MULTIPLIER = 8;
-
 export type ResolvedSearchPolicy = Readonly<{
     retrievalResultLimit: number;
     rerankerResultLimit: number;
@@ -59,14 +56,14 @@ export function resolveSearchPolicy(input: {
                 ?? Math.min(normalizedResultLimit, SEARCH_DEFAULT_DISCLOSURE_LIMIT)),
         ),
     );
+    // Retrieval spends the whole candidate budget on every request.
+    // SEARCH_MAX_CANDIDATES alone owns that cap: a budget that scaled with the
+    // requested output count made discovery depend on how many results were
+    // displayed, so a narrow request searched less of the repository than a
+    // wide one over the same query. limit, retrievalResultLimit,
+    // rerankerResultLimit and disclosureResultLimit shape the response.
     const maxCandidateLimit = SEARCH_MAX_CANDIDATES;
-    const candidateLimit = Math.max(
-        1,
-        Math.min(
-            maxCandidateLimit,
-            Math.max(retrievalResultLimit * SEARCH_CANDIDATE_MULTIPLIER, SEARCH_MIN_CANDIDATES),
-        ),
-    );
+    const candidateLimit = SEARCH_MAX_CANDIDATES;
     const diagnosticCandidateLimit = input.diagnosticCandidateLimit === undefined
         ? undefined
         : Math.max(

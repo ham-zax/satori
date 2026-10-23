@@ -24,6 +24,144 @@ fixed, handler-only labels improve provider rank from 58 to 52. Fusion stays
 at 16. The parent reproduces complete scores and ordering. Automatic discovery
 remains unproven.
 
+## Webharness budget comparison, 23 October 2026
+
+Status: the uncommitted budget change improves one of five queries at output
+limit five. Other owner misses remain. No fusion or routing repair is selected.
+The pipeline and 64-candidate measurements below this addendum describe the
+historical builds, not the current uncommitted budget policy.
+
+### Setup and evidence boundary
+
+The delegated comparison uses baseline `e92b3e906189daaebcf3d56721a70d305b4be063`
+and that commit plus the existing 15 modified files under `packages/mcp/src/core/`.
+The worker builds both copies with
+`node ../../node_modules/typescript7/bin/tsc --build --pretty false` and starts
+each built `packages/mcp/dist/index.js` through `connectCliMcpSession`.
+Neither arm uses the installed runtime. The fixed build retrieves up to 80
+candidates per arm and admits up to 128 rerank candidates, independent of output
+limit. Available candidates, provider capacity, family selection, and byte limits
+still apply. The old advertised-capacity policy admits up to 64 at limit five.
+
+Both arms use an isolated copy of the existing Webharness state and LanceDB:
+
+- Root: `/home/hamza/repo/webharness`, previously recorded HEAD `10842e1`.
+- Publication: `7eb04fb1ca1bf0ad06d8ae1b329f712d42b24becf64725dd88f40e88ea6f84c2`.
+- Generation: `91535a12-4e4e-45d2-a71c-c8da8cd9e0be`.
+- Offline profile, LanceDB, Potion
+  `minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b`, dimension 256.
+- LateOn `LateOn-Code-edge@07ef20f406c86badca122464808f4cac2f6e4b25`, profile
+  `lateon_offline_quality_projection_v6_d128_v1`, activation policy
+  `lateon_context_v6_d128_owner_default_v1`.
+
+Requests use `scope=runtime`, `resultMode=grouped`, `groupBy=symbol`,
+`rankingMode=default`, `limit=5`, `debugMode=full`, and `debugCandidateLimit=160`.
+No alternate terms or experimental ranking flags are supplied. Three samples
+per build run in order HEAD1, fixed1, fixed2, HEAD2, HEAD3, fixed3. Top-five lists
+and target ranks remain stable within each arm. No sync or reindex occurs.
+
+The API rejects explicit `disclosureLimit=10` with `limit=5`.
+`packages/mcp/src/tools/search_codebase.ts` requires disclosure not to exceed
+the requested total. The worker omits disclosureLimit and returns five results.
+This corrects the earlier proposed invalid request. Keep the validation:
+`limit=20, disclosureLimit=10` is valid when ten visible results are wanted.
+Output and disclosure limits do not set the fixed build's retrieval budget.
+
+The queries are:
+
+1. `Trace a request from bin/websession-call to the websession-adapter client. Name the functions that select the adapter and make the request.`
+2. `Where does browser-fast resolve lifecycle for an action command? Name the normal path and any lifecycle-bypass function.`
+3. `How do runtime-leases.acquireRuntimeLease and one-mcp-runtime-ownership.reclaimStaleRuntimeOwnership relate? Identify their state and call sites.`
+4. `Where does browser-fast select its Linux browser backend? Identify the settings that determine the target.`
+5. `How does browser-memory choose the persistent profile root and canonical browser host?`
+
+### Measured results
+
+Counts and medians are baseline → fixed. Raw dense counts exclude other
+retrieval lanes. Rerank input can therefore exceed that count.
+
+| Query | Raw dense count | Rerank input | Grouped count | Median call latency |
+|---|---:|---:|---:|---:|
+| Q1 | 40 → 80 | 40 → 80 | 40 → 80 | 6,235.9 → 7,275.0 ms |
+| Q2 | 40 → 80 | 64 → 100 | 64 → 100 | 2,481.7 → 3,614.5 ms |
+| Q3 | 40 → 80 | 40 → 80 | 40 → 80 | 1,690.1 → 2,854.6 ms |
+| Q4 | 0 → 0 | 0 → 0 | 27 → 57 | 109.8 → 198.6 ms |
+| Q5 | 40 → 80 | 64 → 128 | 76 → 128 | 2,133.8 → 3,361.6 ms |
+
+All requests disclose five results. Q4 uses lexical retrieval and skips reranking.
+Selected exact-symbol outcomes follow. Absence means no hit in the captured
+stages, not merely absence from the visible five.
+
+| Query and target | Baseline → fixed | Interpretation |
+|---|---|---|
+| Q1 `request` | Absent → visible 4 | Lexical rank 46 now reaches rerank input 61, provider 4, grouped 4 |
+| Q1 `callMcpTool` | Absent → visible 5 | Lexical rank 64 now reaches rerank input 71, provider 7, grouped 7 |
+| Q1 `connectMcp` | Visible 5 → outside visible five | Grouped rank 6 → 8 |
+| Q1 `publicBase` | Grouped 9 → 11 | More admission does not preserve every target rank |
+| Q2 `withoutLifecycle` | Provider 1 → 1, grouped 14 → 15 | Post-provider policy still hides the bypass function |
+| Q2 `actionCommand`, `execute` | Visible 1 and 2 in both arms | Normal-path owners remain visible |
+| Q2 `serializeLifecycle` | Visible 3 → 4 | The backend resolver moves from visible 4 → 3 |
+| Q3 `acquireRuntimeLease` | Grouped 7 → 7 | Wider admission does not repair this miss |
+| Q3 `reclaimStaleRuntimeOwnership` | Visible 2 → 2 | Unchanged |
+| Q4 `resolveLinuxBrowserBackend` | Grouped 13 → 13 | Wider lexical discovery does not repair final rank |
+| Q5 `canonicalBrowserHost`, `defaultBrowserMemoryRoot`, `resolveBrowserMemory` | Visible 1, 2, and 4 in both arms | Unchanged |
+
+Provider output counts match rerank input counts. The distinction between
+grouped and visible ranks matters: grouping diagnostics include candidates
+that do not become disclosed results. Do not substitute one rank for the other.
+
+Peak process-tree RSS across the three runs is 2,599 / 2,621 / 2,625 MiB on
+baseline and 2,594 / 2,638 / 2,696 MiB on fixed. Peak single-process RSS is
+1,210 / 1,211 / 1,220 MiB and 1,274 / 1,290 / 1,306 MiB respectively. Each run
+uses at most eight processes. One-minute system load ranges from 0.26 to 3.89.
+Latency medians rise in every query, but host-load variation prevents attributing
+the entire difference to the budget change.
+
+The earlier reported comparison at `limit=20, disclosureLimit=10` finds identical
+top-ten lists across both builds. At those parameters the advertised-capacity
+budgets already match. That result does not measure the changed narrow-request
+behavior. Retrieval changes below limit ten. Advertised-capacity reranking can
+change below limit twenty, including limit ten, subject to the pool and provider.
+The old no-advertised-capacity path uses a different adaptive formula.
+
+Evidence source: the completed T3 task `Measure limit-5 search budgets`, with
+client request ID `satori-limit5-budget-comparison-20261023-1`, reports the above
+counts, ranks, runtime identities, and cleanup. The parent checks the API
+validation and removal of `/tmp/satori-retrieval-budget.7GJHgW`. The worker
+removes the scratch runner, captures, and copied state. These tables preserve
+the returned summary, not raw captures or a retained executable harness.
+The worker makes no repository edits. The parent separately runs 65 tests
+across search-policy, search-rerank-policy, search-rerank-request-contract, and
+search-execution.golden before this documentation update, all passing.
+This five-query comparison does not establish general accuracy or S1 acceptance.
+
+### Proposed next action, not an implemented repair
+
+Keep the bounded budget change for the demonstrated Q1 recovery. Do not enlarge
+budgets again as the next repair. Do not relax the disclosure validation.
+
+Test one change at the post-provider boundary using existing owner cases and
+negative controls. The leading hypothesis is that definition fusion gives
+name evidence enough weight to override a correct provider result. Q2 is a
+direct acceptance case: `withoutLifecycle` must reach the visible first five
+while `actionCommand` and `execute` remain visible. A provider-first rule alone
+is not selected: historical LateOn results show that fusion also repairs errors.
+No confidence threshold or new weighting formula is established by this run.
+
+Preserve strict owner quality on the existing 72-query set and explicit helper,
+test, reference, and path requests. Reject a rule that fixes Q2 by moving the
+loss elsewhere. Stop after one controlled comparison, reporting target ranks
+and regressions. A passing comparison selects a repair, not a new tuning loop.
+No production fusion change is authorized by this documentation update.
+
+S1 remains a separate acceptance gap: the ordinary query misses admission and
+the admitted control still loses after reranking. Follow the existing
+[S1 deciding experiment](s1-owner-discovery-plan-2026-10-23.md#next-deciding-experiment-not-yet-executed)
+for call-backed admission and ownership-aware fusion. The Webharness budget
+gain does not establish either mechanism or repair S1.
+
+## Historical investigation
+
 This is the entry point for an agent that has the repository and nothing
 else: no earlier conversation, no scratch files. It tells the story in order,
 says which document holds which evidence, states the open problem, and lists

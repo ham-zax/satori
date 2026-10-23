@@ -16,7 +16,7 @@ test("preferred source symbols reserve bounded slots while preserving candidate 
     const original = Array.from({ length: 32 }, (_, index) => candidate({ id: `original-${index}` }));
     const refined = Array.from({ length: 20 }, (_, index) => candidate({ id: `refined-${index}` }));
     const selection = selectRerankCandidates({ candidates: [...original, ...refined],
-        preferredCandidates: refined, requestedLimit: 10, providerMaximumDocuments: 32 });
+        preferredCandidates: refined, providerMaximumDocuments: 32 });
     assert.equal(selection.selected.length, 32);
     assert.deepEqual(selection.selected, [...original.slice(0, 16), ...refined.slice(0, 16)]);
 });
@@ -26,10 +26,10 @@ test("preferred complete source evidence survives the ordinary family chunk cap"
         ownerInstanceId: "same-owner", relativePath: "src/owner.ts", startLine: 10 + index * 10 }));
     const full = candidate({ id: "complete", ownerInstanceId: "same-owner", relativePath: "src/owner.ts" });
     const candidates = [...partial, full];
-    const selection = selectRerankCandidates({ candidates, preferredCandidates: [full], requestedLimit: 10 });
+    const selection = selectRerankCandidates({ candidates, preferredCandidates: [full] });
     assert.ok(selection.selected.includes(full));
-    assert.deepEqual(selectRerankCandidates({ candidates, requestedLimit: 10, preferredCandidates: [] }),
-        selectRerankCandidates({ candidates, requestedLimit: 10 }));
+    assert.deepEqual(selectRerankCandidates({ candidates, preferredCandidates: [] }),
+        selectRerankCandidates({ candidates }));
 });
 
 function candidate(input: {
@@ -112,7 +112,6 @@ test("rerank input byte selection rejects mismatched input pairs", () => {
 
 test("rerank selection gives distinct owners priority and retains bounded supplemental chunks", () => {
     const selected = selectRerankCandidates({
-        requestedLimit: 2,
         candidates: [
             candidate({ id: "owner-a-primary", ownerInstanceId: "owner-a", score: 10 }),
             candidate({ id: "owner-a-duplicate", ownerInstanceId: "owner-a", score: 9 }),
@@ -127,11 +126,12 @@ test("rerank selection gives distinct owners priority and retains bounded supple
         "owner-b-primary",
         "owner-a-duplicate",
         "owner-b-duplicate",
+        "owner-a-exact",
     ]);
     assert.equal(selected.familyCount, 2);
     assert.equal(selected.supplementalCandidateCount, 3);
     assert.equal(selected.candidatePoolCount, 5);
-    assert.equal(selected.budgetReason, "family_ambiguity");
+    assert.equal(selected.budgetReason, "complete_family_pool");
 });
 
 test("rerank candidate pool exposes the production family order without applying a request budget", () => {
@@ -156,7 +156,6 @@ test("rerank candidate pool exposes the production family order without applying
 
 test("rerank selection preserves a later query-relevant chunk from a split owner", () => {
     const selected = selectRerankCandidates({
-        requestedLimit: 2,
         candidates: [
             candidate({
                 id: "long-owner-declaration",
@@ -200,7 +199,6 @@ test("rerank selection preserves a later query-relevant chunk from a split owner
 
 test("rerank selection preserves a relevant third chunk from the same owner", () => {
     const selected = selectRerankCandidates({
-        requestedLimit: 2,
         candidates: [
             candidate({
                 id: "long-owner-declaration",
@@ -244,7 +242,6 @@ test("rerank selection preserves a relevant third chunk from the same owner", ()
 
 test("rerank selection never guesses a family when owner metadata is missing", () => {
     const selected = selectRerankCandidates({
-        requestedLimit: 1,
         candidates: [
             candidate({ id: "unknown-a", startLine: 1 }),
             candidate({ id: "unknown-b", startLine: 1 }),
@@ -257,21 +254,17 @@ test("rerank selection never guesses a family when owner metadata is missing", (
     assert.equal(selected.supplementalCandidateCount, 0);
 });
 
-test("rerank selection applies an adaptive family budget", () => {
+test("rerank selection admits the whole available pool below the global ceiling", () => {
     const candidates = Array.from({ length: 30 }, (_, index) => candidate({
         id: `candidate-${String(index).padStart(2, "0")}`,
         ownerInstanceId: `owner-${index}`,
         score: 30 - index,
     }));
 
-    const narrow = selectRerankCandidates({ candidates, requestedLimit: 2 });
-    assert.equal(narrow.selected.length, 12);
-    assert.equal(narrow.budget, 12);
-    assert.equal(narrow.budgetReason, "family_ambiguity");
-
-    const broad = selectRerankCandidates({ candidates, requestedLimit: 10 });
-    assert.equal(broad.selected.length, 30);
-    assert.equal(broad.budgetReason, "complete_family_pool");
+    const selection = selectRerankCandidates({ candidates });
+    assert.equal(selection.selected.length, 30);
+    assert.equal(selection.budget, 30);
+    assert.equal(selection.budgetReason, "complete_family_pool");
 });
 
 test("advertised provider capacity decouples semantic admission from output limit", () => {
@@ -282,7 +275,6 @@ test("advertised provider capacity decouples semantic admission from output limi
     }));
     const selected = selectRerankCandidates({
         candidates,
-        requestedLimit: 2,
         providerMaximumDocuments: 32,
     });
     assert.equal(selected.selected.length, 26);
@@ -297,7 +289,6 @@ test("advertised provider and global capacities report the binding admission own
     }));
     const providerBound = selectRerankCandidates({
         candidates: forty,
-        requestedLimit: 2,
         providerMaximumDocuments: 32,
     });
     assert.equal(providerBound.selected.length, 32);
@@ -309,27 +300,27 @@ test("advertised provider and global capacities report the binding admission own
     }));
     const globallyBound = selectRerankCandidates({
         candidates: many,
-        requestedLimit: 100,
         providerMaximumDocuments: 256,
     });
     assert.equal(globallyBound.selected.length, 128);
     assert.equal(globallyBound.budgetReason, "global_limit");
 });
 
-test("larger native capacity admits 64 candidates by default and scales to 128 for broader requests", () => {
+test("native capacity admits the full global 128-candidate window", () => {
     const candidates = Array.from({ length: 150 }, (_, index) => candidate({
         id: `deep-${index}`, ownerInstanceId: `owner-${index}`,
     }));
-    const narrow = selectRerankCandidates({ candidates, requestedLimit: 10, providerMaximumDocuments: 128 });
-    assert.equal(narrow.selected.length, 64);
-    assert.equal(narrow.selected[49]?.id, "deep-49");
-    assert.equal(narrow.budgetReason, "family_ambiguity");
-    const broad = selectRerankCandidates({ candidates, requestedLimit: 40, providerMaximumDocuments: 128 });
-    assert.equal(broad.selected.length, 128);
-    assert.equal(broad.budgetReason, "global_limit");
+    const selected = selectRerankCandidates({
+        candidates,
+        providerMaximumDocuments: 128,
+    });
+    assert.equal(selected.selected.length, 128);
+    assert.equal(selected.selected[49]?.id, "deep-49");
+    assert.equal(selected.candidatePoolCount, 150);
+    assert.equal(selected.budgetReason, "global_limit");
 });
 
-test("missing or invalid provider capacity preserves default adaptive admission", () => {
+test("missing or invalid provider capacity falls back to the global window", () => {
     const candidates = Array.from({ length: 30 }, (_, index) => candidate({
         id: `candidate-${index}`,
         ownerInstanceId: `owner-${index}`,
@@ -337,11 +328,10 @@ test("missing or invalid provider capacity preserves default adaptive admission"
     for (const providerMaximumDocuments of [undefined, 0, -1, Number.NaN]) {
         const selected = selectRerankCandidates({
             candidates,
-            requestedLimit: 2,
             ...(providerMaximumDocuments === undefined ? {} : { providerMaximumDocuments }),
         });
-        assert.equal(selected.selected.length, 12);
-        assert.equal(selected.budgetReason, "family_ambiguity");
+        assert.equal(selected.selected.length, 30);
+        assert.equal(selected.budgetReason, "complete_family_pool");
     }
 });
 
@@ -356,7 +346,6 @@ test("provider-capacity selection preserves the existing representative and supp
     const pool = buildRerankCandidatePool(candidates);
     const selected = selectRerankCandidates({
         candidates,
-        requestedLimit: 1,
         providerMaximumDocuments: 32,
     });
     assert.deepEqual(
@@ -372,10 +361,9 @@ test("rerank selection remains stable after shuffled provider rows are determini
         candidate({ id: "beta", ownerInstanceId: "owner-b", score: 3 }),
         candidate({ id: "gamma", ownerInstanceId: "owner-c", score: 2 }),
     ];
-    const forward = selectRerankCandidates({ candidates: rank(candidates), requestedLimit: 2 });
+    const forward = selectRerankCandidates({ candidates: rank(candidates) });
     const shuffled = selectRerankCandidates({
         candidates: rank([candidates[2], candidates[0], candidates[3], candidates[1]]),
-        requestedLimit: 2,
     });
 
     assert.deepEqual(shuffled.selected.map(({ id }) => id), forward.selected.map(({ id }) => id));

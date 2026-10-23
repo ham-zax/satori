@@ -491,7 +491,8 @@ const implPool = [
     row("tests/alpha.test.ts", 0.55),
 ];
 
-// 80 rows; only index 70 holds both must tokens, so it is invisible until attempt 3 (topK 80).
+// 80 rows. Index 70 holds both must tokens, so only the full 80-candidate retrieval
+// budget reaches the owner — during the first attempt, whatever the output limit is.
 const retryPool = pool("src", "tz_pool", 80, 0.9).map((r, i) => i === 70
     ? { ...r, relativePath: "src/tz_owner.ts", symbolLabel: "function tzOwner()", content: "export function tzOwner(tzinfo) { return tzinfo ?? None; }" }
     : r);
@@ -551,12 +552,12 @@ const lateOnDiagnostics: RerankExecutionDiagnostics = {
 const scenarios: Scenario[] = [
     // 1. retry attempts and fallback --------------------------------------------------------
     {
-        name: "retry_must_three_attempts",
+        name: "must_owner_visible_at_full_candidate_budget",
         query: Q_MUST,
         semantic: (call) => call.pass === "must_lane" ? [] : retryPool,
         expect: (rec) => {
-            assert.equal(outcomeOf(rec).attemptsUsed, 3);
-            assert.deepEqual(calls(rec).filter((c) => c.pass === "primary").map((c) => c.topK), [32, 64, 80]);
+            assert.equal(outcomeOf(rec).attemptsUsed, 1);
+            assert.deepEqual(calls(rec).filter((c) => c.pass === "primary").map((c) => c.topK), [80]);
             assert.deepEqual(resultsOf(rec).map((r) => r.relativePath), ["src/tz_owner.ts"]);
         },
     },
@@ -765,7 +766,7 @@ const scenarios: Scenario[] = [
         ...reservationBase,
         limit: 3,
         expect: (rec) => {
-            assert.equal(outcomeOf(rec).candidateLimit, 32);
+            assert.equal(outcomeOf(rec).candidateLimit, 80);
             assert.equal((outcomeOf(rec).semanticExpansion as Rec).reason, "caller_alt_terms");
             assert.ok(expandedOnlyCount(rec) > 0 && primaryCount(rec) > 0);
         },

@@ -199,7 +199,6 @@ export async function buildRerankInput(args: {
         preferredCandidates: rerankInputCandidates.filter((candidate) => (
             candidate.retrievalPasses.includes("file_symbols")
         )),
-        requestedLimit: input.retrievalPolicy.rerankerResultLimit,
         providerMaximumDocuments: host.reranker?.getMaxDocuments?.(),
     });
     const stats: RerankInputStats = {

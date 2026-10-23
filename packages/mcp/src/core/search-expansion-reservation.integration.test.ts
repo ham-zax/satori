@@ -142,7 +142,7 @@ function buildDiagnostics(): SearchDiagnostics {
     };
 }
 
-test("a novel caller-expansion hit survives the default small budget beside primary hits", async () => {
+test("a novel caller-expansion hit survives the default reservation beside primary hits", async () => {
     const passes = syntheticPasses();
     const observedQueries: string[] = [];
     const host: SearchExecutionHost = {
@@ -164,10 +164,10 @@ test("a novel caller-expansion hit survives the default small budget beside prim
     if (outcome.kind !== "ok") return;
     assert.equal(outcome.semanticExpansion.reason, "caller_alt_terms");
     assert.equal(observedQueries.length, 2);
-    assert.equal(outcome.candidateLimit, 32);
-    assert.equal(outcome.scored.length, 32);
-    assert.equal(outcome.scored.filter(isPrimarySearchCandidate).length, 22);
-    assert.equal(outcome.scored.filter((c) => !isPrimarySearchCandidate(c)).length, 10);
+    assert.equal(outcome.candidateLimit, 80);
+    assert.equal(outcome.scored.length, 80);
+    assert.equal(outcome.scored.filter(isPrimarySearchCandidate).length, 55);
+    assert.equal(outcome.scored.filter((c) => !isPrimarySearchCandidate(c)).length, 25);
     assert.ok(outcome.scored.some((c) => c.result.candidateId === "e0"), "expansion-only owner must reach ranking");
     assert.ok(outcome.scored.length <= SEARCH_MAX_CANDIDATES);
     const stages = outcome.candidateSurvival?.stages ?? [];

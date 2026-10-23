@@ -58,6 +58,16 @@ select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px
 .demo.re .bar i{transform:scaleX(0);transition:none}
 .tot{font-weight:650;margin-top:8px}
 .why li{margin:0 0 .6em;max-width:68ch}
+.evidence{margin:16px 0 0;border-collapse:collapse;width:100%;font-size:.95rem}
+.evidence th,.evidence td{text-align:left;vertical-align:top;padding:9px 14px 9px 0;border-bottom:1px solid var(--line)}
+.evidence th{font-size:.78rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mid);font-weight:600}
+.evidence td:first-child{width:36%}
+.evidence caption{caption-side:top;text-align:left;font-size:.8rem;letter-spacing:.07em;text-transform:uppercase;color:var(--mid);padding:0 0 8px}
+@media (max-width:560px){.evidence thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.evidence tr{display:block;padding:12px 0;border-bottom:1px solid var(--line)}
+.evidence td{display:block;border:0;padding:2px 0;width:auto}
+.evidence td:first-child{width:auto;font-weight:600}
+.evidence td+td{font-size:.92rem;color:var(--mid)}
 footer{padding:10px 0 60px;color:var(--mid);font-size:.92rem}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation:none!important}}
 </style></head><body>
@@ -130,8 +140,23 @@ footer{padding:10px 0 60px;color:var(--mid);font-size:.92rem}
 <li>“Never searched” and “searched but scored low” are different problems with different fixes.</li>
 </ul>
 </section>
+
+<section aria-labelledby="t5">
+<h2 id="t5">The pattern is measured. The individual stories are not.</h2>
+<p>Every story above is invented. The shape they share is not: it is measured on one real repository, 72 questions over React, Polars and FlatBuffers, natural-language search with no caller terms, one reranker per arm. Of the 25 answers that missed the reranker’s window, <b>18 were in no retrieval arm’s top 80 at all</b>, 4 sat at ranks 70–89, and 3 were re-ordered away by a scored rule inside the search. Widening or reordering the late stages cannot reach those 18 — which is why the first lever below is worth less than the loss that precedes it.</p>
+<table class="evidence">
+<caption>What each lever is worth, from the notes in <code>docs/improvements/</code></caption>
+<thead><tr><th>Lever</th><th>Measured</th><th>What it means here</th></tr></thead>
+<tbody>
+<tr><td>Reordering the labelled rule step perfectly, 28 questions</td><td>strict MRR 0.6786, against 0.6012 already reached with that step off</td><td>the whole late stage is worth about 0.077, less than what retrieval drops first</td></tr>
+<tr><td>Turning that rule off for a strong reranker</td><td>MRR 0.6446 → 0.7798, same 28 questions</td><td>a vote tuned for a weak reader overrides a strong one; it is shipped off there</td></tr>
+<tr><td>Widening the rerank window, five live questions at limit 20</td><td>two of five result lists changed — one owner appeared, one disappeared, two moved — and no answer’s rank changed; 2.2 s either way</td><td>a wider window rearranges the neighbours, not the answer</td></tr>
+<tr><td>Generated identifiers and alternate terms</td><td>React r5 rank 1 → 2; Polars p4, p6, p9 and FlatBuffers fresh_f1 pushed out of the top three</td><td>manufactured vocabulary costs more than it recovers, so expansion stays off</td></tr>
+</tbody></table>
+<p class="hint">Sources: <code>definition-fusion-root-cause.md</code> (summary, headroom), <code>voyage-reranker-and-definition-fusion.md</code>, <code>repository-vocabulary-experiment.md</code>, and a like-for-like run of two builds against one publication. Different datasets and builds are never merged, and none of these figures predicts a single query.</p>
+</section>
 </main>
-<footer class="wrap">This page explains a general pattern with made-up numbers. It reports no measurements of any real search system.</footer>
+<footer class="wrap">The aggregate figures above are measured and cited; every per-answer number on this page is made up to show the mechanism. Checked at HEAD <code>fcf5db5a</code>, where the first page defaults to 20 results within a frozen total of 200 — sizes that hide an answer, not sizes that find one.</footer>
 
 <script>
 const $=s=>document.querySelector(s),RM=matchMedia('(prefers-reduced-motion:reduce)').matches,M=3000;
@@ -141,13 +166,13 @@ const ST=[
 {n:'Admit',d:'Room for the reader',can:'Pass the first few candidates to the careful reader.',no:'Cannot add candidates the shortlist lacks.'},
 {n:'Read',d:'Careful scoring',can:'Re-score every admitted candidate against the question.',no:'Cannot judge what it isn’t shown. A neighbour with more matching words can outscore the answer.'},
 {n:'Final rules',d:'Tie-breakers',can:'Re-order the reader’s list: merge signals, boost or demote.',no:'Cannot add candidates, and can demote a correct answer.'},
-{n:'Show',d:'First results only',can:'Reveal more results when the show size is larger.',no:'Cannot change the order, only how much of it you see.'}];
+{n:'Show',d:'First results only',can:'Reveal more results when the show size is larger. The shipped default shows 20 of a frozen total of 200.',no:'Cannot change the order, only how much of it you see.'}];
 const PRE=[
 {n:'Wrong words',t:'The answer is a short wrapper that hands work to helpers. The question uses the helpers’ words, so fast retrieval puts the wrapper far down the list.',v:{R:1800,N:80,C:128,s:6,sh:0,D:10,mode:'all'}},
 {n:'Just past the cut',t:'It made the shortlist at #70, but the reader has room for only 64. Try raising reader capacity to 128.',v:{R:70,N:80,C:64,s:6,sh:0,D:10,mode:'all'}},
 {n:'Read, but buried',t:'The reader saw it and still ranked it 52nd, because neighbouring helpers share more of the question’s words.',v:{R:40,N:80,C:128,s:52,sh:0,D:10,mode:'all'}},
 {n:'Reader right, rules wrong',t:'The reader ranked it 2nd. A later rule re-ordered the list and pushed it to 16th.',v:{R:40,N:80,C:128,s:2,sh:14,D:10,mode:'all'}},
-{n:'Hidden by show size',t:'Ranked 14th and only ten results are shown. Try showing 20. It appears, but the ranking is unchanged.',v:{R:40,N:80,C:128,s:14,sh:0,D:10,mode:'all'}},
+{n:'Hidden by show size',t:'Ranked 14th. The page was narrowed to ten, so it is hidden; the default page of twenty shows it. It appears, and its rank is unchanged.',v:{R:40,N:80,C:128,s:14,sh:0,D:10,mode:'all'}},
 {n:'Never searched',t:'A filter excluded it before any ranking began. It wasn’t scored low. It was never compared.',v:{R:40,N:80,C:128,s:3,sh:0,D:10,mode:'filter'}}];
 let S={},k=0,tm=null,cur=1,st=null;
 const f=r=>Math.min(1,(Math.log(Math.max(1,r))+.2)/(Math.log(M)+.4));

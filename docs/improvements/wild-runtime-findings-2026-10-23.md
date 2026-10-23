@@ -32,8 +32,10 @@ live index, change versions, or alter benchmark expectations to improve scores.
 4. **S1, owner recall.** The reported query reproduces. `handleSearchCode` is
    absent from all recorded candidate stages, without omitted stage entries.
    Other `handlers.ts` symbols reach grouping, with the first at rank 14.
-   Reranking runs. Establish the missing representation or retrieval mechanism
-   before changing ranking. Do not add a query-specific identifier rule.
+   Reranking runs. Later controlled probes also establish loss after admission.
+   The [revised S1 plan](s1-owner-discovery-plan-2026-10-23.md) tests metadata
+   normalization, file-symbol supplementation, and definition fusion separately.
+   Graph expansion is deferred. Do not add a query-specific identifier rule.
 
 S3 is an intentional 48 KiB response limit with continuation. S4 is an explicit
 navigation contract: the symbol registry does not retain per-file indexing
@@ -41,6 +43,29 @@ timestamps. Exact registry search results can also return null. S5 is a reported
 transient warning, with verified freshness during investigation. S6 does not
 establish an ordering defect. These findings do not authorize arbitrary cap,
 freshness, or reference-order changes.
+
+## Temporary warning suppression, 23 October 2026
+
+At the user's explicit request, omit `SOURCE_FRESHNESS_UNVERIFIED` from warning
+lists emitted by search, navigation, and index status. This is temporary output
+policy, not a freshness repair. Keep structured `sourceFreshness` and freshness
+decisions unchanged. Explicit status details can still report unverified parity.
+
+The shared emitter is `packages/mcp/src/core/warnings.ts`.
+Index status also emits this code directly in
+`packages/mcp/src/core/manage-maintenance-handlers.ts`; that emission is omitted.
+Keep warnings for known changes, unavailable checkpoints, and index snapshots.
+Keep code recognition and legacy warning rendering available.
+
+No automatic expiry or runtime configuration switch is added. To restore the
+warning, restore its emission at both sites and update the affected warning
+expectations. Revisit this temporary policy when warning presentation is decided.
+S1 remains open. This source change does not update the installed runtime.
+
+Verification: 38 focused tests pass across warning mapping, read freshness,
+index status, and warning rendering. `pnpm run check` passes lint, all package
+typechecks, version references, and package-scope checks. Lint reports warnings
+without errors. The tests preserve structured freshness and other warning codes.
 
 ## Ownership and checks
 
@@ -136,6 +161,36 @@ server's actual schema.
   the probe rules out a small candidate-limit increase as a demonstrated
   repair. The task adds no sample-specific synonym, rank boost, or expectation
   change.
+- Later S1 probes use publication `330c18e2-af44-4491-a85a-6af3d468c5ae`.
+  The exact target ranks 997th in dense retrieval across the full index and
+  2,456th under default expansion. Local query-vector hashes match the live
+  runtime for both passes. The query `search code handler` returns the target
+  first. Supplying that phrase as `alt_terms` to the original query admits
+  the target sixth, but the provider ranks it 58th and grouping places it
+  15th. These probes establish two loss points, not a sufficient repair.
+- Review identifies lexical inconsistencies and existing supplementation gates.
+  Metadata tokens do not join `handler`, `handle`, and `handlers`. The
+  supplement uses source and symbol-name terms, bounded file selection, and
+  six symbols per file. Normalization must pass those gates in the real pool.
+  Variable declarations receive no definition vote, and adapter preference
+  ignores a named file identifier. Those facts require separate experiments.
+- The internal prepared relationship index already retains all admitted edges.
+  Its document projector applies the three-callee cap later. Structural labels
+  can affect model scores without exact query-word overlap. No measurement yet
+  proves that labels or a graph bonus repair S1.
+- The [normalization replay](s1-normalization-experiment-2026-10-23.md)
+  reproduces both captured fusion orders exactly. Runtime metadata rank moves
+  from 1,792 to 663 but remains below the twelve-symbol admission limit.
+  Role normalization reads `handlers.ts` and passes the target's term threshold,
+  but it ranks 17th among 37 eligible symbols and the six-symbol cut excludes
+  it. Frozen admitted-control fusion
+  moves from 16 to 13. The tested normalization rules are insufficient.
+- The [declaration-evidence replay](s1-declaration-evidence-experiment-2026-10-23.md)
+  keeps the six-symbol cap and crosses two tokenizers with two orderings.
+  Name priority admits S1 under trial role normalization, moving it from
+  17th to fourth within its file. It removes an accepted React state-update
+  owner from supplementation under both tokenizers. The unconditional rule
+  is rejected. No final grouped result or full-quality improvement is established.
 - Installed runtime acceptance remains unmeasured. Source changes do not update
   the installed 0.10.3 runtime or repair its existing publication. No live
   reindex, upgrade, package publication, commit, or push occurs here.
@@ -145,7 +200,23 @@ server's actual schema.
 
 ## Delivery state
 
-Changes remain uncommitted on `master`, based on `5188f612`. The detached dirty
+The user closes the investigation after three S1 experiments. The
+[wrap-up and resume point](s1-owner-discovery-plan-2026-10-23.md#wrap-up-and-resume-point)
+records the remaining acceptance gap and a future deciding test. S1 stays open.
+Callers must eventually obtain the owner without guessing identifiers or
+supplying workarounds. No sufficient internal policy is selected yet.
+
+A later [graph experiment](s1-graph-evidence-experiment-2026-10-23.md) checks
+the real Satori call path after S2 across 692 TypeScript files. Both required
+proof-backed edges survive production sidecar read-back. This is a task-owned
+artifact roundtrip, not a managed reindex or released-runtime result. The
+fixed-window model comparison improves provider rank from 58 to 52 with
+handler-only context, while fusion stays at 16. The parent reproduces exact
+scores and ordering. Automatic admission and grouped acceptance remain unproven.
+
+The S2 and harness repairs are committed on `master` in `6ecf531a`, based on
+`5188f612`. S1 experiments and the temporary warning policy form a follow-up.
+The detached dirty
 worktree remains untouched. Sol 6.1 medium implements sync and extraction;
 Luna max implements the harness repair; Pi DeepSeek 4.1 max checks provenance
 and reviews all three slices. Workers exchange evidence through bounded Claive

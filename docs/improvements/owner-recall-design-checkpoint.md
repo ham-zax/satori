@@ -2,6 +2,25 @@
 
 Recorded 2026-10-13 on `master` at `224183ca`.
 
+Update, 23 October: the separate
+[S1 plan](s1-owner-discovery-plan-2026-10-23.md) replays normalization through
+metadata ranking, file-symbol supplementation, and definition fusion. It uses
+a captured Satori publication, not the historical 72-query corpus below.
+The [normalization replay](s1-normalization-experiment-2026-10-23.md) improves
+internal ranks but still excludes the target. It establishes no general repair.
+
+The later [declaration-evidence replay](s1-declaration-evidence-experiment-2026-10-23.md)
+admits that handler under trial normalization but loses a React owner from
+supplementation. The measured tradeoff rejects unconditional name priority.
+Historical corpus measurements below remain unchanged.
+
+The separate [graph experiment](s1-graph-evidence-experiment-2026-10-23.md)
+proves the real Satori call path through task-owned sidecar read-back after S2.
+With admission fixed, graph labels improve provider rank from 58 to 52 but
+leave fusion rank 16. The parent reproduces complete scores and ordering.
+The experiment does not update the historical corpus or establish a sufficient
+search repair.
+
 **This is a checkpoint, not an implementation plan.** No proposal here is
 approved or implemented. One product change was made while it was written,
 with Hamza's approval: a sentence in the `search_codebase` tool description

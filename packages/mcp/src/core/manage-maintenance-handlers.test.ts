@@ -65,9 +65,15 @@ test("status distinguishes readable indexes from source parity while sync remain
             assert.deepEqual(payload.sourceFreshness, sourceFreshness);
         }
         if (state === "unverified") {
-            assert.ok(payload.warnings.includes("SOURCE_FRESHNESS_UNVERIFIED"));
+            assert.ok(!(payload.warnings ?? []).includes("SOURCE_FRESHNESS_UNVERIFIED"));
             assert.equal(payload.pendingSync.operationId, "sync-op");
             assert.match(payload.humanText, /Current source parity is unverified/);
+        }
+        if (state === "changed") {
+            assert.ok(payload.warnings.includes("SOURCE_CHANGES_PENDING"));
+        }
+        if (state === "index_snapshot") {
+            assert.ok(payload.warnings.includes("SOURCE_SERVED_FROM_INDEX_SNAPSHOT"));
         }
     }
 });

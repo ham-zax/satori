@@ -547,11 +547,10 @@ export class ManageMaintenanceHandlers {
             const warnings: WarningCode[] = [];
             if (sourceFreshness?.state === "changed") {
                 warnings.push(WARNING_CODES.SOURCE_CHANGES_PENDING);
-            } else if (sourceFreshness?.state === "unverified") {
-                warnings.push(WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED);
             } else if (sourceFreshness?.state === "index_snapshot") {
                 warnings.push(WARNING_CODES.SOURCE_SERVED_FROM_INDEX_SNAPSHOT);
             }
+            // Temporarily omit the unverified warning, retaining sourceFreshness and status details.
             if (proofDebugHint) {
                 statusMessage += `\n⚠️ Completion proof check is temporarily unavailable (probe_failed); keeping local status.`;
                 warnings.push(WARNING_CODES.IGNORE_POLICY_PROBE_FAILED);

@@ -1,0 +1,4808 @@
+{
+  "schemaVersion": 1,
+  "query": "search_codebase grouped result handler freshness warnings next actions",
+  "publicationId": "330c18e2-af44-4491-a85a-6af3d468c5ae",
+  "collection": "hybrid_code_chunks_e7db2afe__gen_330c18e2_af44_4491_a85a_6af3d468c5ae",
+  "source": "Managed-runtime debugMode=full captures from this investigation. Baseline has no alt_terms. Admitted control uses alt_terms=['search code handler']. No production document bytes are included.",
+  "candidateDescriptors": {
+    "chunk_2c12f2a72c870d4b": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 775,
+      "endLine": 803,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_5de21fdb9d04821f4ea0e181cd703cf3\"]"
+    },
+    "chunk_9c56d643a7fcffa9": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 638,
+      "endLine": 649,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_2fd47d210fbc3aeff09fe43aa6ebe00e\"]"
+    },
+    "chunk_7e15bd1f96c84b54": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 805,
+      "endLine": 845,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_dfe6c0a1491bdad743b8f577830366d7\"]"
+    },
+    "chunk_68ec214b53d2cd51": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 153,
+      "endLine": 205,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_42203c2a71bd8fb0f13d972bbcd4a4cb\"]"
+    },
+    "chunk_f76ec6716e53a49b": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 601,
+      "endLine": 655,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_947aa0f3129ef65cc0bddabb9e603286\"]"
+    },
+    "chunk_acabdc417e44d94d": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 334,
+      "endLine": 372,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_a9fdbaf371ac053156e38c554f7a9c15\"]"
+    },
+    "chunk_5929d55a124bf8b7": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 822,
+      "endLine": 836,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_6ad7921dacb5143b494ffd27d0c4f9de\"]"
+    },
+    "chunk_0f7e063b7f517d6b": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 559,
+      "endLine": 570,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_2b6467b3534e0084e4ca2abdc5d49168\"]"
+    },
+    "chunk_19cf263013ddc858": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 286,
+      "endLine": 332,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_e99e35c1f4407f208d0a2c88f1615641\"]"
+    },
+    "chunk_1df3db4e61d3a809": {
+      "relativePath": "evals/code-intelligence-vs/tasks.json",
+      "startLine": 1,
+      "endLine": 89,
+      "ownerId": "[\"symbol\",\"evals/code-intelligence-vs/tasks.json\",\"syminst_89d50672fc60b48a893281481da8ecef\"]"
+    },
+    "chunk_3218c4990577bc45": {
+      "relativePath": "packages/mcp/src/core/search-exact-registry-hit.ts",
+      "startLine": 195,
+      "endLine": 250,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-registry-hit.ts\",\"syminst_4d94c8b589881b65d89d35bf2bb0fb7f\"]"
+    },
+    "chunk_66ded50042b72c85": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.ts",
+      "startLine": 318,
+      "endLine": 358,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.ts\",\"syminst_b8db6d41d3904237656e12b2d60d3d6a\"]"
+    },
+    "chunk_7eb9f0fae10d7443": {
+      "relativePath": "packages/mcp/src/core/search-result-finalization.ts",
+      "startLine": 731,
+      "endLine": 780,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-finalization.ts\",\"syminst_4e5cad5d647ed0902a0d9f0c6c00ac7c\"]"
+    },
+    "chunk_4d7595654b061863": {
+      "relativePath": "packages/mcp/src/core/search-exact-registry-hit.ts",
+      "startLine": 1,
+      "endLine": 44,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-registry-hit.ts\",\"syminst_464adf4055980c6deacadfdb552b1251\"]"
+    },
+    "chunk_b5a0f84ac2e3384b": {
+      "relativePath": "packages/mcp/src/core/tool-response-builders.ts",
+      "startLine": 328,
+      "endLine": 373,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tool-response-builders.ts\",\"syminst_5981053de21f90e82bebc0137d3f3173\"]"
+    },
+    "chunk_12eb5dca3cd4c8d5": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 82,
+      "endLine": 128,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_abbe702a00028b81b4f9b29afd5f3b87\"]"
+    },
+    "chunk_1af13d3503022af7": {
+      "relativePath": "packages/mcp/src/core/search-types.ts",
+      "startLine": 817,
+      "endLine": 859,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-types.ts\",\"syminst_58b946aa780158353a9c00b68270953b\"]"
+    },
+    "chunk_a00ba6a6000d3afd": {
+      "relativePath": "packages/mcp/src/core/search-response-envelopes.ts",
+      "startLine": 202,
+      "endLine": 245,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-envelopes.ts\",\"syminst_b7a50a6760f522c9dd7f7f7d085f1be1\"]"
+    },
+    "chunk_fc533a292fa83a07": {
+      "relativePath": "evals/useful-context/tasks.json",
+      "startLine": 1,
+      "endLine": 79,
+      "ownerId": "[\"symbol\",\"evals/useful-context/tasks.json\",\"syminst_1253718a12ca04b906817d0f29c57c98\"]"
+    },
+    "chunk_f39d1b9913441fa3": {
+      "relativePath": "packages/mcp/src/core/tool-response-builders.ts",
+      "startLine": 293,
+      "endLine": 352,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tool-response-builders.ts\",\"syminst_440cb5b667330951b7da291ad525dece\"]"
+    },
+    "chunk_87598ee9236a016c": {
+      "relativePath": "packages/mcp/src/core/search-exact-registry-hit.ts",
+      "startLine": 44,
+      "endLine": 79,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-registry-hit.ts\",\"syminst_804631a3f9a43617cc759ee1f0514559\"]"
+    },
+    "chunk_4fea902f3e63e319": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 705,
+      "endLine": 718,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_90dd9b59315714aa1384a99af978df4a\"]"
+    },
+    "chunk_72af70c1ab68fcd2": {
+      "relativePath": "packages/mcp/src/core/tool-response-builders.ts",
+      "startLine": 407,
+      "endLine": 460,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tool-response-builders.ts\",\"syminst_3fb505ce95fa789721aab2c24016bd07\"]"
+    },
+    "chunk_7ee822d205e27488": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 1,
+      "endLine": 20,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_fcbc3bb70e1e2a800cdeef79b45ef48c\"]"
+    },
+    "chunk_16811a8155111ccc": {
+      "relativePath": "packages/mcp/src/core/search-response-envelopes.ts",
+      "startLine": 29,
+      "endLine": 50,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-envelopes.ts\",\"syminst_22841ba06cb451ef526c18d890c3a481\"]"
+    },
+    "chunk_54732cda31c00604": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 250,
+      "endLine": 304,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_abbe702a00028b81b4f9b29afd5f3b87\"]"
+    },
+    "chunk_2c5f8ac01976a49e": {
+      "relativePath": "evals/archive/ranking-v3/search-ranking/build-cross-repository-manifest.mjs",
+      "startLine": 66,
+      "endLine": 72,
+      "ownerId": "[\"symbol\",\"evals/archive/ranking-v3/search-ranking/build-cross-repository-manifest.mjs\",\"syminst_8c3831e9d620acbb0aa36d4e7b4f0bc8\"]"
+    },
+    "chunk_74f63ed3237d1df2": {
+      "relativePath": "packages/mcp/src/core/search-result-finalization.ts",
+      "startLine": 1,
+      "endLine": 66,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-finalization.ts\",\"syminst_0bc9c0cd0e84a820c047550c20d15fe4\"]"
+    },
+    "chunk_61fde16d66bf0a24": {
+      "relativePath": "evals/search-quality/search-quality-evaluation.ts",
+      "startLine": 740,
+      "endLine": 745,
+      "ownerId": "[\"symbol\",\"evals/search-quality/search-quality-evaluation.ts\",\"syminst_bc181a64c112af9340063c934523f576\"]"
+    },
+    "chunk_26fdd5b877b5ee4b": {
+      "relativePath": "packages/mcp/src/core/search-response-envelopes.ts",
+      "startLine": 1,
+      "endLine": 29,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-envelopes.ts\",\"syminst_f095ecc2642a3760a8207fa4a96c145a\"]"
+    },
+    "chunk_f43cd9fb3f94c862": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 541,
+      "endLine": 553,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_eb944970c7f3c9aa6890e39c74c149bd\"]"
+    },
+    "chunk_3a4ec2bfe51ece6d": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 1,
+      "endLine": 70,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_ceb1e743eb9a7f583e12e85d60714e8e\"]"
+    },
+    "chunk_9bde45193f484988": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 111,
+      "endLine": 125,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_69af474ab239d783168268df1bb29e7c\"]"
+    },
+    "chunk_e59ae887eeed7fc8": {
+      "relativePath": "evals/archive/ranking-v3/search-ranking/task-suites/satori-r0.candidate-tasks.json",
+      "startLine": 1,
+      "endLine": 79,
+      "ownerId": "[\"symbol\",\"evals/archive/ranking-v3/search-ranking/task-suites/satori-r0.candidate-tasks.json\",\"syminst_b03ba545d0e47495bde5977e586d977c\"]"
+    },
+    "chunk_4522a2d573603bdc": {
+      "relativePath": "packages/mcp/src/core/tool-response-builders.ts",
+      "startLine": 383,
+      "endLine": 443,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tool-response-builders.ts\",\"syminst_440cb5b667330951b7da291ad525dece\"]"
+    },
+    "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 509,
+      "endLine": 588,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_0d4cd58105d0e2cb64bc2eb5aab43935\"]"
+    },
+    "chunk_e886047c2bb96678": {
+      "relativePath": "packages/mcp/src/core/search-types.ts",
+      "startLine": 861,
+      "endLine": 883,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-types.ts\",\"syminst_d94240eedb3bc3aaa6f91cae41d13f88\"]"
+    },
+    "chunk_f689e93f8317c167": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1646,
+      "endLine": 1651,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_7a704dfe8c2a1f703caa53d2d57932fe\"]"
+    },
+    "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 472,
+      "endLine": 507,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_cec107e8536d1805e3cb9d79df33060e\"]"
+    },
+    "chunk_a6d703c90c342e2f": {
+      "relativePath": "packages/mcp/src/core/search-execution.native-order.test.ts",
+      "startLine": 225,
+      "endLine": 225,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-execution.native-order.test.ts\",\"syminst_e2068bd1b0de58e112cefe6885284c61\"]"
+    },
+    "chunk_7679d9f6381c60c5": {
+      "relativePath": "packages/mcp/src/core/search-result-finalization.ts",
+      "startLine": 57,
+      "endLine": 68,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-finalization.ts\",\"syminst_0bc9c0cd0e84a820c047550c20d15fe4\"]"
+    },
+    "chunk_14ce64e24d69dcbc": {
+      "relativePath": "packages/mcp/src/core/search-result-finalization.test.ts",
+      "startLine": 114,
+      "endLine": 114,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-finalization.test.ts\",\"syminst_862f44225af9616930713d1f98a3c9d4\"]"
+    },
+    "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/tools/registry.test.ts",
+      "startLine": 106,
+      "endLine": 137,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/registry.test.ts\",\"syminst_6d08afda4f605f2a4b8b0b82b58a2adb\"]"
+    },
+    "chunk_52d4846a2e226a1d": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 717,
+      "endLine": 754,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_3dd2dc33b3a5261f4955a4e4be094d8a\"]"
+    },
+    "chunk_7a01daf29d738e57": {
+      "relativePath": "packages/mcp/src/core/tool-response-builders.ts",
+      "startLine": 295,
+      "endLine": 326,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tool-response-builders.ts\",\"syminst_c2f23cd4bfeb5a42939c993fe42e7a13\"]"
+    },
+    "chunk_7c060f535cd18ed2": {
+      "relativePath": "packages/mcp/src/core/search-response-envelopes.ts",
+      "startLine": 249,
+      "endLine": 284,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-envelopes.ts\",\"syminst_2b971e9f080475e5ab1b134cbee47cf8\"]"
+    },
+    "chunk_17ff981defc5bf7d": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 873,
+      "endLine": 879,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_754f8ebebf23b4a2ad158d45c6e4cfb6\"]"
+    },
+    "chunk_01cf570afb2b0302": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 599,
+      "endLine": 601,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_25620057f0201a890e592520872e99d9\"]"
+    },
+    "chunk_0cbe6340ce2b7346": {
+      "relativePath": "packages/mcp/src/core/tracked-root-readiness.ts",
+      "startLine": 198,
+      "endLine": 225,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/tracked-root-readiness.ts\",\"syminst_b3888e3442df924f0b24869cd303c0a3\"]"
+    },
+    "chunk_c2cfb084b286050f": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 234,
+      "endLine": 234,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_1cfbe3fd5f220b48614d9c3750a4b46b\"]"
+    },
+    "chunk_469d15cd7c5bb128": {
+      "relativePath": "scripts/perf/index-probe.mjs",
+      "startLine": 246,
+      "endLine": 275,
+      "ownerId": "[\"symbol\",\"scripts/perf/index-probe.mjs\",\"syminst_2b1488a0a6350a13863de3b87c9595e8\"]"
+    },
+    "chunk_0bcb02c6d63eb4da": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 803,
+      "endLine": 805,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_25620057f0201a890e592520872e99d9\"]"
+    },
+    "chunk_6c2513847a36dea3": {
+      "relativePath": "packages/mcp/src/core/search-group-results.ts",
+      "startLine": 1,
+      "endLine": 55,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-results.ts\",\"syminst_42ee9735510331098b2f7e23690c4b78\"]"
+    },
+    "chunk_71e060269d608637": {
+      "relativePath": "packages/mcp/src/core/warnings.ts",
+      "startLine": 38,
+      "endLine": 55,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/warnings.ts\",\"syminst_0251237be06d09b29a39f08cdfc75d89\"]"
+    },
+    "chunk_e246534e63f368a3": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 1059,
+      "endLine": 1059,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_ba96a5acf41ad78981e8779d4a3c9f6f\"]"
+    },
+    "chunk_7f6341c93355afdc": {
+      "relativePath": "packages/core/src/language-analysis/process-service.ts",
+      "startLine": 14,
+      "endLine": 17,
+      "ownerId": "[\"symbol\",\"packages/core/src/language-analysis/process-service.ts\",\"syminst_99116d5d0c250e1e296af533a9ad52ac\"]"
+    },
+    "chunk_99656b033691b00f": {
+      "relativePath": "evals/archive/ranking-v3/search-ranking/build-cross-repository-manifest.mjs",
+      "startLine": 172,
+      "endLine": 200,
+      "ownerId": "[\"symbol\",\"evals/archive/ranking-v3/search-ranking/build-cross-repository-manifest.mjs\",\"syminst_f76b2bbdcc4ea234a52152409e577417\"]"
+    },
+    "chunk_75f6c3eff20fba95": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 657,
+      "endLine": 706,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_41e6ecec03f10b303d04b263ab0f9dad\"]"
+    },
+    "chunk_38727424baa0c38a": {
+      "relativePath": "packages/mcp/src/core/search-group-results.ts",
+      "startLine": 820,
+      "endLine": 863,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-results.ts\",\"syminst_b53b5cea494bf3b64591ce454c8bbfb3\"]"
+    },
+    "chunk_dc081b302ce02036": {
+      "relativePath": "packages/mcp/src/tools/continue_search.ts",
+      "startLine": 26,
+      "endLine": 45,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/continue_search.ts\",\"syminst_f6e4dc912c58fa7d38456ed3045135b3\"]"
+    },
+    "chunk_f9f3afc3a807d7bb": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 1075,
+      "endLine": 1075,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_112f2d36075bdc21f68eb4237c91cf72\"]"
+    },
+    "chunk_52ef519bb1653acf": {
+      "relativePath": "scripts/trufflehog-mvcc-product-run.ts",
+      "startLine": 311,
+      "endLine": 362,
+      "ownerId": "[\"symbol\",\"scripts/trufflehog-mvcc-product-run.ts\",\"syminst_75f4c68953ac7fa6fbe40e593d13ce36\"]"
+    },
+    "chunk_3e0967f0de0b120c": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 730,
+      "endLine": 773,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_75c1a6ce222c4ec05d9174847f5a0d0c\"]"
+    },
+    "chunk_9e26d17867c8041a": {
+      "relativePath": "packages/mcp/src/core/search-exact-registry-hit.ts",
+      "startLine": 81,
+      "endLine": 102,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-registry-hit.ts\",\"syminst_e275f4da4f46a025e26b1bf092358670\"]"
+    },
+    "chunk_bc91fff0153be619": {
+      "relativePath": "packages/mcp/src/core/search-exact-fast-path.ts",
+      "startLine": 585,
+      "endLine": 636,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-fast-path.ts\",\"syminst_bbb5d34be6f91cd2f60db1be36b8eec2\"]"
+    },
+    "chunk_0d71420bc9cb46b5": {
+      "relativePath": "evals/vector-stacks/tasks.json",
+      "startLine": 72,
+      "endLine": 151,
+      "ownerId": "[\"symbol\",\"evals/vector-stacks/tasks.json\",\"syminst_c514c0b52238c1d0f92c4f29fc686006\"]"
+    },
+    "chunk_f8d768ee93a88385": {
+      "relativePath": "packages/mcp/src/core/change-impact.test.ts",
+      "startLine": 460,
+      "endLine": 460,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/change-impact.test.ts\",\"syminst_6de4e662b7240ea6ff33d85cf3e45f75\"]"
+    },
+    "chunk_46e6558477633e4b": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 509,
+      "endLine": 576,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_0d4cd58105d0e2cb64bc2eb5aab43935\"]"
+    },
+    "chunk_9dcfd40b7b99f99d": {
+      "relativePath": "scripts/check-version-freshness.mjs",
+      "startLine": 89,
+      "endLine": 89,
+      "ownerId": "[\"symbol\",\"scripts/check-version-freshness.mjs\",\"syminst_22993ebcfd7659ab5cd0c74d85b52c3c\"]"
+    },
+    "chunk_68b1a1ef1eb7c4d0": {
+      "relativePath": "packages/mcp/src/core/symbol-context-composer.test.ts",
+      "startLine": 890,
+      "endLine": 890,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/symbol-context-composer.test.ts\",\"syminst_860e39c46328a984db97db24650bd423\"]"
+    },
+    "chunk_327409a8d1c0b181": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 262,
+      "endLine": 274,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_5bf82feca4b3f8992e4d5ce14a2dd692\"]"
+    },
+    "chunk_8d64bcbe6eb47906": {
+      "relativePath": "packages/mcp/src/core/search-types.ts",
+      "startLine": 1,
+      "endLine": 22,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-types.ts\",\"syminst_2a9f33cef86b29a17c8a32e609fe51f3\"]"
+    },
+    "chunk_060cc73bd8ae88ce": {
+      "relativePath": "evals/archive/ranking-v3/search-ranking/task-suites/recovery-dashboard-r0.candidate-tasks.json",
+      "startLine": 1,
+      "endLine": 84,
+      "ownerId": "[\"symbol\",\"evals/archive/ranking-v3/search-ranking/task-suites/recovery-dashboard-r0.candidate-tasks.json\",\"syminst_fc3e67c0e55e8e04e0d38097789377e7\"]"
+    },
+    "chunk_e4aa887080c5f452": {
+      "relativePath": "packages/mcp/src/core/navigation-handlers.ts",
+      "startLine": 2147,
+      "endLine": 2190,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/navigation-handlers.ts\",\"syminst_f9ee2fee11514338df932ebea430c257\"]"
+    },
+    "chunk_8e377ebc2127b203": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 205,
+      "endLine": 256,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_abbe702a00028b81b4f9b29afd5f3b87\"]"
+    },
+    "chunk_660036e191e0971d": {
+      "relativePath": "packages/core/src/generation/root-mutation-coordinator.test.ts",
+      "startLine": 88,
+      "endLine": 91,
+      "ownerId": "[\"symbol\",\"packages/core/src/generation/root-mutation-coordinator.test.ts\",\"syminst_ab142ed8b4198211ba9814d4f0611f61\"]"
+    },
+    "chunk_6d65750eca47eb68": {
+      "relativePath": "packages/mcp/src/core/search-group-ordering.test.ts",
+      "startLine": 1,
+      "endLine": 12,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-ordering.test.ts\",\"syminst_c6f618b90adbdd72389565a5d4ee18eb\"]"
+    },
+    "chunk_96ecf0972a092ee4": {
+      "relativePath": "packages/mcp/src/core/navigation-handlers.ts",
+      "startLine": 535,
+      "endLine": 585,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/navigation-handlers.ts\",\"syminst_90d72e159c26974071a4d545fa73cf3b\"]"
+    },
+    "chunk_eccc16cd05347e35": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 2102,
+      "endLine": 2114,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_d424352da9479f3096b55b0a0c92498d\"]"
+    },
+    "chunk_a0ed14e1357f5f8b": {
+      "relativePath": "scripts/code-intelligence-vs.test.mjs",
+      "startLine": 197,
+      "endLine": 223,
+      "ownerId": "[\"symbol\",\"scripts/code-intelligence-vs.test.mjs\",\"syminst_e917b39106ce55901b480b9eabfd3c76\"]"
+    },
+    "chunk_e875dc8dea20b4bd": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 199,
+      "endLine": 212,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_1528a656de296451898db87774b493b7\"]"
+    },
+    "chunk_f967db80b2c69063": {
+      "relativePath": "scripts/perf/index-probe.mjs",
+      "startLine": 243,
+      "endLine": 280,
+      "ownerId": "[\"symbol\",\"scripts/perf/index-probe.mjs\",\"syminst_57dcead2d43609e3359d4595d9fc73be\"]"
+    },
+    "chunk_2dbef88920624c83": {
+      "relativePath": "packages/mcp/src/core/search-execution.native-order.test.ts",
+      "startLine": 197,
+      "endLine": 199,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-execution.native-order.test.ts\",\"syminst_f4b4b83596143b0f9e80a8e5ffddb157\"]"
+    },
+    "chunk_d90e59cc9e5c583d": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 127,
+      "endLine": 149,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_d1177c3b4831605981d3eea27f196a37\"]"
+    },
+    "chunk_ffb28a36357048d4": {
+      "relativePath": "evals/archive/ranking-v3/search-ranking/task-suites/satori-r0.negative-exposure.json",
+      "startLine": 1,
+      "endLine": 85,
+      "ownerId": "[\"symbol\",\"evals/archive/ranking-v3/search-ranking/task-suites/satori-r0.negative-exposure.json\",\"syminst_8c00a2ce9e9f5e2b90b2a76e1201c11b\"]"
+    },
+    "chunk_1dbdd147d3118d18": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 220,
+      "endLine": 284,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_65a1ab83a834b99376c1984ff8cb91ae\"]"
+    },
+    "chunk_35fcd3723cadf88c": {
+      "relativePath": "packages/mcp/src/core/search-result-set-identity.test.ts",
+      "startLine": 125,
+      "endLine": 127,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-set-identity.test.ts\",\"syminst_872030a560fd9fe4d1d9eb6bc4291e7c\"]"
+    },
+    "chunk_b0ba4e5d50733e03": {
+      "relativePath": "packages/mcp/src/core/search-exact-fast-path.ts",
+      "startLine": 1,
+      "endLine": 54,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-fast-path.ts\",\"syminst_3ff32cb9e65ea6da67775704d1ba3052\"]"
+    },
+    "chunk_faee9cf673c3f0ee": {
+      "relativePath": "packages/mcp/src/core/search-result-index.ts",
+      "startLine": 1,
+      "endLine": 13,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-index.ts\",\"syminst_1c9ad822107c3041b11f6b0075a42900\"]"
+    },
+    "chunk_37aa4ab9b54e6f09": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 81,
+      "endLine": 87,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_7c041bb635a3c7ade819503d888ec6ad\"]"
+    },
+    "chunk_c6ba058f497b1678": {
+      "relativePath": "packages/mcp/src/core/symbol-context-composer.test.ts",
+      "startLine": 377,
+      "endLine": 379,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/symbol-context-composer.test.ts\",\"syminst_f4cdcb320b41a073e4673c990d2c620d\"]"
+    },
+    "chunk_05f98b226ad224fa": {
+      "relativePath": "scripts/code-intelligence-vs.mjs",
+      "startLine": 354,
+      "endLine": 414,
+      "ownerId": "[\"symbol\",\"scripts/code-intelligence-vs.mjs\",\"syminst_5f2ba85ed50f97f68a8af16024086d65\"]"
+    },
+    "chunk_bd90d413f35ba6a1": {
+      "relativePath": "packages/core/src/language-analysis/versions.ts",
+      "startLine": 12,
+      "endLine": 15,
+      "ownerId": "[\"symbol\",\"packages/core/src/language-analysis/versions.ts\",\"syminst_d011fe7116084c3ee57bac213f8011a0\"]"
+    },
+    "chunk_68c84d515836f1f3": {
+      "relativePath": "packages/core/src/generation/semantic-workflow-delta.test.ts",
+      "startLine": 192,
+      "endLine": 192,
+      "ownerId": "[\"symbol\",\"packages/core/src/generation/semantic-workflow-delta.test.ts\",\"syminst_eed64bfbdf648d18d03f8d5cc4f6e7cf\"]"
+    },
+    "chunk_b6a9fd0123deb5c3": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 639,
+      "endLine": 654,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_e908ee52fe6468bb0c5b2ed77adc85cd\"]"
+    },
+    "chunk_d555e9140d93cb7d": {
+      "relativePath": "packages/core/src/generation/semantic-workflow-delta.test.ts",
+      "startLine": 395,
+      "endLine": 395,
+      "ownerId": "[\"symbol\",\"packages/core/src/generation/semantic-workflow-delta.test.ts\",\"syminst_7d3864fcfa596d10be736c1e0f708ece\"]"
+    },
+    "chunk_9da5e9600af905b1": {
+      "relativePath": "packages/core/src/generation/publication-source-controls.test.ts",
+      "startLine": 31,
+      "endLine": 33,
+      "ownerId": "[\"symbol\",\"packages/core/src/generation/publication-source-controls.test.ts\",\"syminst_592704ad8ff8c9fd9b4c5c35763007cc\"]"
+    },
+    "chunk_ffbe45a08aa01a76": {
+      "relativePath": "packages/mcp/src/core/search-group-results.inbound-recovery.test.ts",
+      "startLine": 1,
+      "endLine": 11,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-results.inbound-recovery.test.ts\",\"syminst_a5ec2bc4910214894ccbdb89ac779270\"]"
+    },
+    "chunk_11fd502c25789d2c": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 656,
+      "endLine": 681,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_9f8b1f7af28911d2cb67143007294e70\"]"
+    },
+    "chunk_95d5c4e9e1b31440": {
+      "relativePath": "packages/mcp/src/core/search-query-support.test.ts",
+      "startLine": 330,
+      "endLine": 332,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-query-support.test.ts\",\"syminst_74763934979e262132a23bc133baa995\"]"
+    },
+    "chunk_0f0122bba890d026": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 749,
+      "endLine": 768,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_f868da03049ea9918a2f4b9a0c53d554\"]"
+    },
+    "chunk_e717dd91f6310e5e": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 181,
+      "endLine": 183,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_278658ae7d45c5441a076b76fb594510\"]"
+    },
+    "chunk_ab8073e4477f69a1": {
+      "relativePath": "packages/mcp/src/core/search-execution.native-order.test.ts",
+      "startLine": 307,
+      "endLine": 307,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-execution.native-order.test.ts\",\"syminst_77ca1a46a1f448a08b11ca8d3c220735\"]"
+    },
+    "chunk_b48381382006507f": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 425,
+      "endLine": 425,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_52c69d51afc94cfc0f1e893688e28d31\"]"
+    },
+    "chunk_909900dfe45d00a5": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 57,
+      "endLine": 62,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_17a0bf734370ef756084afc60efbce99\"]"
+    },
+    "chunk_c3a40227201c81a0": {
+      "relativePath": "scripts/code-intelligence-vs.test.mjs",
+      "startLine": 31,
+      "endLine": 43,
+      "ownerId": "[\"symbol\",\"scripts/code-intelligence-vs.test.mjs\",\"syminst_31cbf9caa2e05fcd47d860301b8c0f51\"]"
+    },
+    "chunk_b31a6412a1f76c84": {
+      "relativePath": "packages/mcp/src/core/search-native-rerank.integration.test.ts",
+      "startLine": 1064,
+      "endLine": 1064,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-native-rerank.integration.test.ts\",\"syminst_8e66f73af2e586fee81c47739cc81e6a\"]"
+    },
+    "chunk_2d99c00e96f9aa63": {
+      "relativePath": "packages/mcp/src/core/search-concurrent-published-reads.test.ts",
+      "startLine": 107,
+      "endLine": 160,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-concurrent-published-reads.test.ts\",\"syminst_7547709e87a9e7cb360f4f7c86aab55b\"]"
+    },
+    "chunk_3a8fa5f529794205": {
+      "relativePath": "packages/core/src/core/indexing-projection-stream.test.ts",
+      "startLine": 224,
+      "endLine": 226,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-projection-stream.test.ts\",\"syminst_bc9b695458accf09685b049e71888e2f\"]"
+    },
+    "chunk_991007475df85501": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 64,
+      "endLine": 71,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_4ff15a56175899f868c807844099ca99\"]"
+    },
+    "chunk_3079de9bc98c7605": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 185,
+      "endLine": 216,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_1d0fb7f8f5baf28d5c5bd8719ac2ef8c\"]"
+    },
+    "chunk_69760e925a2a84a0": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 73,
+      "endLine": 79,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_c7320e91b62e9516b3009c1e8fbf9d41\"]"
+    },
+    "chunk_352e866792b2f66f": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 111,
+      "endLine": 130,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_a64289f206dc6a025bcba8a146eff1fe\"]"
+    },
+    "chunk_996592ebebcb8272": {
+      "relativePath": "packages/mcp/src/core/search-group-results.ownership.test.ts",
+      "startLine": 1,
+      "endLine": 14,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-results.ownership.test.ts\",\"syminst_b64388ba5fe52320ae9f21ed2297e57a\"]"
+    },
+    "chunk_9113f0dacc892020": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 344,
+      "endLine": 408,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_2933f61ce488d3dfad663f01571869b8\"]"
+    },
+    "chunk_27774f51486e61ac": {
+      "relativePath": "packages/mcp/src/core/search-result-set-identity.test.ts",
+      "startLine": 123,
+      "endLine": 128,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-set-identity.test.ts\",\"syminst_d18a1545128eb33052e96c77ad11f254\"]"
+    },
+    "chunk_96c8ce1a94dc6f10": {
+      "relativePath": "packages/core/src/core/indexing-pipeline.test.ts",
+      "startLine": 416,
+      "endLine": 416,
+      "ownerId": "[\"symbol\",\"packages/core/src/core/indexing-pipeline.test.ts\",\"syminst_798e64bc06b6c3e7edb2b43ad83ae320\"]"
+    },
+    "chunk_0cd707480a3a6a43": {
+      "relativePath": "packages/mcp/src/core/search-group-results.ownership.test.ts",
+      "startLine": 594,
+      "endLine": 596,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-results.ownership.test.ts\",\"syminst_b64388ba5fe52320ae9f21ed2297e57a\"]"
+    },
+    "chunk_2e1db41fdf1400e6": {
+      "relativePath": "packages/mcp/src/core/search-group-ordering.test.ts",
+      "startLine": 393,
+      "endLine": 402,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-group-ordering.test.ts\",\"syminst_44f1f7d8d044dff51d94cb57b586ef6d\"]"
+    },
+    "chunk_b0bb2da609714ddf": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.test.ts",
+      "startLine": 49,
+      "endLine": 55,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.test.ts\",\"syminst_9f809a11b11ad3d22c7ff51a15be88cc\"]"
+    },
+    "chunk_f8ac783ad3bff44b": {
+      "relativePath": "packages/core/src/generation/root-mutation-coordinator.test.ts",
+      "startLine": 94,
+      "endLine": 98,
+      "ownerId": "[\"symbol\",\"packages/core/src/generation/root-mutation-coordinator.test.ts\",\"syminst_91481f0dbe4e34b0fdb4ce5e20880495\"]"
+    },
+    "chunk_5096dd4caa000fcf": {
+      "relativePath": "packages/mcp/src/core/search-disclosure.test.ts",
+      "startLine": 32,
+      "endLine": 57,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-disclosure.test.ts\",\"syminst_d094f8764c35f56c550b2a6dd0b10244\"]"
+    },
+    "chunk_8379ba2f6c4eff28": {
+      "relativePath": "packages/mcp/src/core/search-compact-contract.test.ts",
+      "startLine": 364,
+      "endLine": 390,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-compact-contract.test.ts\",\"syminst_34be3f86e4a7c684162e2544a202f1bb\"]"
+    },
+    "chunk_38b31a3bd597e7ec": {
+      "relativePath": "packages/mcp/src/core/search-result-finalization.test.ts",
+      "startLine": 1,
+      "endLine": 13,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-result-finalization.test.ts\",\"syminst_5a1759b9a4d4ea2f64cbc4e3ea9b4a1d\"]"
+    },
+    "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 509,
+      "endLine": 599,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_0d4cd58105d0e2cb64bc2eb5aab43935\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-exact-registry-hit.ts\",104,256,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-exact-registry-hit.ts",
+      "startLine": 104,
+      "endLine": 256,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-exact-registry-hit.ts\",\"syminst_4d94c8b589881b65d89d35bf2bb0fb7f\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 1325,
+      "endLine": 1467,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_37e4d3c36bff787255b2440a807be780\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 2116,
+      "endLine": 2365,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_955a6677d408628b7ed9a1a4b2537a2d\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 316,
+      "endLine": 344,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_ea4e9d7e1503b84d15081093f04fdc4c\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 490,
+      "endLine": 494,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_6e935f86039c5c6f77348675cfbefa3c\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-request-coordinator.ts",
+      "startLine": 691,
+      "endLine": 703,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-request-coordinator.ts\",\"syminst_9210040637b95c96710493e393e6b901\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 37,
+      "endLine": 307,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_abbe702a00028b81b4f9b29afd5f3b87\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 464,
+      "endLine": 539,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_f4a5d8f024d8cf3ee2fd09b95f1c4eda\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 555,
+      "endLine": 577,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_eb122da333fc2731f2f641056ea06285\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 750,
+      "endLine": 799,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_f78bc959e5329e206c5cfe3241d5e22b\"]"
+    },
+    "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/search-response-helpers.ts",
+      "startLine": 24,
+      "endLine": 26,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-response-helpers.ts\",\"syminst_fb4e22a22f44af254299c7e50f5c785f\"]"
+    },
+    "chunk_bf3988e381be449e": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 2036,
+      "endLine": 2038,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_7f5c7474f60b3f5212f5f28660888d3d\"]"
+    },
+    "chunk_f827da0390dabaaf": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 169,
+      "endLine": 169,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_3285077cb4eaa1c61bd21dbdeb56d1bc\"]"
+    },
+    "chunk_453d35ac6f6b569c": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 472,
+      "endLine": 507,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_cec107e8536d1805e3cb9d79df33060e\"]"
+    },
+    "chunk_bfa9897d446dd8bd": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 168,
+      "endLine": 168,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_75b623a93d0da4e0cda37831000b6ed2\"]"
+    },
+    "chunk_2e227949e7ce5de3": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 170,
+      "endLine": 170,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_501fb1397fac86cad5b21a50f17eff94\"]"
+    },
+    "chunk_50bb106335612344": {
+      "relativePath": "packages/mcp/src/core/search-query-planning.ts",
+      "startLine": 1,
+      "endLine": 18,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-query-planning.ts\",\"syminst_858ccd0d9978e2e6b78b6bcc3da79e4a\"]"
+    },
+    "derived:[\"packages/core/src/net/fetch-with-deadline.ts\",116,121,\"typescript\"]": {
+      "relativePath": "packages/core/src/net/fetch-with-deadline.ts",
+      "startLine": 116,
+      "endLine": 121,
+      "ownerId": "[\"symbol\",\"packages/core/src/net/fetch-with-deadline.ts\",\"syminst_4cd61883083f07c96fdd9943c0d55796\"]"
+    },
+    "chunk_f251cc8d77eb550b": {
+      "relativePath": "packages/mcp/src/core/search-candidate-survival.ts",
+      "startLine": 1,
+      "endLine": 16,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-candidate-survival.ts\",\"syminst_e9094f9264b313a04a8fe20e80b13ad4\"]"
+    },
+    "chunk_600c3a5e88867c12": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 2040,
+      "endLine": 2042,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_55fb3481089baa67beb2618c877088db\"]"
+    },
+    "chunk_5669e4efcb08a77f": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 2024,
+      "endLine": 2026,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_6fcf5cd6b051b38d598990bda9592ec3\"]"
+    },
+    "chunk_14d98c79ae9cbecc": {
+      "relativePath": "packages/mcp/src/core/search-constants.ts",
+      "startLine": 48,
+      "endLine": 48,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-constants.ts\",\"syminst_4e5ec2bfd575f59b7d07c4de4dc94844\"]"
+    },
+    "chunk_693b9ece9d137287": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1982,
+      "endLine": 1984,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_4b7cad34e99df4c656351e9705864008\"]"
+    },
+    "chunk_272a3a354dab4cd9": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 2020,
+      "endLine": 2022,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_9dd41975844fadb2b286906ee41addad\"]"
+    },
+    "derived:[\"packages/core/src/vectordb/zilliz-utils.test.ts\",8,8,\"typescript\"]": {
+      "relativePath": "packages/core/src/vectordb/zilliz-utils.test.ts",
+      "startLine": 8,
+      "endLine": 8,
+      "ownerId": "[\"symbol\",\"packages/core/src/vectordb/zilliz-utils.test.ts\",\"syminst_418fc6399b63610772a1d071ed8944fe\"]"
+    },
+    "chunk_74364b9b44523119": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1289,
+      "endLine": 1291,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_8f27d94bf3ce1dfd6b80ae553fa6134e\"]"
+    },
+    "chunk_ac1ab5c08e3f6379": {
+      "relativePath": "packages/mcp/src/core/search-disclosure.ts",
+      "startLine": 1,
+      "endLine": 9,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-disclosure.ts\",\"syminst_db877200baf03d7093dbe5c6fc4749fe\"]"
+    },
+    "chunk_7b6c52b514bb8456": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1794,
+      "endLine": 1812,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_a61023d0ee35049f83790075041e2daa\"]"
+    },
+    "derived:[\"packages/core/src/net/fetch-with-deadline.test.ts\",9,9,\"typescript\"]": {
+      "relativePath": "packages/core/src/net/fetch-with-deadline.test.ts",
+      "startLine": 9,
+      "endLine": 9,
+      "ownerId": "[\"symbol\",\"packages/core/src/net/fetch-with-deadline.test.ts\",\"syminst_cd05dda86b61762215f2d69f72e958be\"]"
+    },
+    "derived:[\"packages/core/src/vectordb/milvus-restful-http.test.ts\",8,8,\"typescript\"]": {
+      "relativePath": "packages/core/src/vectordb/milvus-restful-http.test.ts",
+      "startLine": 8,
+      "endLine": 8,
+      "ownerId": "[\"symbol\",\"packages/core/src/vectordb/milvus-restful-http.test.ts\",\"syminst_d5395a79c0ae437c80274165a44de988\"]"
+    },
+    "chunk_05018107c55da395": {
+      "relativePath": "packages/mcp/src/core/search-retrieval-passes.ts",
+      "startLine": 1,
+      "endLine": 20,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-retrieval-passes.ts\",\"syminst_68b51e12cd396befeb2b712d569b059b\"]"
+    },
+    "chunk_adf0736dd8857154": {
+      "relativePath": "scripts/satori-live-latency-benchmark.mjs",
+      "startLine": 495,
+      "endLine": 550,
+      "ownerId": "[\"symbol\",\"scripts/satori-live-latency-benchmark.mjs\",\"syminst_d387ef79416f7558fd1e1c0717a21109\"]"
+    },
+    "chunk_2134510aa4348c61": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 708,
+      "endLine": 728,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_4361aa1100c54427b5337d5dfcaa6a5e\"]"
+    },
+    "chunk_f4076d2e751bfaa7": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 132,
+      "endLine": 151,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_c628a9435ceec39458c9beedee335404\"]"
+    },
+    "chunk_04cb008bf3131e15": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1611,
+      "endLine": 1622,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_30cc3d7f2bda27f43dd7d29a662a858b\"]"
+    },
+    "chunk_5e7a980dd2151cd9": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 847,
+      "endLine": 885,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_a28c3a6f7e20a1dcca651143e0162f0f\"]"
+    },
+    "chunk_69c7c9cb79624af1": {
+      "relativePath": "packages/mcp/src/core/search-answer-focus.ts",
+      "startLine": 1,
+      "endLine": 6,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-answer-focus.ts\",\"syminst_f391e141a64611419918f8f140baabf3\"]"
+    },
+    "chunk_4140fa2b23d6aaac": {
+      "relativePath": "packages/mcp/src/core/search-policy.ts",
+      "startLine": 1,
+      "endLine": 11,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/search-policy.ts\",\"syminst_a15f7b89dbd342817dfe8118d01664f9\"]"
+    },
+    "chunk_2df7fc00a1b2ee7e": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 507,
+      "endLine": 509,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_25620057f0201a890e592520872e99d9\"]"
+    },
+    "chunk_91ff3b0c996982a6": {
+      "relativePath": "evals/agent-disclosure/published-index-runtime.mjs",
+      "startLine": 79,
+      "endLine": 86,
+      "ownerId": "[\"symbol\",\"evals/agent-disclosure/published-index-runtime.mjs\",\"syminst_48e0a588a3cf59806d034e34612d467c\"]"
+    },
+    "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",220,284,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/tools/search_codebase.test.ts",
+      "startLine": 220,
+      "endLine": 284,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/tools/search_codebase.test.ts\",\"syminst_65a1ab83a834b99376c1984ff8cb91ae\"]"
+    },
+    "derived:[\"packages/mcp/src/core/handlers.ts\",1362,1390,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1362,
+      "endLine": 1390,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_8fbae9f4ffd78897baf418f192932ab5\"]"
+    },
+    "derived:[\"packages/mcp/src/core/handlers.ts\",813,823,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 813,
+      "endLine": 823,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_57df473911968f87d737722bf857b100\"]"
+    },
+    "derived:[\"packages/mcp/src/core/handlers.ts\",1023,1120,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1023,
+      "endLine": 1120,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_d0cb028791fd7292957dad0ad4f167d9\"]"
+    },
+    "derived:[\"packages/mcp/src/core/handlers.ts\",1033,1093,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1033,
+      "endLine": 1093,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_f58878171c6440bf56e68d9ea274dd90\"]"
+    },
+    "derived:[\"packages/mcp/src/core/handlers.ts\",1122,1225,\"typescript\"]": {
+      "relativePath": "packages/mcp/src/core/handlers.ts",
+      "startLine": 1122,
+      "endLine": 1225,
+      "ownerId": "[\"symbol\",\"packages/mcp/src/core/handlers.ts\",\"syminst_a346b87871b148e4f09504e15d318bc2\"]"
+    }
+  },
+  "variants": {
+    "baseline": {
+      "callerTerms": [],
+      "stages": [
+        {
+          "stage": "mcp_fusion",
+          "total": 124,
+          "candidates": [
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 1,
+              "score": 0.02170673076923077
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 2,
+              "score": 0.02101254480286738
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 3,
+              "score": 0.02022540983606557
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 4,
+              "score": 0.020195101701951015
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 5,
+              "score": 0.020153272576636287
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 6,
+              "score": 0.01952561669829222
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 7,
+              "score": 0.018629807692307692
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 8,
+              "score": 0.0182928898693365
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 9,
+              "score": 0.016686983610998237
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 10,
+              "score": 0.01639344262295082
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 11,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_66ded50042b72c85",
+              "rank": 12,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 13,
+              "score": 0.015625
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 14,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 15,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_12eb5dca3cd4c8d5",
+              "rank": 16,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 17,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 18,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 19,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 20,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 21,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 22,
+              "score": 0.014084507042253521
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 23,
+              "score": 0.013888888888888888
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 24,
+              "score": 0.0136986301369863
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 25,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 26,
+              "score": 0.013333333333333334
+            },
+            {
+              "id": "chunk_2c5f8ac01976a49e",
+              "rank": 27,
+              "score": 0.012658227848101266
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 28,
+              "score": 0.012345679012345678
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 29,
+              "score": 0.012195121951219513
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 30,
+              "score": 0.012048192771084338
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 31,
+              "score": 0.011627906976744186
+            },
+            {
+              "id": "chunk_3a4ec2bfe51ece6d",
+              "rank": 32,
+              "score": 0.011494252873563218
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 33,
+              "score": 0.011475409836065573
+            },
+            {
+              "id": "chunk_e59ae887eeed7fc8",
+              "rank": 34,
+              "score": 0.011363636363636364
+            },
+            {
+              "id": "chunk_4522a2d573603bdc",
+              "rank": 35,
+              "score": 0.011111111111111112
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 36,
+              "score": 0.01111111111111111
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 37,
+              "score": 0.010869565217391304
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 38,
+              "score": 0.010638297872340425
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]",
+              "rank": 39,
+              "score": 0.01044776119402985
+            },
+            {
+              "id": "chunk_a6d703c90c342e2f",
+              "rank": 40,
+              "score": 0.010294117647058823
+            },
+            {
+              "id": "chunk_7679d9f6381c60c5",
+              "rank": 41,
+              "score": 0.01020408163265306
+            },
+            {
+              "id": "chunk_14ce64e24d69dcbc",
+              "rank": 42,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 43,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "chunk_52d4846a2e226a1d",
+              "rank": 44,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 45,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 46,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 47,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_01cf570afb2b0302",
+              "rank": 48,
+              "score": 0.00972222222222222
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 49,
+              "score": 0.009523809523809525
+            },
+            {
+              "id": "chunk_c2cfb084b286050f",
+              "rank": 50,
+              "score": 0.00945945945945946
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 51,
+              "score": 0.009345794392523364
+            },
+            {
+              "id": "chunk_0bcb02c6d63eb4da",
+              "rank": 52,
+              "score": 0.009333333333333334
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 53,
+              "score": 0.009259259259259259
+            },
+            {
+              "id": "chunk_71e060269d608637",
+              "rank": 54,
+              "score": 0.009259259259259259
+            },
+            {
+              "id": "chunk_e246534e63f368a3",
+              "rank": 55,
+              "score": 0.009210526315789473
+            },
+            {
+              "id": "chunk_7f6341c93355afdc",
+              "rank": 56,
+              "score": 0.009174311926605505
+            },
+            {
+              "id": "chunk_99656b033691b00f",
+              "rank": 57,
+              "score": 0.00909090909090909
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 58,
+              "score": 0.00909090909090909
+            },
+            {
+              "id": "chunk_38727424baa0c38a",
+              "rank": 59,
+              "score": 0.009009009009009009
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 60,
+              "score": 0.009009009009009009
+            },
+            {
+              "id": "chunk_f9f3afc3a807d7bb",
+              "rank": 61,
+              "score": 0.008974358974358974
+            },
+            {
+              "id": "chunk_52ef519bb1653acf",
+              "rank": 62,
+              "score": 0.008771929824561403
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 63,
+              "score": 0.008749999999999999
+            },
+            {
+              "id": "chunk_9e26d17867c8041a",
+              "rank": 64,
+              "score": 0.008695652173913044
+            },
+            {
+              "id": "chunk_bc91fff0153be619",
+              "rank": 65,
+              "score": 0.008547008547008548
+            },
+            {
+              "id": "chunk_0d71420bc9cb46b5",
+              "rank": 66,
+              "score": 0.008333333333333333
+            },
+            {
+              "id": "chunk_f8d768ee93a88385",
+              "rank": 67,
+              "score": 0.008333333333333331
+            },
+            {
+              "id": "chunk_46e6558477633e4b",
+              "rank": 68,
+              "score": 0.008333333333333331
+            },
+            {
+              "id": "chunk_9dcfd40b7b99f99d",
+              "rank": 69,
+              "score": 0.008264462809917356
+            },
+            {
+              "id": "chunk_68b1a1ef1eb7c4d0",
+              "rank": 70,
+              "score": 0.00813953488372093
+            },
+            {
+              "id": "chunk_327409a8d1c0b181",
+              "rank": 71,
+              "score": 0.008130081300813009
+            },
+            {
+              "id": "chunk_8d64bcbe6eb47906",
+              "rank": 72,
+              "score": 0.008064516129032258
+            },
+            {
+              "id": "chunk_060cc73bd8ae88ce",
+              "rank": 73,
+              "score": 0.008
+            },
+            {
+              "id": "chunk_e4aa887080c5f452",
+              "rank": 74,
+              "score": 0.008
+            },
+            {
+              "id": "chunk_8e377ebc2127b203",
+              "rank": 75,
+              "score": 0.007874015748031496
+            },
+            {
+              "id": "chunk_660036e191e0971d",
+              "rank": 76,
+              "score": 0.007865168539325841
+            },
+            {
+              "id": "chunk_6d65750eca47eb68",
+              "rank": 77,
+              "score": 0.007865168539325841
+            },
+            {
+              "id": "chunk_96ecf0972a092ee4",
+              "rank": 78,
+              "score": 0.007751937984496124
+            },
+            {
+              "id": "chunk_eccc16cd05347e35",
+              "rank": 79,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 80,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_e875dc8dea20b4bd",
+              "rank": 81,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_f967db80b2c69063",
+              "rank": 82,
+              "score": 0.007633587786259542
+            },
+            {
+              "id": "chunk_2dbef88920624c83",
+              "rank": 83,
+              "score": 0.0076086956521739125
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 84,
+              "score": 0.007526881720430108
+            },
+            {
+              "id": "chunk_ffb28a36357048d4",
+              "rank": 85,
+              "score": 0.007518796992481203
+            },
+            {
+              "id": "chunk_1dbdd147d3118d18",
+              "rank": 86,
+              "score": 0.007446808510638297
+            },
+            {
+              "id": "chunk_35fcd3723cadf88c",
+              "rank": 87,
+              "score": 0.007368421052631578
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 88,
+              "score": 0.0072992700729927005
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 89,
+              "score": 0.007246376811594203
+            },
+            {
+              "id": "chunk_37aa4ab9b54e6f09",
+              "rank": 90,
+              "score": 0.007216494845360824
+            },
+            {
+              "id": "chunk_c6ba058f497b1678",
+              "rank": 91,
+              "score": 0.007216494845360824
+            },
+            {
+              "id": "chunk_05f98b226ad224fa",
+              "rank": 92,
+              "score": 0.007194244604316547
+            },
+            {
+              "id": "chunk_bd90d413f35ba6a1",
+              "rank": 93,
+              "score": 0.007194244604316547
+            },
+            {
+              "id": "chunk_68c84d515836f1f3",
+              "rank": 94,
+              "score": 0.007070707070707071
+            },
+            {
+              "id": "chunk_b6a9fd0123deb5c3",
+              "rank": 95,
+              "score": 0.006999999999999999
+            },
+            {
+              "id": "chunk_d555e9140d93cb7d",
+              "rank": 96,
+              "score": 0.006796116504854368
+            },
+            {
+              "id": "chunk_9da5e9600af905b1",
+              "rank": 97,
+              "score": 0.006730769230769231
+            },
+            {
+              "id": "chunk_ffbe45a08aa01a76",
+              "rank": 98,
+              "score": 0.006730769230769231
+            },
+            {
+              "id": "chunk_11fd502c25789d2c",
+              "rank": 99,
+              "score": 0.006666666666666667
+            },
+            {
+              "id": "chunk_95d5c4e9e1b31440",
+              "rank": 100,
+              "score": 0.0062499999999999995
+            },
+            {
+              "id": "chunk_0f0122bba890d026",
+              "rank": 101,
+              "score": 0.006194690265486726
+            },
+            {
+              "id": "chunk_e717dd91f6310e5e",
+              "rank": 102,
+              "score": 0.00608695652173913
+            },
+            {
+              "id": "chunk_ab8073e4477f69a1",
+              "rank": 103,
+              "score": 0.005982905982905983
+            },
+            {
+              "id": "chunk_b48381382006507f",
+              "rank": 104,
+              "score": 0.005932203389830508
+            },
+            {
+              "id": "chunk_909900dfe45d00a5",
+              "rank": 105,
+              "score": 0.005932203389830508
+            },
+            {
+              "id": "chunk_c3a40227201c81a0",
+              "rank": 106,
+              "score": 0.00588235294117647
+            },
+            {
+              "id": "chunk_b31a6412a1f76c84",
+              "rank": 107,
+              "score": 0.005785123966942148
+            },
+            {
+              "id": "chunk_2d99c00e96f9aa63",
+              "rank": 108,
+              "score": 0.005737704918032787
+            },
+            {
+              "id": "chunk_3a8fa5f529794205",
+              "rank": 109,
+              "score": 0.005737704918032787
+            },
+            {
+              "id": "chunk_991007475df85501",
+              "rank": 110,
+              "score": 0.00564516129032258
+            },
+            {
+              "id": "chunk_3079de9bc98c7605",
+              "rank": 111,
+              "score": 0.005555555555555555
+            },
+            {
+              "id": "chunk_69760e925a2a84a0",
+              "rank": 112,
+              "score": 0.005555555555555555
+            },
+            {
+              "id": "chunk_352e866792b2f66f",
+              "rank": 113,
+              "score": 0.00546875
+            },
+            {
+              "id": "chunk_996592ebebcb8272",
+              "rank": 114,
+              "score": 0.00546875
+            },
+            {
+              "id": "chunk_9113f0dacc892020",
+              "rank": 115,
+              "score": 0.005343511450381679
+            },
+            {
+              "id": "chunk_27774f51486e61ac",
+              "rank": 116,
+              "score": 0.0053030303030303025
+            },
+            {
+              "id": "chunk_96c8ce1a94dc6f10",
+              "rank": 117,
+              "score": 0.0053030303030303025
+            },
+            {
+              "id": "chunk_0cd707480a3a6a43",
+              "rank": 118,
+              "score": 0.005263157894736841
+            },
+            {
+              "id": "chunk_2e1db41fdf1400e6",
+              "rank": 119,
+              "score": 0.005223880597014925
+            },
+            {
+              "id": "chunk_b0bb2da609714ddf",
+              "rank": 120,
+              "score": 0.005185185185185185
+            },
+            {
+              "id": "chunk_f8ac783ad3bff44b",
+              "rank": 121,
+              "score": 0.005147058823529412
+            },
+            {
+              "id": "chunk_5096dd4caa000fcf",
+              "rank": 122,
+              "score": 0.005147058823529412
+            },
+            {
+              "id": "chunk_8379ba2f6c4eff28",
+              "rank": 123,
+              "score": 0.00510948905109489
+            },
+            {
+              "id": "chunk_38b31a3bd597e7ec",
+              "rank": 124,
+              "score": 0.004999999999999999
+            }
+          ]
+        },
+        {
+          "stage": "mcp_filtered",
+          "total": 136,
+          "candidates": [
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 1,
+              "score": 0.02170673076923077
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 2,
+              "score": 0.02101254480286738
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 3,
+              "score": 0.02022540983606557
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 4,
+              "score": 0.020195101701951015
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 5,
+              "score": 0.020153272576636287
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 6,
+              "score": 0.01952561669829222
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 7,
+              "score": 0.018629807692307692
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 8,
+              "score": 0.0182928898693365
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 9,
+              "score": 0.016686983610998237
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 10,
+              "score": 0.01639344262295082
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 11,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_66ded50042b72c85",
+              "rank": 12,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 13,
+              "score": 0.015625
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 14,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 15,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_12eb5dca3cd4c8d5",
+              "rank": 16,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 17,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 18,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 19,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 20,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 21,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 22,
+              "score": 0.014084507042253521
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 23,
+              "score": 0.013888888888888888
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 24,
+              "score": 0.0136986301369863
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 25,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 26,
+              "score": 0.013333333333333334
+            },
+            {
+              "id": "chunk_2c5f8ac01976a49e",
+              "rank": 27,
+              "score": 0.012658227848101266
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 28,
+              "score": 0.012345679012345678
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 29,
+              "score": 0.012195121951219513
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 30,
+              "score": 0.012048192771084338
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 31,
+              "score": 0.011627906976744186
+            },
+            {
+              "id": "chunk_3a4ec2bfe51ece6d",
+              "rank": 32,
+              "score": 0.011494252873563218
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 33,
+              "score": 0.011475409836065573
+            },
+            {
+              "id": "chunk_e59ae887eeed7fc8",
+              "rank": 34,
+              "score": 0.011363636363636364
+            },
+            {
+              "id": "chunk_4522a2d573603bdc",
+              "rank": 35,
+              "score": 0.011111111111111112
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 36,
+              "score": 0.01111111111111111
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 37,
+              "score": 0.010869565217391304
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 38,
+              "score": 0.010638297872340425
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]",
+              "rank": 39,
+              "score": 0.01044776119402985
+            },
+            {
+              "id": "chunk_a6d703c90c342e2f",
+              "rank": 40,
+              "score": 0.010294117647058823
+            },
+            {
+              "id": "chunk_7679d9f6381c60c5",
+              "rank": 41,
+              "score": 0.01020408163265306
+            },
+            {
+              "id": "chunk_14ce64e24d69dcbc",
+              "rank": 42,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 43,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "chunk_52d4846a2e226a1d",
+              "rank": 44,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 45,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 46,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 47,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_01cf570afb2b0302",
+              "rank": 48,
+              "score": 0.00972222222222222
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 49,
+              "score": 0.009523809523809525
+            },
+            {
+              "id": "chunk_c2cfb084b286050f",
+              "rank": 50,
+              "score": 0.00945945945945946
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 51,
+              "score": 0.009345794392523364
+            },
+            {
+              "id": "chunk_0bcb02c6d63eb4da",
+              "rank": 52,
+              "score": 0.009333333333333334
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 53,
+              "score": 0.009259259259259259
+            },
+            {
+              "id": "chunk_71e060269d608637",
+              "rank": 54,
+              "score": 0.009259259259259259
+            },
+            {
+              "id": "chunk_e246534e63f368a3",
+              "rank": 55,
+              "score": 0.009210526315789473
+            },
+            {
+              "id": "chunk_7f6341c93355afdc",
+              "rank": 56,
+              "score": 0.009174311926605505
+            },
+            {
+              "id": "chunk_99656b033691b00f",
+              "rank": 57,
+              "score": 0.00909090909090909
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 58,
+              "score": 0.00909090909090909
+            },
+            {
+              "id": "chunk_38727424baa0c38a",
+              "rank": 59,
+              "score": 0.009009009009009009
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 60,
+              "score": 0.009009009009009009
+            },
+            {
+              "id": "chunk_f9f3afc3a807d7bb",
+              "rank": 61,
+              "score": 0.008974358974358974
+            },
+            {
+              "id": "chunk_52ef519bb1653acf",
+              "rank": 62,
+              "score": 0.008771929824561403
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 63,
+              "score": 0.008749999999999999
+            },
+            {
+              "id": "chunk_9e26d17867c8041a",
+              "rank": 64,
+              "score": 0.008695652173913044
+            },
+            {
+              "id": "chunk_bc91fff0153be619",
+              "rank": 65,
+              "score": 0.008547008547008548
+            },
+            {
+              "id": "chunk_0d71420bc9cb46b5",
+              "rank": 66,
+              "score": 0.008333333333333333
+            },
+            {
+              "id": "chunk_f8d768ee93a88385",
+              "rank": 67,
+              "score": 0.008333333333333331
+            },
+            {
+              "id": "chunk_46e6558477633e4b",
+              "rank": 68,
+              "score": 0.008333333333333331
+            },
+            {
+              "id": "chunk_9dcfd40b7b99f99d",
+              "rank": 69,
+              "score": 0.008264462809917356
+            },
+            {
+              "id": "chunk_68b1a1ef1eb7c4d0",
+              "rank": 70,
+              "score": 0.00813953488372093
+            },
+            {
+              "id": "chunk_327409a8d1c0b181",
+              "rank": 71,
+              "score": 0.008130081300813009
+            },
+            {
+              "id": "chunk_8d64bcbe6eb47906",
+              "rank": 72,
+              "score": 0.008064516129032258
+            },
+            {
+              "id": "chunk_060cc73bd8ae88ce",
+              "rank": 73,
+              "score": 0.008
+            },
+            {
+              "id": "chunk_e4aa887080c5f452",
+              "rank": 74,
+              "score": 0.008
+            },
+            {
+              "id": "chunk_8e377ebc2127b203",
+              "rank": 75,
+              "score": 0.007874015748031496
+            },
+            {
+              "id": "chunk_660036e191e0971d",
+              "rank": 76,
+              "score": 0.007865168539325841
+            },
+            {
+              "id": "chunk_6d65750eca47eb68",
+              "rank": 77,
+              "score": 0.007865168539325841
+            },
+            {
+              "id": "chunk_96ecf0972a092ee4",
+              "rank": 78,
+              "score": 0.007751937984496124
+            },
+            {
+              "id": "chunk_eccc16cd05347e35",
+              "rank": 79,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 80,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_e875dc8dea20b4bd",
+              "rank": 81,
+              "score": 0.007692307692307693
+            },
+            {
+              "id": "chunk_f967db80b2c69063",
+              "rank": 82,
+              "score": 0.007633587786259542
+            },
+            {
+              "id": "chunk_2dbef88920624c83",
+              "rank": 83,
+              "score": 0.0076086956521739125
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 84,
+              "score": 0.007526881720430108
+            },
+            {
+              "id": "chunk_ffb28a36357048d4",
+              "rank": 85,
+              "score": 0.007518796992481203
+            },
+            {
+              "id": "chunk_1dbdd147d3118d18",
+              "rank": 86,
+              "score": 0.007446808510638297
+            },
+            {
+              "id": "chunk_35fcd3723cadf88c",
+              "rank": 87,
+              "score": 0.007368421052631578
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 88,
+              "score": 0.0072992700729927005
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 89,
+              "score": 0.007246376811594203
+            },
+            {
+              "id": "chunk_37aa4ab9b54e6f09",
+              "rank": 90,
+              "score": 0.007216494845360824
+            },
+            {
+              "id": "chunk_c6ba058f497b1678",
+              "rank": 91,
+              "score": 0.007216494845360824
+            },
+            {
+              "id": "chunk_05f98b226ad224fa",
+              "rank": 92,
+              "score": 0.007194244604316547
+            },
+            {
+              "id": "chunk_bd90d413f35ba6a1",
+              "rank": 93,
+              "score": 0.007194244604316547
+            },
+            {
+              "id": "chunk_68c84d515836f1f3",
+              "rank": 94,
+              "score": 0.007070707070707071
+            },
+            {
+              "id": "chunk_b6a9fd0123deb5c3",
+              "rank": 95,
+              "score": 0.006999999999999999
+            },
+            {
+              "id": "chunk_d555e9140d93cb7d",
+              "rank": 96,
+              "score": 0.006796116504854368
+            },
+            {
+              "id": "chunk_9da5e9600af905b1",
+              "rank": 97,
+              "score": 0.006730769230769231
+            },
+            {
+              "id": "chunk_ffbe45a08aa01a76",
+              "rank": 98,
+              "score": 0.006730769230769231
+            },
+            {
+              "id": "chunk_11fd502c25789d2c",
+              "rank": 99,
+              "score": 0.006666666666666667
+            },
+            {
+              "id": "chunk_95d5c4e9e1b31440",
+              "rank": 100,
+              "score": 0.0062499999999999995
+            },
+            {
+              "id": "chunk_0f0122bba890d026",
+              "rank": 101,
+              "score": 0.006194690265486726
+            },
+            {
+              "id": "chunk_e717dd91f6310e5e",
+              "rank": 102,
+              "score": 0.00608695652173913
+            },
+            {
+              "id": "chunk_ab8073e4477f69a1",
+              "rank": 103,
+              "score": 0.005982905982905983
+            },
+            {
+              "id": "chunk_b48381382006507f",
+              "rank": 104,
+              "score": 0.005932203389830508
+            },
+            {
+              "id": "chunk_909900dfe45d00a5",
+              "rank": 105,
+              "score": 0.005932203389830508
+            },
+            {
+              "id": "chunk_c3a40227201c81a0",
+              "rank": 106,
+              "score": 0.00588235294117647
+            },
+            {
+              "id": "chunk_b31a6412a1f76c84",
+              "rank": 107,
+              "score": 0.005785123966942148
+            },
+            {
+              "id": "chunk_2d99c00e96f9aa63",
+              "rank": 108,
+              "score": 0.005737704918032787
+            },
+            {
+              "id": "chunk_3a8fa5f529794205",
+              "rank": 109,
+              "score": 0.005737704918032787
+            },
+            {
+              "id": "chunk_991007475df85501",
+              "rank": 110,
+              "score": 0.00564516129032258
+            },
+            {
+              "id": "chunk_3079de9bc98c7605",
+              "rank": 111,
+              "score": 0.005555555555555555
+            },
+            {
+              "id": "chunk_69760e925a2a84a0",
+              "rank": 112,
+              "score": 0.005555555555555555
+            },
+            {
+              "id": "chunk_352e866792b2f66f",
+              "rank": 113,
+              "score": 0.00546875
+            },
+            {
+              "id": "chunk_996592ebebcb8272",
+              "rank": 114,
+              "score": 0.00546875
+            },
+            {
+              "id": "chunk_9113f0dacc892020",
+              "rank": 115,
+              "score": 0.005343511450381679
+            },
+            {
+              "id": "chunk_27774f51486e61ac",
+              "rank": 116,
+              "score": 0.0053030303030303025
+            },
+            {
+              "id": "chunk_96c8ce1a94dc6f10",
+              "rank": 117,
+              "score": 0.0053030303030303025
+            },
+            {
+              "id": "chunk_0cd707480a3a6a43",
+              "rank": 118,
+              "score": 0.005263157894736841
+            },
+            {
+              "id": "chunk_2e1db41fdf1400e6",
+              "rank": 119,
+              "score": 0.005223880597014925
+            },
+            {
+              "id": "chunk_b0bb2da609714ddf",
+              "rank": 120,
+              "score": 0.005185185185185185
+            },
+            {
+              "id": "chunk_f8ac783ad3bff44b",
+              "rank": 121,
+              "score": 0.005147058823529412
+            },
+            {
+              "id": "chunk_5096dd4caa000fcf",
+              "rank": 122,
+              "score": 0.005147058823529412
+            },
+            {
+              "id": "chunk_8379ba2f6c4eff28",
+              "rank": 123,
+              "score": 0.00510948905109489
+            },
+            {
+              "id": "chunk_38b31a3bd597e7ec",
+              "rank": 124,
+              "score": 0.004999999999999999
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 125,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-exact-registry-hit.ts\",104,256,\"typescript\"]",
+              "rank": 126,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 127,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 128,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 129,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 130,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 131,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 132,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 133,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 134,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 135,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 136,
+              "score": 0
+            }
+          ]
+        },
+        {
+          "stage": "reranker_input",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 1,
+              "score": 0.02170673076923077
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 2,
+              "score": 0.02101254480286738
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 3,
+              "score": 0.02022540983606557
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 4,
+              "score": 0.020195101701951015
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 5,
+              "score": 0.020153272576636287
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 6,
+              "score": 0.01952561669829222
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 7,
+              "score": 0.018629807692307692
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 8,
+              "score": 0.0182928898693365
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 9,
+              "score": 0.016686983610998237
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 10,
+              "score": 0.01639344262295082
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 11,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_66ded50042b72c85",
+              "rank": 12,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 13,
+              "score": 0.015625
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 14,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 15,
+              "score": 0.015384615384615385
+            },
+            {
+              "id": "chunk_12eb5dca3cd4c8d5",
+              "rank": 16,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 17,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 18,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 19,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 20,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 21,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 22,
+              "score": 0.014084507042253521
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 23,
+              "score": 0.013888888888888888
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 24,
+              "score": 0.0136986301369863
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 25,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_2c5f8ac01976a49e",
+              "rank": 26,
+              "score": 0.012658227848101266
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 27,
+              "score": 0.012345679012345678
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 28,
+              "score": 0.012195121951219513
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 29,
+              "score": 0.012048192771084338
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 30,
+              "score": 0.011627906976744186
+            },
+            {
+              "id": "chunk_3a4ec2bfe51ece6d",
+              "rank": 31,
+              "score": 0.011494252873563218
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 32,
+              "score": 0.011475409836065573
+            },
+            {
+              "id": "chunk_e59ae887eeed7fc8",
+              "rank": 33,
+              "score": 0.011363636363636364
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 34,
+              "score": 0.01111111111111111
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 35,
+              "score": 0.010869565217391304
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 36,
+              "score": 0.010638297872340425
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]",
+              "rank": 37,
+              "score": 0.01044776119402985
+            },
+            {
+              "id": "chunk_a6d703c90c342e2f",
+              "rank": 38,
+              "score": 0.010294117647058823
+            },
+            {
+              "id": "chunk_14ce64e24d69dcbc",
+              "rank": 39,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 40,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "chunk_52d4846a2e226a1d",
+              "rank": 41,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 42,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 43,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 44,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_01cf570afb2b0302",
+              "rank": 45,
+              "score": 0.00972222222222222
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 46,
+              "score": 0.009523809523809525
+            },
+            {
+              "id": "chunk_c2cfb084b286050f",
+              "rank": 47,
+              "score": 0.00945945945945946
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 48,
+              "score": 0.009345794392523364
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 49,
+              "score": 0.00909090909090909
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 50,
+              "score": 0.008749999999999999
+            },
+            {
+              "id": "chunk_9e26d17867c8041a",
+              "rank": 51,
+              "score": 0.008695652173913044
+            },
+            {
+              "id": "chunk_1dbdd147d3118d18",
+              "rank": 52,
+              "score": 0.007446808510638297
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 53,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-exact-registry-hit.ts\",104,256,\"typescript\"]",
+              "rank": 54,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 55,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 56,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 57,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 58,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 59,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 60,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 61,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 62,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 63,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 64,
+              "score": 0
+            }
+          ]
+        },
+        {
+          "stage": "reranker_provider_output",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 1,
+              "score": 21.031640296741205
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 2,
+              "score": 20.774393471014523
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 3,
+              "score": 20.74999804576229
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 4,
+              "score": 20.499874423886595
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 5,
+              "score": 20.48030564745112
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 6,
+              "score": 20.454693428256935
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 7,
+              "score": 20.386480596796513
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 8,
+              "score": 20.371766590783185
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 9,
+              "score": 20.368997249138634
+            },
+            {
+              "id": "chunk_66ded50042b72c85",
+              "rank": 10,
+              "score": 20.31187317182477
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 11,
+              "score": 20.307304992058107
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 12,
+              "score": 20.282036568516247
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 13,
+              "score": 20.27735068932301
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 14,
+              "score": 20.27050063026922
+            },
+            {
+              "id": "chunk_52d4846a2e226a1d",
+              "rank": 15,
+              "score": 20.256333870046547
+            },
+            {
+              "id": "chunk_3a4ec2bfe51ece6d",
+              "rank": 16,
+              "score": 20.245993295062654
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 17,
+              "score": 20.241486483731823
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 18,
+              "score": 20.20519823576991
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 19,
+              "score": 20.20285753372488
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 20,
+              "score": 20.200119670248416
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 21,
+              "score": 20.179270953506258
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 22,
+              "score": 20.17899406284497
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 23,
+              "score": 20.167204604361437
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 24,
+              "score": 20.165025643868184
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 25,
+              "score": 20.145418150119916
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 26,
+              "score": 20.08482357174349
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 27,
+              "score": 20.03625994761436
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 28,
+              "score": 20.033146565766415
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 29,
+              "score": 20.02812812595022
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 30,
+              "score": 20.01632791026248
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 31,
+              "score": 20.007015773441456
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 32,
+              "score": 19.998468268402206
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 33,
+              "score": 19.998362858492122
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 34,
+              "score": 19.97759473377609
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 35,
+              "score": 19.97741800898916
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 36,
+              "score": 19.973820917547272
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 37,
+              "score": 19.94176772841
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 38,
+              "score": 19.923651732128523
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 39,
+              "score": 19.918668260906355
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 40,
+              "score": 19.88256563329919
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 41,
+              "score": 19.85596343190372
+            },
+            {
+              "id": "chunk_12eb5dca3cd4c8d5",
+              "rank": 42,
+              "score": 19.822448045747414
+            },
+            {
+              "id": "chunk_1dbdd147d3118d18",
+              "rank": 43,
+              "score": 19.804603312398683
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 44,
+              "score": 19.780176785979158
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-exact-registry-hit.ts\",104,256,\"typescript\"]",
+              "rank": 45,
+              "score": 19.77858211354896
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 46,
+              "score": 19.734856003642122
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 47,
+              "score": 19.72735127424673
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 48,
+              "score": 19.709190689187672
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 49,
+              "score": 19.694203900354978
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 50,
+              "score": 19.685217362088938
+            },
+            {
+              "id": "chunk_14ce64e24d69dcbc",
+              "rank": 51,
+              "score": 19.67650462875956
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 52,
+              "score": 19.657351835667953
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 53,
+              "score": 19.657351835667953
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 54,
+              "score": 19.644886685740957
+            },
+            {
+              "id": "chunk_01cf570afb2b0302",
+              "rank": 55,
+              "score": 19.621142355648054
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 56,
+              "score": 19.593727935000228
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]",
+              "rank": 57,
+              "score": 19.56789311690186
+            },
+            {
+              "id": "chunk_9e26d17867c8041a",
+              "rank": 58,
+              "score": 19.520004982971255
+            },
+            {
+              "id": "chunk_a6d703c90c342e2f",
+              "rank": 59,
+              "score": 19.515823018021116
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 60,
+              "score": 19.34194160515084
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 61,
+              "score": 19.27768936275753
+            },
+            {
+              "id": "chunk_e59ae887eeed7fc8",
+              "rank": 62,
+              "score": 19.168323896511023
+            },
+            {
+              "id": "chunk_2c5f8ac01976a49e",
+              "rank": 63,
+              "score": 18.850277720404527
+            },
+            {
+              "id": "chunk_c2cfb084b286050f",
+              "rank": 64,
+              "score": 18.757848772114098
+            }
+          ]
+        },
+        {
+          "stage": "reranker_fusion_output",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 1,
+              "score": 20.499874423886595
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 2,
+              "score": 20.74999804576229
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 3,
+              "score": 20.774393471014523
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 4,
+              "score": 20.165025643868184
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 5,
+              "score": 20.454693428256935
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 6,
+              "score": 19.94176772841
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 7,
+              "score": 20.386480596796513
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 8,
+              "score": 20.17899406284497
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 9,
+              "score": 20.241486483731823
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 10,
+              "score": 20.282036568516247
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 11,
+              "score": 20.368997249138634
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 12,
+              "score": 20.033146565766415
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 13,
+              "score": 20.20285753372488
+            },
+            {
+              "id": "chunk_9e26d17867c8041a",
+              "rank": 14,
+              "score": 19.520004982971255
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 15,
+              "score": 19.72735127424673
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 16,
+              "score": 19.85596343190372
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 17,
+              "score": 20.27735068932301
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 18,
+              "score": 20.08482357174349
+            },
+            {
+              "id": "chunk_3a4ec2bfe51ece6d",
+              "rank": 19,
+              "score": 20.245993295062654
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 20,
+              "score": 20.01632791026248
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 21,
+              "score": 20.48030564745112
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 22,
+              "score": 20.27050063026922
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 23,
+              "score": 19.923651732128523
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 24,
+              "score": 20.179270953506258
+            },
+            {
+              "id": "chunk_12eb5dca3cd4c8d5",
+              "rank": 25,
+              "score": 19.822448045747414
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 26,
+              "score": 19.709190689187672
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 27,
+              "score": 19.88256563329919
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 28,
+              "score": 20.167204604361437
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 29,
+              "score": 20.145418150119916
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 30,
+              "score": 19.973820917547272
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 31,
+              "score": 19.918668260906355
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 32,
+              "score": 19.27768936275753
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 33,
+              "score": 19.34194160515084
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 34,
+              "score": 19.644886685740957
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-exact-registry-hit.ts\",104,256,\"typescript\"]",
+              "rank": 35,
+              "score": 19.77858211354896
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 36,
+              "score": 19.685217362088938
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 37,
+              "score": 21.031640296741205
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 38,
+              "score": 20.371766590783185
+            },
+            {
+              "id": "chunk_66ded50042b72c85",
+              "rank": 39,
+              "score": 20.31187317182477
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 40,
+              "score": 20.307304992058107
+            },
+            {
+              "id": "chunk_52d4846a2e226a1d",
+              "rank": 41,
+              "score": 20.256333870046547
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 42,
+              "score": 20.20519823576991
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 43,
+              "score": 20.200119670248416
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 44,
+              "score": 20.03625994761436
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 45,
+              "score": 20.02812812595022
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 46,
+              "score": 20.007015773441456
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 47,
+              "score": 19.998468268402206
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 48,
+              "score": 19.998362858492122
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 49,
+              "score": 19.97759473377609
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 50,
+              "score": 19.97741800898916
+            },
+            {
+              "id": "chunk_1dbdd147d3118d18",
+              "rank": 51,
+              "score": 19.804603312398683
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 52,
+              "score": 19.780176785979158
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 53,
+              "score": 19.734856003642122
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 54,
+              "score": 19.694203900354978
+            },
+            {
+              "id": "chunk_14ce64e24d69dcbc",
+              "rank": 55,
+              "score": 19.67650462875956
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 56,
+              "score": 19.657351835667953
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 57,
+              "score": 19.657351835667953
+            },
+            {
+              "id": "chunk_01cf570afb2b0302",
+              "rank": 58,
+              "score": 19.621142355648054
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 59,
+              "score": 19.593727935000228
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",472,507,\"typescript\"]",
+              "rank": 60,
+              "score": 19.56789311690186
+            },
+            {
+              "id": "chunk_a6d703c90c342e2f",
+              "rank": 61,
+              "score": 19.515823018021116
+            },
+            {
+              "id": "chunk_e59ae887eeed7fc8",
+              "rank": 62,
+              "score": 19.168323896511023
+            },
+            {
+              "id": "chunk_2c5f8ac01976a49e",
+              "rank": 63,
+              "score": 18.850277720404527
+            },
+            {
+              "id": "chunk_c2cfb084b286050f",
+              "rank": 64,
+              "score": 18.757848772114098
+            }
+          ]
+        }
+      ]
+    },
+    "admitted": {
+      "callerTerms": [
+        "search code handler"
+      ],
+      "stages": [
+        {
+          "stage": "mcp_filtered",
+          "total": 97,
+          "candidates": [
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 1,
+              "score": 0.0392572700796527
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 2,
+              "score": 0.0375801282051282
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 3,
+              "score": 0.03527914438502674
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 4,
+              "score": 0.03525806589097728
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 5,
+              "score": 0.03252247488101534
+            },
+            {
+              "id": "chunk_bf3988e381be449e",
+              "rank": 6,
+              "score": 0.029709507042253523
+            },
+            {
+              "id": "chunk_f827da0390dabaaf",
+              "rank": 7,
+              "score": 0.029273504273504274
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 8,
+              "score": 0.028371628371628373
+            },
+            {
+              "id": "chunk_453d35ac6f6b569c",
+              "rank": 9,
+              "score": 0.027437578462826052
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 10,
+              "score": 0.025503573749187783
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 11,
+              "score": 0.025326537113730486
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 12,
+              "score": 0.024706420619185605
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 13,
+              "score": 0.0245615879213138
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 14,
+              "score": 0.023992088462810847
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 15,
+              "score": 0.022559393274853796
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 16,
+              "score": 0.02240143369175627
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 17,
+              "score": 0.021697957839262184
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 18,
+              "score": 0.021287976037655115
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 19,
+              "score": 0.01800820707070707
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 20,
+              "score": 0.017937567945333126
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 21,
+              "score": 0.01677805625174046
+            },
+            {
+              "id": "chunk_bfa9897d446dd8bd",
+              "rank": 22,
+              "score": 0.01639344262295082
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 23,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_2e227949e7ce5de3",
+              "rank": 24,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 25,
+              "score": 0.015649738156132017
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 26,
+              "score": 0.015625
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 27,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 28,
+              "score": 0.014925373134328358
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 29,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 30,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 31,
+              "score": 0.014597588791137178
+            },
+            {
+              "id": "chunk_50bb106335612344",
+              "rank": 32,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 33,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "derived:[\"packages/core/src/net/fetch-with-deadline.ts\",116,121,\"typescript\"]",
+              "rank": 34,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 35,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 36,
+              "score": 0.014084507042253521
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 37,
+              "score": 0.013888888888888888
+            },
+            {
+              "id": "chunk_f251cc8d77eb550b",
+              "rank": 38,
+              "score": 0.0136986301369863
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 39,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_600c3a5e88867c12",
+              "rank": 40,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 41,
+              "score": 0.013333333333333334
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 42,
+              "score": 0.013035819142689371
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 43,
+              "score": 0.012345679012345678
+            },
+            {
+              "id": "chunk_38b31a3bd597e7ec",
+              "rank": 44,
+              "score": 0.012216494845360824
+            },
+            {
+              "id": "chunk_61fde16d66bf0a24",
+              "rank": 45,
+              "score": 0.012195121951219513
+            },
+            {
+              "id": "chunk_5669e4efcb08a77f",
+              "rank": 46,
+              "score": 0.012195121951219513
+            },
+            {
+              "id": "chunk_14d98c79ae9cbecc",
+              "rank": 47,
+              "score": 0.012048192771084338
+            },
+            {
+              "id": "chunk_693b9ece9d137287",
+              "rank": 48,
+              "score": 0.011764705882352941
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 49,
+              "score": 0.011627906976744186
+            },
+            {
+              "id": "chunk_272a3a354dab4cd9",
+              "rank": 50,
+              "score": 0.011494252873563218
+            },
+            {
+              "id": "derived:[\"packages/core/src/vectordb/zilliz-utils.test.ts\",8,8,\"typescript\"]",
+              "rank": 51,
+              "score": 0.011475409836065573
+            },
+            {
+              "id": "chunk_74364b9b44523119",
+              "rank": 52,
+              "score": 0.011363636363636364
+            },
+            {
+              "id": "chunk_9bde45193f484988",
+              "rank": 53,
+              "score": 0.01129032258064516
+            },
+            {
+              "id": "chunk_ac1ab5c08e3f6379",
+              "rank": 54,
+              "score": 0.011235955056179775
+            },
+            {
+              "id": "chunk_7b6c52b514bb8456",
+              "rank": 55,
+              "score": 0.011111111111111112
+            },
+            {
+              "id": "derived:[\"packages/core/src/net/fetch-with-deadline.test.ts\",9,9,\"typescript\"]",
+              "rank": 56,
+              "score": 0.01111111111111111
+            },
+            {
+              "id": "derived:[\"packages/core/src/vectordb/milvus-restful-http.test.ts\",8,8,\"typescript\"]",
+              "rank": 57,
+              "score": 0.0109375
+            },
+            {
+              "id": "chunk_e886047c2bb96678",
+              "rank": 58,
+              "score": 0.010869565217391304
+            },
+            {
+              "id": "chunk_05018107c55da395",
+              "rank": 59,
+              "score": 0.010869565217391304
+            },
+            {
+              "id": "chunk_adf0736dd8857154",
+              "rank": 60,
+              "score": 0.010752688172043012
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 61,
+              "score": 0.010638297872340425
+            },
+            {
+              "id": "chunk_352e866792b2f66f",
+              "rank": 62,
+              "score": 0.010606060606060605
+            },
+            {
+              "id": "chunk_2134510aa4348c61",
+              "rank": 63,
+              "score": 0.01044776119402985
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/registry.test.ts\",106,137,\"typescript\"]",
+              "rank": 64,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "chunk_f4076d2e751bfaa7",
+              "rank": 65,
+              "score": 0.009999999999999998
+            },
+            {
+              "id": "chunk_04cb008bf3131e15",
+              "rank": 66,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7a01daf29d738e57",
+              "rank": 67,
+              "score": 0.009900990099009901
+            },
+            {
+              "id": "chunk_7c060f535cd18ed2",
+              "rank": 68,
+              "score": 0.00980392156862745
+            },
+            {
+              "id": "chunk_5e7a980dd2151cd9",
+              "rank": 69,
+              "score": 0.00972222222222222
+            },
+            {
+              "id": "chunk_69c7c9cb79624af1",
+              "rank": 70,
+              "score": 0.009615384615384616
+            },
+            {
+              "id": "chunk_4140fa2b23d6aaac",
+              "rank": 71,
+              "score": 0.009523809523809525
+            },
+            {
+              "id": "chunk_0cbe6340ce2b7346",
+              "rank": 72,
+              "score": 0.009523809523809525
+            },
+            {
+              "id": "chunk_469d15cd7c5bb128",
+              "rank": 73,
+              "score": 0.009345794392523364
+            },
+            {
+              "id": "chunk_2df7fc00a1b2ee7e",
+              "rank": 74,
+              "score": 0.009333333333333334
+            },
+            {
+              "id": "chunk_91ff3b0c996982a6",
+              "rank": 75,
+              "score": 0.009259259259259259
+            },
+            {
+              "id": "chunk_71e060269d608637",
+              "rank": 76,
+              "score": 0.009174311926605505
+            },
+            {
+              "id": "chunk_38727424baa0c38a",
+              "rank": 77,
+              "score": 0.009009009009009009
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 78,
+              "score": 0.008974358974358974
+            },
+            {
+              "id": "chunk_52ef519bb1653acf",
+              "rank": 79,
+              "score": 0.008771929824561403
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 80,
+              "score": 0.008749999999999999
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 81,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",220,284,\"typescript\"]",
+              "rank": 82,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1362,1390,\"typescript\"]",
+              "rank": 83,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",813,823,\"typescript\"]",
+              "rank": 84,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1023,1120,\"typescript\"]",
+              "rank": 85,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1033,1093,\"typescript\"]",
+              "rank": 86,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1122,1225,\"typescript\"]",
+              "rank": 87,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 88,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 89,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 90,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 91,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 92,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 93,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 94,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 95,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 96,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 97,
+              "score": 0
+            }
+          ]
+        },
+        {
+          "stage": "reranker_input",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 1,
+              "score": 0.0392572700796527
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 2,
+              "score": 0.0375801282051282
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 3,
+              "score": 0.03527914438502674
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 4,
+              "score": 0.03525806589097728
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 5,
+              "score": 0.03252247488101534
+            },
+            {
+              "id": "chunk_bf3988e381be449e",
+              "rank": 6,
+              "score": 0.029709507042253523
+            },
+            {
+              "id": "chunk_f827da0390dabaaf",
+              "rank": 7,
+              "score": 0.029273504273504274
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 8,
+              "score": 0.028371628371628373
+            },
+            {
+              "id": "chunk_453d35ac6f6b569c",
+              "rank": 9,
+              "score": 0.027437578462826052
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 10,
+              "score": 0.025503573749187783
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 11,
+              "score": 0.025326537113730486
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 12,
+              "score": 0.024706420619185605
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 13,
+              "score": 0.0245615879213138
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 14,
+              "score": 0.023992088462810847
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 15,
+              "score": 0.022559393274853796
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 16,
+              "score": 0.02240143369175627
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 17,
+              "score": 0.021697957839262184
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 18,
+              "score": 0.021287976037655115
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 19,
+              "score": 0.01800820707070707
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 20,
+              "score": 0.017937567945333126
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 21,
+              "score": 0.01677805625174046
+            },
+            {
+              "id": "chunk_bfa9897d446dd8bd",
+              "rank": 22,
+              "score": 0.01639344262295082
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 23,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_2e227949e7ce5de3",
+              "rank": 24,
+              "score": 0.015873015873015872
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 25,
+              "score": 0.015649738156132017
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 26,
+              "score": 0.015625
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 27,
+              "score": 0.015151515151515152
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 28,
+              "score": 0.014925373134328358
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 29,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 30,
+              "score": 0.014705882352941176
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 31,
+              "score": 0.014597588791137178
+            },
+            {
+              "id": "chunk_50bb106335612344",
+              "rank": 32,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 33,
+              "score": 0.014492753623188406
+            },
+            {
+              "id": "derived:[\"packages/core/src/net/fetch-with-deadline.ts\",116,121,\"typescript\"]",
+              "rank": 34,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 35,
+              "score": 0.014285714285714285
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 36,
+              "score": 0.014084507042253521
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 37,
+              "score": 0.013888888888888888
+            },
+            {
+              "id": "chunk_f251cc8d77eb550b",
+              "rank": 38,
+              "score": 0.0136986301369863
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 39,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_600c3a5e88867c12",
+              "rank": 40,
+              "score": 0.013513513513513514
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 41,
+              "score": 0.013333333333333334
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 42,
+              "score": 0.013035819142689371
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 43,
+              "score": 0.012345679012345678
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 44,
+              "score": 0.011627906976744186
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 45,
+              "score": 0.010638297872340425
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 46,
+              "score": 0.008974358974358974
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 47,
+              "score": 0.008749999999999999
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 48,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",220,284,\"typescript\"]",
+              "rank": 49,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1362,1390,\"typescript\"]",
+              "rank": 50,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",813,823,\"typescript\"]",
+              "rank": 51,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1023,1120,\"typescript\"]",
+              "rank": 52,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1033,1093,\"typescript\"]",
+              "rank": 53,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1122,1225,\"typescript\"]",
+              "rank": 54,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 55,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 56,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 57,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 58,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 59,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 60,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 61,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 62,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 63,
+              "score": 0
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 64,
+              "score": 0
+            }
+          ]
+        },
+        {
+          "stage": "reranker_provider_output",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 1,
+              "score": 25.177213045961576
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 2,
+              "score": 24.985021852476315
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 3,
+              "score": 24.955292524169465
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 4,
+              "score": 24.726650094455803
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 5,
+              "score": 24.675261247055555
+            },
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 6,
+              "score": 24.660192657592578
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 7,
+              "score": 24.63286836671364
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 8,
+              "score": 24.609568527088772
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 9,
+              "score": 24.57278559117252
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 10,
+              "score": 24.508082396948097
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 11,
+              "score": 24.487288712464235
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 12,
+              "score": 24.463921978738703
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 13,
+              "score": 24.421604318709058
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 14,
+              "score": 24.41152842620396
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 15,
+              "score": 24.391870521794072
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 16,
+              "score": 24.388772469080152
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 17,
+              "score": 24.36285753431467
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 18,
+              "score": 24.361919116432965
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",813,823,\"typescript\"]",
+              "rank": 19,
+              "score": 24.338670279089417
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 20,
+              "score": 24.336024372271847
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 21,
+              "score": 24.29871764363444
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 22,
+              "score": 24.2878615374609
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 23,
+              "score": 24.282284383233645
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 24,
+              "score": 24.278233161165183
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 25,
+              "score": 24.25939879249895
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 26,
+              "score": 24.254398842020986
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 27,
+              "score": 24.21667612621637
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 28,
+              "score": 24.20401980503913
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 29,
+              "score": 24.186243582240714
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 30,
+              "score": 24.184175413815485
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 31,
+              "score": 24.17572992320056
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 32,
+              "score": 24.149502480207687
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1023,1120,\"typescript\"]",
+              "rank": 33,
+              "score": 24.129132774569687
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 34,
+              "score": 24.12522420900885
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",220,284,\"typescript\"]",
+              "rank": 35,
+              "score": 24.107927077653283
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1362,1390,\"typescript\"]",
+              "rank": 36,
+              "score": 24.104332672501943
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 37,
+              "score": 24.102893373299686
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 38,
+              "score": 24.09339413460573
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 39,
+              "score": 24.06289394446913
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 40,
+              "score": 24.02961740869788
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 41,
+              "score": 24.020864792817648
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 42,
+              "score": 23.987377069890925
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 43,
+              "score": 23.96262964322647
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 44,
+              "score": 23.94825023810198
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 45,
+              "score": 23.920899928257274
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 46,
+              "score": 23.920899928257274
+            },
+            {
+              "id": "chunk_2e227949e7ce5de3",
+              "rank": 47,
+              "score": 23.896403703865143
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 48,
+              "score": 23.887986848870348
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1033,1093,\"typescript\"]",
+              "rank": 49,
+              "score": 23.876583566668224
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 50,
+              "score": 23.867844032309865
+            },
+            {
+              "id": "chunk_f827da0390dabaaf",
+              "rank": 51,
+              "score": 23.854946083396573
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 52,
+              "score": 23.84270514581859
+            },
+            {
+              "id": "chunk_453d35ac6f6b569c",
+              "rank": 53,
+              "score": 23.805104918046688
+            },
+            {
+              "id": "chunk_bfa9897d446dd8bd",
+              "rank": 54,
+              "score": 23.801295131429935
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 55,
+              "score": 23.796795254692416
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 56,
+              "score": 23.788869907521523
+            },
+            {
+              "id": "chunk_f251cc8d77eb550b",
+              "rank": 57,
+              "score": 23.64435104332939
+            },
+            {
+              "id": "chunk_bf3988e381be449e",
+              "rank": 58,
+              "score": 23.624103690323533
+            },
+            {
+              "id": "chunk_50bb106335612344",
+              "rank": 59,
+              "score": 23.550208177073987
+            },
+            {
+              "id": "chunk_600c3a5e88867c12",
+              "rank": 60,
+              "score": 23.527755223941167
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 61,
+              "score": 23.52562877357765
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 62,
+              "score": 23.386824279331506
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1122,1225,\"typescript\"]",
+              "rank": 63,
+              "score": 23.290532128470026
+            },
+            {
+              "id": "derived:[\"packages/core/src/net/fetch-with-deadline.ts\",116,121,\"typescript\"]",
+              "rank": 64,
+              "score": 23.10617575450174
+            }
+          ]
+        },
+        {
+          "stage": "reranker_fusion_output",
+          "total": 64,
+          "candidates": [
+            {
+              "id": "chunk_a00ba6a6000d3afd",
+              "rank": 1,
+              "score": 24.660192657592578
+            },
+            {
+              "id": "chunk_16811a8155111ccc",
+              "rank": 2,
+              "score": 24.985021852476315
+            },
+            {
+              "id": "chunk_4fea902f3e63e319",
+              "rank": 3,
+              "score": 24.336024372271847
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",464,539,\"typescript\"]",
+              "rank": 4,
+              "score": 24.955292524169465
+            },
+            {
+              "id": "chunk_74f63ed3237d1df2",
+              "rank": 5,
+              "score": 24.149502480207687
+            },
+            {
+              "id": "chunk_26fdd5b877b5ee4b",
+              "rank": 6,
+              "score": 24.63286836671364
+            },
+            {
+              "id": "chunk_b5a0f84ac2e3384b",
+              "rank": 7,
+              "score": 24.361919116432965
+            },
+            {
+              "id": "chunk_f43cd9fb3f94c862",
+              "rank": 8,
+              "score": 24.675261247055555
+            },
+            {
+              "id": "chunk_7ee822d205e27488",
+              "rank": 9,
+              "score": 24.508082396948097
+            },
+            {
+              "id": "chunk_4d7595654b061863",
+              "rank": 10,
+              "score": 24.609568527088772
+            },
+            {
+              "id": "chunk_87598ee9236a016c",
+              "rank": 11,
+              "score": 24.726650094455803
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",1325,1467,\"typescript\"]",
+              "rank": 12,
+              "score": 24.25939879249895
+            },
+            {
+              "id": "chunk_7eb9f0fae10d7443",
+              "rank": 13,
+              "score": 24.41152842620396
+            },
+            {
+              "id": "chunk_1af13d3503022af7",
+              "rank": 14,
+              "score": 24.2878615374609
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",555,577,\"typescript\"]",
+              "rank": 15,
+              "score": 24.487288712464235
+            },
+            {
+              "id": "chunk_bf3988e381be449e",
+              "rank": 16,
+              "score": 23.624103690323533
+            },
+            {
+              "id": "chunk_f689e93f8317c167",
+              "rank": 17,
+              "score": 23.84270514581859
+            },
+            {
+              "id": "chunk_17ff981defc5bf7d",
+              "rank": 18,
+              "score": 23.987377069890925
+            },
+            {
+              "id": "chunk_3218c4990577bc45",
+              "rank": 19,
+              "score": 24.421604318709058
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",490,494,\"typescript\"]",
+              "rank": 20,
+              "score": 24.388772469080152
+            },
+            {
+              "id": "chunk_54732cda31c00604",
+              "rank": 21,
+              "score": 24.12522420900885
+            },
+            {
+              "id": "chunk_72af70c1ab68fcd2",
+              "rank": 22,
+              "score": 24.36285753431467
+            },
+            {
+              "id": "derived:[\"packages/core/src/net/fetch-with-deadline.ts\",116,121,\"typescript\"]",
+              "rank": 23,
+              "score": 23.10617575450174
+            },
+            {
+              "id": "chunk_faee9cf673c3f0ee",
+              "rank": 24,
+              "score": 23.788869907521523
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",691,703,\"typescript\"]",
+              "rank": 25,
+              "score": 23.94825023810198
+            },
+            {
+              "id": "chunk_b0ba4e5d50733e03",
+              "rank": 26,
+              "score": 24.278233161165183
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",37,307,\"typescript\"]",
+              "rank": 27,
+              "score": 24.020864792817648
+            },
+            {
+              "id": "chunk_6c2513847a36dea3",
+              "rank": 28,
+              "score": 24.102893373299686
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",750,799,\"typescript\"]",
+              "rank": 29,
+              "score": 23.386824279331506
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",2116,2365,\"typescript\"]",
+              "rank": 30,
+              "score": 24.06289394446913
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-response-helpers.ts\",24,26,\"typescript\"]",
+              "rank": 31,
+              "score": 23.52562877357765
+            },
+            {
+              "id": "chunk_50bb106335612344",
+              "rank": 32,
+              "score": 23.550208177073987
+            },
+            {
+              "id": "chunk_f251cc8d77eb550b",
+              "rank": 33,
+              "score": 23.64435104332939
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/search-request-coordinator.ts\",316,344,\"typescript\"]",
+              "rank": 34,
+              "score": 23.887986848870348
+            },
+            {
+              "id": "chunk_600c3a5e88867c12",
+              "rank": 35,
+              "score": 23.527755223941167
+            },
+            {
+              "id": "chunk_1df3db4e61d3a809",
+              "rank": 36,
+              "score": 25.177213045961576
+            },
+            {
+              "id": "chunk_f39d1b9913441fa3",
+              "rank": 37,
+              "score": 24.57278559117252
+            },
+            {
+              "id": "chunk_68ec214b53d2cd51",
+              "rank": 38,
+              "score": 24.463921978738703
+            },
+            {
+              "id": "chunk_d90e59cc9e5c583d",
+              "rank": 39,
+              "score": 24.391870521794072
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",813,823,\"typescript\"]",
+              "rank": 40,
+              "score": 24.338670279089417
+            },
+            {
+              "id": "chunk_acabdc417e44d94d",
+              "rank": 41,
+              "score": 24.29871764363444
+            },
+            {
+              "id": "chunk_3e0967f0de0b120c",
+              "rank": 42,
+              "score": 24.282284383233645
+            },
+            {
+              "id": "chunk_2c12f2a72c870d4b",
+              "rank": 43,
+              "score": 24.254398842020986
+            },
+            {
+              "id": "chunk_f76ec6716e53a49b",
+              "rank": 44,
+              "score": 24.21667612621637
+            },
+            {
+              "id": "chunk_7e15bd1f96c84b54",
+              "rank": 45,
+              "score": 24.20401980503913
+            },
+            {
+              "id": "chunk_dc081b302ce02036",
+              "rank": 46,
+              "score": 24.186243582240714
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,599,\"typescript\"]",
+              "rank": 47,
+              "score": 24.184175413815485
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",509,588,\"typescript\"]",
+              "rank": 48,
+              "score": 24.17572992320056
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1023,1120,\"typescript\"]",
+              "rank": 49,
+              "score": 24.129132774569687
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/tools/search_codebase.test.ts\",220,284,\"typescript\"]",
+              "rank": 50,
+              "score": 24.107927077653283
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1362,1390,\"typescript\"]",
+              "rank": 51,
+              "score": 24.104332672501943
+            },
+            {
+              "id": "chunk_19cf263013ddc858",
+              "rank": 52,
+              "score": 24.09339413460573
+            },
+            {
+              "id": "chunk_5929d55a124bf8b7",
+              "rank": 53,
+              "score": 24.02961740869788
+            },
+            {
+              "id": "chunk_fc533a292fa83a07",
+              "rank": 54,
+              "score": 23.96262964322647
+            },
+            {
+              "id": "chunk_0f7e063b7f517d6b",
+              "rank": 55,
+              "score": 23.920899928257274
+            },
+            {
+              "id": "chunk_9c56d643a7fcffa9",
+              "rank": 56,
+              "score": 23.920899928257274
+            },
+            {
+              "id": "chunk_2e227949e7ce5de3",
+              "rank": 57,
+              "score": 23.896403703865143
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1033,1093,\"typescript\"]",
+              "rank": 58,
+              "score": 23.876583566668224
+            },
+            {
+              "id": "chunk_75f6c3eff20fba95",
+              "rank": 59,
+              "score": 23.867844032309865
+            },
+            {
+              "id": "chunk_f827da0390dabaaf",
+              "rank": 60,
+              "score": 23.854946083396573
+            },
+            {
+              "id": "chunk_453d35ac6f6b569c",
+              "rank": 61,
+              "score": 23.805104918046688
+            },
+            {
+              "id": "chunk_bfa9897d446dd8bd",
+              "rank": 62,
+              "score": 23.801295131429935
+            },
+            {
+              "id": "chunk_a0ed14e1357f5f8b",
+              "rank": 63,
+              "score": 23.796795254692416
+            },
+            {
+              "id": "derived:[\"packages/mcp/src/core/handlers.ts\",1122,1225,\"typescript\"]",
+              "rank": 64,
+              "score": 23.290532128470026
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

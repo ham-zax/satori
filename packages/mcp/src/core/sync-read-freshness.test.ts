@@ -276,9 +276,7 @@ test("read freshness reports an index snapshot, not unverified, until live track
         state: "unverified",
         reason: "root_watcher_not_active",
     });
-    assert.deepEqual(buildFreshnessWarningCodes(inactive), [
-        WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED,
-    ]);
+    assert.deepEqual(buildFreshnessWarningCodes(inactive), []);
 });
 
 test("periodic freshness skips a root whose full-index handoff just completed", async (t) => {

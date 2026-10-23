@@ -1,0 +1,663 @@
+{
+  "schemaVersion": 1,
+  "experiment": "s1-declaration-evidence-ordering",
+  "frozenBeforeResults": true,
+  "declaredScope": {
+    "comparison": "exactly two tokenizers x two sort orders at the existing file-symbol supplementation boundary",
+    "s1": "actual frozen publication and baseline mcp_fusion input; reproduction of archived baseline and role-additive results required before comparison",
+    "external": "react and flatbuffers source-backed file-supplement probes with deliberately supplied retrieval candidates; oracle-assisted, not real retrieval or end-to-end benchmarks",
+    "excluded": [
+      "LateOn",
+      "final fusion or grouped rank",
+      "Hit@10",
+      "72-query quality",
+      "statistical generalization",
+      "graph admission",
+      "production repair"
+    ]
+  },
+  "design": {
+    "tokenizers": {
+      "baseline": {
+        "normalizedTerms": "exact shipped production normalizedTerms from search-file-symbol-supplement.ts; unconditional (?:ing|ed|s) removal; no trial stem"
+      },
+      "role-additive": {
+        "normalizedTerms": "prior s1-normalization-experiment role-additive canonical supplement terms; prior stem(term, true) reused unchanged; no new suffix rules",
+        "status": "experimental prerequisite, not accepted production policy"
+      }
+    },
+    "orders": {
+      "total-evidence-first": "matches descending, nameMatches descending, source startLine ascending (shipped comparator). The matches field is TOTAL evidence: it counts the union of declaration-name terms and full source-span terms, including declaration and comment text. It is not independent body-only evidence.",
+      "name-first": "nameMatches descending, matches descending, source startLine ascending (candidate comparator). matches keeps the same total-evidence definition."
+    },
+    "unchangedBehavior": [
+      "MAX_FILES=3",
+      "declaration lane",
+      "MAX_SYMBOLS_PER_FILE=6",
+      "MAX_SYMBOL_LINES=400",
+      "at least two matched concepts",
+      "at least one non-path matched concept",
+      "source hash validation",
+      "callable kinds function|method",
+      "existing candidate identity reuse",
+      "file selection and retrieval order"
+    ],
+    "changeBoundary": "only the supplement sort comparator and the experimental tokenizer differ in disposable copies; the production-ranking algorithm is not reimplemented",
+    "suppliedCandidateRule": "External files are supplied as retrieval candidates by design, in the frozen order. These are oracle-assisted file-supplement probes, not real retrieval or end-to-end measurements."
+  },
+  "s1": {
+    "query": "search_codebase grouped result handler freshness warnings next actions",
+    "traceFixture": "evals/code-intelligence-vs/fixtures/s1-normalization-trace.json",
+    "priorResult": "evals/code-intelligence-vs/fixtures/s1-normalization-result.json",
+    "publicationId": "330c18e2-af44-4491-a85a-6af3d468c5ae",
+    "navigationRoot": "/home/hamza/.satori/publications/f0595d90c4bd7dcbb53a1045d868ba457f99f442c32dba041ff3bda12ab365d6/generations/330c18e2-af44-4491-a85a-6af3d468c5ae/navigation",
+    "inputStage": "mcp_fusion",
+    "target": {
+      "symbolInstanceId": "syminst_7f5c7474f60b3f5212f5f28660888d3d",
+      "file": "packages/mcp/src/core/handlers.ts",
+      "name": "handleSearchCode"
+    },
+    "expectedReproduction": {
+      "baseline": {
+        "tokenizer": "baseline",
+        "order": "total-evidence-first",
+        "selectedFiles": [
+          "packages/mcp/src/tools/search_codebase.test.ts",
+          "evals/code-intelligence-vs/tasks.json",
+          "packages/mcp/src/core/search-exact-registry-hit.ts",
+          "packages/mcp/src/core/search-request-coordinator.ts",
+          "packages/mcp/src/core/search-response-helpers.ts"
+        ],
+        "returnedCount": 20,
+        "returned": [
+          {
+            "label": "function test(\"search_codebase returns structured backend diagnostics when provider runtime fails\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_75c1a6ce222c4ec05d9174847f5a0d0c",
+            "startLine": 730,
+            "endLine": 773
+          },
+          {
+            "label": "function test(\"search_codebase forwards public debugMode selectors to the handler contract\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_42203c2a71bd8fb0f13d972bbcd4a4cb",
+            "startLine": 153,
+            "endLine": 205
+          },
+          {
+            "label": "function test(\"search_codebase emits telemetry with diagnostics from handler meta\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_0d4cd58105d0e2cb64bc2eb5aab43935",
+            "startLine": 509,
+            "endLine": 599
+          },
+          {
+            "label": "function test(\"search_codebase telemetry reports reranker_used when handler diagnostics indicate rerank applied\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_947aa0f3129ef65cc0bddabb9e603286",
+            "startLine": 601,
+            "endLine": 655
+          },
+          {
+            "label": "function test(\"search_codebase accepts bounded diagnostic candidate depth only with full diagnostics\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_65a1ab83a834b99376c1984ff8cb91ae",
+            "startLine": 220,
+            "endLine": 284
+          },
+          {
+            "label": "function test(\"search_codebase falls back to parsed JSON response for telemetry diagnostics\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_41e6ecec03f10b303d04b263ab0f9dad",
+            "startLine": 657,
+            "endLine": 706
+          },
+          {
+            "label": "function buildExactRegistryHitEnvelope",
+            "file": "packages/mcp/src/core/search-exact-registry-hit.ts",
+            "ownerId": "syminst_4d94c8b589881b65d89d35bf2bb0fb7f",
+            "startLine": 104,
+            "endLine": 256
+          },
+          {
+            "label": "function buildExactRegistryWarnings",
+            "file": "packages/mcp/src/core/search-exact-registry-hit.ts",
+            "ownerId": "syminst_e275f4da4f46a025e26b1bf092358670",
+            "startLine": 81,
+            "endLine": 102
+          },
+          {
+            "label": "function attachSearchResultSet",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_37e4d3c36bff787255b2440a807be780",
+            "startLine": 1325,
+            "endLine": 1467
+          },
+          {
+            "label": "method continueOwned",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_955a6677d408628b7ed9a1a4b2537a2d",
+            "startLine": 2116,
+            "endLine": 2365
+          },
+          {
+            "label": "method buildFreshnessBlockedSearchPayload",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_90dd9b59315714aa1384a99af978df4a",
+            "startLine": 705,
+            "endLine": 718
+          },
+          {
+            "label": "function buildFrozenSearchRankedSetBindingInput",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_ea4e9d7e1503b84d15081093f04fdc4c",
+            "startLine": 316,
+            "endLine": 344
+          },
+          {
+            "label": "method buildManageIndexRecommendedAction",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_6e935f86039c5c6f77348675cfbefa3c",
+            "startLine": 490,
+            "endLine": 494
+          },
+          {
+            "label": "method buildNotReadySearchPayload",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_9210040637b95c96710493e393e6b901",
+            "startLine": 691,
+            "endLine": 703
+          },
+          {
+            "label": "function buildSearchWarningDetail",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_abbe702a00028b81b4f9b29afd5f3b87",
+            "startLine": 37,
+            "endLine": 307
+          },
+          {
+            "label": "function buildSearchGroupRecommendedAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_f4a5d8f024d8cf3ee2fd09b95f1c4eda",
+            "startLine": 464,
+            "endLine": 539
+          },
+          {
+            "label": "function buildTopRecommendedSearchAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_eb944970c7f3c9aa6890e39c74c149bd",
+            "startLine": 541,
+            "endLine": 553
+          },
+          {
+            "label": "function buildTopRecommendedRawSearchAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_eb122da333fc2731f2f641056ea06285",
+            "startLine": 555,
+            "endLine": 577
+          },
+          {
+            "label": "function buildSearchGroupPreview",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_f78bc959e5329e206c5cfe3241d5e22b",
+            "startLine": 750,
+            "endLine": 799
+          },
+          {
+            "label": "function buildSearchPassWarning",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_fb4e22a22f44af254299c7e50f5c785f",
+            "startLine": 24,
+            "endLine": 26
+          }
+        ]
+      },
+      "roleAdditive": {
+        "tokenizer": "role-additive",
+        "order": "total-evidence-first",
+        "selectedFiles": [
+          "packages/mcp/src/tools/search_codebase.test.ts",
+          "evals/code-intelligence-vs/tasks.json",
+          "packages/mcp/src/core/search-exact-registry-hit.ts",
+          "packages/mcp/src/core/handlers.ts",
+          "packages/mcp/src/core/search-request-coordinator.ts",
+          "packages/mcp/src/core/search-response-helpers.ts"
+        ],
+        "returnedCount": 26,
+        "targetRankBeforeCut": 17,
+        "eligibleSymbolCount": 37,
+        "targetAdmitted": false,
+        "returned": [
+          {
+            "label": "function test(\"search_codebase returns structured backend diagnostics when provider runtime fails\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_75c1a6ce222c4ec05d9174847f5a0d0c",
+            "startLine": 730,
+            "endLine": 773
+          },
+          {
+            "label": "function test(\"search_codebase forwards public debugMode selectors to the handler contract\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_42203c2a71bd8fb0f13d972bbcd4a4cb",
+            "startLine": 153,
+            "endLine": 205
+          },
+          {
+            "label": "function test(\"search_codebase emits telemetry with diagnostics from handler meta\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_0d4cd58105d0e2cb64bc2eb5aab43935",
+            "startLine": 509,
+            "endLine": 599
+          },
+          {
+            "label": "function test(\"search_codebase telemetry reports reranker_used when handler diagnostics indicate rerank applied\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_947aa0f3129ef65cc0bddabb9e603286",
+            "startLine": 601,
+            "endLine": 655
+          },
+          {
+            "label": "function test(\"search_codebase accepts bounded diagnostic candidate depth only with full diagnostics\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_65a1ab83a834b99376c1984ff8cb91ae",
+            "startLine": 220,
+            "endLine": 284
+          },
+          {
+            "label": "function test(\"search_codebase falls back to parsed JSON response for telemetry diagnostics\") callback",
+            "file": "packages/mcp/src/tools/search_codebase.test.ts",
+            "ownerId": "syminst_41e6ecec03f10b303d04b263ab0f9dad",
+            "startLine": 657,
+            "endLine": 706
+          },
+          {
+            "label": "function buildExactRegistryHitEnvelope",
+            "file": "packages/mcp/src/core/search-exact-registry-hit.ts",
+            "ownerId": "syminst_4d94c8b589881b65d89d35bf2bb0fb7f",
+            "startLine": 104,
+            "endLine": 256
+          },
+          {
+            "label": "function buildExactRegistryWarnings",
+            "file": "packages/mcp/src/core/search-exact-registry-hit.ts",
+            "ownerId": "syminst_e275f4da4f46a025e26b1bf092358670",
+            "startLine": 81,
+            "endLine": 102
+          },
+          {
+            "label": "method buildRuntimeOwnerConflictResponse",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_8fbae9f4ffd78897baf418f192932ab5",
+            "startLine": 1362,
+            "endLine": 1390
+          },
+          {
+            "label": "method buildManageIndexRecommendedAction",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_57df473911968f87d737722bf857b100",
+            "startLine": 813,
+            "endLine": 823
+          },
+          {
+            "label": "method prepareNavigationRead",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_d0cb028791fd7292957dad0ad4f167d9",
+            "startLine": 1023,
+            "endLine": 1120
+          },
+          {
+            "label": "method sortGroupedSearchResults",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_7a704dfe8c2a1f703caa53d2d57932fe",
+            "startLine": 1646,
+            "endLine": 1651
+          },
+          {
+            "label": "method touchWatchedCodebaseBestEffort",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_754f8ebebf23b4a2ad158d45c6e4cfb6",
+            "startLine": 873,
+            "endLine": 879
+          },
+          {
+            "label": "method probeLocalSearchCollectionState",
+            "file": "packages/mcp/src/core/handlers.ts",
+            "ownerId": "syminst_37e92ae24215a1f27a0c8e9218c9f16e",
+            "startLine": 1506,
+            "endLine": 1552
+          },
+          {
+            "label": "function attachSearchResultSet",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_37e4d3c36bff787255b2440a807be780",
+            "startLine": 1325,
+            "endLine": 1467
+          },
+          {
+            "label": "method continueOwned",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_955a6677d408628b7ed9a1a4b2537a2d",
+            "startLine": 2116,
+            "endLine": 2365
+          },
+          {
+            "label": "method buildFreshnessBlockedSearchPayload",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_90dd9b59315714aa1384a99af978df4a",
+            "startLine": 705,
+            "endLine": 718
+          },
+          {
+            "label": "function buildFrozenSearchRankedSetBindingInput",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_ea4e9d7e1503b84d15081093f04fdc4c",
+            "startLine": 316,
+            "endLine": 344
+          },
+          {
+            "label": "function removeCacheAdmissionWarning",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_5bf82feca4b3f8992e4d5ce14a2dd692",
+            "startLine": 262,
+            "endLine": 274
+          },
+          {
+            "label": "method buildManageIndexRecommendedAction",
+            "file": "packages/mcp/src/core/search-request-coordinator.ts",
+            "ownerId": "syminst_6e935f86039c5c6f77348675cfbefa3c",
+            "startLine": 490,
+            "endLine": 494
+          },
+          {
+            "label": "function buildSearchWarningDetail",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_abbe702a00028b81b4f9b29afd5f3b87",
+            "startLine": 37,
+            "endLine": 307
+          },
+          {
+            "label": "function buildSearchGroupRecommendedAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_f4a5d8f024d8cf3ee2fd09b95f1c4eda",
+            "startLine": 464,
+            "endLine": 539
+          },
+          {
+            "label": "function buildTopRecommendedSearchAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_eb944970c7f3c9aa6890e39c74c149bd",
+            "startLine": 541,
+            "endLine": 553
+          },
+          {
+            "label": "function buildTopRecommendedRawSearchAction",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_eb122da333fc2731f2f641056ea06285",
+            "startLine": 555,
+            "endLine": 577
+          },
+          {
+            "label": "function buildSearchPassWarning",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_fb4e22a22f44af254299c7e50f5c785f",
+            "startLine": 24,
+            "endLine": 26
+          },
+          {
+            "label": "function buildSearchWarningDetails",
+            "file": "packages/mcp/src/core/search-response-helpers.ts",
+            "ownerId": "syminst_e5af6c43f244046f662bb6a77a99f240",
+            "startLine": 28,
+            "endLine": 35
+          }
+        ]
+      }
+    }
+  },
+  "external": {
+    "react": {
+      "repo": "facebook/react",
+      "root": "/home/hamza/.cache/satori-eval-repos/react@7c6ac13e19fe",
+      "commit": "7c6ac13e19fef500b7f669a16bbd01ecc95965ca",
+      "suppliedFiles": [
+        "packages/react-reconciler/src/ReactFiberCommitEffects.js",
+        "packages/react-reconciler/src/ReactFiberHooks.js",
+        "packages/react-reconciler/src/ReactChildFiber.js",
+        "packages/react-reconciler/src/ReactFiberWorkLoop.js",
+        "packages/react-reconciler/src/ReactFiberBeginWork.js",
+        "packages/react/src/ReactHooks.js"
+      ],
+      "suppliedFileOrderIsFrozen": true,
+      "note": "the two r4 server-file acceptable alternatives are not supplied; all acceptable patterns are retained for scoring",
+      "cases": [
+        {
+          "id": "r1",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does React run the cleanup function of useEffect",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberCommitEffects\\.js$",
+              "symbolRegex": "^(commitHookEffectListUnmount|safelyCallDestroy)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberCommitEffects.js:248 commitHookEffectListUnmount(flags, finishedWork, nearestMountedAncestor); :907 safelyCallDestroy(current, nearestMountedAncestor, destroy)"
+            }
+          ],
+          "justification": "Effect destroy functions are invoked from commitHookEffectListUnmount/safelyCallDestroy; findings file names ReactFiberCommitEffects.js as the owner."
+        },
+        {
+          "id": "r2",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does useState schedule a re-render when you call the setter",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^(dispatchSetState|dispatchSetStateInternal)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:3626 dispatchSetState (requestUpdateLane then dispatchSetStateInternal); :3656 dispatchSetStateInternal"
+            }
+          ],
+          "justification": "dispatchSetState is the bound setter; it requests a lane and enqueues/schedules the update."
+        },
+        {
+          "id": "r3",
+          "tags": [
+            "findings"
+          ],
+          "query": "where are useEffect dependencies compared",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^areHookInputsEqual$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:456 function areHookInputsEqual("
+            }
+          ],
+          "justification": "areHookInputsEqual compares nextDeps with prevDeps."
+        },
+        {
+          "id": "r4",
+          "tags": [
+            "findings"
+          ],
+          "query": "where does React warn about a missing key prop",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactChildFiber\\.js$",
+              "symbolRegex": "^(warnForMissingKey|warnOnInvalidKey)$",
+              "evidence": "packages/react-reconciler/src/ReactChildFiber.js:151 DEV warnForMissingKey assignment; :1107 warnOnInvalidKey delegates to it"
+            },
+            {
+              "pathRegex": "^packages/react-server/src/React(?:Flight|Fizz)Server\\.js$",
+              "symbolRegex": "^warnForMissingKey$",
+              "evidence": "packages/react-server/src/ReactFlightServer.js:1993 and ReactFizzServer.js:3855 warnForMissingKey"
+            }
+          ],
+          "justification": "Missing-key warnings are implemented in the reconciler and both server renderers."
+        },
+        {
+          "id": "r5",
+          "tags": [
+            "T"
+          ],
+          "query": "where does React flush passive effects after a commit",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberWorkLoop\\.js$",
+              "symbolRegex": "^(flushPassiveEffects|flushPassiveEffectsImpl|flushPendingEffects|flushPendingEffectsDelayed)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberWorkLoop.js:4655 flushPendingEffectsDelayed delegates through flushPendingEffects to flushPassiveEffects; :4728 flushPassiveEffectsImpl"
+            }
+          ],
+          "justification": "Runtime owner of passive-effect flushing; many tests call flushPassiveEffects."
+        },
+        {
+          "id": "r8",
+          "tags": [
+            "T"
+          ],
+          "query": "where does React bail out of re-rendering a component whose props did not change",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberBeginWork\\.js$",
+              "symbolRegex": "^(bailoutOnAlreadyFinishedWork|updateMemoComponent|updateSimpleMemoComponent)$",
+              "evidence": "packages/react-reconciler/src/ReactFiberBeginWork.js:3823 bailoutOnAlreadyFinishedWork; :478 updateMemoComponent; :546 updateSimpleMemoComponent"
+            }
+          ],
+          "justification": "Approved set from coordinator."
+        },
+        {
+          "id": "r9",
+          "tags": [
+            "T",
+            "tooling-competitor"
+          ],
+          "query": "where does React throw when a hook is called outside a component",
+          "acceptable": [
+            {
+              "pathRegex": "^packages/react-reconciler/src/ReactFiberHooks\\.js$",
+              "symbolRegex": "^throwInvalidHookError$",
+              "evidence": "packages/react-reconciler/src/ReactFiberHooks.js:445 function throwInvalidHookError()"
+            },
+            {
+              "pathRegex": "^packages/react/src/ReactHooks\\.js$",
+              "symbolRegex": "^resolveDispatcher$",
+              "evidence": "packages/react/src/ReactHooks.js:24 function resolveDispatcher()"
+            }
+          ],
+          "justification": "Approved owner: throwInvalidHookError / resolveDispatcher; eslint RulesOfHooks and compiler validators are competitors."
+        }
+      ]
+    },
+    "flatbuffers": {
+      "repo": "google/flatbuffers",
+      "root": "/home/hamza/.cache/satori-eval-repos/flatbuffers@b8431fbcd7a5",
+      "commit": "b8431fbcd7a5c71817f314e18b332c0648554efa",
+      "suppliedFiles": [
+        "ts/builder.ts"
+      ],
+      "suppliedFileOrderIsFrozen": true,
+      "cases": [
+        {
+          "id": "fb-object",
+          "tags": [],
+          "query": "where does the builder finish a table and deduplicate its virtual table",
+          "acceptable": [
+            {
+              "pathRegex": "^ts/builder\\.ts$",
+              "symbolRegex": "^endObject$",
+              "evidence": "ts/builder.ts endObject writes the vtable and reuses an existing matching vtable"
+            }
+          ],
+          "justification": "endObject closes the table, trims the vtable, and deduplicates it against previously stored vtables.",
+          "sourceResponsibility": [
+            {
+              "label": "finishes the table vtable",
+              "pattern": "this\\.addInt16\\(vtableloc - this\\.object_start\\)"
+            },
+            {
+              "label": "deduplicates an existing virtual table",
+              "pattern": "existing_vtable = this\\.vtables\\[i\\]"
+            }
+          ]
+        },
+        {
+          "id": "fb-finish",
+          "tags": [],
+          "query": "where does the builder finalize a buffer with its root table and file identifier",
+          "acceptable": [
+            {
+              "pathRegex": "^ts/builder\\.ts$",
+              "symbolRegex": "^finish$",
+              "evidence": "ts/builder.ts finish writes the optional file identifier and the root table offset"
+            }
+          ],
+          "justification": "finish writes the file identifier bytes, adds the root table offset, and sets the final position.",
+          "sourceResponsibility": [
+            {
+              "label": "writes an optional file identifier",
+              "pattern": "if \\(opt_file_identifier\\)"
+            },
+            {
+              "label": "writes the root table offset",
+              "pattern": "this\\.addOffset\\(root_table\\)"
+            }
+          ]
+        },
+        {
+          "id": "fb-string",
+          "tags": [],
+          "query": "where does the builder encode a UTF8 string and store its terminator",
+          "acceptable": [
+            {
+              "pathRegex": "^ts/builder\\.ts$",
+              "symbolRegex": "^createString$",
+              "evidence": "ts/builder.ts createString encodes text to UTF8, adds the zero terminator, and copies the bytes"
+            }
+          ],
+          "justification": "createString encodes the input, appends a zero byte terminator, and writes the bytes into a vector.",
+          "sourceResponsibility": [
+            {
+              "label": "encodes the string as UTF8",
+              "pattern": "this\\.text_encoder\\.encode\\(s\\)"
+            },
+            {
+              "label": "stores a zero terminator",
+              "pattern": "this\\.addInt8\\(0\\)"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "negativeControls": {
+    "singleConcept": [
+      {
+        "id": "search",
+        "lexicalTerm": "search",
+        "expected": "zero canonical concepts after tokenization; no candidates, no source reads"
+      },
+      {
+        "id": "handler-handlers",
+        "lexicalTerms": [
+          "handler",
+          "handlers"
+        ],
+        "expected": "both supplied whole terms collapse to exactly one canonical concept under each tokenizer; no candidates, no source reads"
+      }
+    ],
+    "hashMismatch": {
+      "fixture": "fb-object",
+      "expected": "a mismatched observed source hash admits no candidates"
+    },
+    "identity": {
+      "expected": "every returned owner id, file, and source span equals the registry symbol; existing candidates are returned by identity"
+    }
+  },
+  "scoringNotes": {
+    "position": "first acceptable supplement position is 1-based over the supplement output, or null when none is returned",
+    "admission": "acceptable admission uses the original acceptable pathRegex and symbolRegex sets; all alternatives are retained",
+    "scorability": "a target is unscorable only when missing, span-invalid, or unsupported by its source; recovered Flow status alone is reported, not treated as failure",
+    "missingData": "missing values are null, never a pass",
+    "comparison": "gain/loss/unchanged compares name-first against total-evidence-first within one tokenizer; ordering-only"
+  }
+}

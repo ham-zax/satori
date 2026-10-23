@@ -5,6 +5,31 @@ It is intentionally adapter-based: each provider keeps its own MCP tool surface,
 and the harness normalizes outputs into files, symbols, warnings, latency, and
 anchor-based scores.
 
+The S1 normalization experiment is separate from this five-task benchmark.
+It replays metadata, file-symbol supplementation, and definition fusion using
+a frozen diagnostic capture. It does not measure final grouped acceptance.
+See the [experiment plan](../../docs/improvements/s1-owner-discovery-plan-2026-10-23.md)
+and [measured results](../../docs/improvements/s1-normalization-experiment-2026-10-23.md)
+for scope and the reproduction command. The tested normalization variants
+do not fix S1. The fixture preserves persisted and source-derived candidates.
+The script checks the baseline fusion order before evaluating any variant.
+
+The separate [declaration-evidence experiment](../../docs/improvements/s1-declaration-evidence-experiment-2026-10-23.md)
+compares total-evidence and name-priority ordering with the same per-file cap.
+It uses the captured S1 pool and oracle-assisted React/FlatBuffers file probes.
+Name priority admits S1 only with trial normalization and removes an accepted
+React owner from supplementation. The rule is rejected as an unconditional
+replacement. These positions are not grouped search ranks or benchmark scores.
+
+The [graph evidence experiment](../../docs/improvements/s1-graph-evidence-experiment-2026-10-23.md)
+checks the real Satori call path through task-owned production sidecars.
+Both proof-backed edges survive read-back across 692 extracted TypeScript files.
+Three non-TypeScript files also enter the registry to preserve the replay window.
+With admission fixed, handler-only graph labels improve LateOn rank from 58 to
+52, while fusion remains at 16. The parent reproduces complete scores and
+ordering. Neither artifact read-back nor controlled admission establishes grouped
+search acceptance.
+
 ## Run
 
 Build Satori first if `packages/mcp/dist/index.js` is stale or missing:

@@ -46,7 +46,8 @@ export function buildFreshnessWarningCodes(decision: FreshnessDecision): Warning
         return [WARNING_CODES.SOURCE_CHANGES_PENDING];
     }
     if (decision.sourceFreshness?.state === 'unverified') {
-        return [WARNING_CODES.SOURCE_FRESHNESS_UNVERIFIED];
+        // Temporary user-requested suppression; structured freshness stays unverified.
+        return [];
     }
     if (decision.sourceFreshness?.state === 'index_snapshot') {
         return [WARNING_CODES.SOURCE_SERVED_FROM_INDEX_SNAPSHOT];

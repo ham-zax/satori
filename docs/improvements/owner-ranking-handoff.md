@@ -2,6 +2,28 @@
 
 Written 2026-10-14 on `master` at `224183ca`. Status: open investigation.
 
+Update, 23 October: the Satori runtime trial finds another admission and
+ranking miss for a delegating handler. The
+[S1 experiment plan](s1-owner-discovery-plan-2026-10-23.md) tests existing
+metadata, file-symbol supplementation, and definition fusion separately.
+The [normalization replay](s1-normalization-experiment-2026-10-23.md) rejects
+the tested rules as sufficient: runtime metadata rank remains 663 and the
+supplement still excludes the target. Graph expansion and scoring changes
+remain unproven. This addendum does not change historical measurements below.
+
+The subsequent [declaration-evidence replay](s1-declaration-evidence-experiment-2026-10-23.md)
+admits S1 with name priority and trial role normalization, but loses the React
+state-update owner from supplementation under both tokenizers. Reject an
+unconditional name-priority replacement. The probes do not measure final search rank.
+
+The [graph experiment](s1-graph-evidence-experiment-2026-10-23.md) now checks
+the real entrypoint-to-handler-to-coordinator path through production sidecars.
+Both proof-backed edges survive read-back. The entrypoint reaches 19 targets,
+and its three-callee document context includes the handler. With admission
+fixed, handler-only labels improve provider rank from 58 to 52. Fusion stays
+at 16. The parent reproduces complete scores and ordering. Automatic discovery
+remains unproven.
+
 This is the entry point for an agent that has the repository and nothing
 else: no earlier conversation, no scratch files. It tells the story in order,
 says which document holds which evidence, states the open problem, and lists

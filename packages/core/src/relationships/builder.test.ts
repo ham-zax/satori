@@ -16,7 +16,9 @@ import {
     buildRelationshipDeltaAsync,
     type RelationshipAnalysisEvidence,
 } from './builder';
-import type { ResolutionClaim } from './resolution';
+import type { ResolutionClaim, ResolutionProjectEvidence } from './resolution';
+import { buildTypeScriptResolutionClaims } from './typescript-resolution';
+import { analyzeTypeScriptProject } from '../semantic/typescript-compiler-provider';
 import { DefaultLanguageResolutionStrategyRegistry } from './resolution-strategy-registry';
 import type { SymbolKind, SymbolRecord, SymbolRegistryManifest } from '../symbols';
 import { createLanguageAnalysisService } from '../language-analysis';
@@ -2752,6 +2754,152 @@ test('buildRelationshipDelta incrementally rebuilds CBM language relationships w
 
 
 
+
+async function buildTypeScriptDeltaFixture(unrelatedValue: number) {
+    const sources = {
+        'src/service.ts': 'export class Service { private brand = "service"; work() { return 1; } }',
+        'src/entry.ts': 'import { Service } from "./service";\nexport function run(svc: Service) { return svc.work(); }',
+        'src/unrelated.ts': `export class Unrelated { work() { return ${unrelatedValue}; } }`,
+    };
+    const analysisByFile = await analyzeFiles(sources);
+    const symbols: SymbolRecord[] = [];
+    const files: SymbolRegistryManifest['files'] = [];
+    for (const [relativePath, content] of Object.entries(sources)) {
+        const fileHash = `hash-${content}`;
+        const fileSymbols = buildSymbolRecordsForFile({
+            relativePath,
+            language: 'typescript',
+            content,
+            fileHash,
+            extractorVersion: 'test-extractor-v1',
+            chunks: [],
+            extractedSymbols: analysisByFile.get(relativePath)!.symbols,
+        });
+        symbols.push(...fileSymbols);
+        files.push({ path: relativePath, hash: fileHash, language: 'typescript', symbolCount: fileSymbols.length, definitionStatus: 'definitions_present' });
+    }
+    const registry = buildSymbolRegistry({ manifest: { ...manifest(), files }, symbols });
+    const compilerEvidence = analyzeTypeScriptProject({
+        language: 'typescript',
+        sourceFiles: Object.entries(sources).map(([path, source]) => ({ path, source, sourceHash: `hash-${source}` })),
+        auxiliaryFiles: [],
+    });
+    const evidence: ResolutionProjectEvidence = {
+        language: 'typescript',
+        providerId: compilerEvidence.providerId,
+        providerVersion: compilerEvidence.providerVersion,
+        environmentConfigId: 'test-typescript-delta',
+        claimsByFile: buildTypeScriptResolutionClaims({
+            registry,
+            environmentConfigId: 'test-typescript-delta',
+            providerId: compilerEvidence.providerId,
+            providerVersion: compilerEvidence.providerVersion,
+            occurrencesByFile: compilerEvidence.occurrencesByFile,
+        }),
+    };
+    return {
+        registry,
+        analysisByFile: analysisByFile as Map<string, RelationshipAnalysisEvidence>,
+        resolutionEvidenceByLanguage: new Map([['typescript', evidence]]),
+    };
+}
+
+test('TypeScript delta retains typed calls and claims outside the explicit semantic affected set', async () => {
+    const before = await buildTypeScriptDeltaFixture(1);
+    const existingRecords = buildRelationshipsForRegistry(before);
+    const originalClaims = before.analysisByFile.get('src/entry.ts')!.resolutionClaims;
+    assert.ok(originalClaims);
+    assert.deepEqual(originalClaims.map((claim) => ({
+        caller: before.registry.symbolsByInstanceId.get(claim.sourceInstanceId!)?.qualifiedName,
+        target: claim.targetSymbol,
+        decision: claim.decision,
+        authority: claim.resolutionAuthority,
+        construct: claim.observation.construct,
+        receiverType: claim.observation.receiverType,
+        proof: claim.proofSteps.map((step) => step.kind),
+    })), [{
+        caller: 'run', target: 'Service.work', decision: 'resolved', authority: 'direct_binding',
+        construct: 'typed_member_call', receiverType: 'Service',
+        proof: ['call_site', 'containing_caller', 'receiver_type_binding', 'candidate_set', 'exact_target_definition'],
+    }]);
+    const originalCalls = existingRecords.filter((record) => record.type === 'CALLS');
+    assert.equal(originalCalls.length, 1);
+    assert.equal(before.registry.symbolsByInstanceId.get(originalCalls[0].targetInstanceId!)?.qualifiedName, 'Service.work');
+
+    const after = await buildTypeScriptDeltaFixture(2);
+    const coldRecords = buildRelationshipsForRegistry(after);
+    const coldClaims = after.analysisByFile.get('src/entry.ts')!.resolutionClaims;
+    const deltaAnalysis = new Map(before.analysisByFile);
+    deltaAnalysis.set('src/unrelated.ts', after.analysisByFile.get('src/unrelated.ts')!);
+    const fullEvidence = after.resolutionEvidenceByLanguage.get('typescript')!;
+    const delta = buildRelationshipDelta({
+        registry: after.registry,
+        previousRegistry: before.registry,
+        existingRecords,
+        changedFiles: new Set(['src/unrelated.ts']),
+        previousAnalysisByFile: before.analysisByFile,
+        analysisByFile: deltaAnalysis,
+        resolutionEvidenceByLanguage: new Map([['typescript', {
+            ...fullEvidence,
+            affectedSourceFiles: new Set(['src/unrelated.ts']),
+            claimsByFile: new Map([['src/unrelated.ts', fullEvidence.claimsByFile.get('src/unrelated.ts') ?? []]]),
+        }]]),
+    });
+
+    assert.deepEqual(delta.affectedFiles, ['src/entry.ts', 'src/unrelated.ts']);
+    assert.deepEqual(delta.records.filter((record) => record.type === 'CALLS'), originalCalls);
+    assert.deepEqual(deltaAnalysis.get('src/entry.ts')!.resolutionClaims, originalClaims);
+    assert.deepEqual(delta.records, coldRecords);
+    assert.deepEqual(deltaAnalysis.get('src/entry.ts')!.resolutionClaims, coldClaims);
+    assert.deepEqual(delta.filesToRewrite, ['src/unrelated.ts']);
+});
+
+test('TypeScript delta clears retained calls when an explicitly affected file has empty or absent claims', async () => {
+    const fixture = await buildTypeScriptDeltaFixture(1);
+    const existingRecords = buildRelationshipsForRegistry(fixture);
+    assert.equal(existingRecords.filter((record) => record.type === 'CALLS').length, 1);
+    for (const claimsByFile of [new Map<string, readonly ResolutionClaim[]>([['src/entry.ts', []]]), new Map<string, readonly ResolutionClaim[]>()]) {
+        const analysisByFile = new Map(fixture.analysisByFile);
+        const delta = buildRelationshipDelta({
+            ...fixture,
+            previousRegistry: fixture.registry,
+            previousAnalysisByFile: fixture.analysisByFile,
+            analysisByFile,
+            existingRecords,
+            changedFiles: new Set<string>(),
+            resolutionEvidenceByLanguage: new Map([['typescript', {
+                ...fixture.resolutionEvidenceByLanguage.get('typescript')!,
+                affectedSourceFiles: new Set(['src/entry.ts']),
+                claimsByFile,
+            }]]),
+        });
+        assert.deepEqual(delta.affectedFiles, ['src/entry.ts']);
+        assert.deepEqual(delta.records.filter((record) => record.type === 'CALLS'), []);
+        assert.deepEqual(analysisByFile.get('src/entry.ts')!.resolutionClaims, []);
+    }
+});
+
+test('TypeScript delta does not reuse retained claims without an explicit semantic affected set', async () => {
+    const fixture = await buildTypeScriptDeltaFixture(1);
+    const existingRecords = buildRelationshipsForRegistry(fixture);
+    assert.equal(existingRecords.filter((record) => record.type === 'CALLS').length, 1);
+    const analysisByFile = new Map(fixture.analysisByFile);
+    const delta = buildRelationshipDelta({
+        ...fixture,
+        previousRegistry: fixture.registry,
+        previousAnalysisByFile: fixture.analysisByFile,
+        analysisByFile,
+        existingRecords,
+        changedFiles: new Set<string>(),
+        resolutionEvidenceByLanguage: new Map([['typescript', {
+            ...fixture.resolutionEvidenceByLanguage.get('typescript')!,
+            claimsByFile: new Map(),
+        }]]),
+    });
+    assert.deepEqual(delta.affectedFiles, ['src/entry.ts', 'src/service.ts', 'src/unrelated.ts']);
+    assert.deepEqual(delta.records.filter((record) => record.type === 'CALLS'), []);
+    assert.deepEqual(analysisByFile.get('src/entry.ts')!.resolutionClaims, []);
+});
 
 test('async full and delta relationship builders preserve records and attached claims', async () => {
     const sources = {

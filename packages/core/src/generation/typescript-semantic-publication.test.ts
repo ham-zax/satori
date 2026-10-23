@@ -966,3 +966,50 @@ test('TypeScript LanguageService sessions are released once analysis goes idle',
         await fixture.close();
     }
 });
+
+
+test('production indexing admits typed calls from a module object property and neighboring named function', async () => {
+    const fixture = await createFixture({
+        'tsconfig.json': tsconfig(),
+        'src/tool.ts': `
+class Service { work(): number { return 1; } }
+export const tool = {
+    execute: async (value: string) => {
+        const svc = new Service();
+        return svc.work() + value.length;
+    },
+};
+export function run() {
+    const neighbor = new Service();
+    return neighbor.work();
+}
+`,
+    });
+    try {
+        await fixture.context.indexCodebase(fixture.root);
+        const state = await readNavigation(fixture.context, fixture.root);
+        const claims = state.relationships.analysisByFile.get('src/tool.ts')?.resolutionClaims ?? [];
+        for (const [callee, owner] of [['svc.work', 'tool.execute'], ['neighbor.work', 'run']]) {
+            const claim = claims.find(claim => claim.observation.calleeText === callee);
+            assert.ok(claim, callee);
+            assert.equal(claim.decision, 'resolved');
+            assert.equal(claim.resolutionAuthority, 'direct_binding');
+            assert.equal(claim.relationshipType, 'CALLS');
+            assert.equal(claim.targetSymbol, 'Service.work');
+            const caller = state.registry.symbolsByInstanceId.get(claim.sourceInstanceId!);
+            assert.equal(caller?.qualifiedName, owner);
+            if (owner === 'tool.execute') {
+                assert.deepEqual(caller?.parentQualifiedNamePath, ['tool']);
+                assert.equal(state.registry.symbolsByKey.get(caller!.parentKey!)?.[0]?.qualifiedName, 'tool');
+            }
+            assert.ok(callTargets(state.relationships.records, state.registry.symbolsByInstanceId).some(({ target, record }) => (
+                target.qualifiedName === 'Service.work'
+                && record.sourceInstanceId === claim.sourceInstanceId
+                && record.targetInstanceId === claim.targetInstanceId
+                && record.file === 'src/tool.ts'
+            )), owner);
+        }
+    } finally {
+        await fixture.close();
+    }
+});

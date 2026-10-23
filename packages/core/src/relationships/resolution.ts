@@ -186,7 +186,11 @@ export interface ResolutionProjectEvidence {
     readonly providerVersion: string;
     readonly environmentConfigId: string;
     readonly claimsByFile: ReadonlyMap<string, readonly ResolutionClaim[]>;
-    /** Exact conservative relationship owners to rebuild. Omit for whole-language fallback. */
+    /**
+     * Complete conservative set of owners whose claims need replacement.
+     * Files outside an explicit set may retain their previous claims.
+     * Omit for whole-language fallback.
+     */
     readonly affectedSourceFiles?: ReadonlySet<string>;
     /** Non-indexed source inputs whose content can change semantic identity. */
     readonly sourceControlFiles?: readonly string[];

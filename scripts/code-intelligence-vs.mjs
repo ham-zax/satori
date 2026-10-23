@@ -334,17 +334,24 @@ function renderTemplate(value, context) {
     return value;
 }
 
-function chooseSatoriCallGraphArgs(searchPayload) {
+function chooseSatoriCallGraphTarget(searchPayload) {
     const results = Array.isArray(searchPayload?.results) ? searchPayload.results : [];
     for (const result of results) {
-        if (result?.callGraphHint?.supported && result?.nextActions?.callGraph?.args) {
-            return result.nextActions.callGraph.args;
+        const target = result?.target;
+        if (
+            result?.navigation?.graph === "ready"
+            && typeof target?.file === "string"
+            && target.file.trim().length > 0
+            && typeof target?.symbolId === "string"
+            && target.symbolId.trim().length > 0
+        ) {
+            return target;
         }
     }
     return null;
 }
 
-async function runSatoriTask(session, task, context) {
+export async function runSatoriTask(session, task, context) {
     const calls = [];
     if (task.kind === "search" || task.kind === "architecture") {
         const args = {
@@ -383,8 +390,11 @@ async function runSatoriTask(session, task, context) {
         });
         calls.push({ tool: "search_codebase", ...search });
         const { payload } = extractMcpPayload(search.response);
-        const callGraphArgs = chooseSatoriCallGraphArgs(payload);
-        if (!callGraphArgs) {
+        const callGraphTarget = chooseSatoriCallGraphTarget(payload);
+        const codebaseRoot = typeof payload?.codebaseRoot === "string" && payload.codebaseRoot.trim().length > 0
+            ? payload.codebaseRoot
+            : null;
+        if (!callGraphTarget || !codebaseRoot) {
             const normalized = normalizeResult("satori", task, calls);
             normalized.status = "unsupported";
             normalized.unsupported = true;
@@ -392,12 +402,24 @@ async function runSatoriTask(session, task, context) {
             return normalized;
         }
         const graph = await session.callTool("call_graph", {
-            ...callGraphArgs,
+            path: codebaseRoot,
+            symbolRef: callGraphTarget,
             direction: task.direction || "both",
             depth: task.depth || 2,
             limit: task.graphLimit || 30,
         });
         calls.push({ tool: "call_graph", ...graph });
+        if (graph.response?.isError) {
+            const { text } = extractMcpPayload(graph.response);
+            const normalized = normalizeResult(
+                "satori",
+                task,
+                calls,
+                new Error(text || "call_graph returned an MCP error response"),
+            );
+            normalized.unsupported = false;
+            return normalized;
+        }
         return normalizeResult("satori", task, calls);
     }
 

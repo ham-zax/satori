@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ExtractedSymbol } from '../languages';
 
 import { analyzeWithOxc } from './oxc-adapter';
 import { recoverFlowSymbols } from './flow-recovery';
@@ -134,4 +135,57 @@ test('JSX and registration bodies become searchable chunks with callable owners'
     });
     assert.equal(result.structuralStatus, 'complete');
     assert.ok(result.chunks.some((chunk) => chunk.metadata.symbolLabel?.includes('it("renders children") callback')));
+});
+
+
+test('module object callable properties have static owners and UTF-8 source spans', () => {
+    const properties = [
+        'execute: async (value: string) => { return "café " + value; }',
+        '"function-key": function implementation() { return "😀"; }',
+        'method() { return "méthod"; }',
+        '["literal-key"]: () => { return "clé"; }',
+    ];
+    const content = '// 😀 café\nexport const tool = {\n' + properties.join(',\n') + '\n};\n'
+        + 'const other = { execute() { return 2; } };\n'
+        + 'function run() { return 1; }';
+    const result = analyzeWithOxc({ content, language: 'typescript', relativePath: 'tool.ts' });
+    assert.equal(result.complete, true);
+    assert.equal(result.symbols.find(symbol => symbol.name === 'tool')?.kind, 'variable');
+    for (const [index, name] of ['execute', 'function-key', 'method', 'literal-key'].entries()) {
+        const propertySymbol: ExtractedSymbol | undefined = result.symbols.find(candidate => candidate.qualifiedName === `tool.${name}`);
+        assert.ok(propertySymbol, name);
+        assert.equal(propertySymbol.name, name);
+        assert.equal(propertySymbol.kind, 'method');
+        assert.deepEqual(propertySymbol.parentQualifiedNamePath, ['tool']);
+        assert.equal(propertySymbol.span.startLine, index + 3);
+        assert.equal(propertySymbol.span.endLine, index + 3);
+        assert.equal(Buffer.from(content).subarray(propertySymbol.span.startByte, propertySymbol.span.endByte).toString(), properties[index]);
+    }
+    assert.deepEqual(result.symbols.find(symbol => symbol.qualifiedName === 'other.execute')?.parentQualifiedNamePath, ['other']);
+    assert.deepEqual(result.symbols.find(symbol => symbol.name === 'run')?.parentQualifiedNamePath, []);
+});
+
+test('object ownership does not cross nested, anonymous, local or dynamic property scopes', () => {
+    const content = `
+const key = "dynamic";
+const tool = {
+    [key]: () => { dynamicBody(); },
+    get getter() { return 1; },
+    set setter(value: number) { void value; },
+    nested: { hidden: () => { nestedBody(); } },
+    execute: () => {
+        consume({ anonymous: () => { anonymousBody(); } });
+        function helper() { return 1; }
+    },
+};
+consume({ unbound() { return 1; } });
+export default { defaultAnonymous: () => 1 };
+function run() { const local = { localMethod() { return 1; } }; }
+{ const block = { blockMethod() { return 1; } }; }
+`;
+    const result = analyzeWithOxc({ content, language: 'typescript', relativePath: 'tool.ts' });
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.symbols.filter(symbol => symbol.kind === 'method').map(symbol => symbol.qualifiedName), ['tool.execute']);
+    assert.deepEqual(result.symbols.find(symbol => symbol.name === 'helper')?.parentQualifiedNamePath, []);
+    assert.ok(!result.symbols.some(symbol => ['dynamic', 'hidden', 'anonymous', 'unbound', 'defaultAnonymous', 'localMethod', 'blockMethod'].includes(symbol.name)));
 });

@@ -43,7 +43,9 @@ pnpm run vs:code-intelligence -- \
 Each task defines expected file, symbol, and text anchors in `tasks.json`.
 The harness reports raw score, pass count, unsupported count, and a per-task
 leader. Unsupported or not-ready responses can still show anchor overlap for
-debugging, but they cannot pass a task.
+debugging, but they cannot pass a task. Treat that raw score as diagnostic
+overlap only: an unsupported callgraph task did not complete traversal, so its
+anchor score is not a measure of graph capability and must not rank providers.
 
 This is not an LLM answer-quality benchmark. It measures deterministic code
 intelligence retrieval/navigation behavior:
@@ -52,6 +54,20 @@ intelligence retrieval/navigation behavior:
 - `outline`: expose symbols for a known file.
 - `callgraph`: traverse or approximate relationships around a function.
 - `architecture`: summarize package/module structure.
+
+## Satori Callgraph Contract
+
+The grouped search output is format version 3. The envelope carries
+`codebaseRoot`; each result carries `target.file`, optional `target.symbolId`,
+and `navigation.graph`. The harness selects the first result where
+`navigation.graph === "ready"` and both target fields are nonempty, then calls
+`call_graph` with that exact target as `symbolRef` and `codebaseRoot` as `path`.
+The retired `callGraphHint` and `nextActions` fields are not part of this
+contract.
+
+Agents can discover this mapping from the MCP tool schemas and descriptions,
+the `navigation` data returned by grouped search, and the shipped workflow at
+`packages/cli/assets/skills/satori/SKILL.md`.
 
 ## Fairness Notes
 
@@ -62,3 +78,14 @@ Satori lost the retrieval task.
 Satori exact navigation also depends on compatible JSON sidecars. If it returns
 `requires_reindex`, run `manage_index(action="reindex")` for the target repo
 before using the result as a leaderboard.
+
+For a steady-state benchmark, inspect `manage_index(action="status")` and wait
+until `sourceFreshness.state` is `verified`. Report runs during index lag
+separately.
+
+codebase-memory-mcp schemas vary by server version. An inspected local server
+advertises `project` and `query`, plus `name_pattern` and `semantic_query`; the
+current chat connector advertises `project_name` and `name_pattern`. Inspect
+the selected server's `tools/list` schema. The harness does not convert
+natural-language task queries into regular expressions or assume one universal
+contract.

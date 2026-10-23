@@ -124,7 +124,8 @@ function symbolKind(
 function symbolName(node: AstNode): string | undefined {
     if (node.type === 'AssignmentExpression') return expressionName(node.left);
     if (
-        node.type === 'MethodDefinition'
+        node.type === 'Property'
+        || node.type === 'MethodDefinition'
         || node.type === 'PropertyDefinition'
         || node.type === 'TSMethodSignature'
         || node.type === 'TSAbstractMethodDefinition'
@@ -296,20 +297,29 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
         const earlyExitSpans: SourceSpan[] | undefined = input.includeEarlyExitSpans ? [] : undefined;
         const callSites: CallSite[] = [];
         const receiverTypeBindings: ReceiverTypeBinding[] = [];
+        // Only declarations directly in the program (including exports) own object callers.
+        const moduleDeclarations = childNodes(parsed.program as Program & AstNode)
+            .flatMap((node) => node.type === 'ExportNamedDeclaration' ? childNodes(node) : [node])
+            .filter((node) => node.type === 'VariableDeclaration');
         const visit = (
             node: AstNode,
             parent?: AstNode,
             parents: readonly string[] = [],
             insideCallable = false,
             insideRegistrationCallback = false,
+            directObject?: { literal: AstNode; owner: string },
         ): void => {
             if (earlyExitSpans) {
                 const start = earlyExitContextStart(node, parent);
                 if (start !== undefined) earlyExitSpans.push(sourceMap.spanFromUtf16(start, node.end));
             }
             const callback = !insideCallable || insideRegistrationCallback ? callbackName(node, parent) : undefined;
-            const kind = callback ? 'function' : symbolKind(node, parent, insideCallable);
+            const objectProperty = node.type === 'Property' && node.kind === 'init' && parent === directObject?.literal
+                && isFunctionValue(node.value)
+                && (!node.computed || (isAstNode(node.key) && node.key.type === 'Literal' && typeof node.key.value === 'string'));
+            const kind = objectProperty ? 'method' : callback ? 'function' : symbolKind(node, parent, insideCallable);
             const name = callback ?? (kind ? symbolName(node) : undefined);
+            const symbolParents = objectProperty && directObject ? [...parents, directObject.owner] : parents;
             const nextParents = name && (callback || kind === 'class' || kind === 'interface' || kind === 'namespace')
                 ? [...parents, name]
                 : parents;
@@ -319,8 +329,8 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
                     kind,
                     name,
                     label: labelFor(kind, name),
-                    qualifiedName: [...parents, name].join('.'),
-                    parentQualifiedNamePath: parents,
+                    qualifiedName: [...symbolParents, name].join('.'),
+                    parentQualifiedNamePath: symbolParents,
                     span,
                 });
             }
@@ -350,7 +360,15 @@ export function analyzeWithOxc(input: LanguageAnalysisInput): OxcEvidence {
                 || node.type === 'MethodDefinition' || node.type === 'TSAbstractMethodDefinition'
                 ? Boolean(callback)
                 : insideRegistrationCallback;
-            for (const child of childNodes(node)) visit(child, node, nextParents, childInsideCallable, childRegistrationCallback);
+            const boundObject = node.type === 'VariableDeclarator' && parent && moduleDeclarations.includes(parent)
+                && nodeName(node) && isAstNode(node.init) && node.init.type === 'ObjectExpression'
+                ? { literal: node.init, owner: nodeName(node)! } : undefined;
+            for (const child of childNodes(node)) {
+                // Ownership crosses only the binding-to-literal and literal-to-property edges.
+                const childObject = boundObject?.literal === child ? boundObject
+                    : directObject?.literal === node && child.type === 'Property' ? directObject : undefined;
+                visit(child, node, nextParents, childInsideCallable, childRegistrationCallback, childObject);
+            }
         };
         visit(parsed.program as Program & AstNode);
 

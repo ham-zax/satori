@@ -287,7 +287,12 @@ function* buildCallRelationshipsForRegistryWork(input: BuildCallRelationshipsFor
 
             const claims: ResolutionClaim[] = [];
             for (const file of files) {
-                const fileClaims = evidence.claimsByFile.get(file) ?? [];
+                // Generic delta invalidation can select unchanged semantic owners.
+                // The provider's explicit affected set witnesses which retained
+                // claims remain current; all claims still pass central admission.
+                const fileClaims = evidence.affectedSourceFiles !== undefined && !evidence.affectedSourceFiles.has(file)
+                    ? getEvidence(input.analysisByFile, file)?.resolutionClaims ?? []
+                    : evidence.claimsByFile.get(file) ?? [];
                 if (fileClaims.length > 0) {
                     claims.push(...fileClaims);
                 }

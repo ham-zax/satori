@@ -25,12 +25,20 @@ export interface SymbolQualityLanguageBreakdown {
     status: SymbolQualityStatus;
 }
 
+/** Recovery-style diagnostics; text-only coverage is expected, not a failure. */
+export type PublishedStructuralRecoveryReason = Exclude<StructuralReason, 'unsupported_language'>;
+
 export interface PublishedStructuralAnalysisSummary {
     completeFiles: number;
     recoveredFiles: number;
-    unsupportedFiles: number;
+    /**
+     * Published files indexed as text only: their content stays searchable, while
+     * code symbols and call analysis are unavailable for them.
+     */
+    searchOnlyFiles: number;
     unknownFiles: number;
-    reasons: { reason: StructuralReason; files: number }[];
+    /** Recovery diagnostics only; text-only coverage is not reported here. */
+    reasons: { reason: PublishedStructuralRecoveryReason; files: number }[];
 }
 
 export interface SymbolQualitySummary {
@@ -61,15 +69,17 @@ export interface SymbolQualitySymbolInput {
 /** One summary owner for durable parser evidence in status and search responses. */
 export function summarizePublishedStructuralAnalysis(files: readonly SymbolQualityFileInput[]): PublishedStructuralAnalysisSummary {
     const summary: PublishedStructuralAnalysisSummary = {
-        completeFiles: 0, recoveredFiles: 0, unsupportedFiles: 0, unknownFiles: 0, reasons: [],
+        completeFiles: 0, recoveredFiles: 0, searchOnlyFiles: 0, unknownFiles: 0, reasons: [],
     };
-    const reasons = new Map<StructuralReason, number>();
+    const reasons = new Map<PublishedStructuralRecoveryReason, number>();
     for (const file of files) {
         if (file.structuralStatus === 'complete') summary.completeFiles++;
         else if (file.structuralStatus === 'recovered') summary.recoveredFiles++;
-        else if (file.structuralStatus === 'unsupported') summary.unsupportedFiles++;
+        else if (file.structuralStatus === 'unsupported') summary.searchOnlyFiles++;
         else summary.unknownFiles++;
-        if (file.structuralReason) reasons.set(file.structuralReason, (reasons.get(file.structuralReason) ?? 0) + 1);
+        if (file.structuralReason && file.structuralReason !== 'unsupported_language') {
+            reasons.set(file.structuralReason, (reasons.get(file.structuralReason) ?? 0) + 1);
+        }
     }
     summary.reasons = [...reasons].sort(([a], [b]) => compareAsc(a, b)).map(([reason, files]) => ({ reason, files }));
     return summary;

@@ -5,6 +5,7 @@ records the problem, evidence, decision, and remaining limitations.
 
 | Proposal | Status | Summary |
 |---|---|---|
+| [Index coverage reporting plan, 23 October 2026](index-coverage-reporting-plan-2026-10-23.md) | Implemented; capability-based labels | Replaces the public unsupported count with text-only coverage. Preserves parser recovery, failure, unknown evidence, and actual capability gaps. Persisted evidence is unchanged and no exclusion count is invented. |
 | [S1 declaration-evidence replay, 23 October 2026](s1-declaration-evidence-experiment-2026-10-23.md) | Rejects unconditional name-priority ordering | Trial role normalization plus name priority admits S1 at within-file rank 4, but removes the React state-update owner from supplementation under both tokenizers. |
 | [S1 normalization replay, 23 October 2026](s1-normalization-experiment-2026-10-23.md) | Experiment rejects normalization as a sufficient repair | Runtime metadata rank improves from 1,792 to 663, supplementation still excludes the target, and frozen fusion improves from 16 to 13. |
 | [S1 graph evidence experiment, 23 October 2026](s1-graph-evidence-experiment-2026-10-23.md) | Complete; graph labels insufficient | Real call edges survive read-back. Labels improve provider rank from 58 to 52, while fusion stays at 16. Parent rerun reproduces complete scores and ordering. |

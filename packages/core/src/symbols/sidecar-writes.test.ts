@@ -74,7 +74,7 @@ test('symbol publication roundtrip preserves parser reasons and legacy unknown e
         const read = await readSymbolRegistrySidecar({ normalizedRootPath: root, publicationId: 'fixture', navigationRoot });
         assert.equal(read.status, 'ok', read.status === 'ok' ? undefined : read.reason);
         assert.deepEqual(computeSymbolQualitySummaryFromSidecarRead(read).structuralAnalysis, {
-            completeFiles: 0, recoveredFiles: 1, unsupportedFiles: 0, unknownFiles: 1,
+            completeFiles: 0, recoveredFiles: 1, searchOnlyFiles: 0, unknownFiles: 1,
             reasons: [{ reason: 'syntax_error', files: 1 }],
         });
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

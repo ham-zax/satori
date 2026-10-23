@@ -812,7 +812,11 @@ export interface IndexingFailureMetadata {
 }
 
 interface SearchBaseResponseEnvelope {
-    /** Published parser outcomes; absent when registry evidence is unavailable. */
+    /**
+     * Published structural coverage and recovery outcomes; absent when registry
+     * evidence is unavailable. `searchOnlyFiles` is expected text-only coverage, not
+     * an indexing failure.
+     */
     structuralAnalysis?: import("@satori-code/core").SymbolQualitySummary["structuralAnalysis"];
     formatVersion: typeof SEARCH_RESPONSE_FORMAT_VERSION;
     status: "ok" | "requires_reindex" | "not_indexed" | "not_ready";

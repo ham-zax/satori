@@ -165,10 +165,61 @@ test('published parser degradation stays visible with recovered symbols and lega
     });
     assert.equal(summary.filesWithNonFileSymbols, 1);
     assert.deepEqual(summary.structuralAnalysis, {
-        completeFiles: 1, recoveredFiles: 4, unsupportedFiles: 1, unknownFiles: 1,
+        completeFiles: 1, recoveredFiles: 4, searchOnlyFiles: 1, unknownFiles: 1,
         reasons: [
             { reason: 'analysis_failure', files: 1 }, { reason: 'parser_unavailable', files: 1 },
-            { reason: 'syntax_error', files: 2 }, { reason: 'unsupported_language', files: 1 },
+            { reason: 'syntax_error', files: 2 },
         ],
     });
+});
+
+test('published coverage separates expected text-only files from recovery failures', () => {
+    const files = [
+        { path: 'docs/guide.md', language: 'markdown', structuralStatus: 'unsupported', structuralReason: 'unsupported_language' },
+        { path: 'data/config.json', language: 'json', structuralStatus: 'unsupported' },
+        { path: 'src/main.cobol', language: 'cobol', structuralStatus: 'unsupported', structuralReason: 'unsupported_language' },
+        { path: 'src/complete.ts', language: 'typescript', structuralStatus: 'complete' },
+        { path: 'src/empty.ts', language: 'typescript', structuralStatus: 'complete' },
+        { path: 'src/recovered.go', language: 'go', structuralStatus: 'recovered', structuralReason: 'parser_unavailable' },
+        { path: 'src/failed.rs', language: 'rust', structuralStatus: 'recovered', structuralReason: 'analysis_failure' },
+        { path: 'src/legacy.py', language: 'python' },
+    ] as const;
+    const summary = computeSymbolQualitySummary({ files: [...files], symbols: [] });
+    const analysis = summary.structuralAnalysis;
+
+    // Text-only formats are expected coverage, so they are not failure reasons.
+    assert.equal(analysis.searchOnlyFiles, 3);
+    assert.equal(analysis.completeFiles, 2);
+    assert.equal(analysis.recoveredFiles, 2);
+    assert.equal(analysis.unknownFiles, 1);
+    assert.equal(
+        analysis.completeFiles + analysis.recoveredFiles + analysis.searchOnlyFiles + analysis.unknownFiles,
+        files.length,
+    );
+    assert.deepEqual(analysis.reasons, [
+        { reason: 'analysis_failure', files: 1 },
+        { reason: 'parser_unavailable', files: 1 },
+    ]);
+    assert.ok(!analysis.reasons.some((entry) => (entry.reason as string) === 'unsupported_language'));
+    assert.ok(!('unsupportedFiles' in analysis));
+
+    // A code format without structural support still discloses the missing capability.
+    assert.deepEqual(
+        summary.languages.find((entry) => entry.language === 'cobol'),
+        { language: 'cobol', eligibleFiles: 0, filesWithNonFileSymbols: 0, status: 'search_only' },
+    );
+    // Complete analysis of a symbol-free file stays complete rather than search-only.
+    assert.equal(summary.languages.find((entry) => entry.language === 'typescript')?.status, 'symbol_sparse');
+    assert.equal(summary.eligibleFiles, 5);
+});
+
+test('missing and unverified publication evidence keeps unknown coverage', () => {
+    for (const evidenceAvailability of ['missing', 'unverified'] as const) {
+        const summary = unknownSymbolQualitySummary(undefined, evidenceAvailability);
+        assert.equal(summary.status, 'unknown');
+        assert.equal(summary.evidenceAvailability, evidenceAvailability);
+        assert.deepEqual(summary.structuralAnalysis, {
+            completeFiles: 0, recoveredFiles: 0, searchOnlyFiles: 0, unknownFiles: 0, reasons: [],
+        });
+    }
 });

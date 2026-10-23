@@ -251,3 +251,74 @@ test("status rereads when the operation turns terminal during the read", async (
     assert.equal(payload.publication.publicationId, "published-2");
     assert.deepEqual(payload.sourceFreshness, { state: "verified", reason: "watcher_continuity" });
 });
+
+test("status reports search-only coverage separately from claimed-language gaps", async () => {
+    const root = os.tmpdir();
+    const navigationRoot = `${root}/pub-1`;
+    const builders = new ToolResponseBuilders({} as never);
+    const handler = new ManageMaintenanceHandlers({
+        mutationRuntime: { getActiveMutation: () => undefined, getOperation: () => undefined },
+        prepareStatusTrackedRootRead: async () => ({
+            state: "ready", root: { path: root }, navigationStatus: "valid",
+            publication: {
+                id: "pub-1",
+                publication: {
+                    status: "complete",
+                    createdAt: new Date(0).toISOString(),
+                    vector: { indexedFiles: 6, totalChunks: 6, collectionName: "collection" },
+                    policy: { policyHash: "policy" },
+                },
+            },
+        }),
+        context: { inspectSourceFreshnessCheckpoint: async () => ({ status: "valid" }) },
+        syncManager: {
+            assessReadFreshness: async () => ({ sourceFreshness: { state: "verified", reason: "watcher_continuity" } }),
+        },
+        acquirePublicationLease: () => ({ id: "pub-1", release: () => {} }),
+        isPublicationAdmitted: async () => true,
+        getPublicationNavigationAddress: () => ({ publicationId: "pub-1", navigationRoot }),
+        readPublicationSymbolRegistry: async () => ({
+            status: "ok",
+            registry: {
+                manifest: {
+                    files: [
+                        { path: "src/complete.ts", language: "typescript", structuralStatus: "complete" },
+                        { path: "src/recovered.ts", language: "typescript", structuralStatus: "recovered", structuralReason: "syntax_error" },
+                        { path: "src/gap.ts", language: "typescript", definitionStatus: "structural_unavailable" },
+                        { path: "docs/guide.md", language: "markdown", structuralStatus: "unsupported", structuralReason: "unsupported_language" },
+                        { path: "src/main.cobol", language: "cobol", structuralStatus: "unsupported", structuralReason: "unsupported_language" },
+                        { path: "src/legacy.py", language: "python" },
+                    ],
+                },
+                symbols: [],
+            },
+        } as never),
+        buildSyncHint: () => ({ tool: "manage_index", args: { action: "sync", path: root } }),
+        buildCompatibilityStatusLines: () => "",
+        manageResponse: (...args: Parameters<ToolResponseBuilders["buildManageResponseEnvelope"]>) => ({
+            content: [{ type: "text", text: JSON.stringify(builders.buildManageResponseEnvelope(...args)) }],
+        }),
+    } as never);
+    const result = await handler.handleGetIndexingStatus({ path: root, detail: "full" });
+    const payload = JSON.parse(result.content[0]?.text ?? "{}");
+
+    // Text-only files are expected coverage, so they are counted apart from failures.
+    assert.deepEqual(payload.symbolQuality.structuralAnalysis, {
+        completeFiles: 1, recoveredFiles: 1, searchOnlyFiles: 2, unknownFiles: 2,
+        reasons: [{ reason: "syntax_error", files: 1 }],
+    });
+    assert.match(payload.humanText, /2 published files are search-only/);
+    assert.doesNotMatch(payload.humanText, /unsupported/);
+
+    // The absent structural capability stays disclosed through the language evidence.
+    const cobol = payload.languageCapabilities.languages.find((entry: { language: string }) => entry.language === "cobol");
+    assert.equal(cobol.declaredClaim, "search_only");
+
+    // Only a language that claims structural support produces a coverage gap.
+    assert.equal(payload.structuralCoverage.status, "degraded");
+    assert.equal(payload.structuralCoverage.eligibleFileCount, 4);
+    assert.equal(payload.structuralCoverage.gapFileCount, 1);
+    assert.deepEqual(payload.structuralCoverage.gaps, [
+        { path: "src/gap.ts", language: "typescript", reason: "structural_evidence_unavailable" },
+    ]);
+});

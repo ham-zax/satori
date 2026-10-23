@@ -665,6 +665,10 @@ export class ManageMaintenanceHandlers {
                         const observedSymbolQuality = symbolQuality;
                         if (observedSymbolQuality) {
                             statusMessage += `\n🧭 ${formatSymbolQualityMarker(observedSymbolQuality)}: ${observedSymbolQuality.message}`;
+                            const searchOnlyFiles = observedSymbolQuality.structuralAnalysis.searchOnlyFiles;
+                            if (searchOnlyFiles > 0) {
+                                statusMessage += `\n📄 ${searchOnlyFiles} published files are search-only: text search covers their content, but code symbols and call analysis are unavailable for them.`;
+                            }
                         }
                     }
                 } finally {

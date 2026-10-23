@@ -638,7 +638,7 @@ test("grouped v2 response budgets bound structural and preview overhead", () => 
 
 test('normal raw and grouped search envelopes serialize published parser degradation', () => {
     const structuralAnalysis = {
-        completeFiles: 1, recoveredFiles: 1, unsupportedFiles: 0, unknownFiles: 1,
+        completeFiles: 1, recoveredFiles: 1, searchOnlyFiles: 2, unknownFiles: 1,
         reasons: [{ reason: 'syntax_error' as const, files: 1 }],
     };
     const common = {
@@ -650,7 +650,11 @@ test('normal raw and grouped search envelopes serialize published parser degrada
     for (const envelope of [
         buildRawSearchEnvelope({ ...common, results: [] }),
         buildGroupedSearchEnvelope({ ...common, results: [makeGroup(0)] }),
-    ]) assert.deepEqual(JSON.parse(JSON.stringify(envelope)).structuralAnalysis, structuralAnalysis);
+    ]) {
+        const serialized = JSON.parse(JSON.stringify(envelope)).structuralAnalysis;
+        assert.deepEqual(serialized, structuralAnalysis);
+        assert.ok(!('unsupportedFiles' in serialized));
+    }
 });
 
 test('stale raw and grouped search envelopes report the paths the dirty overlay answered', () => {

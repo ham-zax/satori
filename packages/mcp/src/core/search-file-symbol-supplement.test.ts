@@ -137,3 +137,65 @@ test("the declaration lane retains a generator implementation below the retrieve
     assert.ok(reads.length <= 6);
     assert.ok(results.some((result) => result.relativePath === generator.file && result.symbolLabel === "function GenTable"));
 });
+
+async function supplementFixtures(files: ReturnType<typeof fixture>[], query: string,
+    candidates = files.map((file) => ({ relativePath: file.file }))) {
+    const registry = { manifest: { files: files.flatMap((file) => file.registry.manifest.files) },
+        symbolsByFile: new Map(files.map((file) => [file.file, file.symbols])) } as unknown as SymbolRegistry;
+    const reads: string[] = [];
+    const results = await supplementSearchFileSymbols({
+        candidates, lexicalTerms: buildSearchQueryPlan(query, true).lexicalTerms,
+        registry, codebaseRoot: "/repo", readSourceEvidence: async (root, file) => {
+            reads.push(file);
+            return files.find((entry) => entry.file === file)!.reader(root, file);
+        },
+    });
+    return { results, reads };
+}
+
+test("path context admits an exact source-only owner below both old file windows", async () => {
+    const noise = Array.from({ length: 7 }, (_, index) => fixture(
+        "function encodeRecord() { return record; }", ["encodeRecord"], `src/noise${index}.ts`));
+    const owner = fixture("function create() { return payload; }", ["create"], "src/record/encoder.ts");
+    const { results, reads } = await supplementFixtures([...noise, owner], "record encoder payload");
+    assert.deepEqual(reads.slice(0, 3), noise.slice(0, 3).map((file) => file.file));
+    assert.ok(reads.length <= 6);
+    assert.equal(results.length, 1);
+    assert.equal(results[0].ownerSymbolInstanceId, owner.symbols[0].symbolInstanceId);
+    assert.equal(results[0].relativePath, owner.file);
+    assert.equal(results[0].startLine, 1);
+    assert.equal(results[0].endLine, 1);
+    assert.deepEqual(owner.symbols[0].parentQualifiedNamePath, []);
+});
+
+test("context does not admit one-term name evidence or path-only source evidence", async () => {
+    const owner = fixture("return 1;\nreturn record;", ["payload", "create"], "src/record/encoder.ts");
+    const { results } = await supplementFixtures([owner], "record encoder payload");
+    assert.deepEqual(results, []);
+    const withoutContext = fixture("return payload;", ["create"], "src/record.ts");
+    assert.deepEqual((await supplementFixtures([withoutContext], "record encoder payload")).results, []);
+});
+
+test("stronger symbols precede source-only matches and preserve full-span identity", async () => {
+    const names = [...Array.from({ length: 11 }, (_, index) => `entry${index}`), "create"];
+    const owner = fixture(names.map((_, index) => index < 11
+        ? "return payload + record;" : "return payload;").join("\n"), names, "src/record/encoder.ts");
+    const complete = { relativePath: owner.file, ownerSymbolInstanceId: owner.symbols[11].symbolInstanceId,
+        startLine: 12, endLine: 12, content: "original payload", symbolLabel: "original label" };
+    const { results, reads } = await supplementFixtures([owner], "record encoder payload", [complete]);
+    assert.deepEqual(results.slice(0, 6).map((result) => result.startLine), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(results.map((result) => result.startLine), Array.from({ length: 12 }, (_, index) => index + 1));
+    assert.equal(results[11], complete);
+    assert.equal(reads.length, 1);
+});
+
+test("recovery returns all eligible symbols without per-file or total count quotas", async () => {
+    const names = Array.from({ length: 60 }, (_, index) => `entry${index}`);
+    const files = ["src/record/encoder-a.ts", "src/record/encoder-b.ts", "src/plain.ts"]
+        .map((file) => fixture(names.map(() => "return payload + record;").join("\n"), names, file));
+    const { results, reads } = await supplementFixtures(files, "record encoder payload");
+    assert.equal(results.length, 180);
+    assert.equal(reads.length, 3);
+    assert.deepEqual(results.map((result) => [result.relativePath, result.startLine]),
+        files.flatMap((file) => names.map((_, index) => [file.file, index + 1])));
+});

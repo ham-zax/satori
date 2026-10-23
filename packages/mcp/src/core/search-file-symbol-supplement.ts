@@ -3,13 +3,18 @@ import { readCurrentSourceEvidence } from "./current-source-symbols.js";
 import type { SearchLexicalTerm, SearchResultLike } from "./search-lexical-scoring.js";
 
 const MAX_FILES = 3;
-const MAX_SYMBOLS_PER_FILE = 6;
 const MAX_SYMBOL_LINES = 400;
 
 function normalizedTerms(value: string): Set<string> {
     return new Set((value + " " + value.replace(/([a-z0-9])([A-Z])/g, "$1 $2")).toLowerCase()
         .split(/[^a-z0-9]+/).filter(Boolean)
         .map((term) => term.replace(/(?:ing|ed|s)$/, "")));
+}
+
+function pathContextScore(file: string, queryTerms: Set<string>): number {
+    const pathTerms = normalizedTerms(file);
+    const matches = [...queryTerms].filter((term) => pathTerms.has(term)).length;
+    return matches >= 2 ? matches : 0;
 }
 
 /** Recover bounded symbol evidence inside files already found by retrieval.
@@ -34,10 +39,10 @@ export async function supplementSearchFileSymbols(input: {
     // window. Retain the previous bounded declaration lane alongside the
     // retrieval lane, so precise generator symbols remain discoverable.
     const declarationFiles = [...new Set(input.candidates.map((candidate) => candidate.relativePath))]
-        .map((file, rank) => ({ file, rank, matches: (input.registry.symbolsByFile.get(file) ?? [])
+        .map((file, rank) => ({ file, rank, context: pathContextScore(file, queryTerms), matches: (input.registry.symbolsByFile.get(file) ?? [])
             .filter((symbol) => ["function", "method"].includes(symbol.kind)
                 && [...normalizedTerms(symbol.name)].some((term) => queryTerms.has(term))).length }))
-        .sort((a, b) => b.matches - a.matches || a.rank - b.rank)
+        .sort((a, b) => b.context - a.context || b.matches - a.matches || a.rank - b.rank)
         .slice(0, MAX_FILES).map(({ file }) => file);
     files.push(...declarationFiles.filter((file) => !files.includes(file)));
     const results: SearchResultLike[] = [];
@@ -53,6 +58,7 @@ export async function supplementSearchFileSymbols(input: {
         if (!evidence || evidence.relativeFile !== file || evidence.observedHash !== manifestFile.hash) continue;
         const lines = evidence.source.split(/\r?\n/);
         const pathTerms = normalizedTerms(file);
+        const hasPathContext = pathContextScore(file, queryTerms) > 0;
         const ranked = (input.registry.symbolsByFile.get(file) ?? []).flatMap((symbol) => {
             if (!["function", "method"].includes(symbol.kind)
                 || symbol.fileHash !== evidence.observedHash
@@ -62,13 +68,16 @@ export async function supplementSearchFileSymbols(input: {
             const contentTerms = normalizedTerms(content);
             const nameTerms = normalizedTerms(symbol.name);
             const matched = [...queryTerms].filter((term) => contentTerms.has(term) || nameTerms.has(term));
-            if (matched.length < 2 || !matched.some((term) => !pathTerms.has(term))) return [];
+            const sourceOnlyMatch = matched.some((term) => contentTerms.has(term)
+                && !pathTerms.has(term) && !nameTerms.has(term));
+            if (!matched.some((term) => !pathTerms.has(term))
+                || (matched.length < 2 && !(hasPathContext && sourceOnlyMatch))) return [];
             return [{ symbol, content, matches: matched.length,
                 nameMatches: matched.filter((term) => nameTerms.has(term)).length }];
         }).sort((left, right) => right.matches - left.matches
             || right.nameMatches - left.nameMatches
             || left.symbol.span.startLine - right.symbol.span.startLine);
-        for (const { symbol, content } of ranked.slice(0, MAX_SYMBOLS_PER_FILE)) {
+        for (const { symbol, content } of ranked) {
             const existing = input.candidates.find((candidate) => candidate.ownerSymbolInstanceId === symbol.symbolInstanceId
                 && candidate.startLine === symbol.span.startLine && candidate.endLine === symbol.span.endLine);
             if (existing) {

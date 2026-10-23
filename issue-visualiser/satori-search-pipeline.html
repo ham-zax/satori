@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Following the owner through Satori search</title>
+<style>
+:root{--bg:#edf2f0;--ink:#12231f;--mid:#4a5f59;--line:#c3d1cb;--paper:#f8fbfa;--gold:#f2a900;--trail:#b87a00;--bad:#b3283d;--ok:#1b6e53;--ease:cubic-bezier(.16,1,.3,1);color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+::selection{background:var(--gold);color:var(--ink)}
+:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 clamp(16px,4vw,40px)}
+h1,h2,h3{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;line-height:1.1;letter-spacing:-.02em;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.1rem,5.4vw,3.8rem);max-width:20ch}h2{font-size:clamp(1.5rem,3vw,2.1rem);margin:0 0 12px}h3{font-size:1.2rem;margin-bottom:6px}
+header{padding:clamp(36px,7vw,80px) 0 20px}.lede{max-width:64ch;color:var(--mid);font-size:1.12rem;margin:18px 0 0}
+section{padding:clamp(26px,5vw,52px) 0}p{margin:0 0 .8em;max-width:70ch}code{font-size:.88em;background:rgba(18,35,31,.07);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+button,select{font:inherit;color:inherit}
+.chips,.btns{display:flex;flex-wrap:wrap;gap:8px}
+.chip,.btns button,.ev{padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--paper);cursor:pointer;transition:background .2s,color .2s}
+.chip:hover,.btns button:hover,.ev:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.btns button.pri{background:var(--ink);color:#fff;border-color:var(--ink)}
+.ev{padding:2px 10px;font-size:.84rem;margin:2px 4px 2px 0}
+.story{margin:16px 0 14px;max-width:66ch;min-height:3.4em}
+.hint{font-size:.9rem;color:var(--mid);margin:10px 0 0;max-width:72ch}
+.grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:28px;align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.board{position:relative;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:4px 0}
+.row{display:grid;grid-template-columns:140px 1fr 128px;gap:12px;align-items:center;width:100%;padding:8px 16px;border:0;background:none;text-align:left;cursor:pointer;opacity:.4;transition:opacity .45s var(--ease),background .3s}
+.row.on{opacity:1}.row.cur{background:rgba(242,169,0,.13)}
+.row b{display:block;font-weight:650;font-size:.95rem}.row small{display:block;color:var(--mid);line-height:1.2;font-size:.8rem}
+.val{font-variant-numeric:tabular-nums;font-size:.85rem;text-align:right;line-height:1.25}
+.row.lost .val{color:var(--bad);font-weight:650}
+.track{position:relative;height:22px;border-radius:6px;overflow:hidden;background:radial-gradient(circle,#8aa098 1.2px,transparent 1.7px) 0 0/7px 11px}
+.cut{position:absolute;top:0;bottom:0;right:0;border-left:2px solid var(--bad);background:repeating-linear-gradient(135deg,rgba(179,40,61,.2) 0 4px,rgba(179,40,61,.05) 4px 8px);background-color:rgba(248,251,250,.7);transition:left .6s var(--ease)}
+@media(max-width:640px){.row{grid-template-columns:1fr auto}.track{grid-column:1/-1;order:3}}
+.tok{position:absolute;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:var(--gold);border:2.5px solid var(--ink);box-shadow:0 3px 8px rgba(18,35,31,.3);transition:transform 1s var(--ease),background .3s;z-index:2;pointer-events:none}
+.tok.lost{background:var(--bad)}.tok.ok{background:var(--ok)}
+.trail{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:1}
+.seg{fill:none;stroke:var(--trail);stroke-width:2.5;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset 1s var(--ease)}.seg.d{stroke-dashoffset:0}
+.btns{margin-top:14px}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px 20px}.panel+.panel{margin-top:16px}.panel p{margin-bottom:.5em}
+.sv{font-weight:650}.sv.x{color:var(--bad)}.sv.y{color:var(--ok)}
+.b{display:inline-block;font-size:.78rem;font-weight:650;border:1.5px solid var(--ink);border-radius:6px;padding:0 7px;margin:0 4px 4px 0;white-space:nowrap}
+.b-his{border-style:dashed;color:var(--mid);border-color:var(--mid)}.b-hyp{border-style:dotted;color:var(--mid);border-color:var(--mid)}.b-unt{border-style:dotted}
+.b-open{color:var(--bad);border-color:var(--bad)}.b-rep{color:var(--ok);border-color:var(--ok)}.b-imp{background:var(--ink);color:#fff}
+details{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin:0 0 10px}
+summary{padding:14px 18px;cursor:pointer;font-weight:650;list-style:none;display:flex;justify-content:space-between;gap:12px}
+summary::after{content:"+";font-weight:400}details[open] summary::after{content:"\2212"}
+.db{padding:0 18px 16px;overflow-x:auto}.db li{margin:0 0 .5em}.db ul{padding-left:1.1em;margin:.4em 0}
+table{border-collapse:collapse;width:100%;font-size:.92rem;margin:8px 0}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{font-weight:650}
+.stack{display:flex;height:34px;border-radius:8px;overflow:hidden;margin:10px 0 4px;font-size:.8rem}.stack i{display:flex;align-items:center;justify-content:center;font-style:normal;color:#fff;min-width:0;overflow:hidden;white-space:nowrap}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px 22px;margin:14px 0}
+label{display:block;font-size:.93rem}label span{display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;font-weight:600}
+output{font-variant-numeric:tabular-nums;font-weight:400;color:var(--mid)}
+input[type=range]{width:100%;margin:0;accent-color:var(--ink)}
+select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+#lo li{margin:0 0 .5em}
+#dr{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--paper);border-left:1px solid var(--ink);box-shadow:-10px 0 30px rgba(18,35,31,.18);padding:22px 22px 28px;overflow:auto;z-index:20;transform:translateX(102%);transition:transform .45s var(--ease);visibility:hidden}
+#dr.open{transform:none;visibility:visible}
+#dr dl{margin:12px 0 0;font-size:.92rem}#dr dt{font-weight:650;margin-top:8px}#dr dd{margin:0;overflow-wrap:anywhere}
+footer{padding:10px 0 60px;color:var(--mid);font-size:.92rem}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation:none!important}}
+</style></head><body>
+<header class="wrap">
+<h1>Following the owner through Satori search</h1>
+<p class="lede">The <b>owner</b> is the symbol that implements, or authoritatively declares, the behaviour you asked about. Satori narrows a codebase through ten stages. This page follows the owner through them using recorded evidence, and marks what is observed, implemented, historical, hypothesis or untested. The measured numbers are small facts about specific runs. Nothing here claims a search repair.</p>
+</header>
+<main class="wrap">
+<section aria-labelledby="t1" style="padding-top:8px">
+<h2 id="t1">Follow the owner</h2>
+<div class="chips" id="chips" role="group" aria-label="Choose a recorded case"></div>
+<p class="story" id="story" aria-live="polite"></p>
+<div class="grid"><div>
+ <div class="board" id="board"><svg class="trail" id="trail" aria-hidden="true"></svg><div class="tok" id="tok" aria-hidden="true"></div><div id="rows"></div></div>
+ <div class="btns" role="group" aria-label="Playback"><button id="play" class="pri">Play</button><button id="back">Back</button><button id="step">Step</button><button id="reset">Reset</button></div>
+ <p class="hint">Gold dot = the owner. Each strip is a ranked list, best on the left (logarithmic). Hatched = cut off. Where no rank was recorded, the dot stays where it last had one. Select a row to jump to it.</p>
+</div><div>
+ <div class="panel" aria-live="polite"><h3 id="vt"></h3><div id="vb"></div></div>
+ <div class="panel" id="sd"></div>
+</div></div>
+</section>
+
+<section aria-labelledby="t2">
+<h2 id="t2">Inspect a failure</h2>
+<div id="cases"></div>
+</section>
+
+<section aria-labelledby="t3">
+<h2 id="t3">What can change?</h2>
+<p>These controls apply formulas from the code and the uncommitted diff. “Current” is the working-tree diff, which I did not confirm is in the installed runtime. No rank, accuracy or latency is predicted. The only measured ranks on this page are in the cases above.</p>
+<div class="ctl" id="ctl">
+ <label><span>Budget policy</span><select id="pol"><option value="cur">Current (uncommitted diff)<option value="his">Historical (HEAD)</select></label>
+ <label><span>Output limit</span><select id="lim"><option>5<option selected>10<option>20</select></label>
+ <label><span>Rerank ceiling</span><select id="ceil"><option>128<option>64</select></label>
+ <label><span>Provider capacity</span><select id="cap"><option value="0">Not advertised<option>32<option>64<option value="128" selected>128 (LateOn)</select></label>
+ <label><span>Route</span><select id="route"><option value="con">Conceptual (reranker runs)<option value="cfg">Configuration cue (“settings”)</select></label>
+ <label><span>Candidates available <output id="opool"></output></span><input type="range" id="pool" min="10" max="160" value="80"></label>
+ <label><span>Owner in the pool?</span><select id="own"><option value="in">Inside, at the position below<option value="out">Not retrieved by any arm<option value="scope">Excluded by scope</select></label>
+ <label><span>Owner’s pool position <output id="opos"></output></span><input type="range" id="pos" min="1" max="160" value="70"></label>
+ <label><span>Final grouped rank (what-if) <output id="ofin"></output></span><input type="range" id="fin" min="1" max="40" value="15"></label>
+ <label><span>Disclosure count</span><select id="dis"><option>5<option selected>10<option>20</select></label>
+</div>
+<div class="panel"><ul id="lo" style="padding-left:1.1em;margin:0"></ul></div>
+</section>
+</main>
+<aside id="dr" role="dialog" aria-label="Evidence" tabindex="-1"><button id="dx" class="chip">Close</button><h3 id="dt" style="margin-top:14px"></h3><div id="db"></div></aside>
+<footer class="wrap">Sources are in the repository at <code>docs/improvements/</code>, read-only, on 23 October 2026 at HEAD <code>e92b3e90</code> plus the uncommitted working tree. Different publications, datasets and builds are never merged. Illustrative strips are not model computations.</footer>
+
+<script>
+const $=s=>document.querySelector(s),RM=matchMedia('(prefers-reduced-motion:reduce)').matches,M=3000,D='docs/improvements/';
+const BT={obs:'OBSERVED',imp:'IMPLEMENTED',his:'HISTORICAL',hyp:'HYPOTHESIS',unt:'UNTESTED',open:'OPEN',rep:'REPAIRED IN ITS RECORDED REPLAY'};
+const bd=t=>`<span class="b b-${t}">${BT[t]}</span>`,ev=(k,l)=>`<button class="ev" data-e="${k}">${l||'source'}</button>`;
+const E={
+route:{t:'imp',p:'packages/mcp/src/core/search-query-planning.ts',s:'lines 567–570 (configuration cue), 724–758 (rerankAllowed)',d:'working tree 2026-10-23',b:'HEAD e92b3e90',x:'Configuration cue words (config, setting(s), constant(s), env, flag(s)…) select route “configuration”: lexical retrieval, rerankAllowed false, rerankCalls 0.'},
+flow:{t:'imp',p:'packages/mcp/src/core/search-execution.ts; search-rerank-execution.ts',s:'execution 1064–1135, 1284; rerank-execution 514–650',d:'working tree 2026-10-23',b:'HEAD e92b3e90',x:'Order: retrieval passes → MCP fusion (metadata hits fused first) → file-symbol supplement (only if a reranker exists) → rerank admission → provider → definition fusion (skipped for Voyage rerank-3/lite) → implementation preference → grouping and finalization.'},
+budget:{t:'imp',p:'packages/mcp/src/core/search-policy.ts; search-rerank-policy.ts; search-constants.ts',s:'git diff (uncommitted)',d:'2026-10-23',b:'HEAD e92b3e90 + working tree; SEARCH_MAX_CANDIDATES 80, SEARCH_RERANK_TOP_K 128',x:'candidateLimit = SEARCH_MAX_CANDIDATES; it was min(80, max(limit×8, 32)). Rerank depth = min(min(128, provider cap), pool); it was max(64, ⌈limit×64/10⌉) with a provider cap. Webharness at limit 20 / disclosure 10: identical top-ten lists for five queries, which does not show an accuracy gain. A limit-5 run is elsewhere, unreported.'},
+proj:{t:'imp',p:'packages/core/src/core/search-projections.ts; vector-candidate-fusion.ts',s:'buildSearchProjections 82–133; VECTOR_CANDIDATE_RRF_K_V1=100',d:'2026-10-23',b:'embedding_projection_v3, lexical_projection_v2',x:'Embedding text = identity header (path, kind, symbol label and terms, breadcrumbs) + content. Chunk lexical text = content + metadata + identifier components. Arms fused by reciprocal rank (k=100).'},
+maxsim:{t:'imp',p:'packages/mcp/src/server/lateon-reranker-encoder.ts',s:'maxSimScore 52–67; lowercasing at line 75',d:'2026-10-23',b:'HEAD e92b3e90',x:'Score = sum over query tokens of the best dot product with any document token. No length normalisation; input is lowercased before tokenizing.'},
+s1:{t:'obs',p:D+'s1-owner-discovery-plan-2026-10-23.md',s:'“Baseline and evidence”',d:'2026-10-23',b:'checkout 5188f612; publication 330c18e2 (48,308 chunks); runtime 0.10.3',x:'Target rank 997 (dense), 2,456 (expanded dense), 2,053 (fallback lexical) across the full index; each arm keeps 80. With alt phrase “search code handler”: sixth before reranking, provider rank 58 of 64, grouped rank 15.'},
+s1w:{t:'obs',p:D+'wild-runtime-findings-2026-10-23.md',s:'“Evidence and repair plan”, item 4',d:'2026-10-23',b:'user report; publication 3201ee80 (a different publication)',x:'handleSearchCode is absent from every recorded candidate stage; other handlers.ts symbols reach grouping, the first at rank 14.'},
+norm:{t:'obs',p:D+'s1-normalization-experiment-2026-10-23.md',s:'“Results”',d:'2026-10-23',b:'publication 330c18e2; frozen capture, 171 candidate identities',x:'Runtime-predicate metadata rank 1,792 → 715 (plural) → 663 (role); the cap is 12. Role-additive: target 17 of 37 before the six-symbol cut, not supplemented. Fusion rank in the already-admitted control 16 → 13. Not an end-to-end run.'},
+decl:{t:'obs',p:D+'s1-declaration-evidence-experiment-2026-10-23.md',s:'“S1 results”, “External controls”',d:'2026-10-23',b:'publication 330c18e2; React 7c6ac13e; FlatBuffers b8431fbc',x:'Name-first + trial role tokenizer: target 4 of 37, supplement position 12 (admitted). React r2 loses admission. Over 20 paired comparisons: 0 admission gains, 2 losses. No grouped rank measured.'},
+graph:{t:'obs',p:D+'s1-graph-evidence-experiment-2026-10-23.md',s:'“Foundation”, “Fan-out and serialized context”, “Ranking comparison”',d:'2026-10-23',b:'692 TS files; sidecar roundtrip (not a managed reindex); frozen 64-candidate window; caller terms “search code handler”',x:'Both call edges survive read-back (authority direct_binding). The entrypoint has 35 call sites, 27 admitted, 19 distinct targets. Handler provider rank 58 (empty) / 52 (handler-only) / 53 (all); fusion rank 16 in every arm.'},
+accept:{t:'unt',p:D+'s1-owner-discovery-plan-2026-10-23.md',s:'“User experience target”, “Next deciding experiment, not yet executed”',d:'2026-10-23',b:'oracle: evals/code-intelligence-vs/tasks.json id find-search-handler',x:'Acceptance: the original query returns handleSearchCode in the first ten grouped symbol results, with no identifier guesses or alternate terms. Call-backed admission plus ownership-aware fusion is proposed, not run.'},
+r72:{t:'his',p:D+'owner-recall-design-checkpoint.md',s:'“Where the owner is lost”, “P1 result”',d:'2026-10-13/14',b:'72 questions (28 + 46), React/Polars/FlatBuffers, master 224183ca, no alt terms',x:'25 owners miss the rerank window = 18 in no arm’s top 80 + 4 cut at 64 (p3 89, fresh_r1 70, fresh_r5 78, f2_rewritten 71) + 3 lost in core fusion. Of the 18: 11 at rank 96–395 in some arm, 6 beyond 400, 1 excluded by scope. Probes stop at depth 400, so “beyond 400” is a probe limit, not absence from the index.'},
+cap:{t:'hyp',p:D+'owner-recall-design-checkpoint.md',s:'“Why widening 64 to 96 or 128 hurts elsewhere”',d:'2026-10-13',b:'72 questions; “Not measured in this work”',x:'Consistent with the data but unmeasured: only 4 owners sit at ranks 65–89, while other questions receive extra lower-ranked candidates. A depth-96 replay was proposed.'},
+fus:{t:'his',p:D+'definition-fusion-root-cause.md; voyage-reranker-and-definition-fusion.md',s:'summaries',d:'2026-10-13',b:'28 questions (Voyage run, one run per arm); 72 for LateOn strict MRR',x:'Skipping fusion for rerank-3: MRR 0.6446 → 0.7798 (28 q). The shipped rule lifts LateOn strict MRR 0.2293 → 0.2964 (72 q). About 170 rules replayed; none universal. Not evidence for globally disabling fusion.'},
+alt:{t:'his',p:D+'agent-alt-terms-definition-discovery.md; owner-recall-design-checkpoint.md',s:'“Evidence” table; “Caller alt terms through the real local reranker”',d:'2026-10-06 (46 q); 2026-10-14 (72 q)',b:'two datasets, never merged',x:'46 q: hit@10 16 (none) → 34 (own terms, flag on); wrong terms 8. 72 q LateOn: MRR 0.3559 → 0.4985 with own terms, 0.1823 with another question’s; owners in window 51 → 64 (43 with wrong terms).'},
+q5:{t:'obs',p:D+'q5-retrieval-investigation.md',s:'“Finding”; “Paired result of the metadata experiment”',d:'2026-10-03/04',b:'Colonist 40a7c126; publication fb96d5ed (flag-only run)',x:'Baseline: neither owner reaches the reranker; a 40→80 pool did not help. Metadata arm only: nextClickStillLegal arm 3 / input 8 / grouped 34; legal_actions 8 / 17 / 55; both absent from the visible ten.'},
+q5r:{t:'rep',p:D+'reranker-owner-investigation.md',s:'“Paired live Colonist results”',d:'2026-10-04',b:'Colonist 40a7c126; publication e5808ff0; 3 alternating repeats',x:'definition_discovery on: nextClickStillLegal absent → rank 4; legal_actions absent → 8; validatedClick 2 → 1. A later four-repo comparison used fresh questions and does not supersede this replay.'}};
+const ST=[
+['Question routing','Picks a route','Choose exact, configuration, references, ownership, structural, conceptual or mixed routes; decide whether dense retrieval and the reranker run.','Does not read the index. Words like “settings” send a question down a lexical-only route with no reranker.','route'],
+['Dense + lexical','Potion and chunk text','The Potion dense arm and the chunk-text lexical arm each keep up to 80 candidates (current diff).','Cannot keep an owner ranked below the arm depth. Later budgets cannot recover it.','budget'],
+['Fuse + filter','Merge, dedupe, scope','Fuses arms by reciprocal rank (k=100), de-duplicates per owner, applies scope, path and test filters.','Cannot invent candidates. Scope can remove an owner that similarity found.','proj'],
+['Metadata / supplement','Conditional','Symbol-metadata lexical pass, an alt-terms pass, and a file-symbol supplement when a reranker exists.','Skipped on some routes. Admits by names and source terms, not by who calls whom.','flow'],
+['Admit','Family selection','Keeps one representative per owner plus a few extra chunks, then admits up to min(128 or provider cap, pool).','Admits only what the pool holds. A ceiling of 128 retrieves nothing new.','budget'],
+['Project + bytes','Model input','Builds each document (up to 200 lines / 4,000 chars with structural context) and trims to byte limits.','Cannot add evidence that was not projected. Byte-omitted candidates are not scored.','flow'],
+['Provider scoring','LateOn or Voyage','Scores every admitted document. LateOn sums each query token’s best match (MaxSim).','Scores only the admitted slice. Broad vocabulary can favour a helper over a delegating owner.','maxsim'],
+['Definition fusion','Post-model rules','For LateOn: adds a symbol-name vote and reorders within a file, then applies implementation preference.','Skipped for Voyage rerank-3/lite. Can demote the provider’s best answer.','fus'],
+['Group + freeze','Final result set','Groups by symbol, applies per-file diversity caps, freezes up to 200 results.','Cannot add owners. A capped file can drop a lower sibling.','flow'],
+['Disclose','First results shown','Shows disclosureLimit results (default min(limit, 10)) within 48 KiB. The rest come through continuation.','Showing more can reveal a low owner. It does not repair ranking, and the frozen total caps what exists.','flow']];
+const SC=[
+{n:'S1: original query',e:'s1',L:1,after:'not reached',p:{1:997},c:{1:80},v:{1:'dense #997, keeps 80'},
+ t:'Query: “search_codebase grouped result handler freshness warnings next actions”. Target: handleSearchCode, a short body that delegates to helpers with richer vocabulary.',
+ f:'<b>First demonstrated loss: Dense + lexical.</b> '+bd('obs')+'<p>Across the full index the target ranks 997 (dense), 2,456 (expanded dense) and 2,053 (lexical), while each arm keeps 80. It never becomes a candidate, so no later stage can act on it. A separate user report (publication 3201ee80) shows it absent from every recorded stage. That is a different publication from the probes.</p>'+ev('s1')+ev('s1w','user report')},
+{n:'S1: alternate phrase',e:'s1',L:9,after:'not reached',p:{4:6,6:58,8:15,9:15},c:{6:64,9:10},v:{1:'not itemized',3:'alt phrase admits',4:'#6 before rerank',6:'#58 of 64',8:'grouped #15',9:'#15, shows 10'},
+ t:'Same query plus a controlled alternate phrase, “search code handler”, which a caller would not normally supply.',
+ f:'<b>Admission works; ranking does not.</b> '+bd('obs')+'<p>The target is admitted (sixth before reranking), but the provider ranks it 58 of 64. Existing fusion leaves it at grouped rank 15, outside the first ten. This run is separate from the graph replay: do not combine grouped 15 with fusion 16.</p>'+ev('s1')},
+{n:'S1: graph labels',e:'graph',L:7,after:'not run in this replay',p:{6:52,7:16},c:{6:64,7:10},v:{4:'frozen 64 window',6:'#52 (was #58)',7:'fusion #16'},
+ t:'A replay over a frozen 64-candidate window with caller terms “search code handler”. It tests labels on candidates already admitted.',
+ f:'<b>Labels help the provider; fusion is unchanged.</b> '+bd('obs')+'<p>Graph context moves the provider rank 58 → 52 (handler-only labels), while fusion rank stays 16 in every arm. Stages before scoring were fixed by design, and grouping and disclosure were not run. The acceptance target is the first ten.</p>'+ev('graph')},
+{n:'Colonist Q5: metadata only',e:'q5',L:9,after:'not reached',p:{3:3,4:8,8:34,9:34},c:{9:10},v:{3:'arm #3',4:'input #8',8:'grouped #34',9:'#34, shows 10'},
+ t:'Historical: the Colonist click-legality question, owner nextClickStillLegal. A different repository and dataset from S1.',
+ f:'<b>Admission repaired; the visible result still misses it.</b> '+bd('obs')+bd('his')+'<p>The metadata pass admits both owners and the reranker receives them, yet grouped ranks are 34 and 55, absent from the visible ten. The source attributes the push to the reranker but does not itemize the split.</p>'+ev('q5')},
+{n:'Colonist Q5: definition discovery',e:'q5r',L:-1,after:'',p:{9:4},c:{9:10},v:{9:'visible #4'},
+ t:'The later replay of the same Colonist question, with definition discovery on. This is not Webharness query 5.',
+ f:'<b>No loss in this recorded replay.</b> '+bd('rep')+'<p>The owners reach visible ranks 4 and 8 (a different publication, e5808ff0). This does not say other Q5-era failures are solved.</p>'+ev('q5r')}];
+let k=0,tm=null,st=null,cur=0;
+const f=r=>Math.min(1,(Math.log(Math.max(1,r))+.2)/(Math.log(M)+.4));
+const rowsEl=$('#rows');
+rowsEl.innerHTML=ST.map((s,i)=>`<button class="row" data-i="${i}"><span><b>${s[0]}</b><small>${s[1]}</small></span><span class="track"><span class="cut"></span></span><span class="val"></span></button>`).join('');
+const ROWS=[...rowsEl.children],trail=$('#trail');
+trail.innerHTML=ST.slice(1).map(()=>'<path class="seg" pathLength="1"/>').join('');const SEGS=[...trail.children];
+$('#chips').innerHTML=SC.map((s,i)=>`<button class="chip" data-p="${i}" aria-pressed="false">${s.n}</button>`).join('');const CH=[...document.querySelectorAll('.chip[data-p]')];
+const cap=()=>{const L=SC[cur].L;return L<0?9:L};
+function xs(){const S=SC[cur];let last=null;return ST.map((_,i)=>{if(S.p[i]!=null)last=S.p[i];return last})}
+function render(){const S=SC[cur],c=cap();k=Math.min(k,c);const P=xs(),b=$('#board').getBoundingClientRect();
+ const g=ROWS.map((r,i)=>{const t=r.querySelector('.track').getBoundingClientRect();return[t.left-b.left+(P[i]==null?.5:f(P[i]))*t.width,t.top-b.top+t.height/2]});
+ ROWS.forEach((r,i)=>{r.classList.toggle('on',i<=k);r.classList.toggle('cur',i===k);r.classList.toggle('lost',i===S.L);r.setAttribute('aria-current',i===k?'step':'false');
+  r.querySelector('.val').textContent=S.L>=0&&i>S.L?S.after:(i===S.L?'Dropped: ':'')+(S.v[i]||'no rank recorded');
+  const ct=r.querySelector('.cut'),x=S.c[i];ct.style.display=x==null?'none':'';if(x!=null)ct.style.left=f(x+.5)*100+'%'});
+ const tk=$('#tok');tk.style.transform=`translate(${g[k][0]}px,${g[k][1]}px)`;tk.classList.toggle('lost',k===S.L);tk.classList.toggle('ok',S.L<0&&k===9);
+ SEGS.forEach((s,i)=>{const a=g[i],z=g[i+1],m=(a[1]+z[1])/2;s.setAttribute('d',`M${a[0]} ${a[1]}C${a[0]} ${m} ${z[0]} ${m} ${z[0]} ${z[1]}`);s.classList.toggle('d',i+1<=k)});
+ $('#vt').textContent=S.n;$('#vb').innerHTML=S.f;
+ const lost=k===S.L,T=ST[k];$('#sd').innerHTML=`<h3>${T[0]}</h3><p><b>Can:</b> ${T[2]}</p><p><b>Cannot:</b> ${T[3]}</p><p class="sv ${lost?'x':'y'}">${lost?'The owner is dropped here.':P[k]!=null?'Owner still in the running; last recorded rank #'+P[k]+'.':'Owner still in the running; no rank recorded yet.'}</p>${bd(E[T[4]].t)}${ev(T[4])}`;
+ $('#play').textContent=tm?'Pause':'Play'}
+function stop(){clearInterval(tm);clearTimeout(st);tm=null;$('#play').textContent='Play'}
+function play(){if(k>=cap())k=0;render();tm=setInterval(()=>{if(k>=cap()){stop();return}k++;render()},RM?500:1400);$('#play').textContent='Pause'}
+function pick(i){cur=i;CH.forEach((c,j)=>c.setAttribute('aria-pressed',j===i));$('#story').textContent=SC[i].t;stop();k=0;if(RM){k=cap();render()}else{render();st=setTimeout(play,350)}}
+CH.forEach(c=>c.onclick=()=>pick(+c.dataset.p));
+ROWS.forEach(r=>r.onclick=()=>{stop();k=+r.dataset.i;render()});
+$('#play').onclick=()=>tm?stop():play();$('#step').onclick=()=>{stop();k=Math.min(cap(),k+1);render()};$('#back').onclick=()=>{stop();k=Math.max(0,k-1);render()};$('#reset').onclick=()=>{stop();k=0;render()};
+addEventListener('resize',render);document.addEventListener('visibilitychange',()=>{if(document.hidden)stop()});
+
+// evidence drawer
+let opener=null;
+function open(key,el){const e=E[key];if(!e)return;opener=el;$('#dt').innerHTML=`${bd(e.t)}<br>${key}`;$('#db').innerHTML=`<p>${e.x}</p><dl><dt>Path</dt><dd><code>${e.p}</code></dd><dt>Section</dt><dd>${e.s}</dd><dt>Date</dt><dd>${e.d}</dd><dt>Build / dataset</dt><dd>${e.b}</dd></dl>`;$('#dr').classList.add('open');$('#dx').focus()}
+function shut(){$('#dr').classList.remove('open');if(opener)opener.focus()}
+document.addEventListener('click',e=>{const b=e.target.closest('.ev');if(b)open(b.dataset.e,b)});$('#dx').onclick=shut;document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#dr').classList.contains('open'))shut()});
+
+// cases
+const CS=[
+['S1: the delegating handler '+bd('open'),`<p>handleSearchCode has a short body that delegates. The richer words (grouped, freshness, warnings, next actions) live in nearby helpers. That is a vocabulary gap between the question and the owner. Three bounded experiments tried to close it, each on 2026-10-23 against publication 330c18e2, and each is kept separate:</p>
+<table><tr><th>Experiment</th><th>What it did</th><th>Result</th></tr>
+<tr><td>Normalization ${ev('norm')}</td><td>Plural and role-token rules on symbol metadata</td><td>Internal ranks improve (metadata 1,792 → 663) but admission is not repaired; the cap is 12.</td></tr>
+<tr><td>Declaration priority ${ev('decl')}</td><td>Name-first ordering of declaration evidence</td><td>Admits the target (4 of 37) but loses the React control owner; 20 paired comparisons: 0 gains, 2 losses.</td></tr>
+<tr><td>Graph labels ${ev('graph')}</td><td>Call-graph context added to admitted candidates</td><td>Provider rank 58 → 52; fusion stays at 16. Final acceptance not met.</td></tr></table>
+<p>Proven call edges survive the sidecar roundtrip, but the entrypoint has 35 call sites and 19 distinct targets, so expanding every edge would admit too much. Proven edges alone do not establish automatic admission.</p>
+<p><b>Acceptance target:</b> the original query returns the actual handler in the first ten grouped symbol results, with no identifier guesses or alternate terms. ${ev('accept')}</p>
+<p>${bd('open')} S1 is open. ${bd('unt')} Call-backed admission plus ownership-aware fusion has not been run.</p>`],
+['Recall beyond the available pool '+bd('his'),`<p>Historical dataset: 72 questions (React, Polars, FlatBuffers), master 224183ca, no alternate terms. ${ev('r72')}</p>
+<div class="stack" role="img" aria-label="25 of 72 owners miss the rerank window: 18 in no arm's top 80, 4 cut at 64, 3 lost in core fusion"><i style="flex:18;background:#12231f">18 in no top 80</i><i style="flex:4;background:#b3283d">4</i><i style="flex:3;background:#b87a00">3</i></div>
+<p class="hint" style="margin:0 0 10px">25 owners miss the rerank window: 18 are in no arm’s top 80, 4 sit just past the 64 window (ranks 70–89), 3 are lost in core fusion.</p>
+<p>Of the 18, deeper probes find 11 at ranks 96–395, 6 stay beyond depth 400 and 1 is excluded by scope. “Beyond 400” is where the probe stopped, not proof the owner is missing from the index. Widening 64 to 128 can only help the 4 that sit just past the cut. Why wider windows hurt other questions is ${bd('hyp')} ${ev('cap','hypothesis')}</p>`],
+['Model order versus fusion '+bd('his'),`<p><b>Potion</b> gathers candidates by meaning and is not a judge of ownership. Chunk lexical text (content + metadata) and symbol-metadata lexical text are different documents, so BM25 scores on them can differ. <b>LateOn</b> sums each query token’s best match (MaxSim, no length normalisation) ${ev('maxsim')} so broad vocabulary can favour a helper over a delegating owner. <b>Voyage</b> scores with a hosted model.</p>
+<p>Keep four things apart: the model’s score, the model’s input projection, candidate composition, and post-model fusion.</p>
+<table><tr><th>Dataset</th><th>Finding</th></tr><tr><td>72 q, LateOn</td><td>Shipped fusion rule lifts strict MRR 0.2293 → 0.2964</td></tr><tr><td>28 q, Voyage rerank-3</td><td>Skipping fusion lifts MRR 0.6446 → 0.7798</td></tr></table>
+<p>About 170 replayed rules produced no universal winner. This does not show that fusion should be disabled globally. ${ev('fus')}</p>`],
+['Alternate terms '+bd('his'),`<p>Terms a caller supplies can recover candidates that retrieval missed. Wrong terms cost accuracy. Two datasets, never merged: ${ev('alt')}</p>
+<table><tr><th>Dataset</th><th>None</th><th>Own terms</th><th>Wrong terms</th></tr><tr><td>46 q, hit@10</td><td>16</td><td>34</td><td>8</td></tr><tr><td>72 q LateOn, MRR</td><td>0.3559</td><td>0.4985</td><td>0.1823</td></tr></table>
+<p>This is useful assistance, but S1 requires the ordinary query to work without caller terms.</p>`],
+['Routing and the numbers that are easy to confuse',`<p>Configuration cue words such as “settings” select a lexical-only route that calls no reranker. Raising rerank capacity does nothing there. ${ev('route')} ${ev('flow','stage order')}</p>
+<ul><li><b>Output limit:</b> how many results the caller asks for.</li><li><b>Per-arm retrieval depth:</b> candidates each arm keeps (80 in the current diff).</li><li><b>Fused candidate count:</b> what remains after fusion and filters.</li><li><b>Rerank capacity:</b> the most the reranker may read (up to 128).</li><li><b>Admitted count:</b> what actually went in, limited by pool, family selection and bytes.</li><li><b>Disclosure size:</b> how many frozen results are shown. A disclosure of 10 over a frozen total of 5 shows 5.</li></ul>
+<p>A ceiling of 128 does not retrieve 128 new owners. ${ev('budget','budget diff')}</p>`]];
+$('#cases').innerHTML=CS.map((c,i)=>`<details${i===0?' open':''}><summary>${c[0]}</summary><div class="db">${c[1]}</div></details>`).join('');
+
+// lab
+const g=id=>$('#'+id).value;
+function lab(){const pol=g('pol'),lim=+g('lim'),ceil=+g('ceil'),P=+g('cap')||Infinity,pool=+g('pool'),pos=+g('pos'),dis=+g('dis'),fin=+g('fin'),own=g('own'),cfg=g('route')==='cfg';
+ $('#opool').textContent=pool;$('#opos').textContent='#'+pos;$('#ofin').textContent='#'+fin;
+ const ret=pol==='cur'?80:Math.min(80,Math.max(lim*8,32)),capD=Math.min(ceil,P);
+ let dep,df;if(pol==='cur'){dep=Math.min(pool,capD);df=`min(pool ${pool}, ceiling ${ceil}, provider ${P===Infinity?'no cap':P}) = ${dep}`}
+ else if(P!==Infinity){const q=Math.max(64,Math.ceil(lim*64/10));dep=Math.min(pool,capD,q);df=`min(pool ${pool}, capacity ${capD}, max(64, ⌈${lim}×64/10⌉ = ${q})) = ${dep}`}else{dep=null;df='no advertised cap: the historical adaptive rule depends on family counts and is not modelled here'}
+ const frozen=Math.min(lim,200),vis=Math.min(dis,frozen),o=[];
+ o.push(`<b>Per-arm retrieval depth:</b> ${pol==='cur'?'SEARCH_MAX_CANDIDATES = 80':`min(80, max(${lim}×8, 32))`} = <b>${ret}</b>.`);
+ if(cfg)o.push('<b>Route:</b> configuration cue. Lexical retrieval only, reranker skipped. Capacity, ceiling and the reranker window have no effect on this query.');
+ else o.push(`<b>Rerank depth:</b> ${df}${dep!=null?` → <b>${dep}</b>`:''}.`);
+ if(own==='scope')o.push('<b>Owner:</b> excluded by scope. It was never compared, which differs from scoring low. No budget helps.');
+ else if(own==='out')o.push('<b>Owner:</b> not retrieved by any arm. More rerank capacity cannot recover it. Only a change upstream (retrieval, discovery, projection) could make it a candidate.');
+ else{const cand=pos<=pool;let r=`<b>Owner at pool position ${pos}:</b> ${!cand?'beyond the available pool of '+pool+', so not a candidate.':''}`;
+  if(cand&&!cfg&&dep!=null)r+=pos<=dep?`inside the rerank window of ${dep}. It is read, and its rank after reading is not predicted. ${pol==='cur'?'More admission capacity can help an available owner cross the cut, and more candidates can also add competition.':''}`:`outside the window of ${dep}. Raising the ceiling to 128 ${pos<=Math.min(128,P,pool)?'would admit it':'would not admit it'} with these settings.`;
+  if(cand&&cfg)r+='no reranker runs, so retrieval order stands.';
+  o.push(r)}
+ o.push(`<b>Disclosure:</b> frozen total = min(limit ${lim}, 200) = ${frozen}; shown = min(disclosure ${dis}, frozen) = <b>${vis}</b>. <span class="b b-hyp">WHAT-IF</span> final grouped rank ${fin}: ${fin<=vis?'visible.':fin<=frozen?'in the frozen set but hidden. A larger disclosure would reveal it without repairing the ranking.':'beyond the frozen total, so no disclosure setting can show it.'}`);
+ o.push('Provider order versus post-fusion order: a provider can rank the owner first and fusion can still demote it. That requires measured ranks from a run, not a formula. Outcome not measured.');
+ $('#lo').innerHTML=o.map(x=>`<li>${x}</li>`).join('')}
+$('#ctl').addEventListener('input',lab);lab();
+pick(0);
+</script></body></html>

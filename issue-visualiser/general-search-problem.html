@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Why the right answer goes missing in search</title>
+<style>
+:root{--bg:#edf2f0;--ink:#12231f;--mid:#4a5f59;--line:#c3d1cb;--paper:#f8fbfa;--gold:#f2a900;--trail:#b87a00;--bad:#b3283d;--ok:#1b6e53;--ease:cubic-bezier(.16,1,.3,1);color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+::selection{background:var(--gold);color:var(--ink)}
+:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 clamp(16px,4vw,40px)}
+h1,h2,h3{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;line-height:1.1;letter-spacing:-.02em;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.2rem,5.6vw,4rem);max-width:19ch}
+h2{font-size:clamp(1.5rem,3vw,2.1rem);margin:0 0 12px}
+h3{font-size:1.2rem;margin-bottom:6px}
+header{padding:clamp(36px,7vw,80px) 0 20px}
+.lede{max-width:62ch;color:var(--mid);font-size:1.15rem;margin:18px 0 0}
+section{padding:clamp(28px,5vw,56px) 0}
+p{margin:0 0 .8em;max-width:68ch}
+.chips,.btns{display:flex;flex-wrap:wrap;gap:8px}
+button,select{font:inherit;color:inherit}
+.chip,.btns button{padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--paper);cursor:pointer;transition:background .2s,color .2s}
+.chip:hover,.btns button:hover{border-color:var(--ink)}
+.chip[aria-pressed=true],.btns button.pri{background:var(--ink);color:#fff;border-color:var(--ink)}
+.story{margin:16px 0 14px;max-width:62ch;min-height:3.2em}
+.hint{font-size:.9rem;color:var(--mid);margin:10px 0 0}
+.grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(260px,1fr);gap:28px;align-items:start}
+@media(max-width:880px){.grid{grid-template-columns:1fr}}
+.board{position:relative;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:6px 0}
+.row{display:grid;grid-template-columns:132px 1fr 104px;gap:12px;align-items:center;width:100%;padding:11px 16px;border:0;background:none;text-align:left;cursor:pointer;opacity:.4;transition:opacity .45s var(--ease),background .3s}
+.row.on{opacity:1}.row.cur{background:rgba(242,169,0,.13)}
+.row b{display:block;font-weight:650}.row small{display:block;color:var(--mid);line-height:1.25}
+.val{font-variant-numeric:tabular-nums;font-size:.9rem;text-align:right}
+.row.lost .val{color:var(--bad);font-weight:650}
+.track{position:relative;height:26px;border-radius:6px;overflow:hidden;background:radial-gradient(circle,#8aa098 1.2px,transparent 1.7px) 0 0/7px 13px}
+.cut{position:absolute;top:0;bottom:0;right:0;border-left:2px solid var(--bad);background:repeating-linear-gradient(135deg,rgba(179,40,61,.2) 0 4px,rgba(179,40,61,.05) 4px 8px);background-color:rgba(248,251,250,.7);transition:left .6s var(--ease)}
+@media(max-width:600px){.row{grid-template-columns:1fr auto}.track{grid-column:1/-1;order:3}}
+.tok{position:absolute;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:var(--gold);border:2.5px solid var(--ink);box-shadow:0 3px 8px rgba(18,35,31,.3);transition:transform 1s var(--ease),background .3s;z-index:2;pointer-events:none}
+.tok.lost{background:var(--bad)}
+.trail{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:1}
+.seg{fill:none;stroke:var(--trail);stroke-width:2.5;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset 1s var(--ease)}
+.seg.d{stroke-dashoffset:0}
+.btns{margin-top:14px}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.panel+.panel{margin-top:16px}
+.panel p{margin-bottom:.5em}
+.sv{font-weight:650}.sv.x{color:var(--bad)}.sv.y{color:var(--ok)}
+.tag{display:inline-block;font-size:.82rem;border:1px solid var(--line);border-radius:6px;padding:1px 8px;color:var(--mid);margin-bottom:10px}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px 24px;margin-top:14px}
+label{display:block;font-size:.95rem}label span{display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;font-weight:600}
+output{font-variant-numeric:tabular-nums;font-weight:400;color:var(--mid)}
+input[type=range]{width:100%;margin:0;accent-color:var(--ink)}
+select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:24px;margin:18px 0}
+.cols p{font-size:.97rem}
+.demo{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:16px}
+.doc .bar{display:grid;grid-template-columns:84px 1fr;gap:10px;align-items:center;font-size:.9rem;margin:5px 0}
+.bar i{display:block;height:10px;border-radius:5px;background:var(--ink);transform-origin:left;transform:scaleX(var(--w));transition:transform .8s var(--ease)}
+.demo.re .bar i{transform:scaleX(0);transition:none}
+.tot{font-weight:650;margin-top:8px}
+.why li{margin:0 0 .6em;max-width:68ch}
+footer{padding:10px 0 60px;color:var(--mid);font-size:.92rem}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation:none!important}}
+</style></head><body>
+<header class="wrap">
+<h1>Why the right answer goes missing in search</h1>
+<p class="lede">A search tool can’t read everything. It narrows thousands of candidates through a few steps, from fast and rough to slow and careful. The correct result can be dropped at any step, and each step drops it for a different reason. Pick a story and follow the gold dot.</p>
+</header>
+
+<main class="wrap">
+<section aria-labelledby="t1" style="padding-top:8px">
+<h2 id="t1">Follow the right answer</h2>
+<div class="chips" id="chips" role="group" aria-label="Choose a story"></div>
+<p class="story" id="story" aria-live="polite"></p>
+<div class="grid">
+ <div>
+  <div class="board" id="board"><svg class="trail" id="trail" aria-hidden="true"></svg><div class="tok" id="tok" aria-hidden="true"></div><div id="rows"></div></div>
+  <div class="btns" role="group" aria-label="Playback">
+   <button id="play" class="pri">Play</button><button id="back">Back</button><button id="step">Step</button><button id="reset">Reset</button>
+  </div>
+  <p class="hint">The gold dot is the correct answer. Each strip is a ranked list, best on the left (the scale is logarithmic, so the left side is stretched). Hatched area means cut off. Select a row to jump to it.</p>
+ </div>
+ <div>
+  <div class="panel" aria-live="polite"><span class="tag">Illustrative numbers you can change</span><h3 id="vt"></h3><p id="vw"></p><p id="vh"></p></div>
+  <div class="panel" id="sd"></div>
+ </div>
+</div>
+</section>
+
+<section aria-labelledby="t2">
+<h2 id="t2">What can change?</h2>
+<p>These controls only apply rules. They do not predict how any real system would rank things: the “reader’s rank” is a number you set, because a bigger pool can move it up or down.</p>
+<div class="ctl" id="ctl">
+ <label><span>Answer’s rank in fast retrieval <output id="oR"></output></span><input type="range" id="R" min="0" max="348"></label>
+ <label><span>Shortlist size (top N kept)</span><select id="N"><option>32<option>64<option>80<option>128<option>256</select></label>
+ <label><span>Reader capacity (most it can read)</span><select id="C"><option>32<option>64<option>128</select></label>
+ <label><span>Reader’s rank for the answer <output id="os"></output></span><input type="range" id="s" min="1" max="128"></label>
+ <label><span>Final rules move it down by <output id="osh"></output></span><input type="range" id="sh" min="0" max="30"></label>
+ <label><span>Results shown</span><select id="D"><option>5<option>10<option>20</select></label>
+ <label><span>Route</span><select id="mode"><option value="all">Search everywhere<option value="filter">Answer is filtered out<option value="skip">Reader is skipped (shortcut)</select></label>
+</div>
+<p class="hint" id="win"></p>
+</section>
+
+<section aria-labelledby="t3">
+<h2 id="t3">Three kinds of matching</h2>
+<div class="cols">
+ <div><h3>Keyword search</h3><p>Counts shared words and weighs rare ones more (BM25 is a common formula). Fast and exact, blind to synonyms. It only sees the text it was given, so searching a description and searching just names can disagree.</p></div>
+ <div><h3>Meaning search</h3><p>Turns text into lists of numbers (embeddings) so similar meanings sit close together. Good at paraphrase, blurry on exact names. Best used to gather candidates, not to settle who is correct.</p></div>
+ <div><h3>The reader</h3><p>A reranker reads the question beside each candidate. It is the most careful and the slowest, so it only gets a limited window. Some readers match each question word to its best document word and add up the scores.</p></div>
+</div>
+<div class="panel"><span class="tag">Illustrative, hand-picked numbers. Not output from a real model.</span>
+<h3>When shared vocabulary misleads</h3>
+<p>Question: “export report with warnings and next steps”. The real implementation is a short function that passes work to helpers. A nearby helper uses the question’s words.</p>
+<div class="demo" id="demo">
+ <div class="doc"><b>Wrapper (the real answer)</b><div class="bar"><span>export</span><i style="--w:.6"></i></div><div class="bar"><span>report</span><i style="--w:.5"></i></div><div class="bar"><span>warnings</span><i style="--w:.1"></i></div><div class="bar"><span>next steps</span><i style="--w:.1"></i></div><div class="tot">Total 1.3</div></div>
+ <div class="doc"><b>Helper (nearby)</b><div class="bar"><span>export</span><i style="--w:.3"></i></div><div class="bar"><span>report</span><i style="--w:.8"></i></div><div class="bar"><span>warnings</span><i style="--w:.95"></i></div><div class="bar"><span>next steps</span><i style="--w:.9"></i></div><div class="tot">Total 2.95</div></div>
+</div>
+<div class="btns" style="margin-top:12px"><button id="replay">Replay scoring</button></div>
+<p class="hint">A scorer that rewards vocabulary overlap prefers the helper, even though the wrapper does the job.</p></div>
+</section>
+
+<section aria-labelledby="t4">
+<h2 id="t4">Why a bigger number isn’t a cure</h2>
+<ul class="why">
+<li>More reader capacity can rescue an answer that was shortlisted but outside the window.</li>
+<li>It cannot rescue an answer the shortlist never contained, and it does nothing when the reader is skipped.</li>
+<li>More candidates also means more competition, so the answer may land lower, not higher.</li>
+<li>A correct reader score can still be undone by a later rule.</li>
+<li>Showing more results reveals a low-ranked answer. It does not repair the ranking.</li>
+<li>“Never searched” and “searched but scored low” are different problems with different fixes.</li>
+</ul>
+</section>
+</main>
+<footer class="wrap">This page explains a general pattern with made-up numbers. It reports no measurements of any real search system.</footer>
+
+<script>
+const $=s=>document.querySelector(s),RM=matchMedia('(prefers-reduced-motion:reduce)').matches,M=3000;
+const ST=[
+{n:'Route & scope',d:'Where to look',can:'Skip steps, or exclude parts of the codebase.',no:'Cannot find what it was told not to search.'},
+{n:'Retrieve',d:'Fast, rough net',can:'Keep the top N matches by shared words or similar meaning.',no:'Cannot keep anything ranked below N, however correct.'},
+{n:'Admit',d:'Room for the reader',can:'Pass the first few candidates to the careful reader.',no:'Cannot add candidates the shortlist lacks.'},
+{n:'Read',d:'Careful scoring',can:'Re-score every admitted candidate against the question.',no:'Cannot judge what it isn’t shown. A neighbour with more matching words can outscore the answer.'},
+{n:'Final rules',d:'Tie-breakers',can:'Re-order the reader’s list: merge signals, boost or demote.',no:'Cannot add candidates, and can demote a correct answer.'},
+{n:'Show',d:'First results only',can:'Reveal more results when the show size is larger.',no:'Cannot change the order, only how much of it you see.'}];
+const PRE=[
+{n:'Wrong words',t:'The answer is a short wrapper that hands work to helpers. The question uses the helpers’ words, so fast retrieval puts the wrapper far down the list.',v:{R:1800,N:80,C:128,s:6,sh:0,D:10,mode:'all'}},
+{n:'Just past the cut',t:'It made the shortlist at #70, but the reader has room for only 64. Try raising reader capacity to 128.',v:{R:70,N:80,C:64,s:6,sh:0,D:10,mode:'all'}},
+{n:'Read, but buried',t:'The reader saw it and still ranked it 52nd, because neighbouring helpers share more of the question’s words.',v:{R:40,N:80,C:128,s:52,sh:0,D:10,mode:'all'}},
+{n:'Reader right, rules wrong',t:'The reader ranked it 2nd. A later rule re-ordered the list and pushed it to 16th.',v:{R:40,N:80,C:128,s:2,sh:14,D:10,mode:'all'}},
+{n:'Hidden by show size',t:'Ranked 14th and only ten results are shown. Try showing 20. It appears, but the ranking is unchanged.',v:{R:40,N:80,C:128,s:14,sh:0,D:10,mode:'all'}},
+{n:'Never searched',t:'A filter excluded it before any ranking began. It wasn’t scored low. It was never compared.',v:{R:40,N:80,C:128,s:3,sh:0,D:10,mode:'filter'}}];
+let S={},k=0,tm=null,cur=1,st=null;
+const f=r=>Math.min(1,(Math.log(Math.max(1,r))+.2)/(Math.log(M)+.4));
+const rowsEl=$('#rows');
+rowsEl.innerHTML=ST.map((s,i)=>`<button class="row" data-i="${i}"><span><b>${s.n}</b><small>${s.d}</small></span><span class="track"><span class="cut"></span></span><span class="val"></span></button>`).join('');
+const ROWS=[...rowsEl.children],trail=$('#trail');
+trail.innerHTML=ST.slice(1).map(()=>'<path class="seg" pathLength="1"/>').join('');
+const SEGS=[...trail.children];
+$('#chips').innerHTML=PRE.map((p,i)=>`<button class="chip" data-p="${i}" aria-pressed="false">${p.n}</button>`).join('');
+const CH=[...document.querySelectorAll('.chip')];
+
+function calc(){const{R,N,C,s,sh,D,mode}=S,lim=Math.min(C,N),skip=mode==='skip';
+ const rd=skip?R:Math.min(s,lim),fin=skip?R:Math.max(1,rd+sh);
+ const ok=[mode!=='filter',R<=N,skip||R<=lim,true,true,fin<=D];
+ const loss=ok.indexOf(false);
+ return{lim,rd,fin,skip,loss,cap:loss<0?5:loss,p:[null,R,R,rd,fin,fin],cut:[mode==='filter'?0:null,N,skip?null:lim,skip?null:lim,skip?null:lim,D]}}
+
+function verdict(c){const{R,N,C,D,mode}=S;
+ if(c.loss===0)return['Never in the search','A filter or scope rule excluded it before any ranking, so it was never compared. That is different from scoring low.','Changing sizes does nothing here. The scope rule has to include it.'];
+ if(c.loss===1)return['It never reached the shortlist',`Fast retrieval ranked it #${R}, but only the top ${N} are kept.`,`Reader capacity can’t help, because the reader never sees it. A shortlist of at least ${R} would make it a candidate, and its rank after reading would still be unknown.`];
+ if(c.loss===2){const n=Math.min(128,N);return['Shortlisted, but no room at the reader',`It sits at #${R} on the shortlist. The reader’s window is ${c.lim}.`,R<=n?`Capacity 128 would admit it. Being read is not the same as being ranked high, and its rank after reading isn’t predicted here.`:`Even capacity 128 would not admit it, because the shortlist holds only ${N}.`]}
+ if(c.loss===5){const lead=c.skip?'The reader was skipped, so retrieval order stands.':'';
+  if(!c.skip&&S.sh>0&&c.rd<=D)return['The reader had it. A final rule moved it down',`Reader order #${c.rd}, after final rules #${c.fin}. The model did its job and a later step undid it.`,`Showing ${c.fin} or more would reveal it, but the rule is the cause, so the ranking would stay wrong.`];
+  return['Read, but ranked below what you see',`${lead} Its rank is #${c.fin}; only the top ${D} are shown.`.trim(),`Showing ${c.fin} or more would reveal it without improving its rank.`]}
+ return[`Found at #${c.fin}`,'It survived every step. Survival here is a property of these settings, not of every query.',c.skip?'Reader skipped, so raising reader capacity changes nothing.':'']}
+
+function geo(c){const b=$('#board').getBoundingClientRect();return ROWS.map((r,i)=>{const t=r.querySelector('.track').getBoundingClientRect();const p=c.p[i];return[t.left-b.left+(p==null?.5:f(p))*t.width,t.top-b.top+t.height/2]})}
+
+function render(){const c=calc();k=Math.min(k,c.cap);
+ const V=[S.mode==='filter'?'Excluded':S.mode==='skip'?'Reader skipped':'Open',`#${S.R} of ${S.N} kept`,c.skip?'n/a':`#${S.R}, room ${c.lim}`,c.skip?'skipped':`#${c.rd}`,`#${c.fin}`,`#${c.fin}, shows ${S.D}`];
+ ROWS.forEach((r,i)=>{r.classList.toggle('on',i<=k);r.classList.toggle('cur',i===k);r.classList.toggle('lost',i===c.loss);
+  r.setAttribute('aria-current',i===k?'step':'false');
+  r.querySelector('.val').textContent=i>c.cap?'not reached':(i===c.loss?'Dropped: ':'')+V[i];
+  const ct=r.querySelector('.cut'),x=c.cut[i];ct.style.display=x==null?'none':'';if(x!=null)ct.style.left=(x===0?0:f(x+.5)*100)+'%'});
+ const g=geo(c);$('#tok').style.transform=`translate(${g[k][0]}px,${g[k][1]}px)`;$('#tok').classList.toggle('lost',k===c.loss);
+ SEGS.forEach((s,i)=>{const[a,b]=[g[i],g[i+1]],m=(a[1]+b[1])/2;s.setAttribute('d',`M${a[0]} ${a[1]}C${a[0]} ${m} ${b[0]} ${m} ${b[0]} ${b[1]}`);s.classList.toggle('d',i+1<=k)});
+ const v=verdict(c);$('#vt').textContent=v[0];$('#vw').textContent=v[1];$('#vh').textContent=v[2];
+ const lost=k===c.loss;$('#sd').innerHTML=`<h3>${ST[k].n}</h3><p><b>Can:</b> ${ST[k].can}</p><p><b>Cannot:</b> ${ST[k].no}</p><p class="sv ${lost?'x':'y'}">${lost?'The answer is dropped here.':'The answer is still in the running'+(c.p[k]?` at #${c.p[k]}.`:'.')}</p>`;
+ $('#oR').textContent='#'+S.R;$('#os').textContent='#'+S.s;$('#osh').textContent='+'+S.sh;
+ $('#win').textContent=c.skip?'The reader is skipped, so capacity has no effect. Retrieval order is kept.':`Reader window = the smaller of capacity (${S.C}) and shortlist (${S.N}) = ${c.lim}. Output size, shortlist, capacity, and show size are four separate numbers.`;
+ $('#play').textContent=tm?'Pause':'Play'}
+
+function stop(){clearInterval(tm);clearTimeout(st);tm=null;$('#play').textContent='Play'}
+function play(){const c=calc();if(k>=c.cap)k=0;render();tm=setInterval(()=>{if(k>=calc().cap){stop();return}k++;render()},RM?500:1500);$('#play').textContent='Pause'}
+function setCtl(){for(const id of ['N','C','D','mode'])$('#'+id).value=S[id];$('#R').value=Math.round(Math.log10(S.R)*100);$('#s').value=S.s;$('#sh').value=S.sh}
+function pick(i){cur=i;S={...PRE[i].v};CH.forEach((c,j)=>c.setAttribute('aria-pressed',j===i));$('#story').textContent=PRE[i].t;setCtl();stop();k=0;if(RM){k=calc().cap;render()}else{render();st=setTimeout(play,350)}}
+
+CH.forEach(c=>c.onclick=()=>pick(+c.dataset.p));
+ROWS.forEach(r=>r.onclick=()=>{stop();k=+r.dataset.i;render()});
+$('#play').onclick=()=>tm?(stop()):play();
+$('#step').onclick=()=>{stop();k=Math.min(calc().cap,k+1);render()};
+$('#back').onclick=()=>{stop();k=Math.max(0,k-1);render()};
+$('#reset').onclick=()=>{stop();k=0;render()};
+$('#ctl').addEventListener('input',e=>{const id=e.target.id;S[id]=id==='mode'?e.target.value:id==='R'?Math.round(10**(e.target.value/100)):+e.target.value;stop();CH.forEach(c=>c.setAttribute('aria-pressed','false'));$('#story').textContent='Custom settings. The verdict beside the board follows your choices.';k=calc().cap;render()});
+$('#replay').onclick=()=>{const d=$('#demo');if(RM)return;d.classList.add('re');void d.offsetWidth;d.classList.remove('re')};
+addEventListener('resize',render);document.addEventListener('visibilitychange',()=>{if(document.hidden)stop()});
+pick(1);
+</script></body></html>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SEARCH_DEFAULT_DISCLOSURE_LIMIT } from "../core/search-constants.js";
 import {
     McpTool,
     ToolContext,
@@ -20,7 +21,7 @@ const buildContinueSearchSchema = (ctx: ToolContext) => z.object({
         .positive()
         .max(ctx.capabilities.getMaxSearchPageSize())
         .optional()
-        .describe("Optional maximum number of additional groups. Defaults to the initial disclosure size."),
+        .describe(`Optional maximum number of additional groups, up to ${ctx.capabilities.getMaxSearchPageSize()}. Defaults to the initial disclosure size (normally ${SEARCH_DEFAULT_DISCLOSURE_LIMIT}). Each call can request a different size, subject to remaining results and response byte limits.`),
 }).strict();
 
 export const continueSearchTool: McpTool = {

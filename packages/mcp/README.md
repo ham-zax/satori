@@ -119,6 +119,16 @@ skips searchable sources over 8 MiB. A full Publication has no aggregate source
 byte or chunk limit. Broad workspace roots (filesystem root, home directory, state root)
 stay rejected unless `SATORI_ALLOW_BROAD_ROOTS=true` explicitly opts in.
 
+Grouped search shows up to 20 results initially and retains up to 200 ranked
+results for continuation by default, subject to available groups and response
+byte limits. Set `limit` to customize the total and `disclosureLimit` to customize
+the first page (`disclosureLimit` must not exceed `limit`). For example,
+`limit=100, disclosureLimit=20` retains up to 100 results and shows up to 20 now.
+Use `continue_search` with the returned handle and exact `nextOffset` as
+`expectedOffset`. Each continuation defaults to the initial page size, or accepts
+a custom `limit` from 1 to 200. Continuation reveals existing ranked results
+without new retrieval or reranking. Raw search defaults to 20 chunks.
+
 <!-- TOOLS_START -->
 
 ## Tools

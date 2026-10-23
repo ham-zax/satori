@@ -3,6 +3,7 @@ import {
     resolveRerankerProvider,
 } from "../config.js";
 import {
+    SEARCH_DEFAULT_DISCLOSURE_LIMIT,
     SEARCH_MAX_FROZEN_RESULTS,
     SEARCH_MAX_LOGICAL_RESULTS,
     SEARCH_MAX_PAGE_SIZE,
@@ -46,7 +47,8 @@ export class CapabilityResolver {
             : rerankerProvider === 'voyage'
                 && Boolean(this.config.voyageKey);
 
-        const defaultSearchLimit = embeddingLocality === 'local' ? 10 : 20;
+        // Keep the ranked pool available for continuation without enlarging the first page.
+        const defaultSearchLimit = SEARCH_MAX_FROZEN_RESULTS;
 
         return {
             hasVectorStore,
@@ -76,8 +78,8 @@ export class CapabilityResolver {
         return this.matrix.embeddingLocality;
     }
 
-    public getDefaultSearchLimit(): number {
-        return this.matrix.defaultSearchLimit;
+    public getDefaultSearchLimit(resultMode: "grouped" | "raw" = "grouped"): number {
+        return resultMode === "raw" ? SEARCH_DEFAULT_DISCLOSURE_LIMIT : this.matrix.defaultSearchLimit;
     }
 
     public getMaxSearchLimit(): number {

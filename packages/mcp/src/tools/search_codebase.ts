@@ -23,6 +23,7 @@ import {
     SEARCH_ALT_TERMS_MAX,
     SEARCH_ALT_TERMS_STRING_MAX_CHARS,
     SEARCH_ALT_TERMS_TERM_MAX_CHARS,
+    SEARCH_DEFAULT_DISCLOSURE_LIMIT,
     SEARCH_MAX_DIAGNOSTIC_CANDIDATES,
 } from "../core/search-constants.js";
 import {
@@ -267,8 +268,8 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
     resultMode: z.enum(["grouped", "raw"]).optional().meta({ default: "grouped" }).describe("Output mode. grouped returns merged search groups, raw returns chunk hits."),
     groupBy: z.enum(["symbol", "file"]).optional().meta({ default: "symbol" }).describe("Grouping strategy in grouped mode."),
     rankingMode: z.enum(["default", "auto_changed_first"]).optional().meta({ default: "auto_changed_first" }).describe("Ranking policy. auto_changed_first boosts files changed in the current git working tree when available."),
-    limit: z.number().int().positive().max(ctx.capabilities.getMaxSearchResultTotal()).optional().meta({ default: ctx.capabilities.getDefaultSearchLimit() }).describe("Grouped mode: total frozen result-set bound across continuation pages. Raw mode: maximum returned chunk count. It is not the initial grouped page size."),
-    disclosureLimit: z.number().int().positive().max(ctx.capabilities.getMaxSearchPageSize()).optional().describe("Initial grouped-result page size only. Grouped searches show at most 10 results initially when omitted. For example, limit=20 and disclosureLimit=6 returns up to 6 initially and freezes up to 20 total for continuation. Retrieval depth and reranker admission are independent."),
+    limit: z.number().int().positive().max(ctx.capabilities.getMaxSearchResultTotal()).optional().meta({ default: ctx.capabilities.getDefaultSearchLimit() }).describe(`Grouped mode: total frozen result-set bound across continuation pages, default ${ctx.capabilities.getDefaultSearchLimit()}. Raw mode: maximum returned chunk count, default ${ctx.capabilities.getDefaultSearchLimit("raw")}. It is not the initial grouped page size.`),
+    disclosureLimit: z.number().int().positive().max(ctx.capabilities.getMaxSearchPageSize()).optional().describe(`Initial grouped-result page size only, default ${SEARCH_DEFAULT_DISCLOSURE_LIMIT}, bounded by limit. For example, limit=100 and disclosureLimit=20 returns up to 20 initially and freezes up to 100 total for continuation. Customize later pages with continue_search.limit. Retrieval depth and reranker admission are independent.`),
     includeResultIndex: z.boolean().optional().describe("Optional grouped-mode compact index over the frozen ranked results. Defaults to false when omitted."),
     debugMode: z.enum(["summary", "ranking", "freshness", "full"]).optional().describe("Bounded diagnostic projection."),
     debugCandidateLimit: z.number().int().positive().max(SEARCH_MAX_DIAGNOSTIC_CANDIDATES).optional().describe("Diagnostic-only retrieval depth. Valid only with full diagnostics; it does not change the visible result limit or reranker ceilings."),
@@ -297,7 +298,7 @@ const buildSearchSchema = (ctx: ToolContext) => z.object({
             message: "includeResultIndex is available only with grouped results.",
         });
     }
-    const effectiveRequestedTotal = value.limit ?? ctx.capabilities.getDefaultSearchLimit();
+    const effectiveRequestedTotal = value.limit ?? ctx.capabilities.getDefaultSearchLimit(value.resultMode);
     if (value.disclosureLimit !== undefined
         && value.disclosureLimit > effectiveRequestedTotal) {
         refinementContext.addIssue({
@@ -386,7 +387,7 @@ export const searchCodebaseTool: McpTool = {
             debugMode: normalizedDebugMode,
         };
         const startedAt = Date.now();
-        const limit = input.limit ?? ctx.capabilities.getDefaultSearchLimit();
+        const limit = input.limit ?? ctx.capabilities.getDefaultSearchLimit(input.resultMode);
         const profile = getProfile(ctx);
         const parsedOperators = parseSearchOperators(input.query);
         const queryPlan = buildSearchQueryPlan(

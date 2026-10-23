@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import os from "node:os";
+import { CapabilityResolver } from "./capabilities.js";
+import { resolveSearchPolicy } from "./search-policy.js";
 import {
     projectGroupedDisclosure,
     resolveOmittedBeyondLimitGroupCount,
@@ -55,6 +58,31 @@ function buildEnvelope(
         })),
     };
 }
+
+test("default disclosure shows twenty groups and retains the rest for custom continuation pages", () => {
+    const capabilities = new CapabilityResolver({
+        name: "test", version: "1", stateRoot: os.tmpdir(), executionProfile: "offline", networkPolicy: { kind: "local-only" },
+        vectorStoreProvider: "LanceDB", encoderProvider: "Potion", encoderModel: "pinned-potion",
+    });
+    const policy = resolveSearchPolicy({ resultLimit: capabilities.getDefaultSearchLimit(), hasMustOperators: false });
+    const orderedResults = Array.from({ length: 60 }, (_, index) => result(index));
+    const first = projectGroupedDisclosure({
+        orderedResults, callerLimit: policy.retrievalResultLimit,
+        disclosureLimit: policy.disclosureResultLimit, maxResponseBytes: 48 * 1024,
+        includeSummary: true, buildEnvelope,
+    });
+    assert.equal(first.results.length, 20);
+    assert.equal(resolveSearchGroupedResultCounts({
+        requestedTotal: policy.retrievalResultLimit, availableGroupCount: orderedResults.length,
+        returnedGroupCount: first.results.length,
+    }).remainingGroupCount, 40);
+    const next = projectGroupedDisclosure({
+        orderedResults: orderedResults.slice(first.results.length), callerLimit: 40,
+        disclosureLimit: 35, maxResponseBytes: 48 * 1024, includeSummary: true, buildEnvelope,
+    });
+    assert.equal(next.results.length, 35);
+    assert.deepEqual(next.results.map(entry => entry.target.file), orderedResults.slice(20, 55).map(entry => entry.target.file));
+});
 
 test("grouped disclosure preserves the unannotated baseline when no boundary applies", () => {
     const projected = projectGroupedDisclosure({

@@ -26,11 +26,12 @@ function baseConfig(overrides: Partial<ContextMcpConfig> = {}): ContextMcpConfig
     };
 }
 
-test('capability resolver reports a cloud reranker and the cloud default limit', () => {
+test('capability resolver reports a cloud reranker and the frozen result default', () => {
     const resolver = new CapabilityResolver(baseConfig());
 
     assert.equal(resolver.hasReranker(), true);
-    assert.equal(resolver.getDefaultSearchLimit(), 20);
+    assert.equal(resolver.getDefaultSearchLimit(), 200);
+    assert.equal(resolver.getDefaultSearchLimit("raw"), 20);
 });
 
 test('capability resolver reports no reranker without a Voyage key', () => {
@@ -39,7 +40,7 @@ test('capability resolver reports no reranker without a Voyage key', () => {
     assert.equal(resolver.hasReranker(), false);
 });
 
-test('local embeddings keep the smaller default limit and still use the resolved reranker', () => {
+test('local embeddings retain the full frozen result pool and use the resolved reranker', () => {
     const resolver = new CapabilityResolver(baseConfig({
         encoderProvider: 'Potion',
         voyageKey: 'voyage-key'
@@ -47,7 +48,8 @@ test('local embeddings keep the smaller default limit and still use the resolved
 
     assert.equal(resolver.getEmbeddingLocality(), 'local');
     assert.equal(resolver.hasReranker(), true);
-    assert.equal(resolver.getDefaultSearchLimit(), 10);
+    assert.equal(resolver.getDefaultSearchLimit(), 200);
+    assert.equal(resolver.getDefaultSearchLimit("raw"), 20);
 });
 
 test('offline policy disables cloud reranking even when credentials remain configured', () => {

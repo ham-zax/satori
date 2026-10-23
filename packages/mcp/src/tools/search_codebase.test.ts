@@ -371,6 +371,29 @@ test('search_codebase accepts an optional compact result index only for grouped 
     assert.match(rejectedRaw.content[0]?.text ?? '', /includeResultIndex.*grouped/i);
 });
 
+test('search_codebase keeps a default continuation pool and accepts custom totals and pages', async () => {
+    for (const encoderProvider of ['Potion', 'VoyageAI'] as const) {
+        const calls: Array<Record<string, unknown>> = [];
+        const ctx = {
+            capabilities: new CapabilityResolver(buildConfig({ encoderProvider })),
+            workspacePolicy: REPO_WORKSPACE_POLICY,
+            toolHandlers: {
+                handleSearchCode: async (args: Record<string, unknown>) => {
+                    calls.push(args);
+                    return { content: [{ type: 'text' as const, text: '{"status":"ok","results":[]}' }] };
+                },
+            },
+        } as unknown as ToolContext;
+
+        for (const options of [{}, { disclosureLimit: 35 }, { limit: 90, disclosureLimit: 12 }, { resultMode: 'raw' }]) {
+            const response = await searchCodebaseTool.execute({ path: '/repo', query: 'auth ownership', ...options }, ctx);
+            assert.equal(response.isError, undefined);
+        }
+        assert.deepEqual(calls.map(call => call.limit), [200, 200, 90, 20]);
+        assert.deepEqual(calls.map(call => call.disclosureLimit), [undefined, 35, 12, undefined]);
+    }
+});
+
 test('search_codebase accepts a large logical total on Potion while independently bounding disclosure', async () => {
     const capabilities = new CapabilityResolver(buildConfig({
         executionProfile: 'offline',
@@ -412,7 +435,7 @@ test('search_codebase accepts a large logical total on Potion while independentl
     const pageAboveDefaultTotal = await searchCodebaseTool.execute({
         path: '/repo',
         query: 'auth ownership',
-        disclosureLimit: 11,
+        disclosureLimit: 201,
     }, ctx);
 
     assert.equal(accepted.isError, undefined);

@@ -1516,6 +1516,77 @@ for (const fixture of [
     });
 }
 
+for (const fixture of [
+    { namespace: 'A', parentSegments: ['A'] },
+    { namespace: 'A::B', parentSegments: ['A', 'B'] },
+]) {
+    test(`Tree-sitter recovers intact children of errored C++ namespace ${fixture.namespace}`, async () => {
+        const result = await createLanguageAnalysisService().analyze({
+            language: 'cpp',
+            relativePath: 'src/recovered_namespace.cpp',
+            content: [
+                `namespace ${fixture.namespace} {`,
+                '    int broken() { return +; }',
+                '    int intact() { return helper(); }',
+                '}',
+                'int outside() { return helper(); }',
+            ].join('\n'),
+        });
+
+        assert.equal(result.structuralStatus, 'recovered');
+        assert.equal(result.structuralReason, 'syntax_error');
+        assert.deepEqual(result.symbols.map((symbol) => ({
+            kind: symbol.kind,
+            qualifiedName: symbol.qualifiedName,
+            parentQualifiedNamePath: symbol.parentQualifiedNamePath,
+        })), [
+            {
+                kind: 'function',
+                qualifiedName: [...fixture.parentSegments, 'intact'].join('.'),
+                parentQualifiedNamePath: fixture.parentSegments,
+            },
+            { kind: 'function', qualifiedName: 'outside', parentQualifiedNamePath: [] },
+        ]);
+        assert.deepEqual(result.moduleBindings, []);
+        assert.deepEqual(result.callSites, []);
+        assert.deepEqual(result.receiverTypeBindings, []);
+        assert.deepEqual(result.pythonFlowFacts, []);
+    });
+}
+
+for (const fixture of [
+    {
+        name: 'malformed name',
+        namespace: 'namespace A:: { int intact() { return 1; } }',
+    },
+    {
+        name: 'absent name',
+        namespace: 'namespace { int broken() { return +; } int intact() { return 1; } }',
+    },
+    {
+        name: 'missing closing brace',
+        namespace: 'namespace A { int intact() { return 1; }',
+    },
+]) {
+    test(`Tree-sitter rejects C++ namespace recovery with ${fixture.name}`, async () => {
+        const result = await createLanguageAnalysisService().analyze({
+            language: 'cpp',
+            relativePath: 'src/unsafe_namespace.cpp',
+            content: `int outside() { return 1; }\n${fixture.namespace}\n`,
+        });
+
+        assert.equal(result.structuralStatus, 'recovered');
+        assert.equal(result.structuralReason, 'syntax_error');
+        assert.deepEqual(result.symbols.map((symbol) => ({
+            kind: symbol.kind,
+            qualifiedName: symbol.qualifiedName,
+            parentQualifiedNamePath: symbol.parentQualifiedNamePath,
+        })), [
+            { kind: 'function', qualifiedName: 'outside', parentQualifiedNamePath: [] },
+        ]);
+    });
+}
+
 test('Tree-sitter excludes declarations with broken bodies and definitions inside error nodes', async () => {
     const result = await createLanguageAnalysisService().analyze({
         language: 'python',

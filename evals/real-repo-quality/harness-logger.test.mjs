@@ -447,6 +447,57 @@ test('the fused pool carries rank, key, pass tags, score, and rerank membership'
     assert.equal(entries[2].in_rerank_window, false);
 });
 
+test('the fused pool does not borrow a symbol from a regrouped owner and span', () => {
+    const relativePath = 'packages/react-reconciler/src/ReactFiberHooks.js';
+    const candidate = {
+        candidateId: 'chunk_147219204377335a',
+        ownerId: JSON.stringify(['symbol', relativePath, 'syminst_b602137bfb6c3743fe9874cb9aff1673']),
+        relativePath, startLine: 2769, endLine: 2781, rank: 15, score: 0.9,
+    };
+    const response = {
+        hints: { debugSearch: { candidateSurvival: { stages: [
+            { stage: 'mcp_pass', passId: 'attempt:1/primary', candidates: [{ ...candidate }] },
+            { stage: 'mcp_fusion', candidates: [{ ...candidate }] },
+            { stage: 'grouped', candidates: [{
+                ...candidate,
+                ownerId: JSON.stringify(['symbol', relativePath, 'syminst_eba54485f7efd4eb005479038cd40eba']),
+                startLine: 456, endLine: 503,
+                groupReplay: { displayLabel: 'function areHookInputsEqual' },
+            }] },
+            { stage: 'reranker_input', candidates: [{ ...candidate }] },
+        ] } } },
+    };
+
+    assert.deepEqual(buildFusedPoolEntries(response, 'r3'), [{
+        rank: 15,
+        key: `${relativePath}||2769-2781`,
+        path: relativePath,
+        symbol: '',
+        span: '2769-2781',
+        retrievalPasses: ['primary'],
+        fusedScore: 0.9,
+        in_rerank_window: true,
+    }]);
+});
+
+test('the fused pool requires the same owner even when candidate and span match', () => {
+    const response = responseWithFusedPool();
+    const stages = response.hints.debugSearch.candidateSurvival.stages;
+    const fusion = stages.find(s => s.stage === 'mcp_fusion').candidates[0];
+    const grouped = stages.find(s => s.stage === 'grouped').candidates[0];
+    fusion.ownerId = JSON.stringify(['symbol', fusion.relativePath, 'owner-original']);
+    grouped.ownerId = fusion.ownerId;
+    const matching = buildFusedPoolEntries(response, 'q1');
+    assert.equal(matching[0].symbol, 'function alfa()');
+
+    grouped.ownerId = JSON.stringify(['symbol', fusion.relativePath, 'owner-later']);
+
+    assert.deepEqual(buildFusedPoolEntries(response, 'q1'), [
+        { ...matching[0], key: 'src/a.ts||1-10', symbol: '' },
+        ...matching.slice(1),
+    ]);
+});
+
 test('the fused pool fails loudly when the fusion stage is absent', () => {
     assert.throws(
         () => buildFusedPoolEntries({ hints: { debugSearch: { candidateSurvival: { stages: [] } } } }, 'q9'),

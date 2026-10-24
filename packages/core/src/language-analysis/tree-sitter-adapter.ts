@@ -174,7 +174,9 @@ type ScalaPackageIdentity = Readonly<{
 function cppNamespaceIdentity(node: Node): CppNamespaceIdentity | undefined {
     if (node.type !== 'namespace_definition') return undefined;
     const declaredName = node.childForFieldName('name');
-    if (!declaredName) return undefined;
+    if (!declaredName || declaredName.hasError || declaredName.isError || declaredName.isMissing) {
+        return undefined;
+    }
     if (declaredName.type === 'namespace_identifier') {
         const name = declaredName.text.trim();
         return name ? { name, parentSegments: [] } : undefined;
@@ -374,8 +376,27 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         parentNode?: Node,
         semanticContainer: 'module' | 'class' | 'callable' = 'module',
     ): void => {
+        const cppNamespace = language === 'cpp' ? cppNamespaceIdentity(node) : undefined;
+        const cppNamespaceBody = cppNamespace && node.hasError
+            ? node.childForFieldName('body')
+            : undefined;
+        const openingBrace = cppNamespaceBody?.firstChild;
+        const closingBrace = cppNamespaceBody?.lastChild;
+        // A clean name and real body delimiters preserve ownership for intact children,
+        // but the errored namespace itself must not become an authoritative symbol.
+        const recoverCppNamespace = Boolean(
+            cppNamespaceBody?.type === 'declaration_list'
+            && !cppNamespaceBody.isError
+            && !cppNamespaceBody.isMissing
+            && openingBrace?.type === '{'
+            && !openingBrace.isError
+            && !openingBrace.isMissing
+            && closingBrace?.type === '}'
+            && !closingBrace.isError
+            && !closingBrace.isMissing
+        );
         // A malformed definition cannot supply a trustworthy identity or owner for descendants.
-        if (node.isError || node.isMissing || (node.hasError && (
+        if (node.isError || node.isMissing || (node.hasError && !recoverCppNamespace && (
             declarations[node.type]
             || node.type === 'decorated_definition'
             || node.type === 'impl_item'
@@ -465,7 +486,6 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
         ) {
             kind = undefined;
         }
-        const cppNamespace = language === 'cpp' ? cppNamespaceIdentity(node) : undefined;
         const csharpNamespace = language === 'csharp' ? csharpNamespaceIdentity(node) : undefined;
         const scalaPackage = language === 'scala' ? scalaPackageIdentity(node) : undefined;
         const scalaBinding = language === 'scala' ? scalaBindingName(node) : undefined;
@@ -529,7 +549,7 @@ function extractSymbols(root: Node, language: string, sourceMap: Utf8SourceMap):
             : kind && (kind === 'function' || kind === 'method' || kind === 'constructor')
                 ? 'callable'
                 : semanticContainer;
-        if (kind && name) {
+        if (kind && name && !recoverCppNamespace) {
             symbols.push({
                 kind,
                 name,

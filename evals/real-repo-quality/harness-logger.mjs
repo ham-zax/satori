@@ -241,8 +241,8 @@ export function buildQueryHarnessRecord({
  * Build the fused-pool top-80 sidecar entries for one query from a full
  * debug response. The pool is the `mcp_fusion` survival stage (fusion-score
  * order after reservation) with per-candidate pass tags joined from the
- * `mcp_pass` stages, symbols from the `grouped` stage, and rerank-window
- * membership from `reranker_input`.
+ * `mcp_pass` stages, symbols from exact stage-identity matches in `grouped`,
+ * and rerank-window membership from `reranker_input`.
  *
  * Throws when the `mcp_fusion` stage is absent: a run without the fused pool
  * must fail loudly rather than write a silent empty sidecar.
@@ -270,15 +270,17 @@ export function buildFusedPoolEntries(response, queryId = '?') {
     const expandedIds = idsIn('mcp_pass', 'expanded');
     const rerankStages = stages.filter(s => s.stage === 'reranker_input' && Array.isArray(s.candidates));
     const rerankIds = new Set(rerankStages.flatMap(s => s.candidates.map(c => c.candidateId)));
-    const symbolById = new Map();
+    const stageIdentity = c => JSON.stringify([c.candidateId, c.ownerId, c.relativePath, c.startLine, c.endLine]);
+    const symbolByIdentity = new Map();
     for (const s of stages) {
         if (s.stage !== 'grouped' || !Array.isArray(s.candidates)) continue;
         for (const c of s.candidates) {
-            if (symbolById.has(c.candidateId)) continue;
+            const identity = stageIdentity(c);
+            if (symbolByIdentity.has(identity)) continue;
             const label = c.groupReplay?.displayLabel ?? '';
             // File-level groups carry no symbol: their label names the file.
             const symbol = label.startsWith('file ') ? '' : label;
-            symbolById.set(c.candidateId, symbol);
+            symbolByIdentity.set(identity, symbol);
         }
     }
     return fusionStage.candidates.slice(0, 80).map(c => {
@@ -286,7 +288,7 @@ export function buildFusedPoolEntries(response, queryId = '?') {
             ...(primaryIds.has(c.candidateId) ? ['primary'] : []),
             ...(expandedIds.has(c.candidateId) ? ['expanded'] : []),
         ];
-        const symbol = symbolById.get(c.candidateId) ?? '';
+        const symbol = symbolByIdentity.get(stageIdentity(c)) ?? '';
         const span = `${c.startLine ?? ''}-${c.endLine ?? ''}`;
         return {
             rank: c.rank,

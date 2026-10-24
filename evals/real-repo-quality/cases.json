@@ -202,9 +202,14 @@
               "pathRegex": "^crates/polars-core/src/chunked_array/cast\\.rs$",
               "symbolRegex": null,
               "evidence": "crates/polars-core/src/chunked_array/cast.rs:75 cast_impl_inner, :126 cast_impl, :218/:257/:365 cast_with_options"
+            },
+            {
+              "pathRegex": "^crates/polars-core/src/frame/column/mod\\.rs$",
+              "symbolRegex": null,
+              "evidence": "crates/polars-core/src/frame/column/mod.rs:486 Column::cast dispatches to Series/Scalar::cast; :474 cast_with_options"
             }
           ],
-          "justification": "Core cast implementation; py-polars unit tests cast heavily."
+          "justification": "File-level acceptance of the column cast implementation family and the chunked-array cast kernel; no specific Column::cast symbol is required."
         },
         {
           "id": "p4",

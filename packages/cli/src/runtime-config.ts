@@ -243,21 +243,6 @@ export function evaluateStaticRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConf
         });
     }
 
-    const activationPolicy = env.SATORI_LATEON_ACTIVATION_POLICY?.trim();
-    if (activationPolicy && rerankerProvider !== "lateon") {
-        const knownPolicy = activationPolicy === DEFAULT_LATEON_ACTIVATION_POLICY;
-        checks.push({
-            name: "lateon_activation_policy",
-            status: "error",
-            message: knownPolicy
-                ? `SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; received ${rerankerProvider}.`
-                : `Invalid LateOn activation policy: ${activationPolicy}.`,
-            nextStep: knownPolicy
-                ? "Set SATORI_RERANKER_PROVIDER=lateon or remove SATORI_LATEON_ACTIVATION_POLICY."
-                : `Reinstall with \`${satoriCliCommand("install --reranker lateon")}\`.`,
-        });
-    }
-
     if (executionProfile === "offline" && provider !== "Potion") {
         checks.push({
             name: "offline_embedding_policy",

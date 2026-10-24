@@ -43,8 +43,13 @@ const altTermsMap = altTermsFilePath
     ? JSON.parse(fs.readFileSync(path.resolve(workspaceRoot, altTermsFilePath), 'utf8'))
     : null;
 const flagsOpt = opt('flags', '');
-const passedFlags = Object.fromEntries(flagsOpt.split(',').filter(Boolean).map((f) => [f, true]));
-if (flagsOpt) process.env.SATORI_SEARCH_FLAGS = flagsOpt;
+const passedFlags = Object.fromEntries(flagsOpt.split(',').filter(Boolean).map((f) => {
+    const [key, raw] = f.split('=');
+    if (raw === undefined || raw === 'true') return [key, true];
+    if (raw === 'false') return [key, false];
+    throw new Error(`--flags ${key} must be true or false; received ${raw}`);
+}));
+if (flagsOpt) process.env.SATORI_SEARCH_FLAGS = Object.entries(passedFlags).filter(([, value]) => value).map(([key]) => key).join(',');
 const reservationPolicyOpt = opt('reservation-policy', 'cap55');
 if (!['cap55', 'cap64', 'off'].includes(reservationPolicyOpt)) {
     throw new Error(`--reservation-policy must be cap55, cap64, or off; received ${reservationPolicyOpt}`);

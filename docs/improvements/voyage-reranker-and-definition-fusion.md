@@ -16,8 +16,12 @@ figures as indicative only.
   weighting serves both, so the rule depends on the reranker.
 - The Voyage arms were also faster per request than local LateOn on this
   machine.
-- The Voyage numbers were produced through a test hook, not through the
-  shipped Voyage provider path. See [Limits](#limits) before quoting them.
+- The shipped Voyage provider path reproduces the result: `rerank-3-lite`
+  scores 20/25/25 with MRR 0.7798, and the canonical projection raises that to
+  22/26/26 with MRR 0.8452.
+- The symbol-metadata pass is not an independent gain. On the native document it
+  changes no rank. Under the canonical projection it recovers one rank (`p6`)
+  for 1.2% more bytes.
 
 ## Problem
 
@@ -217,6 +221,33 @@ Findings:
 - A learned weighting is not justified on 28 questions; a one-line rule already
   recovers nearly all of the raw gain.
 
+## Shipped Voyage path (2026-10-24)
+
+Same 28 questions, same Publication, same parameters, one fresh index, at
+`0a2aa66c`. The arms differ only in the projection Voyage is handed.
+
+| Arm | Projection | hit@1 | hit@5 | hit@10 | MRR | Mean input | Rerank median |
+|---|---|---|---|---|---|---|---|
+| A | native provider document | 20 | 25 | 25 | 0.7798 | 105,445 bytes | 806 ms |
+| D | native + symbol-metadata pass | 20 | 25 | 25 | 0.7798 | 104,196 bytes | 888 ms |
+| C | canonical document and query | 22 | 26 | 26 | 0.8393 | 166,424 bytes | 935 ms |
+| B | canonical + symbol-metadata pass | 22 | 26 | 26 | 0.8452 | 168,374 bytes | 993 ms |
+
+Arm C isolates the projection: `r3` 3 → 2, `r7` absent → 1, `p1` 3 → 1, and
+`p6` 2 → 3. The projection costs 58% more input bytes and about 130 ms of
+provider time. Arm D adds the symbol-metadata pass to the native document and
+changes no rank. With the projection, the pass adds 47 documents, moves `p6`
+back to 2, and changes no other rank, so arm B is the current path.
+
+Relative to the native document, the projection is +7.6% MRR and +10% hit@1.
+Adding the metadata pass to the projection is +0.7% MRR, one rank on `p6`, for
++1.2% bytes. Adding it to the native document is 0.0%. Arm C is the cheaper
+design. Arm B is the default because the difference is one rank, within the
+noise of 28 questions, and it needs no Voyage-only gate.
+
+Definition fusion skips the Voyage `rerank-3` family. On the shipped path the
+post-fusion order equals the provider order on 28 of 28 queries.
+
 ## Changes in the working tree
 
 Uncommitted at the time of writing. Committed since: the core fusion credit in
@@ -237,17 +268,25 @@ Uncommitted at the time of writing. Committed since: the core fusion credit in
   `VOYAGEAI_RERANKER_MODEL`. The fixed list of accepted names is to be replaced
   by pass-through names; see
   [Reranker selection plan](reranker-selection-plan.md).
+- **Voyage canonical projection** (`packages/mcp/src/server/voyage-reranker.ts`,
+  `provider-runtime.ts`): Voyage advertises `search_rerank_document_v5` and
+  `search_rerank_query_v2`, so the coordinator builds the same publication-bound
+  bytes as LateOn. This is arm B above.
+- **LateOn-only activation policy** (`packages/mcp/src/config.ts`,
+  `packages/cli/src/runtime-config.ts`): a leftover
+  `SATORI_LATEON_ACTIVATION_POLICY` no longer stops the server or the static
+  runtime config when the provider is `voyage` or `none`.
 
 ## Limits
 
 - 28 questions, three repositories, one run per arm. A difference of one
   question is within noise.
-- The Voyage arms sent LateOn's document and query formats to Voyage through a
-  scratch hook. The shipped Voyage provider builds a plainer document (path,
-  language, symbol label, content). Quality through that path has not been
-  measured, and the fusion switch has not been confirmed end to end through it.
-- `VOYAGEAI_RERANKER_MODEL` cannot select Voyage in the offline runtime, whose
-  network policy is local-only.
+- The shipped Voyage path was measured at `0a2aa66c` on a fresh index. The
+  canonical projection sends 58% more bytes than the native document (166 KB
+  against 105 KB per query, mean), so a cheaper variant must be measured before
+  it is claimed equivalent.
+- The fusion skip matches the literal model names `rerank-3` and
+  `rerank-3-lite`. A different pass-through model name keeps definition fusion.
 - Fusion-off for `rerank-2.5` was replayed offline only.
 - The rule was chosen on the same 28 questions it is reported on. It has not
   been checked on questions it was not tuned against.
@@ -258,15 +297,14 @@ Uncommitted at the time of writing. Committed since: the core fusion credit in
 
 The measurements support recommending Voyage `rerank-3` (or `rerank-3-lite`
 where cost matters) as the best-quality option, and keeping local LateOn as the
-offline default. They do not yet support a guaranteed figure: quote the result
-as measured on this eval ("20 of 28 owners at rank 1 against 13") once the
-shipped Voyage path reproduces it. Using Voyage sends rerank documents (code
-excerpts) to a third party and is billed per token; say so next to the
-recommendation.
+offline default. Quote the result as measured on this eval: 22 of 28 owners at
+rank 1 against 13, with the canonical projection. Using Voyage sends rerank
+documents (code excerpts) to a third party and is billed per token; say so next
+to the recommendation.
 
 ## Open
 
-- `r1`, `p3`, `f5`: the owner never reaches the rerank window. This is
-  retrieval and admission work, independent of the reranker.
+- `r1` and `f5`: the owner never reaches the rerank window. This is retrieval
+  and admission work, independent of the reranker.
 - `r2` ranks low under every model.
 - Definition fusion itself is to be revisited in a separate session.

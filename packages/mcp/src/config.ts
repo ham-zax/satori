@@ -444,7 +444,9 @@ export function createMcpConfig(): ContextMcpConfig {
         ? (lateOnProfileRaw as LateOnRuntimeProfileId | undefined)
             ?? LATEON_RUNTIME_PROFILE_IDS.contextV6D128
         : undefined;
-    const lateOnActivationPolicyRaw = envManager.get('SATORI_LATEON_ACTIVATION_POLICY');
+    const lateOnActivationPolicyRaw = rerankerProvider === 'lateon'
+        ? envManager.get('SATORI_LATEON_ACTIVATION_POLICY')
+        : undefined;
     if (
         lateOnActivationPolicyRaw
         && lateOnActivationPolicyRaw !== LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6
@@ -452,12 +454,6 @@ export function createMcpConfig(): ContextMcpConfig {
         throw new Error(
             `Invalid SATORI_LATEON_ACTIVATION_POLICY '${lateOnActivationPolicyRaw}'. `
             + `Expected ${LATEON_ACTIVATION_POLICY_IDS.ownerDefaultContextV6}; reinstall is required.`,
-        );
-    }
-    if (lateOnActivationPolicyRaw && rerankerProvider !== 'lateon') {
-        throw new Error(
-            `SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; `
-            + `received ${rerankerProvider}.`,
         );
     }
     const lateOnActivationPolicy = (

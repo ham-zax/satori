@@ -1087,21 +1087,20 @@ satori reranker status</code></pre>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Reranker</th><th>Right answer first</th><th>In top 5</th><th>In top 10</th><th>MRR</th><th>Median search</th></tr>
+              <tr><th>Reranker</th><th>Right answer first</th><th>In top 5</th><th>In top 10</th><th>MRR</th><th>Rerank median</th></tr>
             </thead>
             <tbody>
-              <tr><td>LateOn (local, default)</td><td>13/28</td><td>19/28</td><td>21/28</td><td>0.556</td><td>2.40 s</td></tr>
-              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>18/28</td><td>24/28</td><td>24/28</td><td>0.738</td><td>1.04 s</td></tr>
-              <tr><td>Voyage <code>rerank-3</code></td><td>17/28</td><td>24/28</td><td>24/28</td><td>0.711</td><td>1.12 s</td></tr>
-              <tr><td>Voyage <code>rerank-2.5</code></td><td>19/28</td><td>24/28</td><td>24/28</td><td>0.759</td><td>1.25 s</td></tr>
+              <tr><td>LateOn (local, default)</td><td>13/28</td><td>21/28</td><td>23/28</td><td>0.555</td><td>2.62 s</td></tr>
+              <tr><td>Voyage <code>rerank-3-lite</code> (Voyage default)</td><td>22/28</td><td>26/28</td><td>26/28</td><td>0.845</td><td>0.99 s</td></tr>
             </tbody>
           </table>
         </div>
         <p>
           28 plain-English questions over React, Polars, and FlatBuffers, with
           Potion embeddings and the same index for every row. One run per row on
-          one WSL2 laptop. Times are the whole search and include the network for
-          Voyage.
+          one WSL2 laptop. Times are the reranker alone and include the network for
+          Voyage. The canonical projection sends about 60% more bytes, so Voyage
+          uses the free quota faster.
         </p>
         <div class="callout">
           <p>
@@ -1109,8 +1108,7 @@ satori reranker status</code></pre>
             A <code>VOYAGEAI_API_KEY</code> alone does not enable it. With Voyage,
             each search sends the query and candidate code excerpts to Voyage AI,
             a MongoDB company. Each account gets 200 million free tokens per
-            model, about 8,000 searches or months of daily use, and needs no
-            credit card to start. <code>satori doctor</code> and
+            model and needs no credit card to start. <code>satori doctor</code> and
             <code>satori reranker status</code> print
             <code>Online: search queries and code excerpts are sent to Voyage.</code>
             If Voyage fails during a search, results come back in retrieval order

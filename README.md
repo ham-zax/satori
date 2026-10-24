@@ -147,16 +147,14 @@ Tuning-set results, measured on an earlier prompt projection; the held-out run i
 
 On the current default (LateOn reranking plus definition fusion, which runs only with reranking), 19 named-symbol questions across 4 repositories went from 4 to 13 owners at rank 1 against no reranker; owner in the top 10 stayed at 15 either way. [Corrected comparison](docs/improvements/reranker-owner-investigation.md).
 
-**Choosing a reranker.** LateOn is the local default. Voyage is an opt-in online reranker (`satori reranker use voyage`); it works with the offline Potion index and sends each query and its candidate code excerpts to Voyage AI, a MongoDB company. Each Voyage account gets 200 million free tokens per model, about 8,000 searches. 28 plain-English questions over React, Polars, and FlatBuffers, same Potion index for every row:
+**Choosing a reranker.** LateOn is the local default. Voyage is an opt-in online reranker (`satori reranker use voyage`); it works with the offline Potion index and sends each query and its candidate code excerpts to Voyage AI, a MongoDB company. Each Voyage account gets 200 million free tokens per model. 28 plain-English questions over React, Polars, and FlatBuffers, same Potion index for every row:
 
-| Reranker | Right answer first | In top 5 | In top 10 | MRR | Search time: median / mean / p90 |
-|---|---:|---:|---:|---:|---|
-| LateOn (local, default) | 13/28 | 19/28 | 21/28 | 0.556 | 2.40 s / 3.10 s / 4.19 s |
-| Voyage `rerank-3-lite` (Voyage default) | 18/28 | 24/28 | 24/28 | 0.738 | 1.04 s / 1.65 s / 3.09 s |
-| Voyage `rerank-3` | 17/28 | 24/28 | 24/28 | 0.711 | 1.12 s / 2.15 s / 3.23 s |
-| Voyage `rerank-2.5` | 19/28 | 24/28 | 24/28 | 0.759 | 1.25 s / 2.20 s / 5.21 s |
+| Reranker | Right answer first | In top 5 | In top 10 | MRR | Rerank median |
+|---|---:|---:|---:|---:|---:|
+| LateOn (local, default) | 13/28 | 21/28 | 23/28 | 0.555 | 2.62 s |
+| Voyage `rerank-3-lite` (Voyage default) | 22/28 | 26/28 | 26/28 | 0.845 | 0.99 s |
 
-One run per row on one WSL2 laptop; times are the whole search. [How to choose, and the limits of these numbers](docs/REFERENCE.md#choosing-a-reranker).
+Voyage's canonical projection sends about 60% more input bytes than the native document, so it uses the free quota faster. One run per row on one WSL2 laptop; times are the reranker alone. [How to choose, and the limits of these numbers](docs/REFERENCE.md#choosing-a-reranker).
 
 **Plain-English questions.** 46 conceptual questions over React, Polars, and FlatBuffers ("cleanup of useEffect" → `commitHookEffectListUnmount`). Agents can pass up to 4 code-vocabulary guesses in `alt_terms`; Satori searches them as separate passes, including definitions, and fuses them with the original question:
 

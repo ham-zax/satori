@@ -45,6 +45,7 @@ import {
 import { MissingProviderConfigIssue, ProviderBackedOperation, ToolContext } from "../tools/types.js";
 import { LateOnReranker } from "./lateon-reranker.js";
 import { startSupervisedSyncWorker } from "./supervised-sync-worker.js";
+import { VoyageProjectionReranker } from "./voyage-reranker.js";
 import type { LateOnRuntimeProfileId } from "./lateon-reranker-protocol.js";
 
 /**
@@ -671,10 +672,10 @@ export class ProviderRuntime {
         if (!bootstrap.reranker) return null;
         switch (bootstrap.reranker.kind) {
             case 'voyage':
-                return new VoyageAIReranker({
+                return new VoyageProjectionReranker(new VoyageAIReranker({
                     apiKey: bootstrap.reranker.apiKey,
                     model: bootstrap.reranker.model,
-                });
+                }));
             case 'lateon':
                 return new LateOnReranker({
                     modelDirectory: bootstrap.reranker.modelDirectory,

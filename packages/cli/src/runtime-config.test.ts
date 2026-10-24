@@ -140,24 +140,30 @@ test("static runtime config rejects an invalid LateOn activation policy", () => 
     assert.match(policy?.message || "", /Invalid LateOn activation policy: untrusted_policy_v1\./);
 });
 
-test("static runtime config rejects a LateOn activation policy without the lateon provider", () => {
-    const checks = evaluateStaticRuntimeConfig({
-        SATORI_RUNTIME_PROFILE: "offline",
-        VECTOR_STORE_PROVIDER: "LanceDB",
-        EMBEDDING_PROVIDER: "Potion",
-        EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
-        EMBEDDING_OUTPUT_DIMENSION: "256",
-        POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
-        POTION_MODEL_PATH: "/opt/satori/potion/model",
-        SATORI_RERANKER_PROVIDER: "none",
-        SATORI_LATEON_ACTIVATION_POLICY: "lateon_context_v6_d128_owner_default_v1",
-    });
-    const policy = checks.find((check) => check.name === "lateon_activation_policy");
-    assert.equal(policy?.status, "error");
-    assert.match(
-        policy?.message || "",
-        /SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; received none\./,
-    );
+test("static runtime config ignores a LateOn activation policy without the lateon provider", () => {
+    for (const provider of ["none", "voyage"] as const) {
+        for (const activationPolicy of [
+            "lateon_context_v6_d128_owner_default_v1",
+            "untrusted_policy_v1",
+        ]) {
+            const checks = evaluateStaticRuntimeConfig({
+                SATORI_RUNTIME_PROFILE: "offline",
+                VECTOR_STORE_PROVIDER: "LanceDB",
+                EMBEDDING_PROVIDER: "Potion",
+                EMBEDDING_MODEL: "minishlab/potion-code-16M-v2@e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+                EMBEDDING_OUTPUT_DIMENSION: "256",
+                POTION_HELPER_PATH: "/opt/satori/potion/satori-potion",
+                POTION_MODEL_PATH: "/opt/satori/potion/model",
+                SATORI_RERANKER_PROVIDER: provider,
+                ...(provider === "voyage" ? { VOYAGEAI_API_KEY: "test-voyage-key" } : {}),
+                SATORI_LATEON_ACTIVATION_POLICY: activationPolicy,
+            });
+            assert.equal(
+                checks.find((check) => check.name === "lateon_activation_policy"),
+                undefined,
+            );
+        }
+    }
 });
 
 test("static runtime config rejects the context-v3 policy without the activated profile", () => {

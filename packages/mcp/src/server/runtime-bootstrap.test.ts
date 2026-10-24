@@ -273,14 +273,12 @@ test('LateOn config selects the current profile and rejects any other profile or
         assert.throws(createMcpConfig, /Invalid SATORI_LATEON_ACTIVATION_POLICY/);
         delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
 
+        // The activation policy is LateOn-only; other providers ignore it.
         process.env.SATORI_RERANKER_PROVIDER = 'none';
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'lateon_context_v6_d128_owner_default_v1';
-        assert.throws(
-            createMcpConfig,
-            /SATORI_LATEON_ACTIVATION_POLICY requires SATORI_RERANKER_PROVIDER=lateon; received none/,
-        );
+        assert.equal(createMcpConfig().lateOnActivationPolicy, undefined);
         process.env.SATORI_LATEON_ACTIVATION_POLICY = 'untrusted_policy_v1';
-        assert.throws(createMcpConfig, /Invalid SATORI_LATEON_ACTIVATION_POLICY/);
+        assert.equal(createMcpConfig().lateOnActivationPolicy, undefined);
         delete process.env.SATORI_LATEON_ACTIVATION_POLICY;
         process.env.SATORI_RERANKER_PROVIDER = 'lateon';
 
@@ -416,6 +414,21 @@ test('offline config accepts explicitly selected Voyage reranking when the key i
 
         assert.equal(parsed.rerankerProvider, 'voyage');
         assert.equal(resolveRerankerProvider(parsed), 'voyage');
+    });
+});
+
+test('offline config ignores a leftover LateOn activation policy for Voyage reranking', () => {
+    withOfflinePotionConfig({
+        SATORI_RERANKER_PROVIDER: 'voyage',
+        VOYAGEAI_API_KEY: 'test-voyage-key',
+        SATORI_LATEON_MODEL_PATH: '/opt/satori/models/lateon-code-edge',
+        SATORI_LATEON_PROFILE: 'lateon_offline_quality_projection_v6_d128_v1',
+        SATORI_LATEON_ACTIVATION_POLICY: 'lateon_context_v6_d128_owner_default_v1',
+    }, () => {
+        const parsed = createMcpConfig();
+
+        assert.equal(parsed.rerankerProvider, 'voyage');
+        assert.equal(parsed.lateOnActivationPolicy, undefined);
     });
 });
 

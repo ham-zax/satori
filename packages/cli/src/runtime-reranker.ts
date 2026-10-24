@@ -95,7 +95,7 @@ export async function executeManagedRerankerCommand(
         : undefined;
     if (desired === "voyage") {
         const writeMessage = options.writeMessage ?? ((message: string) => { process.stderr.write(message); });
-        writeMessage("Voyage is a paid API. In Satori's tests it ranked the owning code first for 20 of 28 questions; LateOn did so for 13.\n");
+        writeMessage("Voyage is a paid API and sends code excerpts to a third party. In Satori's tests it ranked the owning code first for 22 of 28 questions; LateOn did so for 13.\n");
         const apiKey = await resolveVoyageApiKey(homeDir, env, options);
         if (apiKey === null) {
             return {

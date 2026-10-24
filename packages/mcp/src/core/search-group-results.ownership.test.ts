@@ -326,6 +326,95 @@ test("grouped target publication preserves byte-authoritative ownership and reje
     assert.equal(notContained.visibleResults[0]?.target.symbolId, undefined);
 });
 
+test("a contained member preserves its group owner when leading documentation joins", () => {
+    const owner = {
+        symbolKey: "create_key",
+        symbolInstanceId: "create_instance",
+        language: "swift",
+        kind: "function",
+        name: "create",
+        qualifiedName: "create",
+        label: "function create(string:)",
+        file: "src/Builder.swift",
+        span: { startLine: 5, endLine: 7, startByte: 100, endByte: 160 },
+        parentQualifiedNamePath: [],
+        fileHash: "hash",
+        extractorVersion: "v1",
+    } satisfies SymbolRecord;
+    const registry = {
+        symbolsByInstanceId: new Map([[owner.symbolInstanceId, owner]]),
+        symbolsByFile: new Map<string, SymbolRecord[]>([[owner.file, [owner]]]),
+    } as unknown as SymbolRegistry;
+    const documentation = {
+        ...candidate(owner.file, 3, 5, 0.9, { authoritativeRank: 1 }),
+        result: {
+            relativePath: owner.file,
+            language: "swift",
+            content: "\n/// Create a string.\n",
+            startLine: 3, endLine: 5, startByte: 70, endByte: 100,
+        },
+    };
+    const implementation = {
+        ...candidate(owner.file, 5, 7, 0.8, { authoritativeRank: 2 }),
+        result: {
+            relativePath: owner.file,
+            language: "swift",
+            content: "func create(string: String) {\n    return\n}",
+            startLine: 5, endLine: 7, startByte: 100, endByte: 160,
+            ownerSymbolKey: owner.symbolKey,
+            ownerSymbolInstanceId: owner.symbolInstanceId,
+        },
+    };
+    const resolveOwner: Parameters<typeof buildVisibleGroupedSearchResults>[0]["resolveOwner"] = (result) => resolveSearchOwnerFromRegistry({
+        result: result as unknown as SearchOwnerResolutionInputResult,
+        registry,
+        sanitizeIndexedRelativeFilePath: (file) => file,
+        hasTokenBoundaryMatch: () => false,
+        isWriterActionTerm: () => false,
+    });
+    assert.equal(resolveOwner(documentation.result).ownerSymbolInstanceId, owner.symbolInstanceId);
+    assert.equal(resolveOwner(documentation.result).ownerProof, undefined);
+    assert.equal(resolveOwner(implementation.result).ownerProof?.symbolInstanceId, owner.symbolInstanceId);
+
+    const build = (scored: Array<typeof documentation | typeof implementation>) => buildVisibleGroupedSearchResults({
+        scored,
+        codebaseRoot: "/repo",
+        groupBy: "symbol",
+        limit: 5,
+        queryPlan: { intent: "semantic", referenceSeeking: false, exactMatchPinningEnabled: false },
+        mustMatchesFirst: false,
+        registry,
+        navigationState: { relationshipReady: false },
+        debugMode: "none",
+        now: navigationHelpers.now,
+        previewMaxBytes: 200,
+        navigationHelpers,
+        parseIndexedAtMs: () => undefined,
+        resolveOwner,
+    }).visibleResults;
+
+    assert.equal(build([documentation])[0]?.target.symbolId, undefined);
+    for (const members of [[documentation, implementation], [implementation, documentation]]) {
+        const groups = build(members);
+        assert.equal(groups.length, 1);
+        assert.deepEqual(groups[0]?.target, {
+            file: owner.file,
+            span: { startLine: 5, endLine: 7 },
+            symbolId: owner.symbolInstanceId,
+        });
+        assert.equal(groups[0]?.symbolKind, "function");
+    }
+
+    const unrelated = {
+        ...documentation,
+        result: { ...documentation.result, content: "unrelated();\n/// Create a string.\n" },
+    };
+    assert.equal(resolveOwner(unrelated.result).ownerSymbolInstanceId, undefined);
+    const separateGroups = build([unrelated, implementation]);
+    assert.equal(separateGroups.length, 2);
+    assert.equal(separateGroups.filter((group) => group.target.symbolId === owner.symbolInstanceId).length, 1);
+});
+
 test("a broad same-file chunk cannot publish a nested registry symbol target", () => {
     const nested = {
         symbolKey: "nested_key",

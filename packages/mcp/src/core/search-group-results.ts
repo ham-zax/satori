@@ -816,7 +816,10 @@ export function buildVisibleGroupedSearchResults(input: {
             spanValidation: registrySymbolRepair
                 ? (registrySymbolRepair.validated ? "verified" : registrySymbolRepair.attempted ? "unverified" : "not_applicable")
                 : "not_applicable",
-            ownershipValidated: group.validatedOwnerChunkCount === group.chunks.length,
+            // One contained member proves this canonical group owner. Leading
+            // documentation can join without containment proof and must not
+            // erase the identity proved by another member.
+            ownershipValidated: group.validatedOwnerChunkCount > 0,
             candidateIds: group.chunks.map((chunk) => searchCandidateIdentity(
                 chunk.result as SearchResultLike,
             ).candidateId),

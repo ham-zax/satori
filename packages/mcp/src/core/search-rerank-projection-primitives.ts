@@ -174,7 +174,16 @@ export function firstStructuralDeclaration(
     const normalizedPath = relativePath.toLowerCase();
     const isFileLevel = symbolKind === "file" || symbolKind === "module";
     const candidates = lines.map((line) => line.trim()).filter(Boolean);
-    if (!isFileLevel) return candidates[0] ?? "";
+    if (!isFileLevel) {
+        // A complete standalone Swift attribute is metadata for the following
+        // declaration. Keep mixed or nested syntax on the existing path rather
+        // than guessing where its declaration begins.
+        if (normalizedLanguage === "swift") {
+            const standaloneAttributes = /^(?:@[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\([^()]*\))?\s*)+$/u;
+            return candidates.find((line) => !standaloneAttributes.test(line)) ?? "";
+        }
+        return candidates[0] ?? "";
+    }
     if (
         ["markdown", "md", "mdx"].includes(normalizedLanguage)
         || /\.mdx?$/u.test(normalizedPath)

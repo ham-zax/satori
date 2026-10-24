@@ -43,6 +43,52 @@ test("canonical policy carries the frozen v5 contract identity", () => {
     assert.equal(SEARCH_RERANK_DOCUMENT_POLICY.id, "search_rerank_document_v5");
 });
 
+test("Swift attributes do not replace the callable declaration in the rerank signature", () => {
+    const declaration = "mutating public func create(string str: String?) -> Offset {";
+    const content = [
+        "  @inline(__always)",
+        `  ${declaration}`,
+        "    guard let str = str else { return Offset() }",
+        "    return Offset(offset: str.utf8.count)",
+        "  }",
+    ].join("\n");
+    const result = buildSearchRerankDocument(baseInput({
+        relativePath: "swift/Sources/FlatBuffers/FlatBufferBuilder.swift",
+        language: "swift",
+        canonicalSymbolLabel: "function create",
+        content,
+        symbolSpan: { startLine: 1, endLine: 5 },
+        query: "in the Swift library where does the builder add a string",
+    }));
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.signature_or_declaration, declaration);
+    assert.ok(parsed.query_relevant_source_excerpt.includes("@inline(__always)"));
+    assert.ok(parsed.query_relevant_source_excerpt.includes(declaration));
+    assert.equal(result.utf8Bytes <= SEARCH_RERANK_DOCUMENT_POLICY.maximumUtf8Bytes, true);
+});
+
+test("Swift declaration selection handles stacked attributes and preserves uncertain or mixed syntax", () => {
+    const declaration = "public func load() -> String {";
+    const fixtures = [
+        { language: "swift", lines: ["@MainActor", "@available(iOS 13.0, *)", declaration, "}"], expected: declaration },
+        { language: "swift", lines: [`@inline(__always) ${declaration}`, "}"], expected: `@inline(__always) ${declaration}` },
+        { language: "swift", lines: ["@available(", "iOS 13.0, *)", declaration, "}"], expected: "@available(" },
+        { language: "swift", lines: ["@SomeAttribute(nested())", declaration, "}"], expected: "@SomeAttribute(nested())" },
+        { language: "csharp", lines: ["@Result", "Create() { return result; }"], expected: "@Result" },
+    ];
+    for (const fixture of fixtures) {
+        const result = buildSearchRerankDocument(baseInput({
+            language: fixture.language,
+            content: fixture.lines.join("\n"),
+            symbolSpan: { startLine: 1, endLine: fixture.lines.length },
+        }));
+        assert.equal(JSON.parse(result.text).signature_or_declaration, fixture.expected);
+    }
+    assert.throws(() => buildSearchRerankDocument(baseInput({
+        language: "swift", content: "@MainActor\n@inline(__always)", symbolSpan: { startLine: 1, endLine: 2 },
+    })), /inferred signatureOrDeclaration must be a non-empty string/);
+});
+
 test("canonical projection encodes the source once across budget attempts", (t) => {
     const original = Buffer.from;
     let encodings = 0;

@@ -1,8 +1,10 @@
 # Jev as an independent judge in the Satori workflow
 
-Status: first lanes implemented and measured, 24 October 2026. Two evidence-lane comparison
-runs and one retrieval-triage run exist. The evidence lane used an inconsistent rubric, so its
-counts are provisional. No corrected-rubric rerun exists. No product code path changed.
+Status: first lanes implemented and measured, 24 October 2026. The evidence-lane rubric and the
+retrieval-triage adapter contracts were corrected on the same date and are covered by offline
+tests. Two evidence-lane comparison runs and one retrieval-triage run exist; those historical
+counts were produced before the corrections and remain provisional. No corrected-rubric model
+rerun and no retrieval-triage model rerun exist. No product code path changed.
 
 Evidence paths under `/tmp` are local transient artifacts. They are not versioned, and raw
 reproducibility may be unavailable after cleanup. This document keeps the method, identities,
@@ -62,12 +64,13 @@ Measured on 24 October 2026, all 47 accepted entries, concurrency 8:
 | 1 | granularity-blind | 47 | 35 | 12 | $0.00113 | 2.3 s |
 | 2 | granularity stated in question (criterion still required a symbol) | 47 | 37 | 10 | ~$0.001 | 2.2 s |
 
-The script that produced both runs is internally inconsistent. Its instructions say that at
-`path` granularity, naming the file is a full answer. Its `answers.what` criterion still requires
-the file and the function, class, or symbol (`evals/judges/jev-dual-judge.mjs:41-50`). Both
-47-entry runs therefore measured a mixed rubric. The counts below are observed under that rubric.
-They are not proof of scoring tolerance, calibration, or accuracy. No corrected-rubric rerun has
-been performed. The script correction is a slice-3 task; this document does not change it.
+The script that produced both runs was internally inconsistent. Its instructions say that at
+`path` granularity, naming the file is a full answer. Its `answers.what` criterion still required
+the file and the function, class, or symbol (in the earlier script). Both 47-entry runs therefore
+measured a mixed rubric. The counts below are observed under that rubric. They are not proof of
+scoring tolerance, calibration, or accuracy. No corrected-rubric rerun has been performed, so those
+counts remain provisional. The current script derives the rubric from `item.granularity`; the
+correction has offline checks only and has not been run against the model.
 
 What run 1 actually measured: every one of the 12 disagreements was a `path`-granularity entry and
 none was a `symbol` entry (32/32 symbol entries agreed). The pattern was consistent with Jev
@@ -92,6 +95,38 @@ independent judge. The path-level acceptance looked like the place where the eva
 lives — a bare file path is accepted as a full answer, and Jev called it partial. The mixed rubric
 means these runs do not prove that reading. They are not proof of scoring tolerance, calibration,
 or accuracy, and the path-level result is not a defect to fix in product code.
+
+### Current script contract (corrected, not rerun)
+
+The evidence lane now uses one rubric per item, derived from the item's recorded granularity:
+
+- **`path`.** The `answers` criterion accepts the file that owns the behaviour. No symbol is
+  required, and a file-only answer is not classified as `partial` for that reason. This aligns the
+  criterion with the instruction that already accepted the owning file.
+- **`symbol`.** The `answers` criterion requires the answering function, class, or symbol itself.
+  A file-only answer in the right file remains `partial`.
+- **Question intent.** The rejection text no longer excludes a test or documentation file by
+  itself: when the question asks for tests, documentation, or configuration, that file is the
+  answer. One question per item is unchanged.
+- **Unknown granularity.** A missing or unknown granularity is rejected with a diagnostic. The
+  script does not guess a level.
+
+Response handling accepts the documented bare `{choice, confidence, probabilities}` shape and the
+nested `questions`, `answers`, and `results` containers. Only the choices `answers`, `partial`, and
+`unrelated` are accepted. A malformed response is an item error, never agreement. Agreement treats
+`partial` as a third explicit Satori outcome, keeps `answers`/`accept`/`accepted` and
+`reject`/`rejected`/`unrelated` for compatibility, and returns `null` for an unknown baseline.
+
+Each request attempt, including the response-body read, is bounded by
+`AbortSignal.timeout(30000)`. The existing four-attempt limit remains, so a run cannot wait
+forever. An abort or timeout is reported as a failed item. After the summary is written, any
+failed item makes the process exit nonzero. `--concurrency` must be a positive integer and
+`--limit` a non-negative integer, so a bad value cannot produce an empty success.
+
+Offline tests cover both rubrics, the documented and malformed response shapes, partial agreement,
+the request body and signal, deterministic timeout failures, worker settling, output-directory
+creation, and the nonzero exit. They make no model or network call. No corrected-rubric model
+rerun has been performed, so the run counts above are unchanged and provisional.
 
 ## From disagreement to root cause
 
@@ -135,7 +170,9 @@ bare file path is a full answer for those cases while the `answers.what` criteri
 - **Falsifiable check:** rerun the lane with one consistent rubric. The prediction is that
 the path-level disagreements shrink and no ranking changes. If any survive, that residual is a real
 `product` case and gets its own investigation.
-- **Status:** not run. The rubric was inconsistent, so the current count is provisional.
+- **Status:** not run. The script now uses one granularity-aware rubric, but no corrected-rubric
+  model rerun exists. The prediction remains unmeasured, and the historical counts were not
+  regenerated.
 
 This is why the lane's output is a queue, not a score. A 10/47 disagreement rate looks like a
 quality problem. It is probably a measurement artifact, but the inconsistent rubric means that
@@ -218,7 +255,8 @@ rubric-only change with no retrieval change.
 One polars run (`node evals/real-repo-quality/run.mjs --repos polars`) indexed in 99 s, scored 9
 queries with hit@5 of 8/9, and produced the artifact the lane needs. `result.json` stores only a
 median 137-character preview per hit, so the adapter `evals/judges/result-triage.mjs` resolves each
-recorded path and span against the pinned checkout and judges the source itself.
+recorded path and span against the local checkout at `repo.path` and judges the source itself. The
+recorded `commit` and `head` label the revision; the adapter does not hash or verify the checkout.
 
 90 hit-question pairs at concurrency 8, 76k input tokens, $0.0032, 31 s of model time:
 
@@ -230,10 +268,37 @@ recorded path and span against the pinned checkout and judges the source itself.
 | below the 0.7 floor | 23 of the 33 non-answers |
 
 These are model judgments of the supplied snippets. They are not source-adjudicated verdicts. The
-run used `evals/judges/result-triage.mjs`, which hardcodes `granularity: 'path'` because it was
-written for the polars path-level cases, and records `satori.verdict: 'answers'` from harness top-k
-admission. That is an admission proxy, not an independent Satori judge verdict. Generalizing the
-script to other granularities is pending slice 3. This document does not change the script.
+run used an earlier version of `evals/judges/result-triage.mjs`, which hardcoded
+`granularity: 'path'` because it was written for the polars path-level cases, and recorded
+`satori.verdict: 'answers'` from harness top-k admission. That is an admission proxy, not an
+independent Satori judge verdict. The current adapter does not reproduce that fabrication: it
+emits `admission` metadata and omits `satori`, so the judge lane reports `satori: null` and
+`agree: null` for those rows. Historical item files that carry a real `satori.verdict` still
+compare. The 90 historical judgments were not regenerated.
+
+### Current triage contract (corrected, not rerun)
+
+- **Rubric source.** Granularity comes from `evals/real-repo-quality/cases.json`, resolved relative
+  to the adapter. The lookup uses repository name, query id, and the exact pinned query text. An
+  unknown repository, unknown query id, or mismatched query text is refused with a diagnostic; the
+  adapter does not invent a rubric. No `--cases` flag was added.
+- **Per-hit level.** Acceptable entries whose `pathRegex` matches the hit path select the level. If
+  none match, the query's full acceptable set selects it. The level is `path` when any selected
+  entry has `symbolRegex: null`, otherwise `symbol`. This preserves the mixed `p8` case: a hit on
+  the Python `series.py` entry is `symbol`, and a hit under the Rust `interop/numpy/` entry is
+  `path`. All 28 pinned cases were inspected; `p8` is the only mixed query.
+- **Admission metadata.** Each item carries `admission: {source: 'harness top-k admission', rank}`.
+  It carries no `satori` field. The judge lane preserves `admission` in its output.
+- **Source evidence.** Source text is read from the local checkout at triage time. The recorded
+  `commit` and `head` are provenance labels, not verified bytes: `revisionVerified` is `false`
+  because no hash check or Git command runs. A missing source file falls back to the preview stored
+  in `result.json`, marked by `evidenceSource: 'preview'`, `sourceReadFailed: true`, and
+  `previewChars`. A hit with neither source text nor a non-empty preview is refused with a
+  diagnostic rather than judged as empty text.
+- **Output.** The adapter creates `--out` recursively, writes repo-qualified item ids such as
+  `polars:p8#1`, and keeps `triage-index.json` for joins.
+
+This is adapter and contract work only. It adds no production logic and does not edit the oracle.
 
 The disagreement rate is not the finding. Where the disagreements sit is:
 
@@ -278,19 +343,37 @@ bash -ic 'node evals/judges/jev-dual-judge.mjs --lane items --items /tmp/polars/
 
 The key lives in the login shell as `TYPESAFE_API_KEY` (or `JEV_API_KEY`); a non-interactive
 shell has neither, so `bash -ic` is required. Responses are cached by payload hash under
-`~/.cache/satori-jev-judge/`, and every run writes its rows to a timestamped directory there.
-Nothing is written inside the repository except the runner itself.
+`~/.cache/satori-jev-judge/`, and every run writes its rows to a timestamped directory there, or to
+`--out` when given. Nothing is written inside the repository except the runners and their tests.
+
+Offline checks, with no model call and no repository write:
+
+```bash
+node --test evals/judges/jev-workflow.test.mjs
+pnpm exec eslint evals/judges/jev-dual-judge.mjs evals/judges/result-triage.mjs evals/judges/jev-workflow.test.mjs
+```
+
+The tests cover both rubrics, documented and malformed response shapes, partial agreement,
+admission-only rows, symbol/path/mixed triage levels, unknown and mismatched query refusal, the
+request body and timeout signal, worker settling, recursive output-directory creation, and the
+nonzero exit on an item error. They use mocked fetch and temporary directories. They are not a
+corrected-rubric model run.
 
 ## Limits
 
 - Two comparison runs on the evidence lane used a mixed rubric: the instructions allowed a
   file-only answer at `path` granularity, while `answers.what` demanded a symbol. The 32/32 symbol
   agreements and 10 path disagreements are observed counts under that rubric. They are provisional
-  and are not proof of scoring tolerance, calibration, or accuracy. No corrected-rubric rerun
-  exists.
-- One retrieval-triage run covers one repository (polars, 90 judgments). The triage rubric is
-  path-only, and every Satori verdict is the harness admission proxy. The counts do not extend to
-  another repository or to symbol-level precision, and they are not source-adjudicated proof.
+  and are not proof of scoring tolerance, calibration, or accuracy. The current script respects
+  granularity, but the historical counts were not regenerated and no corrected-rubric rerun exists.
+- One retrieval-triage run covers one repository (polars, 90 judgments). That run used a path-only
+  rubric and the harness admission proxy. The current adapter derives symbol/path levels and
+  separates admission from verdict, but the 90 judgments were not regenerated. The historical
+  counts do not extend to another repository or to symbol-level precision, and they are not
+  source-adjudicated proof.
+- Source evidence is read from the local checkout at triage time. The adapter records `commit` and
+  `head` and sets `revisionVerified: false`; it does not hash the bytes or verify the checkout, so
+  a stale local checkout can change the evidence without detection.
 - The evidence lane judges curator-written evidence summaries, not raw code, so a disagreement
   can mean "the summary is weak" rather than "the judge is wrong".
 - The 0.36–0.74 confidence range comes from the separate 28-query intent experiment.

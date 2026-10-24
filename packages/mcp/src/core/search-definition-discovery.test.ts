@@ -21,6 +21,34 @@ test("definition evidence rescues a method from a narrative fixture without eras
     assert.deepEqual(result.items.map(item => item.providerRank), [2, 1]);
 });
 
+test("an inflected query term reaches its declaration when the exact token is absent", () => {
+    const rows = [
+        metadata("SupportsUnionUnderlyingType", "include/flatbuffers/idl.h", "flatbuffers.Parser.SupportsUnionUnderlyingType", "method"),
+        metadata("add_union_type", "include/flatbuffers/reflection_generated.h", "add_union_type", "method"),
+        metadata("ParseAnyValue", "src/idl_parser.cpp", "flatbuffers.Parser.ParseAnyValue", "method"),
+    ];
+    const control = order(rows, "where does flatc resolve a union type");
+    assert.equal(control.items.at(-1)?.originalIndex, 2);
+    const result = order(rows, "where does flatc resolve a union type when parsing");
+    assert.ok(result.items.findIndex(item => item.originalIndex === 2) < 2);
+});
+
+test("an exact query token keeps its own vote and does not trigger the fallback", () => {
+    const result = order([
+        metadata("parseState", "src/parse-state.ts"),
+        metadata("unrelatedHelper", "src/other.ts"),
+        metadata("parsingState", "src/parsing-state.ts"),
+    ], "parsing");
+    assert.deepEqual(result.items.map(item => item.originalIndex), [2, 0, 1]);
+});
+
+test("a doubled consonant and a silent e resolve to the document base", () => {
+    const running = order([metadata("runState", "src/run.ts"), metadata("other", "src/other.ts")], "running");
+    assert.equal(running.items[0]?.originalIndex, 0);
+    const handling = order([metadata("other", "src/other.ts"), metadata("handleState", "src/handle.ts")], "handling");
+    assert.equal(handling.items[0]?.originalIndex, 1);
+});
+
 test("a production path alone cannot displace a relevant test", () => {
     const result = order([
         metadata("recordsRejectedOffers", "tests/trade.test.ts"),

@@ -60,6 +60,27 @@ function definitionTerms(metadata: DefinitionDiscoveryMetadata): DefinitionTerms
 }
 
 /**
+ * Exact-token metadata BM25 cannot relate an inflected query word to the
+ * declaration it names. A query for "parsing" does not vote for
+ * `ParseAnyValue`, although the declaration carries "parse". The owner then
+ * keeps only its provider vote while union/type helpers behind it gain a
+ * definition vote and pass it.
+ *
+ * Recover only that inflection, and only when the exact query token is
+ * absent from this rerank window. The document side and BM25 weights are
+ * unchanged, so this adds a query term and never rewrites symbol metadata.
+ */
+function inflectedBaseTerm(term: string, corpusHas: (term: string) => boolean): string | null {
+    if (term.length < 5 || !term.endsWith("ing")) return null;
+    let stem = term.slice(0, -3);
+    if (stem.length < 3) return null;
+    if (/([b-df-hj-np-tv-z])\1$/u.test(stem)) stem = stem.slice(0, -1);
+    const withE = `${stem}e`;
+    if (corpusHas(withE)) return withE;
+    return corpusHas(stem) ? stem : null;
+}
+
+/**
  * BM25 over definition fields in the validated rerank window, fused with
  * provider order using the existing RRF constant. A path category alone
  * never promotes a candidate: its definition fields must match the query.
@@ -85,8 +106,14 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     const populated = docs.filter(doc => doc.length > 0);
     if (populated.length === 0) return { items: [...input.items], applied: false };
     const averageLength = populated.reduce((sum, doc) => sum + doc.length, 0) / populated.length;
+    const corpusTerms = new Set(docs.flatMap(doc => [...doc.counts.keys()]));
+    const effectiveQueryTerms = [...new Set(queryTerms.flatMap(term => {
+        if (corpusTerms.has(term)) return [term];
+        const base = inflectedBaseTerm(term, candidate => corpusTerms.has(candidate));
+        return base ? [term, base] : [term];
+    }))];
     const scores = new Map<T, number>();
-    for (const term of queryTerms) {
+    for (const term of effectiveQueryTerms) {
         const df = docs.filter(doc => doc.counts.has(term)).length;
         if (df === 0) continue;
         const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));

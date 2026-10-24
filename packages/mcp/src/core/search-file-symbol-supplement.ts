@@ -38,7 +38,9 @@ export async function supplementSearchFileSymbols(input: {
     // A declaration-supported file can be retrieved below the initial file
     // window. Retain the previous bounded declaration lane alongside the
     // retrieval lane, so precise generator symbols remain discoverable.
+    // Overlap must not consume the additional lane's file budget.
     const declarationFiles = [...new Set(input.candidates.map((candidate) => candidate.relativePath))]
+        .filter((file) => !files.includes(file))
         .map((file, rank) => ({ file, rank, context: pathContextScore(file, queryTerms), matches: (input.registry.symbolsByFile.get(file) ?? [])
             .filter((symbol) => ["function", "method"].includes(symbol.kind)
                 && [...normalizedTerms(symbol.name)].some((term) => queryTerms.has(term))).length }))

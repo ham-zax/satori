@@ -199,3 +199,48 @@ test("recovery returns all eligible symbols without per-file or total count quot
     assert.deepEqual(results.map((result) => [result.relativePath, result.startLine]),
         files.flatMap((file) => names.map((_, index) => [file.file, index + 1])));
 });
+
+test("declaration overlap cannot consume the additional file budget", async () => {
+    const retrieved = ["src/emit_code_table.ts", "src/emit_code_table_cache.ts", "src/emit_code_table_writer.ts"]
+        .map((file) => fixture("function emitCodeTable() { return code + table; }", ["emitCodeTable"], file));
+    const generator = fixture("void GenTable() { code += table; }", ["GenTable"], "src/idl_gen_cpp.cpp");
+    const files = [...retrieved, generator];
+    for (const file of files) {
+        file.symbols.forEach((symbol, index) => {
+            symbol.symbolInstanceId = `${file.file}#${index}`;
+        });
+    }
+    const { results, reads } = await supplementFixtures(files, "where does the C++ generator emit code for a table");
+    assert.equal(results.length, 1);
+    const [table] = results;
+    assert.equal(table.relativePath, generator.file);
+    assert.equal(table.ownerSymbolInstanceId, generator.symbols[0].symbolInstanceId);
+    assert.equal(table.startLine, 1);
+    assert.equal(table.endLine, 1);
+    assert.equal(table.content, generator.lines[0]);
+    assert.deepEqual(reads, files.map((file) => file.file));
+    assert.equal(new Set(reads).size, reads.length);
+    assert.ok(reads.length <= 6);
+});
+
+test("disjoint declaration files keep retrieval-lane selection and output unchanged", async () => {
+    const retrieved = [0, 1, 2].map((index) => fixture("function run() { return 1; }", ["run"], `src/retrieved${index}.ts`));
+    const declarations = [
+        fixture("void GenTable() { code += table; }", ["GenTable"], "src/idl_gen_cpp.cpp"),
+        fixture("function emitCode() { return table; }", ["emitCode"], "src/idl_gen_code.ts"),
+        fixture("function generateTable() { return code; }", ["generateTable"], "src/table_emitter.ts"),
+    ];
+    const files = [...retrieved, ...declarations];
+    for (const file of files) {
+        file.symbols.forEach((symbol, index) => {
+            symbol.symbolInstanceId = `${file.file}#${index}`;
+        });
+    }
+    const { results, reads } = await supplementFixtures(files, "where does the C++ generator emit code for a table");
+    assert.deepEqual(reads, files.map((file) => file.file));
+    assert.equal(new Set(reads).size, reads.length);
+    assert.ok(reads.length <= 6);
+    assert.deepEqual(results.map((result) => [result.relativePath, result.ownerSymbolInstanceId,
+        result.startLine, result.endLine]),
+    declarations.map((file) => [file.file, file.symbols[0].symbolInstanceId, 1, 1]));
+});

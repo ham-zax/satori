@@ -10,6 +10,13 @@ p3 acceptance later added `crates/polars-core/src/frame/column/mod.rs`; the resu
 is rubric-only. Historical statements below keep their dates. `/tmp` evidence paths are local
 transient artifacts, not versioned; raw reproducibility may be unavailable after cleanup.
 
+Later status (25 October 2026, HEAD `fb125738`): `0a2aa66c` makes definition fusion match
+inflected query words, and `fb125738` sends Voyage the canonical projection. The same 28-question
+set then measures LateOn at hit@1/5/10 13/21/23 and MRR 0.5545, and Voyage `rerank-3-lite` at
+22/26/26 and MRR 0.8452 (commit message of `fb125738`). Every table below is the `b26af3d1`
+capture, scored with the pre-`5f96827c` rubric and the pre-`0a2aa66c` fusion rule. Its hit@10 is
+therefore two lower than the current build.
+
 ## Intent and current state
 
 Hamza requests continued investigation of f1 and related search failures.
@@ -146,7 +153,7 @@ Candidate admission in a frozen replay does not establish a final quality gain.
 The flag worker finishes baseline and three separate variants: symbol_metadata_bm25, neutral_owner_preference, and first_stage_owner_floor.
 Requests use `limit=20`, `disclosureLimit=10`, no caller alternative terms, and unchanged Publications.
 All four variants complete all 28 questions. No oracle ranks improve or regress.
-Hit@1/5/10 remains 13/21/21. Strict MRR@10 remains 0.554762.
+Hit@1/5/10 remains 13/21/21 at `b26af3d1`. Strict MRR@10 remains 0.554762.
 Each variant records 46 semantic attempts and 3,192 reranked candidates across its 28 calls.
 The first two flags preserve visible order. The owner-floor flag changes eight result lists without changing oracle ranks.
 No default flag changes are selected. No inference process remains.
@@ -239,7 +246,7 @@ Scratch orchestration corrections and interruptions:
   The driver's compact `lanes` fields are empty because its field names do not match the harness return shape.
   Stage counts and full responses remain available. These offline corrections make no search calls.
 
-Scores, all denominators 28:
+Scores, all denominators 28 (measured at `b26af3d1`, pre-`5f96827c` rubric, pre-`0a2aa66c` fusion):
 - Ordinary hit@1/5/10: `13/21/21 → 13/21/21`.
 - Ordinary MRR@10: `0.572619 → 0.575595`, delta `+0.002976`.
 - Strict hit@1/5/10: `13/20/20 → 13/20/21`.

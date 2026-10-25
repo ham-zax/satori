@@ -4,6 +4,11 @@ Recorded 2026-10-06. `definition_alt_terms` is **on by default**. It only acts
 when the caller supplies `alt_terms`; `flags: { definition_alt_terms: false }`
 restores the previous behavior.
 
+Provenance (annotated 25 October 2026): every figure below comes from 2026-10-06 captures on the
+72-question set, before `07ab8334` (Jev judges in `evals/judges/`) and before `0a2aa66c`
+(inflected query words in definition fusion). Do not compare these counts with the 28-question
+figures of later builds (LateOn 13/21/23, MRR 0.5545 at `fb125738`); the denominators differ.
+
 ## Problem
 
 Natural-language questions describe what code does; identifiers record what

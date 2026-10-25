@@ -426,6 +426,11 @@ export interface SearchProviderWorkDebugHint {
     rerankerCalls: number;
     rerankerCandidates: number;
     rerankerInputBytes: number;
+    /**
+     * Provider-billed reranker tokens, summed over calls. Absent when the
+     * provider reports no usage, so local-profile output keeps its shape.
+     */
+    rerankerProviderTokens?: number;
     rerankerFailures: number;
     rerankerRetries: number;
     rerankerTimeouts: number;

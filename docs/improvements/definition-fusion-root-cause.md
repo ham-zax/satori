@@ -8,6 +8,13 @@ captured in one run per reranker (LateOn locally, three Voyage models through
 the API). This continues
 [Voyage rerankers and definition fusion](voyage-reranker-and-definition-fusion.md).
 
+Provenance (annotated 25 October 2026): every figure below replays the definition-fusion rule as
+it shipped at `861820e2`. Commit `0a2aa66c` later made that rule match inflected query words
+(`packages/mcp/src/core/search-definition-discovery.ts`), so the rule replayed here is not the
+rule that ships at HEAD `fb125738`. The graders changed once after these captures, at `5f96827c`
+(a rubric-only p3 acceptance), which moves the 28-question set by one hit@10 and leaves the
+44-question set unchanged.
+
 ## Summary
 
 - **Root cause.** The shipped rule adds a symbol-name vote to the reranker's

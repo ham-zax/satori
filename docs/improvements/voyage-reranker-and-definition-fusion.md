@@ -84,6 +84,14 @@ model.
 
 ### Full pipeline
 
+Provenance: these captures were taken before `5f96827c` (the p3 rubric change) and before
+`0a2aa66c` (inflected query words in definition fusion). LateOn's hit@5 and hit@10 here are
+therefore two below the `fb125738` re-measurement of the same 28 questions: 13/21/23 with MRR
+0.5545. The MRR column is MRR@10, the mean of 1/rank for rank <= 10. The commit figure of 0.5545
+is lower than the lenient MRR@10 of these captures (0.572619 to 0.575595) although it answers more
+questions, so it is consistent with a strict MRR rather than this column. Compare hit counts
+across builds, not MRR.
+
 | Reranker | Definition fusion | hit@1 | hit@5 | hit@10 | strict@1 | MRR |
 |---|---|---|---|---|---|---|
 | LateOn (shipped default) | on | 13 | 19 | 21 | 13 | 0.5557 |

@@ -24,6 +24,12 @@ export interface RerankExecutionDiagnostics {
     observedWallMs?: number;
     /** Local-reranker only: max(0, observedWallMs - effective deadline) on execution timeout. */
     deadlineLatenessMs?: number;
+    /**
+     * Provider only: tokens the provider billed for this rerank() call, summed
+     * over attempts. Absent when the provider reports no usage, which includes
+     * the local profile and keeps its diagnostics shape unchanged.
+     */
+    providerTokens?: number;
 }
 
 export interface RerankOptions {

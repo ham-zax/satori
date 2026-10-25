@@ -186,6 +186,13 @@ answer. The goal is the owner at rank 1 of `search_codebase`.
 - **Rerankers in scope:** LateOn (local, the default), Voyage `rerank-3-lite`
   (the Voyage default) and `rerank-3`. `rerank-2.5` is out of scope.
 
+Provenance (recorded 2026-10-23 at `26eba5c8`, annotated 25 October 2026): every figure below is
+measured on the 72-question set, from captures taken before `07ab8334` (Jev judges, which changed
+only `evals/judges/`) and before `0a2aa66c` (inflected query words in definition fusion). The
+28-question reference in item 1 (13 owners first, MRR 0.5557) is the pre-`5f96827c` capture. The
+current build `fb125738` measures 13/21/23 and MRR 0.5545 on those 28 questions. A 72-question
+figure is not comparable with a 28-question figure.
+
 ## The pipeline, and where each loss sits
 
 1. Retrieval arms: dense (Potion embeddings), lexical, lexical fallback.

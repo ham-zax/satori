@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openLocalSession } from './session.mjs';
+import { openLocalSession, localOfflineEnvironment, explicitRuntimeEnvironment } from './session.mjs';
 import { DistStaleError, assertRuntimeDistFresh, importFreshDist } from './dist-freshness.mjs';
 import {
     buildFusedPoolEntries,
@@ -75,7 +75,7 @@ const fileSha256 = (relative) => sha256File(path.resolve(workspaceRoot, relative
  * leaves every unnamed flag at its default, so `--flags rerank_blend` was
  * recorded as compound_join=false, path_demotion=false when both were on.
  */
-function buildProvenance(resolveSearchFlags, constants, reservation) {
+function buildProvenance(resolveSearchFlags, constants, reservation, runtimeEnv) {
     const resolvedFlags = resolveSearchFlags(passedFlags);
     const gitSha = gitOut('rev-parse', 'HEAD');
     const dirtyDiff = execFileSync('git', ['diff', 'HEAD'], { encoding: 'utf8', cwd: workspaceRoot });
@@ -89,6 +89,15 @@ function buildProvenance(resolveSearchFlags, constants, reservation) {
             ? sha256String(dirtyDiff)
             : null,
         dirtyTreeUntrackedPaths: untracked.length > 0 ? untracked.split('\n') : [],
+        // The resolved arm, not the installed launcher's defaults. A run that
+        // switches provider without saying so cannot be compared with another.
+        runtime: {
+            profile: runtimeEnv.SATORI_RUNTIME_PROFILE ?? null,
+            rerankerProvider: runtimeEnv.SATORI_RERANKER_PROVIDER ?? null,
+            rerankerModel: runtimeEnv.VOYAGEAI_RERANKER_MODEL ?? null,
+            embeddingProvider: runtimeEnv.EMBEDDING_PROVIDER ?? null,
+            embeddingModel: runtimeEnv.EMBEDDING_MODEL ?? null,
+        },
         resolvedFlags,
         reservation: {
             enabled: reservationPolicyOpt !== 'off',
@@ -286,9 +295,10 @@ async function main() {
     const { resolveSearchFlags } = await dist('packages/mcp/dist/core/search-flags.js');
     const searchConstants = await dist('packages/mcp/dist/core/search-constants.js');
     const reservation = await dist('packages/mcp/dist/core/search-expansion-reservation.js');
-    const provenance = buildProvenance(resolveSearchFlags, searchConstants, reservation);
+    const runtimeEnv = { ...await localOfflineEnvironment(), ...explicitRuntimeEnvironment() };
+    const provenance = buildProvenance(resolveSearchFlags, searchConstants, reservation, runtimeEnv);
     const { scoreQuery, normalizeHit } = await import('./score.mjs');
-    log(`provenance gitSha=${provenance.gitSha} dirtyTreeHash=${provenance.dirtyTreeHash ?? 'clean'} flags=${JSON.stringify(provenance.resolvedFlags)}`);
+    log(`provenance gitSha=${provenance.gitSha} dirtyTreeHash=${provenance.dirtyTreeHash ?? 'clean'} flags=${JSON.stringify(provenance.resolvedFlags)} reranker=${provenance.runtime.rerankerProvider ?? '?'}/${provenance.runtime.rerankerModel ?? '-'}`);
 
     const result = {
         generatedAt: now(),

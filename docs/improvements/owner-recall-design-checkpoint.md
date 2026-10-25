@@ -2,6 +2,12 @@
 
 Recorded 2026-10-13 on `master` at `224183ca`.
 
+Provenance (annotated 25 October 2026): every 72-question figure below is the state at
+`224183ca`, from captures taken before `07ab8334` (Jev judges in `evals/judges/`) and before
+`0a2aa66c` (inflected query words in definition fusion). Read them as history, not as current
+behaviour. The 28-question set now measures LateOn at hit@1/5/10 13/21/23 and MRR 0.5545 at HEAD
+`fb125738`.
+
 Update, 23 October: the separate
 [S1 plan](s1-owner-discovery-plan-2026-10-23.md) replays normalization through
 metadata ranking, file-symbol supplementation, and definition fusion. It uses

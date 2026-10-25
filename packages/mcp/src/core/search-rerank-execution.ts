@@ -419,6 +419,10 @@ export async function invokeReranker(args: {
                 onExecutionDiagnostics: (diagnostics) => {
                     rerankerExecutionDiagnosticsObserved = true;
                     searchDiagnostics.rerankerExecutionDiagnostics = diagnostics;
+                    if (diagnostics.providerTokens !== undefined) {
+                        searchDiagnostics.rerankerProviderTokens =
+                            (searchDiagnostics.rerankerProviderTokens ?? 0) + diagnostics.providerTokens;
+                    }
                     searchDiagnostics.rerankerRetries = Math.max(
                         searchDiagnostics.rerankerRetries,
                         diagnostics.retries,

@@ -164,6 +164,10 @@ accepts a matching path when no symbol regex is supplied; that result is valid
 for the path question but must not enter a strict-symbol denominator. Recomputing
 from saved responses and normalized symbol labels gives:
 
+Provenance (annotated 25 October 2026): these captures are from 2026-10-04, at `dccb5ad4`. They
+precede `07ab8334` (Jev judges), `0a2aa66c` (inflected query words in definition fusion) and the
+`5f96827c` rubric change, which makes polars p3 acceptable at file level.
+
 | Metric | ON | OFF | Denominator |
 |---|---:|---:|---|
 | Named-symbol owner@1 | **68.4% (13/19)** | 21.1% (4/19) | Nineteen named-symbol questions |

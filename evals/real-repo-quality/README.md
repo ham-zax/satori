@@ -46,6 +46,17 @@ installed model paths; rebuild CLI together with core and MCP when those identit
 For consecutive, frozen-build policy comparisons over unchanged retrieval indexes, use a new
 output directory with `--reuse-index --quality-only --label <variant>`; this skips repeated latency
 sessions and records the new implementation identity. Do not change the build during a run.
+To measure a provider arm that differs from the installed profile, pass non-secret overrides as
+JSON; the harness applies them after the installed profile and records the resolved arm in
+`provenance.runtime`:
+
+```bash
+SATORI_EVAL_RUNTIME_ENV='{"SATORI_RERANKER_PROVIDER":"voyage","VOYAGEAI_RERANKER_MODEL":"rerank-3-lite"}' \
+  node evals/real-repo-quality/run.mjs --state-root <index> --out <dir> --reuse-index
+```
+
+Secrets do not belong in that JSON: put `VOYAGEAI_API_KEY` in `~/.satori/.env` (mode 600), where
+the server's `EnvManager` reads it. The harness rejects KEY, TOKEN, SECRET, and PASSWORD overrides.
 To measure a separate representative warm workload without adding it to the quality oracle,
 combine `--quality-only` with `--latency-request-json <request-file>` and
 `--latency-state-root <existing-task-index>`. The JSON contains ordinary `search_codebase`

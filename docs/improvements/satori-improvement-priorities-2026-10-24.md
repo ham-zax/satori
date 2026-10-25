@@ -29,7 +29,8 @@ evidence and detailed designs. Their historical statuses require a current check
   Hit@1 and hit@5 are unchanged. The p3 hits are `cast_unchecked` at rank 7 and `strict_cast` at
   rank 10. Neither hit proves `Column::cast`. No retrieval changed.
 - **One live 28-query measurement exists.** At HEAD `11889927`, overall hit@10 is 21/28 and
-  strict hit@10 is 20/28. It is a baseline. It does not attribute a score change to the quota
+  strict hit@10 is 20/28. That figure is historical: HEAD is now `fb125738`, which measures
+  hit@10 23/28 for the same set. It is a baseline. It does not attribute a score change to the quota
   removal, because capture settings and runtime bytes also differ from the earlier capture.
 - **The f6 implementation is committed.** Commit `6b31381b` adds the disjoint declaration-lane
   filter. The paired run recorded workspace HEAD `5f7e906c`, and the fix was uncommitted then. Its
@@ -224,6 +225,13 @@ Checks:
 - A and B have identical first-ten outputs for all 28 queries.
 
 ### Scores
+
+Provenance: captures A, B and C are saved responses from the `11889927` era, rescored with the
+`score.mjs` that is committed today. The "current" rubric is `5f96827c`. The build after these
+captures, `fb125738`, reports hit@1/5/10 13/21/23 with MRR 0.5545 for the LateOn arm. That is one
+hit@10 above capture C's current-rubric 22, and its MRR is not the MRR@10 of this section: lenient
+MRR@10 here is 0.580697, so the 0.5545 figure is consistent with a strict MRR. Compare hit counts
+only until one run prints both definitions.
 
 | Capture | Rubric | hit@1 | hit@5 | hit@10 | MRR@10 | strict hit@1 | strict hit@5 | strict hit@10 | strict MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|

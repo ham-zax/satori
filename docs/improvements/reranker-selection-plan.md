@@ -50,6 +50,9 @@ offline runtime's local-only network policy (`packages/mcp/src/config.ts:524`,
 `packages/cli/src/runtime-selection.ts:76`, `packages/cli/src/args.ts:391`).
 The measured gain (MRR 0.5557 to 0.7798) was produced with exactly that
 combination: local Potion embeddings, local LanceDB, Voyage reranking.
+That measurement is dated 2026-10-13: it precedes the `5f96827c` rubric change and `0a2aa66c`,
+and it uses Voyage's native document. At `fb125738` the same comparison reads 0.5545 to 0.8452,
+because Voyage now receives the canonical projection.
 
 - *Recommended:* allow it, only when the user explicitly selects Voyage. It is
   never inferred from the presence of an API key. Embeddings and the vector

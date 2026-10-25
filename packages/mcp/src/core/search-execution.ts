@@ -1428,6 +1428,9 @@ export async function runSearchExecution(
             rerankerCalls: searchDiagnostics.rerankerCalls,
             rerankerCandidates: searchDiagnostics.rerankerCandidates,
             rerankerInputBytes: searchDiagnostics.rerankerInputBytes,
+            ...(searchDiagnostics.rerankerProviderTokens !== undefined
+                ? { rerankerProviderTokens: searchDiagnostics.rerankerProviderTokens }
+                : {}),
             rerankerFailures: searchDiagnostics.rerankerFailures,
             rerankerRetries: searchDiagnostics.rerankerRetries,
             rerankerTimeouts: searchDiagnostics.rerankerTimeouts,

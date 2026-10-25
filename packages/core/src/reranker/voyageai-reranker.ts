@@ -134,6 +134,21 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Voyage reports `usage.total_tokens` on a successful rerank response. It is the
+ * only authority for what a call cost, so a missing or malformed value adds
+ * nothing rather than an estimate.
+ */
+function reportedTotalTokens(usage: unknown): number {
+    if (!usage || typeof usage !== 'object') {
+        return 0;
+    }
+    const total = (usage as { total_tokens?: unknown }).total_tokens;
+    return typeof total === 'number' && Number.isFinite(total) && total >= 0
+        ? Math.floor(total)
+        : 0;
+}
+
 export interface VoyageAIRerankerConfig {
     apiKey: string;
     model?: VoyageRerankerModel;
@@ -206,12 +221,15 @@ export class VoyageAIReranker implements Reranker {
         }
 
         let timeoutEvents = 0;
+        // A failed attempt was not billed, so only a parsed success adds here.
+        let billedTokens = 0;
         const reportDiagnostics = (attempts: number): void => {
             try {
                 options.onExecutionDiagnostics?.({
                     attempts,
                     retries: Math.max(0, attempts - 1),
                     timeouts: timeoutEvents,
+                    ...(billedTokens > 0 ? { providerTokens: billedTokens } : {}),
                 });
             } catch {
                 // Diagnostics are observational only: a throwing telemetry
@@ -264,9 +282,9 @@ export class VoyageAIReranker implements Reranker {
                 }
 
                 const responseBody = await readRerankResponseBody(response);
-                let result: { data?: unknown };
+                let result: { data?: unknown; usage?: unknown };
                 try {
-                    result = JSON.parse(responseBody) as { data?: unknown };
+                    result = JSON.parse(responseBody) as { data?: unknown; usage?: unknown };
                 } catch (error) {
                     if (!(error instanceof SyntaxError)) {
                         throw error;
@@ -282,6 +300,8 @@ export class VoyageAIReranker implements Reranker {
                         { rerankerValidationFailure: true, rerankerHttpStatus: response.status },
                     );
                 }
+
+                billedTokens += reportedTotalTokens(result.usage);
 
                 const rerankResults: RerankResult[] = result.data.map((item, responseIndex) => {
                     if (!item || typeof item !== 'object') {

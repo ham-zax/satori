@@ -595,6 +595,42 @@ test('VoyageAIReranker reports timeout and retry diagnostics when a timeout is f
     assert.deepEqual(reported.diagnostics, { attempts: 2, retries: 1, timeouts: 1 });
 });
 
+test('VoyageAIReranker reports provider-billed tokens from the response usage', async () => {
+    const reported: { diagnostics: RerankExecutionDiagnostics | null } = { diagnostics: null };
+    await withMockedFetch(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ index: 0, relevance_score: 0.9 }], usage: { total_tokens: 1234 } }),
+        text: async () => '',
+    }), async () => {
+        const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key' });
+        await reranker.rerank('find auth', ['alpha document'], {
+            onExecutionDiagnostics: (diagnostics) => {
+                reported.diagnostics = diagnostics;
+            },
+        });
+    });
+    assert.deepEqual(reported.diagnostics, { attempts: 1, retries: 0, timeouts: 0, providerTokens: 1234 });
+});
+
+test('VoyageAIReranker omits provider tokens when the response reports no usage', async () => {
+    const reported: { diagnostics: RerankExecutionDiagnostics | null } = { diagnostics: null };
+    await withMockedFetch(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ index: 0, relevance_score: 0.9 }] }),
+        text: async () => '',
+    }), async () => {
+        const reranker = new VoyageAIReranker({ apiKey: 'voyage-test-key' });
+        await reranker.rerank('find auth', ['alpha document'], {
+            onExecutionDiagnostics: (diagnostics) => {
+                reported.diagnostics = diagnostics;
+            },
+        });
+    });
+    assert.deepEqual(reported.diagnostics, { attempts: 1, retries: 0, timeouts: 0 });
+});
+
 test('VoyageAIReranker terminates immediately when the caller cancels during the retry delay', async () => {
     const calls: string[] = [];
     const controller = new AbortController();

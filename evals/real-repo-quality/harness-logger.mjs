@@ -165,6 +165,7 @@ export function buildQueryHarnessRecord({
     // termsEmitted is the authoritative record of what the expanded pass
     // queried, so it is the fallback when the lexical request is absent.
     const expansionDecision = response?.hints?.debugSearch?.semanticExpansion;
+    const providerWork = response?.hints?.debugSearch?.providerWork;
     const lexicalRequests = survival?.lexicalRequests || [];
     const expandedLexReq = lexicalRequests.find(r => r.passId?.includes('expanded'));
     const expansionAttempted = expansionDecision?.attempted === true;
@@ -233,6 +234,14 @@ export function buildQueryHarnessRecord({
             fusionMs: null,
             rerankMs: Number.isFinite(timings.rerank) ? Math.round(timings.rerank) : null,
             totalElapsedMs: Math.round(elapsedMs),
+        },
+        // Provider work the run actually billed. Only a provider that reports
+        // usage fills tokens, so a local-profile run records null here.
+        provider_work: {
+            rerankerCalls: providerWork?.rerankerCalls ?? null,
+            rerankerCandidates: providerWork?.rerankerCandidates ?? null,
+            rerankerInputBytes: providerWork?.rerankerInputBytes ?? null,
+            rerankerProviderTokens: providerWork?.rerankerProviderTokens ?? null,
         },
     };
 }

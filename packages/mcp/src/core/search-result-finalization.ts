@@ -321,6 +321,9 @@ export async function finalizeSearchResults(
                 rerankerCalls: providerWork.rerankerCalls,
                 rerankerCandidates: providerWork.rerankerCandidates,
                 rerankerInputBytes: providerWork.rerankerInputBytes,
+                ...(providerWork.rerankerProviderTokens !== undefined
+                    ? { rerankerProviderTokens: providerWork.rerankerProviderTokens }
+                    : {}),
                 rerankerFailures: providerWork.rerankerFailures,
                 rerankerRetries: providerWork.rerankerRetries,
                 rerankerTimeouts: providerWork.rerankerTimeouts,

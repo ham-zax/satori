@@ -21,6 +21,35 @@ function installedOfflineEnvironment(home) {
     return JSON.parse(line.slice('const managedEnv = '.length, -1));
 }
 
+/**
+ * Explicit arm selection for a measurement, as non-secret environment overrides.
+ * The installed launcher describes the shipped profile; this lets a run measure
+ * another provider on the same build without editing that profile. Secrets stay
+ * in the EnvManager-owned ~/.satori/.env, which the server reads itself.
+ */
+export function explicitRuntimeEnvironment(env = process.env) {
+    const raw = env.SATORI_EVAL_RUNTIME_ENV;
+    if (!raw) return {};
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (error) {
+        throw new Error(`SATORI_EVAL_RUNTIME_ENV must be a JSON object: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('SATORI_EVAL_RUNTIME_ENV must be a JSON object of non-secret environment overrides.');
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+        if (/KEY|TOKEN|SECRET|PASSWORD/i.test(key)) {
+            throw new Error(`SATORI_EVAL_RUNTIME_ENV must not carry ${key}; put secrets in ~/.satori/.env instead.`);
+        }
+        if (typeof value !== 'string') {
+            throw new Error(`SATORI_EVAL_RUNTIME_ENV.${key} must be a string.`);
+        }
+    }
+    return parsed;
+}
+
 /** Bind the local build's profile identities while reusing installed model artifacts. */
 export async function localOfflineEnvironment(home = os.homedir()) {
     const env = installedOfflineEnvironment(home);
@@ -44,6 +73,7 @@ export async function openLocalSession({ stateRoot, roots, home = os.homedir() }
     const env = {
         ...process.env,
         ...await localOfflineEnvironment(home),
+        ...explicitRuntimeEnvironment(),
         SATORI_STATE_ROOT: stateRoot,
         SATORI_SESSION_ROOTS_JSON: JSON.stringify(roots),
         LANCEDB_PATH: path.join(stateRoot, 'vector', 'lancedb'),

@@ -216,6 +216,8 @@ unchanged, so over-limit batches still cost one rejected request each.
 
 Hit counts are of 28. Time is per search, on the indexes above. The LateOn
 row is Task 9 of the [reranker selection plan](reranker-selection-plan.md).
+These captures predate the `5f96827c` rubric change and `0a2aa66c`, so the LateOn row re-measures
+at 13/21/23 with MRR 0.5545 at HEAD `fb125738`.
 
 | Embedder | Reranker | Hit@1 | Hit@5 | Hit@10 | MRR | Median | Mean | p90 |
 |---|---|---|---|---|---|---|---|---|

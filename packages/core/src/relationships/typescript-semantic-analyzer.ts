@@ -438,7 +438,11 @@ export function referenceAuthorityReady(projectConfigPath: string): true | undef
         const state = referenceDeclarationState(configPath);
         if (state.unproven) return undefined;
         for (const output of state.outputs) {
-            if (!fs.existsSync(output)) return undefined;
+            try {
+                if (!fs.statSync(output, { throwIfNoEntry: false })?.isFile()) return undefined;
+            } catch {
+                return undefined;
+            }
         }
         pending.push(...state.references);
     }

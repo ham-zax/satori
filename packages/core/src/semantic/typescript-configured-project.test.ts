@@ -9,6 +9,7 @@ import * as ts from './typescript-api';
 import {
     TypeScriptLanguageServiceSession,
     TypeScriptConfigReadError,
+    TypeScriptSourceBudgetTracker,
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
 import { referenceAuthorityReady } from '../relationships/typescript-semantic-analyzer';
@@ -464,6 +465,73 @@ test('native session closes its process even when snapshot disposal fails', () =
         assert.doesNotThrow(() => session.dispose());
         assert.equal(closes, 1);
         assert.throws(() => session.getProgram(), /disposed/);
+    } finally {
+        session.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('reference readiness rejects a directory at the declaration output path', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-output-directory-'));
+    try {
+        const compilerOptions = { composite: true, declaration: true, rootDir: 'src', outDir: 'dist', types: [] };
+        writeJson(path.join(root, 'lib/tsconfig.json'), { compilerOptions, include: ['src'] });
+        write(path.join(root, 'lib/src/index.ts'), 'export const value = 1;');
+        fs.mkdirSync(path.join(root, 'lib/dist/index.d.ts'), { recursive: true });
+        const config = path.join(root, 'app/tsconfig.json');
+        writeJson(config, { compilerOptions, include: ['src'], references: [{ path: '../lib' }] });
+        write(path.join(root, 'app/src/index.ts'), 'import { value } from "../../lib/src/index"; export const result = value;');
+        const session = new TypeScriptLanguageServiceSession(config);
+        try {
+            assert.ok(session.getProgram().getSemanticDiagnostics().some(diagnostic => diagnostic.code === 6305));
+            assert.equal(referenceAuthorityReady(config), undefined);
+        } finally { session.dispose(); }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const importJson of [false, true]) {
+    test(`source budgets ${importJson ? 'charge imported JSON without charging metadata' : 'do not charge JSON metadata'}`, () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-json-budget-'));
+        const main = path.join(root, 'main.ts');
+        writeJson(path.join(root, 'package.json'), { type: 'commonjs', description: 'x'.repeat(5000) });
+        writeJson(path.join(root, 'data.json'), { value: 'x'.repeat(5000) });
+        write(main, importJson ? 'import data from "./data.json"; export const value = data;' : 'export const value = 1;');
+        const session = new TypeScriptProgramSession(root, [main], {
+            module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
+            noEmit: true, noLib: true, types: [], resolveJsonModule: true,
+        }, new TypeScriptSourceBudgetTracker({ maxFileBytes: 1024, maxProjectBytes: 2048 }));
+        try {
+            session.getProgram();
+            if (importJson) assert.match(session.getResourceLimitFailure() ?? '', /data\.json.*per-file budget/);
+            else assert.equal(session.getResourceLimitFailure(), undefined);
+        } finally {
+            session.dispose();
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+}
+
+test('JSON source overrides count toward the project budget while metadata overrides do not', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-json-overrides-'));
+    const main = path.join(root, 'main.ts');
+    const metadata = path.join(root, 'package.json');
+    const data = path.join(root, 'data.json');
+    writeJson(metadata, { type: 'commonjs', description: 'x'.repeat(5000) });
+    writeJson(data, { value: 'small' });
+    write(main, 'import data from "./data.json"; export const value = data;');
+    const session = new TypeScriptProgramSession(root, [main], {
+        module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        noEmit: true, noLib: true, types: [], resolveJsonModule: true,
+    }, new TypeScriptSourceBudgetTracker({ maxFileBytes: 1024, maxProjectBytes: 200 }));
+    try {
+        session.getProgram();
+        assert.equal(session.getResourceLimitFailure(), undefined);
+        session.updateFile(metadata, JSON.stringify({ type: 'commonjs', description: 'x'.repeat(6000) }));
+        session.getProgram();
+        assert.equal(session.getResourceLimitFailure(), undefined);
+        session.updateFile(data, JSON.stringify({ value: 'x'.repeat(250) }));
+        session.getProgram();
+        assert.match(session.getResourceLimitFailure() ?? '', /project budget.*data\.json/);
     } finally {
         session.dispose();
         fs.rmSync(root, { recursive: true, force: true });

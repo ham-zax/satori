@@ -17,6 +17,7 @@ export class TypeScriptProgramSession {
     private moduleResolver?: ModuleResolver;
     private readonly overrides = new Map<string, string>();
     private readonly changed = new Set<string>();
+    private readonly jsonReadBytes = new Map<string, number>();
     private disposed = false;
 
     constructor(
@@ -39,12 +40,14 @@ export class TypeScriptProgramSession {
                 removeFile: serverFS.noop,
                 readFile: (fileName) => {
                     const override = this.overrides.get(path.resolve(fileName));
-                    if (override !== undefined) return override;
+                    if (override !== undefined) {
+                        return this.admitRead(fileName, Buffer.byteLength(override, 'utf8')) ? override : undefined;
+                    }
                     try {
                         const stat = fs.statSync(fileName);
-                        if (!stat.isFile() || this.sourceBudget && !this.sourceBudget.admit(fileName, stat.size)) return undefined;
+                        if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
                         const content = fs.readFileSync(fileName, 'utf8');
-                        if (this.sourceBudget && !this.sourceBudget.admit(fileName, Buffer.byteLength(content, 'utf8'))) return undefined;
+                        if (!this.admitRead(fileName, Buffer.byteLength(content, 'utf8'))) return undefined;
                         return content;
                     } catch {
                         return undefined;
@@ -56,6 +59,7 @@ export class TypeScriptProgramSession {
 
     getProgram(): Program {
         if (this.disposed) throw new Error('TypeScript program session is disposed.');
+        const refreshed = !this.snapshot || this.changed.size > 0;
         if (!this.snapshot) {
             const snapshot = this.api.createSnapshot({
                 createPrograms: [{
@@ -85,7 +89,24 @@ export class TypeScriptProgramSession {
         }
         this.changed.clear();
         if (!this.program) throw new Error('TypeScript did not create a semantic program.');
+        if (refreshed && this.sourceBudget && this.jsonReadBytes.size > 0) {
+            // A read callback cannot distinguish JSON metadata from an imported
+            // JSON source. The native program's file list supplies that proof.
+            for (const fileName of this.program.getSourceFileNames()) {
+                const bytes = this.jsonReadBytes.get(path.resolve(fileName));
+                if (bytes !== undefined && !this.sourceBudget.admit(fileName, bytes)) break;
+            }
+        }
         return this.program;
+    }
+
+    private admitRead(fileName: string, bytes: number): boolean {
+        if (!this.sourceBudget) return true;
+        if (path.extname(fileName).toLowerCase() === '.json') {
+            this.jsonReadBytes.set(path.resolve(fileName), bytes);
+            return true;
+        }
+        return this.sourceBudget.admit(fileName, bytes);
     }
 
     getResourceLimitFailure(): string | undefined {
@@ -106,7 +127,7 @@ export class TypeScriptProgramSession {
 
     updateFile(fileName: string, source: string): void {
         const absolute = path.resolve(fileName);
-        if (this.sourceBudget && !this.sourceBudget.admit(absolute, Buffer.byteLength(source, 'utf8'))) return;
+        if (!this.admitRead(absolute, Buffer.byteLength(source, 'utf8'))) return;
         this.overrides.set(absolute, source);
         this.changed.add(absolute);
     }

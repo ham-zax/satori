@@ -2,6 +2,7 @@ export interface TypeScriptReferenceDeclarationState {
     readonly outputs: readonly string[];
     readonly references: readonly string[];
     readonly unproven: boolean;
+    readonly resourceFailure?: string;
 }
 
 interface CacheEntry {

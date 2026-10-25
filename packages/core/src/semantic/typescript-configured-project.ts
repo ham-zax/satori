@@ -18,6 +18,8 @@ export interface TypeScriptConfiguredProjectIdentity {
 
 export interface TypeScriptConfiguredProject {
     readonly configPath: string;
+    /** Config and metadata paths read by the compiler, including missing candidates. */
+    readonly configFiles: readonly string[];
     readonly fileNames: readonly string[];
     readonly options: ts.CompilerOptions;
     readonly projectReferences?: readonly ts.ProjectReference[];
@@ -70,6 +72,11 @@ export class TypeScriptSourceBudgetTracker {
 
     getFailureMessage(): string | undefined {
         return this.failureMessage;
+    }
+
+    forget(fileName: string): void {
+        this.totalBytes -= this.admittedBytesByFile.get(fileName) ?? 0;
+        this.admittedBytesByFile.delete(fileName);
     }
 
     reset(): void {
@@ -197,6 +204,7 @@ export function loadTypeScriptConfiguredProject(configPath: string): TypeScriptC
 
         return {
             configPath: absoluteConfigPath,
+            configFiles: [...configReads.keys()].map(normalizedPath).sort(),
             fileNames,
             options,
             ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),

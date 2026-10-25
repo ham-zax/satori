@@ -862,10 +862,9 @@ function resolvePythonMemberTarget(input: {
                     atSpan: input.call.span,
                 })
             ));
-            if (importedClassBindings.length > 1) return undefined;
             classReference = [...annotatedTypes][0]
                 ?? (preceding && localTypes.size === 1 ? preceding.typeName : undefined)
-                ?? (importedClassBindings.length === 1 ? receiver : undefined)
+                ?? (importedClassBindings.length >= 1 ? receiver : undefined)
                 ?? ((input.classesByName.get(receiver) ?? []).some((candidate) => candidate.file === input.source.file)
                     ? receiver
                     : undefined);
@@ -2300,23 +2299,40 @@ function pythonFallbackProofSteps(input: {
     const proof: ResolutionProofStep[] = [];
     const fileSymbols = input.registry.symbolsByFile.get(input.source.file) ?? [];
     const appendImportProof = (bindings: readonly ModuleBinding[]): void => {
-        const binding = bindings[0];
+        const firstBinding = bindings[0];
         // Target resolution already proved a single destination. Equivalent
         // declarations still prove that import when it appears in several branches.
-        if (!binding || bindings.some((candidate) => (
-            candidate.kind !== binding.kind
-            || candidate.moduleSpecifier !== binding.moduleSpecifier
-            || candidate.importedName !== binding.importedName
+        if (!firstBinding || bindings.some((candidate) => (
+            candidate.kind !== firstBinding.kind
+            || candidate.moduleSpecifier !== firstBinding.moduleSpecifier
+            || candidate.importedName !== firstBinding.importedName
         ))) return;
-        const name = binding.localName ?? binding.importedName ?? binding.moduleSpecifier?.split('.')[0];
-        const firstImportEnd = bindings.reduce((end, candidate) => Math.min(end, candidate.span.endByte), Infinity);
+        const name = firstBinding.localName ?? firstBinding.importedName ?? firstBinding.moduleSpecifier?.split('.')[0];
+        const block = input.call.statementBlockSpan;
+        // A same-block import at the block's indentation executes before the
+        // call. A nested conditional import cannot reset the rebinding scan.
+        const provingLocalImport = block && bindings
+            .filter((candidate) => (
+                spanContainsSpan(block, candidate.span)
+                && candidate.span.startColumn === block.startColumn
+                && candidate.span.endByte <= input.call.span.startByte
+                && ownerForCall(fileSymbols, { span: candidate.span })?.symbolInstanceId
+                    === input.source.symbolInstanceId
+            ))
+            .sort((left, right) => right.span.endByte - left.span.endByte)[0];
+        const binding = provingLocalImport ?? bindings.reduce((first, candidate) => (
+            candidate.span.endByte < first.span.endByte ? candidate : first
+        ), firstBinding);
+        const localImport = ownerForCall(fileSymbols, { span: binding.span })?.symbolInstanceId
+            === input.source.symbolInstanceId;
         // An import cannot prove a name that was subsequently rebound.
         if ((input.evidence.pythonFlowFacts ?? []).some((fact) => {
             if (fact.kind !== 'assignment_origin' || fact.targetText !== name
-                || fact.span.startByte < firstImportEnd
+                || fact.span.startByte < binding.span.endByte
                 || fact.span.endByte > input.call.span.startByte) return false;
             const owner = ownerForCall(fileSymbols, { span: fact.span });
-            return !owner || owner.symbolInstanceId === input.source.symbolInstanceId;
+            // Module assignments do not rebind a function-local import.
+            return (!owner && !localImport) || owner?.symbolInstanceId === input.source.symbolInstanceId;
         })) return;
         proof.push({
             kind: binding.moduleSpecifier?.startsWith('.') ? 'relative_import' : 'absolute_import',

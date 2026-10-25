@@ -12,6 +12,8 @@ export interface TypeScriptSourceReader {
     readonly maxFileBytes: number;
     readonly maxProjectBytes: number;
     admit(fileName: string, bytes: number): boolean;
+    forget(fileName: string): void;
+    reset(): void;
     getFailureMessage(): string | undefined;
 }
 
@@ -24,6 +26,7 @@ export class TypeScriptProgramSession {
     private readonly overrides = new Map<string, string>();
     private readonly changed = new Set<string>();
     private readonly jsonReadBytes = new Map<string, number>();
+    private readonly sourceReadBytes = new Map<string, number>();
     private jsonBytes = 0;
     private jsonReadFailure?: string;
     private disposed = false;
@@ -59,11 +62,17 @@ export class TypeScriptProgramSession {
                         }
                         const stat = fs.statSync(fileName);
                         if (!stat.isFile() || !this.admitRead(fileName, stat.size)) return undefined;
-                        const content = fs.readFileSync(fileName, 'utf8');
-                        if (!this.admitRead(fileName, Buffer.byteLength(content, 'utf8'))) return undefined;
-                        return content;
+                        const content = readTypeScriptFileBytes(fileName, Math.min(
+                            this.sourceBudget?.maxFileBytes ?? Number.MAX_SAFE_INTEGER,
+                            this.sourceBudget?.maxProjectBytes ?? Number.MAX_SAFE_INTEGER,
+                        ));
+                        if (!this.admitRead(fileName, content.length)) return undefined;
+                        return content.toString('utf8');
                     } catch (error) {
-                        if (error instanceof TypeScriptReadLimitError) this.rejectJsonRead(fileName, error.bytes);
+                        if (error instanceof TypeScriptReadLimitError) {
+                            if (path.extname(fileName).toLowerCase() === '.json') this.rejectJsonRead(fileName, error.bytes);
+                            else this.sourceBudget?.admit(fileName, error.bytes);
+                        }
                         return undefined;
                     }
                 },
@@ -74,6 +83,14 @@ export class TypeScriptProgramSession {
     getProgram(): Program {
         if (this.disposed) throw new Error('TypeScript program session is disposed.');
         const refreshed = !this.snapshot || this.changed.size > 0;
+        const previousJsonReads = refreshed ? new Map(this.jsonReadBytes) : undefined;
+        if (refreshed) {
+            // Each snapshot owns its quota. Cached compiler files are charged
+            // again below, while files removed from the program lose their charge.
+            if (!this.sourceBudget?.getFailureMessage()) this.sourceBudget?.reset();
+            this.jsonReadBytes.clear();
+            this.jsonBytes = 0;
+        }
         if (!this.snapshot) {
             const snapshot = this.api.createSnapshot({
                 createPrograms: [{
@@ -103,12 +120,28 @@ export class TypeScriptProgramSession {
         }
         this.changed.clear();
         if (!this.program) throw new Error('TypeScript did not create a semantic program.');
-        if (refreshed && this.sourceBudget && this.jsonReadBytes.size > 0) {
+        if (refreshed) {
             // A read callback cannot distinguish JSON metadata from an imported
             // JSON source. The native program's file list supplies that proof.
-            for (const fileName of this.program.getSourceFileNames()) {
-                const bytes = this.jsonReadBytes.get(path.resolve(fileName));
-                if (bytes !== undefined && !this.sourceBudget.admit(fileName, bytes)) break;
+            const active = new Set(this.program.getSourceFileNames().map(file => path.resolve(file)));
+            for (const fileName of active) {
+                const isJson = path.extname(fileName).toLowerCase() === '.json';
+                let bytes = isJson
+                    ? this.jsonReadBytes.get(fileName) ?? previousJsonReads?.get(fileName)
+                    : this.sourceReadBytes.get(fileName);
+                if (bytes === undefined && (this.sourceBudget || isJson)) {
+                    // Native snapshots can reuse a formerly inactive file without
+                    // calling readFile. Its current snapshot text is the witness.
+                    const sourceFile = this.program.getSourceFile(fileName);
+                    if (!sourceFile) throw new Error(`TypeScript snapshot lost source bytes for '${fileName}'.`);
+                    bytes = Buffer.byteLength(sourceFile.text, 'utf8');
+                }
+                if (isJson && bytes !== undefined && !this.jsonReadBytes.has(fileName)) this.admitRead(fileName, bytes);
+                if (!isJson && bytes !== undefined) this.sourceReadBytes.set(fileName, bytes);
+                if (bytes !== undefined && this.sourceBudget && !this.sourceBudget.admit(fileName, bytes)) break;
+            }
+            for (const file of this.sourceReadBytes.keys()) {
+                if (!active.has(file)) this.sourceReadBytes.delete(file);
             }
         }
         return this.program;
@@ -126,7 +159,9 @@ export class TypeScriptProgramSession {
             this.jsonReadBytes.set(absolute, bytes);
             return true;
         }
-        return this.sourceBudget?.admit(fileName, bytes) ?? true;
+        if (this.sourceBudget && !this.sourceBudget.admit(fileName, bytes)) return false;
+        this.sourceReadBytes.set(path.resolve(fileName), bytes);
+        return true;
     }
 
     private jsonReadLimit(fileName: string): number {
@@ -161,6 +196,7 @@ export class TypeScriptProgramSession {
 
     updateFile(fileName: string, source: string): void {
         const absolute = path.resolve(fileName);
+        if (this.snapshot && this.changed.size === 0 && !this.sourceBudget?.getFailureMessage()) this.sourceBudget?.reset();
         if (!this.admitRead(absolute, Buffer.byteLength(source, 'utf8'))) return;
         this.overrides.set(absolute, source);
         this.changed.add(absolute);
@@ -168,6 +204,11 @@ export class TypeScriptProgramSession {
 
     invalidateFile(fileName: string): void {
         const absolute = path.resolve(fileName);
+        if (this.snapshot && this.changed.size === 0 && !this.sourceBudget?.getFailureMessage()) this.sourceBudget?.reset();
+        this.sourceBudget?.forget(absolute);
+        this.sourceReadBytes.delete(absolute);
+        this.jsonBytes -= this.jsonReadBytes.get(absolute) ?? 0;
+        this.jsonReadBytes.delete(absolute);
         this.overrides.delete(absolute);
         this.changed.add(absolute);
     }

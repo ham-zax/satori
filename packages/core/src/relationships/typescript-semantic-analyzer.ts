@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -30,6 +29,7 @@ import type {
 import { buildTypeScriptResolutionClaims } from './typescript-resolution';
 import type { TypeScriptResourceFailureRank, TypeScriptShardEvidence } from './typescript-resolution-shards';
 import { perfTrace } from '../utils/perf-trace';
+import { readTypeScriptFileBytes, TypeScriptReadLimitError, TYPESCRIPT_METADATA_FILE_BYTES } from '../semantic/typescript-bounded-reader';
 
 const TYPESCRIPT_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'] as const;
 const ROOT_MODULE_CONTROL_FILES = [
@@ -80,6 +80,8 @@ interface ProjectPlan {
     readonly controlFiles: readonly string[];
     readonly environmentConfigId: string;
     readonly referencedProjectKeys: readonly string[];
+    readonly referenceConfigPaths?: readonly string[];
+    readonly referenceStates?: ReadonlyMap<string, TypeScriptReferenceDeclarationState>;
 }
 
 interface ProjectSnapshot {
@@ -214,24 +216,12 @@ function parseRootState(text: string, rootPath: string): RootResolutionState | u
     }
 }
 
-function fileContentHash(filePath: string): string {
-    let fd: number | undefined;
+function fileContentHash(filePath: string, limit = TYPESCRIPT_METADATA_FILE_BYTES): string {
     try {
-        fd = fs.openSync(filePath, 'r');
-        const hash = createHash('sha256');
-        const buffer = Buffer.allocUnsafe(64 * 1024);
-        let position = 0;
-        while (true) {
-            const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
-            if (bytesRead <= 0) break;
-            hash.update(buffer.subarray(0, bytesRead));
-            position += bytesRead;
-        }
-        return hash.digest('hex');
-    } catch {
+        return createHash('sha256').update(readTypeScriptFileBytes(filePath, limit)).digest('hex');
+    } catch (error) {
+        if (error instanceof TypeScriptReadLimitError) throw error;
         return 'missing';
-    } finally {
-        if (fd !== undefined) fs.closeSync(fd);
     }
 }
 
@@ -306,99 +296,70 @@ function resolveConfigLike(candidate: string): string | undefined {
     return candidates.find((item) => fs.existsSync(item) && fs.statSync(item).isFile());
 }
 
-function resolveExtendsPath(configPath: string, specifier: string): string | undefined {
-    if (specifier.startsWith('.') || path.isAbsolute(specifier)) {
-        return resolveConfigLike(path.resolve(path.dirname(configPath), specifier));
-    }
-    try {
-        const requireFromConfig = createRequire(configPath);
-        return normalizeAbsolute(requireFromConfig.resolve(specifier));
-    } catch {
-        try {
-            const requireFromConfig = createRequire(configPath);
-            return normalizeAbsolute(requireFromConfig.resolve(`${specifier}/tsconfig.json`));
-        } catch {
-            return undefined;
-        }
-    }
-}
-
-function configExtendsSpecifiers(configPath: string): string[] {
-    const api = new ts.API({ runExternalCode: false });
-    try {
-        const read = api.readConfigFile(configPath);
-        if (read.error || !read.config || typeof read.config !== 'object') return [];
-        const raw = (read.config as { extends?: unknown }).extends;
-        return (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [])
-            .filter((value): value is string => typeof value === 'string' && value.length > 0);
-    } finally { api.close(); }
-}
-
-function collectConfigChain(configPath: string, seen = new Set<string>()): string[] {
-    const normalized = normalizeAbsolute(configPath);
-    if (seen.has(normalized) || !fs.existsSync(normalized)) return [];
-    seen.add(normalized);
-    const chain = [normalized];
-    for (const specifier of configExtendsSpecifiers(normalized)) {
-        const resolved = resolveExtendsPath(normalized, specifier);
-        if (resolved) chain.push(...collectConfigChain(resolved, seen));
-    }
-    return chain;
-}
-
 function resolveProjectReferenceConfig(referencePath: string): string | undefined {
     return resolveConfigLike(referencePath);
 }
 
-function projectReferenceConfigs(configPath: string): readonly string[] {
-    const api = new ts.API({ runExternalCode: false });
-    try {
-        const parsed = api.parseConfigFile(normalizeAbsolute(configPath));
-        return (parsed.projectReferences ?? [])
-            .map(reference => resolveProjectReferenceConfig(reference.path))
-            .filter((value): value is string => value !== undefined);
-    } finally { api.close(); }
+function referenceConfigs(project: TypeScriptConfiguredProject): string[] {
+    return (project.projectReferences ?? [])
+        .map(reference => resolveProjectReferenceConfig(reference.path))
+        .filter((value): value is string => value !== undefined);
 }
 
-function referenceDeclarationState(configPath: string, cache?: TypeScriptReferenceDeclarationCache): TypeScriptReferenceDeclarationState {
-    const normalized = normalizeAbsolute(configPath);
-    const api = new ts.API({ runExternalCode: false });
-    try {
-        const parsed = api.parseConfigFile(normalized);
-        const references = (parsed.projectReferences ?? [])
-            .map(reference => resolveProjectReferenceConfig(reference.path))
-            .filter((value): value is string => value !== undefined);
-        const fingerprint = createHash('sha256').update(JSON.stringify({
-            chain: collectConfigChain(normalized).map(file => [file, fileContentHash(file)]),
-            files: parsed.fileNames,
-        })).digest('hex');
-        const cached = cache?.get(normalized, fingerprint);
-        if (cached) return cached;
-        let state: TypeScriptReferenceDeclarationState;
-        if (!parsed.options.declaration && !parsed.options.composite) {
-            // A reference that emits no declarations cannot prove readiness: the
-            // checker still expects an output and reports TS6305 without it.
-            state = { outputs: [], references, unproven: true };
-        } else {
-            const program = api.createProgram(
-                parsed.fileNames,
-                { ...parsed.options, noEmit: false },
-                { projectReferences: parsed.projectReferences },
-            );
-            try {
-                // The compiler computes output paths, including declarationDir,
-                // outDir and bundled declarations. Never duplicate those rules.
-                state = {
-                    outputs: [...program.getDeclarationEmit(parsed.fileNames).outputFiles.keys()]
-                        .filter(file => /\.d\.[cm]?ts$/.test(file)).map(normalizeAbsolute).sort(),
-                    references,
-                    unproven: false,
-                };
-            } finally { program.dispose(); }
-        }
-        cache?.set(normalized, fingerprint, state);
+function referenceDeclarationState(
+    project: TypeScriptConfiguredProject,
+    cache: TypeScriptReferenceDeclarationCache | undefined,
+    resourceBudget: TypeScriptSourceBudget,
+): TypeScriptReferenceDeclarationState {
+    const references = referenceConfigs(project);
+    const fingerprint = stableHash({
+        chain: project.configFiles.map(file => [file, fileContentHash(file)]),
+        files: project.fileNames,
+        resourceBudget,
+    });
+    const cached = cache?.get(project.configPath, fingerprint);
+    if (cached) return cached;
+    if (!project.options.declaration && !project.options.composite) {
+        const state = { outputs: [], references, unproven: true };
+        cache?.set(project.configPath, fingerprint, state);
         return state;
-    } finally { api.close(); }
+    }
+    const session = new TypeScriptProgramSession(path.dirname(project.configPath), project.fileNames,
+        { ...project.options, noEmit: false }, new TypeScriptSourceBudgetTracker(resourceBudget), project.projectReferences);
+    try {
+        const program = session.getProgram();
+        let resourceFailure = session.getResourceLimitFailure();
+        if (resourceFailure) return { outputs: [], references, unproven: true, resourceFailure };
+        const outputs = [...program.getDeclarationEmit(project.fileNames).outputFiles.keys()]
+            .filter(file => /\.d\.[cm]?ts$/.test(file)).map(normalizeAbsolute).sort();
+        resourceFailure = session.getResourceLimitFailure();
+        if (resourceFailure) return { outputs: [], references, unproven: true, resourceFailure };
+        const state = { outputs, references, unproven: false };
+        cache?.set(project.configPath, fingerprint, state);
+        return state;
+    } finally { session.dispose(); }
+}
+
+function referenceStatesReady(
+    configs: readonly string[],
+    stateFor: (config: string) => TypeScriptReferenceDeclarationState,
+): true | undefined {
+    const visited = new Set<string>();
+    const pending = [...configs];
+    while (pending.length > 0) {
+        const configPath = pending.pop()!;
+        if (visited.has(configPath)) continue;
+        visited.add(configPath);
+        const state = stateFor(configPath);
+        if (state.unproven) return undefined;
+        for (const output of state.outputs) {
+            try {
+                if (!fs.statSync(output, { throwIfNoEntry: false })?.isFile()) return undefined;
+            } catch { return undefined; }
+        }
+        pending.push(...state.references);
+    }
+    return true;
 }
 
 /**
@@ -410,24 +371,14 @@ function referenceDeclarationState(configPath: string, cache?: TypeScriptReferen
  * an unreadable config. A `true` result means no TS6305 is possible.
  */
 export function referenceAuthorityReady(projectConfigPath: string, cache?: TypeScriptReferenceDeclarationCache): true | undefined {
-    const visited = new Set<string>();
-    const pending = [...projectReferenceConfigs(projectConfigPath)];
-    while (pending.length > 0) {
-        const configPath = pending.pop()!;
-        if (visited.has(configPath)) continue;
-        visited.add(configPath);
-        const state = referenceDeclarationState(configPath, cache);
-        if (state.unproven) return undefined;
-        for (const output of state.outputs) {
-            try {
-                if (!fs.statSync(output, { throwIfNoEntry: false })?.isFile()) return undefined;
-            } catch {
-                return undefined;
-            }
-        }
-        pending.push(...state.references);
+    try {
+        return referenceStatesReady(referenceConfigs(loadTypeScriptConfiguredProject(projectConfigPath)), config => (
+            referenceDeclarationState(loadTypeScriptConfiguredProject(config), cache, DEFAULT_TYPESCRIPT_SEMANTIC_RESOURCE_BUDGET)
+        ));
+    } catch (error) {
+        if (error instanceof TypeScriptConfigReadError || error instanceof TypeScriptReadLimitError) return undefined;
+        throw error;
     }
-    return true;
 }
 
 function packageControlFiles(rootPath: string, sourceFiles: readonly string[]): string[] {
@@ -452,29 +403,30 @@ function packageControlFiles(rootPath: string, sourceFiles: readonly string[]): 
 
 function projectControlFiles(
     rootPath: string,
-    project: TypeScriptConfiguredProject | undefined,
+    project: TypeScriptConfiguredProject,
     sourceFiles: readonly string[],
-    cache: TypeScriptReferenceDeclarationCache,
+    load: (config: string) => TypeScriptConfiguredProject | undefined,
+    stateFor: (project: TypeScriptConfiguredProject) => TypeScriptReferenceDeclarationState,
 ): { controls: string[]; referencedProjectKeys: string[] } {
-    const controls = new Set(packageControlFiles(rootPath, sourceFiles));
-    const referencedProjectKeys = new Set<string>();
-    if (project) {
-        for (const config of collectConfigChain(project.configPath)) controls.add(config);
-        for (const reference of project.projectReferences ?? []) {
-            const referenceConfig = resolveProjectReferenceConfig(reference.path);
-            if (!referenceConfig) continue;
-            referencedProjectKeys.add(configuredProjectKey(referenceConfig));
-            for (const config of collectConfigChain(referenceConfig)) controls.add(config);
-            for (const output of referenceDeclarationState(referenceConfig, cache).outputs) {
-                controls.add(output);
-            }
-        }
+    const controls = new Set([...packageControlFiles(rootPath, sourceFiles), ...project.configFiles]);
+    const references = referenceConfigs(project);
+    const pending = [...references];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+        const config = pending.pop()!;
+        if (visited.has(config)) continue;
+        visited.add(config);
+        controls.add(config);
+        const referenced = load(config);
+        if (!referenced) continue;
+        for (const file of referenced.configFiles) controls.add(file);
+        const state = stateFor(referenced);
+        for (const output of state.outputs) controls.add(output);
+        pending.push(...state.references);
     }
     return {
-        controls: [...controls]
-            .filter((filePath) => isWithinRoot(rootPath, filePath))
-            .sort(),
-        referencedProjectKeys: [...referencedProjectKeys].sort(),
+        controls: [...controls].filter(file => isWithinRoot(rootPath, file)).sort(),
+        referencedProjectKeys: references.map(configuredProjectKey).sort(),
     };
 }
 
@@ -903,7 +855,14 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             } };
         }
 
-        const plans = this.discoverPlans(rootPath, typeScriptFiles);
+        let plans: ProjectPlan[] = [];
+        let discoveryFailure: string | undefined;
+        try {
+            plans = this.discoverPlans(rootPath, typeScriptFiles);
+        } catch (error) {
+            if (!(error instanceof TypeScriptReadLimitError)) throw error;
+            discoveryFailure = `TypeScript semantic metadata is ${error.bytes} bytes, exceeding the ${TYPESCRIPT_METADATA_FILE_BYTES} byte per-file budget.`;
+        }
         const shard = this.options.shard;
         const shardOwner = shard ? assignProjectShards(plans, shard.count) : undefined;
         const owns = (plan: ProjectPlan) => this.options.projectKey !== undefined
@@ -942,7 +901,9 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                 },
             } };
         };
-        const rootResourceFailure = compilerRootResourceFailure(plans, this.resourceBudget);
+        const rootResourceFailure = discoveryFailure ?? plans.flatMap(plan => [...(plan.referenceStates?.values() ?? [])])
+            .find(state => state.resourceFailure)?.resourceFailure
+            ?? compilerRootResourceFailure(plans, this.resourceBudget);
         if (rootResourceFailure) {
             return resourceLimitEvidence(rootResourceFailure, [0, 0]);
         }
@@ -1062,13 +1023,15 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             }
 
             const session = this.getOrCreateSession(plan);
-            const refreshFiles = changedFiles
-                ? plan.relativeFiles.filter((file) => changedFiles.has(file))
-                : [...plan.relativeFiles];
+            const refreshFiles = !existingSession || existingSession.environmentConfigId !== plan.environmentConfigId
+                ? []
+                : changedFiles
+                    ? plan.relativeFiles.filter(file => changedFiles.has(file))
+                    : [...plan.relativeFiles];
             for (const relativeFile of refreshFiles) {
                 const absoluteFile = normalizeAbsolute(path.join(rootPath, relativeFile));
                 if (fs.existsSync(absoluteFile)) {
-                    session.updateFile(absoluteFile, fs.readFileSync(absoluteFile, 'utf8'));
+                    session.invalidateFile(absoluteFile);
                 }
             }
             const updateResourceFailure = session.getResourceLimitFailure();
@@ -1086,7 +1049,10 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             let referenceReady = true;
             if (plan.referencedProjectKeys.length > 0) {
                 const referenceStartedAt = performance.now();
-                const proven = plan.configPath ? referenceAuthorityReady(plan.configPath, this.referenceDeclarations) : undefined;
+                const proven = referenceStatesReady(
+                    plan.referenceConfigPaths ?? [],
+                    config => plan.referenceStates?.get(config) ?? { outputs: [], references: [], unproven: true },
+                );
                 referenceReady = proven
                     ?? !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
                 perfTrace('typescript.reference_authority', performance.now() - referenceStartedAt, {
@@ -1174,13 +1140,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             const session = this.sessions.get(plan.key)?.session;
             if (!session) {
                 // The session may have been evicted while processing a large multi-project repo.
-                const recreated = this.getOrCreateSession(plan);
-                for (const relativeFile of plan.relativeFiles) {
-                    const absoluteFile = normalizeAbsolute(path.join(rootPath, relativeFile));
-                    if (fs.existsSync(absoluteFile) && (!changedFiles || changedFiles.has(relativeFile))) {
-                        recreated.updateFile(absoluteFile, fs.readFileSync(absoluteFile, 'utf8'));
-                    }
-                }
+                this.getOrCreateSession(plan);
             }
             const activeSession = this.sessions.get(plan.key)!.session;
             const activeResourceFailure = activeSession.getResourceLimitFailure();
@@ -1398,13 +1358,22 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             configuredGroups.set(selected.configPath, group);
         }
 
+        const referenceStates = new Map<string, TypeScriptReferenceDeclarationState>();
+        const stateFor = (project: TypeScriptConfiguredProject): TypeScriptReferenceDeclarationState => {
+            let state = referenceStates.get(project.configPath);
+            if (!state) {
+                state = referenceDeclarationState(project, this.referenceDeclarations, this.resourceBudget);
+                referenceStates.set(project.configPath, state);
+            }
+            return state;
+        };
         const plans: ProjectPlan[] = [];
         for (const [configPath, files] of [...configuredGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
             const project = load(configPath);
             if (!project) continue;
             const sortedFiles = [...files].sort();
             const absoluteFiles = sortedFiles.map((file) => normalizeAbsolute(path.join(normalizedRoot, file)));
-            const control = projectControlFiles(normalizedRoot, project, absoluteFiles, this.referenceDeclarations);
+            const control = projectControlFiles(normalizedRoot, project, absoluteFiles, load, stateFor);
             const environmentConfigId = `typescript:${ts.version}:configured:${stableHash({
                 providerVersion: TYPESCRIPT_COMPILER_PROVIDER_VERSION,
                 compilerVersion: ts.version,
@@ -1431,6 +1400,8 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
                     .filter((file): file is string => Boolean(file)),
                 environmentConfigId,
                 referencedProjectKeys: control.referencedProjectKeys,
+                referenceConfigPaths: referenceConfigs(project),
+                referenceStates,
             });
         }
 
@@ -1529,7 +1500,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (!fs.existsSync(absolute)) {
                 throw new Error(`TypeScript semantic source disappeared before claim publication: '${relativeFile}'.`);
             }
-            const currentHash = fileContentHash(absolute);
+            const currentHash = fileContentHash(absolute, this.resourceBudget.maxFileBytes);
             if (currentHash !== manifest.hash) {
                 throw new Error(`TypeScript semantic source changed before claim publication: '${relativeFile}'.`);
             }

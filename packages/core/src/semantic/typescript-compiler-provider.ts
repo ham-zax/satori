@@ -9,7 +9,7 @@ import type { SemanticProjectInput } from './contracts';
 const VIRTUAL_ROOT = '/__satori__';
 
 export const TYPESCRIPT_COMPILER_PROVIDER_ID = 'satori-typescript-compiler';
-export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v9';
+export const TYPESCRIPT_COMPILER_PROVIDER_VERSION = 'ts-compiler-v10';
 
 export type TypeScriptSemanticDecision =
     | 'resolved'

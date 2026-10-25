@@ -695,6 +695,88 @@ test('resolvePythonRelationships proves repeated function-local imports without 
     ]);
 });
 
+test('resolvePythonRelationships admits equivalent branch-local class imports and refuses conflicting destinations', async () => {
+    const input = await buildAnalyzedPythonRegistry({
+        'pkg/channels.py': 'class Channel:\n    @staticmethod\n    def send_peer(): pass\n',
+        'pkg/other.py': 'class Channel:\n    @staticmethod\n    def send_peer(): pass\n',
+        'pkg/cli.py': [
+            'def main(mode):',
+            '    if mode == "open":',
+            '        from pkg.channels import Channel',
+            '        Channel.send_peer()',
+            '    if mode == "send":',
+            '        from pkg.channels import Channel',
+            '        Channel.send_peer()',
+            '',
+            'def conflicting(mode):',
+            '    from pkg.channels import Channel',
+            '    if mode:',
+            '        from pkg.other import Channel',
+            '    Channel.send_peer()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships(input);
+    const admitted = admitAuthoritativeProofBackedCalls({
+        registry: input.registry,
+        claims: [...result.claimsByFile.values()].flat(),
+    });
+    assert.deepEqual(admitted.map((record) => [
+        input.registry.symbolsByInstanceId.get(record.sourceInstanceId!)?.qualifiedName,
+        input.registry.symbolsByInstanceId.get(record.targetInstanceId!)?.qualifiedName,
+        record.span?.startLine,
+    ]), [
+        ['main', 'Channel.send_peer', 4],
+        ['main', 'Channel.send_peer', 7],
+    ]);
+});
+
+test('resolvePythonRelationships uses dominating local reimports without overlooking later assignments', async () => {
+    const input = await buildAnalyzedPythonRegistry({
+        'pkg/channels.py': 'def send_peer(): pass\n',
+        'pkg/cli.py': [
+            'from pkg import channels',
+            'channels = None',
+            '',
+            'def reimport(value):',
+            '    from pkg import channels',
+            '    channels = value',
+            '    from pkg import channels',
+            '    channels.send_peer()',
+            '',
+            'def fresh_local():',
+            '    from pkg import channels',
+            '    channels.send_peer()',
+            '',
+            'def rebound(value):',
+            '    from pkg import channels',
+            '    channels = value',
+            '    from pkg import channels',
+            '    channels = value',
+            '    channels.send_peer()',
+            '',
+            'def conditional(value, mode):',
+            '    from pkg import channels',
+            '    channels = value',
+            '    if mode:',
+            '        from pkg import channels',
+            '    channels.send_peer()',
+        ].join('\n'),
+    });
+    const result = resolvePythonRelationships(input);
+    const admitted = admitAuthoritativeProofBackedCalls({
+        registry: input.registry,
+        claims: [...result.claimsByFile.values()].flat(),
+    });
+    assert.deepEqual(admitted.map((record) => [
+        input.registry.symbolsByInstanceId.get(record.sourceInstanceId!)?.qualifiedName,
+        input.registry.symbolsByInstanceId.get(record.targetInstanceId!)?.qualifiedName,
+        record.span?.startLine,
+    ]), [
+        ['reimport', 'send_peer', 8],
+        ['fresh_local', 'send_peer', 12],
+    ]);
+});
+
 test('resolvePythonRelationships keeps branch-conflicted origins non-authoritative while preserving straight-line reassignment', async () => {
     const { registry, analysisByFile } = await buildAnalyzedPythonRegistry({
         'src/app.py': [

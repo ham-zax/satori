@@ -1,0 +1,443 @@
+{
+  "schemaVersion": 1,
+  "scoring": "rank = position (1-based) of the first top-10 result whose path matches an acceptable pathRegex and whose symbol name matches symbolRegex (or symbolRegex is null, or the result is a whole-file result on a matching path). strictRank additionally requires a symbol-level result when symbolRegex is set. Tags: T=test lexical competitor, tests-ask, tooling-ask, lang, generated, rust-vs-py, py-owned.",
+  "topK": 10,
+  "repos": [
+    {
+      "name": "gin",
+      "url": "https://github.com/gin-gonic/gin",
+      "commit": "73726dc606796a025971fe451f0aa6f1b9b847f6",
+      "queries": [
+        {
+          "id": "g1",
+          "tags": [],
+          "query": "where does gin walk the radix tree and extract path parameters while matching a route",
+          "acceptable": [
+            {
+              "pathRegex": "^tree\\.go$",
+              "symbolRegex": "^getValue$",
+              "evidence": "tree.go:418 func (n *node) getValue(path string, params *Params, skippedNodes *[]skippedNode, unescape bool) (value nodeValue) {"
+            }
+          ],
+          "justification": "node.getValue walks the tree, saves wildcard values into params, and returns the handler chain; it is the route-lookup owner."
+        },
+        {
+          "id": "g2",
+          "tags": [
+            "T"
+          ],
+          "query": "where does gin recover from a panic raised inside a handler chain",
+          "acceptable": [
+            {
+              "pathRegex": "^recovery\\.go$",
+              "symbolRegex": "^(Recovery|RecoveryWithWriter|CustomRecovery|CustomRecoveryWithWriter)$",
+              "evidence": "recovery.go:45 func RecoveryWithWriter(out io.Writer, recovery ...RecoveryFunc) HandlerFunc {"
+            }
+          ],
+          "justification": "RecoveryWithWriter wraps CustomRecoveryWithWriter, which defers a recover call and aborts with a 500 response; the other helpers in this file delegate to it."
+        },
+        {
+          "id": "g3",
+          "tags": [
+            "T"
+          ],
+          "query": "where does the JSON binding decode a request body into a Go struct",
+          "acceptable": [
+            {
+              "pathRegex": "^binding/json\\.go$",
+              "symbolRegex": "^Bind$",
+              "evidence": "binding/json.go:33 func (jsonBinding) Bind(req *http.Request, obj any) error {"
+            }
+          ],
+          "justification": "jsonBinding.Bind decodes the body with the JSON codec and then validates the result; it is the JSON arm of the binding dispatch."
+        },
+        {
+          "id": "g4",
+          "tags": [
+            "T"
+          ],
+          "query": "where does gin provide the helper that writes a value as JSON with an HTTP status code",
+          "acceptable": [
+            {
+              "pathRegex": "^context\\.go$",
+              "symbolRegex": "^JSON$",
+              "evidence": "context.go:1205 func (c *Context) JSON(code int, obj any) {"
+            }
+          ],
+          "justification": "Context.JSON calls Render with a render.JSON value and the given status; it is the public JSON response helper."
+        },
+        {
+          "id": "g5",
+          "tags": [
+            "T"
+          ],
+          "query": "where does gin read a route parameter value such as the id in /users/:id",
+          "acceptable": [
+            {
+              "pathRegex": "^context\\.go$",
+              "symbolRegex": "^Param$",
+              "evidence": "context.go:503 func (c *Context) Param(key string) string {"
+            }
+          ],
+          "justification": "Context.Param returns the named value from the Params slice that the tree lookup populated."
+        },
+        {
+          "id": "g6",
+          "tags": [],
+          "query": "where does gin build a nested router group that inherits the parent path prefix",
+          "acceptable": [
+            {
+              "pathRegex": "^routergroup\\.go$",
+              "symbolRegex": "^Group$",
+              "evidence": "routergroup.go:72 func (group *RouterGroup) Group(relativePath string, handlers ...HandlerFunc) *RouterGroup {"
+            }
+          ],
+          "justification": "RouterGroup.Group joins the relative path onto the parent prefix and copies the parent handler chain."
+        },
+        {
+          "id": "g7",
+          "tags": [],
+          "query": "where does gin validate a bound struct using its validate tags",
+          "acceptable": [
+            {
+              "pathRegex": "^binding/default_validator\\.go$",
+              "symbolRegex": "^(ValidateStruct|validateStruct)$",
+              "evidence": "binding/default_validator.go:44 func (v *defaultValidator) ValidateStruct(obj any) error {"
+            }
+          ],
+          "justification": "defaultValidator.ValidateStruct runs go-playground/validator over structs, pointers, and slice elements."
+        },
+        {
+          "id": "g8",
+          "tags": [
+            "T"
+          ],
+          "query": "where does gin implement HTTP basic authentication for a route",
+          "acceptable": [
+            {
+              "pathRegex": "^auth\\.go$",
+              "symbolRegex": "^(BasicAuth|BasicAuthForRealm|BasicAuthForProxy)$",
+              "evidence": "auth.go:72 func BasicAuth(accounts Accounts) HandlerFunc {"
+            }
+          ],
+          "justification": "BasicAuth and its realm and proxy variants perform the credential check and write the challenge header in auth.go."
+        },
+        {
+          "id": "g9",
+          "tags": [],
+          "query": "which file defines the Engine type and the entry point that net/http calls",
+          "acceptable": [
+            {
+              "pathRegex": "^gin\\.go$",
+              "symbolRegex": null,
+              "evidence": "gin.go:92 type Engine struct {"
+            }
+          ],
+          "justification": "gin.go declares Engine, its configuration fields, and ServeHTTP, the http.Handler entry point."
+        },
+        {
+          "id": "g10",
+          "tags": [],
+          "query": "which file serves static files and directory listings from disk",
+          "acceptable": [
+            {
+              "pathRegex": "^fs\\.go$",
+              "symbolRegex": null,
+              "evidence": "fs.go:42 func Dir(root string, listDirectory bool) http.FileSystem {"
+            }
+          ],
+          "justification": "fs.go builds the http.FileSystem used by Static and StaticFS, including the directory-listing wrapper."
+        },
+        {
+          "id": "g11",
+          "tags": [],
+          "query": "which file wraps http.ResponseWriter to record the status code and response size",
+          "acceptable": [
+            {
+              "pathRegex": "^response_writer\\.go$",
+              "symbolRegex": null,
+              "evidence": "response_writer.go:49 type responseWriter struct {"
+            }
+          ],
+          "justification": "response_writer.go defines responseWriter, which records status, size, and written state around the real writer."
+        },
+        {
+          "id": "g12",
+          "tags": [],
+          "query": "which file contains the allocation-free conversion helpers between strings and byte slices",
+          "acceptable": [
+            {
+              "pathRegex": "^internal/bytesconv/bytesconv\\.go$",
+              "symbolRegex": null,
+              "evidence": "internal/bytesconv/bytesconv.go:19 func BytesToString(b []byte) string {"
+            }
+          ],
+          "justification": "bytesconv.go holds StringToBytes and BytesToString, the unsafe conversion helpers used on hot paths."
+        },
+        {
+          "id": "g13",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for inserting routes into the tree and looking them up",
+          "acceptable": [
+            {
+              "pathRegex": "^tree_test\\.go$",
+              "symbolRegex": null,
+              "evidence": "tree_test.go:101 func TestTreeAddAndGet(t *testing.T) {"
+            }
+          ],
+          "justification": "tree_test.go holds the route-tree insertion and lookup tests, including wildcard cases."
+        },
+        {
+          "id": "g14",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for JSON request body binding",
+          "acceptable": [
+            {
+              "pathRegex": "^binding/json_test\\.go$",
+              "symbolRegex": null,
+              "evidence": "binding/json_test.go:22 func TestJSONBindingBindBody(t *testing.T) {"
+            }
+          ],
+          "justification": "json_test.go holds the JSON binding tests for BindBody, maps, and custom codecs."
+        },
+        {
+          "id": "g15",
+          "tags": [
+            "config"
+          ],
+          "query": "where are the module path and dependency versions declared for the Go build",
+          "acceptable": [
+            {
+              "pathRegex": "^go\\.mod$",
+              "symbolRegex": null,
+              "evidence": "go.mod:1 module github.com/gin-gonic/gin"
+            }
+          ],
+          "justification": "go.mod declares the module path, the Go version, and the required module versions."
+        }
+      ]
+    },
+    {
+      "name": "flask",
+      "url": "https://github.com/pallets/flask",
+      "commit": "22d924701a6ae2e4cd01e9a15bbaf3946094af65",
+      "queries": [
+        {
+          "id": "f1",
+          "tags": [
+            "T"
+          ],
+          "query": "where does Flask call the view function registered for the matched URL rule",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/app\\.py$",
+              "symbolRegex": "^dispatch_request$",
+              "evidence": "src/flask/app.py:879     def dispatch_request(self) -> ft.ResponseReturnValue:"
+            }
+          ],
+          "justification": "Flask.dispatch_request resolves request.url_rule.endpoint in view_functions and calls it with the captured view arguments."
+        },
+        {
+          "id": "f2",
+          "tags": [
+            "T"
+          ],
+          "query": "where does Flask run the before_request functions before handling a request",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/app\\.py$",
+              "symbolRegex": "^preprocess_request$",
+              "evidence": "src/flask/app.py:1271     def preprocess_request(self) -> ft.ResponseReturnValue | None:"
+            }
+          ],
+          "justification": "preprocess_request runs the app and blueprint before_request functions and returns the first non-None value."
+        },
+        {
+          "id": "f3",
+          "tags": [
+            "T"
+          ],
+          "query": "where does Flask convert the value returned by a view into a Response object",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/app\\.py$",
+              "symbolRegex": "^make_response$",
+              "evidence": "src/flask/app.py:1129     def make_response(self, rv: ft.ResponseReturnValue) -> Response:"
+            }
+          ],
+          "justification": "make_response converts Response, str, bytes, dict, iterator, and tuple return values into a Response."
+        },
+        {
+          "id": "f4",
+          "tags": [
+            "T"
+          ],
+          "query": "where does Flask write the signed session cookie into the response",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/sessions\\.py$",
+              "symbolRegex": "^save_session$",
+              "evidence": "src/flask/sessions.py:337     def save_session("
+            }
+          ],
+          "justification": "SecureCookieSessionInterface.save_session serializes the session and writes the signed cookie with its expiry and flags."
+        },
+        {
+          "id": "f5",
+          "tags": [],
+          "query": "where does Flask match the request path against the URL map",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/ctx\\.py$",
+              "symbolRegex": "^match_request$",
+              "evidence": "src/flask/ctx.py:357     def match_request(self) -> None:"
+            }
+          ],
+          "justification": "RequestContext.match_request calls the URL adapter's match method and stores the result on the context."
+        },
+        {
+          "id": "f6",
+          "tags": [
+            "T"
+          ],
+          "query": "where does Flask provide the decorator that registers a handler for an exception type",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/sansio/scaffold\\.py$",
+              "symbolRegex": "^errorhandler$",
+              "evidence": "src/flask/sansio/scaffold.py:598     def errorhandler("
+            }
+          ],
+          "justification": "Scaffold.errorhandler stores the decorated function in error_handler_spec for the given exception code or class."
+        },
+        {
+          "id": "f7",
+          "tags": [],
+          "query": "where does Flask create the Jinja environment for template rendering",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/app\\.py$",
+              "symbolRegex": "^create_jinja_environment$",
+              "evidence": "src/flask/app.py:385     def create_jinja_environment(self) -> Environment:"
+            }
+          ],
+          "justification": "create_jinja_environment builds the jinja2.Environment from the app's jinja options and installs Flask globals and filters."
+        },
+        {
+          "id": "f8",
+          "tags": [],
+          "query": "where does Flask run the after_request functions for a response",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/app\\.py$",
+              "symbolRegex": "^process_response$",
+              "evidence": "src/flask/app.py:1298     def process_response(self, response: Response) -> Response:"
+            }
+          ],
+          "justification": "process_response runs the after_request functions and then saves the session through the session interface."
+        },
+        {
+          "id": "f9",
+          "tags": [],
+          "query": "which file extends the Werkzeug request and response classes with Flask behavior",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/wrappers\\.py$",
+              "symbolRegex": null,
+              "evidence": "src/flask/wrappers.py:18 class Request(RequestBase):"
+            }
+          ],
+          "justification": "wrappers.py specializes the Werkzeug Request and Response classes with Flask properties and defaults."
+        },
+        {
+          "id": "f10",
+          "tags": [],
+          "query": "which file defines the Config object and loads values from a Python file",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/config\\.py$",
+              "symbolRegex": null,
+              "evidence": "src/flask/config.py:50 class Config(dict):  # type: ignore[type-arg]"
+            }
+          ],
+          "justification": "config.py defines Config and its from_pyfile and from_object loaders."
+        },
+        {
+          "id": "f11",
+          "tags": [],
+          "query": "which file implements the template loader that dispatches to blueprints",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/templating\\.py$",
+              "symbolRegex": null,
+              "evidence": "src/flask/templating.py:53 class DispatchingJinjaLoader(BaseLoader):"
+            }
+          ],
+          "justification": "templating.py defines DispatchingJinjaLoader, which resolves templates through the app and its blueprints."
+        },
+        {
+          "id": "f12",
+          "tags": [],
+          "query": "which file defines the context-local proxies for request, session, g, and current_app",
+          "acceptable": [
+            {
+              "pathRegex": "^src/flask/globals\\.py$",
+              "symbolRegex": null,
+              "evidence": "src/flask/globals.py:46 request: Request = LocalProxy(  # type: ignore[assignment]"
+            }
+          ],
+          "justification": "globals.py defines the LocalProxy objects for current_app, g, request, and session."
+        },
+        {
+          "id": "f13",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for blueprint registration and URL prefixes",
+          "acceptable": [
+            {
+              "pathRegex": "^tests/test_blueprints\\.py$",
+              "symbolRegex": null,
+              "evidence": "tests/test_blueprints.py:8 def test_blueprint_specific_error_handling(app, client):"
+            }
+          ],
+          "justification": "test_blueprints.py covers blueprint registration, prefixes, error handling, and nesting."
+        },
+        {
+          "id": "f14",
+          "tags": [
+            "tests-ask"
+          ],
+          "query": "where are the tests for custom session interfaces",
+          "acceptable": [
+            {
+              "pathRegex": "^tests/test_session_interface\\.py$",
+              "symbolRegex": null,
+              "evidence": "tests/test_session_interface.py:6 def test_open_session_with_endpoint():"
+            }
+          ],
+          "justification": "test_session_interface.py covers custom session interface behavior across requests."
+        },
+        {
+          "id": "f15",
+          "tags": [
+            "config"
+          ],
+          "query": "where are the Python build metadata, version, and runtime dependencies declared",
+          "acceptable": [
+            {
+              "pathRegex": "^pyproject\\.toml$",
+              "symbolRegex": null,
+              "evidence": "pyproject.toml:1 [project]"
+            }
+          ],
+          "justification": "pyproject.toml declares the project metadata, version, Python requirement, and runtime dependencies."
+        }
+      ]
+    }
+  ]
+}

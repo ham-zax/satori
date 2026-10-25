@@ -62,3 +62,9 @@ combine `--quality-only` with `--latency-request-json <request-file>` and
 `--latency-state-root <existing-task-index>`. The JSON contains ordinary `search_codebase`
 arguments. This runs one warmup and three measured warm calls, records the checkout's full HEAD,
 and labels the workload as unscored; it does not report a cold median.
+
+## Held-out set
+
+`cases-heldout.json` holds 30 questions over gin (v1.12.0, `73726dc606796a025971fe451f0aa6f1b9b847f6`) and Flask
+(3.1.3, `22d924701a6ae2e4cd01e9a15bbaf3946094af65`), 15 per repo. This set is not used for tuning.
+Run it with `--cases evals/real-repo-quality/cases-heldout.json`.

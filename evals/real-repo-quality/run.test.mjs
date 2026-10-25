@@ -49,6 +49,7 @@ function fixture(t) {
                 classifyPathCategory: () => 'srcRuntime',
                 isNonProductionDistractor: () => false,
                 resolveSearchFlags: () => ({ compound_join: true, path_demotion: true }),
+                defaultRerankBlendForProvider: provider => provider === 'lateon',
                 SEARCH_ALT_TERMS_MAX: 4,
                 reservationCapForPolicy: () => 55,
             };

@@ -46,7 +46,7 @@ import type {
     SearchRerankProjectionResult,
     SearchRerankStructuralContextStatus,
 } from "./search-rerank-projection-result.js";
-import { resolveSearchFlags } from "./search-flags.js";
+import { defaultRerankBlendForProvider, resolveSearchFlags } from "./search-flags.js";
 import { resolveSearchAltTerms } from "./search-expansion-terms.js";
 import type {
     SearchCandidate,
@@ -550,7 +550,10 @@ export function applyRerankOrder(args: {
                 })),
             );
         }
-        const executionFlags = resolveSearchFlags(input.flags);
+        const providerIdentity = rerankerIdentity(host);
+        const executionFlags = resolveSearchFlags(input.flags, {
+            rerank_blend: defaultRerankBlendForProvider(providerIdentity?.provider),
+        });
         let itemsForPolicy = [...validatedItems];
         let definitionFusionApplied = false;
         if (allowsDefinitionDiscovery({
@@ -560,7 +563,7 @@ export function applyRerankOrder(args: {
             scope: input.scope,
             hasPathConstraint: input.parsedOperators.path.length > 0 || input.requestedSubdirectory != null,
             hasMustConstraint: input.parsedOperators.must.length > 0,
-        }) && host.definitionMetadata && rerankerOrderNeedsDefinitionFusion(rerankerIdentity(host))) {
+        }) && host.definitionMetadata && rerankerOrderNeedsDefinitionFusion(providerIdentity)) {
             const definitionAltTerms = executionFlags.definition_alt_terms
                 ? (input.resolvedAltTerms ?? resolveSearchAltTerms(input.alt_terms)).termsEmitted : [];
             const fusion = fuseDefinitionDiscovery({

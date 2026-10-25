@@ -59,6 +59,8 @@ function fixture(t) {
         import * as lancedb from ${JSON.stringify(lanceUrl)};
         import path from 'node:path';
         import fs from 'node:fs';
+        export function explicitRuntimeEnvironment() { return {}; }
+        export async function localOfflineEnvironment() { return {}; }
         export async function openLocalSession({ stateRoot }) {
             fs.appendFileSync(${JSON.stringify(path.join(root, 'sessions'))}, 'started\\n');
             const db = await lancedb.connect(path.join(stateRoot, 'vector/lancedb'));
@@ -78,6 +80,13 @@ function fixture(t) {
                         return { text: JSON.stringify({ status }), json: { status }, isError: false };
                     }
                     if (tool !== 'search_codebase') throw new Error('unexpected tool: ' + tool);
+                    if (process.env.SATORI_HARNESS_TEST_FAIL_SEARCH === '1') {
+                        const failed = {
+                            status: 'not_ready', reason: 'search_backend_failed',
+                            message: 'Search backend failed: all semantic search passes failed.',
+                        };
+                        return { text: JSON.stringify(failed), json: failed, isError: true };
+                    }
                     const candidate = { candidateId: id, relativePath: 'src/owner.ts', startLine: 1, endLine: 10, rank: 1, score: 0.9 };
                     const json = {
                         status: 'ok', fixtureRevision: process.env.SATORI_HARNESS_TEST_REVISION,
@@ -116,11 +125,11 @@ function fixture(t) {
     return {
         repos, writeCases, root, outDir,
         sessionsStarted: () => fs.existsSync(path.join(root, 'sessions')),
-        run(names, revision = '1', extraArgs = []) {
+        run(names, revision = '1', extraArgs = [], extraEnv = {}) {
             execFileSync(process.execPath, ['--import', preload, runner,
                 '--cases', casesFile, '--repos', names, '--state-root', stateRoot, '--out', outDir, ...extraArgs], {
                 cwd: workspaceRoot, encoding: 'utf8', timeout: 30_000,
-                env: { ...process.env, SATORI_HARNESS_TEST_REVISION: revision },
+                env: { ...process.env, SATORI_HARNESS_TEST_REVISION: revision, ...extraEnv },
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
             return Object.fromEntries(['result', 'harness-log', 'fused-pool'].map(name =>
@@ -136,6 +145,14 @@ test('a fresh state indexes before resolving targets and searching', t => {
     assert.ok(repo.indexing.events.some(event => event.args.action === 'create'));
     assert.deepEqual(output['harness-log'][0].targets, ['chunk-react']);
     assert.equal(repo.queries[0].responseStatus, 'ok');
+});
+
+test('a failed search reports the tool error, not a missing fused pool', t => {
+    const f = fixture(t);
+    assert.throws(
+        () => f.run('react', '1', [], { SATORI_HARNESS_TEST_FAIL_SEARCH: '1' }),
+        /Search failed for react\/react1: .*all semantic search passes failed/,
+    );
 });
 
 test('sequential React and Polars runs retain both repositories in all JSON outputs', t => {

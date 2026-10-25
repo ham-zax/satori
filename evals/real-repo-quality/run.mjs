@@ -361,6 +361,12 @@ async function main() {
                 const at = now();
                 const queryStartedAt = performance.now();
                 const response = await session.call('search_codebase', callArgs);
+                // A failed search has no candidateSurvival. Report the tool's own
+                // error here, so a backend failure is not mistaken for a missing
+                // debug field further down.
+                if (response.isError || response.json?.status !== 'ok') {
+                    throw new Error(`Search failed for ${repo.name}/${query.id}: ${response.text.slice(0, 800)}`);
+                }
                 const elapsedMs = performance.now() - queryStartedAt;
                 const plan = buildSearchQueryPlan(query.query, true);
                 const focus = resolveSearchAnswerFocus(plan, provenance.resolvedFlags);

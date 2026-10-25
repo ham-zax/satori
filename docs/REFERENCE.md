@@ -551,18 +551,25 @@ FlatBuffers (10), with Potion embeddings and the same index for every row:
 
 | Reranker | Right answer first | In top 5 | In top 10 | MRR | Rerank median |
 |---|---:|---:|---:|---:|---:|
-| LateOn (local, default) | 13/28 | 21/28 | 23/28 | 0.555 | 2.62 s |
-| Voyage `rerank-3-lite` (Voyage default) | 22/28 | 26/28 | 26/28 | 0.845 | 0.99 s |
+| LateOn (local, default) | 13/28 | 22/28 | 24/28 | 0.566 | 2.58 s |
+| Voyage `rerank-3-lite` (Voyage default) | 23/28 | 27/28 | 27/28 | 0.881 | 1.03 s |
 
-The Voyage row made 28 rerank calls with no failure and no timeout, and sent
-about 4.7 MB of rerank input in total. `rerank-3` and `rerank-2.5` were measured
+Each Voyage run made 28 rerank calls with no failure and no timeout, and sent
+about 4.7 MB of rerank input. `rerank-3` and `rerank-2.5` were measured
 only on the earlier native-document path. Re-measure them before choosing one
 over `rerank-3-lite`.
 
+The table is measured at `fb125738`, before the default-on `cleanup` → `destroy`
+behavior bridge in `9abe9006`. On the 28-query rerank-3 run at `5253c443` the
+bridge moves r1 from absent to rank 1 with no other case change. The run scores
+hit@1/5/10 23/28/28, MRR 0.8899. The `rerank-3-lite` row is not re-measured with
+the bridge.
+
 Limits of these numbers:
 
-- 28 questions on 3 repositories, one run per row. A difference of one
-  question is within noise.
+- 28 questions on 3 repositories, three runs per row with identical counts. The
+  earlier native-document comparison has one run per arm, so a one-question
+  difference there is within noise.
 - Times are the reranker alone on one WSL2 laptop. Voyage times also depend on
   the network.
 - `none` was not part of this run.

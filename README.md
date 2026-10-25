@@ -151,10 +151,10 @@ On the current default (LateOn reranking plus definition fusion, which runs only
 
 | Reranker | Right answer first | In top 5 | In top 10 | MRR | Rerank median |
 |---|---:|---:|---:|---:|---:|
-| LateOn (local, default) | 13/28 | 21/28 | 23/28 | 0.555 | 2.62 s |
-| Voyage `rerank-3-lite` (Voyage default) | 22/28 | 26/28 | 26/28 | 0.845 | 0.99 s |
+| LateOn (local, default) | 13/28 | 22/28 | 24/28 | 0.566 | 2.58 s |
+| Voyage `rerank-3-lite` (Voyage default) | 23/28 | 27/28 | 27/28 | 0.881 | 1.03 s |
 
-Voyage's canonical projection sends about 60% more input bytes than the native document, so it uses the free quota faster. One run per row on one WSL2 laptop; times are the reranker alone. [How to choose, and the limits of these numbers](docs/REFERENCE.md#choosing-a-reranker).
+Voyage's canonical projection sends about 60% more input bytes than the native document, so it uses the free quota faster. Three runs per row on one WSL2 laptop; times are the median reranker time. Measured at `fb125738`, before the default-on `cleanup` → `destroy` bridge (`9abe9006`); the bridge moves r1 to rank 1 on the 28-question rerank-3 run, and the `rerank-3-lite` row is not re-measured. [How to choose, and the limits of these numbers](docs/REFERENCE.md#choosing-a-reranker).
 
 **Plain-English questions.** 46 conceptual questions over React, Polars, and FlatBuffers ("cleanup of useEffect" → `commitHookEffectListUnmount`). Agents can pass up to 4 code-vocabulary guesses in `alt_terms`; Satori searches them as separate passes, including definitions, and fuses them with the original question:
 

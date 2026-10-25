@@ -10,12 +10,12 @@ p3 acceptance later added `crates/polars-core/src/frame/column/mod.rs`; the resu
 is rubric-only. Historical statements below keep their dates. `/tmp` evidence paths are local
 transient artifacts, not versioned; raw reproducibility may be unavailable after cleanup.
 
-Later status (25 October 2026, HEAD `fb125738`): `0a2aa66c` makes definition fusion match
+Later status (25 October 2026, build `fb125738`): `0a2aa66c` makes definition fusion match
 inflected query words, and `fb125738` sends Voyage the canonical projection. The same 28-question
-set then measures LateOn at hit@1/5/10 13/21/23 and MRR 0.5545, and Voyage `rerank-3-lite` at
-22/26/26 and MRR 0.8452 (commit message of `fb125738`). Every table below is the `b26af3d1`
-capture, scored with the pre-`5f96827c` rubric and the pre-`0a2aa66c` fusion rule. Its hit@10 is
-therefore two lower than the current build.
+set then measures LateOn at hit@1/5/10 13/22/24 and MRR 0.5664, and Voyage `rerank-3-lite` at
+23/27/27 and MRR 0.8810, re-scored with the `008b5a2b` f5 oracle. Every table below is the
+`b26af3d1` capture, scored with the pre-`5f96827c` rubric and the pre-`0a2aa66c` fusion rule. Its
+hit@10 is therefore three lower than the current build.
 
 ## Intent and current state
 

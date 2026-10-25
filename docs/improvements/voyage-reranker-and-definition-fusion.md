@@ -8,8 +8,8 @@ strong signal and single-run latency figures as indicative only.
 Provenance (annotated 25 October 2026): the 2026-10-13 arms predate the `5f96827c` rubric change
 and the `0a2aa66c` fusion change. The "Shipped Voyage path" section starts with the later re-run at
 `0a2aa66c`, under the current rubric, and ends with the matched three-run comparison at code
-`fb125738`. Read that section for current behaviour, and the sections before it as the history that
-chose the shipping rule.
+`fb125738`, re-scored with the `008b5a2b` f5 oracle. Read that section for current behaviour, and
+the sections before it as the history that chose the shipping rule.
 
 ## Summary
 
@@ -24,7 +24,7 @@ chose the shipping rule.
   machine.
 - The shipped Voyage provider path reproduces the result: `rerank-3-lite`
   scores 20/25/25 with MRR 0.7798, and the canonical projection raises that to
-  22/26/26 with MRR 0.8452.
+  23/27/27 with MRR 0.8810.
 - The symbol-metadata pass is not an independent gain. On the native document it
   changes no rank. Under the canonical projection it changes neither a rank nor
   a byte of rerank input, so the shipped path leaves it off.
@@ -92,8 +92,8 @@ model.
 
 Provenance: these captures were taken before `5f96827c` (the p3 rubric change) and before
 `0a2aa66c` (inflected query words in definition fusion). LateOn's hit@5 and hit@10 here are
-therefore two below the `fb125738` re-measurement of the same 28 questions: 13/21/23 with MRR
-0.5545, measured in the `0a2aa66c` differential at workspace `07ab8334`. The MRR column is MRR@10,
+therefore three below the `fb125738` re-measurement of the same 28 questions: 13/22/24 with MRR
+0.5664, measured in the `0a2aa66c` differential at workspace `07ab8334`. The MRR column is MRR@10,
 the mean of 1/rank for rank <= 10. Do not compare it across documents: the same 13/21/22 counts
 carry MRR@10 0.5509 in the `0a2aa66c` differential and 0.580697 in the 24 October rescore of
 capture C, so the two values use different inputs. Compare hit counts across builds.
@@ -248,10 +248,13 @@ turns `definition_discovery` off. This run uses the current rubric
 | A | native provider document | 20 | 25 | 25 | 0.7798 | 105,445 bytes | 806 ms |
 | D | native + symbol-metadata pass | 20 | 25 | 25 | 0.7798 | 104,196 bytes | 888 ms |
 | C | canonical, definition discovery off | 22 | 26 | 26 | 0.8393 | 166,424 bytes | 935 ms |
-| B | canonical, shipped flags | 22 | 26 | 26 | 0.8452 | 168,374 bytes | 993 ms |
+| B | canonical, shipped flags | 23 | 27 | 27 | 0.8810 | 168,374 bytes | 993 ms |
+
+All rows are re-scored with the `008b5a2b` f5 oracle. Only arm B changes: its
+accepted `src/flatc.cpp` `ParseFile` answer lifts it to 23/27/27 with MRR 0.8810.
 
 Four repeat runs at `fb125738` (three without and one with
-`symbol_metadata_bm25`) reproduce 22/26/26 and MRR 0.845 every time, with the
+`symbol_metadata_bm25`) reproduce 23/27/27 and MRR 0.881 every time, with the
 same 168,374-byte mean input and the same billed tokens. The metadata flag
 changes neither the ranks nor the rerank input at this build. One run bills
 1,209,744 provider tokens over the 28 questions: mean 43,205 per search, range
@@ -261,9 +264,9 @@ searches.
 Arm C is not a projection-only control: it also turns `definition_discovery`
 off. Its `p6` rank 3 against 2 for the shipped arm is that flag's effect, not
 the projection's. Against arm A, which keeps the shipped flags, the projection
-moves `r3` 3 → 2, `r7` absent → 1, and `p1` 3 → 1. It costs 60% more input
-bytes (168,374 against 105,445 per query, mean). In the single-run table its
-rerank median is 187 ms higher (993 against 806 ms).
+moves `r3` 3 → 2, `r7` absent → 1, `p1` 3 → 1, and `f5` absent → 1. It
+costs 60% more input bytes (168,374 against 105,445 per query, mean). In the
+single-run table its rerank median is 187 ms higher (993 against 806 ms).
 
 The symbol-metadata pass is not a gain under either document. On the native
 document (A → D) it changes no rank. Under the canonical projection it changes
@@ -272,28 +275,35 @@ document with the pass off.
 
 ### Matched three-run comparison (2026-10-25)
 
-Same 28 questions, same Publication, same flags, three fresh runs per arm at
-code `fb125738`. The LateOn arm's third run records docs-only `16fbd7eb`; the
-code and index are unchanged. Both arms see the same 116.3 mean rerank
+Same 28 questions, same Publication, same flags, three fresh runs per arm. The
+reranker path is `fb125738`, the token accounting is `7b7c23dc`, and the f5
+oracle is `008b5a2b`. The LateOn arm's third run records docs-only `16fbd7eb`;
+the code and index are unchanged. Both arms see the same 116.3 mean rerank
 candidates and the same 168,374 mean input bytes.
 
 | Reranker | hit@1 | hit@5 | hit@10 | MRR | Rerank median | Total median |
 |---|---|---|---|---|---|---|
-| Voyage `rerank-3-lite`, canonical | 22 | 26 | 26 | 0.8452 | 1,033 ms (899–1,157) | 2,234 ms (2,177–2,402) |
-| LateOn | 13 | 21 | 23 | 0.5545 | 2,576 ms (2,434–2,577) | 3,410 ms (3,255–3,688) |
+| Voyage `rerank-3-lite`, canonical | 23 | 27 | 27 | 0.8810 | 1,033 ms (899–1,157) | 2,234 ms (2,177–2,402) |
+| LateOn | 13 | 22 | 24 | 0.5664 | 2,576 ms (2,434–2,577) | 3,410 ms (3,255–3,688) |
 
 Every run produced the same hit counts and MRR, so the quality spread is zero.
-Voyage ranks 12 questions better and one worse (`p6` 1 → 2). Its rerank median
+Voyage ranks 13 questions better and one worse (`p6` 1 → 2). Its rerank median
 is 1,543 ms lower; the total median is 1,176 ms lower because retrieval and
 response overhead are shared.
 
 Definition fusion skips the Voyage `rerank-3` family. On the shipped path the
 post-fusion order equals the provider order on 28 of 28 queries.
 
+These runs predate `9abe9006` (the default-on `cleanup` → `destroy` bridge).
+The 28-query rerank-3 run at `5253c443` with the bridge scores hit@1/5/10
+23/28/28, MRR 0.8899, with no misses; the `rerank-3-lite` arm is not re-measured.
+
 ## Changes in the working tree
 
 Uncommitted at the time of writing. Committed since: the core fusion credit in
-`a9be87e3`, the `rerank-3` acceptance and fusion skip in `22a56c06`.
+`a9be87e3`, the `rerank-3` acceptance and fusion skip in `22a56c06`, the
+canonical projection in `fb125738`, the provider token accounting and eval
+arm override in `7b7c23dc`, and the f5 oracle in `008b5a2b`.
 
 - **Core fusion credit** (`packages/core/src/core/vector-candidate-fusion.ts`,
   `semantic-search-service.ts`): when the any-terms lexical arm filled its limit
@@ -335,10 +345,12 @@ Uncommitted at the time of writing. Committed since: the core fusion credit in
   projection arms have one run, so a one-question difference between them is
   within noise.
 - The projection table was measured at `0a2aa66c` on a fresh index. The matched
-  comparison is at `fb125738` on one Publication. The canonical projection sends
-  60% more bytes than the native document (168 KB against 105 KB per query,
-  mean). The native document is measured and scores lower (20/25/25, MRR
-  0.7798); no equivalence is claimed.
+  comparison uses the `fb125738` reranker path, the `7b7c23dc` token
+  accounting, and the `008b5a2b` f5 oracle, on one Publication built at
+  `0a2aa66c` and reused unchanged. The canonical projection sends 60% more bytes
+  than the native document (168 KB against 105 KB per query, mean). The native
+  document is measured and scores lower (20/25/25, MRR 0.7798); no equivalence
+  is claimed.
 - The fusion skip matches the literal model names `rerank-3` and
   `rerank-3-lite`. A different pass-through model name keeps definition fusion.
 - Fusion-off for `rerank-2.5` was replayed offline only.
@@ -352,17 +364,24 @@ Uncommitted at the time of writing. Committed since: the core fusion credit in
 
 The measurements support recommending Voyage `rerank-3` (or `rerank-3-lite`
 where cost matters) as the best-quality option, and keeping local LateOn as the
-offline default. Quote the result as measured on this eval: 22 of 28 owners at
+offline default. Quote the result as measured on this eval: 23 of 28 owners at
 rank 1 against 13, with the canonical projection. Using Voyage sends rerank
 documents (code excerpts) to a third party and is billed per token; say so next
 to the recommendation. One search bills 43,205 tokens on average, range
-24,664–60,404. At the listed `rerank-3-lite` price of $0.02 per million tokens,
+24,664–60,404. At the listed `rerank-3-lite` price of $0.02 per million tokens
+([Voyage pricing](https://docs.voyageai.com/docs/pricing), 25 October 2026),
 that is about $0.00086 per search, or $0.024 per 28-question pass, after the
 200-million-token free tier.
 
 ## Open
 
-- `r1` and `f5`: the owner never reaches the rerank window. This is retrieval
-  and admission work, independent of the reranker.
+- `r1`: the owner never reaches the rerank window. This is retrieval and
+  admission work, independent of the reranker. `9abe9006` later adds a
+  default-on `cleanup` → `destroy` behavior bridge; on the 28-query rerank-3 run
+  at `5253c443` it moves r1 from absent to rank 1 with no other case change
+  (hit@1/5/10 23/28/28, MRR 0.8899). The `rerank-3-lite` table above is not
+  re-measured with that bridge.
+- `f5` was an oracle mismatch, not a retrieval miss. Voyage ranks `src/flatc.cpp`
+  `ParseFile` first, and the `008b5a2b` oracle accepts it.
 - `r2` ranks low under every model.
 - Definition fusion itself is to be revisited in a separate session.

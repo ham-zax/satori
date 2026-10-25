@@ -1,8 +1,9 @@
 # Search miss triage: r7, p6, r1, f5, 25 October 2026
 
-Status: complete. No product code change. r7 and p6 need no work.
-r1 is a vocabulary gap with an existing caller-side repair. The f5 oracle is
-widened to accept the `flatc` entry point; the saved run re-scores at 27/28.
+Status: complete. No product code change from this note; the r1 bridge is a
+later commit (`9abe9006`). r7 and p6 need no work. r1 is a vocabulary gap with
+an existing caller-side repair. The f5 oracle is widened to accept the `flatc`
+entry point; the saved run re-scores at 27/28.
 
 ## Scope and method
 
@@ -125,6 +126,14 @@ Decision: no retrieval work. The existing caller-side `alt_terms` bridge is the
 repair. An automatic synonym bridge is a separate product change and has no
 measured design here.
 
+Later status (25 October 2026): `9abe9006` adds that bridge as the default-on
+`behavior_alt_terms` flag (`cleanup` → `destroy`). On the 28-query rerank-3 run
+at `5253c443` with the flag on, r1 moves from absent to rank 1 and no other case
+changes. The run scores hit@1/5/10 23/28/28, MRR 0.8899, with no misses. The
+flag-off baseline on the same build scores hit@1/5/10 22/27/27, MRR 0.8542, with
+r1 the only miss. The bridge is automatic now; the caller-side `alt_terms` entry
+remains a valid override.
+
 ## f5: no accepted symbol reaches the pool, and Voyage does not rank it
 
 Query: `where does flatc parse a schema file`. Focus: `neutral`
@@ -190,8 +199,10 @@ Action, 25 October 2026: the oracle now accepts `src/flatc.cpp` `ParseFile`.
 `FlatCompiler::ParseFile` at line 36 reads the schema file and calls
 `parser.Parse` at line 46, so it is the flatc entry point for the query.
 Re-scoring the saved run with the revised oracle moves f5 from absent to rank 1
-and changes no other case: hit@10 goes from 26/28 to 27/28. The only remaining
-miss is r1, which has the documented caller-side repair.
+and changes no other case: hit@1 goes from 22/28 to 23/28, hit@5 from 26/28 to
+27/28, hit@10 from 26/28 to 27/28, and MRR from 0.8452 to 0.8810. The only
+remaining miss is r1; the later `behavior_alt_terms` bridge fixes it (see the
+r1 later status).
 
 ## Limits
 

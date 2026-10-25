@@ -15,5 +15,5 @@
     "licenses": "node licenses.mjs"
   },
   "napi": { "binaryName": "projection" },
-  "devDependencies": { "@napi-rs/cli": "3.10.8", "tsx": "4.22.4", "@types/node": "22.19.0", "typescript": "6.0.3" }
+  "devDependencies": { "@napi-rs/cli": "3.10.8", "tsx": "4.22.4", "@types/node": "22.19.0", "typescript": "7.1.0-beta" }
 }

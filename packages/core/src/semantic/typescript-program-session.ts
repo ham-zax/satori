@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { API, type CompilerOptions, type Program, type ProjectReference, type Snapshot } from './typescript-api';
+import { API, type CompilerOptions, type ModuleResolver, type Program, type ProjectReference, type RawCompilerOptions, type ResolutionMode, type Snapshot } from './typescript-api';
 import { serverFS } from './typescript-api';
 
 export interface TypeScriptSourceReader {
@@ -14,6 +14,7 @@ export class TypeScriptProgramSession {
     private readonly api: InstanceType<typeof API>;
     private snapshot?: Snapshot;
     private program?: Program;
+    private moduleResolver?: ModuleResolver;
     private readonly overrides = new Map<string, string>();
     private readonly changed = new Set<string>();
     private disposed = false;
@@ -89,6 +90,18 @@ export class TypeScriptProgramSession {
 
     getResourceLimitFailure(): string | undefined {
         return this.sourceBudget?.getFailureMessage();
+    }
+
+    /**
+     * Resolves a specifier the program did not resolve itself, such as a
+     * `require()` argument in a TypeScript file. Uses the program's compiler
+     * options and the session's file overrides.
+     */
+    resolveModuleName(containingFile: string, specifier: string, mode: ResolutionMode): string | undefined {
+        if (this.disposed) throw new Error('TypeScript program session is disposed.');
+        this.moduleResolver ??= this.api.createModuleResolver(this.options as RawCompilerOptions);
+        const result = this.moduleResolver.resolveModuleName(specifier, path.dirname(path.resolve(containingFile)), mode);
+        return result.resolvedModule?.resolvedFileName;
     }
 
     updateFile(fileName: string, source: string): void {

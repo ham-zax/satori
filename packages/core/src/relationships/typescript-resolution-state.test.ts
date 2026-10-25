@@ -89,6 +89,42 @@ test('a fresh analyzer resumes a delta from persisted state, sharded or not', as
     }
 });
 
+test('a require() edge in a TypeScript file keeps its importer in the delta', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-require-')));
+    const files = ['src/a.ts', 'src/b.ts'];
+    const write = (file: string, text: string) => {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), text);
+    };
+    const analyzer = new TypeScriptSemanticProjectAnalyzer(4, undefined, 0, {
+        stateDirectory: fs.mkdtempSync(path.join(root, 'state-')),
+    });
+    try {
+        write('tsconfig.json', JSON.stringify({ compilerOptions: COMPILER_OPTIONS, include: ['src'] }));
+        write('src/a.ts', 'export const a = 1;\n');
+        write(
+            'src/b.ts',
+            'declare const require: (id: string) => { a: number };\nexport const b = require("./a").a;\n',
+        );
+        const before = registryFor(root, files);
+
+        await analyzer.analyze({ rootPath: root, language: 'typescript', registry: before });
+        write('src/a.ts', 'export const a = 2;\n');
+        const after = registryFor(root, files);
+        const delta = await analyzer.analyze({
+            rootPath: root,
+            language: 'typescript',
+            registry: after,
+            previousRegistry: before,
+            changedFiles: new Set(['src/a.ts']),
+        });
+        assert.deepEqual([...(delta.affectedSourceFiles ?? [])].sort(), ['src/a.ts', 'src/b.ts']);
+    } finally {
+        await analyzer.dispose();
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('an unreadable tsconfig only drops its own project instead of failing the analysis', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'satori-ts-broken-config-')));
     const write = (file: string, text: string) => {

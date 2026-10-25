@@ -58,6 +58,7 @@ type ProjectMode = 'configured' | 'inferred';
 interface ProgramSession {
     getProgram(): ts.Program;
     getResourceLimitFailure(): string | undefined;
+    resolveModuleName(containingFile: string, specifier: string, mode: ts.ResolutionMode): string | undefined;
     updateFile(fileName: string, source: string): void;
     /** Makes the next Program re-read `fileName` from disk. */
     invalidateFile(fileName: string): void;
@@ -348,19 +349,100 @@ function resolveProjectReferenceConfig(referencePath: string): string | undefine
     return resolveConfigLike(referencePath);
 }
 
-function referencedDeclarationOutputs(configPath: string): string[] {
+interface ReferenceDeclarationState {
+    /** Declaration outputs this config expects, normalized. */
+    readonly outputs: readonly string[];
+    /** Project references of this config, resolved to config paths. */
+    readonly references: readonly string[];
+    /** Outputs alone cannot prove readiness for this config. */
+    readonly unproven: boolean;
+}
+
+interface CachedReferenceDeclarationState {
+    readonly fingerprint: string;
+    readonly state: ReferenceDeclarationState;
+}
+
+// Emitting declarations builds the reference's whole program, which costs about
+// a second on a large project. Repeat analyses of the same reference reuse the
+// output list; the fingerprint covers the config chain and the file list, while
+// output existence is checked per analysis.
+const referenceDeclarationStates = new Map<string, CachedReferenceDeclarationState>();
+
+function projectReferenceConfigs(configPath: string): readonly string[] {
     const api = new ts.API({ runExternalCode: false });
     try {
-        const parsed = api.parseConfigFile(configPath);
-        if (!parsed.options.declaration && !parsed.options.composite) return [];
-        const program = api.createProgram(parsed.fileNames, { ...parsed.options, noEmit: false }, { projectReferences: parsed.projectReferences });
-        try {
-            // The compiler computes output paths, including declarationDir,
-            // outDir and bundled declarations. Never duplicate those rules.
-            return [...program.getDeclarationEmit(parsed.fileNames).outputFiles.keys()]
-                .filter(file => /\.d\.[cm]?ts$/.test(file)).map(normalizeAbsolute).sort();
-        } finally { program.dispose(); }
+        const parsed = api.parseConfigFile(normalizeAbsolute(configPath));
+        return (parsed.projectReferences ?? [])
+            .map(reference => resolveProjectReferenceConfig(reference.path))
+            .filter((value): value is string => value !== undefined);
     } finally { api.close(); }
+}
+
+function referenceDeclarationState(configPath: string): ReferenceDeclarationState {
+    const normalized = normalizeAbsolute(configPath);
+    const api = new ts.API({ runExternalCode: false });
+    try {
+        const parsed = api.parseConfigFile(normalized);
+        const references = (parsed.projectReferences ?? [])
+            .map(reference => resolveProjectReferenceConfig(reference.path))
+            .filter((value): value is string => value !== undefined);
+        const fingerprint = createHash('sha256').update(JSON.stringify({
+            chain: collectConfigChain(normalized).map(file => [file, fileContentHash(file)]),
+            files: parsed.fileNames,
+        })).digest('hex');
+        const cached = referenceDeclarationStates.get(normalized);
+        if (cached?.fingerprint === fingerprint) return cached.state;
+        let state: ReferenceDeclarationState;
+        if (!parsed.options.declaration && !parsed.options.composite) {
+            // A reference that emits no declarations cannot prove readiness: the
+            // checker still expects an output and reports TS6305 without it.
+            state = { outputs: [], references, unproven: true };
+        } else {
+            const program = api.createProgram(
+                parsed.fileNames,
+                { ...parsed.options, noEmit: false },
+                { projectReferences: parsed.projectReferences },
+            );
+            try {
+                // The compiler computes output paths, including declarationDir,
+                // outDir and bundled declarations. Never duplicate those rules.
+                state = {
+                    outputs: [...program.getDeclarationEmit(parsed.fileNames).outputFiles.keys()]
+                        .filter(file => /\.d\.[cm]?ts$/.test(file)).map(normalizeAbsolute).sort(),
+                    references,
+                    unproven: false,
+                };
+            } finally { program.dispose(); }
+        }
+        referenceDeclarationStates.set(normalized, { fingerprint, state });
+        return state;
+    } finally { api.close(); }
+}
+
+/**
+ * Proves that the checker cannot report TS6305 ("Output file has not been built
+ * from source file") for a configured project: every declaration output of
+ * every referenced project exists on disk. Native diagnostics stay
+ * authoritative, so this returns `undefined` whenever outputs alone cannot
+ * prove readiness: a missing output, a reference without declaration emit, or
+ * an unreadable config. A `true` result means no TS6305 is possible.
+ */
+export function referenceAuthorityReady(projectConfigPath: string): true | undefined {
+    const visited = new Set<string>();
+    const pending = [...projectReferenceConfigs(projectConfigPath)];
+    while (pending.length > 0) {
+        const configPath = pending.pop()!;
+        if (visited.has(configPath)) continue;
+        visited.add(configPath);
+        const state = referenceDeclarationState(configPath);
+        if (state.unproven) return undefined;
+        for (const output of state.outputs) {
+            if (!fs.existsSync(output)) return undefined;
+        }
+        pending.push(...state.references);
+    }
+    return true;
 }
 
 function packageControlFiles(rootPath: string, sourceFiles: readonly string[]): string[] {
@@ -397,7 +479,7 @@ function projectControlFiles(
             if (!referenceConfig) continue;
             referencedProjectKeys.add(configuredProjectKey(referenceConfig));
             for (const config of collectConfigChain(referenceConfig)) controls.add(config);
-            for (const output of referencedDeclarationOutputs(referenceConfig)) {
+            for (const output of referenceDeclarationState(referenceConfig).outputs) {
                 controls.add(output);
             }
         }
@@ -507,6 +589,30 @@ function transitiveDependents(
 }
 
 /**
+ * `require()` argument literals. The native `SourceFile.imports` omits them for
+ * TypeScript files, while the retired `preProcessFile(..., true, true)` scan
+ * included them. A missing edge here leaves an importer stale after the
+ * required target changes.
+ */
+function requireCallSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
+    const specifiers: ts.StringLiteralLikeNode[] = [];
+    const visit = (node: ts.Node): void => {
+        if (
+            ts.isCallExpression(node)
+            && node.arguments.length > 0
+            && ts.isIdentifier(node.expression)
+            && node.expression.text === 'require'
+        ) {
+            const argument = node.arguments[0];
+            if (ts.isStringLiteralLikeNode(argument)) specifiers.push(argument);
+        }
+        node.forEachChild(visit);
+    };
+    visit(sourceFile);
+    return specifiers;
+}
+
+/**
  * Import edges from this project's files, keyed by the imported file. Targets
  * include indexed files outside the project (a relative import into another
  * project's source), since a change there can change the importer's claims.
@@ -515,6 +621,7 @@ function buildReverseDependencies(
     program: ts.Program,
     plan: ProjectPlan,
     manifestPaths: ReadonlySet<string>,
+    session: ProgramSession,
 ): { reverse: Map<string, Set<string>>; unresolvedImports: boolean } {
     const relativeByAbsolute = new Map(
         plan.absoluteFiles.map((absolute, index) => [normalizeAbsolute(absolute), plan.relativeFiles[index]]),
@@ -538,10 +645,19 @@ function buildReverseDependencies(
         const sourceRelative = plan.relativeFiles[index];
         const sourceFile = sourceFileForProgram(program, sourceAbsolute);
         if (!sourceFile) continue;
-        for (const imported of sourceFile.imports) {
+        const required = requireCallSpecifiers(sourceFile);
+        const requiredSpecifiers = new Set<ts.Node>(required);
+        const specifiers = new Set<ts.Node>(sourceFile.imports);
+        for (const requiredLiteral of required) specifiers.add(requiredLiteral);
+        for (const imported of specifiers) {
             if (!ts.isStringLiteralLikeNode(imported)) continue;
             const mode = program.getModeForUsageLocation(sourceFile.fileName, imported);
-            const resolved = program.getResolvedModule(sourceFile.fileName, imported.text, mode)?.resolvedFileName;
+            // The program resolves import sites only, so a require() argument
+            // needs the session's resolver to become an edge.
+            const resolved = program.getResolvedModule(sourceFile.fileName, imported.text, mode)?.resolvedFileName
+                ?? (requiredSpecifiers.has(imported)
+                    ? session.resolveModuleName(sourceFile.fileName, imported.text, mode as ts.ResolutionMode)
+                    : undefined);
             if (!resolved) {
                 unresolvedImports = true;
                 continue;
@@ -613,14 +729,6 @@ function diagnosticIdentity(errors: readonly ts.Diagnostic[]): readonly number[]
     return errors.map((error) => error.code).sort((left, right) => left - right);
 }
 
-
-/** TypeScript 7 owns reference diagnostics, including declaration output readiness. */
-export function unbuiltReferenceImport(program: ts.Program, projectFiles: readonly string[]): boolean | undefined {
-    // Retain the established call contract while retiring the JS compiler's
-    // output-name and resolution fast path. Native diagnostics are authoritative.
-    void projectFiles;
-    return !program.getSemanticDiagnostics().some(diagnostic => diagnostic.code === 6305);
-}
 
 export interface TypeScriptSemanticAnalyzerOptions {
     /**
@@ -986,24 +1094,24 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             if (programResourceFailure) {
                 return resourceLimitEvidence(programResourceFailure, [1, planIndex.get(plan.key)!]);
             }
-            let referenceAuthorityReady = true;
+            let referenceReady = true;
             if (plan.referencedProjectKeys.length > 0) {
                 const referenceStartedAt = performance.now();
-                const fastDecision = unbuiltReferenceImport(program, plan.absoluteFiles);
-                referenceAuthorityReady = fastDecision
+                const proven = plan.configPath ? referenceAuthorityReady(plan.configPath) : undefined;
+                referenceReady = proven
                     ?? !program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
                 perfTrace('typescript.reference_authority', performance.now() - referenceStartedAt, {
                     project: plan.key,
-                    decision: fastDecision === undefined ? 'diagnostics' : 'fast',
-                    ready: referenceAuthorityReady,
+                    decision: proven === undefined ? 'diagnostics' : 'outputs',
+                    ready: referenceReady,
                 });
                 const diagnosticResourceFailure = session.getResourceLimitFailure();
                 if (diagnosticResourceFailure) {
                     return resourceLimitEvidence(diagnosticResourceFailure, [1, planIndex.get(plan.key)!]);
                 }
             }
-            projectReferenceAuthorityReady.set(plan.key, referenceAuthorityReady);
-            const dependencies = buildReverseDependencies(program, plan, manifestPaths);
+            projectReferenceAuthorityReady.set(plan.key, referenceReady);
+            const dependencies = buildReverseDependencies(program, plan, manifestPaths, session);
             const currentProjectGlobalFiles = projectGlobalSourceFiles(program, plan, manifestPaths);
             currentSnapshots.set(plan.key, {
                 environmentConfigId: plan.environmentConfigId,
@@ -1181,9 +1289,25 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     }
 
     private clearSessionState(): void {
-        for (const cached of this.sessions.values()) cached.session.dispose();
+        for (const cached of this.sessions.values()) this.disposeCachedSession(cached);
         this.sessions.clear();
         this.rootStates.clear();
+    }
+
+    /**
+     * Native disposal can fail after the client closes. Every caller keeps its
+     * maps consistent, so one failure must not skip the remaining disposals or
+     * leave a disposed session cached, and the idle timer must not throw.
+     */
+    private disposeCachedSession(cached: CachedSession): void {
+        try {
+            cached.session.dispose();
+        } catch (error) {
+            console.warn(
+                `[TypeScriptResolution] Failed to dispose the session for ${cached.key}: `
+                + `${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
     }
 
     /**
@@ -1234,7 +1358,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
     private releaseSession(key: string): void {
         const cached = this.sessions.get(key);
         if (!cached) return;
-        cached.session.dispose();
+        this.disposeCachedSession(cached);
         this.sessions.delete(key);
     }
 
@@ -1361,7 +1485,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             return existing.session;
         }
         if (existing) {
-            existing.session.dispose();
+            this.disposeCachedSession(existing);
             this.sessions.delete(plan.key);
         }
 
@@ -1388,7 +1512,7 @@ export class TypeScriptSemanticProjectAnalyzer implements ResolutionProjectAnaly
             const victim = [...this.sessions.values()].sort((left, right) => (
                 left.lastUsed - right.lastUsed || left.key.localeCompare(right.key)
             ))[0];
-            victim.session.dispose();
+            this.disposeCachedSession(victim);
             this.sessions.delete(victim.key);
         }
     }

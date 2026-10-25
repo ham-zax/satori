@@ -68,8 +68,26 @@ staged externally during this run. Parent performs no staging, reset, commits or
 Checkpoint: build passes. All 45 publication, equivalence, Flow and lazy-analyzer tests pass
 across eight files (4m 18s). Updated configured-project and resolution-state checks pass 14 tests,
 including injected snapshot-disposal failure with native process closure. Four lint smoke tests
-pass, including compiler coverage for the two retired ESLint rules. The dependency graph shows
+pass, including compiler coverage for the two retired ESLint rules. The workspace dependency graph shows
 only TypeScript 7.1.0-beta. Focused MCP/CLI checks and final repository check are running.
+Review round 1 (TS71-R) returned PASS WITH FINDINGS: 1 major, 6 minor, 1 nit. The major was a
+vacuous reference-readiness check that ran whole-program diagnostics, with a test that could not
+fail. Fix round 1 ran inline, with no extra dispatch:
+- `referenceAuthorityReady` proves TS6305 is impossible from the referenced declaration outputs
+  and returns `undefined` when outputs cannot prove it, so native diagnostics stay authoritative.
+- Declaration outputs are cached by config-chain and file-list fingerprint: 1240 ms to 49 ms on
+  the CLI project, and the repo's CLI/MCP projects prove readiness.
+- `require()` edges in TypeScript files are restored through a session-owned module resolver,
+  with a regression test that failed before the resolver existed.
+- Session disposal catches and reports per-session failures, so the idle timer cannot throw and
+  one failure cannot leave a disposed entry cached.
+- The standalone `experiments/napi-search-projections` manifest and lockfile move to 7.1.0-beta.
+Accepted and documented, not fixed: config diagnostics lose the circularity file chain (`{0}`
+placeholders), Flow recovery starts one native client per file, and `getDefinitionAtPosition`
+returns a reduced test probe. `@napi-rs/cli` still pins TypeScript 6.0.3 for the excluded
+experiment toolchain. Re-verified: `pnpm run check`, 31 heavy publication/equivalence tests, 32
+focused provider/equivalence/lazy/Flow tests, 15 configured-project/resolution-state tests, 30
+MCP, 34 CLI and 5 script tests.
 Adjacent finding, not a migration failure: `node scripts/sync-cbm-language-map.mjs --check`
 successfully uses the new transpiler but reports a stale generated map. The unchanged map pins
 CBM 11b662f9; the separate CBM checkout is at 3457b21b. No map regeneration is authorized or performed.
@@ -78,5 +96,5 @@ CBM 11b662f9; the separate CBM checkout is at 3457b21b. No map regeneration is a
 |---|---|---|---|---|---|
 | T1 | review | - | deepseek-v4.1-flash-free (T3 `node:delegated-task:command%3Amcp%3A39d636c5-d402-4155-a6a1-53cddf9f88cd%3Adelegate-task%3At1-blend-heldout-20261025-r1`) | Held-out 30q (gin, Flask) on LateOn, same build and indexes: blend-on keeps every hit blend-off has, and improves hit@1 or MRR. Per-query ranks, provenance and metric table reported. | Met on hits and on hit@1/MRR; not met on per-query rank. `/tmp/satori-blend-heldout-20261025/{off,on}`. git `8f72ce70`, dirtyTreeHash `8c327d53…`, lateon, only `rerank_blend` differs. hit@1 10→12, hit@5 20→20, MRR 0.4712→0.5078, fused recall 28/30 both, hits 24/24 with no hit lost or gained. Ranks moved on 6 cases: gained g10 6→1, g12 7→1, f4 3→1; lost g3 1→5, g8 2→8, g14 4→6. 3 up, 3 down. Verified by the orchestrator from both `result.json` and `harness-summary.md`. Logs: `/tmp/satori-blend-heldout-20261025/logs/{off,on}.log`. |
 | T2 | blocked | T1 | unassigned | `rerank_blend` is enabled only for the LateOn provider; an explicit `false` from the caller and from `SATORI_SEARCH_FLAGS` both win over the gate; focused tests cover both explicit-off paths. | Blocked by T1: the held-out split shows +2 hit@1 and +0.037 MRR against 3 gained and 3 lost ranks on 6 changed cases out of 30. That is not a provider-specific win, so the gate has no evidence to key on. Needs Hamza's decision. |
-| TS71-A | in-progress | - | OpenCode DeepSeek V4.1 Flash, max | Port all first-party TypeScript runtime/build consumers to 7.1.0-beta, including analyzer/session/AST/config APIs and compiler-version state identity. Preserve existing semantics and resource/process cleanup. Update manifests, lockfile, affected documentation and tests. `pnpm run check`, build, existing TypeScript configured-project/provider/adversarial/resolution-state tests and TypeScript publication/equivalence tests pass. Report third-party peer constraints honestly. Refs and constraints above. | Dispatch 1/2. T3 taskId `node:delegated-task:command%3Amcp%3Ae4c682c1-b486-4947-8484-45cf645f6dad%3Adelegate-task%3Asatori-ts71-a-20261025-r1`. Returned running, provider `opencode`, model `zengate/deepseek-v4.1-flash-free`, variant `max`. Parent checks acceptance on return. |
-| TS71-R | open | TS71-A | OpenCode DeepSeek V4.1 Flash, max | One read-only independent review of the complete migration diff against TS71-A, preservation of existing edits, public evidence contracts, process cleanup, resource limits, version identity, mapper execution disabled, and regression coverage. Report concrete defects with files and checks, or no findings. | Not dispatched. |
+| TS71-A | review | - | OpenCode DeepSeek V4.1 Flash, max | Port all first-party TypeScript runtime/build consumers to 7.1.0-beta, including analyzer/session/AST/config APIs and compiler-version state identity. Preserve existing semantics and resource/process cleanup. Update manifests, lockfile, affected documentation and tests. `pnpm run check`, build, existing TypeScript configured-project/provider/adversarial/resolution-state tests and TypeScript publication/equivalence tests pass. Report third-party peer constraints honestly. Refs and constraints above. | Dispatch 1/2. T3 taskId `node:delegated-task:command%3Amcp%3Ae4c682c1-b486-4947-8484-45cf645f6dad%3Adelegate-task%3Asatori-ts71-a-20261025-r1`. Returned running, provider `opencode`, model `zengate/deepseek-v4.1-flash-free`, variant `max`. Continuation authorized the parent to implement inline. All acceptance checks pass after fix round 1: `pnpm run check`, build, publication/equivalence, provider/adversarial, configured-project/resolution-state, MCP, CLI and script tests. Awaiting Hamza. |
+| TS71-R | review | TS71-A | OpenCode DeepSeek V4.1 Flash, max | One read-only independent review of the complete migration diff against TS71-A, preservation of existing edits, public evidence contracts, process cleanup, resource limits, version identity, mapper execution disabled, and regression coverage. Report concrete defects with files and checks, or no findings. | Dispatch 2/2, T3 taskId `node:delegated-task:command%3Amcp%3A69ffc3e2-54fb-488f-a5c4-ed1efd0f46e6%3Adelegate-task%3Asatori-ts71-r-review-20261025-r1`. Verdict PASS WITH FINDINGS: 1 major, 6 minor, 1 nit. No blocker. Findings 1 and 2 fixed in round 1, finding 3 fixed with a regression test, finding 5 hardened, finding 7 corrected. Findings 4, 6 and 8 documented as accepted. Re-verified by the parent. Awaiting Hamza. |

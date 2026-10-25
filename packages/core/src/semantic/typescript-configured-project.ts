@@ -244,6 +244,9 @@ export class TypeScriptLanguageServiceSession {
     get options(): ts.CompilerOptions { return this.project.options; }
     getProgram(): ts.Program { return this.session.getProgram(); }
     getResourceLimitFailure(): string | undefined { return this.session.getResourceLimitFailure(); }
+    resolveModuleName(containingFile: string, specifier: string, mode: ts.ResolutionMode): string | undefined {
+        return this.session.resolveModuleName(containingFile, specifier, mode);
+    }
 
     getDefinitionAtPosition(fileName: string, position: number): readonly { fileName: string; kind: string }[] {
         const program = this.getProgram();

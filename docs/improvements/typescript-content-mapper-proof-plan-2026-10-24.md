@@ -3,6 +3,9 @@
 ## Migration update, 25 October 2026
 
 The repository migration targets `typescript@7.1.0-beta` for runtime analysis and builds.
+Every first-party manifest uses `7.1.0-beta`, including the standalone
+`experiments/napi-search-projections` package. That experiment's toolchain still brings
+`typescript@6.0.3` transitively through `@napi-rs/cli`; no Satori code uses it.
 The analyzer uses the native synchronous API, snapshots and compiler-owned reference diagnostics.
 `disableSourceOfProjectReferenceRedirect: true` preserves built-declaration authority and TS6305
 for missing outputs. The compiler computes declaration output paths through `getDeclarationEmit`.

@@ -11,7 +11,7 @@ import {
     TypeScriptConfigReadError,
     loadTypeScriptConfiguredProject,
 } from './typescript-configured-project';
-import { unbuiltReferenceImport } from '../relationships/typescript-semantic-analyzer';
+import { referenceAuthorityReady } from '../relationships/typescript-semantic-analyzer';
 import { TypeScriptProgramSession } from './typescript-program-session';
 
 function write(fileName: string, content: string): void {
@@ -186,8 +186,8 @@ test('configured TypeScript project records and resolves a representative projec
             assert.equal(unbuiltSession.configuredFiles.includes(excluded.replace(/\\/g, '/')), false);
             const diagnostics = unbuiltSession.getProgram().getSemanticDiagnostics();
             assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [6305]);
-            // The fast TS6305 decision agrees with the checker without type-checking.
-            assert.equal(unbuiltReferenceImport(unbuiltSession.getProgram(), [appSource]), false);
+            // The output check cannot prove readiness when the reference is unbuilt.
+            assert.equal(referenceAuthorityReady(appConfig), undefined);
             const aliasDefinition = unbuiltSession.getDefinitionAtPosition(
                 appSource,
                 appText.indexOf('Shared().run'),
@@ -213,7 +213,7 @@ test('configured TypeScript project records and resolves a representative projec
         const builtSession = new TypeScriptLanguageServiceSession(appConfig);
         try {
             assert.equal(builtSession.getProgram().getSemanticDiagnostics().length, 0);
-            assert.equal(unbuiltReferenceImport(builtSession.getProgram(), [appSource]), true);
+            assert.equal(referenceAuthorityReady(appConfig), true);
             assert.equal(
                 definitionFile(builtSession, appSource, appText, 'Shared().run'),
                 path.join(root, 'lib/dist/index.d.ts').replace(/\\/g, '/'),
@@ -244,7 +244,7 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
             const program = api.createProgram(parsed.fileNames, { ...parsed.options, disableSourceOfProjectReferenceRedirect: true }, { projectReferences: parsed.projectReferences });
             try {
                 const reportsTs6305 = program.getSemanticDiagnostics().some((diagnostic) => diagnostic.code === 6305);
-                return { fast: unbuiltReferenceImport(program, parsed.fileNames), reportsTs6305 };
+                return { fast: referenceAuthorityReady(config), reportsTs6305 };
             } finally { program.dispose(); }
         } finally { api.close(); }
     };
@@ -265,7 +265,7 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         write(path.join(root, 'app/src/a.ts'), 'import { c } from "../../core/src/c";\nexport const a = c;\n');
         const indirect = decide(indirectConfig);
         assert.equal(indirect.reportsTs6305, true);
-        assert.notEqual(indirect.fast, true);
+        assert.equal(indirect.fast, undefined);
 
         // A bare require() in a TypeScript file is not a module import.
         const requireConfig = path.join(root, 'req/tsconfig.json');
@@ -276,7 +276,7 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         );
         const bareRequire = decide(requireConfig);
         assert.equal(bareRequire.reportsTs6305, false);
-        assert.notEqual(bareRequire.fast, false);
+        assert.equal(bareRequire.fast, undefined);
 
         // NodeNext: the import condition reaches a built entry, the require
         // condition an unbuilt one. Only the import condition applies here.
@@ -298,7 +298,7 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         write(path.join(root, 'esm-app/src/a.ts'), 'import { esm } from "dual";\nexport const a = esm;\n');
         const nodeNext = decide(esmConfig);
         assert.equal(nodeNext.reportsTs6305, false);
-        assert.notEqual(nodeNext.fast, false);
+        assert.equal(nodeNext.fast, undefined);
 
         // A referenced project that emits no declarations: the checker still
         // expects its declaration output and reports TS6305 without it.
@@ -310,7 +310,7 @@ test('the fast TS6305 decision agrees with the checker for indirect references, 
         write(path.join(root, 'plain-app/src/a.ts'), 'import { p } from "../../plain/src/p";\nexport const a = p;\n');
         const plain = decide(plainConfig);
         assert.equal(plain.reportsTs6305, true);
-        assert.notEqual(plain.fast, true);
+        assert.equal(plain.fast, undefined);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

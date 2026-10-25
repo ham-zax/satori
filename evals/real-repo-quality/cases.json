@@ -252,9 +252,14 @@
               "pathRegex": "^crates/(polars-io/src/parquet/read|polars-parquet/src/arrow/read|polars-stream/src/nodes/io_sources/parquet)/",
               "symbolRegex": null,
               "evidence": "crates/polars-io/src/parquet/read/reader.rs:33 impl ParquetReader; crates/polars-io/src/parquet/read/read_impl.rs"
+            },
+            {
+              "pathRegex": "^crates/polars-sql/src/table_functions\\.rs$",
+              "symbolRegex": "^read_parquet$",
+              "evidence": "crates/polars-sql/src/table_functions.rs:98 read_parquet table function; dispatches to the IO layer"
             }
           ],
-          "justification": "Rust Parquet readers; python read_parquet wrapper not acceptable."
+          "justification": "Rust Parquet readers and the SQL read_parquet table function; python read_parquet wrapper not acceptable."
         },
         {
           "id": "p7",
@@ -339,9 +344,14 @@
               "pathRegex": "(^|/)([Vv]erifier|TableVerifier|Verifiable)\\.(h|rs|swift|cs|java|kt|ts|go|py)$",
               "symbolRegex": null,
               "evidence": "include/flatbuffers/verifier.h:119 VerifyTable, :185 VerifyTableStart; rust/flatbuffers/src/verifier.rs; swift/Sources/FlatBuffers/TableVerifier.swift"
+            },
+            {
+              "pathRegex": "(^|/)FlatBufferVerify\\.cs$",
+              "symbolRegex": null,
+              "evidence": "net/FlatBuffers/FlatBufferVerify.cs:89 public class Verifier; :596 VerifyTable"
             }
           ],
-          "justification": "Coordinator: runtime verifier table verification; generated Verify() methods not acceptable."
+          "justification": "Coordinator: runtime verifier table verification (C++ verifier.h, C# Verifier in FlatBufferVerify.cs); generated Verify() methods not acceptable."
         },
         {
           "id": "f3",

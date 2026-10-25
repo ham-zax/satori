@@ -8,7 +8,7 @@ type RankedCandidate = {
     score: number;
 };
 
-/** Backend-arm RRF policy v1. MCP multi-pass fusion has a separate policy. */
+/** Backend-arm RRF constant. MCP multi-pass fusion has a separate constant. */
 export const VECTOR_CANDIDATE_RRF_K_V1 = 100;
 
 function assertValidCandidate(candidate: VectorCandidate): void {
@@ -90,6 +90,7 @@ export function fuseVectorCandidatesWithRrf(input: {
     }
 
     const candidatesById = new Map<string, RankedCandidate>();
+    const scoresByOwner = new Map<string, number>();
     const addRankedArm = (arm: readonly VectorCandidate[]): {
         readonly contributors: readonly VectorCandidate[];
         readonly ownerIds: ReadonlySet<string>;
@@ -113,6 +114,7 @@ export function fuseVectorCandidatesWithRrf(input: {
             contributors.push(candidate);
             rank++;
             const score = 1 / (input.k + rank);
+            scoresByOwner.set(ownerId, (scoresByOwner.get(ownerId) ?? 0) + score);
             const existing = candidatesById.get(candidate.document.id);
             if (existing) {
                 assertMatchingDocument(existing.document, candidate.document);
@@ -130,10 +132,15 @@ export function fuseVectorCandidatesWithRrf(input: {
         return { contributors, ownerIds: seenOwnerIds };
     };
 
-    addRankedArm(input.dense);
+    const dense = addRankedArm(input.dense);
+    const denseRepresentatives = new Map(dense.contributors.map(candidate => (
+        [vectorCandidateOwnerId(candidate), candidate.document.id]
+    )));
     const lexical = addRankedArm(input.lexical);
+    const lexicalOwnerIds = new Set(lexical.ownerIds);
     if (input.lexicalFallback) {
         const fallback = addRankedArm(input.lexicalFallback);
+        for (const ownerId of fallback.ownerIds) lexicalOwnerIds.add(ownerId);
         if (input.lexicalFallbackLimit !== undefined
             && input.lexicalFallback.length >= input.lexicalFallbackLimit) {
             const cutScore = 1 / (input.k + fallback.ownerIds.size + 1);
@@ -145,13 +152,31 @@ export function fuseVectorCandidatesWithRrf(input: {
                     ...existing,
                     score: existing.score + cutScore,
                 });
+                const ownerId = vectorCandidateOwnerId(candidate);
+                scoresByOwner.set(ownerId, (scoresByOwner.get(ownerId) ?? 0) + cutScore);
             }
         }
     }
 
     return Array.from(candidatesById.values())
+        .map(candidate => {
+            const owner = candidate.document.metadata.ownerSymbolInstanceId;
+            const ownerId = vectorCandidateOwnerId(candidate);
+            // Dense and lexical retrieval corroborate the published symbol even
+            // when they select different chunks. Keep both chunks as evidence.
+            // Two lexical requests alone do not establish independent agreement.
+            const corroborated = typeof owner === 'string' && owner.length > 0
+                && dense.ownerIds.has(ownerId) && lexicalOwnerIds.has(ownerId);
+            return {
+                ...candidate,
+                score: corroborated ? scoresByOwner.get(ownerId)! : candidate.score,
+                representativeId: corroborated ? denseRepresentatives.get(ownerId)! : candidate.document.id,
+            };
+        })
         .sort((left, right) => (
             right.score - left.score
+            || compareContractStrings(left.representativeId, right.representativeId)
+            || Number(right.document.id === right.representativeId) - Number(left.document.id === left.representativeId)
             || compareContractStrings(left.document.id, right.document.id)
         ))
         .slice(0, input.limit)

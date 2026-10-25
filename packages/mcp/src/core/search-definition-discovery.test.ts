@@ -82,6 +82,25 @@ test("whole acronym spelling survives segmentation and file fallback stays a fil
     assert.equal(file.kind, "file");
 });
 
+test("name coverage does not spend a body-relevant implementation's slot on its file's helpers", () => {
+    const names = ["recordAssessment", "rebuildWeaknesses", "rebuildObjectives", "loadEvidence", "getLearner", "loadProjection"];
+    const result = order(names.map(name => metadata(name, "src/kernel/evidence.ts")),
+        "Where does the kernel turn a graded attempt into durable evidence and rebuild learner objectives and weaknesses?");
+
+    assert.equal(result.items[0]?.originalIndex, 0);
+    assert.deepEqual(new Set(result.items.map(item => item.originalIndex)), new Set(names.map((_, index) => index)));
+});
+
+test("missing name evidence abstains on a behavior description instead of dropping the provider's owner", () => {
+    const names = ["applyAsrAttributionPolicy", "error", "product", "transcription", "speech", "learner", "artifact"];
+    const result = order(names.map((name, index) => metadata(name,
+        index === 0 ? "src/communication/asr-gate.ts" : `src/cli-${index}.ts`)),
+    "Where does the product decide whether a speech transcription error is the learner mistake or an artifact?");
+
+    assert.equal(result.items[3]?.originalIndex, 0);
+    assert.equal(result.items[3]?.providerRank, 1);
+});
+
 test("new publication metadata invalidates the identity cache", () => {
     const prior = metadata("tradeWorkflow", "src/actions.ts");
     const changed = metadata("drawWidget", "src/actions.ts");

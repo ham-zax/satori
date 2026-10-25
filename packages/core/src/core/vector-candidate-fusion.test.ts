@@ -43,6 +43,54 @@ test('Core RRF fusion combines independent arms and deduplicates repeated IDs', 
     assert.equal(results.find((result) => result.document.id === 'dense')?.score, 1 / 102);
 });
 
+test('Core RRF fusion corroborates a dense owner when lexical search selects another chunk', () => {
+    const owner = { relativePath: 'src/owner.ts', metadata: { ownerSymbolInstanceId: 'owner' } };
+    const other = candidate('other', 8);
+    for (const mode of ['lexical', 'fallback', 'both']) {
+        const lexical = [candidate('tail', 10, owner), other];
+        const results = fuseVectorCandidatesWithRrf({
+            dense: [candidate('head', 10, owner), other],
+            lexical: mode === 'fallback' ? [] : lexical,
+            ...(mode !== 'lexical' ? { lexicalFallback: lexical } : {}),
+            k: VECTOR_CANDIDATE_RRF_K_V1,
+            limit: 3,
+        });
+
+        assert.deepEqual(results.map(result => result.document.id), ['head', 'tail', 'other']);
+        const votes = mode === 'both' ? 3 : 2;
+        assert.equal(results[0]?.score, votes / 101);
+        assert.equal(results[1]?.score, votes / 101);
+        assert.equal(results[2]?.score, votes / 102);
+    }
+});
+
+test('Core RRF fusion does not merge unknown owners or the same symbol ID in different files', () => {
+    for (const owner of [
+        { relativePath: 'src/shared.ts', metadata: {} },
+        { metadata: { ownerSymbolInstanceId: 'owner' } },
+    ]) {
+        const results = fuseVectorCandidatesWithRrf({
+            dense: [candidate('head', 10, owner), candidate('other', 8)],
+            lexical: [candidate('tail', 10, owner), candidate('other', 8)],
+            k: VECTOR_CANDIDATE_RRF_K_V1,
+            limit: 3,
+        });
+        assert.equal(results[0]?.document.id, 'other');
+    }
+});
+
+test('Core RRF fusion retains the dense representative when a corroborated owner exceeds the result budget', () => {
+    const owner = { relativePath: 'src/owner.ts', metadata: { ownerSymbolInstanceId: 'owner' } };
+    const results = fuseVectorCandidatesWithRrf({
+        dense: [candidate('z-head', 10, owner)],
+        lexical: [candidate('a-tail', 10, owner)],
+        k: VECTOR_CANDIDATE_RRF_K_V1,
+        limit: 1,
+    });
+    assert.equal(results[0]?.document.id, 'z-head');
+    assert.equal(results[0]?.score, 2 / 101);
+});
+
 test('Core RRF fusion orders equal-score arms before assigning ranks', () => {
     const fuse = (dense: VectorCandidate[]) => fuseVectorCandidatesWithRrf({
         dense,

@@ -85,7 +85,8 @@ function inflectedBaseTerm(term: string, corpusHas: (term: string) => boolean): 
  * provider order using the existing RRF constant. A path category alone
  * never promotes a candidate: its definition fields must match the query.
  * File targets retain a location vote as a truthful fallback; they are not
- * converted into symbols. Ties preserve provider order.
+ * converted into symbols. Equal fused votes favor observed definition evidence
+ * over abstention, then preserve provider order.
  */
 export function fuseDefinitionDiscovery<T extends { originalIndex: number; providerRank: number }>(input: {
     items: readonly T[];
@@ -128,25 +129,45 @@ export function fuseDefinitionDiscovery<T extends { originalIndex: number; provi
     const definitionRank = new Map([...scores.keys()]
         .sort((a, b) => scores.get(b)! - scores.get(a)! || a.originalIndex - b.originalIndex)
         .map((item, index) => [item, index + 1]));
-    const score = (item: T) => 1 / (SEARCH_RRF_K + item.providerRank)
-        + (definitionRank.has(item) ? 1 / (SEARCH_RRF_K + definitionRank.get(item)!) : 0);
-    const items = [...input.items].sort((a, b) => score(b) - score(a) || a.providerRank - b.providerRank);
     const evidenceByItem = new Map(docs.map(doc => [doc.item, doc]));
+    const score = (item: T) => {
+        const evidence = evidenceByItem.get(item)!;
+        // A behavior description need not share the implementation's name.
+        // Missing definition evidence retains a bounded last-place prior for
+        // an actual implementation. It is not evidence against the body.
+        // Single-term lookup and supporting/file targets keep lexical semantics.
+        const abstentionRank = queryTerms.length > 1 && evidence.ownerTerms.length > 0
+            && evidence.metadata?.kind !== "file" ? scores.size + 1 : undefined;
+        const rank = definitionRank.get(item) ?? abstentionRank;
+        return 1 / (SEARCH_RRF_K + item.providerRank)
+            + (rank !== undefined ? 1 / (SEARCH_RRF_K + rank) : 0);
+    };
+    const items = [...input.items].sort((a, b) => score(b) - score(a)
+        || Number(definitionRank.has(b)) - Number(definitionRank.has(a))
+        || a.providerRank - b.providerRank);
     const fileSlots = new Map<string, number[]>();
     items.forEach((item, index) => {
         const file = evidenceByItem.get(item)?.metadata?.file;
         if (file) fileSlots.set(file, [...(fileSlots.get(file) ?? []), index]);
     });
-    // A file-diversity cap must not spend an owner's slots on generic helpers
-    // before its more specific definition. Change only the order within each
-    // file's existing slots; do not promote files or increase disclosure.
+    // Name coverage compares definitions the query actually names. Preserve
+    // provider order within the file for implementations named only by behavior.
+    // Supporting/file targets can still yield a slot to a matching definition.
     const coverage = (item: T) => {
         const terms = evidenceByItem.get(item)!.ownerTerms;
         return queryTerms.filter(term => terms.includes(term)).length;
     };
     for (const slots of fileSlots.values()) {
         const withinFile = slots.map(index => items[index]!)
+            .sort((a, b) => a.providerRank - b.providerRank);
+        const matchingSlots = withinFile.map(item => {
+            const evidence = evidenceByItem.get(item)!;
+            return coverage(item) > 0 || evidence.ownerTerms.length === 0
+                || evidence.metadata?.kind === "file";
+        }).flatMap((matches, index) => matches ? [index] : []);
+        const matchingDefinitions = matchingSlots.map(index => withinFile[index]!)
             .sort((a, b) => coverage(b) - coverage(a) || score(b) - score(a) || a.providerRank - b.providerRank);
+        matchingSlots.forEach((slot, index) => { withinFile[slot] = matchingDefinitions[index]!; });
         slots.forEach((slot, index) => { items[slot] = withinFile[index]!; });
     }
     return { items, applied: true };

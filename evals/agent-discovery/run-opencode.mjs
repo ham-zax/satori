@@ -7,7 +7,20 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
+import { API } from "typescript/sync";
+import {
+    getChildren,
+    getNameOfDeclaration,
+    isCallExpression,
+    isFunctionDeclaration,
+    isIdentifier,
+    isMethodDeclaration,
+    isPropertyAccessExpression,
+    isPropertyAssignment,
+    isPropertySignatureDeclaration,
+    isVariableDeclaration,
+    ScriptKind,
+} from "typescript/ast";
 import {
     JsonRpcStdioSession,
     decodeToolResponse,
@@ -245,22 +258,22 @@ export function loadTaskManifest(file = DEFAULT_TASKS_FILE) {
 }
 
 function declarationName(node, sourceFile) {
-    return node.name?.getText(sourceFile) ?? null;
+    return getNameOfDeclaration(node)?.getText(sourceFile) ?? null;
 }
 
 function findNamedDeclaration(sourceFile, symbolName) {
     let match = null;
     const visit = (node) => {
         if (!match && declarationName(node, sourceFile) === symbolName
-            && (ts.isFunctionDeclaration(node)
-                || ts.isMethodDeclaration(node)
-                || ts.isVariableDeclaration(node)
-                || ts.isPropertySignature(node)
-                || ts.isPropertyAssignment(node))) {
+            && (isFunctionDeclaration(node)
+                || isMethodDeclaration(node)
+                || isVariableDeclaration(node)
+                || isPropertySignatureDeclaration(node)
+                || isPropertyAssignment(node))) {
             match = node;
             return;
         }
-        ts.forEachChild(node, visit);
+        for (const child of getChildren(node)) visit(child);
     };
     visit(sourceFile);
     return match;
@@ -269,13 +282,12 @@ function findNamedDeclaration(sourceFile, symbolName) {
 function sourceFileFor(repoRoot, relativeFile) {
     const absoluteFile = path.join(repoRoot, relativeFile);
     const sourceText = fs.readFileSync(absoluteFile, "utf8");
-    return ts.createSourceFile(
-        absoluteFile,
-        sourceText,
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TS,
-    );
+    const api = new API();
+    try {
+        return api.createSourceFile(absoluteFile, sourceText, { scriptKind: ScriptKind.TS }).sourceFile;
+    } finally {
+        api.close();
+    }
 }
 
 export function inspectNamedSymbol(repoRoot, relativeFile, symbolName) {
@@ -299,16 +311,16 @@ export function inspectNamedSymbol(repoRoot, relativeFile, symbolName) {
 function declarationCalls(sourceFile, declaration, targetName) {
     let called = false;
     const visit = (node) => {
-        if (ts.isCallExpression(node)) {
+        if (isCallExpression(node)) {
             const expression = node.expression;
-            const calledName = ts.isIdentifier(expression)
+            const calledName = isIdentifier(expression)
                 ? expression.text
-                : ts.isPropertyAccessExpression(expression)
+                : isPropertyAccessExpression(expression)
                     ? expression.name.text
                     : null;
             if (calledName === targetName) called = true;
         }
-        ts.forEachChild(node, visit);
+        for (const child of getChildren(node)) visit(child);
     };
     visit(declaration);
     return called;

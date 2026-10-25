@@ -166,6 +166,7 @@ bounds, fingerprint invalidation, per-analyzer disposal and metadata-only idle c
 | TS71-F | review | TS71-A, TS71-R | parent inline | Regression tests reproduce directory outputs accepted as declarations and metadata counted as source. Repair both without bypassing JSON-source budgets. Focused semantic and publication checks plus pnpm run check pass. Commit the scoped fix on master, preserving existing migration commits. | Inline repair from clean e2cd3ce8. Three regression cases failed before repair. Final checks pass: pnpm run check, 43 core tests across five files, 37 agent-discovery eval tests, 507 script tests. Task-key start remains line 227. Only this ledger, the two owning files and their focused test file change. The scoped commit integrates on master, which already contains all handoff commits. Awaiting Hamza. |
 | TS71-M | review | TS71-F | parent inline | Bound JSON allocation before native parsing without treating metadata as source. Bound and own reference-cache retention, with cleanup and unchanged readiness results. Three-run measurements, mutation checks, focused tests and repository check pass. Integrate on local master. | Authorized inline follow-up from clean 8886865b. No new dispatch. Three-run evidence above: oversized JSON data reads 8388620→0 bytes, phase median 120.883→11.072 ms. Cache disposal releases proof entries, warm lookups avoid recomputation, stale-fingerprint mutation fails the regression. Final checks pass: 76 core tests across 12 files, 507 script tests, pnpm run check, git diff --check. Exact-target start remains line 227. Scoped integration on local master preserves all handoff commits. Awaiting Hamza. |
 | DEP-A | review | TS71-M | parent inline | Update npm dependencies across all first-party manifests and both lockfiles to current latest releases. Preserve TypeScript 7.1 beta and workspace links. Raise Node minimum to 22.22, as Hamza authorizes, and synchronize managed native-runtime versions. Repository check, build, scripts, affected runtime tests and experiment checks pass. Record upstream constraints. | Direct request on 25 October 2026. Snapshot: clean master 7cfee54f. No dispatches. Updated 13 direct npm dependencies including napi CLI 3.10.9 and Chokidar 6. Both outdated checks return {}. Check/build/507 scripts pass. Core reports 1083 passed, 2 skipped. MCP: 1251 source tests and 2 compiled real-model tests pass on Node 22.22. CLI: 482 pass on Node 22.22. Native Chokidar event/cleanup passes. Napi debug/release builds, typecheck, 20 fault tests and 17 release tests pass (3 release-only skips). Upstream constraints and source-harness limits below. Final diff checked. Integrate on local master. Awaiting Hamza. |
+| LOCAL-A | review | DEP-A | parent inline | Show how agents use the unpublished local build. Measure current LateOn and Voyage rerank-3-lite through local MCP on the same 28 pinned queries, current oracle and frozen build. Use the same task-owned index and local embeddings. Activate all supported clients after Hamza selects them, preserving unrelated settings, models and ranking code. Report quality and execution failures honestly. | Code build 9753ced1. No dispatch. Matched current-oracle runs: LateOn MRR 0.585, hit@1 14/28, hit@5 22/28; Voyage rerank-3-lite MRR 0.958, hit@1 26/28, hit@5 28/28. All queries return ok, with no reranker failure markers. Same source commits, navigation manifests, flags and oracle hash. Both process scopes exit 0. Hamza selects all clients. Canonical local activation and preflight pass, and config readback checks Codex/Claude/OpenCode/AGY use the stable launcher. Launcher now selects repo packages/mcp/dist/index.js with offline/LateOn. Restart existing MCP client connections to load it. Evidence below. Awaiting Hamza. |
 
 ## Dependency refresh checkpoint
 
@@ -224,3 +225,44 @@ Its README already gives the correct command, which the final install and checks
 Future runs must read standalone commands before invoking pnpm. Final self-review finds no
 additional in-scope defect. Runtime code changes only widen rejection types and preserve the
 guarded IPC call. No new runtime owner, branch, fallback or compatibility layer is introduced.
+
+## Local build comparison, 25 October 2026
+
+LOCAL-A uses the fresh build at 9753ced1. Only this ledger differs from that commit.
+Do not edit the build or ledger between provider runs. The harness connects an MCP client to
+packages/mcp/dist/index.js directly, reuses installed local model files, and makes no client
+configuration or npm-release changes. Model paths and the Voyage credential are available.
+Fresh state: /home/hamza/.cache/satori-eval-state-local-9753ced1-20261025-r1 .
+Results: /home/hamza/.cache/satori-eval-results/local-9753ced1-20261025-r1/{lateon,voyage} .
+Use the current unchanged evals/real-repo-quality/cases.json, 28 queries. Run run.mjs with
+--flags rerank_blend=false and that state root. LateOn builds the fresh index. Voyage reuses
+it with --reuse-index and rerank-3-lite. SATORI_EVAL_RUNTIME_ENV sets only the reranker and,
+for Voyage, its model. Embeddings remain Potion, storage remains LanceDB. Scope both runs
+sequentially with systemd MemoryMax=4G. The tool environment needs the existing user bus at
+/run/user/1000/bus. No performance percentage, latency median, or held-out generalization claim
+follows from these two quality runs. Next: check terminal indexing/coverage, provider identity,
+tool errors and quality summaries, then explain local activation commands and report results.
+
+Final LOCAL-A evidence: both runs exit 0. All three repositories publish readable indexes with
+verified source parity. Each arm uses the same six repository-head/manifest-path metadata
+records (index-witness.tsv), and the state contains exactly three navigation manifests.
+Provenance matches: git 9753ced1d326799013f5a4e1a9e68e2d88270bc1, ledger-only dirty hash
+4910b7c9ed5f9a6d415af349a12570e9d09d37ea84c20acc00c1a3b298895e90, oracle SHA256
+9266efeb025d8836619e5328380303d8ba99ae8a756426066a6e3840aa9f2bc7. Both arms retain
+rerank_blend=false and behavior_alt_terms=true. Dense/lexical/fused owner recall is identical:
+21/28, 20/28, 25/28. The provider is the only changed runtime selection.
+LateOn: MRR 0.585, hit@1 14/28, hit@5 22/28. Voyage rerank-3-lite: MRR 0.958,
+hit@1 26/28, hit@5 28/28. No RERANKER_FAILED or LateOn failure markers appear in either
+harness log. This is one quality run per provider on the 28-query benchmark.
+
+Hamza then selects all supported clients. Run:
+pnpm run dev:install-local-mcp -- --client all --runtime offline --reranker lateon --no-build .
+The installer reuses the checked build, performs MCP initialization/tool preflight, and updates
+Codex, Claude, OpenCode and AGY without an npm release or installation. Parsed configuration
+readback checks every client points to ~/.satori/bin/satori-mcp.js. Parsed launcher readback
+checks Node 24.19.0 and /home/hamza/repo/satori/packages/mcp/dist/index.js, with offline/LateOn.
+Voyage comparison does not persistently change the active profile. Existing client connections
+need a restart. No ranking code, model data or unrelated client setting is edited.
+The results, activation log and task-owned index remain in the cache paths above for inspection
+and future comparisons. Both systemd process scopes terminate. Repository delta is this ledger
+only, recording the successful run and activation. No new implementation task remains.
